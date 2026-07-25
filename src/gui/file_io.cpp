@@ -1223,7 +1223,7 @@ static bool AddColorClasses(const GuiState& state, const std::map<int, int>& cry
   if (n_classes == 0) {
     // Mono-only state: touch nothing. Neither SetColorMode nor AddColorClass may run, or the
     // scene grows a raypath_color key and stops being byte-identical to the pre-v4.7 wire form
-    // (the same "count == 0 -> omit" isomorphism LUMICE_ConfigToJson keeps).
+    // (the same "count == 0 -> omit" isomorphism the shared JSON encoder keeps).
     return true;
   }
   // raypath_color_mode: pass through verbatim; the Scene validates the enum range.
@@ -1413,8 +1413,8 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     return nullptr;
   }
   if (use_custom_spectrum) {
-    // Discrete custom spectrum overrides the string (same rule as LUMICE_Config's
-    // spectrum_count > 0). SetCustomSpectrum is only called in this branch: calling it with
+    // Discrete custom spectrum overrides the string, matching the core config's own rule.
+    // SetCustomSpectrum is only called in this branch: calling it with
     // count == 0 would CLEAR the spectrum back to "D65" and clobber the preset name above.
     int n = std::min(static_cast<int>(state.sun.custom_spectrum.size()), kSpectrumHardMax);
     if (static_cast<int>(state.sun.custom_spectrum.size()) > kSpectrumHardMax) {

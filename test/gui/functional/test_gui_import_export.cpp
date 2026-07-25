@@ -544,7 +544,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(spec[2]["wavelength"].get<float>(), 650.0f);
 
       // (4) BuildScene emits the discrete spectrum on the commit path too (the discrete list
-      // overrides the spectrum name string, mirroring the LUMICE_Config spectrum_count > 0 rule).
+      // overrides the spectrum name string, matching the core config's own rule).
       const auto scene_j = CommitSceneJson(gui::g_state);
       const auto& commit_spec = scene_j["scene"]["light_source"]["spectrum"];
       IM_CHECK(commit_spec.is_array());

@@ -26,8 +26,8 @@
 
 namespace {
 
-// Minimal single-prism config in the canonical ConfigToJson format used by
-// LUMICE_CommitConfig (lowercase "prism", nested "shape"). Mirrors
+// Minimal single-prism config in the canonical wire format LUMICE_SceneFromJson reads
+// (lowercase "prism", nested "shape"). Mirrors
 // MakeSmallSimConfigJson / MakeMinimalConfigJson in test/unit-correctness/server/
 // test_c_api.cpp; those fixtures live in a TU-private anon namespace and are
 // not linkable across the gui_test target, so we recreate their shape here.
@@ -475,7 +475,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // (b) NON-RESTART: lifecycle stays COMPLETED with the SAME epoch. This is the 322 clock-
     // decoupling guarantee — a display-time edit re-materializes but does NOT reset the
     // accumulator or bump the committed_epoch. If ③'s wake path ever regressed to calling
-    // LUMICE_Start / LUMICE_CommitConfig, this would flip lifecycle back to RUNNING and/or
+    // LUMICE_Start / LUMICE_CommitScene, this would flip lifecycle back to RUNNING and/or
     // bump the epoch.
     LUMICE_SimLifecycleResult lc_after{};
     IM_CHECK_EQ(LUMICE_GetSimLifecycle(server, &lc_after), LUMICE_OK);
@@ -843,8 +843,8 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     const size_t rgb_bytes = static_cast<size_t>(first[0].img_width) * static_cast<size_t>(first[0].img_height) * 3;
     std::vector<uint8_t> first_rgb(first[0].img_buffer, first[0].img_buffer + rgb_bytes);
 
-    // Re-Run: same config, same EV. RunToIdleWithData internally does LUMICE_CommitConfig
-    // which calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
+    // Re-Run: same config, same EV. RunToIdleWithData internally commits the scene, which
+    // calls Stop() → ResetWith()/rebuild → restart accumulation. This is the exact
     // path DoRun() takes; if any code layer sneaked EV into the committed config, this
     // re-Run's composite would be 2× amplified vs. first Run.
     IM_CHECK(RunToIdleWithData(server, kColorConfig));
