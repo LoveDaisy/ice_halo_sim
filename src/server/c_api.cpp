@@ -139,42 +139,7 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback) {
 }
 
 
-// =============== Configuration ===============
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str) {
-  if (!server || !config_str) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  auto err = server->server_->CommitConfig(std::string(config_str));
-  if (err) {
-    LOG_ERROR("Failed to commit configuration: {}", err.message);
-    if (!err.field.empty()) {
-      LOG_ERROR("Error field: {}", err.field);
-    }
-    return MapErrorCode(err.code);
-  }
-  return LUMICE_OK;
-}
-
-
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename) {
-  if (!server || !filename) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  auto err = server->server_->CommitConfigFromFile(lumice::PathFromU8(filename));
-  if (err) {
-    LOG_ERROR("Failed to load configuration from file '{}': {}", filename, err.message);
-    if (!err.field.empty()) {
-      LOG_ERROR("Error field: {}", err.field);
-    }
-    return MapErrorCode(err.code);
-  }
-  return LUMICE_OK;
-}
-
-
-// =============== Configuration (C struct) ===============
+// =============== ConfigScratch <-> JSON (internal; see c_api_internal.hpp) ===============
 // Serialize a LUMICE_Distribution to its core-compatible JSON wire form. NO_RANDOM emits a
 // bare number (center), matching core Distribution::to_json's short-circuit branch
 // (math.cpp: `obj = dist.center`); the other 5 types emit {"type","mean","std"} objects. The
@@ -531,7 +496,7 @@ static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lin
 // being re-derived here, so there is exactly one implementation of each formula.
 // Throws std::invalid_argument on an invalid lens_type / visible / grid count; callers wrap.
 // The grid-count check lives here (not only in the entry points) because this is the single place
-// that dereferences central_grid[]/elevation_grid[] — LUMICE_ConfigToJson accepts a
+// that dereferences central_grid[]/elevation_grid[] — ConfigToJson accepts a
 // caller-assembled struct with no bounds pass of its own.
 static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
@@ -621,7 +586,7 @@ static const char* ColorModeToString(int mode) {
 
 // Non-static (declared in server/c_api_internal.hpp) so unit tests can assert the
 // emitted filter JSON shape field by field. See that header for rationale.
-nlohmann::json ConfigToJson(const LUMICE_Config& c) {
+nlohmann::json ConfigToJson(const ConfigScratch& c) {
   using json = nlohmann::json;
   json root;
 
@@ -641,8 +606,8 @@ nlohmann::json ConfigToJson(const LUMICE_Config& c) {
 
     // COMPLEX resolves its composition from this config's compositions[] pool (the Scene path
     // gets it directly via LUMICE_SceneAddComplexFilter). Simple arms defer to the shared
-    // encoder. The zero-init guard / invalid-type throw lives in EncodeSimpleFilterBody, which
-    // LUMICE_CommitConfigStruct's try/catch maps to LUMICE_ERR_INVALID_CONFIG.
+    // encoder. The zero-init guard / invalid-type throw lives in EncodeSimpleFilterBody; every
+    // caller of this function wraps it and maps the throw to LUMICE_ERR_INVALID_CONFIG.
     if (f.type == LUMICE_FILTER_TYPE_COMPLEX) {
       j["type"] = "complex";
       if (f.composition_index < 0 || f.composition_index >= c.composition_count) {
@@ -736,7 +701,7 @@ struct LUMICE_Scene_ {
   nlohmann::json root;
 };
 
-// Empty-scene skeleton: the same shape ConfigToJson emits for a zero-initialized LUMICE_Config,
+// Empty-scene skeleton: the same shape ConfigToJson emits for a zero-initialized ConfigScratch,
 // minus the optional raypath_color (absent until SetColorMode/AddColorClass — the same
 // "count == 0 → omit the key" isomorphism the batch path keeps). Scene scalars default to a
 // default config's values; Set* overwrites them.
@@ -858,8 +823,8 @@ LUMICE_ErrorCode LUMICE_SceneAddComplexFilter(LUMICE_Scene* scene, const LUMICE_
   if (arr.size() >= LUMICE_MAX_CONFIG_FILTERS) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
-  // Validate the composition storage before writing anything (mirrors LUMICE_CommitConfigStruct's
-  // clause/term bounds + null-pointer defense). term_ids may legitimately be null iff every
+  // Validate the composition storage before writing anything (clause/term bounds +
+  // null-pointer defense). term_ids may legitimately be null iff every
   // clause has 0 terms (total_terms == 0) — see LUMICE_CompositionSetClauses.
   const auto& comp = *composition;
   if (comp.clause_count < 0 || comp.clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
@@ -992,7 +957,7 @@ LUMICE_ErrorCode LUMICE_SceneSetLightSource(LUMICE_Scene* scene, float sun_altit
   ls["azimuth"] = sun_azimuth;
   ls["diameter"] = sun_diameter;
   // A discrete spectrum (an array set by SceneSetCustomSpectrum) wins over the string, mirroring
-  // the LUMICE_Config spectrum_count > 0 rule — do NOT clobber it here. Only write the string
+  // the ConfigScratch spectrum_count > 0 rule — do NOT clobber it here. Only write the string
   // when no discrete spectrum is currently set. This makes the two call orders converge.
   if (!ls.contains("spectrum") || !ls["spectrum"].is_array()) {
     ls["spectrum"] = spectrum ? spectrum : "D65";
@@ -1077,7 +1042,7 @@ const nlohmann::json& SceneRoot(const LUMICE_Scene* scene) {
 
 // ---------- Serialization: decoupled from commit ----------
 // SceneToJson lives in the Scene section because it only depends on scene->root (no JsonToConfig).
-// It mirrors LUMICE_ConfigToJson's buffer contract exactly. root.dump() can throw type_error if a
+// Buffer contract is snprintf-style (see lumice.h). root.dump() can throw type_error if a
 // Set* stored a non-UTF-8 string (SetLightSource/SetCustomSpectrum take an unvalidated const char*),
 // so the dump is guarded — the exception must not cross the C ABI boundary.
 LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, size_t buf_size, size_t* out_len) {
@@ -1191,12 +1156,12 @@ LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flag
 }
 
 
-// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
-// See lumice.h for the full ownership contract. Uses calloc/free (not new[]/delete[])
-// deliberately: LUMICE_Config crosses the C ABI boundary and non-C++ bindings must be
-// able to release the raypath_color allocation without a C++ runtime — a documented
-// exception to the "no raw new/delete" project rule (AGENTS.md).
-LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count) {
+// =============== ConfigScratch raypath-color storage (internal) ===============
+// See c_api_internal.hpp for the ownership contract. calloc/free (not new[]/delete[]) is kept
+// from when this pair was public C API: the allocation shape must stay interchangeable with
+// LUMICE_CompositionSetClauses's, which still crosses the C ABI and must remain releasable
+// without a C++ runtime — a documented exception to the "no raw new/delete" rule (AGENTS.md).
+LUMICE_ColorClass* ConfigCreateColorClasses(ConfigScratch* cfg, int count) {
   if (!cfg) {
     return nullptr;
   }
@@ -1205,8 +1170,8 @@ LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count
   }
   // Create-or-replace: any existing allocation must be released before we overwrite the
   // pointer. Guards the "consecutive Create with different counts" pattern from leaking
-  // the previous allocation, and pairs with the memset-before-Release fix in JsonToConfig /
-  // FillLumiceConfig (both call Release explicitly to make the intent obvious).
+  // the previous allocation, and pairs with the memset-before-Release entry in JsonToConfig
+  // (which calls Release explicitly to make the intent obvious).
   if (cfg->raypath_color) {
     std::free(cfg->raypath_color);  // NOLINT(cppcoreguidelines-no-malloc): C ABI boundary; see block comment above.
     cfg->raypath_color = nullptr;
@@ -1230,7 +1195,7 @@ LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count
   return buf;
 }
 
-void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg) {
+void ConfigReleaseColorClasses(ConfigScratch* cfg) {
   if (!cfg) {
     return;
   }
@@ -1243,10 +1208,9 @@ void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg) {
 
 
 // =============== Complex-Composition storage lifecycle (task-host-abi-cpu-caps, BREAKING v4.9) ===============
-// Same C-ABI-boundary rationale for calloc/free as LUMICE_ConfigCreateColorClasses above:
-// LUMICE_Config crosses the C ABI, and non-C++ bindings must be able to release the
-// composition storage without a C++ runtime — a documented exception to the "no raw
-// new/delete" project rule (AGENTS.md).
+// calloc/free (not new[]/delete[]) deliberately: LUMICE_ComplexComposition crosses the C ABI,
+// and non-C++ bindings must be able to release the composition storage without a C++ runtime —
+// a documented exception to the "no raw new/delete" project rule (AGENTS.md).
 
 LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, int clause_count, const int* term_counts,
                                               const int* term_ids) {
@@ -1258,14 +1222,14 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
   }
   // term_counts is required whenever clause_count > 0 (every clause needs its own count).
   // term_ids, however, must NOT be required upfront: a composition where every clause has 0
-  // terms (total_terms == 0) is legitimate (LUMICE_CompositionClauseTerms's doc comment and
-  // LUMICE_CommitConfigStruct's validation both already treat it as such), and a caller with
+  // terms (total_terms == 0) is legitimate (LUMICE_CompositionClauseTerms's doc comment already
+  // treats it as such), and a caller with
   // total_terms == 0 may reasonably pass term_ids == nullptr for that empty flat buffer — e.g.
   // JsonToComplexComposition's std::vector<int> term_ids_vec, whose .data() is nullptr when
   // never push_back'd into. Requiring non-null unconditionally rejected exactly that legitimate
-  // shape at the ONLY writer, before CommitConfigStruct ever saw it (code-review round 2,
-  // Major — round 1's fix only patched CommitConfigStruct's read-side check, not this entry
-  // point). So the term_ids null-check is deferred until total_terms is known.
+  // shape at the ONLY writer, before any consumer ever saw it (code-review round 2, Major —
+  // round 1's fix only patched the read-side check, not this entry point). So the term_ids
+  // null-check is deferred until total_terms is known.
   if (clause_count > 0 && term_counts == nullptr) {
     return LUMICE_ERR_NULL_ARG;
   }
@@ -1287,7 +1251,7 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
 
   // Create-or-replace: release any prior allocation before overwriting the pointers,
   // guarding "consecutive Set with different clause_count" from leaking the previous
-  // allocation. Pairs with the memset-before-Release fix in JsonToConfig / FillLumiceConfig.
+  // allocation. Pairs with the memset-before-Release entry in JsonToConfig.
   LUMICE_CompositionReleaseClauses(comp);
 
   if (clause_count == 0) {
@@ -1340,7 +1304,7 @@ void LUMICE_CompositionReleaseClauses(LUMICE_ComplexComposition* comp) {
   comp->clause_count = 0;
 }
 
-void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg) {
+void ConfigReleaseCompositions(ConfigScratch* cfg) {
   if (!cfg) {
     return;
   }
@@ -1357,7 +1321,7 @@ void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg) {
     LUMICE_CompositionReleaseClauses(&cfg->compositions[i]);
   }
   // Leave composition_count alone — this Release only frees the intra-record heap storage;
-  // the inline compositions[] array itself is part of LUMICE_Config's own layout.
+  // the inline compositions[] array itself is part of ConfigScratch's own layout.
 }
 
 const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, int clause_index, int* out_term_count) {
@@ -1385,13 +1349,13 @@ const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, 
 }
 
 
-// Single source for the "hand an already-encoded scene JSON to the core and report reuse" tail
-// shared by LUMICE_CommitConfigStruct and LUMICE_CommitScene. Both entry points differ only in
-// how they obtain `root` (ConfigToJson of a wide struct vs. the Scene handle's own document);
-// everything downstream — the core commit call, the error log, the error-code mapping, and the
-// out_reused write-back — must stay identical, so it lives here rather than being duplicated.
-// Callers are responsible for their own NULL checks before calling. `source` only tags the error
-// log with the originating entry point, so a failed commit stays attributable after unification.
+// Single source for the "hand an already-encoded scene JSON to the core and report reuse" tail.
+// LUMICE_CommitScene is its only caller today (v4.12 removed the three legacy entry points that
+// shared it); it stays a separate function because the core commit call, the error log, the
+// error-code mapping and the out_reused write-back are one unit that a future second producer of
+// an already-encoded document must reuse verbatim rather than re-derive. Callers are responsible
+// for their own NULL checks before calling. `source` only tags the error log with the
+// originating entry point, so a failed commit stays attributable.
 static LUMICE_ErrorCode CommitJsonToServer(LUMICE_Server* server, const nlohmann::json& root, int* out_reused,
                                            const char* source) {
   bool reused = false;
@@ -1407,119 +1371,7 @@ static LUMICE_ErrorCode CommitJsonToServer(LUMICE_Server* server, const nlohmann
 }
 
 
-// Struct->JSON path: see doc/capi-lifecycle-architecture.md §6.2.
-LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused) {
-  if (!server || !config) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  // Bounds check
-  if (config->crystal_count > LUMICE_MAX_CONFIG_CRYSTALS || config->filter_count > LUMICE_MAX_CONFIG_FILTERS ||
-      config->renderer_count > LUMICE_MAX_CONFIG_RENDERERS ||
-      config->scatter_count > LUMICE_MAX_CONFIG_SCATTER_LAYERS || config->raypath_color_count < 0 ||
-      config->raypath_color_count > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-  // v4.8: raypath_color is a heap pointer; reject the inconsistent state where count > 0
-  // but the pointer is null (would dereference null on the loop below).
-  if (config->raypath_color_count > 0 && config->raypath_color == nullptr) {
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-  for (int i = 0; i < config->raypath_color_count; i++) {
-    if (config->raypath_color[i].match_count < 0 ||
-        config->raypath_color[i].match_count > LUMICE_MAX_CONFIG_COLOR_REFS) {
-      return LUMICE_ERR_INVALID_CONFIG;
-    }
-  }
-  // v4.11: the two grid counts index LUMICE_RenderParam's fixed-capacity inline arrays, which
-  // ConfigToJson reads without re-checking. Same defense as the match_count loop above.
-  if (config->renderer_count < 0) {
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-  for (int i = 0; i < config->renderer_count; i++) {
-    const auto& r = config->renderers[i];
-    if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
-        r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
-      return LUMICE_ERR_INVALID_CONFIG;
-    }
-  }
-  // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are heap pointers;
-  // mirror the raypath_color null-pointer defense above and enforce the ABI sanity
-  // ceilings (clause/term storage moved off inline layout, but the CLAUSES/TERMS constants
-  // are retained as DoS-guard caps against malformed input).
-  if (config->composition_count < 0 || config->composition_count > LUMICE_MAX_CONFIG_COMPLEX) {
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-  for (int i = 0; i < config->composition_count; i++) {
-    const auto& comp = config->compositions[i];
-    if (comp.clause_count < 0 || comp.clause_count > LUMICE_MAX_CONFIG_CLAUSES) {
-      return LUMICE_ERR_INVALID_CONFIG;
-    }
-    // term_counts is always required once clause_count > 0 (LUMICE_CompositionSetClauses
-    // always allocates it in that case). term_ids, however, legitimately stays nullptr
-    // when every clause has 0 terms (total_terms == 0) — SetClauses skips that allocation
-    // on purpose. Conflating the two here would reject a state SetClauses itself produces
-    // (code-review round 1, Major; e.g. JSON `"composition": [[]]` round-tripped through
-    // Parse then CommitConfigStruct).
-    if (comp.clause_count > 0 && comp.term_counts == nullptr) {
-      return LUMICE_ERR_INVALID_CONFIG;
-    }
-    size_t comp_total_terms = 0;
-    for (int cl = 0; cl < comp.clause_count; cl++) {
-      if (comp.term_counts[cl] < 0 || comp.term_counts[cl] > LUMICE_MAX_CONFIG_TERMS) {
-        return LUMICE_ERR_INVALID_CONFIG;
-      }
-      comp_total_terms += static_cast<size_t>(comp.term_counts[cl]);
-    }
-    if (comp_total_terms > 0 && comp.term_ids == nullptr) {
-      return LUMICE_ERR_INVALID_CONFIG;
-    }
-  }
-
-  // ConfigToJson is a new throw source (std::invalid_argument on an unset/invalid filter
-  // type — the zero-init guard); the raypath-only version never threw. server_->CommitConfig
-  // already converts core from_json exceptions to an Error return internally (server.cpp),
-  // so those don't reach here — this try/catch primarily guards ConfigToJson's throw from
-  // escaping the C ABI boundary. Map any escaped exception to LUMICE_ERR_INVALID_CONFIG.
-  try {
-    auto config_json = ConfigToJson(*config);
-    return CommitJsonToServer(server, config_json, out_reused, "struct");
-  } catch (const std::exception& e) {
-    LOG_ERROR("Failed to commit configuration (struct): invalid config: {}", e.what());
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-}
-
-
-// =============== Configuration Serialization (LUMICE_Config -> JSON) ===============
-// Public serialization API: struct -> JSON string, the symmetric pair of the parsing
-// section below. snprintf-style caller buffer (see the contract in lumice.h). Wraps the
-// internal ConfigToJson, mapping its throw (unset/invalid filter type) to
-// LUMICE_ERR_INVALID_CONFIG so nothing escapes the C ABI boundary.
-LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len) {
-  if (!config) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-  std::string json_str;
-  try {
-    json_str = ConfigToJson(*config).dump();
-  } catch (const std::exception& e) {
-    LOG_ERROR("LUMICE_ConfigToJson: failed to serialize config: {}", e.what());
-    return LUMICE_ERR_INVALID_CONFIG;
-  }
-  if (out_len) {
-    *out_len = json_str.size();
-  }
-  if (out_buf && buf_size > 0) {
-    size_t n = std::min(json_str.size(), buf_size - 1);
-    std::memcpy(out_buf, json_str.data(), n);
-    out_buf[n] = '\0';
-  }
-  return LUMICE_OK;
-}
-
-
-// =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
+// =============== Configuration Parsing (JSON -> ConfigScratch) ===============
 // Symmetric inverse of ConfigToJson. Decomposed into per-section helpers.
 
 // Parse one distribution IN PLACE. `*out` must already hold the default this slot carries in
@@ -1746,7 +1598,7 @@ static LUMICE_ErrorCode JsonToFilter(const nlohmann::json& fj, LUMICE_FilterPara
   // Type-specific fields (JSON -> struct arm). Field names/defaults mirror core
   // config/filter_config.cpp::from_json. Parse does lossless mapping ONLY: value
   // validation (e.g. entry_exit min_len >= 1, max_len <= kMaxHits) stays single-source
-  // in core and fires at commit time (caught by LUMICE_CommitConfigStruct). -1 encodes
+  // in core and fires at commit time (surfaced by LUMICE_CommitScene). -1 encodes
   // an absent optional (wildcard / no bound).
   // SYNC: the per-type field list here mirrors the emit side in ConfigToJson (above);
   // adding/removing a filter type or field requires updating both.
@@ -1912,8 +1764,8 @@ static LUMICE_ErrorCode JsonToColorClass(const nlohmann::json& j, LUMICE_ColorCl
 }
 
 // Parse the top-level "raypath_color" JSON (both bare-array and object forms) into
-// LUMICE_Config. Mirrors core RaypathColorConfig::from_json.
-static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Config* out) {
+// ConfigScratch. Mirrors core RaypathColorConfig::from_json.
+static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, ConfigScratch* out) {
   const nlohmann::json* classes_arr = nullptr;
   // Single-source default: track the core `kDefaultCompositeMode` (currently
   // "painter" per doc §4.8) so a bare-array config / object with no "mode"
@@ -1944,7 +1796,7 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
 
   if (classes_arr == nullptr) {
     // Explicitly clear any prior allocation (Release is null-safe).
-    LUMICE_ConfigReleaseColorClasses(out);
+    ConfigReleaseColorClasses(out);
     return LUMICE_OK;
   }
   if (static_cast<int>(classes_arr->size()) > LUMICE_MAX_CONFIG_COLOR_CLASSES) {
@@ -1952,14 +1804,14 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
   }
   const int count = static_cast<int>(classes_arr->size());
   if (count == 0) {
-    LUMICE_ConfigReleaseColorClasses(out);
+    ConfigReleaseColorClasses(out);
     return LUMICE_OK;
   }
-  // Implicit allocation (task-344): callers of LUMICE_ParseConfigString/File cannot know
-  // the class count before parsing, so we allocate on their behalf here. Ownership is
+  // Implicit allocation: the caller cannot know the class count before parsing, so we allocate
+  // on their behalf here. Ownership is
   // transferred to `out`; the caller must eventually call
-  // LUMICE_ConfigReleaseColorClasses (or use a RAII guard).
-  LUMICE_ColorClass* classes = LUMICE_ConfigCreateColorClasses(out, count);
+  // ConfigReleaseColorClasses (or use a RAII guard).
+  LUMICE_ColorClass* classes = ConfigCreateColorClasses(out, count);
   if (!classes) {
     // count is bounded above by LUMICE_MAX_CONFIG_COLOR_CLASSES; only OOM reaches here.
     return LUMICE_ERR_INVALID_CONFIG;
@@ -1969,7 +1821,7 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
   for (int i = 0; i < count; i++) {
     auto err = JsonToColorClass((*classes_arr)[i], &classes[i]);
     if (err != LUMICE_OK) {
-      LUMICE_ConfigReleaseColorClasses(out);
+      ConfigReleaseColorClasses(out);
       return err;
     }
   }
@@ -1979,7 +1831,7 @@ static LUMICE_ErrorCode JsonToRaypathColor(const nlohmann::json& j, LUMICE_Confi
 // Reference-integrity helpers for the scene block. Crystals and filters are parsed into `out`
 // before the scene block is, so a scattering entry's ids can be checked against what was actually
 // declared — the C-API-side equivalent of core's m.crystals_.at() / m.filters_.at() lookups.
-static bool ConfigHasCrystal(const LUMICE_Config& c, int id) {
+static bool ConfigHasCrystal(const ConfigScratch& c, int id) {
   for (int i = 0; i < c.crystal_count; i++) {
     if (c.crystals[i].id == id) {
       return true;
@@ -1988,7 +1840,7 @@ static bool ConfigHasCrystal(const LUMICE_Config& c, int id) {
   return false;
 }
 
-static bool ConfigHasFilter(const LUMICE_Config& c, int id) {
+static bool ConfigHasFilter(const ConfigScratch& c, int id) {
   for (int i = 0; i < c.filter_count; i++) {
     if (c.filters[i].id == id) {
       return true;
@@ -1997,10 +1849,10 @@ static bool ConfigHasFilter(const LUMICE_Config& c, int id) {
   return false;
 }
 
-// Parse the JSON "scene" subsection (light source + simulation params) into a LUMICE_Config.
+// Parse the JSON "scene" subsection (light source + simulation params) into a ConfigScratch.
 // Named ...SceneParams (not JsonToScene) to avoid colliding, on sight, with the public opaque
 // type LUMICE_Scene — this file-static parser has always been about the scene PARAMS block only.
-static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, LUMICE_Config* out) {
+static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScratch* out) {
   // Light source: required, and so are its `type` / `altitude` / `spectrum` keys (core
   // LightSourceConfig::from_json reads all three with .at()). A `type` other than "sun" is
   // rejected rather than mirrored: core only logs and leaves its SunParam uninitialized.
@@ -2215,7 +2067,7 @@ static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_Grid
   return LUMICE_OK;
 }
 
-static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE_Config* out) {
+static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, ConfigScratch* out) {
   if (static_cast<int>(render_arr.size()) > LUMICE_MAX_CONFIG_RENDERERS) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
@@ -2354,11 +2206,11 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, LUMICE
   return LUMICE_OK;
 }
 
-// Resolve a complex filter's "composition" JSON into a LUMICE_Config compositions[] slot and
+// Resolve a complex filter's "composition" JSON into a ConfigScratch compositions[] slot and
 // set f->composition_index. Validates reference integrity: each term id must reference an
 // existing SIMPLE (non-complex) filter, and clause/term/composition counts respect the ABI
 // bounds. Must run after all simple filters are parsed (two-pass, mirrors config_manager.cpp).
-static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMICE_Config* out, LUMICE_FilterParam* f) {
+static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, ConfigScratch* out, LUMICE_FilterParam* f) {
   if (!fj.contains("composition") || !fj.at("composition").is_array()) {
     return LUMICE_ERR_MISSING_FIELD;
   }
@@ -2419,15 +2271,15 @@ static LUMICE_ErrorCode JsonToComplexComposition(const nlohmann::json& fj, LUMIC
   return LUMICE_OK;
 }
 
-static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* out) {
+static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, ConfigScratch* out) {
   // v4.8: raypath_color is an owning heap pointer. If `out` was reused across two Parse
   // calls, memset would clobber the pointer without freeing it — release first so the
   // memset that follows sees a defensibly-null field. Release is null-safe / idempotent.
-  LUMICE_ConfigReleaseColorClasses(out);
+  ConfigReleaseColorClasses(out);
   // v4.9 (task-host-abi-cpu-caps): compositions[i].term_ids/term_counts are also owning
   // heap pointers — same memset-would-leak hazard as raypath_color; release first.
-  LUMICE_ConfigReleaseCompositions(out);
-  std::memset(out, 0, sizeof(LUMICE_Config));
+  ConfigReleaseCompositions(out);
+  std::memset(out, 0, sizeof(ConfigScratch));
   out->spectrum = "D65";  // Safe default (memset leaves nullptr)
 
   // Crystals (required)
@@ -2506,7 +2358,10 @@ static LUMICE_ErrorCode JsonToConfig(const nlohmann::json& root, LUMICE_Config* 
 }
 
 
-LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* out) {
+// Internal JSON-string -> ConfigScratch reader. Declared in c_api_internal.hpp so the
+// parser-parity / strictness tests can drive it directly; production code reaches the same
+// validator through JsonToScene below.
+LUMICE_ErrorCode ParseConfigString(const char* json_str, ConfigScratch* out) {
   if (!json_str || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
@@ -2525,45 +2380,27 @@ LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* o
 }
 
 
-LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out) {
-  if (!filename || !out) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  std::ifstream file(lumice::PathFromU8(filename));
-  if (!file.is_open()) {
-    return LUMICE_ERR_FILE_NOT_FOUND;
-  }
-
-  try {
-    auto root = nlohmann::json::parse(file);
-    return JsonToConfig(root, out);
-  } catch (const nlohmann::json::parse_error&) {
-    return LUMICE_ERR_INVALID_JSON;
-  } catch (const std::exception&) {
-    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception.
-    return LUMICE_ERR_INVALID_VALUE;
-  }
-}
-
-
 // ---------- Serialization: decoupled from commit (JSON -> new Scene) ----------
 // JsonToScene reuses the established JsonToConfig validator (single source of truth — no parallel
-// JSON reader that could drift from it) by parsing into a temporary LUMICE_Config, then re-encodes
+// JSON reader that could drift from it) by parsing into a temporary ConfigScratch, then re-encodes
 // that struct via ConfigToJson into the new handle's root. It NEVER touches LUMICE_Server: this is
 // the serialization half of the handle API, deliberately independent of commit/re-sim.
 //
-// The temporary LUMICE_Config is heap-allocated (it is large; this scrum's history includes a real
-// 512 KB stack overflow from an oversized on-stack LUMICE_Config). Its owning heap fields
+// This double hop (text -> ConfigScratch -> JSON root) is the known, deliberate technical debt
+// recorded at ConfigScratch's declaration in c_api_internal.hpp — the alternative was rewriting a
+// validated parser, a far larger risk than one re-encode on a non-hot path.
+//
+// The temporary ConfigScratch is heap-allocated (it is large; this scrum's history includes a real
+// 512 KB stack overflow from an oversized on-stack copy of this struct). Its owning heap fields
 // (raypath_color, compositions[].term_ids/term_counts) are freed on EVERY return path by the
 // custom deleter — JsonToConfig may leave them partially allocated when it fails mid-parse (same
 // hazard JsonToConfig itself guards against with its memset-before-Release entry).
 namespace {
 struct ConfigDeleter {
-  void operator()(LUMICE_Config* cfg) const {
+  void operator()(ConfigScratch* cfg) const {
     if (cfg) {
-      LUMICE_ConfigReleaseColorClasses(cfg);
-      LUMICE_ConfigReleaseCompositions(cfg);
+      ConfigReleaseColorClasses(cfg);
+      ConfigReleaseCompositions(cfg);
       delete cfg;
     }
   }
@@ -2572,7 +2409,7 @@ struct ConfigDeleter {
 
 static LUMICE_ErrorCode JsonToScene(const nlohmann::json& root, LUMICE_Scene** out_scene) {
   *out_scene = nullptr;  // contract: *out_scene is NULL on any failure, no handle to Destroy
-  std::unique_ptr<LUMICE_Config, ConfigDeleter> tmp(new LUMICE_Config());
+  std::unique_ptr<ConfigScratch, ConfigDeleter> tmp(new ConfigScratch());
   auto err = JsonToConfig(root, tmp.get());
   if (err != LUMICE_OK) {
     return err;
@@ -2601,7 +2438,7 @@ LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_s
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
   } catch (const std::exception&) {
-    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception:
+    // See ParseConfigString for why this is std::exception, not nlohmann::json::exception:
     // JsonToScene's inner JsonToConfig call runs the same decode-direction Map*ToCApi throws.
     return LUMICE_ERR_INVALID_VALUE;
   }
@@ -2627,19 +2464,20 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
   } catch (const nlohmann::json::parse_error&) {
     return LUMICE_ERR_INVALID_JSON;
   } catch (const std::exception&) {
-    // See LUMICE_ParseConfigString for why this is std::exception, not nlohmann::json::exception.
+    // See ParseConfigString for why this is std::exception, not nlohmann::json::exception.
     return LUMICE_ERR_INVALID_VALUE;
   }
 }
 
 
 // =============== Scene commit ===============
-// Handle->core commit. Deliberately thinner than LUMICE_CommitConfigStruct: that function's
-// bounds-check prologue defends against a caller hand-filling the wide C struct with arbitrary
-// counts/pointers, a state a Scene cannot reach — every Add*/Set* validated its own input at call
-// time, so re-checking here would be dead code. scene->root and ConfigToJson's output are the
-// same encoding (they share the per-section encode helpers), so both entry points hand the core
-// the identical document shape and reuse judgement cannot diverge between them.
+// Handle->core commit, and since v4.12 the only commit entry point in the API. It carries no
+// bounds-check prologue on purpose: the removed struct path needed one because a caller could
+// hand-fill the wide C struct with arbitrary counts/pointers, a state a Scene cannot reach —
+// every Add*/Set* validated its own input at call time, so re-checking here would be dead code.
+// scene->root and ConfigToJson's output are the same encoding (they share the per-section encode
+// helpers), which is what lets JsonToScene hand this function a document it produced by the
+// ConfigScratch route without any behavioral difference.
 LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused) {
   if (!server || !scene) {
     return LUMICE_ERR_NULL_ARG;

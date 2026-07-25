@@ -20,9 +20,22 @@ extern "C" {
 // v4.3~v4.9 BREAKING bumps lived only in prose comments, so a caller linking against a header
 // newer/older than the .so it loads had NO compile-time guard — a layout mismatch was silent UB.
 // Callers can now pin the ABI they were built against, e.g.:
-//   static_assert(LUMICE_API_VERSION >= 410, "Lumice header too old for this integration");
-// Bump on every BREAKING change to LUMICE_Config / public struct layout.
-#define LUMICE_API_VERSION 411
+//   static_assert(LUMICE_API_VERSION >= 412, "Lumice header too old for this integration");
+// Bump on every BREAKING change to the public symbol set / struct layout.
+//
+// BREAKING (v4.12): the wide `LUMICE_Config` value struct and everything that only existed to
+// feed it are REMOVED. Gone: LUMICE_Config; the three commit entry points
+// LUMICE_CommitConfig / LUMICE_CommitConfigFromFile / LUMICE_CommitConfigStruct;
+// LUMICE_ParseConfigString / LUMICE_ParseConfigFile / LUMICE_ConfigToJson;
+// LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses /
+// LUMICE_ConfigReleaseCompositions; and the C++ RAII header src/include/lumice_config_scope.hpp.
+// LUMICE_Scene (added v4.11-era, see the "Scene (opaque handle)" section) is now the ONLY way to
+// describe and commit a configuration: build with SceneCreate + Add*/Set* or parse with
+// LUMICE_SceneFromJson / _FromJsonFile, then commit with LUMICE_CommitScene. No shim, no alias —
+// callers of the removed symbols fail to compile, which is the intended migration signal.
+// The LUMICE_MAX_CONFIG_* ceilings survive the struct: they are now the Scene's Add*/Set*
+// per-kind soft caps, not the dimensions of an inline array.
+#define LUMICE_API_VERSION 412
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -132,7 +145,7 @@ typedef struct LUMICE_RenderResult_ {
   int img_width;
   int img_height;
   const unsigned char* img_buffer;  // Read-only, managed by Server.
-                                    // Valid until next LUMICE_GetRenderResults() or LUMICE_CommitConfig().
+                                    // Valid until next LUMICE_GetRenderResults() or LUMICE_CommitScene().
                                     // Sentinel: img_buffer == NULL
   // task-345.3: composite-only auto-EV anchor. Populated by
   // LUMICE_GetCompositeResults / LUMICE_GetRawXyzAndCompositeResults's composite_out —
@@ -151,7 +164,7 @@ typedef struct LUMICE_RawXyzResult_ {
   int img_width;
   int img_height;
   const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
-                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitConfig().
+                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitScene().
                              // Sentinel: xyz_buffer == NULL
   float snapshot_intensity;  // Per-pixel landed intensity (landed_ray_weights / (kNormScale * total_pixels))
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
@@ -197,13 +210,13 @@ typedef void (*LUMICE_LogCallback)(LUMICE_LogLevel level, const char* logger_nam
 // for full coverage, but can also be called later (subsequent log messages will be forwarded).
 void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 
-// =============== Configuration (JSON string) ===============
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);  // filename must be UTF-8
-
-// =============== Configuration (C struct — bypasses JSON string serialization) ===============
-// GUI fills this struct directly from UI state, avoiding JSON dump/parse overhead.
-// Cross-references use integer IDs (crystal_id, filter_id), resolved internally by Core.
+// =============== Configuration bounds ===============
+// Per-kind soft capacity ceilings enforced by the Scene build API (LUMICE_SceneAdd* /
+// LUMICE_SceneSet*) and by the JSON readers behind LUMICE_SceneFromJson / _FromJsonFile.
+// They are pure validation bounds — nothing is dimensioned by them any more (the wide
+// LUMICE_Config value struct whose inline arrays they used to size was removed in v4.12).
+// Cross-references between items use integer IDs (crystal_id, filter_id) assigned by the
+// Scene's Add* calls and resolved internally by Core.
 
 #define LUMICE_MAX_CONFIG_CRYSTALS 256
 #define LUMICE_MAX_CONFIG_FILTERS 256
@@ -214,12 +227,10 @@ LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* 
 // Discrete-spectrum entry cap. Mirrors core wl_pool.hpp::kWlPoolSizeMax (255).
 #define LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES 255
 // Complex (sum-of-products) filter composition bounds. See LUMICE_ComplexComposition.
-// LUMICE_MAX_CONFIG_COMPLEX remains an ABI ceiling baked into the LUMICE_Config layout
-// (bounds the inline compositions[] array). LUMICE_MAX_CONFIG_CLAUSES / _TERMS are no
-// longer inline-array dimensions (v4.9, task-host-abi-cpu-caps): clause/term storage is
-// heap-allocated via LUMICE_CompositionSetClauses, and these two constants are pure
-// sanity ceilings that cap a single filter's OR/AND fan-out (defensive DoS bound against
-// malformed .lmc/JSON input). Widen (breaking bump) if needed.
+// All three are sanity ceilings against malformed .lmc/JSON input: LUMICE_MAX_CONFIG_COMPLEX
+// caps complex-filter records per scene, LUMICE_MAX_CONFIG_CLAUSES / _TERMS cap a single
+// filter's OR/AND fan-out. Clause/term storage is heap-allocated via
+// LUMICE_CompositionSetClauses (v4.9). Widen (breaking bump) if needed.
 #define LUMICE_MAX_CONFIG_COMPLEX 32    // max complex-filter composition records per config
 #define LUMICE_MAX_CONFIG_CLAUSES 4096  // sanity ceiling: max OR clauses per complex filter
 #define LUMICE_MAX_CONFIG_TERMS 64      // sanity ceiling: max AND terms per clause
@@ -360,31 +371,29 @@ typedef struct LUMICE_FilterParam_ {
   // Crystal arm (type == LUMICE_FILTER_TYPE_CRYSTAL)
   int crystal_id;
 
-  // Complex arm (type == LUMICE_FILTER_TYPE_COMPLEX): index into
-  // LUMICE_Config.compositions[] holding this filter's sum-of-products.
+  // Complex arm (type == LUMICE_FILTER_TYPE_COMPLEX). Historically an index into the removed
+  // LUMICE_Config's compositions[] pool; on the Scene path the composition is passed alongside
+  // the filter to LUMICE_SceneAddComplexFilter, which IGNORES this field.
   int composition_index;
 } LUMICE_FilterParam;
 
-// Sum-of-products composition for a complex filter, referenced by
-// LUMICE_FilterParam.composition_index. The outer level is an OR over clauses; each clause
-// is an AND over its terms; each term is the ID of a SIMPLE filter in the same config's
-// filters[] pool (referenced by id — reorder-robust — not by array index; a term may never
-// reference another complex filter, matching core config semantics).
-// INVARIANT: compositions[] is rebuilt wholesale together with its host LUMICE_Config;
-// records are not individually reordered (composition_index is a pool index valid only
-// within one config snapshot). Consumers (e.g. GUI) must respect this whole-rebuild model.
+// Sum-of-products composition for a complex filter, passed to LUMICE_SceneAddComplexFilter
+// alongside the filter it belongs to. The outer level is an OR over clauses; each clause
+// is an AND over its terms; each term is the ID of a SIMPLE filter in the same scene
+// (referenced by id — reorder-robust — not by array index; a term may never reference another
+// complex filter, matching core config semantics).
 //
 // BREAKING (v4.9, task-host-abi-cpu-caps): storage layout changed from inline
 // `clauses[16][8]` / `term_counts[16]` to a pair of owned heap pointers with a
 // clause-major flat encoding. Rationale: at 16×8 inline the ceiling was too low for
-// real "OR of several hundred raypaths" use cases; naively widening the inline array
-// (e.g. to 4096×64) would push LUMICE_Config well past its 160 KB stack budget and
-// re-run the raypath_color[64] stack-overflow that task-344 already fixed on the
-// color path. Callers now populate one record via LUMICE_CompositionSetClauses and
-// must release via LUMICE_CompositionReleaseClauses (or via LUMICE_ConfigReleaseCompositions
-// / the C++ RAII guard lumice::ConfigOwningGuard). Do NOT copy this struct by value —
+// real "OR of several hundred raypaths" use cases, and naively widening the inline array
+// (e.g. to 4096×64) would have blown the stack budget of the wide value struct that carried
+// these records at the time. Callers populate one record via LUMICE_CompositionSetClauses and
+// must release via LUMICE_CompositionReleaseClauses. Do NOT copy this struct by value —
 // term_ids/term_counts are owning pointers; aliasing copies would double-free on double
 // Release (enforced by scripts/check_policies.py's `no-config-by-value-copy` gate).
+// LUMICE_SceneAddComplexFilter deep-copies the record, so a caller's composition can be
+// released as soon as that call returns.
 //
 // Fields:
 //   term_ids     — owned; flat array of simple-filter IDs, clause-major
@@ -495,8 +504,8 @@ typedef struct LUMICE_ColorClassRef_ {
 // lands visible=0 (INVISIBLE), which is the OPPOSITE of the core JSON default `true`.
 // Callers must explicitly set visible=1 for the class to appear in composited output — the
 // class is otherwise silently omitted from the compositor. This mirrors LUMICE_FILTER_TYPE_UNSET's
-// "zero-init requires explicit follow-up" discipline; the GUI FillLumiceConfig equivalent for
-// task-3 must not forget this.
+// "zero-init requires explicit follow-up" discipline: every writer that assembles a color class
+// (GUI scene builder, JSON reader, hand-written caller) must set it.
 typedef struct LUMICE_ColorClass_ {
   float color[3];                                            // linear RGB in [0, 1]
   int combine;                                               // LUMICE_COLOR_COMBINE_ANY / _ALL
@@ -547,8 +556,8 @@ typedef struct LUMICE_GridLine_ {
 // BREAKING (v4.11): extended from the 6-field projection-agnostic subset to the full renderer
 // description (lens / lens_shift / view / visible / background / ray_color / grid /
 // celestial_outline). Before this, those fields had no home in the struct, so every C API entry
-// point that re-encodes a renderer (LUMICE_ParseConfigString/File, LUMICE_SceneFromJson/File,
-// LUMICE_SceneAddRenderer) silently replaced them with a hardcoded
+// point that re-encodes a renderer (LUMICE_SceneFromJson/File, LUMICE_SceneAddRenderer)
+// silently replaced them with a hardcoded
 // dual_fisheye_equal_area/fov180/view000/visible=full/black-background renderer — a config could
 // parse cleanly and then be simulated with a projection the caller never asked for. Callers must
 // recompile.
@@ -585,28 +594,26 @@ typedef struct LUMICE_RenderParam_ {
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============
-// LUMICE_Scene (opaque type declared up top) is an incrementally-built scene container. Unlike
-// the wide-value LUMICE_Config struct below, adding a subsystem is adding a function (never an
-// ABI break to existing callers), there is no MAX_* compile-time ceiling on the number of items,
-// and the three commit entry points collapse (in a later step) into one. The handle owns all its
+// LUMICE_Scene (opaque type declared up top) is THE configuration container of this API and the
+// only way to describe a simulation. It is built incrementally: adding a subsystem is adding a
+// function (never an ABI break to existing callers), there is no MAX_* compile-time ceiling on
+// the number of items, and there is exactly one commit entry point. The handle owns all its
 // state; callers manage it exclusively through the lifecycle functions.
 //
-// The Add*/Set* family covers the same nine subsystems LUMICE_Config carries. The leaf POD
-// structs above (LUMICE_CrystalParam / FilterParam / ComplexComposition / RenderParam /
-// ScatterLayer / SpectrumEntry / ColorClass) are UNCHANGED and pass in by const pointer — the
-// Scene deep-copies every input value immediately, so the caller's leaf struct may be a stack
-// temporary that is discarded/reused right after the call returns (no "must outlive commit"
-// lifetime reasoning). Type + lifecycle + leaf writes are joined by the serialization half
-// (SceneToJson / SceneFromJson / SceneFromJsonFile, below) and by the commit entry point
-// (LUMICE_CommitScene, below), which is the handle-side counterpart of the three legacy
-// LUMICE_Config commit functions.
+// The Add*/Set* family covers nine subsystems. The leaf POD structs above (LUMICE_CrystalParam /
+// FilterParam / ComplexComposition / RenderParam / ScatterLayer / SpectrumEntry / ColorClass)
+// pass in by const pointer — the Scene deep-copies every input value immediately, so the
+// caller's leaf struct may be a stack temporary that is discarded/reused right after the call
+// returns (no "must outlive commit" lifetime reasoning). Type + lifecycle + leaf writes are
+// joined by the serialization half (SceneToJson / SceneFromJson / SceneFromJsonFile, below) and
+// by the commit entry point (LUMICE_CommitScene, below).
 //
-// Coexists with LUMICE_Config: this step adds symbols only; LUMICE_Config and its three commit
-// entry points are byte-for-byte unchanged. LUMICE_API_VERSION is NOT bumped here (no BREAKING
-// layout change) — the bump lands with the eventual LUMICE_Config removal.
+// v4.12 removed the wide `LUMICE_Config` value struct this family replaced, along with its three
+// commit entry points and its parse/serialize/ownership helpers. See the BREAKING note at
+// LUMICE_API_VERSION for the full removed-symbol list.
 //
 // Naming: this family uses Noun-Verb order (SceneCreate / SceneAddCrystal / …), coexisting with
-// the repo's existing Verb-Noun names (LUMICE_CreateServer / LUMICE_CommitConfig). Both are
+// the repo's existing Verb-Noun names (LUMICE_CreateServer / LUMICE_DestroyServer). Both are
 // accepted conventions; neither is "the new standard".
 
 // ---------- Lifecycle ----------
@@ -616,7 +623,7 @@ LUMICE_Scene* LUMICE_SceneCreate(void);
 
 // Deep-copy `scene` into a brand-new, fully independent handle (no aliasing with the original).
 // This is the value the old wide-struct semantics really bought — atomic modal edit / Cancel —
-// now a single call instead of a ~96 KB stack copy. Mutating the clone never affects the
+// now a single call instead of a ~128 KB stack copy. Mutating the clone never affects the
 // original and vice versa; each must be Destroyed independently. Returns NULL if `scene` is
 // NULL or on allocation failure.
 LUMICE_Scene* LUMICE_SceneClone(const LUMICE_Scene* scene);
@@ -638,7 +645,7 @@ void LUMICE_SceneDestroy(LUMICE_Scene* scene);
 // returns an error code (never throws across the C ABI). On any validation failure the scene is
 // left unchanged (no partial write). Returns LUMICE_ERR_NULL_ARG when scene / the input pointer
 // / out_id is NULL; LUMICE_ERR_INVALID_CONFIG on an invalid item (bad enum, out-of-range count,
-// or exceeding the soft per-kind capacity carried over from LUMICE_MAX_CONFIG_*).
+// or exceeding the soft per-kind capacity given by the matching LUMICE_MAX_CONFIG_*).
 LUMICE_ErrorCode LUMICE_SceneAddCrystal(LUMICE_Scene* scene, const LUMICE_CrystalParam* crystal, int* out_id);
 // SceneAddFilter handles the SIMPLE filter arms only (none/raypath/entry_exit/direction/crystal);
 // a filter with type == LUMICE_FILTER_TYPE_COMPLEX is rejected (LUMICE_ERR_INVALID_CONFIG) —
@@ -655,14 +662,14 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
 LUMICE_ErrorCode LUMICE_SceneAddScatterLayer(LUMICE_Scene* scene, const LUMICE_ScatterLayer* layer, int* out_id);
 LUMICE_ErrorCode LUMICE_SceneAddColorClass(LUMICE_Scene* scene, const LUMICE_ColorClass* color_class, int* out_id);
 
-// ---------- Scalar / whole-group settings: grouped by LUMICE_Config field cluster ----------
+// ---------- Scalar / whole-group settings, grouped by subsystem ----------
 // Each Set* is idempotent (last write wins) and callable in any order. Returns
 // LUMICE_ERR_NULL_ARG for a NULL scene, LUMICE_ERR_INVALID_CONFIG / _INVALID_VALUE for an
 // invalid value.
 //
 // Light source + spectrum interact: a discrete spectrum (SceneSetCustomSpectrum with count > 0)
-// takes precedence over the `spectrum` string, matching the LUMICE_Config spectrum_count > 0
-// rule. So SceneSetLightSource does NOT overwrite a discrete spectrum already set, and the two
+// takes precedence over the `spectrum` string, matching the core config's own rule.
+// So SceneSetLightSource does NOT overwrite a discrete spectrum already set, and the two
 // call orders (SetLightSource then SetCustomSpectrum, or the reverse) converge to the same
 // result. SceneSetCustomSpectrum with count == 0 clears the discrete spectrum (falls back to the
 // default "D65" string).
@@ -679,8 +686,8 @@ LUMICE_ErrorCode LUMICE_SceneSetColorMode(LUMICE_Scene* scene, int raypath_color
 // re-simulate (that stays the exclusive job of the commit entry points). Round-trip is lossless:
 // SceneFromJson(ToJson(scene)) is semantically equal to the original.
 //
-// SceneToJson serializes `scene` into `out_buf` using the same snprintf-style buffer contract as
-// LUMICE_ConfigToJson: pass out_buf == NULL (or buf_size == 0) to query the length only; on a
+// SceneToJson serializes `scene` into `out_buf` using an snprintf-style buffer contract: pass
+// out_buf == NULL (or buf_size == 0) to query the length only; on a
 // too-small buffer the output is truncated but always NUL-terminated, and *out_len (when non-NULL)
 // always reports the full, untruncated length. Returns LUMICE_ERR_NULL_ARG for a NULL scene,
 // LUMICE_ERR_INVALID_CONFIG if the scene cannot be serialized (e.g. a Set* call was fed a string
@@ -690,8 +697,7 @@ LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, si
 // SceneFromJson / SceneFromJsonFile parse and validate a full scene JSON document and, on success,
 // allocate a brand-new handle written to *out_scene (the caller owns it and MUST eventually pass
 // it to LUMICE_SceneDestroy). On ANY failure *out_scene is set to NULL and no handle is leaked, so
-// the caller never Destroys a handle that was not produced. Validation, soft capacity limits, and
-// error-code semantics are identical to LUMICE_ParseConfigString / LUMICE_ParseConfigFile:
+// the caller never Destroys a handle that was not produced. Error-code semantics:
 // LUMICE_ERR_NULL_ARG (NULL json_str/filename or out_scene), LUMICE_ERR_INVALID_JSON (syntax
 // error), LUMICE_ERR_MISSING_FIELD (a required field absent), LUMICE_ERR_INVALID_VALUE /
 // LUMICE_ERR_INVALID_CONFIG (bad enum / value / exceeds a LUMICE_MAX_CONFIG_* soft cap),
@@ -700,10 +706,9 @@ LUMICE_ErrorCode LUMICE_SceneFromJson(const char* json_str, LUMICE_Scene** out_s
 LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
 
 // ---------- Commit ----------
-// Commit `scene` to `server`: the handle-side counterpart of LUMICE_CommitConfigStruct, and the
-// entry point the three legacy LUMICE_Config commit functions collapse into. Both go through the
-// same core commit path, so reuse judgement and re-simulation triggering are identical for
-// equivalent scene state — commit never depends on which entry point produced the JSON.
+// Commit `scene` to `server`. This is the ONE and only commit entry point of the API: v4.12
+// removed the three legacy LUMICE_Config commit functions, and every configuration — however it
+// was authored — reaches the core through here.
 //
 // Commit is DELIBERATELY decoupled from serialization: this takes a handle, never a JSON string
 // or a file path. To commit JSON, first build a handle with LUMICE_SceneFromJson /
@@ -715,183 +720,23 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
 //
 // `out_reused` is OPTIONAL (may be NULL). When non-NULL it receives 1 if the server reused the
 // existing consumers/renderers across this commit (no renderer-layout change), 0 if they were
-// rebuilt. Unlike the legacy JSON-string / JSON-file entry points, which never exposed this
-// signal, every LUMICE_CommitScene caller can read it.
+// rebuilt.
 //
 // Errors: LUMICE_ERR_NULL_ARG (NULL server or scene); otherwise whatever the core commit rejects
-// the scene with, mapped exactly as LUMICE_CommitConfigStruct maps it — LUMICE_ERR_INVALID_CONFIG
+// the scene with — LUMICE_ERR_INVALID_CONFIG
 // / _MISSING_FIELD / _INVALID_VALUE / _INVALID_JSON for a configuration the core refuses, and
 // LUMICE_ERR_SERVER for a server-side failure. On any error *out_reused is left untouched. Note
 // that no whole-scene re-validation happens here: each Add*/Set* call already validated its own
 // input, so what this can still surface is cross-field/semantic rejection from the core.
 LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
 
-// BREAKING (v4.4): added spectrum_entries[]/spectrum_count for custom discrete spectrum.
-// Layout changed; callers must recompile against this header. spectrum_count > 0 selects the
-// discrete-list path and overrides the spectrum string field (mirrors filters/filter_count).
-// BREAKING (v4.6): added compositions[]/composition_count for complex (sum-of-products)
-// filters. Layout changed; callers must recompile. A filters[] entry with type ==
-// LUMICE_FILTER_TYPE_COMPLEX indexes into compositions[] via its composition_index.
-// BREAKING (v4.7): added raypath_color[]/raypath_color_count/raypath_color_mode for
-// per-raypath color classes (Design 2). Layout changed; callers must recompile.
-// raypath_color_count == 0 → no color classes configured (mono-only, zero regression).
-// BREAKING (v4.8): raypath_color[] is no longer an inline array — it is now a heap-allocated
-// `LUMICE_ColorClass*` owned by this struct. The inline `LUMICE_ColorClass[64]` layout was
-// ~354 KB and pushed `LUMICE_Config` to 467 KB, which overflowed the ImGui test engine's
-// ~512 KB thread stack when two configs coexisted in one function. Callers now allocate via
-// `LUMICE_ConfigCreateColorClasses` and must release via `LUMICE_ConfigReleaseColorClasses`
-// (or via a C++ RAII guard such as `lumice::ConfigOwningGuard`; see
-// `src/include/lumice_config_scope.hpp`). Layout changed; callers must recompile.
-// BREAKING (v4.9, task-host-abi-cpu-caps): LUMICE_ComplexComposition's clause/term storage
-// moved off the inline layout onto a pair of owning heap pointers (term_ids / term_counts).
-// The outer `compositions[LUMICE_MAX_CONFIG_COMPLEX]` inline array is retained; only the
-// intra-record clause/term storage was heap-ified — which SHRINKS sizeof(LUMICE_Config)
-// (each record drops from ~580 B inline to ~24 B ptr+count). Callers populate a record via
-// LUMICE_CompositionSetClauses and release per-record via LUMICE_CompositionReleaseClauses
-// or config-wide via LUMICE_ConfigReleaseCompositions; the C++ RAII guard
-// `lumice::ConfigOwningGuard` releases both raypath_color AND compositions in one shot.
-//
-// Do not copy this struct by value (assignment, by-value parameter, or storing it in a
-// container) — `raypath_color` AND each `compositions[i].term_ids/term_counts` are owning
-// heap pointers; copies alias the same allocations and cause double-free on double Release.
-// Pass `LUMICE_Config*` or `const LUMICE_Config&` instead. See
-// LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses,
-// LUMICE_CompositionSetClauses / LUMICE_ConfigReleaseCompositions.
-typedef struct LUMICE_Config_ {
-  // Crystals
-  LUMICE_CrystalParam crystals[LUMICE_MAX_CONFIG_CRYSTALS];
-  int crystal_count;
-
-  // Filters
-  LUMICE_FilterParam filters[LUMICE_MAX_CONFIG_FILTERS];
-  int filter_count;
-
-  // Complex-filter compositions (referenced by filters[].composition_index for COMPLEX type).
-  LUMICE_ComplexComposition compositions[LUMICE_MAX_CONFIG_COMPLEX];
-  int composition_count;
-
-  // Renderers
-  LUMICE_RenderParam renderers[LUMICE_MAX_CONFIG_RENDERERS];
-  int renderer_count;
-
-  // Scene: light source
-  float sun_altitude;
-  float sun_azimuth;
-  float sun_diameter;
-  const char* spectrum;  // e.g. "D65", "D50", "A", "E"; ignored when spectrum_count > 0
-  // Discrete custom spectrum. When spectrum_count > 0, the spectrum string is ignored and this
-  // list is used instead. spectrum_count == 0 means "use the spectrum string".
-  LUMICE_SpectrumEntry spectrum_entries[LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES];
-  int spectrum_count;
-
-  // Scene: simulation
-  int infinite;             // 1=infinite rays, 0=finite
-  LUMICE_RayCount ray_num;  // only used when infinite==0
-  int max_hits;
-  // Geometry-resampling clock K: how many rays reuse one sampled crystal instance before
-  // resampling. 0 = disabled (core derives a SimBatch-based default); else must be in
-  // [1, kGeomClockMax=64] (validated at commit by core config_manager.cpp). Added v4.10 so
-  // struct-path callers can drive K (previously only reachable via config JSON). Pure append;
-  // zero-init == disabled, so this is backward compatible at the value level.
-  int geom_clock;
-
-  // Scene: scattering
-  LUMICE_ScatterLayer scattering[LUMICE_MAX_CONFIG_SCATTER_LAYERS];
-  int scatter_count;
-
-  // Raypath color classes (Design 2, task-342.2; BREAKING v4.8: heap-allocated pointer).
-  // raypath_color_count == 0 disables the color path entirely — mono
-  // LUMICE_GetRenderResults output is byte-identical to the pre-v4.7 struct layout.
-  // Non-zero enables per-raypath color: LUMICE_GetCompositeResults returns one composite
-  // RGB image per colored renderer.
-  //
-  // Ownership: raypath_color is owned by this LUMICE_Config and must be allocated /
-  // released only through LUMICE_ConfigCreateColorClasses / LUMICE_ConfigReleaseColorClasses.
-  // Zero-initializing this struct (e.g. `LUMICE_Config cfg{};`) leaves raypath_color ==
-  // nullptr / raypath_color_count == 0, which is the "no color classes" state and is safe
-  // to release (Release is idempotent / null-safe).
-  LUMICE_ColorClass* raypath_color;
-  int raypath_color_count;
-  int raypath_color_mode;  // LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER
-} LUMICE_Config;
-
-// Bound the LUMICE_Config growth: this struct is passed by value from callers that may put
-// it on the stack (unit tests, GUI wrappers). Static assertion fails loudly if a future
-// field addition explodes the size. Bound is a hard ceiling; keep it low enough that
-// Windows' 1 MB default stack still leaves reasonable headroom.
-//
-// v4.8 (task-344): tightened from 768 KB to 160 KB after raypath_color[64] was moved off
-// the inline layout onto the heap. Measured sizeof(LUMICE_Config) drops from 467 KB to
-// ~113 KB (plan §3 point 5); the 160 KB ceiling keeps ~40 % headroom for future fields
-// while still catching accidental re-inlining or unbounded array additions early.
-// v4.9 (task-host-abi-cpu-caps): LUMICE_ComplexComposition's inline `clauses[16][8]` /
-// `term_counts[16]` (~580 B/record × 32 records ≈ 18.6 KB) moved off inline onto per-record
-// heap pointers (24 B/record × 32 records = 768 B); measured sizeof(LUMICE_Config) drops from
-// ~113 KB to ~96 KB (~98 280 B on this platform), so the 160 KB ceiling still holds with even
-// more headroom than pre-v4.9.
-// v4.10: five LUMICE_CrystalParam shape scalars promoted to
-// LUMICE_Distribution (height/prism_h/upper_h/lower_h: 4B->12B each = +32B; face_distance[6]:
-// 24B->72B = +48B; +80B/crystal × 256 crystals ≈ +20 KB) plus one int geom_clock. Measured
-// sizeof(LUMICE_Config) == 118 768 B on this platform (Apple clang, arm64) — up from ~98 KB,
-// still well under the 160 KB ceiling (~27.5 % headroom).
-// v4.11: LUMICE_RenderParam grew the full renderer description; the two
-// LUMICE_GridLine[64] inline arrays dominate (24 B × 64 × 2 = 3 072 B) for ~3.1 KB/renderer ×
-// 4 renderers ≈ +12.3 KB. Measured sizeof(LUMICE_Config) == 131 328 B on this platform (Apple
-// clang, arm64) — up from 118 768 B, still under the 160 KB ceiling (~19.8 % headroom). If a
-// future widening approaches it, shrink LUMICE_MAX_CONFIG_GRID_LINES rather than raising the
-// 160 KB ceiling.
-#if defined(__cplusplus)
-static_assert(sizeof(LUMICE_Config) <= 160u * 1024u,
-              "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(
-    sizeof(LUMICE_Config) <= 160u * 1024u,
-    "LUMICE_Config exceeded its 160 KB ABI ceiling — either shrink a field or bump the ceiling deliberately");
-#endif
-
-// out_reused: if non-NULL, set to 1 if consumers were reused (no buffer realloc), 0 if rebuilt.
-LUMICE_ErrorCode LUMICE_CommitConfigStruct(LUMICE_Server* server, const LUMICE_Config* config, int* out_reused);
-
-// =============== Raypath Color Classes lifecycle (task-344, BREAKING v4.8) ===============
-// Allocate `count` zero-initialized LUMICE_ColorClass entries and attach them to `cfg`.
-// On success, `cfg->raypath_color` points to the new array, `cfg->raypath_color_count` is
-// set to `count`, and the returned pointer aliases `cfg->raypath_color` for the caller to
-// fill.
-//
-// Semantics:
-//   - `cfg == nullptr` → returns nullptr (no side effect).
-//   - `count < 0` or `count > LUMICE_MAX_CONFIG_COLOR_CLASSES` → returns nullptr; `cfg`
-//     is left untouched.
-//   - `count == 0` → releases any existing allocation, sets pointer to nullptr and
-//     count to 0, returns nullptr. This is the "no color classes" state (mono-only).
-//   - `count > 0` → this call is create-or-replace: if `cfg->raypath_color` was already
-//     non-null (e.g. a prior Create call), it is released first, then a fresh
-//     zero-initialized array of `count` entries is allocated. Safe to call multiple times
-//     on the same `cfg` with different counts.
-//   - Allocator is calloc/free; the returned pointer must eventually be released via
-//     LUMICE_ConfigReleaseColorClasses (or its C++ RAII wrapper).
-//
-// Ownership contract: whether the caller invokes Create directly OR indirectly triggers
-// allocation via LUMICE_ParseConfigString / LUMICE_ParseConfigFile (both allocate
-// implicitly based on the parsed JSON), the caller MUST call Release once done with
-// `cfg`. In C++ code, prefer the `lumice::ConfigOwningGuard` RAII wrapper in
-// `src/include/lumice_config_scope.hpp` (also releases compositions).
-LUMICE_ColorClass* LUMICE_ConfigCreateColorClasses(LUMICE_Config* cfg, int count);
-
-// Release the raypath_color allocation owned by `cfg`, if any. Idempotent and null-safe:
-//   - `cfg == nullptr` → no-op.
-//   - `cfg->raypath_color == nullptr` → clears count only, no free.
-//   - Otherwise → free(cfg->raypath_color), then nullptr / count=0.
-// Safe to call multiple times; safe to call on a freshly zero-initialized LUMICE_Config.
-void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
-
 // =============== Complex-Composition storage lifecycle (task-host-abi-cpu-caps, BREAKING v4.9) ===============
 // Populate `comp` in one shot from an application-owned (clause_count, term_counts[], term_ids[])
 // triple. This is the ONLY supported writer for the composition storage — direct field writes
 // (previously legal against the old inline `clauses[16][8]`) are no longer defined.
 //
-// Unlike LUMICE_ConfigCreateColorClasses's two-phase allocate-then-fill-in-place pattern, this
-// API is a one-shot value write (Set): every production caller already holds the complete
+// This is a one-shot value write (Set), not a two-phase allocate-then-fill-in-place: every
+// production caller already holds the complete
 // (clause_count, term_counts, term_ids) triple on the stack before calling, so there is no
 // caller-visible "allocated but not yet populated" intermediate state to expose. Reach for this
 // same shape (Set over Create) for a future owning field only if callers likewise assemble the
@@ -915,11 +760,11 @@ void LUMICE_ConfigReleaseColorClasses(LUMICE_Config* cfg);
 //   - `clause_count > 0` → this call is CREATE-OR-REPLACE: if `comp` already held a prior
 //     allocation, it is released before the new one is allocated. On OOM, `comp` falls back
 //     to the "OR of nothing" state (fully-cleared, safe to Release again) and the function
-//     returns LUMICE_ERR_INVALID_CONFIG — mirrors LUMICE_ConfigCreateColorClasses's OOM policy.
+//     returns LUMICE_ERR_INVALID_CONFIG.
 //   - `term_ids` must be a clause-major flat array of length `sum(term_counts[0..clause_count))`.
 //     Elements are simple-filter IDs; reference-integrity checks (each id resolves to an
-//     existing SIMPLE filter in the enclosing LUMICE_Config) are the CALLER's responsibility
-//     (the c_api / GUI writers already run this pre-check; see LUMICE_CommitConfigStruct).
+//     existing SIMPLE filter in the same scene) are the CALLER's responsibility
+//     (the c_api / GUI writers already run this pre-check).
 //   - Allocator is calloc/free; callers must eventually release via
 //     LUMICE_CompositionReleaseClauses (or its config-wide sibling / RAII guard).
 LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, int clause_count, const int* term_counts,
@@ -930,17 +775,6 @@ LUMICE_ErrorCode LUMICE_CompositionSetClauses(LUMICE_ComplexComposition* comp, i
 //   - Otherwise → free both pointers (either may already be null), then leave `comp` in the
 //     "OR of nothing" state (both nullptr, clause_count=0).
 void LUMICE_CompositionReleaseClauses(LUMICE_ComplexComposition* comp);
-
-// Release the composition storage owned by every record in `cfg->compositions[0..composition_count)`.
-// Does NOT touch `composition_count` or the inline compositions[] array itself — those remain
-// part of the LUMICE_Config's own layout. Idempotent and null-safe:
-//   - `cfg == nullptr` → no-op.
-//   - Otherwise → iterates and calls LUMICE_CompositionReleaseClauses on each record.
-// Callers who reuse a `LUMICE_Config` across successive Parse / Fill invocations must call
-// this before the memset that clears the struct (otherwise the record pointers leak); the
-// C++ RAII guard `lumice::ConfigOwningGuard` calls it on scope exit alongside
-// LUMICE_ConfigReleaseColorClasses.
-void LUMICE_ConfigReleaseCompositions(LUMICE_Config* cfg);
 
 // Read-only convenience accessor: return a pointer to clause `clause_index`'s first AND-term
 // inside `comp->term_ids` (i.e. the address of `term_ids[prefix_sum(term_counts[0..clause_index))]`)
@@ -964,7 +798,7 @@ const int* LUMICE_CompositionClauseTerms(const LUMICE_ComplexComposition* comp, 
 // =============== Raypath Color Display-Time Setter (task-342.2) ===============
 // Display-time appearance of one color class (mutable without re-simulation): the RGB
 // color, the visible/solo toggles. Structural fields (match[]/combine) live on
-// LUMICE_ColorClass and require re-simulation to change (LUMICE_CommitConfig{,Struct}).
+// LUMICE_ColorClass and require re-simulation to change (LUMICE_CommitScene).
 // WARNING (same footgun as LUMICE_ColorClass): visible/solo are applied verbatim, so a
 // zero-initialized LUMICE_ColorClassDisplay{} has visible==0 (INVISIBLE). Callers MUST set
 // visible=1 explicitly for every class they want shown, or the next composite hides them.
@@ -998,8 +832,8 @@ typedef struct LUMICE_ColorClassDisplay_ {
 // this range return LUMICE_ERR_INVALID_VALUE.
 //
 // Thread safety: display-time only; safe relative to OTHER display-time getters (Get*Results,
-// LUMICE_GetSimLifecycle, etc.). NOT thread-safe with concurrent LUMICE_CommitConfig{,Struct}
-// — the existing single-owner CommitConfig rule (doc/capi-lifecycle-architecture.md §4) still
+// LUMICE_GetSimLifecycle, etc.). NOT thread-safe with a concurrent LUMICE_CommitScene
+// — the existing single-owner commit rule (doc/capi-lifecycle-architecture.md §4) still
 // applies to this setter.
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode);
@@ -1018,7 +852,7 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 //
 // Thread safety: display-time only; safe relative to other display-time getters (Get*Results,
 // LUMICE_GetSimLifecycle, LUMICE_SetRaypathColors, etc.). NOT thread-safe with concurrent
-// LUMICE_CommitConfig{,Struct} (same single-owner rule as the rest of the display-time surface).
+// LUMICE_CommitScene (same single-owner rule as the rest of the display-time surface).
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total);
 
 // Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
@@ -1036,52 +870,6 @@ LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_tot
 // consumers) scan; intended for infrequent polls (commit-debounce cadence, ~1 Hz), not per
 // render frame.
 LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
-
-// =============== Configuration Parsing (JSON -> LUMICE_Config) ===============
-// Parse JSON into LUMICE_Config struct, enabling load-modify-commit workflows.
-//
-// Input format: accepts JSON in the format produced by LUMICE_CommitConfigStruct round-trip
-// (i.e., the subset of the full config format that LUMICE_Config can represent).
-// Specifically:
-//   - crystal: height/face_distance as scalars/arrays, axis as {type, mean, std} objects
-//   - filter: parse (JSON -> struct) supports all 6 types (none / raypath / entry_exit /
-//     direction / crystal / complex), mirroring the LUMICE_ConfigToJson emit; unknown type
-//     strings return LUMICE_ERR_INVALID_VALUE. Complex filters populate compositions[] and
-//     set composition_index (resolved in a second pass; each composition term must reference
-//     an existing simple filter, else LUMICE_ERR_INVALID_CONFIG). Parse does lossless field
-//     mapping only; per-value semantic validation (e.g. entry_exit min_len >= 1) fires at
-//     commit time in core.
-//   - render: lens/view/visible/background fields are ignored; only id/resolution/opacity/
-//     intensity_factor/overlap are parsed
-//   - spectrum: string enumerations ("D65","D55","D50","D75","A","E") populate the spectrum
-//     field; JSON arrays of {wavelength, weight} populate spectrum_entries[]/spectrum_count
-//     (up to LUMICE_MAX_CONFIG_SPECTRUM_ENTRIES; larger arrays return LUMICE_ERR_INVALID_CONFIG).
-//
-// The spectrum field in the output struct points to static storage; the caller must not free it.
-// If the caller replaces spectrum with a custom string for CommitConfigStruct, the caller
-// manages that string's lifetime.
-//
-// For full-format JSON (user-written configs with distribution parameters, complex filters, etc.),
-// use LUMICE_CommitConfig() or LUMICE_CommitConfigFromFile() instead.
-
-// Parse a JSON string into LUMICE_Config. Returns LUMICE_ERR_INVALID_JSON on parse failure.
-LUMICE_ErrorCode LUMICE_ParseConfigString(const char* json_str, LUMICE_Config* out);
-
-// Parse a JSON file into LUMICE_Config. filename must be UTF-8 encoded.
-// Returns LUMICE_ERR_FILE_NOT_FOUND if the file cannot be opened.
-LUMICE_ErrorCode LUMICE_ParseConfigFile(const char* filename, LUMICE_Config* out);
-
-// Serialize a LUMICE_Config into its JSON string form — the inverse of
-// LUMICE_ParseConfigString and the explicit serialization half of the typed-struct API
-// (for save / round-trip / debugging; distinct from the commit path).
-//
-// Buffer contract (snprintf-style, no cross-ABI allocation): writes at most buf_size bytes
-// into out_buf, always NUL-terminated when buf_size > 0. out_buf may be NULL (or buf_size 0)
-// to query the length without writing. If out_len is non-NULL it receives the full JSON
-// length EXCLUDING the NUL terminator; the output was truncated iff out_len >= buf_size.
-// Returns LUMICE_ERR_NULL_ARG if config is NULL, LUMICE_ERR_INVALID_CONFIG if the config
-// cannot be serialized (e.g. a filter with an unset/invalid type).
-LUMICE_ErrorCode LUMICE_ConfigToJson(const LUMICE_Config* config, char* out_buf, size_t buf_size, size_t* out_len);
 
 // =============== Results ===============
 // See doc/capi-lifecycle-architecture.md §5 for sentinel contract.
@@ -1105,7 +893,7 @@ LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderRes
 // composite buffer is genuinely freed and rebuilt whenever a fresh snapshot is
 // materialized — so it is only guaranteed valid until the NEXT LUMICE_Get*Results()
 // call (render/composite/stats/xyz, any of which may trigger a snapshot) or
-// LUMICE_CommitConfig(). Copy the pixels before the next Get*Results if you need them.
+// LUMICE_CommitScene(). Copy the pixels before the next Get*Results if you need them.
 LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
 
 // Fill raw XYZ results into out array (xyz_buffer == NULL sentinel when count < max_count).
@@ -1127,7 +915,7 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
 //
 // Lifetime: same as the individual getters — pointers stay valid until the
 // NEXT LUMICE_Get*Results() call (which may trigger a new snapshot) or
-// LUMICE_CommitConfig(). Copy the pixels before the next Get*Results if you
+// LUMICE_CommitScene(). Copy the pixels before the next Get*Results if you
 // need them.
 LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
                                                      int xyz_max_count, LUMICE_RenderResult* composite_out,
@@ -1312,7 +1100,7 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 //   backend = LUMICE_BACKEND_METAL          : request Metal; falls back to CPU
 //                                             if incompatible or unavailable
 //                                             on this platform.
-// Takes effect on the next simulation start (after LUMICE_CommitConfig). The
+// Takes effect on the next simulation start (after LUMICE_CommitScene). The
 // env-var LUMICE_TRACE_BACKEND, when set, overrides this preference:
 //   - "cpu_backend"            forces CPU unconditionally (ignores this pref).
 //   - "metal"                  forces Metal (Apple) regardless of this pref.
