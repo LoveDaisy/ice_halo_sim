@@ -47,4 +47,8 @@ namespace lumice {
 
 }  // namespace lumice
 
+// Implementation detail of the two declarations above, not part of the interface —
+// do not let it leak into the preprocessor namespace of every including TU.
+#undef LUMICE_PRINTF_FORMAT
+
 #endif  // LUMICE_UTIL_FATAL_HPP

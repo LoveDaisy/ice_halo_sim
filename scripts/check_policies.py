@@ -1144,6 +1144,9 @@ def check_no_bare_print() -> list[Violation]:
     today; if one appears, prefer rewording it over weakening the pattern.
     """
     out: list[Violation] = []
+    # Not cxx_sources(): that helper is bound to CXX_SUFFIXES, which excludes
+    # .cu/.metal. Walking here is deliberate, not an oversight — see the
+    # PRINT_SCAN_SUFFIXES note above for why the set stays separate.
     for path in sorted(SRC.rglob("*")):
         if path.suffix not in PRINT_SCAN_SUFFIXES or not path.is_file():
             continue
