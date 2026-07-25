@@ -98,10 +98,10 @@ struct LensProjScene {
 // pooled over 60 runs), with the sampled mean/σ recorded per scene in
 // test/gui/references/_thresholds.json and repeated inline below.
 static const LensProjScene kScenes[] = {
-  // mean 20.29 σ0.216
+  // mean 20.3085 σ0.1887
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 21.24 σ0.237
+  // mean 21.1868 σ0.2203
   {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
   // mean 27.74 σ0.058
@@ -129,6 +129,37 @@ static bool RequestAndWaitExport(ImGuiTestContext* ctx, const gui::PreviewViewpo
   return g_auto_ev_export.done.load() && g_auto_ev_export.result;
 }
 
+// IM_CHECK*() macros expand to `return;` on failure, so any of them firing between server
+// creation and the manual teardown below would skip Stop/Destroy and leak a running server +
+// poller thread into the next IM_REGISTER_TEST case (ResetTestState() only nulls the pointer,
+// it does not tear one down). The min_rays wait this scene relies on has an observed real
+// chance of not finishing in time under load (see the note above), which made that early-return
+// path newly reachable rather than theoretical. Ordinary `return` still unwinds the C++ stack,
+// so a scope guard here is sufficient; disarm it via server_owned once the normal path has torn
+// the server down itself, to avoid a double Stop/Destroy.
+struct ScopedServerAndWatchdogGuard {
+  ImGuiTestEngineIO* engine_io;
+  float saved_watchdog_warn;
+  float saved_watchdog_kill;
+  bool server_owned = true;
+
+  explicit ScopedServerAndWatchdogGuard(ImGuiTestEngineIO* io)
+      : engine_io(io), saved_watchdog_warn(io->ConfigWatchdogWarning), saved_watchdog_kill(io->ConfigWatchdogKillTest) {
+  }
+
+  ~ScopedServerAndWatchdogGuard() {
+    engine_io->ConfigWatchdogWarning = saved_watchdog_warn;
+    engine_io->ConfigWatchdogKillTest = saved_watchdog_kill;
+    if (server_owned && gui::g_server != nullptr) {
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+    }
+  }
+};
+
 void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
   for (int idx = 0; idx < kSceneCount; idx++) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "lens_proj", kScenes[idx].name);
@@ -137,8 +168,12 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       const auto& scene = kScenes[ctx->Test->ArgVariant];
       ResetTestState();
 
-      // 1. Server up before DoRun, at the harness-selected core log level.
+      // 1. Server up before DoRun, at the harness-selected core log level. The guard must be
+      // constructed immediately after: every IM_CHECK* below this point can return early, and
+      // only the guard's destructor unconditionally tears the server (and any widened watchdog
+      // config) back down on that path.
       gui::g_server = LUMICE_CreateServer();
+      ScopedServerAndWatchdogGuard guard(ctx->EngineIO);
       LUMICE_SetLogLevel(gui::g_server, static_cast<LUMICE_LogLevel>(g_core_log_level));
 
       // 2. Load the scene config (DeserializeFromJson does a full GuiState reset internally).
@@ -168,13 +203,11 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       // full-sky scenes need up to 5M rays to reach a usable noise floor (see kScenes[] note),
       // which can take longer than 60 simulated seconds to accumulate — the loop bound below is
       // already 120s, so the watchdog default was simply never raised to match. Widen it only
-      // for this wait so a slow-but-legitimate accumulation isn't mistaken for a hung test,
-      // then restore it immediately so every other test keeps the tight default.
-      ImGuiTestEngineIO* engine_io = ctx->EngineIO;
-      const float saved_watchdog_warn = engine_io->ConfigWatchdogWarning;
-      const float saved_watchdog_kill = engine_io->ConfigWatchdogKillTest;
-      engine_io->ConfigWatchdogWarning = 150.0f;
-      engine_io->ConfigWatchdogKillTest = 180.0f;
+      // for this wait so a slow-but-legitimate accumulation isn't mistaken for a hung test; the
+      // guard restores it (whether this wait succeeds or the IM_CHECK below returns early), so
+      // every other test still gets the tight default.
+      guard.engine_io->ConfigWatchdogWarning = 150.0f;
+      guard.engine_io->ConfigWatchdogKillTest = 180.0f;
       gui::g_state.texture_upload_count = 0;
       gui::g_state.stats_sim_ray_num = 0;
       for (int i = 0;
@@ -182,11 +215,10 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
            ++i) {
         ctx->Yield(1);
       }
-      engine_io->ConfigWatchdogWarning = saved_watchdog_warn;
-      engine_io->ConfigWatchdogKillTest = saved_watchdog_kill;
       IM_CHECK_GE((unsigned long long)gui::g_state.stats_sim_ray_num, scene.min_rays);
       IM_CHECK_GT((int)gui::g_state.texture_upload_count, 0);
 
+      guard.server_owned = false;
       gui::g_server_poller.Stop();
       LUMICE_StopServer(gui::g_server);
       LUMICE_DestroyServer(gui::g_server);

@@ -59,7 +59,7 @@ Checks:
      populated prefix are the same thing by construction. The invariant is
      pinned here rather than in a comment because the failure is silent: a
      default slot reads as a valid empty crystal all the way to the GPU.
-  10. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_ARGS
+  10. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_FILTER_EXPR
      must match the gui_test correctness-pool `--filter` invocation in
      scripts/build.sh. The two are independent hand-maintained copies (bash vs.
      Python, so they cannot share a single literal) of the same exclusion list;
@@ -74,7 +74,6 @@ CHECKS. Keep each check deterministic and artifact-inspecting.
 """
 from __future__ import annotations
 
-import importlib.util
 import re
 import sys
 from dataclasses import dataclass
@@ -1023,9 +1022,19 @@ BUILD_SH = REPO_ROOT / "scripts" / "build.sh"
 REGEN_GUI_TEST_REFS_PY = REPO_ROOT / "scripts" / "regen_gui_test_refs.py"
 
 _BUILD_SH_CORRECTNESS_FILTER = re.compile(r'GUI_TEST_BIN"\s+--fixed-dt\s+--filter\s+"([^"]+)"')
+# Matches SUITE_FILTER_EXPR's value however it is broken across adjacent string-literal lines
+# (Python concatenates those at parse time); DOTALL lets the group span the newline between them.
+_REGEN_SUITE_FILTER_EXPR = re.compile(
+    r'SUITE_FILTER_EXPR\s*=\s*\(\s*((?:"[^"]*"\s*)+)\)', re.DOTALL
+)
+_QUOTED_STRING = re.compile(r'"([^"]*)"')
 
 
 def check_gui_test_suite_args_sync() -> list[Violation]:
+    """Text/regex-only on both sides (never imports regen_gui_test_refs.py): that module pulls
+    in numpy/PIL, and an unguarded import here would let a failure in it take down every other
+    check_policies.py check along with this one — see git history for the exec_module attempt
+    this replaced."""
     out: list[Violation] = []
     if not BUILD_SH.exists() or not REGEN_GUI_TEST_REFS_PY.exists():
         return out
@@ -1046,44 +1055,32 @@ def check_gui_test_suite_args_sync() -> list[Violation]:
         return out
     build_sh_filter = m.group(1)
 
-    spec = importlib.util.spec_from_file_location(
-        "_check_policies_regen_gui_test_refs", REGEN_GUI_TEST_REFS_PY
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    suite_args = list(getattr(module, "SUITE_ARGS", []))
-    if "--filter" not in suite_args:
+    regen_text = REGEN_GUI_TEST_REFS_PY.read_text(encoding="utf-8")
+    m2 = _REGEN_SUITE_FILTER_EXPR.search(regen_text)
+    if not m2:
         out.append(
             Violation(
                 REGEN_GUI_TEST_REFS_PY,
                 1,
                 "gui-test-suite-args-sync",
-                "SUITE_ARGS has no `--filter` entry; update this check's pattern "
-                "alongside any SUITE_ARGS restructuring.",
+                "could not locate SUITE_FILTER_EXPR's value (expected "
+                '`SUITE_FILTER_EXPR = ("..." "...")`); update this check\'s pattern '
+                "alongside any SUITE_FILTER_EXPR restructuring.",
             )
         )
         return out
-    regen_filter = suite_args[suite_args.index("--filter") + 1]
+    regen_filter = "".join(_QUOTED_STRING.findall(m2.group(1)))
+    lineno = regen_text.count("\n", 0, m2.start()) + 1
 
     if build_sh_filter != regen_filter:
-        lineno = next(
-            (
-                i + 1
-                for i, line in enumerate(
-                    REGEN_GUI_TEST_REFS_PY.read_text(encoding="utf-8").splitlines()
-                )
-                if line.strip().startswith("SUITE_ARGS")
-            ),
-            1,
-        )
         out.append(
             Violation(
                 REGEN_GUI_TEST_REFS_PY,
                 lineno,
                 "gui-test-suite-args-sync",
-                f"SUITE_ARGS filter ({regen_filter!r}) no longer matches "
+                f"SUITE_FILTER_EXPR ({regen_filter!r}) no longer matches "
                 f"scripts/build.sh's gui_test correctness-pool `--filter` "
-                f"({build_sh_filter!r}); update SUITE_ARGS so reference calibration "
+                f"({build_sh_filter!r}); update SUITE_FILTER_EXPR so reference calibration "
                 "keeps running under the same condition CI actually asserts under.",
             )
         )

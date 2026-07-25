@@ -184,12 +184,15 @@ def _scene_key(scene: str, mode: str | None) -> str:
 # predate this and had to be regenerated from full-suite runs after a 31% run-level flake).
 # So the condition is not a knob: thresholds must be calibrated under the condition the
 # assertions run in, and there is no way to ask this script for anything else.
-SUITE_ARGS = [
-    "--fixed-dt",
-    "--filter",
+# A standalone named constant (rather than embedding the string as the 3rd element of
+# SUITE_ARGS) so scripts/check_policies.py's gui-test-suite-args-sync check can extract it by
+# name via a plain text/regex read, matching how it reads scripts/build.sh — instead of having
+# to import this module (and its numpy/PIL dependency graph) just to reach one string.
+SUITE_FILTER_EXPR = (
     "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,"
-    "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade",
-]
+    "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
+)
+SUITE_ARGS = ["--fixed-dt", "--filter", SUITE_FILTER_EXPR]
 
 
 def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:
