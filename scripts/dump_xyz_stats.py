@@ -99,8 +99,14 @@ def load_lib():
     lib.LUMICE_DestroyServer.restype  = None
     lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 
-    lib.LUMICE_CommitConfigFromFile.restype  = ctypes.c_int
-    lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.LUMICE_SceneFromJsonFile.restype  = ctypes.c_int
+    lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+
+    lib.LUMICE_CommitScene.restype  = ctypes.c_int
+    lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+
+    lib.LUMICE_SceneDestroy.restype  = None
+    lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
 
     lib.LUMICE_QueryServerState.restype  = ctypes.c_int
     lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
@@ -113,6 +119,23 @@ def load_lib():
     ]
 
     return lib
+
+
+def _commit_via_scene_handle(lib, server, config_path):
+    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle."""
+    scene = ctypes.c_void_p()
+    err = lib.LUMICE_SceneFromJsonFile(config_path.encode("utf-8"), ctypes.byref(scene))
+    if err != 0:
+        raise RuntimeError(f"SceneFromJsonFile failed: err={err}, config={config_path}")
+    if not scene:
+        raise RuntimeError(f"SceneFromJsonFile returned a NULL handle for {config_path}")
+    try:
+        # CommitScene deep-copies what it needs; the handle stays caller-owned.
+        err = lib.LUMICE_CommitScene(server, scene, None)
+        if err != 0:
+            raise RuntimeError(f"CommitScene failed: err={err}, config={config_path}")
+    finally:
+        lib.LUMICE_SceneDestroy(scene)
 
 # ─── Statistics computation ───────────────────────────────────────────────────
 
@@ -181,9 +204,7 @@ def run_scene(lib, scene_name, config_path, timeout_s):
 
     truncated = False
     try:
-        err = lib.LUMICE_CommitConfigFromFile(server, config_path.encode("utf-8"))
-        if err != 0:
-            raise RuntimeError(f"CommitConfigFromFile failed: err={err}, config={config_path}")
+        _commit_via_scene_handle(lib, server, config_path)
 
         # result array: 1 renderer + 1 sentinel slot
         results = (LUMICE_RawXyzResult * 2)()

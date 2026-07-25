@@ -53,10 +53,7 @@ from test.e2e._parity_metrics import (
     render_psnr,
 )
 from test.e2e._projection_battery import PROJECTION_TYPES, write_projection_config
-from test.e2e.capi_runner import (
-    run_scene_capi_buffered,
-    run_scene_from_json_file_capi_buffered,
-)
+from test.e2e.capi_runner import run_scene_capi_buffered
 from test.e2e.runner import get_project_root
 
 _SEED = 42
@@ -76,12 +73,26 @@ _DEGENERATE_CONFIGS = sorted(p.name for p in _CONFIGS_DIR.glob("degenerate_pipel
 
 
 def _assert_handle_matches_legacy(config_path, label: str) -> None:
-    """Run `config_path` through both config paths at one seed and compare the output."""
+    """Run `config_path` through both config paths at one seed and compare the output.
+
+    Both arms name their ``commit_path`` explicitly. This file is the one place in the suite
+    that needs the two surfaces to *differ*, so neither arm may inherit the runner's default —
+    a future change to that default would otherwise turn this differential into a
+    handle-vs-handle self-comparison that passes for the wrong reason.
+    """
     legacy = run_scene_capi_buffered(
-        str(config_path), sim_seed=_SEED, timeout_sec=_TIMEOUT, backend="legacy"
+        str(config_path),
+        sim_seed=_SEED,
+        timeout_sec=_TIMEOUT,
+        backend="legacy",
+        commit_path="config_file",
     )
-    handle = run_scene_from_json_file_capi_buffered(
-        str(config_path), sim_seed=_SEED, timeout_sec=_TIMEOUT, backend="legacy"
+    handle = run_scene_capi_buffered(
+        str(config_path),
+        sim_seed=_SEED,
+        timeout_sec=_TIMEOUT,
+        backend="legacy",
+        commit_path="scene_handle",
     )
 
     assert legacy.has_valid_data, f"{label}: legacy arm produced no valid data"

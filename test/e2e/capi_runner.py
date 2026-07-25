@@ -211,11 +211,13 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_DestroyServer.restype = None
     lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 
+    # Legacy LUMICE_Config commit path. Kept solely for the handle-vs-legacy differential
+    # sentinel, which needs both surfaces to compare them; every other caller goes through the
+    # Scene handle below. Retires with the legacy commit entry points.
     lib.LUMICE_CommitConfigFromFile.restype = ctypes.c_int
     lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
-    # Scene (opaque handle) config path — the handle-side counterpart of
-    # LUMICE_CommitConfigFromFile.
+    # Scene (opaque handle) config path — how the suite commits configs.
     lib.LUMICE_SceneFromJsonFile.restype = ctypes.c_int
     lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
 
@@ -331,6 +333,45 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
+# How the config reaches the server. Both end up at the same Server::CommitConfig; they differ
+# only in which C API surface carries the document there.
+#   "scene_handle" : LUMICE_SceneFromJsonFile + LUMICE_CommitScene  (opaque handle path)
+#   "config_file"  : LUMICE_CommitConfigFromFile  (legacy LUMICE_Config path)
+# "scene_handle" is the default and the only path the suite exercises in anger. "config_file" is
+# retained for exactly one caller — the handle-vs-legacy differential sentinel, which needs both
+# surfaces to compare them. It retires together with the legacy commit entry points.
+_COMMIT_PATHS = ("scene_handle", "config_file")
+
+
+def _commit_via_scene_handle(lib, server, config_path: str) -> None:
+    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle."""
+    scene = ctypes.c_void_p()
+    err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
+    if err != 0:
+        raise RuntimeError(f"SceneFromJsonFile failed err={err} config={config_path}")
+    if not scene:
+        raise RuntimeError(f"SceneFromJsonFile returned a NULL handle for {config_path}")
+    try:
+        # CommitScene deep-copies what it needs; the handle stays caller-owned.
+        err = lib.LUMICE_CommitScene(server, scene, None)
+        if err != 0:
+            raise RuntimeError(f"CommitScene failed err={err} config={config_path}")
+    finally:
+        # NULL-safe no-op by contract, but the handle is non-NULL here by the check above; the
+        # finally covers the commit-failure path, where the handle exists and must still be freed.
+        lib.LUMICE_SceneDestroy(scene)
+
+
+def _commit_config(lib, server, config_path: str, commit_path: str) -> None:
+    """Carry `config_path` to `server` over the selected C API surface."""
+    if commit_path == "scene_handle":
+        _commit_via_scene_handle(lib, server, config_path)
+        return
+    err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
+    if err != 0:
+        raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+
+
 def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> SimResult:
     """Run a single Lumice simulation via the C API and return scalar intensity.
 
@@ -358,9 +399,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
         raise RuntimeError("LUMICE_CreateServer returned NULL")
 
     try:
-        err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
-        if err != 0:
-            raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+        _commit_via_scene_handle(lib, server, str(config_path))
 
         results = (LUMICE_RawXyzResult * 1)()
         state_out = ctypes.c_int(0)
@@ -403,65 +442,19 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
 
 _BACKEND_MODES = ("legacy", "metal", "cpu_backend", "cuda")
 
-# How the config reaches the server. Both end up at Server::CommitConfig; they differ only in
-# which C API surface carries the document there.
-#   "config_file"  : LUMICE_CommitConfigFromFile  (legacy LUMICE_Config path)
-#   "scene_handle" : LUMICE_SceneFromJsonFile + LUMICE_CommitScene  (opaque handle path)
-_COMMIT_PATHS = ("config_file", "scene_handle")
-
-
-def _commit_via_scene_handle(lib, server, config_path: str) -> None:
-    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle."""
-    scene = ctypes.c_void_p()
-    err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
-    if err != 0:
-        raise RuntimeError(f"SceneFromJsonFile failed err={err} config={config_path}")
-    if not scene:
-        raise RuntimeError(f"SceneFromJsonFile returned a NULL handle for {config_path}")
-    try:
-        # CommitScene deep-copies what it needs; the handle stays caller-owned.
-        err = lib.LUMICE_CommitScene(server, scene, None)
-        if err != 0:
-            raise RuntimeError(f"CommitScene failed err={err} config={config_path}")
-    finally:
-        lib.LUMICE_SceneDestroy(scene)
-
-
-def run_scene_from_json_file_capi_buffered(
-    config_path: str,
-    sim_seed: int = 0,
-    timeout_sec: int = 180,
-    backend: str = "legacy",
-) -> BufferedSimResult:
-    """Same as run_scene_capi_buffered, but feeds the config through the Scene handle path
-    (LUMICE_SceneFromJsonFile + LUMICE_CommitScene) instead of LUMICE_CommitConfigFromFile.
-
-    Everything downstream — polling, buffer copy-out, backend log parsing — is shared with
-    run_scene_capi_buffered, so a difference between the two results is a difference in the
-    config path and nothing else.
-    """
-    return run_scene_capi_buffered(
-        config_path,
-        sim_seed=sim_seed,
-        timeout_sec=timeout_sec,
-        backend=backend,
-        commit_path="scene_handle",
-    )
-
 
 def run_scene_capi_buffered(
     config_path: str,
     sim_seed: int = 0,
     timeout_sec: int = 180,
     backend: str = "legacy",
-    commit_path: str = "config_file",
+    commit_path: str = "scene_handle",
 ) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out XYZ + RGB buffers.
 
-    `commit_path` selects which C API surface carries the config to the server
-    ("config_file" = LUMICE_CommitConfigFromFile, "scene_handle" =
-    LUMICE_SceneFromJsonFile + LUMICE_CommitScene). Prefer the
-    run_scene_from_json_file_capi_buffered wrapper for the latter.
+    `commit_path` selects which C API surface carries the config to the server;
+    see _COMMIT_PATHS. It defaults to the Scene handle path — callers other than
+    the handle-vs-legacy differential sentinel have no reason to set it.
 
     `backend` selects the trace path:
       - "legacy"     : no env, preferred_backend = LUMICE_BACKEND_CPU. The C-API
@@ -540,12 +533,7 @@ def run_scene_capi_buffered(
                     lib.LUMICE_SetPreferredBackend(server, LUMICE_BACKEND_CPU)
                 # cpu_backend: env handles routing; preferred is ignored.
 
-                if commit_path == "scene_handle":
-                    _commit_via_scene_handle(lib, server, config_path)
-                else:
-                    err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
-                    if err != 0:
-                        raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
+                _commit_config(lib, server, str(config_path), commit_path)
 
                 results = (LUMICE_RawXyzResult * 1)()
                 renders = (LUMICE_RenderResult * 1)()
