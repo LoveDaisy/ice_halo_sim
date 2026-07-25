@@ -210,5 +210,6 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
 void RegisterStateReconcileTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
+void RegisterLensProjectionTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

@@ -90,6 +90,22 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="smoke_",
         source="test/gui/visual/test_gui_capture_smoke.cpp",
     ),
+    # Lens-projection scene names — must match kScenes[] order in test_gui_lens_projection.cpp.
+    # One scene per projection branch of the preview fragment shader; all four share the same
+    # simulated frame, so a PSNR drop localizes to the projection math.
+    "lens_proj": ReferenceGroup(
+        key="lens_proj",
+        scenes=[
+            "fisheye_equal_area_120",
+            "fisheye_orthographic_180",
+            "dual_fisheye_equal_area_full",
+            "rectangular",
+        ],
+        modes=[None],
+        tmp_prefix="lumice_lens_proj_",
+        ref_prefix="lens_proj_",
+        source="test/gui/visual/test_gui_lens_projection.cpp",
+    ),
 }
 
 STAGING_DIR = "/tmp/gui_refs_build"
