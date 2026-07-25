@@ -69,6 +69,22 @@ Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cm
 - Do not use raw `new` / `delete`.
 - Do not use `using namespace`.
 - Keep code comments in English.
+- Logging: all diagnostic output goes through the logger — `ILOG_*` (core/server, `src/util/logger.hpp`)
+  or `GUI_LOG_*` (GUI, `src/gui/gui_logger.hpp`). A raw `printf` / `fprintf` / `std::cout` / `std::cerr`
+  bypasses the unified sinks, the level filter and the format, so it is invisible exactly where a user
+  looks: the GUI log panel, the file sink they enabled, and — on Windows, where the GUI calls
+  `FreeConsole()` unless a diagnostic flag was passed — anywhere at all. Two files under `src/` are
+  exempt, and both are exemptions with a name and an owner rather than a per-line escape hatch:
+  `src/main.cpp`, whose stdout **is** the CLI's product output (two of its lines are parsed contracts —
+  the `[BENCHMARK]` JSON and `ColorClassSignal:`, so a log prefix would break the e2e suite); and
+  `src/util/fatal.hpp`, the single owner of the pre-abort trap, where unbuffered stderr is the whole
+  point — a per-message-unflushed file sink can lose the line precisely when it matters. For an
+  unrecoverable invariant call `lumice::FatalAbort(...)` instead of hand-rolling print-then-`abort()`.
+  Enforced by the `no-bare-print` rule in `scripts/check_policies.py`, which also scans `.cu` / `.metal`
+  so a GPU backend cannot reopen the side channel. `test/` is deliberately out of scope: test binaries
+  are their own harness with no app logger to bypass, and some of their output is a parsed contract
+  (the regen driver reads gui_test's `PSNR=` line). Device-side `printf` in a CUDA kernel stays a
+  legitimate debugging tool — the gate does not stop you adding one while working, only from landing it.
 - Public API boundary: `src/gui/` code must only access core/config functionality
   through the C API (`src/include/lumice.h`). Direct `#include` of `core/` or `config/`
   headers from `src/gui/` is prohibited.

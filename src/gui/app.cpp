@@ -9,7 +9,6 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <fstream>
 #include <future>
 #include <optional>
@@ -145,7 +144,7 @@ std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
 std::string g_log_file_path;
 
 void GlfwErrorCallback(int error, const char* description) {
-  fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+  GUI_LOG_ERROR("GLFW Error {}: {}", error, description);
 }
 
 float GetAspectRatio(AspectPreset preset) {
