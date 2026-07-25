@@ -40,8 +40,15 @@ using RunIntent = gui::RunIntent;
 
 // Small finite single-prism run: empty filter (all rays pass), rectangular lens, tiny
 // resolution — completes in well under a second on CPU or Metal.
+//
+// The crystal block is in the canonical wire form (lowercase "prism", shape nested under
+// "shape"). It used to read `"type": "Prism", "height": 1.0, "ratio": {...}` — which the core
+// parser did NOT understand: an unrecognized type logs "Unknown crystal type!" and leaves the
+// default-constructed param, so "height"/"ratio" were never read and this test silently ran a
+// zero-face-distance crystal. The Scene parser rejects the unknown type outright
+// (LUMICE_ERR_INVALID_VALUE) instead of defaulting, which is how the typo surfaced.
 const char* kFiniteConfig = R"({
-  "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "ratio": {"upper": 1.0, "lower": 1.0}}],
+  "crystal": [{"id": 1, "type": "prism", "shape": {"height": 1.0}}],
   "filter": [],
   "scene": {
     "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0, "diameter": 0.5, "spectrum": "D65"},
