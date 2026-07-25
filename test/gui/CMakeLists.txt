@@ -24,6 +24,7 @@ add_executable(gui_test
     visual/test_gui_bg.cpp
     visual/test_gui_crystal_renderer.cpp
     visual/test_gui_auto_ev.cpp
+    visual/test_gui_capture_smoke.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
