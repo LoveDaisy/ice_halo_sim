@@ -211,13 +211,7 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_DestroyServer.restype = None
     lib.LUMICE_DestroyServer.argtypes = [ctypes.c_void_p]
 
-    # Legacy LUMICE_Config commit path. Kept solely for the handle-vs-legacy differential
-    # sentinel, which needs both surfaces to compare them; every other caller goes through the
-    # Scene handle below. Retires with the legacy commit entry points.
-    lib.LUMICE_CommitConfigFromFile.restype = ctypes.c_int
-    lib.LUMICE_CommitConfigFromFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-
-    # Scene (opaque handle) config path — how the suite commits configs.
+    # Scene (opaque handle) config path — the only C API surface that commits a config.
     lib.LUMICE_SceneFromJsonFile.restype = ctypes.c_int
     lib.LUMICE_SceneFromJsonFile.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
 
@@ -333,18 +327,12 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
-# How the config reaches the server. Both end up at the same Server::CommitConfig; they differ
-# only in which C API surface carries the document there.
-#   "scene_handle" : LUMICE_SceneFromJsonFile + LUMICE_CommitScene  (opaque handle path)
-#   "config_file"  : LUMICE_CommitConfigFromFile  (legacy LUMICE_Config path)
-# "scene_handle" is the default and the only path the suite exercises in anger. "config_file" is
-# retained for exactly one caller — the handle-vs-legacy differential sentinel, which needs both
-# surfaces to compare them. It retires together with the legacy commit entry points.
-_COMMIT_PATHS = ("scene_handle", "config_file")
+def _commit_config(lib, server, config_path: str) -> None:
+    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle.
 
-
-def _commit_via_scene_handle(lib, server, config_path: str) -> None:
-    """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle."""
+    Since v4.12 this is the whole story: LUMICE_SceneFromJsonFile + LUMICE_CommitScene is the
+    only C API surface that carries a config to the server, so there is no path selector.
+    """
     scene = ctypes.c_void_p()
     err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
     if err != 0:
@@ -360,18 +348,6 @@ def _commit_via_scene_handle(lib, server, config_path: str) -> None:
         # NULL-safe no-op by contract, but the handle is non-NULL here by the check above; the
         # finally covers the commit-failure path, where the handle exists and must still be freed.
         lib.LUMICE_SceneDestroy(scene)
-
-
-def _commit_config(lib, server, config_path: str, commit_path: str) -> None:
-    """Carry `config_path` to `server` over the selected C API surface."""
-    if commit_path == "scene_handle":
-        _commit_via_scene_handle(lib, server, config_path)
-        return
-    if commit_path != "config_file":
-        raise ValueError(f"unknown commit_path: {commit_path!r} (expected one of {_COMMIT_PATHS})")
-    err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
-    if err != 0:
-        raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")
 
 
 def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) -> SimResult:
@@ -401,7 +377,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
         raise RuntimeError("LUMICE_CreateServer returned NULL")
 
     try:
-        _commit_via_scene_handle(lib, server, str(config_path))
+        _commit_config(lib, server, str(config_path))
 
         results = (LUMICE_RawXyzResult * 1)()
         state_out = ctypes.c_int(0)
@@ -450,13 +426,8 @@ def run_scene_capi_buffered(
     sim_seed: int = 0,
     timeout_sec: int = 180,
     backend: str = "legacy",
-    commit_path: str = "scene_handle",
 ) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out XYZ + RGB buffers.
-
-    `commit_path` selects which C API surface carries the config to the server;
-    see _COMMIT_PATHS. It defaults to the Scene handle path — callers other than
-    the handle-vs-legacy differential sentinel have no reason to set it.
 
     `backend` selects the trace path:
       - "legacy"     : no env, preferred_backend = LUMICE_BACKEND_CPU. The C-API
@@ -484,8 +455,6 @@ def run_scene_capi_buffered(
     """
     if backend not in _BACKEND_MODES:
         raise ValueError(f"backend must be one of {_BACKEND_MODES}, got {backend!r}")
-    if commit_path not in _COMMIT_PATHS:
-        raise ValueError(f"commit_path must be one of {_COMMIT_PATHS}, got {commit_path!r}")
 
     lib = _load_lib()
     _ensure_log_callback_registered(lib)
@@ -535,7 +504,7 @@ def run_scene_capi_buffered(
                     lib.LUMICE_SetPreferredBackend(server, LUMICE_BACKEND_CPU)
                 # cpu_backend: env handles routing; preferred is ignored.
 
-                _commit_config(lib, server, str(config_path), commit_path)
+                _commit_config(lib, server, str(config_path))
 
                 results = (LUMICE_RawXyzResult * 1)()
                 renders = (LUMICE_RenderResult * 1)()

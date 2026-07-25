@@ -106,7 +106,7 @@ not be changed without re-calibrating the brightness baseline.
 | `xyz_buffer` | `snapshot_xyz_` (filtered XYZ data; `NULL` sentinel) |
 | `snapshot_intensity` | Per-pixel landed intensity (`snapshot_intensity_ / (kNormScale × total_pixels)`) |
 | `intensity_factor` | CLI/config EV factor `2^EV` |
-| `has_valid_data` | Non-zero once simulation has produced data (reset on `CommitConfig`/`Stop`) |
+| `has_valid_data` | Non-zero once simulation has produced data (reset on commit / `Stop`) |
 | `snapshot_generation` | Increments per snapshot; compare to detect data changes |
 | `effective_pixels` | Non-zero pixel count (stats display) |
 
@@ -137,7 +137,7 @@ mono path must compute their own.
 > both locations).
 
 **Lifetime**: the `xyz_buffer` pointer is valid until the next
-`LUMICE_GetRawXyzResults()` or `LUMICE_CommitConfig()` call.
+`LUMICE_GetRawXyzResults()` or `LUMICE_CommitScene()` call.
 
 **Composite EV setter**: `LUMICE_SetCompositeExposure(server, ev_total)` (task-345.3) is
 the display-time counterpart to `LUMICE_SetRaypathColors` — the GUI uses it to push the

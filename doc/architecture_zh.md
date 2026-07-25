@@ -55,8 +55,10 @@
 - 生命周期管理：控制服务器启动和停止
 
 **主要接口**：
-- `CommitConfig(const std::string&)`: 提交 JSON 配置字符串
-- `CommitConfigFromFile(const std::string&)`: 从文件加载配置
+- `CommitConfig(const nlohmann::json&, bool* out_reused)`: 提交已解析的配置。这是 core 侧唯一的
+  commit；能到达它的公开入口只有 `LUMICE_CommitScene`（C API 的 `LUMICE_Config` 值结构体及其三个
+  commit 函数已在 v4.12 移除，见 [`doc/c_api_zh.md`](c_api_zh.md)）。
+- `CommitConfig(const std::string&)`: JSON 字符串重载，供 benchmark harness 使用
 - `GetRenderResults()`: 获取渲染结果（非阻塞）
 - `GetStatsResult()`: 获取统计结果（非阻塞）
 - `IsIdle()`: 检查是否空闲
@@ -320,9 +322,10 @@ void LUMICE_DestroyServer(LUMICE_Server* server);
 // 日志
 void LUMICE_SetLogLevel(LUMICE_Server* server, LUMICE_LogLevel level);
 
-// 配置（返回 LUMICE_ErrorCode）
-LUMICE_ErrorCode LUMICE_CommitConfig(LUMICE_Server* server, const char* config_str);
-LUMICE_ErrorCode LUMICE_CommitConfigFromFile(LUMICE_Server* server, const char* filename);
+// 配置：先构建或解析出场景句柄，再提交它（返回 LUMICE_ErrorCode）
+LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** out_scene);
+LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
+void LUMICE_SceneDestroy(LUMICE_Scene* scene);
 
 // 结果获取（数组+哨兵模式，返回 LUMICE_ErrorCode）
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
