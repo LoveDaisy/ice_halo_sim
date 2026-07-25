@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
@@ -31,6 +32,14 @@ namespace {
 
 constexpr int kDefaultJpegQuality = 95;
 constexpr auto kPollInterval = std::chrono::seconds(1);
+
+// Owning wrapper for the short-lived LUMICE_Scene handles the CLI builds from JSON.
+// LUMICE_CommitScene reads the scene as const and keeps no reference to it, so each handle is
+// a local that must be destroyed on every exit path — including the commit-failure returns.
+struct SceneDeleter {
+  void operator()(LUMICE_Scene* scene) const { LUMICE_SceneDestroy(scene); }
+};
+using ScenePtr = std::unique_ptr<LUMICE_Scene, SceneDeleter>;
 
 // Warn (once, on config load) if the last multi-scattering layer has prob > 0.
 // core semantics: the last layer's prob-fail rays would have "continued to the
@@ -318,7 +327,16 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 
-  if (LUMICE_CommitConfig(server, config_str.c_str()) != LUMICE_OK) {
+  // JSON -> handle -> commit. Parse and commit are separate entry points now, so the two
+  // failures are reported separately instead of being flattened into one "failed to commit".
+  LUMICE_Scene* raw_scene = nullptr;
+  if (LUMICE_SceneFromJson(config_str.c_str(), &raw_scene) != LUMICE_OK) {
+    std::cerr << "Error: failed to parse config for " << mode << " benchmark pass\n";
+    LUMICE_DestroyServer(server);
+    return;
+  }
+  ScenePtr scene(raw_scene);
+  if (LUMICE_CommitScene(server, scene.get(), /*out_reused=*/nullptr) != LUMICE_OK) {
     std::cerr << "Error: failed to commit config for " << mode << " benchmark pass\n";
     LUMICE_DestroyServer(server);
     return;
@@ -734,7 +752,18 @@ int main(int argc, char** argv) {
   LUMICE_SetLogLevel(server, log_level);
 
   WarnIfLastScatteringLayerProbNonzero(config_filename);
-  if (LUMICE_CommitConfigFromFile(server, config_filename.u8string().c_str()) != LUMICE_OK) {
+  // File -> handle -> commit. The parse half reports through its return code only (no internal
+  // LOG_ERROR, unlike the core commit path), so the CLI says out loud which half failed instead
+  // of exiting 1 with nothing on the console.
+  LUMICE_Scene* raw_scene = nullptr;
+  if (auto err = LUMICE_SceneFromJsonFile(config_filename.u8string().c_str(), &raw_scene); err != LUMICE_OK) {
+    std::cerr << "Error: failed to load configuration from file '" << config_filename.u8string() << "' (error code "
+              << static_cast<int>(err) << ")\n";
+    LUMICE_DestroyServer(server);
+    return 1;
+  }
+  ScenePtr scene(raw_scene);
+  if (LUMICE_CommitScene(server, scene.get(), /*out_reused=*/nullptr) != LUMICE_OK) {
     LUMICE_DestroyServer(server);
     return 1;
   }
