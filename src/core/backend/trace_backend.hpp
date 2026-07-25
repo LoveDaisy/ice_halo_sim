@@ -35,7 +35,8 @@ namespace lumice {
 //   2) Host pointers do not cross the seam, except at two explicit boundaries:
 //        - HostRayBatch: the ingest boundary (only at the first MS layer).
 //        - ReadbackExitRays: the sole device->host boundary (exit-ray
-//          buffer-egress — N `ExitRayRecord`s, each 36B carrying
+//          buffer-egress — N `ExitRayRecord`s, each 96B (size single-sourced
+//          by the static_assert in core/exit_seam.hpp) carrying
 //          {dir, weight, path, crystal_id, ms_layer_idx}).
 //      Ray data and layer-local buffers otherwise live as backend-owned,
 //      opaque, device-resident handles. (scrum-258.1: ReadbackImage was
@@ -54,7 +55,8 @@ namespace lumice {
 //          The only host-visible side-effect is reading ContinuationCount() —
 //          a single 4-byte cudaMemcpy.
 //        - ReadbackExitRays performs a single device->host copy of
-//          N `ExitRayRecord`s (36B each) for N exit rays.
+//          N `ExitRayRecord`s (96B each, size single-sourced by the
+//          static_assert in core/exit_seam.hpp) for N exit rays.
 //
 //   4) Metal co-design as a second orthogonal view. The contract is validated
 //      by at least one Metal skeleton implementation so the seam does not
@@ -390,7 +392,8 @@ class TraceBackend {
   // contract. Copies the world-space exit rays captured this session
   // (one entry per ray that left the crystal in the final MS layer) into
   // the caller-provided vector and returns the exit-ray count. Each record
-  // is a 36B `ExitRayRecord` carrying {dir, weight, path, crystal_id,
+  // is a 96B `ExitRayRecord` (size single-sourced by the static_assert in
+  // core/exit_seam.hpp) carrying {dir, weight, path, crystal_id,
   // ms_layer_idx}; see core/exit_seam.hpp. The simulator routes these
   // through the legacy consumer projection (O(exit rays)), replacing the
   // per-batch O(W*H) image readback.

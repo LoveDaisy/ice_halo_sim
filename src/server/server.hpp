@@ -2,7 +2,6 @@
 #define INCLUDE_SERVER_H_
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -259,21 +258,6 @@ class Server {
    * @return Error object indicating success or failure
    */
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
-
-  /**
-   * @brief Commit configuration from file
-   * @param filename Path to JSON configuration file
-   * @return Error object indicating success or failure
-   * @note The configuration format should follow V3 configuration schema
-   * @see configuration.md for configuration format details
-   * @example
-   *   auto err = server.CommitConfigFromFile("config.json");
-   *   if (err) {
-   *     std::cerr << "Error: " << err.message << std::endl;
-   *     return;
-   *   }
-   */
-  Error CommitConfigFromFile(const std::filesystem::path& filename);
 
   /**
    * @brief Get all render results

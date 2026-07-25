@@ -102,7 +102,8 @@ class MetalTraceBackend : public TraceBackend {
   void SetCaptureRayMask(bool enable);
   void ReadbackRayMask(std::vector<uint64_t>& masks, std::vector<float>& weights) const;
   // [PARITY-ONLY] Exit seam buffer-egress contract — see base class.
-  // Returns rich `ExitRayRecord` (36B each) — see core/exit_seam.hpp.
+  // Returns rich `ExitRayRecord` (96B each, size single-sourced by the
+  // static_assert in core/exit_seam.hpp) — see core/exit_seam.hpp.
   // Not invoked on the production path; DrainExits is the production exit
   // seam. Retained as a parity testing contract — virtual override stays
   // for the parity harness.
