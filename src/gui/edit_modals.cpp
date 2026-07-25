@@ -1708,6 +1708,13 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   const float kToolRow = ImGui::GetFrameHeightWithSpacing();
   const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
   const float kPreviewChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
+  // Content pane height (tab bar + the tallest tab body). Sized to fit the tallest crystal layout —
+  // Pyramid + all 6 Face Distance rows expanded (~16 rows + tab bar) — so that case no longer needs a
+  // scrollbar. Kept a FIXED height (not ImGuiChildFlags_AutoResizeY): a content-driven size grows the
+  // modal downward past the screen bottom as sections/rows expand and it drops the scroll fallback
+  // that genuinely tall content (e.g. a many-row filter, up to kMaxSummandRows) still relies on — so
+  // content taller than this still scrolls, while the fixed size keeps the modal centered on appear.
+  const float kModalContentHeight = kToolRow + 17.0f * ImGui::GetFrameHeightWithSpacing() + kVPad;
   bool vertical = state.modal_layout_vertical;
 
   if (vertical) {
@@ -1716,26 +1723,23 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     RenderCrystalPreviewPane(state);
     ImGui::EndChild();
-    // Lower pane: tab bar + body. Height matches the horizontal right pane
-    // so V-layout modal is visually a stacked version of H-layout (user
-    // feedback gui-polish-v15 round 2). Use default scrollbar behavior
-    // (shown only when content overflows); AlwaysVerticalScrollbar would
-    // leave the track visible even when content fits — unnecessary noise
-    // for tabs whose natural height already matches the pane.
-    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
+    // Lower pane: tab bar + body, at kModalContentHeight so the tallest crystal layout fits without a
+    // scrollbar (taller content still scrolls; see the constant's rationale).
+    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kModalContentHeight), ImGuiChildFlags_None,
                       ImGuiWindowFlags_None);
     RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
     ImGui::EndChild();
   } else {
-    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse — height
-    // budget covers content; right pane sizes off remaining width.
+    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse (fixed preview height);
+    // right pane sizes off remaining width and uses kModalContentHeight so the tallest tab content
+    // (Pyramid + all Face Distance rows) fits without a scrollbar (taller content still scrolls).
     const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kPreviewChildW_H - style.ItemSpacing.x);
     ImGui::BeginChild("##modal_left_pane", ImVec2(kPreviewChildW_H, kPreviewChildHeight), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     RenderCrystalPreviewPane(state);
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kPreviewChildHeight), ImGuiChildFlags_None);
+    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kModalContentHeight), ImGuiChildFlags_None);
     RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
     ImGui::EndChild();
   }
