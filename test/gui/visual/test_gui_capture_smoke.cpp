@@ -16,8 +16,11 @@
 
 #include "test_gui_shared.hpp"
 
-// Calibrated by scripts/regen_gui_test_refs.py Phase B (--group capture_harness) as
-// floor((mean − 3σ) · 2) / 2; see test/gui/references/_thresholds.json.
+// Set by scripts/regen_gui_test_refs.py Phase B (--group capture_harness); see
+// test/gui/references/_thresholds.json. This scene renders pixel-identical across runs, so
+// there is no finite PSNR distribution to take mean − 3σ from and the driver reports its
+// deterministic floor instead — the same 40 dB the repo's other deterministic GL
+// comparisons use (screenshot/left_panel_psnr, screenshot/crystal_psnr).
 static constexpr double kPsnrThreshold = 40.0;
 
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
@@ -60,8 +63,11 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
     IM_CHECK(has_nonzero);
 
     // Tmp filename must match ReferenceGroup.tmp_prefix in scripts/regen_gui_test_refs.py.
+    // The reference is PNG, not JPEG: the driver's format rule picked it because this frame
+    // has zero run-to-run variance (so JPEG artifacts would be its only noise) and a flat UI
+    // screenshot compresses smaller losslessly anyway.
     const std::string tmp_path = "/tmp/lumice_capture_harness_fullframe.png";
-    const std::string ref_path = std::string(LUMICE_TEST_REF_DIR) + "/smoke_fullframe.jpg";
+    const std::string ref_path = std::string(LUMICE_TEST_REF_DIR) + "/smoke_fullframe.png";
     auto rgb = lumice::test::StripAlpha(g_fullframe_capture.pixels.data(), g_fullframe_capture.width,
                                         g_fullframe_capture.height);
     IM_CHECK(

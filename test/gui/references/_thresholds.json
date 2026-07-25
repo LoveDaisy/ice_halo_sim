@@ -56,6 +56,20 @@
           "threshold": 19.0
         }
       }
+    },
+    "capture_harness": {
+      "generated_at": "2026-07-25T10:49:44",
+      "n_ref_runs": 10,
+      "n_calib_runs": 10,
+      "scenes": {
+        "fullframe": {
+          "psnr_mean": null,
+          "psnr_std": null,
+          "identical_runs": 10,
+          "n_samples": 10,
+          "threshold": 40.0
+        }
+      }
     }
   }
 }
