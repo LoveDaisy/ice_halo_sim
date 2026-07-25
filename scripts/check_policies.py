@@ -94,6 +94,29 @@ POLICY_DOC = REPO_ROOT / "doc" / "env-var-policy.md"
 
 CXX_SUFFIXES = {".cpp", ".cc", ".hpp", ".h", ".mm", ".inl"}
 
+# The bare-print rule scans GPU sources too, so a CUDA/Metal backend cannot
+# reintroduce a stderr side channel that bypasses the logger. This is a SEPARATE
+# set rather than a widening of CXX_SUFFIXES on purpose: the other checks in this
+# file were written and validated against host C++ only, and sweeping .cu/.metal
+# into all of them at once would change ten rules' scope as a side effect of
+# adding one. Widen CXX_SUFFIXES itself only after auditing each check.
+PRINT_SCAN_SUFFIXES = CXX_SUFFIXES | {".cu", ".cuh", ".metal"}
+
+# The only two translation units under src/ allowed to write to a stdio stream.
+# Both are exceptions with a name and an owner, which is why the rule needs no
+# per-line escape hatch and no "print followed by abort" pattern matching:
+#   - main.cpp    : the CLI's stdout IS its product output, not logging. Two of
+#                   its lines are parsed by the e2e suite ([BENCHMARK] json and
+#                   ColorClassSignal:), so a log prefix would break the harness.
+#   - util/fatal.hpp : the single owner of the pre-abort trap, where unbuffered
+#                   stderr is the point (see the rationale in that header).
+BARE_PRINT_ALLOWED = frozenset(
+    {
+        SRC / "main.cpp",
+        SRC / "util" / "fatal.hpp",
+    }
+)
+
 
 @dataclass
 class Violation:
@@ -198,6 +221,18 @@ USING_NAMESPACE = re.compile(r"\busing\s+namespace\b")
 # pinned: PR#182 was specifically about `__builtin_popcountll`; extend the
 # alternation when a new MSVC-unsafe family surfaces.
 MSVC_UNSAFE_BUILTIN = re.compile(r"\b__builtin_(?:popcount|ctz|clz)\w*")
+# Stream-writing calls that bypass the logger's sinks / level filter / format.
+# Buffer-writing formatters (snprintf, vsnprintf, sprintf, asprintf) are NOT
+# listed: they produce a string, they do not emit output, so they are not a
+# logging bypass. The leading \b is what excludes them: there is no word boundary
+# before `printf` inside `snprintf`, so the buffer forms cannot match, while the
+# `v?f?` prefix admits the four stream forms (printf/fprintf/vprintf/vfprintf)
+# that can. Only qualified std:: stream objects are matched, which is sound here
+# because `using namespace` is itself banned (check_no_using_namespace above), so
+# an unqualified `cout` cannot compile. std::endl/std::flush need no entry: they
+# cannot appear without one of the stream objects below.
+BARE_PRINT_CALL = re.compile(r"\b(?:std::)?(?:v?f?printf|puts|fputs|fputc|putc|putchar)\s*\(")
+BARE_PRINT_STREAM = re.compile(r"\bstd::(?:cout|cerr|clog)\b")
 
 
 def check_getenv_centralization() -> list[Violation]:
@@ -1087,6 +1122,49 @@ def check_gui_test_suite_args_sync() -> list[Violation]:
     return out
 
 
+def check_no_bare_print() -> list[Violation]:
+    """No raw stdio/iostream output under src/ — logging goes through spdlog.
+
+    A bare print bypasses the unified sinks, the level filter and the format, so
+    it is invisible in exactly the places a user looks: the GUI log panel, the
+    file sink they enabled, and — on Windows, where the GUI calls FreeConsole()
+    unless a diagnostic flag was passed — anywhere at all.
+
+    Scope note: `test/` is not scanned. Test binaries are their own harness and
+    several of their lines are parsed contracts (regen_gui_test_refs.py reads the
+    `[<group>] <tag>: PSNR=... dB` line out of gui_test's stderr). Nothing there
+    is a logging bypass, because there is no app logger to bypass.
+
+    Honest limitation: device-side printf inside a CUDA kernel is a legitimate
+    debugging tool. This rule does not stop you from adding one while you work —
+    it stops one from landing. That is the intended trade, not an oversight.
+
+    Known gap: strip_comments() blanks comments but preserves string literals, so
+    a literal containing e.g. `printf(` would be flagged. No such literal exists
+    today; if one appears, prefer rewording it over weakening the pattern.
+    """
+    out: list[Violation] = []
+    for path in sorted(SRC.rglob("*")):
+        if path.suffix not in PRINT_SCAN_SUFFIXES or not path.is_file():
+            continue
+        if path in BARE_PRINT_ALLOWED:
+            continue
+        for lineno, _orig, code in code_lines(path):
+            if BARE_PRINT_CALL.search(code) or BARE_PRINT_STREAM.search(code):
+                out.append(
+                    Violation(
+                        path,
+                        lineno,
+                        "no-bare-print",
+                        "raw stdio/iostream output bypasses the logger's sinks, level "
+                        "filter and format. Use ILOG_* (core/server) or GUI_LOG_* (gui); "
+                        "for an unrecoverable-invariant trap use lumice::FatalAbort "
+                        "(util/fatal.hpp). See AGENTS.md.",
+                    )
+                )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1099,6 +1177,7 @@ CHECKS = [
     check_no_msvc_unsafe_builtin,
     check_no_default_constructed_crystal_slots,
     check_gui_test_suite_args_sync,
+    check_no_bare_print,
 ]
 
 
@@ -1122,7 +1201,7 @@ def main() -> int:
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
-        "no-default-constructed-crystal-slots, gui-test-suite-args-sync)."
+        "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print)."
     )
     return 0
 

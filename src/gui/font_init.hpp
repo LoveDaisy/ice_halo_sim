@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cstdio>
 #include <cstring>
 
 #include "IconsFontAwesome6.h"
 #include "gui/fa_solid_900_embed.h"
+#include "gui/gui_logger.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -27,7 +27,7 @@ inline void LoadFontAtlas(ImGuiIO& io) {
     ImFont* icon_font =
         io.Fonts->AddFontFromMemoryTTF(icon_buf, static_cast<int>(kFaSolid900Size), 13.0f, &icon_cfg, kIconRanges);
     if (!icon_font) {
-      fprintf(stderr, "[gui] WARNING: FA icon font failed to load; ICON_FA_* glyphs will be blank.\n");
+      GUI_LOG_WARNING("FA icon font failed to load; ICON_FA_* glyphs will be blank.");
     }
   }
 }

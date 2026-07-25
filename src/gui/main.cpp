@@ -8,7 +8,6 @@
 #endif
 
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -59,6 +58,43 @@ int main(int argc, char** argv) {
   timeBeginPeriod(1);
 #endif
 
+  // Set up GUI-side log sinks (independent from Core's spdlog).
+  // GUI logs go through GUI's own spdlog logger; Core logs arrive via C API callback
+  // (registered further down, next to LUMICE_CreateServer).
+  //
+  // This runs FIRST, before GLFW / GL / ImGui init, because every failure those
+  // stages can report is itself logged: a sink installed after them would silently
+  // drop exactly the startup diagnostics a user needs. Nothing here depends on a
+  // window, a GL context or an ImGui context — ImGuiLogSink is a plain ring buffer
+  // that the log panel reads later. On Windows it must stay AFTER the FreeConsole
+  // block above, so the stdout sink is built against the final console state.
+  {
+    // ImGui ring buffer sink (shared between GUI logger and Core callback)
+    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
+
+    // File sink (default level=off, enabled via GUI checkbox)
+    std::filesystem::path log_path;
+    if (const char* home = std::getenv("HOME")) {
+      log_path = std::filesystem::path(home) / "lumice.log";
+    } else {
+      log_path = "lumice.log";
+    }
+    log_path = std::filesystem::absolute(log_path);
+    gui::g_log_file_path = log_path.u8string();
+    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
+    gui::g_file_log_sink->set_level(spdlog::level::off);
+
+    // Set GUI logger sinks: stdout + ImGui + file, then apply our custom formatter to all.
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
+    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
+
+    // Flush strategy: warning+ immediately, all levels every 1s
+    // spdlog::err = our warning level (see spdlog_levels.hpp)
+    gui::GetGuiLogger().flush_on(spdlog::level::err);
+    spdlog::flush_every(std::chrono::seconds(1));
+  }
+
   // Parse --skip-calibration flag early.
   bool skip_calibration = false;
   for (int i = 1; i < argc; ++i) {
@@ -70,7 +106,7 @@ int main(int argc, char** argv) {
 
   glfwSetErrorCallback(gui::GlfwErrorCallback);
   if (!glfwInit()) {
-    fprintf(stderr, "Failed to initialize GLFW\n");
+    GUI_LOG_ERROR("Failed to initialize GLFW");
     return 1;
   }
 
@@ -104,7 +140,7 @@ int main(int argc, char** argv) {
   }
   GLFWwindow* window = glfwCreateWindow(init_w, init_h, "Lumice", nullptr, nullptr);
   if (!window) {
-    fprintf(stderr, "Failed to create GLFW window\n");
+    GUI_LOG_ERROR("Failed to create GLFW window");
     glfwTerminate();
     return 1;
   }
@@ -143,42 +179,15 @@ int main(int argc, char** argv) {
   // Create Lumice server.
   gui::g_server = LUMICE_CreateServer();
 
-  // Set up GUI-side log sinks (independent from Core's spdlog).
-  // GUI logs go through GUI's own spdlog logger; Core logs arrive via C API callback.
-  {
-    // ImGui ring buffer sink (shared between GUI logger and Core callback)
-    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-
-    // File sink (default level=off, enabled via GUI checkbox)
-    std::filesystem::path log_path;
-    if (const char* home = std::getenv("HOME")) {
-      log_path = std::filesystem::path(home) / "lumice.log";
-    } else {
-      log_path = "lumice.log";
+  // Bridge Core logs into the GUI ring buffer. Kept here rather than in the sink
+  // block at the top of main(): the callback only carries meaning once a server
+  // exists to emit Core logs, so it pairs with LUMICE_CreateServer above.
+  LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
+    if (gui::g_imgui_log_sink) {
+      auto spd_level = static_cast<spdlog::level::level_enum>(level);
+      gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
     }
-    log_path = std::filesystem::absolute(log_path);
-    gui::g_log_file_path = log_path.u8string();
-    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
-    gui::g_file_log_sink->set_level(spdlog::level::off);
-
-    // Set GUI logger sinks: stdout + ImGui + file, then apply our custom formatter to all.
-    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink, gui::g_file_log_sink });
-    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
-
-    // Flush strategy: warning+ immediately, all levels every 1s
-    // spdlog::err = our warning level (see spdlog_levels.hpp)
-    gui::GetGuiLogger().flush_on(spdlog::level::err);
-    spdlog::flush_every(std::chrono::seconds(1));
-
-    // Register C API callback to receive Core logs → pipe into ImGui ring buffer
-    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
-      if (gui::g_imgui_log_sink) {
-        auto spd_level = static_cast<spdlog::level::level_enum>(level);
-        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
-      }
-    });
-  }
+  });
 
   // Parse CLI arguments for log level.
   // --log-level / -v / -d control GUI log level (global logger, LOG_* macros).
