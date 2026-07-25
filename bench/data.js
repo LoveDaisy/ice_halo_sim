@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784993016346,
+  "lastUpdate": 1784993018835,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ca327679e29ff539e1ab7a1b51177ed6066af02f",
-          "message": "Merge pull request #123 from LoveDaisy/feat/metal-exit-seam\n\nfeat(metal): exit-seam buffer egress 出口替代整幅回读 (P1/scrum-258)",
-          "timestamp": "2026-06-12T09:45:24+08:00",
-          "tree_id": "0af735a07c022e2c17115e13424724ac9d00cca0",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ca327679e29ff539e1ab7a1b51177ed6066af02f"
-        },
-        "date": 1781229036649,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 92.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 104.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 97,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c5b5985c34ddd97e7372b393a1d7892279bf136c",
           "message": "Merge pull request #124 from LoveDaisy/feat/metal-rootgen\n\nfeat(metal): device GPU root-gen 默认根供给 + 吞吐确证 (P2/scrum-260+261)",
           "timestamp": "2026-06-12T10:11:44+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28e5a9de538df35ed7b5b980592cd051c1109e71",
+          "message": "Merge pull request #226 from LoveDaisy/chore/dead-weight-closeout\n\nchore(dead-weight-closeout): delete orphaned Server::CommitConfigFromFile, fix stale ExitRayRecord size comments",
+          "timestamp": "2026-07-25T23:16:52+08:00",
+          "tree_id": "6622931ec23b0c2436e0728a5bdcc31f2e48b31d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/28e5a9de538df35ed7b5b980592cd051c1109e71"
+        },
+        "date": 1784993018004,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 87.6,
             "unit": "%"
           }
         ]
