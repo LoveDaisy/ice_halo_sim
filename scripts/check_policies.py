@@ -59,12 +59,22 @@ Checks:
      populated prefix are the same thing by construction. The invariant is
      pinned here rather than in a comment because the failure is silent: a
      default slot reads as a valid empty crystal all the way to the GPU.
+  10. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_ARGS
+     must match the gui_test correctness-pool `--filter` invocation in
+     scripts/build.sh. The two are independent hand-maintained copies (bash vs.
+     Python, so they cannot share a single literal) of the same exclusion list;
+     letting them drift silently recalibrates GUI visual-regression thresholds
+     under a condition CI no longer actually asserts under — this exact class of
+     drift (isolated `--filter <group>` vs. the full suite) previously made
+     committed references optimistic (see AGENTS.md's reference-regeneration
+     section).
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from dataclasses import dataclass
@@ -1009,6 +1019,77 @@ def check_no_default_constructed_crystal_slots() -> list[Violation]:
     return out
 
 
+BUILD_SH = REPO_ROOT / "scripts" / "build.sh"
+REGEN_GUI_TEST_REFS_PY = REPO_ROOT / "scripts" / "regen_gui_test_refs.py"
+
+_BUILD_SH_CORRECTNESS_FILTER = re.compile(r'GUI_TEST_BIN"\s+--fixed-dt\s+--filter\s+"([^"]+)"')
+
+
+def check_gui_test_suite_args_sync() -> list[Violation]:
+    out: list[Violation] = []
+    if not BUILD_SH.exists() or not REGEN_GUI_TEST_REFS_PY.exists():
+        return out
+
+    build_sh_text = BUILD_SH.read_text(encoding="utf-8")
+    m = _BUILD_SH_CORRECTNESS_FILTER.search(build_sh_text)
+    if not m:
+        out.append(
+            Violation(
+                BUILD_SH,
+                1,
+                "gui-test-suite-args-sync",
+                "could not locate the gui_test correctness-pool `--filter` invocation "
+                "(expected `\"$GUI_TEST_BIN\" --fixed-dt --filter \"...\"`); update this "
+                "check's pattern alongside any build.sh restructuring.",
+            )
+        )
+        return out
+    build_sh_filter = m.group(1)
+
+    spec = importlib.util.spec_from_file_location(
+        "_check_policies_regen_gui_test_refs", REGEN_GUI_TEST_REFS_PY
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    suite_args = list(getattr(module, "SUITE_ARGS", []))
+    if "--filter" not in suite_args:
+        out.append(
+            Violation(
+                REGEN_GUI_TEST_REFS_PY,
+                1,
+                "gui-test-suite-args-sync",
+                "SUITE_ARGS has no `--filter` entry; update this check's pattern "
+                "alongside any SUITE_ARGS restructuring.",
+            )
+        )
+        return out
+    regen_filter = suite_args[suite_args.index("--filter") + 1]
+
+    if build_sh_filter != regen_filter:
+        lineno = next(
+            (
+                i + 1
+                for i, line in enumerate(
+                    REGEN_GUI_TEST_REFS_PY.read_text(encoding="utf-8").splitlines()
+                )
+                if line.strip().startswith("SUITE_ARGS")
+            ),
+            1,
+        )
+        out.append(
+            Violation(
+                REGEN_GUI_TEST_REFS_PY,
+                lineno,
+                "gui-test-suite-args-sync",
+                f"SUITE_ARGS filter ({regen_filter!r}) no longer matches "
+                f"scripts/build.sh's gui_test correctness-pool `--filter` "
+                f"({build_sh_filter!r}); update SUITE_ARGS so reference calibration "
+                "keeps running under the same condition CI actually asserts under.",
+            )
+        )
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1020,6 +1101,7 @@ CHECKS = [
     check_gui_state_field_tier_registration,
     check_no_msvc_unsafe_builtin,
     check_no_default_constructed_crystal_slots,
+    check_gui_test_suite_args_sync,
 ]
 
 
@@ -1043,7 +1125,7 @@ def main() -> int:
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
-        "no-default-constructed-crystal-slots)."
+        "no-default-constructed-crystal-slots, gui-test-suite-args-sync)."
     )
     return 0
 

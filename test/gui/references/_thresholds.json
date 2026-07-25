@@ -72,37 +72,37 @@
       }
     },
     "lens_proj": {
-      "generated_at": "2026-07-25T11:50:10",
+      "generated_at": "2026-07-25T13:26:21",
       "n_ref_runs": 10,
-      "n_calib_runs": 40,
+      "n_calib_runs": 60,
       "scenes": {
         "dual_fisheye_equal_area_full": {
-          "psnr_mean": 20.6025,
-          "psnr_std": 0.273,
+          "psnr_mean": 27.7354,
+          "psnr_std": 0.0577,
           "identical_runs": 0,
-          "n_samples": 40,
-          "threshold": 19.5
+          "n_samples": 59,
+          "threshold": 26.5
         },
         "fisheye_equal_area_120": {
-          "psnr_mean": 19.431,
-          "psnr_std": 0.4564,
+          "psnr_mean": 20.3085,
+          "psnr_std": 0.1887,
           "identical_runs": 0,
-          "n_samples": 40,
-          "threshold": 17.5
+          "n_samples": 60,
+          "threshold": 19.0
         },
         "fisheye_orthographic_180": {
-          "psnr_mean": 20.307,
-          "psnr_std": 0.3741,
+          "psnr_mean": 21.1868,
+          "psnr_std": 0.2203,
           "identical_runs": 0,
-          "n_samples": 40,
-          "threshold": 18.5
+          "n_samples": 60,
+          "threshold": 20.0
         },
         "rectangular": {
-          "psnr_mean": 19.6095,
-          "psnr_std": 0.3485,
+          "psnr_mean": 26.5868,
+          "psnr_std": 0.0686,
           "identical_runs": 0,
-          "n_samples": 40,
-          "threshold": 18.0
+          "n_samples": 59,
+          "threshold": 25.5
         }
       }
     }

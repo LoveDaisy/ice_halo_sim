@@ -5,8 +5,8 @@ Reference generation and threshold calibration driver for GUI visual-regression 
 Phase A: Run gui_test N times with --keep-export-png, pixel-average the
   captures per (scene, mode), and save the mean image as the new reference.
 Phase B: Run gui_test N_calib times, parse PSNR output from stderr, and
-  compute per-scene threshold recommendations (mean - SIGMA_MARGIN*sigma,
-  floor to 0.5 dB).
+  compute per-scene threshold recommendations
+  (mean - max(SIGMA_MARGIN*sigma, MIN_MARGIN_DB), floor to 0.5 dB).
 
 Both phases are driven by the GROUPS registry below: a reference group names the
 gui_test category it tags its output with, its scenes/modes, and the tmp/reference
@@ -139,6 +139,17 @@ DETERMINISTIC_FLOOR_DB = 40.0
 # also the margin the observed tails need: three sigma left the lens_proj dual-fisheye
 # threshold 0.08 dB under the lowest sample of an independent 20-run batch.
 SIGMA_MARGIN = 4.0
+
+# Floor on how tight a threshold may get, in dB below the sampled mean. Four sigma alone is
+# only a defence against run-to-run noise on THIS machine; a scene whose sigma nearly
+# vanishes (the ray-gated lens_proj scenes calibrate at sigma ~0.06 dB) would otherwise get a
+# threshold 0.2 dB under its own mean, which a different GPU or driver could cross on its
+# own. The size comes from this repo's own history: regenerating auto_ev against a changed
+# orientation sampler moved its PSNRs 0.3-0.8 dB, so a margin under 1 dB does not survive
+# legitimate upstream change. This is the same reasoning as DETERMINISTIC_FLOOR_DB above,
+# applied to scenes that are merely quiet rather than pixel-identical. It binds only there:
+# every auto_ev scene has 4σ ≥ 0.84 dB, so their shipped thresholds are unaffected.
+MIN_MARGIN_DB = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +404,7 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
 
     print(
         f"\n[Phase B][{group.key}] Recommendations "
-        f"(mean − {SIGMA_MARGIN:.0f}σ, floor to 0.5 dB precision):"
+        f"(mean − max({SIGMA_MARGIN:.0f}σ, {MIN_MARGIN_DB:.1f} dB), floor to 0.5 dB precision):"
     )
     scenes_out: dict[str, dict] = {}
     for tag in sorted(psnr_data):
@@ -418,7 +429,7 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         vals = np.array(finite)
         mean = float(vals.mean())
         std = float(vals.std(ddof=0))
-        threshold = math.floor((mean - SIGMA_MARGIN * std) * 2) / 2
+        threshold = math.floor((mean - max(SIGMA_MARGIN * std, MIN_MARGIN_DB)) * 2) / 2
         suffix = f"  ({identical}/{len(samples)} runs pixel-identical, excluded)" if identical else ""
         print(f"  {tag}: mean={mean:.2f} dB  std={std:.4f} dB  threshold={threshold:.1f} dB{suffix}")
         scenes_out[tag] = {

@@ -47,6 +47,10 @@ struct LensProjScene {
   int render_w;
   int render_h;
   double psnr_threshold;
+  // Simulated rays to accumulate before capturing. Higher = less Monte-Carlo noise in the
+  // capture, which is what limits how small a geometric error the PSNR comparison can
+  // resolve; see the note above kScenes[].
+  unsigned long long min_rays;
   LensSetup setup;
   // Consumed only when setup == kOverrideViewProj.
   int lens_type = 0;
@@ -71,26 +75,44 @@ struct LensProjScene {
 // and the equirect map spans the full ±180° x ±90° sky. A square frame would only add
 // black bands.
 //
+// Capture timing is gated on accumulated RAYS, not on a texture-upload count as the auto_ev
+// scenes are. An upload carries however much data happened to arrive, so the same upload
+// count buys different ray counts depending on machine load — measured here, 40 uploads was
+// 6.43M rays on an idle machine and 4.56M under load. That leaks load into the noise level
+// and therefore into PSNR, inflating the calibrated sigma (a contended 60-run batch measured
+// 0.63 dB against 0.22 dB for the same scene run undisturbed) and forcing a threshold too
+// loose to catch anything. Gating on rays makes the capture reproducible instead.
+//
+// min_rays differs per scene because detection power does. The comparison is one noisy
+// capture against a smooth 10-run mean, so per-run Monte-Carlo noise sets the PSNR floor,
+// and a projection error only moves PSNR by as much of the frame as it disturbs. The
+// single-fisheye scenes fill their frame with the halo and resolve a perturbed projection
+// easily at 0.4M rays. The two full-sky scenes spread the same structure over a much larger
+// frame, leaving most pixels empty sky: at that budget, a lens-scale error that visibly
+// stretches the halo ring into an ellipse moved PSNR only ~1.2 dB and did not even cross the
+// threshold. They accumulate 5M rays instead, which drops the noise floor far enough for the
+// geometric term to dominate, and stays well inside halo_22.json's 10M ray budget.
+//
 // References are pixel-averaged means of N=10 runs; thresholds come from
 // scripts/regen_gui_test_refs.py --group lens_proj (Phase B, mean − 4σ floored to 0.5 dB,
-// pooled over 40 runs), with the sampled mean/σ recorded per scene in
+// pooled over 60 runs), with the sampled mean/σ recorded per scene in
 // test/gui/references/_thresholds.json and repeated inline below.
 static const LensProjScene kScenes[] = {
-  // mean 19.43 σ0.456
-  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 17.5,
+  // mean 20.29 σ0.216
+  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 20.31 σ0.374
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,
+  // mean 21.24 σ0.237
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  400000ULL,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean 20.60 σ0.273
-  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 19.5,
+  // mean 27.74 σ0.058
+  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5000000ULL,
    LensSetup::kDualFisheyeExport},
-  // mean 19.61 σ0.349
-  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 18.0,
+  // mean 26.59 σ0.069
+  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5000000ULL,
    LensSetup::kEquirectExport},
 };
 // clang-format on
-static constexpr int kSceneCount = 4;
+static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
 
 // Drive the main loop's export hook (test_gui_main.cpp) and wait for the FBO readback.
 // Structurally identical to the helper in test_gui_auto_ev.cpp; kept local rather than
@@ -135,12 +157,35 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       gui::DoRun(/*user_initiated=*/true);
       IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
 
-      // 5. Wait for stable data (three texture uploads), then stop the simulation.
+      // 5. Accumulate scene.min_rays simulated rays, then stop the simulation. stats_sim_ray_num
+      // tracks the ray count behind the currently displayed texture (app.cpp:1363-1365). Both
+      // counters are zeroed here rather than trusted from ResetTestState: a stale ray count
+      // left by the previous scene satisfies the wait on the very first frame, and the capture
+      // then reads whatever texture happened to still be bound.
+      //
+      // ImGuiTestEngine's watchdog measures simulated time (frame count * ConfigFixedDeltaTime
+      // under --fixed-dt), not wall clock, and its default kill threshold is 60s. The two
+      // full-sky scenes need up to 5M rays to reach a usable noise floor (see kScenes[] note),
+      // which can take longer than 60 simulated seconds to accumulate — the loop bound below is
+      // already 120s, so the watchdog default was simply never raised to match. Widen it only
+      // for this wait so a slow-but-legitimate accumulation isn't mistaken for a hung test,
+      // then restore it immediately so every other test keeps the tight default.
+      ImGuiTestEngineIO* engine_io = ctx->EngineIO;
+      const float saved_watchdog_warn = engine_io->ConfigWatchdogWarning;
+      const float saved_watchdog_kill = engine_io->ConfigWatchdogKillTest;
+      engine_io->ConfigWatchdogWarning = 150.0f;
+      engine_io->ConfigWatchdogKillTest = 180.0f;
       gui::g_state.texture_upload_count = 0;
-      for (int i = 0; i < 30 * 60 && gui::g_state.texture_upload_count < 3; ++i) {
+      gui::g_state.stats_sim_ray_num = 0;
+      for (int i = 0;
+           i < 120 * 60 && (gui::g_state.stats_sim_ray_num < scene.min_rays || gui::g_state.texture_upload_count == 0);
+           ++i) {
         ctx->Yield(1);
       }
-      IM_CHECK_GE((int)gui::g_state.texture_upload_count, 3);
+      engine_io->ConfigWatchdogWarning = saved_watchdog_warn;
+      engine_io->ConfigWatchdogKillTest = saved_watchdog_kill;
+      IM_CHECK_GE((unsigned long long)gui::g_state.stats_sim_ray_num, scene.min_rays);
+      IM_CHECK_GT((int)gui::g_state.texture_upload_count, 0);
 
       gui::g_server_poller.Stop();
       LUMICE_StopServer(gui::g_server);
