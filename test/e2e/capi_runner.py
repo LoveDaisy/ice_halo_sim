@@ -367,6 +367,8 @@ def _commit_config(lib, server, config_path: str, commit_path: str) -> None:
     if commit_path == "scene_handle":
         _commit_via_scene_handle(lib, server, config_path)
         return
+    if commit_path != "config_file":
+        raise ValueError(f"unknown commit_path: {commit_path!r} (expected one of {_COMMIT_PATHS})")
     err = lib.LUMICE_CommitConfigFromFile(server, str(config_path).encode("utf-8"))
     if err != 0:
         raise RuntimeError(f"CommitConfigFromFile failed err={err} config={config_path}")

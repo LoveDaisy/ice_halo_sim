@@ -124,7 +124,7 @@ def load_lib():
 def _commit_via_scene_handle(lib, server, config_path):
     """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle."""
     scene = ctypes.c_void_p()
-    err = lib.LUMICE_SceneFromJsonFile(config_path.encode("utf-8"), ctypes.byref(scene))
+    err = lib.LUMICE_SceneFromJsonFile(str(config_path).encode("utf-8"), ctypes.byref(scene))
     if err != 0:
         raise RuntimeError(f"SceneFromJsonFile failed: err={err}, config={config_path}")
     if not scene:
