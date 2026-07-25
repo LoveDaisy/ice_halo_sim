@@ -6,13 +6,12 @@
 #include <vector>
 
 #include "include/lumice.h"
-#include "include/lumice_config_scope.hpp"  // lumice::ConfigOwningGuard for the LUMICE_Config oracle
-#include "server/c_api_internal.hpp"        // ConfigToJson + SceneRoot (test-only exposures)
+#include "server/c_api_internal.hpp"  // ConfigScratch(+Guard) + ConfigToJson + SceneRoot (internal)
 
 // White-box tests for the LUMICE_Scene opaque handle (type + lifecycle + Add*/Set* build API).
 //
 // AC1 strategy: prove each Scene Add*/Set* encodes the SAME wire JSON as the established batch
-// path by diffing SceneRoot() against ConfigToJson() of an equivalent single-item LUMICE_Config.
+// path by diffing SceneRoot() against ConfigToJson() of an equivalent single-item ConfigScratch.
 // ConfigToJson is the single source of truth for that wire format (and is itself cross-checked
 // against core to_json elsewhere in test_c_api.cpp), so equality here means the incremental path
 // did not drift from the batch path. This is white-box, not "return code was OK".
@@ -149,8 +148,8 @@ TEST(SceneAdd, CrystalEncodingMatchesConfigToJson) {
   int id = -1;
   ASSERT_EQ(LUMICE_SceneAddCrystal(g.get(), &p, &id), LUMICE_OK);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.crystal_count = 1;
   config.crystals[0] = p;
   config.crystals[0].id = 0;  // Scene assigns 0 by insertion order
@@ -167,8 +166,8 @@ void ExpectFilterMatchesConfigToJson(const LUMICE_FilterParam& f) {
   ASSERT_EQ(LUMICE_SceneAddFilter(g.get(), &f, &id), LUMICE_OK);
   ASSERT_EQ(id, 0);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.filter_count = 1;
   config.filters[0] = f;
   config.filters[0].id = 0;
@@ -268,9 +267,9 @@ TEST(SceneAddComplexFilter, MatchesConfigToJson) {
   ASSERT_EQ(LUMICE_SceneAddComplexFilter(g.get(), &f, &comp, &id), LUMICE_OK);
   ASSERT_EQ(id, 0);
 
-  // Oracle: a LUMICE_Config with one complex filter referencing compositions[0].
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  // Oracle: a ConfigScratch with one complex filter referencing compositions[0].
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.filter_count = 1;
   config.filters[0] = f;
   config.filters[0].id = 0;
@@ -318,8 +317,8 @@ TEST(SceneAddRenderer, MatchesConfigToJson) {
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
   ASSERT_EQ(id, 0);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.renderer_count = 1;
   config.renderers[0] = r;
   config.renderers[0].id = 0;
@@ -339,8 +338,8 @@ TEST(SceneAddScatterLayer, MatchesConfigToJson) {
   ASSERT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
   ASSERT_EQ(id, 0);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.scatter_count = 1;
   config.scattering[0] = layer;
   auto oracle = ConfigToJson(config);
@@ -368,9 +367,9 @@ TEST(SceneAddColorClass, MatchesConfigToJson) {
   ASSERT_EQ(LUMICE_SceneAddColorClass(g.get(), &cls, &id), LUMICE_OK);
   ASSERT_EQ(id, 0);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
-  LUMICE_ConfigCreateColorClasses(&config, 1);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
+  ConfigCreateColorClasses(&config, 1);
   config.raypath_color[0] = cls;
   config.raypath_color_count = 1;
   config.raypath_color_mode = LUMICE_COLOR_MODE_PAINTER;  // Scene default = core kDefaultCompositeMode
@@ -467,8 +466,8 @@ TEST(SceneSetLightSource, SceneBlockMatchesConfigToJson) {
   ASSERT_EQ(LUMICE_SceneSetLightSource(g.get(), 23.5f, 90.0f, 0.53f, "D65"), LUMICE_OK);
   ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 500000, 12, 4), LUMICE_OK);
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard guard(config);
   config.sun_altitude = 23.5f;
   config.sun_azimuth = 90.0f;
   config.sun_diameter = 0.53f;
@@ -1073,11 +1072,12 @@ TEST(SceneSerializeNegative, FromJsonFileNotFound) {
 // =============== LUMICE_CommitScene (AC1/AC2) ===============
 //
 // AC1 strategy mirrors the Add*/Set* section above: rather than asserting "return code was OK",
-// these prove the new handle entry point lands on the SAME core commit path as the established
-// LUMICE_CommitConfigStruct — same return codes AND the same out_reused sequence for equivalent
-// scene state. The mechanism that makes that hold is that scene->root and ConfigToJson() are the
-// same wire document (EquivalentToCommitConfigStructForSameState asserts that byte-level premise
-// directly, so a failure tells you whether the drift is in the data shape or in the commit path).
+// these pin the commit contract itself — the out_reused sequence across a renderer-preserving
+// edit versus a renderer-changing one — plus the byte-level premise underneath it: scene->root
+// and ConfigToJson() are the SAME wire document (WireDocumentMatchesConfigToJsonAcrossEdits).
+// That premise is what makes LUMICE_SceneFromJson correct: it parses into a ConfigScratch and
+// re-encodes through ConfigToJson, so if the two encodings ever drifted, a JSON-authored scene
+// and a hand-built one would commit as different documents.
 
 namespace {
 
@@ -1110,9 +1110,9 @@ void FillCommittableScene(LUMICE_Scene* scene, float sun_altitude = 20.0f) {
   ASSERT_EQ(LUMICE_SceneSetSimParams(scene, 0, 100, 8, 0), LUMICE_OK);
 }
 
-// The LUMICE_Config oracle for FillCommittableScene: the same nine-subsystem state expressed in
-// the legacy wide struct, so the two commit entry points can be fed equivalent input.
-void FillEquivalentConfig(LUMICE_Config* config, float sun_altitude = 20.0f) {
+// The ConfigScratch oracle for FillCommittableScene: the same state expressed through the
+// internal wide struct, so the Scene encoding can be diffed against ConfigToJson's.
+void FillEquivalentConfig(ConfigScratch* config, float sun_altitude = 20.0f) {
   config->crystal_count = 1;
   config->crystals[0] = MakePrismParam(1.0f);
   config->crystals[0].id = 0;
@@ -1161,7 +1161,7 @@ TEST(SceneCommit, OutReusedNullDoesNotCrash) {
   ASSERT_NO_FATAL_FAILURE(FillCommittableScene(g.get()));
   ServerGuard s;
   ASSERT_NE(s.get(), nullptr);
-  // out_reused is optional (same contract as LUMICE_CommitConfigStruct): NULL must commit normally.
+  // out_reused is optional: NULL must commit normally.
   EXPECT_EQ(LUMICE_CommitScene(s.get(), g.get(), nullptr), LUMICE_OK);
 }
 
@@ -1218,32 +1218,29 @@ TEST(SceneCommit, ReusesConsumersOnNonRendererChange) {
   EXPECT_EQ(reused, 1) << "consumers must be reused when the renderer set is unchanged";
 }
 
-TEST(SceneCommit, EquivalentToCommitConfigStructForSameState) {
-  // AC1 head-on: same scene state, two entry points, two independent servers — identical return
-  // codes and identical out_reused sequences across a first commit and a non-renderer edit.
+TEST(SceneCommit, WireDocumentMatchesConfigToJsonAcrossEdits) {
+  // The byte-level premise the whole handle path rests on: a Scene built through Add*/Set*
+  // encodes to exactly what ConfigToJson emits for the equivalent config state — before AND
+  // after an edit. LUMICE_SceneFromJson relies on it directly (it parses into a ConfigScratch
+  // and re-encodes through ConfigToJson into a handle root), so a drift here means a
+  // JSON-authored scene and a hand-built one would reach the core as different documents.
+  //
+  // The commit half is asserted alongside it so the equality is not just an encoder fact:
+  // the same scene state must commit OK and report the renderer-preserving reuse signal.
   SceneGuard scene;
   ASSERT_NO_FATAL_FAILURE(FillCommittableScene(scene.get()));
 
-  LUMICE_Config config{};
-  lumice::ConfigOwningGuard config_guard(config);
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
   FillEquivalentConfig(&config);
 
-  // White-box premise: the two paths hand the core the SAME document. If this fails, a divergence
-  // below is a data-shape drift (399.2 territory), not a commit-path bug.
   ASSERT_EQ(SceneRoot(scene.get()), ConfigToJson(config)) << "scene->root must match ConfigToJson byte for byte";
 
   ServerGuard scene_server;
-  ServerGuard struct_server;
   ASSERT_NE(scene_server.get(), nullptr);
-  ASSERT_NE(struct_server.get(), nullptr);
 
   int scene_reused = -1;
-  int struct_reused = -1;
-  const auto scene_err1 = LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused);
-  const auto struct_err1 = LUMICE_CommitConfigStruct(struct_server.get(), &config, &struct_reused);
-  EXPECT_EQ(scene_err1, struct_err1);
-  EXPECT_EQ(scene_err1, LUMICE_OK);
-  EXPECT_EQ(scene_reused, struct_reused);
+  EXPECT_EQ(LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused), LUMICE_OK);
   EXPECT_EQ(scene_reused, 0);
 
   // Identical non-renderer edit on both sides.
@@ -1252,12 +1249,7 @@ TEST(SceneCommit, EquivalentToCommitConfigStructForSameState) {
   ASSERT_EQ(SceneRoot(scene.get()), ConfigToJson(config)) << "edited states must still match";
 
   scene_reused = -1;
-  struct_reused = -1;
-  const auto scene_err2 = LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused);
-  const auto struct_err2 = LUMICE_CommitConfigStruct(struct_server.get(), &config, &struct_reused);
-  EXPECT_EQ(scene_err2, struct_err2);
-  EXPECT_EQ(scene_err2, LUMICE_OK);
-  EXPECT_EQ(scene_reused, struct_reused);
+  EXPECT_EQ(LUMICE_CommitScene(scene_server.get(), scene.get(), &scene_reused), LUMICE_OK);
   EXPECT_EQ(scene_reused, 1);
 }
 

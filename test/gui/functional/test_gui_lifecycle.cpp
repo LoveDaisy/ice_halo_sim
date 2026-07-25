@@ -57,8 +57,21 @@ const char* kFiniteConfig = R"({
 // Commit kFiniteConfig and block until the server reaches IDLE with produced data
 // (has_valid_data is the C-API RawXyzResult contract field — untouched by 1.5). Returns false on
 // timeout / commit failure.
+// JSON -> Scene handle -> commit: the only commit path since v4.12 removed the JSON-string
+// entry points. The handle is a local — LUMICE_CommitScene reads it as const and keeps no
+// reference — so it is destroyed as soon as the commit returns.
+LUMICE_ErrorCode CommitJsonConfig(LUMICE_Server* server, const char* json) {
+  LUMICE_Scene* scene = nullptr;
+  if (auto err = LUMICE_SceneFromJson(json, &scene); err != LUMICE_OK) {
+    return err;
+  }
+  const auto err = LUMICE_CommitScene(server, scene, /*out_reused=*/nullptr);
+  LUMICE_SceneDestroy(scene);
+  return err;
+}
+
 bool RunFiniteToCompletion(LUMICE_Server* server) {
-  if (LUMICE_CommitConfig(server, kFiniteConfig) != LUMICE_OK) {
+  if (CommitJsonConfig(server, kFiniteConfig) != LUMICE_OK) {
     return false;
   }
   constexpr int kMaxWaitMs = 5000;

@@ -13,11 +13,10 @@
 #include "config/config_compare.hpp"
 #include "config/config_manager.hpp"
 #include "include/lumice.h"
-#include "include/lumice_config_scope.hpp"
-#include "server/c_api_internal.hpp"  // ConfigToJson (test-only exposure)
+#include "server/c_api_internal.hpp"  // ConfigScratch + ParseConfigString + ConfigToJson (internal)
 
 // Differential tests: core's native config parser (config/*::from_json) vs the C API JSON parser
-// behind LUMICE_ParseConfigString / LUMICE_SceneFromJson (server/c_api.cpp::JsonToConfig).
+// behind ParseConfigString / LUMICE_SceneFromJson (server/c_api.cpp::JsonToConfig).
 //
 // Why this exists: once the handle path is the only way to feed a config into the library, it must
 // accept everything the core parser accepts and reject everything the core parser rejects — a
@@ -115,10 +114,10 @@ CoreOutcome ParseWithCore(const std::string& text) {
   return out;
 }
 
-// Re-encode a parsed LUMICE_Config through the same ConfigToJson() the commit path uses, then
+// Re-encode a parsed ConfigScratch through the same ConfigToJson() the commit path uses, then
 // hand the result back to the core parser. Equality with the core-direct parse is exactly the
 // "value survived the C API round trip" property.
-CoreOutcome ReparseThroughCapiEncoding(const LUMICE_Config& cfg) {
+CoreOutcome ReparseThroughCapiEncoding(const ConfigScratch& cfg) {
   CoreOutcome out;
   nlohmann::json encoded;
   try {
@@ -268,8 +267,8 @@ struct CorpusCase {
   bool round_trip_ok = false;  // ... and core accepted the C API's re-encoding of the result
 
   // The C API validates in two stages: the JSON parser does a lossless translation, then core
-  // re-validates the re-encoded document at commit time (LUMICE_CommitScene /
-  // LUMICE_CommitConfigStruct both funnel through ConfigToJson -> Server::CommitConfig). So
+  // re-validates the re-encoded document at commit time (LUMICE_CommitScene hands the core a
+  // document produced by the same ConfigToJson encoder this test drives). So
   // "the C API accepts this config" end-to-end means BOTH stages passed; a config the parser
   // waves through but core rejects on re-encode is still rejected by every real entry point.
   bool AcceptedEndToEnd() const { return capi_ok && round_trip_ok; }
@@ -294,9 +293,9 @@ const std::vector<CorpusCase>& Corpus() {
       const std::string text = ReadFile(file);
       c.core = ParseWithCore(text);
 
-      LUMICE_Config cfg{};
-      lumice::ConfigOwningGuard guard(cfg);
-      c.capi_status = LUMICE_ParseConfigString(text.c_str(), &cfg);
+      ConfigScratch cfg{};
+      ConfigScratchGuard guard(cfg);
+      c.capi_status = ParseConfigString(text.c_str(), &cfg);
       c.capi_ok = (c.capi_status == LUMICE_OK);
 
       if (c.capi_ok) {
@@ -440,9 +439,9 @@ testing::AssertionResult ParseWithBoth(const std::string& text, BothParsed* out)
   if (!core.ok) {
     return testing::AssertionFailure() << "core rejected the input: " << core.error;
   }
-  LUMICE_Config cfg{};
-  lumice::ConfigOwningGuard guard(cfg);
-  LUMICE_ErrorCode status = LUMICE_ParseConfigString(text.c_str(), &cfg);
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  LUMICE_ErrorCode status = ParseConfigString(text.c_str(), &cfg);
   if (status != LUMICE_OK) {
     return testing::AssertionFailure() << "C API rejected the input: status " << status;
   }
@@ -460,9 +459,9 @@ testing::AssertionResult ParseWithBoth(const std::string& text, BothParsed* out)
 // End-to-end C API verdict on one document: the parse stage AND core's re-validation of the
 // re-encoding (see CorpusCase::AcceptedEndToEnd for why both stages count).
 bool CapiAcceptsEndToEnd(const std::string& text) {
-  LUMICE_Config cfg{};
-  lumice::ConfigOwningGuard guard(cfg);
-  if (LUMICE_ParseConfigString(text.c_str(), &cfg) != LUMICE_OK) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  if (ParseConfigString(text.c_str(), &cfg) != LUMICE_OK) {
     return false;
   }
   return ReparseThroughCapiEncoding(cfg).ok;

@@ -66,8 +66,21 @@ const char* kSingleClassConfig = R"({
   }
 })";
 
+// JSON -> Scene handle -> commit: the only commit path since v4.12 removed the JSON-string
+// entry points. The handle is a local — LUMICE_CommitScene reads it as const and keeps no
+// reference — so it is destroyed as soon as the commit returns.
+LUMICE_ErrorCode CommitJsonConfig(LUMICE_Server* server, const char* json) {
+  LUMICE_Scene* scene = nullptr;
+  if (auto err = LUMICE_SceneFromJson(json, &scene); err != LUMICE_OK) {
+    return err;
+  }
+  const auto err = LUMICE_CommitScene(server, scene, /*out_reused=*/nullptr);
+  LUMICE_SceneDestroy(scene);
+  return err;
+}
+
 bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
-  if (LUMICE_CommitConfig(server, json) != LUMICE_OK) {
+  if (CommitJsonConfig(server, json) != LUMICE_OK) {
     return false;
   }
   for (int waited = 0; waited < 5000; waited += 10) {
