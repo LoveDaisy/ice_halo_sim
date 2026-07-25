@@ -6,7 +6,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
-#include <fstream>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -1578,27 +1577,6 @@ Error Server::CommitConfig(const std::string& config_str) {
     return Error::InvalidJson(e.what());
   } catch (...) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: Unknown error");
-    return Error::InvalidJson("Unknown JSON parsing error");
-  }
-}
-
-Error Server::CommitConfigFromFile(const std::filesystem::path& filename) {
-  if (!impl_) {
-    return Error::ServerNotReady("Server is terminated");
-  }
-  std::ifstream f(filename);
-  if (!f.is_open()) {
-    return Error::InvalidConfig("Cannot open file: " + filename.u8string());
-  }
-  try {
-    nlohmann::json config_json;
-    f >> config_json;
-    return impl_->CommitConfig(config_json);
-  } catch (const nlohmann::json::parse_error& e) {
-    ILOG_ERROR(impl_->GetLogger(), "CommitConfigFromFile: JSON parse error: {}", e.what());
-    return Error::InvalidJson(e.what());
-  } catch (...) {
-    ILOG_ERROR(impl_->GetLogger(), "CommitConfigFromFile: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
 }

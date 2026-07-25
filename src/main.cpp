@@ -88,7 +88,7 @@ void WarnIfLastScatteringLayerProbNonzero(const nlohmann::json& j_cfg) {
 void WarnIfLastScatteringLayerProbNonzero(const std::filesystem::path& config_path) {
   std::ifstream f(config_path);
   if (!f.is_open()) {
-    return;  // let CommitConfigFromFile report the real "cannot open" error.
+    return;  // let LUMICE_SceneFromJsonFile report the real "cannot open" error.
   }
   try {
     nlohmann::json j;
