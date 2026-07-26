@@ -479,8 +479,9 @@ void ShapeTableParamLabel(const char* label) {
   }
 }
 
-bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_min, float center_max,
+bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, float center_min, float center_max,
                              const char* center_fmt, SliderScale center_scale) {
+  ShapeDist& dist = ShapeScalarAt(cr, slot);  // single mapping authority (gui_state.hpp)
   bool changed = false;
   // No PushID wrapper: the center slider keeps its original `label`-derived id (so existing
   // ItemInputValue paths — e.g. "##Height##modal_cr_input" — stay valid), and each extra widget

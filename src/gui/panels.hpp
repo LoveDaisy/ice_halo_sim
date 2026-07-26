@@ -74,7 +74,7 @@ constexpr int kShapeTableColumnCount = 5;
 void ShapeTableParamLabel(const char* label);
 
 // Render one crystal shape distribution as a property-table row:
-//   [Param label] [center slider+input] [Randomize checkbox] [spread input]
+//   [Param label] [center slider+input] [Randomize checkbox] [spread input] [sync-group swatch]
 // The spread column is wrapped in BeginDisabled(!randomize) so a not-yet-randomized field still
 // shows it (greyed = "available to turn on"), matching the owner's "everything on the surface"
 // design — no hidden state, the table stays a regular rectangle. Enabling randomization sets the
@@ -82,8 +82,17 @@ void ShapeTableParamLabel(const char* label);
 // to NO_RANDOM and zeroes the (now meaningless) spread. Must be called between BeginTable/EndTable,
 // and advances exactly kShapeTableColumnCount columns — every row helper in this table (this one and
 // the file-local wedge row) must honor that column count or ImGui silently misaligns the grid.
+//
+// Takes the whole `cr` plus the LUMICE_SHAPE_SCALAR_* `slot` this row edits, rather than the single
+// ShapeDist& it used to: the Sync column's popup enumerates the OTHER scalars of the same crystal
+// (group membership lists, leader lookup, next free group number), so the row needs to see its
+// siblings. Resolution goes through gui_state.hpp's ShapeScalarAt — the one mapping authority —
+// so no second slot→field table exists to drift.
+// Callers MUST pass a named LUMICE_SHAPE_SCALAR_* constant, never a bare integer: the slot order is
+// NOT CrystalConfig's field order (UPPER_H is slot 1, PRISM_H slot 2 — see the SLOT-ORDER TRAP note
+// in gui_state.hpp), so a positional guess lands one pyramid height's grouping on the other.
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
-bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_min, float center_max,
+bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, float center_min, float center_max,
                              const char* center_fmt = "%.3f", SliderScale center_scale = SliderScale::kLinear);
 
 // ---- Axis preset classification ----

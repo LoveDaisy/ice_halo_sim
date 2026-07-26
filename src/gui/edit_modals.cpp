@@ -655,12 +655,18 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     setup_shape_columns();
     ImGui::TableHeadersRow();
 
+    // Slots are named constants, never bare integers or field order — see the SLOT-ORDER TRAP note
+    // on ShapeScalarAt (UPPER_H is slot 1, PRISM_H slot 2, the reverse of the rows' visual order).
     if (cr.type == CrystalType::kPrism) {
-      RenderShapeDistTableRow("Height##modal_cr", cr.height, 0.01f, 100.0f, "%.2f", SliderScale::kLog);
+      RenderShapeDistTableRow("Height##modal_cr", cr, LUMICE_SHAPE_SCALAR_HEIGHT, 0.01f, 100.0f, "%.2f",
+                              SliderScale::kLog);
     } else {
-      RenderShapeDistTableRow("Prism H##modal_cr", cr.prism_h, 0.0f, 100.0f, "%.4f", SliderScale::kLogLinear);
-      RenderShapeDistTableRow("Upper H##modal_cr", cr.upper_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
-      RenderShapeDistTableRow("Lower H##modal_cr", cr.lower_h, 0.0f, 1.0f, "%.3f", SliderScale::kLinear);
+      RenderShapeDistTableRow("Prism H##modal_cr", cr, LUMICE_SHAPE_SCALAR_PRISM_H, 0.0f, 100.0f, "%.4f",
+                              SliderScale::kLogLinear);
+      RenderShapeDistTableRow("Upper H##modal_cr", cr, LUMICE_SHAPE_SCALAR_UPPER_H, 0.0f, 1.0f, "%.3f",
+                              SliderScale::kLinear);
+      RenderShapeDistTableRow("Lower H##modal_cr", cr, LUMICE_SHAPE_SCALAR_LOWER_H, 0.0f, 1.0f, "%.3f",
+                              SliderScale::kLinear);
       RenderWedgeTableRow("Upper A##modal_cr", &cr.upper_alpha);
       RenderWedgeTableRow("Lower A##modal_cr", &cr.lower_alpha);
     }
@@ -681,7 +687,8 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       for (int i = 0; i < 6; i++) {
         char label[32];
         snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-        RenderShapeDistTableRow(label, cr.face_distance[i], 0.0f, kFaceSpreadMax, "%.3f", SliderScale::kLinear);
+        RenderShapeDistTableRow(label, cr, LUMICE_SHAPE_SCALAR_FACE_0 + i, 0.0f, kFaceSpreadMax, "%.3f",
+                                SliderScale::kLinear);
       }
       ImGui::EndTable();
     }
