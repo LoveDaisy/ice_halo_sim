@@ -29,7 +29,7 @@ Link against the `lumice` static library.
 ### Constants
 
 ```c
-#define LUMICE_API_VERSION 412        // ABI version, encoded major*100 + minor (v4.12)
+#define LUMICE_API_VERSION 413        // ABI version, encoded major*100 + minor (v4.13)
 #define LUMICE_MAX_RENDER_RESULTS 16  // Maximum capacity of the render result array
 #define LUMICE_MAX_STATS_RESULTS 1    // Maximum capacity of the stats result array
 ```
@@ -38,12 +38,31 @@ Link against the `lumice` static library.
 mismatch instead of hitting silent UB from a struct-layout drift, e.g.:
 
 ```c
-static_assert(LUMICE_API_VERSION >= 412, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 413, "Lumice header too old for this integration");
 ```
 
 It is bumped on every BREAKING change to the public symbol set or struct layout.
 
-**v4.12 is such a break.** The wide `LUMICE_Config` value struct and everything that existed only
+**v4.13 is such a break.** `LUMICE_CrystalParam` gained a field appended at the end of the
+struct: `int sync_group[LUMICE_SHAPE_SCALAR_COUNT]`, alongside ten new `LUMICE_SHAPE_SCALAR_*`
+index constants. The core simulator has expressed shape-scalar sync groups (grouped shape
+scalars sharing one random draw per crystal instance — see
+[`configuration.md`'s Shape-Scalar Sync Groups](configuration.md#shape-scalar-sync-groups) for
+the full semantics) since v4.12, but `LUMICE_CrystalParam` had no slot for the declaration, so
+the only path a config file, the GUI, or a caller of this API ever takes silently dropped it on
+the floor — core always received an all-independent struct and nothing warned. The struct's
+layout changed, so callers must recompile; behavior does not change for an existing caller, since
+a zero-initialized `sync_group` (the same state a zeroed/`{}`-initialized `LUMICE_CrystalParam`
+already had) means every scalar independent, exactly as before. `LUMICE_SHAPE_SCALAR_*` indexes
+`sync_group[]` in **RNG draw order** (prism: `HEIGHT` then `FACE_0..FACE_5`; pyramid: `UPPER_H`
+then `PRISM_H` then `LOWER_H` then `FACE_0..FACE_5`), which is deliberately **not** the field
+declaration order of `LUMICE_CrystalParam` itself (`height` / `prism_h` / `upper_h` / `lower_h`
+— note `upper_h` and `prism_h` are transposed relative to the draw order). A group's leader —
+the member whose distribution the whole group is normalized to — is defined as its lowest
+`LUMICE_SHAPE_SCALAR_*` index, so this ordering is load-bearing: aligning it to the struct's
+field order would silently redefine which member of a mixed group owns the distribution.
+
+**v4.12 is also a break.** The wide `LUMICE_Config` value struct and everything that existed only
 to feed it were removed: `LUMICE_Config` itself, the three commit entry points
 (`LUMICE_CommitConfig` / `LUMICE_CommitConfigFromFile` / `LUMICE_CommitConfigStruct`),
 `LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile` / `LUMICE_ConfigToJson`, the
