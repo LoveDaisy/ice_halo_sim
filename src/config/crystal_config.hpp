@@ -9,9 +9,59 @@
 
 namespace lumice {
 
+//! @brief Index space for every randomizable crystal shape scalar.
+//!
+//! @details Slots are shared by both crystal types: a prism only owns
+//!   kShapeScalarHeight + the six faces, a pyramid only owns the three
+//!   pyramidal/prism heights + the six faces. Slots that do not apply to a type
+//!   are simply never read for that type (CanonicalizeSyncGroups zeroes their
+//!   sync group so an inapplicable declaration cannot leak into equality).
+//!
+//!   ⚠️ The order is deliberately chosen to be *verbatim the RNG draw order* in
+//!   simulator.cpp's CrystalMaker: prism draws h_ then d_[0..5]; pyramid draws
+//!   h_pyr_u_ -> h_prs_ -> h_pyr_l_ then d_[0..5]. That makes "a group's leader
+//!   = its lowest-index member applicable to the crystal type" identical to "the
+//!   member drawn first", so no second ordering definition is needed anywhere.
+//!
+//!   Note this is NOT the field declaration order of PyramidCrystalParam, and
+//!   NOT the field order of the C API's LUMICE_CrystalParam
+//!   (height/prism_h/upper_h/lower_h). The divergence is intentional; the C API
+//!   mirror carries the same warning.
+enum ShapeScalar : int {
+  kShapeScalarHeight = 0,  // PrismCrystalParam::h_ — prism only
+  kShapeScalarUpperH = 1,  // PyramidCrystalParam::h_pyr_u_ — pyramid only
+  kShapeScalarPrismH = 2,  // PyramidCrystalParam::h_prs_ — pyramid only
+  kShapeScalarLowerH = 3,  // PyramidCrystalParam::h_pyr_l_ — pyramid only
+  kShapeScalarFace0 = 4,   // d_[0] — both types
+  kShapeScalarFace1 = 5,
+  kShapeScalarFace2 = 6,
+  kShapeScalarFace3 = 7,
+  kShapeScalarFace4 = 8,
+  kShapeScalarFace5 = 9,
+  kShapeScalarCount = 10,
+};
+
+//! @brief Shape-scalar sync groups: 0 = independent, 1..N = group id.
+//!
+//! @details Members of one group share a SINGLE random draw (the group's first
+//!   applicable member consumes the RNG; the rest reuse its value without
+//!   consuming anything). Zero-initialized = every scalar independent = the
+//!   behavior before sync groups existed.
+//!
+//!   Deliberately a parallel array on the param structs rather than a field on
+//!   Distribution: that type is shared with the orientation distributions and
+//!   crosses the GPU device wire (pcg_shared.h), which is the wrong scope for a
+//!   host-only shape-sampling concept.
+//!
+//!   Heights fold with std::abs while face distances stay signed (see
+//!   CrystalMaker), so a group that mixes a height with a face distance shares
+//!   the same *raw* draw but the height member consumes |v|. The mechanism does
+//!   not forbid such a group; the asymmetry is documented, not validated away.
+
 struct PrismCrystalParam {
   Distribution h_{ DistributionType::kNoRandom, 1.0f, 0.0f };  // Height, equal to c/a in HP2.0
   Distribution d_[6]{};                                        // Distance to center for prism faces
+  int sync_group_[kShapeScalarCount]{};                        // Shape-scalar sync groups, 0 = independent
 };
 
 struct PyramidCrystalParam {
@@ -19,9 +69,46 @@ struct PyramidCrystalParam {
   Distribution h_pyr_u_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Upper pyramidal relative height, from 0.0 to 1.0
   Distribution h_pyr_l_{ DistributionType::kNoRandom, 0.0f, 0.0f };  // Lower pyramidal relative height, from 0.0 to 1.0
   Distribution d_[6]{};                                              // Distance to center for prism faces
+  int sync_group_[kShapeScalarCount]{};                              // Shape-scalar sync groups, 0 = independent
   float wedge_angle_u_ = 28.0f;  // Upper wedge angle (degrees). Default ≈ atan(√3/2 / 1.629), i.e. Miller {1,0,-1,1}
   float wedge_angle_l_ = 28.0f;  // Lower wedge angle (degrees)
 };
+
+//! @brief Rewrite sync_group_ into its canonical form. Three rules, all required:
+//!   1. slots not applicable to this crystal type are zeroed;
+//!   2. single-member groups are zeroed (a singleton group IS independence);
+//!   3. surviving groups are renumbered 1..N by first appearance in ShapeScalar order.
+//!
+//! @details Canonical form is not cosmetic: config_compare.hpp's operator== is
+//!   the re-simulation trigger predicate, so `[2,1,2,1,2,1]` and `[1,2,1,2,1,2]`
+//!   — the same partition — must compare equal or a semantic no-op would kick
+//!   off a full re-run. Applied on parse, on serialization, and inside
+//!   operator== (on local copies).
+void CanonicalizeSyncGroups(PrismCrystalParam& p);
+void CanonicalizeSyncGroups(PyramidCrystalParam& p);
+
+//! @brief Leader-normalize the distributions inside each sync group.
+//!
+//! @details The group's leader (lowest applicable ShapeScalar index, i.e. the
+//!   member drawn first) owns the distribution; every other member's
+//!   Distribution is overwritten with the leader's. A member that differed is
+//!   overwritten anyway, but only after a LOG_WARNING — neither silent nor
+//!   rejected.
+//!
+//!   PRECONDITION: CanonicalizeSyncGroups must have run first. Otherwise a slot
+//!   that rule 1 is about to zero (inapplicable to this type) could be picked as
+//!   the leader and donate its distribution to the whole group. Prefer
+//!   PrepareSyncGroups, which cannot get the order wrong.
+void NormalizeSyncGroups(PrismCrystalParam& p);
+void NormalizeSyncGroups(PyramidCrystalParam& p);
+
+//! @brief Canonicalize-then-normalize, in the only correct order.
+//!
+//! @details The composed entry point every parse path should call, so the order
+//!   invariant is enforced by the implementation instead of by each caller's
+//!   memory.
+void PrepareSyncGroups(PrismCrystalParam& p);
+void PrepareSyncGroups(PyramidCrystalParam& p);
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
 
