@@ -78,7 +78,7 @@ constexpr float kEditModalMinWidth = 820.0f;
 //
 // Held at 420 for the Crystal-tab shape property table. Fixed columns
 // (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Spread
-// kShapeSpreadColWidth=60) sum to ~156; the stretch Value column then gets a
+// kShapeSpreadColWidth=60 + Sync kShapeSyncColWidth=40) sum to ~196; the stretch Value column then gets a
 // long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
 // readable, plus inner borders / cell padding. (The GUI is uniform-only, so there
 // is no Type column; that reclaimed width goes to the Value slider.)
@@ -93,6 +93,11 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 constexpr float kShapeParamColWidth = 60.0f;
 constexpr float kShapeRandColWidth = 36.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
+// Sync (shape-scalar sync group): a ~20px square swatch button plus cell padding, widened to
+// kShapeSyncColWidth so the "Sync" header text is not clipped by the column (the swatch itself
+// would fit in 24). Starting value — the owner walkthrough after this task lands is what settles
+// the final swatch width and palette.
+constexpr float kShapeSyncColWidth = 40.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
@@ -582,7 +587,7 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
 
 // Render a wedge-angle parameter (upper_alpha / lower_alpha) as one property-table row. These are
 // structurally NOT randomizable (owner: "no need, don't do it"), so only the Parameter + Value
-// columns are filled; the Random / Type / Spread columns are advanced but left BLANK. Blank here
+// columns are filled; the Rand / Spread / Sync columns are advanced but left BLANK. Blank here
 // means "not applicable" — visually distinct from the greyed-but-present state a randomizable row
 // shows when its Randomize checkbox is off. Advances all kShapeTableColumnCount columns.
 static bool RenderWedgeTableRow(const char* label, float* value) {
@@ -593,7 +598,7 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                                       kWedgePresetCount, /*trailing_label=*/false);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
-  // columns as intentionally-empty cells (Random / Type / Spread). Driven by the shared constant
+  // columns as intentionally-empty cells (Rand / Spread / Sync). Driven by the shared constant
   // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
   // kShapeTableColumnCount is load-bearing here, not just asserted in a comment. Empty (not skipped)
   // keeps the grid a rectangle and the headers aligned.
@@ -625,9 +630,9 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   ImGui::Spacing();
 
   // -- Shape parameters (property table) --
-  // Every randomizable shape scalar is one RenderShapeDistTableRow (4 aligned columns:
-  // Param | Value | Rand | Spread); the two Pyramid wedge angles are non-randomizable
-  // RenderWedgeTableRow rows (Rand/Spread blank). See gui/slider_mapping.hpp for the
+  // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
+  // Param | Value | Rand | Spread | Sync); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Rand/Spread/Sync blank). See gui/slider_mapping.hpp for the
   // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
   // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
   // drift (ImGui silently misaligns rather than asserting on a mismatch).
@@ -637,12 +642,13 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // Shared column setup: identical fixed widths in the main params table and the Face Distance table
   // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
   // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
-  // clipping the fixed Rand/Type/Spread cells.
+  // clipping the fixed Rand/Spread/Sync cells.
   const auto setup_shape_columns = []() {
     ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
     ImGui::TableSetupColumn("Rand", ImGuiTableColumnFlags_WidthFixed, kShapeRandColWidth);
     ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
+    ImGui::TableSetupColumn("Sync", ImGuiTableColumnFlags_WidthFixed, kShapeSyncColWidth);
   };
 
   if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {

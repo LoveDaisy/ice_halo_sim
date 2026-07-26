@@ -62,10 +62,10 @@ constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
 // structure-consumption sites (RenderShapeDistTableRow / the wedge + face rows' TableNextColumn
 // sequences). ImGui does NOT hard-assert when a row emits a different number of columns than the
 // header declares — it silently misaligns — so keeping every site pinned to this one constant is
-// how the "columns everywhere" invariant is enforced. Columns: Param | Value | Rand | Spread.
+// how the "columns everywhere" invariant is enforced. Columns: Param | Value | Rand | Spread | Sync.
 // (The GUI edits uniform-only — no distribution-type column; non-uniform types loaded from JSON are
 // downgraded to uniform on load, see file_io.cpp ParseShapeDist.)
-constexpr int kShapeTableColumnCount = 4;
+constexpr int kShapeTableColumnCount = 5;
 
 // Emit the Parameter (first) column of a shape-table row: strip any "##id" suffix from `label` and
 // show the human-readable name. Shared so the randomizable rows (RenderShapeDistTableRow) and the

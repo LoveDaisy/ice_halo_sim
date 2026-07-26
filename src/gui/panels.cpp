@@ -529,6 +529,11 @@ bool RenderShapeDistTableRow(const char* label, ShapeDist& dist, float center_mi
   }
 
   ImGui::EndDisabled();
+
+  // Col 4 — sync group. Placeholder cell until the widget lands; the column already exists so the
+  // grid stays a rectangle and the column-count assert below stays satisfied.
+  ImGui::TableNextColumn();
+
   // Make kShapeTableColumnCount load-bearing at the consumption site, not just a comment: assert the
   // row consumed exactly that many columns. Bumping the constant + adding a TableSetupColumn without
   // updating this helper then trips here instead of silently misaligning the grid (the drift mode the
