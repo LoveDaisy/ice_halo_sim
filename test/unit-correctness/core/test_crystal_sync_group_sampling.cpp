@@ -104,9 +104,10 @@ TEST(ShapeScalarSyncGroupSampling, PrismNoSyncMatchesContractOrder) {
     }
   }
 
-  // Both streams must still sit at the same position: a sampler that drew an
-  // extra value (or one fewer) somewhere could in principle still have matched
-  // every assertion above only if the surplus draw came last, which this catches.
+  // Both streams must still sit at the same position. A miscount anywhere in the
+  // middle already shows up as a value mismatch on the next draw, but one that
+  // lands after the LAST replayed crystal's final draw would pass every
+  // assertion above; this is the only thing that catches it.
   ASSERT_EQ(rng.GetUniform(), ref.GetUniform()) << "prism sampling consumed a different number of RNG draws";
 }
 
@@ -140,6 +141,7 @@ TEST(ShapeScalarSyncGroupSampling, PyramidNoSyncMatchesContractOrder) {
     }
   }
 
+  // Same trailing-miscount guard as the prism case above.
   ASSERT_EQ(rng.GetUniform(), ref.GetUniform()) << "pyramid sampling consumed a different number of RNG draws";
 }
 
