@@ -11,95 +11,45 @@
 //
 // The suite's first job is a hard compatibility gate: declaring no sync group
 // must leave the RNG stream byte-identical to what MakeCrystal produced before
-// sync groups existed. The kPrism*/kPyramid* golden arrays below were captured
-// from that pre-change implementation (temporary hex-float dump inside
-// CrystalMaker, one rng instance, 20 consecutive MakeCrystal calls), so they are
-// an external oracle rather than a transcription of the new code's own behavior.
-// If they ever need regenerating, that is a red flag, not a chore: every seeded
-// reference in the repo (golden / parity / e2e) moves with this stream.
+// sync groups existed. That gate is written as a CONTRACT REPLAY, not as a table
+// of captured values: a second RandomNumberGenerator on the same seed is driven
+// by hand, in the order the contract fixes (prism h_ then d[0..5]; pyramid
+// h_pyr_u_, h_prs_, h_pyr_l_, then d[0..5] — the draw order, not the declaration
+// order), and the two streams are compared value for value. Both run on the same
+// standard library inside the same binary, so the comparison is bit-exact on
+// every platform; and because the reference is written from the contract rather
+// than transcribed from the sampler, reordering a draw or adding/dropping one
+// still desynchronizes the streams and fails.
+//
+// An earlier form of this gate hard-coded hex-float sample values captured on a
+// single machine. Only std::mt19937 is portable by specification; the adaptors
+// on top of it (normal_distribution, uniform_real_distribution) are
+// implementation defined, and normal_distribution's polar method caches a second
+// value, so even the NUMBER of engine outputs it consumes varies. Such a table
+// can therefore only ever hold on the standard library it was captured on. Same
+// defect family as the platform-dependent pyramid oracle retired in
+// doc/numerical-robustness.md §8, and the same resolution: align on the
+// contract, retire the absolute oracle.
 
 namespace {
 
 namespace ns = lumice;
 
-constexpr int kGoldenDraws = 20;
+// Consecutive draws replayed per test — one rng instance consumed continuously,
+// so the sampler's per-crystal state (the sync-group cache) is exercised across
+// crystals rather than only on a fresh sampler.
+constexpr int kContractReplayDraws = 20;
 
-// Prism golden: rng seed 20260726, h_ = Gaussian(1.0, 0.3), all six
+// Prism fixture: rng seed 20260726, h_ = Gaussian(1.0, 0.3), all six
 // face_distance = Uniform(center 1.0, spread 0.6), sync_group_ all zero.
 constexpr uint32_t kPrismGoldenSeed = 20260726u;
 
-constexpr float kPrismGoldenH[kGoldenDraws] = {
-  0x1.a13438p-1f, 0x1.39f4c2p-1f, 0x1.24d3e2p-1f, 0x1.748ad4p-1f, 0x1.c446fap-1f, 0x1.0deacap+0f, 0x1.8fd5ep-1f,
-  0x1.b1c74p+0f,  0x1.84aa8cp-1f, 0x1.558e3ep-1f, 0x1.354ba2p-1f, 0x1.873076p-1f, 0x1.01221ap-1f, 0x1.2f66b8p+0f,
-  0x1.7a0706p-1f, 0x1.992eeap+0f, 0x1.fa15f6p-2f, 0x1.d9bffcp-1f, 0x1.501b9p-1f,  0x1.bbba1ap-1f,
-};
-constexpr float kPrismGoldenD[kGoldenDraws][6] = {
-  { 0x1.baab4p-1f, 0x1.168e16p+0f, 0x1.d08ap-1f, 0x1.4871fap+0f, 0x1.3e0ba4p+0f, 0x1.32e02cp+0f },
-  { 0x1.7b4f8p-1f, 0x1.fe6176p-1f, 0x1.9bf48ep-1f, 0x1.148a0ep+0f, 0x1.6a2718p-1f, 0x1.c623e8p-1f },
-  { 0x1.2cbdf6p+0f, 0x1.2df93cp+0f, 0x1.372e78p+0f, 0x1.0936ccp+0f, 0x1.39aa72p+0f, 0x1.6d2fe6p-1f },
-  { 0x1.0eb29ap+0f, 0x1.093b6p+0f, 0x1.0c32e6p+0f, 0x1.37b9ecp+0f, 0x1.36b908p+0f, 0x1.96854cp-1f },
-  { 0x1.3dcb94p+0f, 0x1.673de2p-1f, 0x1.3eea96p+0f, 0x1.28f61cp+0f, 0x1.b25016p-1f, 0x1.c93b7ep-1f },
-  { 0x1.e0fac2p-1f, 0x1.2949f2p+0f, 0x1.1ffdd4p+0f, 0x1.397fe4p+0f, 0x1.94118p-1f, 0x1.cdcc5ep-1f },
-  { 0x1.9479a2p-1f, 0x1.b89218p-1f, 0x1.1b34bcp+0f, 0x1.21dc06p+0f, 0x1.0d74bcp+0f, 0x1.099feap+0f },
-  { 0x1.19271ap+0f, 0x1.e33a4ep-1f, 0x1.1afdb8p+0f, 0x1.1cf0c2p+0f, 0x1.412f1p+0f, 0x1.2e6c52p+0f },
-  { 0x1.0de706p+0f, 0x1.38eb18p+0f, 0x1.bd1b74p-1f, 0x1.07eb0ap+0f, 0x1.2d0a9cp+0f, 0x1.c3f55ep-1f },
-  { 0x1.1bf264p+0f, 0x1.2f14c8p+0f, 0x1.32adb8p+0f, 0x1.3b773ep+0f, 0x1.1c1d7ap+0f, 0x1.427252p+0f },
-  { 0x1.45401cp+0f, 0x1.a4984ep-1f, 0x1.42f59p+0f, 0x1.e5b6b2p-1f, 0x1.0ed59ap+0f, 0x1.26cf34p+0f },
-  { 0x1.88d9d8p-1f, 0x1.3155fcp+0f, 0x1.c73324p-1f, 0x1.f08432p-1f, 0x1.3ac3aep+0f, 0x1.d6ee94p-1f },
-  { 0x1.f0da26p-1f, 0x1.0259e4p+0f, 0x1.fbbf2ep-1f, 0x1.cd3404p-1f, 0x1.4acb46p+0f, 0x1.d6059p-1f },
-  { 0x1.49b702p+0f, 0x1.66a51ap-1f, 0x1.9b6a44p-1f, 0x1.e6f32p-1f, 0x1.2875eep+0f, 0x1.a4844ap-1f },
-  { 0x1.49e9acp+0f, 0x1.d9ee96p-1f, 0x1.2d758ep+0f, 0x1.1a9b04p+0f, 0x1.a4d6f2p-1f, 0x1.17e6fep+0f },
-  { 0x1.1e24ap+0f, 0x1.ea83e4p-1f, 0x1.6f1c26p-1f, 0x1.0604f8p+0f, 0x1.3a3578p+0f, 0x1.30f41p+0f },
-  { 0x1.fec928p-1f, 0x1.8e5e74p-1f, 0x1.c773b4p-1f, 0x1.ef983ap-1f, 0x1.94658p-1f, 0x1.88760cp-1f },
-  { 0x1.0fdc5ep+0f, 0x1.80544cp-1f, 0x1.97a49cp-1f, 0x1.257b3cp+0f, 0x1.bb6bc4p-1f, 0x1.2e5fb8p+0f },
-  { 0x1.2864e8p+0f, 0x1.433df6p+0f, 0x1.ce2f64p-1f, 0x1.f0d9a8p-1f, 0x1.cf4f7cp-1f, 0x1.2adfd8p+0f },
-  { 0x1.11d8a4p+0f, 0x1.0506d2p+0f, 0x1.21f06cp+0f, 0x1.a33a82p-1f, 0x1.93754p-1f, 0x1.153592p+0f },
-};
-
-// Pyramid golden: rng seed 20260727, h_pyr_u_ = Gaussian(0.3, 0.1),
+// Pyramid fixture: rng seed 20260727, h_pyr_u_ = Gaussian(0.3, 0.1),
 // h_prs_ = Uniform(center 1.0, spread 0.4), h_pyr_l_ = Laplacian(0.3, 0.1) —
 // three deliberately different distribution types, so a mixed-up draw order
 // between the three heights cannot pass unnoticed. All six face_distance =
 // Gaussian(1.0, 0.5), sync_group_ all zero.
 constexpr uint32_t kPyramidGoldenSeed = 20260727u;
-
-constexpr float kPyramidGoldenH1[kGoldenDraws] = {
-  0x1.764b88p-2f, 0x1.85ee1ep-2f, 0x1.8dcc86p-3f, 0x1.8d6cd8p-2f, 0x1.862c92p-2f, 0x1.bccc7cp-2f, 0x1.fd17f2p-3f,
-  0x1.3c7eaap-3f, 0x1.893176p-4f, 0x1.f00f8cp-3f, 0x1.0498d4p-2f, 0x1.a73358p-2f, 0x1.ca30eep-2f, 0x1.2c1962p-2f,
-  0x1.35e4a4p-2f, 0x1.fb92b6p-3f, 0x1.359ab6p-2f, 0x1.34c628p-2f, 0x1.881ddcp-2f, 0x1.45e57ap-2f,
-};
-constexpr float kPyramidGoldenH2[kGoldenDraws] = {
-  0x1.1f995ap+0f, 0x1.cbaa3cp-1f, 0x1.1c552cp+0f, 0x1.1aae94p+0f, 0x1.05e6dep+0f, 0x1.1c2648p+0f, 0x1.02a6aap+0f,
-  0x1.25893ap+0f, 0x1.2d012p+0f,  0x1.26db9p+0f,  0x1.12bb64p+0f, 0x1.a78cdp-1f,  0x1.9dfe0ep-1f, 0x1.11eac6p+0f,
-  0x1.097a04p+0f, 0x1.19b9d2p+0f, 0x1.f2b008p-1f, 0x1.c4c67cp-1f, 0x1.ab68f2p-1f, 0x1.2bdb4ap+0f,
-};
-constexpr float kPyramidGoldenH3[kGoldenDraws] = {
-  0x1.aaed8ep-2f, 0x1.e81ap-4f,   0x1.258016p-2f, 0x1.490ddep-2f, 0x1.2f71e6p-2f, 0x1.d33a5cp-3f, 0x1.3a1654p-2f,
-  0x1.7ece8p-2f,  0x1.25678p-2f,  0x1.718ce4p-2f, 0x1.833d48p-3f, 0x1.382d64p-2f, 0x1.d0ee5cp-2f, 0x1.0ef692p-3f,
-  0x1.431cdcp-4f, 0x1.2eb044p-2f, 0x1.6303cp-2f,  0x1.e6b0d6p-4f, 0x1.2acd68p-2f, 0x1.ed6e32p-3f,
-};
-constexpr float kPyramidGoldenD[kGoldenDraws][6] = {
-  { 0x1.77b53p+0f, 0x1.cad678p-2f, 0x1.53d0f8p-1f, 0x1.f37f5p-2f, 0x1.14429p+1f, 0x1.a089eep-1f },
-  { 0x1.48d38p-6f, 0x1.ee3578p-1f, 0x1.65ef64p+0f, 0x1.a08d74p-1f, 0x1.6f6ad2p-1f, 0x1.139276p+0f },
-  { 0x1.d62dap-2f, 0x1.d65be4p-1f, 0x1.ac5834p-2f, 0x1.25633ep-1f, 0x1.7c9316p+0f, 0x1.23d864p-1f },
-  { 0x1.28d99cp+0f, 0x1.14aa22p+0f, 0x1.b549dap-1f, 0x1.ea8e84p-2f, 0x1.5d1c7ep-1f, -0x1.60eacp-5f },
-  { 0x1.2585e4p-2f, 0x1.e1dbecp-1f, 0x1.dcb7cp-1f, 0x1.a8b88p+0f, 0x1.5b0cf4p+0f, 0x1.00e098p-2f },
-  { 0x1.61c2eep-1f, 0x1.05197cp+0f, 0x1.4aa888p-1f, 0x1.b0e758p-1f, 0x1.b2d7ecp-2f, 0x1.22678cp-1f },
-  { 0x1.7b0bp+0f, 0x1.5d48ep+0f, 0x1.25d24p-2f, 0x1.a0108cp-2f, 0x1.443d86p+0f, 0x1.10b9fcp+0f },
-  { 0x1.ccdefap+0f, 0x1.f9ecccp-1f, 0x1.3ef062p+1f, 0x1.f1a694p-1f, 0x1.99e0f6p+0f, 0x1.246cecp+1f },
-  { 0x1.4b3aacp+0f, 0x1.2958e6p+0f, 0x1.b1e866p-1f, 0x1.06f37ep+0f, 0x1.77aa4p-1f, 0x1.536a88p+1f },
-  { 0x1.0e5c2ep+0f, 0x1.474bf4p+0f, 0x1.555696p+0f, 0x1.956e76p-1f, 0x1.f14ac8p+0f, 0x1.eb6654p-1f },
-  { 0x1.2405f2p-1f, 0x1.91859ep+0f, 0x1.49589ap+0f, 0x1.9e3c62p-1f, 0x1.db26dcp+0f, 0x1.7605ccp+0f },
-  { 0x1.8278ep+0f, 0x1.131f22p+1f, 0x1.1fa8cp+0f, 0x1.427faep+0f, 0x1.3db826p+0f, 0x1.0b5ffp-2f },
-  { 0x1.01d42cp-1f, 0x1.5dd4dep-1f, 0x1.492a9cp+0f, 0x1.8647d4p-1f, 0x1.0a6636p+0f, 0x1.2a0618p+0f },
-  { 0x1.5790e8p-1f, 0x1.b58cfcp-1f, 0x1.ed8696p-1f, 0x1.57e4cp-1f, 0x1.0f66a6p+0f, 0x1.c73d4cp-1f },
-  { 0x1.80e57p+0f, 0x1.2862ep-1f, 0x1.0f8e5ep+1f, 0x1.7e8d58p-2f, 0x1.7a023cp-1f, 0x1.2eeb62p+0f },
-  { 0x1.38af62p-1f, 0x1.855638p+0f, 0x1.0881c6p-1f, 0x1.625268p-1f, 0x1.638412p+0f, 0x1.57064ap+0f },
-  { 0x1.2b869ep+0f, 0x1.0f2646p+0f, 0x1.4a598p-1f, 0x1.031cep+0f, 0x1.cd4998p+0f, 0x1.fdc336p+0f },
-  { 0x1.0584c8p-1f, 0x1.89a9dp+0f, 0x1.13448ep+0f, 0x1.516788p-2f, 0x1.07c95p+0f, 0x1.69c4f6p+0f },
-  { 0x1.08b95p-1f, 0x1.064a02p+1f, 0x1.6c7e5p+0f, 0x1.d5842ep-1f, 0x1.06741p+0f, 0x1.73fc64p+0f },
-  { 0x1.af4544p-2f, 0x1.c15a4p+0f, 0x1.4d0fc8p+0f, 0x1.fba91p-2f, 0x1.205d4cp-1f, 0x1.952238p+0f },
-};
 
 ns::PrismCrystalParam GoldenPrismParam() {
   ns::PrismCrystalParam p;
@@ -128,76 +78,114 @@ bool CfGeomBytesEqual(const ns::CrystalGeom& a, const ns::CrystalGeom& b) {
 // ==================================================================================================
 // AC1 — no sync declaration must not perturb the RNG stream, value for value.
 
-TEST(ShapeScalarSyncGroupSampling, PrismNoSyncMatchesPreChangeGolden) {
+TEST(ShapeScalarSyncGroupSampling, PrismNoSyncMatchesContractOrder) {
   const ns::PrismCrystalParam p = GoldenPrismParam();
   ns::RandomNumberGenerator rng(kPrismGoldenSeed);
+  ns::RandomNumberGenerator ref(kPrismGoldenSeed);
 
-  // One rng instance, consumed continuously across the draws — exactly the
-  // lifecycle the golden was captured under. Rebuilding it per draw would reset
-  // the stream and make every row identical.
-  for (int draw = 0; draw < kGoldenDraws; draw++) {
+  // One rng instance each, consumed continuously across the draws — the
+  // lifecycle MakeCrystal runs under. Rebuilding them per draw would reset both
+  // streams and make every row identical.
+  for (int draw = 0; draw < kContractReplayDraws; draw++) {
+    // Hand-replayed contract stream: h_, then d[0..5] — seven draws in this
+    // order. std::abs folds the height only, matching the fold site inside
+    // SamplePrismShapeScalars; face_distance stays signed.
+    const float exp_h = std::abs(ref.Get(p.h_));
+    float exp_dist[6]{};
+    for (int i = 0; i < 6; i++) {
+      exp_dist[i] = ref.Get(p.d_[i]);
+    }
+
     float dist[6]{};
     const float h = ns::SamplePrismShapeScalars(rng, p, dist);
-    ASSERT_EQ(h, kPrismGoldenH[draw]) << "prism height diverged at draw " << draw;
+    ASSERT_EQ(h, exp_h) << "prism height diverged at draw " << draw;
     for (int i = 0; i < 6; i++) {
-      ASSERT_EQ(dist[i], kPrismGoldenD[draw][i]) << "prism face_distance[" << i << "] diverged at draw " << draw;
+      ASSERT_EQ(dist[i], exp_dist[i]) << "prism face_distance[" << i << "] diverged at draw " << draw;
     }
   }
+
+  // Both streams must still sit at the same position: a sampler that drew an
+  // extra value (or one fewer) somewhere could in principle still have matched
+  // every assertion above only if the surplus draw came last, which this catches.
+  ASSERT_EQ(rng.GetUniform(), ref.GetUniform()) << "prism sampling consumed a different number of RNG draws";
 }
 
-TEST(ShapeScalarSyncGroupSampling, PyramidNoSyncMatchesPreChangeGolden) {
+TEST(ShapeScalarSyncGroupSampling, PyramidNoSyncMatchesContractOrder) {
   const ns::PyramidCrystalParam p = GoldenPyramidParam();
   ns::RandomNumberGenerator rng(kPyramidGoldenSeed);
+  ns::RandomNumberGenerator ref(kPyramidGoldenSeed);
 
-  for (int draw = 0; draw < kGoldenDraws; draw++) {
+  for (int draw = 0; draw < kContractReplayDraws; draw++) {
+    // Contract stream: upper, prism, lower height, then d[0..5] — the draw
+    // order, not the declaration order of PyramidCrystalParam. All three
+    // heights fold with std::abs, the face distances do not.
+    const float exp_h1 = std::abs(ref.Get(p.h_pyr_u_));
+    const float exp_h2 = std::abs(ref.Get(p.h_prs_));
+    const float exp_h3 = std::abs(ref.Get(p.h_pyr_l_));
+    float exp_dist[6]{};
+    for (int i = 0; i < 6; i++) {
+      exp_dist[i] = ref.Get(p.d_[i]);
+    }
+
     float h1 = 0.f;
     float h2 = 0.f;
     float h3 = 0.f;
     float dist[6]{};
     ns::SamplePyramidShapeScalars(rng, p, h1, h2, h3, dist);
-    // h1/h2/h3 are upper / prism / lower — the draw order, not the declaration
-    // order of PyramidCrystalParam.
-    ASSERT_EQ(h1, kPyramidGoldenH1[draw]) << "pyramid upper_h diverged at draw " << draw;
-    ASSERT_EQ(h2, kPyramidGoldenH2[draw]) << "pyramid prism_h diverged at draw " << draw;
-    ASSERT_EQ(h3, kPyramidGoldenH3[draw]) << "pyramid lower_h diverged at draw " << draw;
+    ASSERT_EQ(h1, exp_h1) << "pyramid upper_h diverged at draw " << draw;
+    ASSERT_EQ(h2, exp_h2) << "pyramid prism_h diverged at draw " << draw;
+    ASSERT_EQ(h3, exp_h3) << "pyramid lower_h diverged at draw " << draw;
     for (int i = 0; i < 6; i++) {
-      ASSERT_EQ(dist[i], kPyramidGoldenD[draw][i]) << "pyramid face_distance[" << i << "] diverged at draw " << draw;
+      ASSERT_EQ(dist[i], exp_dist[i]) << "pyramid face_distance[" << i << "] diverged at draw " << draw;
     }
   }
+
+  ASSERT_EQ(rng.GetUniform(), ref.GetUniform()) << "pyramid sampling consumed a different number of RNG draws";
 }
 
-// The two tests above pin the extracted sampler against the golden. These two
-// pin the *full MakeCrystal pipeline* against the same golden, so a divergence
+// The two tests above pin the extracted sampler against the contract. These two
+// pin the *full MakeCrystal pipeline* against the same contract, so a divergence
 // between "what the sampler draws" and "what MakeCrystal actually builds a
 // crystal from" cannot hide: MakeCrystal is the entry point all three backends
 // use, the sampler is only its first half.
-TEST(ShapeScalarSyncGroupSampling, PrismMakeCrystalAgreesWithGoldenGeometry) {
+TEST(ShapeScalarSyncGroupSampling, PrismMakeCrystalAgreesWithContractGeometry) {
   const ns::PrismCrystalParam p = GoldenPrismParam();
   ns::RandomNumberGenerator rng(kPrismGoldenSeed);
+  ns::RandomNumberGenerator ref(kPrismGoldenSeed);
 
-  for (int draw = 0; draw < kGoldenDraws; draw++) {
+  for (int draw = 0; draw < kContractReplayDraws; draw++) {
+    const float ref_h = std::abs(ref.Get(p.h_));
+    float ref_dist[6]{};
+    for (int i = 0; i < 6; i++) {
+      ref_dist[i] = ref.Get(p.d_[i]);
+    }
+
     const ns::Crystal from_pipeline = ns::MakeCrystal(rng, ns::CrystalParam{ p });
-    float golden_dist[6]{};
-    std::memcpy(golden_dist, kPrismGoldenD[draw], sizeof(golden_dist));
-    const ns::Crystal from_golden = ns::Crystal::CreatePrism(kPrismGoldenH[draw], golden_dist);
-    EXPECT_TRUE(CfGeomBytesEqual(from_pipeline.CfGeom(), from_golden.CfGeom()))
-        << "MakeCrystal geometry differs from the golden scalars' geometry at draw " << draw;
+    const ns::Crystal from_contract = ns::Crystal::CreatePrism(ref_h, ref_dist);
+    EXPECT_TRUE(CfGeomBytesEqual(from_pipeline.CfGeom(), from_contract.CfGeom()))
+        << "MakeCrystal geometry differs from the contract-order scalars' geometry at draw " << draw;
   }
 }
 
-TEST(ShapeScalarSyncGroupSampling, PyramidMakeCrystalAgreesWithGoldenGeometry) {
+TEST(ShapeScalarSyncGroupSampling, PyramidMakeCrystalAgreesWithContractGeometry) {
   const ns::PyramidCrystalParam p = GoldenPyramidParam();
   ns::RandomNumberGenerator rng(kPyramidGoldenSeed);
+  ns::RandomNumberGenerator ref(kPyramidGoldenSeed);
 
-  for (int draw = 0; draw < kGoldenDraws; draw++) {
+  for (int draw = 0; draw < kContractReplayDraws; draw++) {
+    const float ref_h1 = std::abs(ref.Get(p.h_pyr_u_));
+    const float ref_h2 = std::abs(ref.Get(p.h_prs_));
+    const float ref_h3 = std::abs(ref.Get(p.h_pyr_l_));
+    float ref_dist[6]{};
+    for (int i = 0; i < 6; i++) {
+      ref_dist[i] = ref.Get(p.d_[i]);
+    }
+
     const ns::Crystal from_pipeline = ns::MakeCrystal(rng, ns::CrystalParam{ p });
-    float golden_dist[6]{};
-    std::memcpy(golden_dist, kPyramidGoldenD[draw], sizeof(golden_dist));
-    const ns::Crystal from_golden =
-        ns::Crystal::CreatePyramid(p.wedge_angle_u_, p.wedge_angle_l_, kPyramidGoldenH1[draw], kPyramidGoldenH2[draw],
-                                   kPyramidGoldenH3[draw], golden_dist);
-    EXPECT_TRUE(CfGeomBytesEqual(from_pipeline.CfGeom(), from_golden.CfGeom()))
-        << "MakeCrystal geometry differs from the golden scalars' geometry at draw " << draw;
+    const ns::Crystal from_contract =
+        ns::Crystal::CreatePyramid(p.wedge_angle_u_, p.wedge_angle_l_, ref_h1, ref_h2, ref_h3, ref_dist);
+    EXPECT_TRUE(CfGeomBytesEqual(from_pipeline.CfGeom(), from_contract.CfGeom()))
+        << "MakeCrystal geometry differs from the contract-order scalars' geometry at draw " << draw;
   }
 }
 
