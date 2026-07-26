@@ -479,6 +479,267 @@ void ShapeTableParamLabel(const char* label) {
   }
 }
 
+
+// ---- Sync column: shape-scalar sync groups (the Sync cell of a shape-table row) ----
+namespace {
+
+// Row names indexed by LUMICE_SHAPE_SCALAR_*, used in the popup's membership lists. The order is
+// the SLOT index space, not CrystalConfig's field order: UPPER_H is slot 1 and PRISM_H slot 2 (see
+// the SLOT-ORDER TRAP note in gui_state.hpp), so this table reads "Upper H" before "Prism H" even
+// though the modal draws Prism H first. The strings match what ShapeTableParamLabel prints for the
+// corresponding rows, because a membership list naming rows the user cannot find is worse than none.
+const char* const kShapeScalarLabels[LUMICE_SHAPE_SCALAR_COUNT] = {
+  "Height", "Upper H", "Prism H", "Lower H", "Face 3", "Face 4", "Face 5", "Face 6", "Face 7", "Face 8",
+};
+
+// Group colors are DERIVED from the group number, never stored (D7): a stored color would have to
+// round-trip through JSON, the C API and the .lmc format for a purely cosmetic property. Low
+// saturation so a filled cell stays readable behind the group number and does not fight the table's
+// own row striping. Groups beyond the table length wrap — a 7th group reusing group 1's color is a
+// cosmetic collision, not an error state, and the number in the swatch remains unambiguous (this is
+// also why the number is drawn at all: color alone is not accessible).
+const ImVec4 kSyncGroupPalette[] = {
+  ImVec4(0.36f, 0.55f, 0.75f, 1.00f),  // blue
+  ImVec4(0.75f, 0.55f, 0.36f, 1.00f),  // amber
+  ImVec4(0.45f, 0.68f, 0.48f, 1.00f),  // green
+  ImVec4(0.70f, 0.48f, 0.66f, 1.00f),  // orchid
+  ImVec4(0.42f, 0.66f, 0.70f, 1.00f),  // teal
+  ImVec4(0.76f, 0.52f, 0.48f, 1.00f),  // terracotta
+};
+constexpr int kSyncGroupPaletteCount = static_cast<int>(sizeof(kSyncGroupPalette) / sizeof(kSyncGroupPalette[0]));
+
+// Swatch fill for a non-zero group. Group 0 (independent) has no color — it renders as an outline.
+ImVec4 SyncGroupColor(int group) {
+  return kSyncGroupPalette[(group - 1) % kSyncGroupPaletteCount];
+}
+
+// Is this scalar drawn as a row for `type`? Mirrors RenderCrystalModal's type branch (Prism draws
+// Height; Pyramid draws Prism/Upper/Lower H; the six faces are drawn by both) — the same condition,
+// promoted from an implicit `if` in the renderer to a predicate the Sync widget can also ask.
+//
+// Everything the widget does is scoped by this: the popup enumerates only visible slots, the leader
+// search only considers visible slots, and propagation only writes visible slots. So a group number
+// on a scalar belonging to the OTHER crystal type lies dormant across a type switch — not cleared,
+// not shown, not joined. That is deliberate: D1 permits such a grouping to exist in storage (no
+// commensurability check), and leaving it alone is the smallest GUI-side behavior that neither
+// invents a cross-type editing model nor destroys data the user may switch back to.
+bool IsShapeScalarVisible(CrystalType type, int slot) {
+  if (slot >= LUMICE_SHAPE_SCALAR_FACE_0) {
+    return true;  // face_distance[0..5]: both types
+  }
+  if (type == CrystalType::kPrism) {
+    return slot == LUMICE_SHAPE_SCALAR_HEIGHT;
+  }
+  return slot == LUMICE_SHAPE_SCALAR_PRISM_H || slot == LUMICE_SHAPE_SCALAR_UPPER_H ||
+         slot == LUMICE_SHAPE_SCALAR_LOWER_H;
+}
+
+// The slot whose value the group carries: the lowest-indexed applicable member. This is not a GUI
+// approximation of the core rule — it IS the core rule (lumice.h LUMICE_CrystalParam::sync_group:
+// "the group's first applicable member (lowest LUMICE_SHAPE_SCALAR_* index) consumes the RNG and
+// owns the distribution"), evaluated over the same applicable set IsShapeScalarVisible defines. So
+// the value the user sees snap in on join is the value core will actually draw with. `exclude_slot`
+// keeps a row from electing itself as its own leader while it is joining.
+// Returns -1 when the group has no other member (or group == 0).
+int FindGroupLeaderSlot(const CrystalConfig& cr, int group, int exclude_slot) {
+  if (group == 0) {
+    return -1;
+  }
+  for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    if (s == exclude_slot || !IsShapeScalarVisible(cr.type, s)) {
+      continue;
+    }
+    if (ShapeScalarAt(cr, s).sync_group == group) {
+      return s;
+    }
+  }
+  return -1;
+}
+
+// Group id for "+ New group": one past the largest id anywhere in the crystal. Scans ALL ten slots,
+// including ones the current type does not draw, so a new group cannot collide with a dormant group
+// belonging to the other crystal type. Ids abandoned along the way are not recycled — core
+// renumbers on parse anyway (canonicalization), and reusing a number the user just emptied would
+// re-color a row they had visually separated.
+int NextUnusedSyncGroup(const CrystalConfig& cr) {
+  int max_group = 0;
+  for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    max_group = std::max(max_group, ShapeScalarAt(cr, s).sync_group);
+  }
+  return max_group + 1;
+}
+
+// Copy `slot`'s distribution onto the rest of its group (type, center and spread — NOT the group id
+// itself). Called after an edit to any row that is in a group: a subordinate row stays editable and
+// writing through it updates the whole group, which the owner picked over greying subordinates out.
+void PropagateToSyncGroup(CrystalConfig& cr, int slot) {
+  const ShapeDist src = ShapeScalarAt(cr, slot);
+  if (src.sync_group == 0) {
+    return;
+  }
+  for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    if (s == slot || !IsShapeScalarVisible(cr.type, s)) {
+      continue;
+    }
+    ShapeDist& dst = ShapeScalarAt(cr, s);
+    if (dst.sync_group != src.sync_group) {
+      continue;
+    }
+    dst.type = src.type;
+    dst.center = src.center;
+    dst.spread = src.spread;
+  }
+}
+
+// Join `slot` to `group`, snapshotting the group leader's distribution into it. Joining is visibly
+// destructive of the row's own value — that self-explains the semantics better than a confirmation
+// dialog would, and Cancel on the modal is the undo. A group with no other member (a fresh "+ New
+// group") has no leader, so the row keeps its value and simply becomes the group's first member.
+void JoinSyncGroup(CrystalConfig& cr, int slot, int group) {
+  ShapeDist& dist = ShapeScalarAt(cr, slot);
+  dist.sync_group = group;
+  const int leader = FindGroupLeaderSlot(cr, group, slot);
+  if (leader < 0) {
+    return;
+  }
+  const ShapeDist& src = ShapeScalarAt(cr, leader);
+  dist.type = src.type;
+  dist.center = src.center;
+  dist.spread = src.spread;
+}
+
+// Comma-separated names of `group`'s visible members, empty if the group has none.
+std::string SyncGroupMemberList(const CrystalConfig& cr, int group) {
+  std::string members;
+  for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    if (!IsShapeScalarVisible(cr.type, s) || ShapeScalarAt(cr, s).sync_group != group) {
+      continue;
+    }
+    if (!members.empty()) {
+      members += ", ";
+    }
+    members += kShapeScalarLabels[s];
+  }
+  return members;
+}
+
+// Draw the group swatch: filled + numbered for a group, hollow outline for independent. Purely
+// visual — the click is owned by the caller's Button, which this paints over.
+void DrawSyncSwatch(const ImVec2& p_min, float side, int group) {
+  ImDrawList* draw_list = ImGui::GetWindowDrawList();
+  if (group == 0) {
+    // Independent: a hollow outline. Distinct at a glance from any filled group cell, and it still
+    // reads as a clickable target rather than an empty cell.
+    draw_list->AddRect(p_min, ImVec2(p_min.x + side, p_min.y + side), ImGui::GetColorU32(ImGuiCol_TextDisabled), 2.0f);
+    return;
+  }
+  // Number centered in the swatch, in whichever of black/white contrasts with the fill. Derived
+  // from the fill's luminance rather than fixed, so a later palette edit cannot silently produce
+  // an unreadable cell.
+  const ImVec4 fill = SyncGroupColor(group);
+  const float luma = 0.299f * fill.x + 0.587f * fill.y + 0.114f * fill.z;
+  const ImU32 text_col = luma > 0.55f ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255);
+  char num[16];
+  snprintf(num, sizeof(num), "%d", group);
+  const ImVec2 text_size = ImGui::CalcTextSize(num);
+  draw_list->AddText(ImVec2(p_min.x + (side - text_size.x) * 0.5f, p_min.y + (side - text_size.y) * 0.5f), text_col,
+                     num);
+}
+
+// Body of the group picker popup (caller owns Begin/EndPopup). Returns true if the row's group
+// changed. Item ids are anchored with "###" so they stay put as membership text changes.
+bool RenderSyncPopupItems(CrystalConfig& cr, int slot) {
+  ShapeDist& dist = ShapeScalarAt(cr, slot);
+  bool changed = false;
+
+  // "None" first: leaving a group is selecting None, because a group is an equivalence relation
+  // and not an object — there is nothing to delete, and the last member leaving is what makes a
+  // group disappear (D7). Leaving does NOT restore the pre-join value: no shadow copy is kept,
+  // and the modal's Cancel is the undo path.
+  if (ImGui::Selectable("None###sync_none") && dist.sync_group != 0) {
+    dist.sync_group = 0;
+    changed = true;
+  }
+
+  // Existing groups, with their membership spelled out: the decision the user is making is "join
+  // the group that has Face 3 and Face 5 in it", not "join group 1".
+  bool listed_any = false;
+  const int group_upper_bound = NextUnusedSyncGroup(cr);  // exclusive: one past the largest id in use
+  for (int group = 1; group < group_upper_bound; ++group) {
+    const std::string members = SyncGroupMemberList(cr, group);
+    if (members.empty()) {
+      continue;
+    }
+    listed_any = true;
+    // "###sync_group_N" anchors the id to the group number alone: the visible part carries the
+    // membership list, which changes as rows join and leave, and an id derived from it would change
+    // with it.
+    char item[192];
+    snprintf(item, sizeof(item), "%d  (%s)###sync_group_%d", group, members.c_str(), group);
+    // Re-selecting the row's current group is a no-op, not a re-snapshot: the row IS the value the
+    // group would hand it back, and treating it as a join would be a needless self-overwrite.
+    if (ImGui::Selectable(item) && dist.sync_group != group) {
+      JoinSyncGroup(cr, slot, group);
+      changed = true;
+    }
+  }
+  if (listed_any) {
+    ImGui::Separator();
+  }
+
+  // An explicit item rather than a side effect of clicking through the swatch: "make a new group"
+  // is a distinct intent from "pick an existing one" (D7 settled the popup as the single path).
+  if (ImGui::Selectable("+  New group###sync_new")) {
+    JoinSyncGroup(cr, slot, NextUnusedSyncGroup(cr));
+    changed = true;
+  }
+  return changed;
+}
+
+// Sync cell: a group-colored square button that opens the group picker. Returns true if the row's
+// group (and hence, via the snapshot, possibly its value) changed.
+//
+// The button's visible label is EMPTY and its id is "##sync_<label>" — the group number is drawn
+// on top by hand rather than being part of the label. That is not decoration: ImGui hashes the
+// whole id string (only "###" restarts the hash — imgui.cpp ImHashStr), so a number in the label
+// would make the widget's id change every time the user regrouped, and every test path addressing
+// it would drift out from under them. Same reason the swatch is a Button and not a ColorButton:
+// Button registers with the test engine, so the cell is reachable by a real click.
+bool RenderSyncCell(const char* label, CrystalConfig& cr, int slot) {
+  const int group = ShapeScalarAt(cr, slot).sync_group;
+
+  char btn_id[96];
+  snprintf(btn_id, sizeof(btn_id), "##sync_%s", label);
+
+  // Square, exactly one frame tall: the swatch must not be what sets the row height, or the modal's
+  // fixed-height content pane (edit_modals.cpp kModalContentHeight, budgeted in rows) would need a
+  // scrollbar once Face Distance is expanded.
+  const float side = ImGui::GetFrameHeight();
+  const ImVec2 p_min = ImGui::GetCursorScreenPos();
+
+  const ImVec4 fill = group != 0 ? SyncGroupColor(group) : ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_Button, fill);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(fill.x, fill.y, fill.z, group != 0 ? 0.80f : 0.25f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(fill.x, fill.y, fill.z, group != 0 ? 0.60f : 0.40f));
+  const bool clicked = ImGui::Button(btn_id, ImVec2(side, side));
+  ImGui::PopStyleColor(3);
+  DrawSyncSwatch(p_min, side, group);
+
+  char popup_id[96];
+  snprintf(popup_id, sizeof(popup_id), "##sync_popup_%s", label);
+  if (clicked) {
+    ImGui::OpenPopup(popup_id);
+  }
+  bool changed = false;
+  if (ImGui::BeginPopup(popup_id)) {
+    changed = RenderSyncPopupItems(cr, slot);
+    ImGui::EndPopup();
+  }
+  return changed;
+}
+
+}  // namespace
+
 bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, float center_min, float center_max,
                              const char* center_fmt, SliderScale center_scale) {
   ShapeDist& dist = ShapeScalarAt(cr, slot);  // single mapping authority (gui_state.hpp)
@@ -488,8 +749,15 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
   // gets a `label`-suffixed unique id so multiple rows do not collide and GUI tests can target each.
   ImGui::TableNextRow();
 
-  // Col 0 — Parameter name.
+  // Col 0 — Parameter name. A grouped row also gets its name cell tinted in the group's color (at
+  // low alpha, so the text stays readable): together with the filled Sync swatch this makes group
+  // membership pre-attentive — the eye finds the rows that move together without reading numbers.
+  // CellBg draws above the table's RowBg striping, so the two do not fight.
   ImGui::TableNextColumn();
+  if (dist.sync_group != 0) {
+    const ImVec4 tint = SyncGroupColor(dist.sync_group);
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::GetColorU32(ImVec4(tint.x, tint.y, tint.z, 0.28f)));
+  }
   ShapeTableParamLabel(label);
 
   // Col 1 — center value: slider + input, filling the (stretch) Value column. trailing_label=false
@@ -531,9 +799,18 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
 
   ImGui::EndDisabled();
 
-  // Col 4 — sync group. Placeholder cell until the widget lands; the column already exists so the
-  // grid stays a rectangle and the column-count assert below stays satisfied.
+  // Col 4 — sync group swatch + picker popup.
   ImGui::TableNextColumn();
+  const bool group_changed = RenderSyncCell(label, cr, slot);
+
+  // A value edit on a row that is in a group writes through to the whole group. Evaluated after the
+  // Sync cell so an edit made in the same frame the row joined a group propagates the joined value
+  // rather than the discarded one. Joining itself does not go through here — that path snapshots
+  // FROM the leader (JoinSyncGroup), it does not push TO the group.
+  if (changed) {
+    PropagateToSyncGroup(cr, slot);
+  }
+  changed |= group_changed;
 
   // Make kShapeTableColumnCount load-bearing at the consumption site, not just a comment: assert the
   // row consumed exactly that many columns. Bumping the constant + adding a TableSetupColumn without
