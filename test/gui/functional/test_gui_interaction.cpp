@@ -4463,6 +4463,63 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/sync_group_cross_range_converges — grouping scalars whose sliders have DIFFERENT
+  // ranges is permitted (the design deliberately runs no dimensional-commensurability check), and
+  // Height [0.01, 100] with a face distance [0, 2] is the case where that shows. What the group
+  // then settles on is the tighter bound: a value propagated into the face row is clamped by that
+  // row's own slider, and the clamp propagates straight back out.
+  //
+  // The property worth pinning is not the number 2.0 — it is that the loop TERMINATES. Propagation
+  // is triggered by "this row's value changed", and a clamp is a change, so a value that no member
+  // can hold is fed back and forth between rows. Measured: one frame to converge, stable after.
+  // An implementation that ping-ponged (or clamped asymmetrically) would leave the modal visibly
+  // twitching and this test red.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_cross_range_converges");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      crystal().type = gui::CrystalType::kPrism;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Height##modal_cr");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      // Both start at the shared default 1.0, which is inside both ranges — nothing to clamp yet.
+      IM_CHECK_EQ(crystal().height.center, 1.0f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.0f);
+
+      // 50 is legal for Height and far outside the face range.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 50.0f);
+      ctx->Yield(1);
+      // Settled after a SINGLE frame, on the face row's maximum, with both members agreeing.
+      IM_CHECK_EQ(crystal().face_distance[0].center, 2.0f);
+      IM_CHECK_EQ(crystal().height.center, 2.0f);
+      // ...and it stays there: no oscillation between the two clamps over the following frames.
+      ctx->Yield(8);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 2.0f);
+      IM_CHECK_EQ(crystal().height.center, 2.0f);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
   // p2_modal/sync_column_layout_budget — AC5, as a measurement rather than a look at the modal.
   // The Sync column is FIXED width and Value is the only stretch column, so every pixel Sync takes
   // comes out of the slider. Two things could go wrong and neither is visible in a state assertion:
