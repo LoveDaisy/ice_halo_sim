@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <variant>
 
 #include "config/config_compare.hpp"
 #include "config/crystal_config.hpp"
@@ -313,6 +314,32 @@ TEST(ShapeScalarSyncGroupJson, SerializationDoesNotMutateTheSourceParam) {
   const auto emitted = out.at("sync_group").at("face_distance").get<std::vector<int>>();
   const std::vector<int> expected = { 1, 2, 1, 2, 1, 2 };
   EXPECT_EQ(emitted, expected);
+}
+
+TEST(ShapeScalarSyncGroupJson, ReachableFromTheDocumentedConfigFilePosition) {
+  // The schema position users write is `crystal[].shape.sync_group`, one level
+  // above the shape object the tests above feed directly. This pins that the key
+  // survives CrystalConfig's own from_json rather than only the param's.
+  nlohmann::json shape = PrismShapeJson();
+  shape["sync_group"] = { { "face_distance", nlohmann::json::array({ 1, 2, 1, 2, 1, 2 }) } };
+  const nlohmann::json crystal = {
+    { "id", 1 },
+    { "type", "prism" },
+    { "shape", shape },
+    { "axis",
+      { { "zenith", { { "type", "uniform" }, { "mean", 90 }, { "std", 360 } } },
+        { "azimuth", { { "type", "uniform" }, { "mean", 0 }, { "std", 360 } } } } },
+  };
+
+  const auto config = crystal.get<ns::CrystalConfig>();
+  ASSERT_TRUE(std::holds_alternative<ns::PrismCrystalParam>(config.param_));
+  const auto& p = std::get<ns::PrismCrystalParam>(config.param_);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace0], 1);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace1], 2);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace2], 1);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace3], 2);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace4], 1);
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarFace5], 2);
 }
 
 TEST(ShapeScalarSyncGroupJson, ParsingIntoAReusedParamClearsStaleGroups) {
