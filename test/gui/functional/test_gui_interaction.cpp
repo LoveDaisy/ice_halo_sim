@@ -4463,6 +4463,79 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/sync_column_layout_budget — AC5, as a measurement rather than a look at the modal.
+  // The Sync column is FIXED width and Value is the only stretch column, so every pixel Sync takes
+  // comes out of the slider. Two things could go wrong and neither is visible in a state assertion:
+  // the slider hitting PrepareSliderLayout's 40 px floor (below which it stops shrinking and starts
+  // overflowing its cell instead), and the taller-content case needing a scrollbar in the modal's
+  // fixed-height content pane. Both are checked in the worst case the modal supports: the narrow
+  // vertical layout, a Pyramid (three H rows + two wedge rows), with Face Distance expanded.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_column_layout_budget");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+
+      // The 420 px vertical width is only reached on the frame RenderEditModals observes the
+      // layout flag FLIP; without the flip the window keeps whatever width AlwaysAutoResize last
+      // converged to (see test_gui_modal_layout.cpp for the same dance and why).
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      gui::g_state.modal_layout_vertical = true;
+      ctx->Yield(6);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(4);
+
+      ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(win != nullptr);
+      IM_CHECK_EQ(win->Size.x, 420.0f);  // the narrow layout really is what is being measured
+
+      // Value column: the slider must still be laid out by the formula, not clamped by the floor.
+      // PrepareSliderLayout returns max(avail - kInputWidth - spacing, 40); a return of exactly 40
+      // means the cell is too narrow for the [slider][input] pair and the input is overflowing.
+      const auto slider = ctx->ItemInfo("**/##Face 3##modal_fd_slider");
+      const auto input = ctx->ItemInfo("**/##Face 3##modal_fd_input");
+      const auto swatch = ctx->ItemInfo("**/##sync_Face 3##modal_fd");
+      const float slider_w = slider.RectFull.GetWidth();
+      fprintf(stderr, "[sync_layout] vertical modal=%.0f slider_w=%.1f input_right=%.1f swatch=(%.1fx%.1f)\n",
+              win->Size.x, slider_w, input.RectFull.Max.x, swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
+      IM_CHECK_GT(slider_w, 40.0f);
+      // The input sits to the slider's right and must end before the Rand column starts — i.e. the
+      // pair fits the cell instead of spilling into the next one.
+      const auto rand_check = ctx->ItemInfo("**/##rnd_Face 3##modal_fd");
+      IM_CHECK_LT(input.RectFull.Max.x, rand_check.RectFull.Min.x);
+      // The swatch is square and exactly one frame tall, so it cannot be what drives row height.
+      IM_CHECK_EQ(swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
+      IM_CHECK_LE(swatch.RectFull.GetHeight(), ImGui::GetFrameHeight());
+
+      // No scrollbar in the modal's fixed-height content pane with everything expanded. The pane is
+      // a BeginChild of the modal; find it by walking ImGui's window list rather than guessing its
+      // auto-generated child name.
+      ImGuiContext& g = *ImGui::GetCurrentContext();
+      bool found_pane = false;
+      for (ImGuiWindow* w : g.Windows) {
+        if (w->ParentWindow == win && w->WasActive && strstr(w->Name, "modal_bottom_pane") != nullptr) {
+          found_pane = true;
+          fprintf(stderr, "[sync_layout] pane '%s' scroll_max_y=%.1f\n", w->Name, w->ScrollMax.y);
+          IM_CHECK_EQ(w->ScrollMax.y, 0.0f);  // content fits: nothing to scroll
+        }
+      }
+      IM_CHECK(found_pane);  // a renamed pane must fail loudly, not silently skip the check
+
+      // Restore the layout flag BEFORE closing, so the modal (and the widths ImGui has cached for
+      // it) is handed back to later tests in the default horizontal form.
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(4);
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
   // p2_modal/sync_group_reselect_current_is_noop — re-picking the group a row is already in must
   // not re-snapshot it, i.e. the popup's "if (dist.sync_group != group)" guard is load-bearing.
   //
