@@ -4073,6 +4073,16 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       std::string name_baseline = gui::CrystalOf(gui::g_state, entry).name;
       gui::CrystalType type_baseline = gui::CrystalOf(gui::g_state, entry).type;
 
+      // Step 1b: declare sync groups (404.3). There is no control for them yet — 404.4 adds the
+      // column — so they are injected straight into the entry, from where the modal copies them
+      // into its edit buffer like any other shape state. Both a scalar and face slots, because
+      // Reset All clears them not by naming them but by assigning whole ShapeDist values; a
+      // future rewrite that switched to per-component assignment would leave exactly these
+      // behind, and nothing else in the suite would notice.
+      gui::CrystalOf(gui::g_state, entry).height.sync_group = 3;
+      gui::CrystalOf(gui::g_state, entry).face_distance[2].sync_group = 1;
+      gui::CrystalOf(gui::g_state, entry).face_distance[4].sync_group = 1;
+
       // Step 2: open modal again, modify height to another non-default (2.0),
       // click Reset All, then OK to commit the reset.
       ctx->ItemClick("**/Edit##cr");
@@ -4094,6 +4104,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).lower_alpha, defaults.lower_alpha);
       for (int i = 0; i < 6; ++i) {
         IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[i], defaults.face_distance[i]);
+      }
+      // Sync groups cleared too (404.3). Spelled out rather than left to ShapeDist::operator==
+      // above so the intent is visible at the assertion, not inferred from a comparison operator.
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height.sync_group, 0);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[i].sync_group, 0);
       }
 
       // Step 4: assert name/type/axis preserved (Reset All must not touch them).
