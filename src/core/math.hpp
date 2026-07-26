@@ -190,6 +190,19 @@ struct Distribution {
   float Scale() const;
 };
 
+//! @brief Field-by-field value equality for two Distributions.
+//!
+//! @details The single owner of "are these two distributions the same". Both
+//!   config_compare.hpp's operator==(Distribution, Distribution) — the
+//!   re-simulation trigger predicate — and the sync-group leader normalization in
+//!   crystal_config.cpp route here, so adding a field to Distribution cannot
+//!   leave one of them silently comparing the old subset. The static_assert is
+//!   what forces that update.
+inline bool DistributionValueEqual(const Distribution& a, const Distribution& b) {
+  static_assert(sizeof(Distribution) == 12, "Update DistributionValueEqual when Distribution fields change");
+  return a.type == b.type && a.center == b.center && a.spread == b.spread;
+}
+
 
 class RandomNumberGenerator {
  public:
