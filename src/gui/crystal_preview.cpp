@@ -33,6 +33,17 @@ int g_crystal_mesh_hash = 0;  // Hash of crystal params for change detection
 static LUMICE_CrystalMesh g_last_mesh{};
 static bool g_last_mesh_valid = false;
 
+// Salt bases for CrystalParamHash's ten ShapeDist fields (height/prism_h/upper_h/lower_h then the
+// six face_distance entries) and the two single-slot alpha salts. This is the single source both
+// the hash_shape() call sites below and HashSaltSlotsAreDistinct's compile-time proof read from —
+// two independently hand-typed copies of the same literals could drift out of sync (e.g. a call
+// site's salt changed without updating the proof's copy) while the assert keeps compiling green,
+// silently certifying a layout that is no longer the one actually hashed.
+constexpr int kShapeSaltBaseCount = 10;
+constexpr int kShapeSaltBases[kShapeSaltBaseCount] = { 31, 37, 43, 49, 59, 63, 67, 71, 75, 79 };
+constexpr int kAlphaSaltCount = 2;
+constexpr int kAlphaSalts[kAlphaSaltCount] = { 55, 57 };  // upper_alpha / lower_alpha
+
 int CrystalParamHash(const CrystalConfig& c) {
   // Simple hash to detect parameter changes
   int h = static_cast<int>(c.type);
@@ -58,35 +69,30 @@ int CrystalParamHash(const CrystalConfig& c) {
   // 31/37/41/43 + 47/53 while a ShapeDist was three slots wide; at four, 41's block would have
   // swallowed lower_h's 43. See HashSaltSlotsAreDistinct below — the assertion, not this comment,
   // is what keeps the property true.
-  h ^= hash_shape(c.height, 31);
-  h ^= hash_shape(c.prism_h, 37);
-  h ^= hash_shape(c.upper_h, 43);
-  h ^= hash_shape(c.lower_h, 49);
-  h ^= hash_float(c.upper_alpha) * 55;
-  h ^= hash_float(c.lower_alpha) * 57;
+  h ^= hash_shape(c.height, kShapeSaltBases[0]);
+  h ^= hash_shape(c.prism_h, kShapeSaltBases[1]);
+  h ^= hash_shape(c.upper_h, kShapeSaltBases[2]);
+  h ^= hash_shape(c.lower_h, kShapeSaltBases[3]);
+  h ^= hash_float(c.upper_alpha) * kAlphaSalts[0];
+  h ^= hash_float(c.lower_alpha) * kAlphaSalts[1];
   for (int i = 0; i < 6; i++) {
     // Stride 4, not 3: each ShapeDist now spans salt..salt+3, so a stride of 3 would give face i's
     // sync_group slot the same multiplier as face i+1's type slot, letting two changes cancel.
-    h ^= hash_shape(c.face_distance[i], 59 + i * 4);
+    h ^= hash_shape(c.face_distance[i], kShapeSaltBases[4 + i]);
   }
   return h;
 }
 
 // Compile-time proof of the property CrystalParamHash relies on: no two slots share a multiplier.
-// A hand-checked list of constants is exactly the kind of claim that rots the next time someone
-// adds a shape field or shifts a salt, so it is asserted rather than argued in a comment. The
-// slots in use are each ShapeDist base's base..base+3 (ten of them: the four isolated scalars plus
-// the six face_distance blocks at 59 + i*4) and the two single-slot alpha salts.
+// Reads kShapeSaltBases/kAlphaSalts directly (the same constants the hash_shape call sites above
+// use) rather than a second hand-typed copy, so the proof cannot silently drift from what is
+// actually hashed. The slots in use are each ShapeDist base's base..base+3 (ten of them: the four
+// isolated scalars plus the six face_distance blocks) and the two single-slot alpha salts.
 constexpr bool HashSaltSlotsAreDistinct() {
-  constexpr int kShapeBaseCount = 10;
-  constexpr int kShapeBases[kShapeBaseCount] = { 31, 37, 43, 49, 59, 63, 67, 71, 75, 79 };
-  constexpr int kAlphaSaltCount = 2;
-  constexpr int kAlphaSalts[kAlphaSaltCount] = { 55, 57 };  // upper_alpha / lower_alpha
-
-  constexpr int kSlotCount = kShapeBaseCount * 4 + kAlphaSaltCount;
+  constexpr int kSlotCount = kShapeSaltBaseCount * 4 + kAlphaSaltCount;
   int slots[kSlotCount] = {};
   int n = 0;
-  for (int base : kShapeBases) {
+  for (int base : kShapeSaltBases) {
     for (int k = 0; k < 4; k++) {
       slots[n++] = base + k;
     }
