@@ -36,6 +36,10 @@ namespace {
 // the reset (the developer must add a line here or accept the omission).
 // Does not touch name / type / zenith / azimuth / roll — type lives in a radio
 // button above, name is layer-scoped metadata, axis lives in a sibling tab.
+// A ShapeDist's sync_group needs no line of its own: every statement below assigns or copies a
+// whole ShapeDist, so the group rides along and lands back on the default 0 (independent). It is
+// listed here only because the "one line per field" discipline above would otherwise make its
+// absence read as an oversight.
 void ResetCrystalShapeParams(CrystalConfig& c) {
   CrystalConfig defaults;
   c.height = defaults.height;

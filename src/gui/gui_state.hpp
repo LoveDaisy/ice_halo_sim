@@ -84,6 +84,17 @@ struct ShapeDist {
   ShapeDistType type = ShapeDistType::kNoRandom;
   float center = 0.0f;
   float spread = 0.0f;
+  // Shape-scalar sync group (v4.13). 0 = independent; equal non-zero values across scalars of the
+  // same crystal mean "draw once, share the value" (core PrepareSyncGroups). The GUI keeps it
+  // EMBEDDED in each ShapeDist rather than as a CrystalConfig-level parallel array: CrystalConfig
+  // has exactly the ten ShapeDist members the core's kShapeScalarCount indexes, so embedding keeps
+  // "a scalar and its group" one object — copies, comparisons and the modal's edit buffer carry it
+  // for free. The parallel-array form the C API needs is produced at the two translation boundaries
+  // only, by FillSyncGroupArray / ApplySyncGroupArray below.
+  // Canonicalization / leader normalization are NOT done here — core's from_json owns them for both
+  // the preview path (LUMICE_GetCrystalMesh) and the commit path (LUMICE_SceneAddCrystal), so the
+  // GUI passes raw user numbering through verbatim and never becomes a second authority.
+  int sync_group = 0;
 
   ShapeDist() = default;
   ShapeDist(ShapeDistType t, float c, float s) : type(t), center(c), spread(s) {}
@@ -99,7 +110,7 @@ struct ShapeDist {
   ShapeDist(float v) : center(v) {}  // NOLINT(google-explicit-constructor)
 
   friend bool operator==(const ShapeDist& a, const ShapeDist& b) {
-    return a.type == b.type && a.center == b.center && a.spread == b.spread;
+    return a.type == b.type && a.center == b.center && a.spread == b.spread && a.sync_group == b.sync_group;
   }
   friend bool operator!=(const ShapeDist& a, const ShapeDist& b) { return !(a == b); }
 };
@@ -155,6 +166,57 @@ struct CrystalConfig {
   }
   friend bool operator!=(const CrystalConfig& a, const CrystalConfig& b) { return !(a == b); }
 };
+
+// ---- Shape-scalar sync groups: GUI embedded form <-> C API parallel-array form ----
+//
+// SLOT-ORDER TRAP: the LUMICE_SHAPE_SCALAR_* index space is NOT this struct's field declaration
+// order — UPPER_H is slot 1 and PRISM_H slot 2, the reverse of how CrystalConfig (and the GUI
+// modal) orders them. A translation written by field position instead of by name lands prism_h's
+// group on upper_h and vice versa, which JSON-round-trips cleanly and only shows up as the wrong
+// pair of pyramid heights moving together. So the mapping is spelled out ONCE, by named constant,
+// in ShapeScalarAt below; both directions and both call sites go through it.
+//
+// Single mapping authority. face_distance[0..5] occupies the six contiguous slots at the end.
+static_assert(LUMICE_SHAPE_SCALAR_FACE_5 == LUMICE_SHAPE_SCALAR_FACE_0 + 5 &&
+                  LUMICE_SHAPE_SCALAR_COUNT == LUMICE_SHAPE_SCALAR_FACE_0 + 6,
+              "LUMICE_SHAPE_SCALAR_FACE_* must be six contiguous slots ending the index space");
+inline const ShapeDist& ShapeScalarAt(const CrystalConfig& c, int slot) {
+  switch (slot) {
+    case LUMICE_SHAPE_SCALAR_HEIGHT:
+      return c.height;
+    case LUMICE_SHAPE_SCALAR_UPPER_H:
+      return c.upper_h;
+    case LUMICE_SHAPE_SCALAR_PRISM_H:
+      return c.prism_h;
+    case LUMICE_SHAPE_SCALAR_LOWER_H:
+      return c.lower_h;
+    default:
+      assert(slot >= LUMICE_SHAPE_SCALAR_FACE_0 && slot < LUMICE_SHAPE_SCALAR_COUNT);
+      return c.face_distance[slot - LUMICE_SHAPE_SCALAR_FACE_0];
+  }
+}
+inline ShapeDist& ShapeScalarAt(CrystalConfig& c, int slot) {
+  return const_cast<ShapeDist&>(ShapeScalarAt(static_cast<const CrystalConfig&>(c), slot));
+}
+
+// Embedded -> parallel array, for LUMICE_CrystalParam::sync_group[]. Both C API call sites
+// (file_io.cpp's commit path and crystal_preview.cpp's preview path) MUST produce the identical
+// array — a divergence would render one crystal in the preview and simulate a different one, with
+// nothing to notice it. Sharing this one function is what makes that mechanical rather than a
+// convention two files are expected to keep.
+// Values pass through verbatim; canonicalization belongs to core (see ShapeDist::sync_group).
+inline void FillSyncGroupArray(const CrystalConfig& c, int sync_group[LUMICE_SHAPE_SCALAR_COUNT]) {
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_COUNT; slot++) {
+    sync_group[slot] = ShapeScalarAt(c, slot).sync_group;
+  }
+}
+
+// Parallel array -> embedded. The inverse of FillSyncGroupArray, used by the .lmc parse path.
+inline void ApplySyncGroupArray(const int sync_group[LUMICE_SHAPE_SCALAR_COUNT], CrystalConfig& c) {
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_COUNT; slot++) {
+    ShapeScalarAt(c, slot).sync_group = sync_group[slot];
+  }
+}
 
 // Wavelength/weight pair for user-defined discrete spectra.
 struct WlWeight {

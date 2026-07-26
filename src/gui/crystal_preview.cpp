@@ -43,23 +43,68 @@ int CrystalParamHash(const CrystalConfig& c) {
   };
   // Each shape field is a ShapeDist: hash all three components ({type, center, spread}) so a change
   // to the distribution type or spread (not just the center) is detected and re-uploads the mesh.
+  // A ShapeDist occupies four consecutive salt slots: type/center/spread plus sync_group. The
+  // group MUST be hashed — changing only the grouping changes the geometry (synced scalars share
+  // one draw), and a hash blind to it leaves the stale mesh on screen, which reads as "the feature
+  // does not work" rather than as a caching bug.
   auto hash_shape = [&](const ShapeDist& d, int salt) {
     int hh = static_cast<int>(d.type) * salt;
     hh ^= hash_float(d.center) * (salt + 1);
     hh ^= hash_float(d.spread) * (salt + 2);
+    hh ^= d.sync_group * (salt + 3);
     return hh;
   };
+  // Salts are spaced ≥4 apart because each ShapeDist consumes four consecutive slots. They were
+  // 31/37/41/43 + 47/53 while a ShapeDist was three slots wide; at four, 41's block would have
+  // swallowed lower_h's 43. See HashSaltSlotsAreDistinct below — the assertion, not this comment,
+  // is what keeps the property true.
   h ^= hash_shape(c.height, 31);
   h ^= hash_shape(c.prism_h, 37);
-  h ^= hash_shape(c.upper_h, 41);
-  h ^= hash_shape(c.lower_h, 43);
-  h ^= hash_float(c.upper_alpha) * 47;
-  h ^= hash_float(c.lower_alpha) * 53;
+  h ^= hash_shape(c.upper_h, 43);
+  h ^= hash_shape(c.lower_h, 49);
+  h ^= hash_float(c.upper_alpha) * 55;
+  h ^= hash_float(c.lower_alpha) * 57;
   for (int i = 0; i < 6; i++) {
-    h ^= hash_shape(c.face_distance[i], 59 + i * 3);
+    // Stride 4, not 3: each ShapeDist now spans salt..salt+3, so a stride of 3 would give face i's
+    // sync_group slot the same multiplier as face i+1's type slot, letting two changes cancel.
+    h ^= hash_shape(c.face_distance[i], 59 + i * 4);
   }
   return h;
 }
+
+// Compile-time proof of the property CrystalParamHash relies on: no two slots share a multiplier.
+// A hand-checked list of constants is exactly the kind of claim that rots the next time someone
+// adds a shape field or shifts a salt, so it is asserted rather than argued in a comment. The
+// slots in use are each ShapeDist base's base..base+3 (ten of them: the four isolated scalars plus
+// the six face_distance blocks at 59 + i*4) and the two single-slot alpha salts.
+constexpr bool HashSaltSlotsAreDistinct() {
+  constexpr int kShapeBaseCount = 10;
+  constexpr int kShapeBases[kShapeBaseCount] = { 31, 37, 43, 49, 59, 63, 67, 71, 75, 79 };
+  constexpr int kAlphaSaltCount = 2;
+  constexpr int kAlphaSalts[kAlphaSaltCount] = { 55, 57 };  // upper_alpha / lower_alpha
+
+  constexpr int kSlotCount = kShapeBaseCount * 4 + kAlphaSaltCount;
+  int slots[kSlotCount] = {};
+  int n = 0;
+  for (int base : kShapeBases) {
+    for (int k = 0; k < 4; k++) {
+      slots[n++] = base + k;
+    }
+  }
+  for (int salt : kAlphaSalts) {
+    slots[n++] = salt;
+  }
+  for (int i = 0; i < kSlotCount; i++) {
+    for (int j = i + 1; j < kSlotCount; j++) {
+      if (slots[i] == slots[j]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+static_assert(HashSaltSlotsAreDistinct(),
+              "CrystalParamHash salt slots collide; two fields would share a multiplier and could cancel");
 
 bool HasActiveShapeRandomization(const CrystalConfig& c) {
   auto is_random = [](const ShapeDist& d) { return d.type != ShapeDistType::kNoRandom; };
@@ -200,6 +245,11 @@ bool BuildCrystalMeshData(const CrystalConfig& cr, unsigned long long sample_see
   for (int i = 0; i < 6; i++) {
     param.face_distance[i] = ToLumiceDistribution(cr.face_distance[i]);
   }
+  // Sync groups (v4.13) via the same shared translation the commit path uses (file_io.cpp's
+  // FillCrystalParam). Filled for both types — the slots the current type does not use are
+  // dropped by core's canonicalization, and sharing one function is what guarantees the preview
+  // and the simulation see the same crystal.
+  FillSyncGroupArray(cr, param.sync_group);
 
   *out = {};
   if (LUMICE_GetCrystalMesh(&param, sample_seed, out) != LUMICE_OK) {

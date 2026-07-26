@@ -14,6 +14,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include "gui/app.hpp"
@@ -170,6 +171,81 @@ static json SerializeShapeDist(const ShapeDist& d) {
   return j;
 }
 
+// SYNC: these two key tables must stay byte-identical to kPrismSyncGroupKeys /
+// kPyramidSyncGroupKeys in src/server/c_api.cpp and src/config/crystal_config.cpp. This is the
+// third copy: the GUI may not include core/config headers (public-API boundary), and c_api.cpp's
+// copy is TU-private, so the table is duplicated rather than shared. There is no compile-time
+// mechanism tying the three together — a single character of drift here means a .lmc the GUI
+// writes declares a group under a key core never reads, and the declaration silently degenerates
+// to "all independent" with nothing to warn. These SYNC comments are the only defense; changing a
+// key name means editing all three.
+// "face_distance" is common to both types and handled separately (a 6-element array, mirroring how
+// face_distance itself serializes).
+static constexpr std::pair<const char*, int> kPrismSyncGroupKeys[] = {
+  { "height", LUMICE_SHAPE_SCALAR_HEIGHT },
+};
+static constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
+  { "prism_h", LUMICE_SHAPE_SCALAR_PRISM_H },
+  { "upper_h", LUMICE_SHAPE_SCALAR_UPPER_H },
+  { "lower_h", LUMICE_SHAPE_SCALAR_LOWER_H },
+};
+
+// Write shape.sync_group. Emits nothing when nothing is synced, so every .lmc written before
+// v4.13 (and every all-independent crystal today) keeps its byte-identical wire form — the same
+// "non-default only" convention face_distance already follows here.
+// Mirrors WriteSyncGroupJson in src/server/c_api.cpp / src/config/crystal_config.cpp.
+static void WriteSyncGroupJson(json& shape_j, const int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
+                               const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+  json sg = json::object();
+  for (size_t k = 0; k < scalar_key_cnt; k++) {
+    if (sync_group[scalar_keys[k].second] != 0) {
+      sg[scalar_keys[k].first] = sync_group[scalar_keys[k].second];
+    }
+  }
+  bool any_face = false;
+  for (int i = 0; i < 6; i++) {
+    any_face = any_face || sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] != 0;
+  }
+  if (any_face) {
+    // All six, zeros included — matching how face_distance itself serializes.
+    sg["face_distance"] =
+        std::vector<int>(sync_group + LUMICE_SHAPE_SCALAR_FACE_0, sync_group + LUMICE_SHAPE_SCALAR_FACE_0 + 6);
+  }
+  if (!sg.empty()) {
+    shape_j["sync_group"] = sg;
+  }
+}
+
+// Read shape.sync_group. An absent key leaves every slot 0 (all independent), which is why an
+// older .lmc needs no migration. Mirrors ReadSyncGroupJson in the two files named above.
+static void ReadSyncGroupJson(const json& shape_j, int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
+                              const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+  for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; i++) {
+    sync_group[i] = 0;
+  }
+  if (!shape_j.contains("sync_group") || !shape_j.at("sync_group").is_object()) {
+    return;
+  }
+  const auto& sg = shape_j.at("sync_group");
+  for (size_t k = 0; k < scalar_key_cnt; k++) {
+    if (sg.contains(scalar_keys[k].first) && sg.at(scalar_keys[k].first).is_number_integer()) {
+      sync_group[scalar_keys[k].second] = sg.at(scalar_keys[k].first).get<int>();
+    }
+  }
+  if (sg.contains("face_distance") && sg.at("face_distance").is_array()) {
+    size_t i = 0;
+    for (const auto& elem : sg.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      if (elem.is_number_integer()) {
+        sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = elem.get<int>();
+      }
+      i++;
+    }
+  }
+}
+
 // Field-sync guard for SerializeCrystal.
 // If CrystalConfig gains/loses a field, sizeof changes and this fires. Developer must then
 // audit BOTH SerializeCrystal (below) and FillCrystalParam (further down this file) for
@@ -181,10 +257,13 @@ static json SerializeShapeDist(const ShapeDist& d) {
 //   height, prism_h, upper_h, lower_h (now ShapeDist; serialize + c-api yes),
 //   upper_alpha, lower_alpha (bare float, pyramid-only/yes),
 //   face_distance[6] (now ShapeDist[6]; conditional serialize / c-api yes),
+//   ShapeDist::sync_group (v4.13; conditional serialize via WriteSyncGroupJson / c-api yes
+//     via FillSyncGroupArray — one int in each of the ten ShapeDist members),
 //   zenith, azimuth, roll (AxisDist, yes/yes).
-// Size grew 112 → 192 when the five shape scalars became ShapeDist (12 B each: +80 B total).
+// Size grew 112 → 192 when the five shape scalars became ShapeDist (12 B each: +80 B total),
+// then 192 → 232 when ShapeDist gained sync_group (+4 B × 10 ShapeDist members).
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(CrystalConfig) == 192,
+static_assert(sizeof(CrystalConfig) == 232,
               "CrystalConfig size changed; audit SerializeCrystal and FillCrystalParam for new/renamed fields");
 #endif
 static json SerializeCrystal(const CrystalConfig& c, int id) {
@@ -221,6 +300,17 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
     j["shape"]["face_distance"] = { SerializeShapeDist(c.face_distance[0]), SerializeShapeDist(c.face_distance[1]),
                                     SerializeShapeDist(c.face_distance[2]), SerializeShapeDist(c.face_distance[3]),
                                     SerializeShapeDist(c.face_distance[4]), SerializeShapeDist(c.face_distance[5]) };
+  }
+
+  // shape.sync_group: the embedded per-ShapeDist groups gathered back into the wire form's
+  // parallel array. Only the keys applicable to this crystal type are consulted, matching how the
+  // shape scalars themselves are written above.
+  int sg[LUMICE_SHAPE_SCALAR_COUNT];
+  FillSyncGroupArray(c, sg);
+  if (c.type == CrystalType::kPrism) {
+    WriteSyncGroupJson(j["shape"], sg, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+  } else {
+    WriteSyncGroupJson(j["shape"], sg, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
   }
 
   j["axis"]["zenith"] = SerializeAxisDist(c.zenith);
@@ -668,6 +758,16 @@ static CrystalConfig ParseCrystal(const json& j) {
         c.face_distance[i] = ParseShapeDist(s["face_distance"][i], 1.0f);
       }
     }
+    // shape.sync_group: read into the wire form's parallel array, then scatter back into each
+    // ShapeDist. Must come AFTER the shape parses above — those assign whole ShapeDist values and
+    // would overwrite an already-scattered group with the default 0.
+    int sg[LUMICE_SHAPE_SCALAR_COUNT];
+    if (c.type == CrystalType::kPrism) {
+      ReadSyncGroupJson(s, sg, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+    } else {
+      ReadSyncGroupJson(s, sg, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+    }
+    ApplySyncGroupArray(sg, c);
   }
 
   if (j.contains("axis")) {
@@ -956,7 +1056,7 @@ static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
 // Helper: fill a LUMICE_CrystalParam from GUI CrystalConfig.
 // `dst->id` is deliberately NOT set: LUMICE_SceneAddCrystal ignores any incoming .id and
 // assigns its own sequential id, returned via out_id (lumice.h "Incremental build" contract).
-// Field-sync guard: see the static_assert(sizeof(CrystalConfig) == 112) near
+// Field-sync guard: see the static_assert(sizeof(CrystalConfig) == 232) near
 // SerializeCrystal above. One copy guards both functions (same TU, identical
 // condition); this comment keeps the pairing obvious to readers.
 static void FillCrystalParam(const CrystalConfig& c, LUMICE_CrystalParam* dst) {
@@ -973,6 +1073,10 @@ static void FillCrystalParam(const CrystalConfig& c, LUMICE_CrystalParam* dst) {
   for (int i = 0; i < 6; i++) {
     dst->face_distance[i] = ToLumiceDistribution(c.face_distance[i]);
   }
+  // Sync groups (v4.13). Same shared translation the preview path uses (crystal_preview.cpp's
+  // BuildCrystalMeshData) — the two must agree or the preview shows a crystal the simulator never
+  // traces. Raw values; core canonicalizes.
+  FillSyncGroupArray(c, dst->sync_group);
   FillAxisDist(c.zenith, &dst->zenith);
   FillAxisDist(c.azimuth, &dst->azimuth);
   FillAxisDist(c.roll, &dst->roll);
