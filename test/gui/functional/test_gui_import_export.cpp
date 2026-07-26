@@ -762,6 +762,104 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // AC1 of the Sync column: a C3 grouping BUILT BY CLICKING reaches the geometry. The 404.3 tests
+  // above inject sync_group into the config and check the data path; this one starts from an
+  // all-independent crystal and drives the actual widget — swatch button, then popup item — the way
+  // a user would, then asserts on the mesh the simulator would trace.
+  //
+  // It lives in this file, not next to the other Sync-column tests in test_gui_interaction.cpp,
+  // because gui_test is ONE binary (test/gui/CMakeLists.txt compiles both into add_executable):
+  // the PrismFacePlaneOffsets / CountDistinct probes are already defined in this translation unit,
+  // and this repo copies a test helper only across binaries, never within one.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_built_in_ui_reaches_geometry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
+      ctx->Yield(2);
+      auto& entry = gui::g_state.layers[0].entries[0];
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Randomize all six faces first. Without randomization every face keeps the same default
+      // 1.0 and "grouped faces are equal" would hold for a build that ignored sync_group entirely.
+      for (int i = 0; i < 6; ++i) {
+        char rnd_id[64];
+        snprintf(rnd_id, sizeof(rnd_id), "**/##rnd_Face %d##modal_fd", i + 3);
+        ctx->ItemClick(rnd_id);
+        ctx->Yield(2);
+      }
+
+      // Face 3/5/7 (indices 0/2/4) → group 1, Face 4/6/8 (1/3/5) → group 2. Each group is opened
+      // with "+ New group" on its first member and joined via its "###sync_group_N" item after that.
+      const int kGroupMembers[2][3] = { { 3, 5, 7 }, { 4, 6, 8 } };
+      for (int g = 0; g < 2; ++g) {
+        for (int m = 0; m < 3; ++m) {
+          char swatch[64];
+          snprintf(swatch, sizeof(swatch), "**/##sync_Face %d##modal_fd", kGroupMembers[g][m]);
+          ctx->ItemClick(swatch);
+          ctx->Yield(2);
+          if (m == 0) {
+            ctx->ItemClick("**/###sync_new");
+          } else {
+            char item[64];
+            snprintf(item, sizeof(item), "**/###sync_group_%d", g + 1);
+            ctx->ItemClick(item);
+          }
+          ctx->Yield(2);
+        }
+      }
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(3);
+
+      // The committed entry carries the grouping the clicks described.
+      const auto& cr = gui::CrystalOf(gui::g_state, entry);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(cr.face_distance[i].sync_group, (i % 2 == 0) ? 1 : 2);
+        IM_CHECK_EQ(cr.face_distance[i].type, gui::ShapeDistType::kUniform);
+      }
+      // ...and so does the scene handed to core: face_distance's sync_group array is the canonical
+      // [1,2,1,2,1,2]. Read off the commit path, not off g_state again, because the grouping being
+      // present in the GUI and reaching the simulator are separate claims (404.1 found the CLI path
+      // dropping sync_group while the GUI-side data was perfectly correct).
+      const auto scene_j = CommitSceneJson(gui::g_state);
+      const auto& sg = scene_j["crystal"][0]["shape"]["sync_group"]["face_distance"];
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(sg[i].get<int>(), (i % 2 == 0) ? 1 : 2);
+      }
+
+      // White-box on the geometry: two draws, six faces. The eye cannot verify this symmetry in a
+      // halo image, which is the entire reason the feature exists — so it is asserted on the mesh.
+      LUMICE_CrystalMesh mesh{};
+      IM_CHECK(gui::BuildCrystalMeshData(cr, 12345, &mesh));
+      const auto off = PrismFacePlaneOffsets(mesh);
+      IM_CHECK_EQ(CountDistinct(off, 1e-5f), (size_t)2);
+      IM_CHECK(std::fabs(off[0] - off[2]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[2] - off[4]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[1] - off[3]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[3] - off[5]) <= 1e-5f);
+      // The two groups drew separately: a mesh where all six faces collapsed to one value would
+      // satisfy every equality above.
+      IM_CHECK(std::fabs(off[0] - off[1]) > 1e-5f);
+
+      // Control on the same randomized crystal: ungrouped, the six faces draw six distinct values.
+      // Without it, "2 distinct" would also pass on a build that ignored face_distance randomization.
+      gui::CrystalConfig ungrouped = cr;
+      for (int i = 0; i < 6; ++i) {
+        ungrouped.face_distance[i].sync_group = 0;
+      }
+      LUMICE_CrystalMesh independent{};
+      IM_CHECK(gui::BuildCrystalMeshData(ungrouped, 12345, &independent));
+      IM_CHECK_EQ(CountDistinct(PrismFacePlaneOffsets(independent), 1e-5f), (size_t)6);
+    };
+  }
+
   // Test: custom-spectrum end-to-end round-trip (task-323).
   // Covers all 4 file_io write paths + 1 load path introduced by the discrete-spectrum work:
   //   1. GUI project save (root["sun"]["spectrum"]="custom" + "custom_spectrum" array)
