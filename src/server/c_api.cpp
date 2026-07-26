@@ -274,6 +274,78 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
   }
 }
 
+// SYNC: these two key tables must stay byte-identical to kPrismSyncGroupKeys /
+// kPyramidSyncGroupKeys in src/config/crystal_config.cpp (private to that TU's anonymous
+// namespace, hence duplicated rather than shared). The core from_json looks the keys up by name;
+// a single character of drift here means the C API emits a key core never reads, and a declared
+// sync group silently degenerates back to "all independent" with no warning anywhere.
+// "face_distance" is common to both types and handled separately (a 6-element array, mirroring
+// how face_distance itself serializes).
+static constexpr std::pair<const char*, int> kPrismSyncGroupKeys[] = {
+  { "height", LUMICE_SHAPE_SCALAR_HEIGHT },
+};
+static constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
+  { "prism_h", LUMICE_SHAPE_SCALAR_PRISM_H },
+  { "upper_h", LUMICE_SHAPE_SCALAR_UPPER_H },
+  { "lower_h", LUMICE_SHAPE_SCALAR_LOWER_H },
+};
+
+// struct -> JSON. Passes sync_group through verbatim: canonicalization (drop inapplicable slots,
+// collapse singletons, renumber) and leader normalization belong to core's from_json, which every
+// path that actually consumes this JSON runs exactly once. Re-implementing them here would be a
+// second authority for the same semantics.
+// Writes nothing at all when no scalar is synced, keeping the wire form of every pre-v4.13 config
+// byte-identical. Mirrors WriteSyncGroupJson in src/config/crystal_config.cpp.
+static void WriteSyncGroupJson(nlohmann::json& shape_j, const int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
+                               const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+  nlohmann::json sg = nlohmann::json::object();
+  for (size_t k = 0; k < scalar_key_cnt; k++) {
+    if (sync_group[scalar_keys[k].second] != 0) {
+      sg[scalar_keys[k].first] = sync_group[scalar_keys[k].second];
+    }
+  }
+  bool any_face = false;
+  for (int i = 0; i < 6; i++) {
+    any_face = any_face || sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] != 0;
+  }
+  if (any_face) {
+    // All six, zeros included — matching how face_distance itself serializes.
+    sg["face_distance"] =
+        std::vector<int>(sync_group + LUMICE_SHAPE_SCALAR_FACE_0, sync_group + LUMICE_SHAPE_SCALAR_FACE_0 + 6);
+  }
+  if (!sg.empty()) {
+    shape_j["sync_group"] = sg;
+  }
+}
+
+// JSON -> struct. Absent "sync_group" leaves every slot 0 (all independent), which is why an
+// older config file needs no edit. Mirrors ReadSyncGroupJson in src/config/crystal_config.cpp.
+static void ReadSyncGroupJson(const nlohmann::json& shape_j, int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
+                              const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+  for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; i++) {
+    sync_group[i] = 0;
+  }
+  if (!shape_j.contains("sync_group")) {
+    return;
+  }
+  const auto& sg = shape_j.at("sync_group");
+  for (size_t k = 0; k < scalar_key_cnt; k++) {
+    if (sg.contains(scalar_keys[k].first)) {
+      sync_group[scalar_keys[k].second] = sg.at(scalar_keys[k].first).get<int>();
+    }
+  }
+  if (sg.contains("face_distance")) {
+    size_t i = 0;
+    for (const auto& elem : sg.at("face_distance")) {
+      if (i >= 6) {
+        break;
+      }
+      sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = elem.get<int>();
+      i++;
+    }
+  }
+}
+
 // Non-static (declared in server/c_api_internal.hpp) so both ConfigToJson and
 // LUMICE_GetCrystalMesh consume the SAME crystal-shape translation table. Returns
 // {"type","shape"} only — id/axis are the caller's responsibility (ConfigToJson adds
@@ -300,6 +372,14 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
     fd.push_back(DistributionToJson(cr.face_distance[fi]));
   }
   j["shape"]["face_distance"] = fd;
+  // Only the keys applicable to this crystal type are emitted, so an inapplicable declaration
+  // never reaches the wire in the first place (core's canonicalization zeroes such slots anyway,
+  // as defense in depth).
+  if (cr.type == 0) {
+    WriteSyncGroupJson(j["shape"], cr.sync_group, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+  } else {
+    WriteSyncGroupJson(j["shape"], cr.sync_group, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+  }
   return j;
 }
 
@@ -1534,6 +1614,15 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
         return err;
       }
     }
+  }
+
+  // Sync groups: read verbatim, only the keys this crystal type owns. Canonicalization and
+  // leader normalization stay in core's from_json (see WriteSyncGroupJson's note); this struct
+  // holds what the caller / config file declared.
+  if (type_str == "prism") {
+    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+  } else {
+    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
   }
 
   // Axis distributions. The two cases are deliberately NOT symmetric, mirroring core:
