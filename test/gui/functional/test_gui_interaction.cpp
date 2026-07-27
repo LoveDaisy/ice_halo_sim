@@ -4,9 +4,10 @@
 #include <fstream>
 #include <thread>
 
-#include "IconsFontAwesome6.h"  // ICON_FA_* selectors used to match new icon-prefixed button labels
-#include "gui/file_io.hpp"      // DeserializeFromJson / BuildExportJsonOrWarn (hand-authored-config walkthroughs)
-#include "gui/log_sink.hpp"     // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+#include "IconsFontAwesome6.h"      // ICON_FA_* selectors used to match new icon-prefixed button labels
+#include "gui/crystal_preview.hpp"  // BuildCrystalMeshData (core-side sync-group leader oracle)
+#include "gui/file_io.hpp"          // DeserializeFromJson / BuildExportJsonOrWarn (hand-authored-config walkthroughs)
+#include "gui/log_sink.hpp"         // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
 // imgui_internal.h is generally an anti-pattern, but z-order assertions need
 // direct ImGuiContext::Windows access. The relied-on semantics
 // (BringWindowToDisplayFront splices to g.Windows back; creation with
@@ -4396,25 +4397,28 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_modal/sync_group_leader_is_lowest_syncable_slot — the leader rule, checked across the two
+  // p2_modal/sync_group_leader_is_lowest_visible_slot — the leader rule, checked across the two
   // ways "lowest slot index" can disagree with what a naive search finds. lumice.h defines the
-  // group's owner as its lowest-indexed applicable member; the GUI snapshots from that same slot
-  // (restricted to the slots it lets the user sync), so what the user sees on join is the value core
-  // will draw with. Two disagreements are exercised, one per group:
+  // group's owner as its lowest-indexed applicable member, and core evaluates that over every slot
+  // the crystal type has (crystal_config.cpp kApplicablePrism / kApplicablePyramid). The GUI
+  // snapshots from that same slot, over that same set, so what the user sees on join is the value
+  // core will draw with. Two disagreements are exercised, one per group:
   //   group 1 — slot order vs ROW order: Upper H is slot 1, Lower H slot 3, and Upper H is drawn
   //             BELOW Prism H. A search following the visual order, or CrystalConfig's field order,
   //             lands on the wrong one.
   //   group 2 — slot order vs SYNCABLE order: Prism H (slot 2) is the group's lowest member outright,
-  //             but it is not syncable (no commensurable partner — it has no Sync control at all), so
-  //             the leader must be the lowest slot the user can actually reach. A leader search still
-  //             scoped by IsShapeScalarVisible elects the unreachable Prism H and hands out 0.75.
+  //             and it has no Sync control (no commensurable partner to offer the user). It is the
+  //             leader all the same. Electing the lowest slot the user can REACH instead — the
+  //             narrower, affordance-driven set — hands out face_distance[1]'s 1.5 while core draws
+  //             with 0.75, so the table would show a distribution the simulation overwrites on
+  //             commit. What a row cannot do is join a group; being in one is not the GUI's call.
   // Both groups are seeded with members that DISAGREE — the only configuration in which "which member
   // is the leader" is observable at all. A group built by clicking has equal members by construction,
   // and a snapshot from either end of it looks identical. (A hand-authored config reaching the GUI in
   // exactly this state is normal: canonicalization belongs to core's from_json, on commit, not to the
-  // GUI — and group 2 is precisely a grouping the GUI itself can no longer build.)
+  // GUI — and group 2 is precisely a grouping the GUI itself cannot build.)
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_is_lowest_syncable_slot");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_is_lowest_visible_slot");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       gui::g_state.modal_immediate_mode = true;
@@ -4427,13 +4431,13 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       crystal().upper_h.sync_group = 1;  // slot 1 — group 1's leader
       crystal().lower_h = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.9f, 0.0f };
       crystal().lower_h.sync_group = 1;  // slot 3 — the foil for group 1
-      // Prism H: slot 2, non-syncable, and group 2's lowest member by index. Its value is inside the
-      // face slider's [0, 2] range on purpose, so a wrong leader shows up as the wrong NUMBER rather
-      // than as a clamp artifact that could be explained away.
+      // Prism H: slot 2, no Sync control, and group 2's lowest member by index — hence its leader.
+      // Its value is inside the face slider's [0, 2] range on purpose, so a wrong leader shows up as
+      // the wrong NUMBER rather than as a clamp artifact that could be explained away.
       crystal().prism_h = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.75f, 0.0f };
       crystal().prism_h.sync_group = 2;
       crystal().face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.5f, 0.3f };
-      crystal().face_distance[1].sync_group = 2;  // slot 5 — group 2's lowest SYNCABLE member
+      crystal().face_distance[1].sync_group = 2;  // slot 5 — the foil: lowest slot the user can reach
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -4453,23 +4457,25 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kUniform);
       IM_CHECK_EQ(crystal().face_distance[0].spread, 0.08f);
 
-      // Face 5 (slot 6) joins group 2: the leader is face_distance[1] (slot 5), NOT the lower-indexed
-      // but unsyncable prism_h (slot 2).
+      // Face 5 (slot 6) joins group 2: the leader is prism_h (slot 2), NOT the higher-indexed
+      // face_distance[1] (slot 5) that happens to be the lowest member carrying a Sync control.
+      // 0.75 vs 1.5 is the whole point — this is the value core hands the simulation, so it is the
+      // value the joining row must take, whether or not the row it came from is editable from here.
       ctx->ItemClick("**/##sync_Face 5##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_2");
       ctx->Yield(2);
       IM_CHECK_EQ(crystal().face_distance[2].sync_group, 2);
-      IM_CHECK_EQ(crystal().face_distance[2].center, 1.5f);
-      IM_CHECK_EQ(crystal().face_distance[2].type, gui::ShapeDistType::kUniform);
-      IM_CHECK_EQ(crystal().face_distance[2].spread, 0.3f);
+      IM_CHECK_EQ(crystal().face_distance[2].center, 0.75f);
+      IM_CHECK_EQ(crystal().face_distance[2].type, gui::ShapeDistType::kNoRandom);
+      IM_CHECK_EQ(crystal().face_distance[2].spread, 0.0f);
 
       // Joining reads the group, it does not write it: every seeded member is untouched, and the two
       // groups are still internally disagreeing.
       IM_CHECK_EQ(crystal().upper_h.center, 0.4f);
       IM_CHECK_EQ(crystal().lower_h.center, 0.9f);
       IM_CHECK_EQ(crystal().prism_h.center, 0.75f);
-      IM_CHECK_EQ(crystal().prism_h.sync_group, 2);  // dormant, not cleared
+      IM_CHECK_EQ(crystal().prism_h.sync_group, 2);  // still a member, and still the leader
       IM_CHECK_EQ(crystal().face_distance[1].center, 1.5f);
 
       ctx->ItemClose("**/Face Distance##modal");
@@ -4480,16 +4486,21 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // p2_modal/sync_group_unsyncable_member_is_inert — AC2. A hand-authored config MAY group a scalar
-  // the GUI offers no Sync control for (lumice.h runs no commensurability check, and the GUI is not a
-  // second authority on what is legal). Every consequence of that is checked in one walkthrough,
-  // because the failure mode is a HALF-applied predicate: a swatch hidden while the membership list,
-  // the leader search or the propagation still counted the row would leave the user staring at a
-  // group they cannot reach, or at a value that moves for no visible reason.
+  // p2_modal/sync_group_unsyncable_member_is_a_full_member — a hand-authored config MAY group a
+  // scalar the GUI offers no Sync control for (lumice.h runs no commensurability check, and the GUI
+  // is not a second authority on what is legal). Once such a group exists, core treats that scalar as
+  // an ordinary member — it is applicable, so NormalizeSyncGroups elects it and writes over the rest
+  // of the group from it — and the GUI reports and propagates it the same way. The missing Sync
+  // control means one thing only: the user cannot make this row join a group from here.
+  //
+  // Every consequence is checked in one walkthrough, because the failure mode is a HALF-applied
+  // predicate: hiding the swatch is the affordance, and if the membership list, the leader search or
+  // the propagation followed it, the table would report a distribution core overwrites on commit —
+  // the row silently reverting after the user edited it.
   //
   // The config groups prism `height` with `face_distance[0]` — the exact shape the owner named.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_unsyncable_member_is_inert");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_unsyncable_member_is_a_full_member");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -4544,34 +4555,43 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/##Height##modal_cr_input"));
       IM_CHECK(ctx->ItemExists("**/##sync_Face 3##modal_fd"));
 
-      // (2) The membership list names only rows the user can go and find. The popup item's visible
-      // label carries the list, so this reads what is actually on screen rather than re-deriving it.
+      // (2) The membership list names the group's real members, Height included. It describes the
+      // group the user is about to join, and Height is the member whose value that group carries —
+      // omitting it would understate what joining costs. The popup item's visible label carries the
+      // list, so this reads what is actually on screen rather than re-deriving it. Both names fit
+      // inside ImGuiTestItemInfo::DebugLabel's 32-char buffer, which is why the config has exactly
+      // two members.
       ctx->ItemClick("**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
       const ImGuiTestItemInfo group_item = ctx->ItemInfo("**/###sync_group_1");
       IM_CHECK_NE(group_item.ID, (ImGuiID)0);
-      fprintf(stderr, "[sync_inert] group 1 popup label = '%s'\n", group_item.DebugLabel);
+      fprintf(stderr, "[sync_full_member] group 1 popup label = '%s'\n", group_item.DebugLabel);
       IM_CHECK(strstr(group_item.DebugLabel, "Face 3") != nullptr);  // the list is really being read
-      IM_CHECK(strstr(group_item.DebugLabel, "Height") == nullptr);  // ...and Height is not in it
+      IM_CHECK(strstr(group_item.DebugLabel, "Height") != nullptr);  // ...and Height is in it
       // Re-selecting the group the row is already in is a documented no-op, so this only dismisses
       // the popup (see sync_group_reselect_current_is_noop).
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
       IM_CHECK_EQ(crystal().face_distance[0].sync_group, 1);
 
-      // (3) Editing across the pair moves neither row into the other, in EITHER direction. The
-      // face→height direction is the destination-side gate (Height is not a propagation target); the
-      // height→face direction is the source-side gate (a row with no swatch must not be a group
-      // writer either, or the face value would jump with nothing on screen to explain it).
-      const float height_before = crystal().height.center;
+      // (3) An edit to either row moves the other, in BOTH directions — the group is written whole.
+      // face→height is the destination-side scope (core normalizes Height too, so leaving it behind
+      // would only mean core rewrites the face on commit); height→face is the source-side scope (the
+      // row has no swatch, but it is the group's leader, and an edit to the leader is precisely the
+      // edit the whole group must follow). The Param-name tint on both rows is what makes the paired
+      // movement attributable on screen.
+      //
+      // Both values sit inside BOTH sliders' ranges — Height's [0.01, 100] and a face distance's
+      // [0, 2] — so nothing here is a clamp. Cross-range clamping has its own test
+      // (sync_group_cross_range_converges) and does not belong in this one.
       ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.75f);
       ctx->Yield(2);
       IM_CHECK_EQ(crystal().face_distance[0].center, 0.75f);
-      IM_CHECK_EQ(crystal().height.center, height_before);
-      ctx->ItemInputValue("**/##Height##modal_cr_input", 3.0f);
+      IM_CHECK_EQ(crystal().height.center, 0.75f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 1.8f);
       ctx->Yield(2);
-      IM_CHECK_EQ(crystal().height.center, 3.0f);
-      IM_CHECK_EQ(crystal().face_distance[0].center, 0.75f);
+      IM_CHECK_EQ(crystal().height.center, 1.8f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.8f);
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
@@ -4590,6 +4610,139 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       const auto& rc = gui::CrystalOf(reloaded, reloaded.layers[0].entries[0]);
       IM_CHECK_EQ(rc.height.sync_group, rc.face_distance[0].sync_group);
       IM_CHECK_NE(rc.height.sync_group, 0);
+    };
+  }
+
+  // p2_modal/sync_group_leader_agrees_with_core_mesh_oracle — the mechanism that pins "the GUI's
+  // leader IS core's leader", as opposed to a comment asking the next person to keep them in step.
+  //
+  // The GUI's leader rule and core's are two implementations of one sentence in lumice.h. Nothing
+  // structural forces them together, and they HAVE drifted apart once: a GUI-side affordance
+  // narrowing (some rows get no Sync control) leaked into the leader search, so for a hand-authored
+  // group the table showed, and handed out on join, a distribution core discarded on commit. A test
+  // that hardcodes the expected leader cannot catch the recurrence in general — it freezes today's
+  // GUI-side belief, and if core's rule is what moves, the frozen literal moves with the GUI and the
+  // test stays green while the two diverge.
+  //
+  // So the expected value is not written down here. It is measured, from core, at run time:
+  // BuildCrystalMeshData goes through the public LUMICE_GetCrystalMesh, whose param->JSON->param
+  // round trip runs the real PrepareSyncGroups (canonicalize + leader-normalize) before sampling
+  // geometry. Feed it the disagreeing group and it returns the mesh core would actually draw; compare
+  // that against one control mesh per candidate leader — each the same crystal with the group
+  // flattened to that candidate's value — and exactly one matches. That match names core's leader
+  // without reading a single line of GUI code. The GUI then has to agree with it.
+  //
+  // Consequences, which are the point:
+  //   - core changes its leader rule (kApplicable* / the NormalizeSyncGroupsImpl scan) → the matching
+  //     control changes → the GUI, unchanged, disagrees → red.
+  //   - the GUI's mirror side goes back to scoping the leader search by the affordance predicate
+  //     (this bug, recurring) → it hands out 0.75 where the oracle says 1.0 → red.
+  // What this deliberately does NOT catch is the affordance predicate simply excluding one more row.
+  // That is not a silent hazard any more but a no-op: the mirror side no longer reads that predicate
+  // at all, which is the decoupling this test exists on top of, not a gap in it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_agrees_with_core_mesh_oracle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+
+      // The owner's reproduction, verbatim: prism height (slot 0, no Sync control) grouped with
+      // face_distance[0] (slot 4), the two disagreeing. Only a hand-authored config can produce this
+      // state, and it is the only state in which "who is the leader" is observable at all.
+      constexpr float kHeightValue = 1.0f;
+      constexpr float kFaceValue = 0.75f;
+      crystal().type = gui::CrystalType::kPrism;
+      crystal().height = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, kHeightValue, 0.0f };
+      crystal().height.sync_group = 1;
+      crystal().face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, kFaceValue, 0.0f };
+      crystal().face_distance[0].sync_group = 1;
+
+      // --- The oracle: ask core, through the public mesh API, which member it drew with. ---
+      auto build = [](const gui::CrystalConfig& cr, LUMICE_CrystalMesh* out) {
+        // kNoRandom throughout, so the seed selects nothing and the draw is deterministic; passing
+        // the same literal every time keeps that explicit rather than incidental.
+        return lumice::gui::BuildCrystalMeshData(cr, lumice::gui::kPreviewFixedSampleSeed, out);
+      };
+      auto same_mesh = [](const LUMICE_CrystalMesh& a, const LUMICE_CrystalMesh& b) {
+        return a.vertex_count == b.vertex_count && a.edge_count == b.edge_count &&
+               a.triangle_count == b.triangle_count &&
+               std::memcmp(a.vertices, b.vertices, sizeof(float) * a.vertex_count * 3) == 0 &&
+               std::memcmp(a.edges, b.edges, sizeof(int) * a.edge_count * 2) == 0 &&
+               std::memcmp(a.triangles, b.triangles, sizeof(int) * a.triangle_count * 3) == 0;
+      };
+
+      // Candidate controls: the same crystal with the group already flattened onto one candidate,
+      // and no groups left for core to normalize. Leader-normalization writes the leader's
+      // distribution over every member, so core's output for the grouped config must equal exactly
+      // one of these.
+      gui::CrystalConfig flat_height = crystal();
+      flat_height.height.center = kHeightValue;
+      flat_height.face_distance[0].center = kHeightValue;
+      flat_height.height.sync_group = 0;
+      flat_height.face_distance[0].sync_group = 0;
+
+      gui::CrystalConfig flat_face = flat_height;
+      flat_face.height.center = kFaceValue;
+      flat_face.face_distance[0].center = kFaceValue;
+
+      LUMICE_CrystalMesh mesh_core{};
+      LUMICE_CrystalMesh mesh_flat_height{};
+      LUMICE_CrystalMesh mesh_flat_face{};
+      IM_CHECK(build(crystal(), &mesh_core));
+      IM_CHECK(build(flat_height, &mesh_flat_height));
+      IM_CHECK(build(flat_face, &mesh_flat_face));
+
+      const bool core_chose_height = same_mesh(mesh_core, mesh_flat_height);
+      const bool core_chose_face = same_mesh(mesh_core, mesh_flat_face);
+      // Exactly one. Both true would mean the mesh cannot tell the two candidates apart and the
+      // oracle proves nothing; both false would mean core picked something neither control models,
+      // and reading a leader value out of it would be an invention.
+      fprintf(stderr, "[sync_oracle] core_chose_height=%d core_chose_face=%d\n", (int)core_chose_height,
+              (int)core_chose_face);
+      IM_CHECK(core_chose_height != core_chose_face);
+      const float core_leader_value = core_chose_height ? kHeightValue : kFaceValue;
+
+      // --- The GUI must hand out that same value. ---
+      // Face 5 (slot 6) joining group 1 snapshots from whatever the GUI thinks the leader is, so the
+      // value that lands in the row IS the GUI's answer, read through a real click rather than by
+      // calling the predicate directly.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[2].center, core_leader_value);
+
+      // AC2, the other half: with the GUI writing the whole group, an edit leaves every member equal,
+      // so core's normalize finds nothing to override — no silent rewrite of the row the user just
+      // typed into, and no leader-override warning on commit. Checked the same way, against core:
+      // after the edit the grouped config's mesh must equal the mesh of the same values carrying no
+      // groups at all, which can only hold if normalization changed nothing.
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.25f);
+      ctx->Yield(2);
+      gui::CrystalConfig after_edit_ungrouped = crystal();
+      for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+        gui::ShapeScalarAt(after_edit_ungrouped, s).sync_group = 0;
+      }
+      LUMICE_CrystalMesh mesh_after_edit{};
+      LUMICE_CrystalMesh mesh_after_edit_ungrouped{};
+      IM_CHECK(build(crystal(), &mesh_after_edit));
+      IM_CHECK(build(after_edit_ungrouped, &mesh_after_edit_ungrouped));
+      IM_CHECK(same_mesh(mesh_after_edit, mesh_after_edit_ungrouped));
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
     };
   }
 
