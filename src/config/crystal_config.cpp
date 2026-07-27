@@ -1,5 +1,6 @@
 #include "config/crystal_config.hpp"
 
+#include <array>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <numeric>
@@ -14,29 +15,39 @@ namespace lumice {
 
 namespace {
 
-// Which ShapeScalar slots physically exist on each crystal type. A prism has one
-// height and six faces; a pyramid has three stacked heights and six faces.
-constexpr bool kApplicablePrism[kShapeScalarCount] = {
-  true,   // kShapeScalarHeight
-  false,  // kShapeScalarUpperH
-  false,  // kShapeScalarPrismH
-  false,  // kShapeScalarLowerH
-  true,  true, true, true, true, true,
-};
-constexpr bool kApplicablePyramid[kShapeScalarCount] = {
-  false,  // kShapeScalarHeight
-  true,   // kShapeScalarUpperH
-  true,   // kShapeScalarPrismH
-  true,   // kShapeScalarLowerH
-  true,  true, true, true, true, true,
-};
+// Which Distribution each ShapeScalar slot names on this crystal type, or nullptr
+// for a slot the type simply does not have. A prism has one height and six faces;
+// a pyramid has three stacked heights and six faces.
+//
+// These two functions are the SINGLE source of "does this slot physically exist
+// on this type". Both consumers derive from them and neither restates the fact:
+// leader normalization needs the addresses, canonicalization needs only the
+// nullptr pattern, and `IsShapeScalarApplicable` (below) exposes the same pattern
+// to the C API. A previous revision kept a separate `kApplicable*` bool table for
+// canonicalization; the two encodings had nothing tying them together, so adding
+// a crystal type or moving a slot could silently desynchronize them.
+using ShapeScalarSlots = std::array<Distribution*, kShapeScalarCount>;
 
-void CanonicalizeSyncGroupsImpl(int sync_group[kShapeScalarCount], const bool applicable[kShapeScalarCount]) {
+ShapeScalarSlots PrismSlots(PrismCrystalParam& p) {
+  return {
+    &p.h_, nullptr, nullptr, nullptr, &p.d_[0], &p.d_[1], &p.d_[2], &p.d_[3], &p.d_[4], &p.d_[5],
+  };
+}
+
+ShapeScalarSlots PyramidSlots(PyramidCrystalParam& p) {
+  return {
+    nullptr, &p.h_pyr_u_, &p.h_prs_, &p.h_pyr_l_, &p.d_[0], &p.d_[1], &p.d_[2], &p.d_[3], &p.d_[4], &p.d_[5],
+  };
+}
+
+// `slots` is read for its nullptr pattern only — never dereferenced — so this pass
+// works on exactly the same applicability fact NormalizeSyncGroupsImpl uses.
+void CanonicalizeSyncGroupsImpl(int sync_group[kShapeScalarCount], const ShapeScalarSlots& slots) {
   // Rule 1: a group declared on a slot this crystal type does not have is not a
   // membership at all. Zeroing first is what makes rules 2 and 3 see the real
   // member set.
   for (int i = 0; i < kShapeScalarCount; i++) {
-    if (!applicable[i]) {
+    if (slots[i] == nullptr) {
       sync_group[i] = 0;
     }
   }
@@ -86,7 +97,7 @@ void CanonicalizeSyncGroupsImpl(int sync_group[kShapeScalarCount], const bool ap
 
 // Leader-normalize one param's groups. `slots` maps a ShapeScalar index to the
 // Distribution living there, or nullptr for a slot this crystal type lacks.
-void NormalizeSyncGroupsImpl(const int sync_group[kShapeScalarCount], Distribution* const slots[kShapeScalarCount]) {
+void NormalizeSyncGroupsImpl(const int sync_group[kShapeScalarCount], const ShapeScalarSlots& slots) {
   for (int i = 0; i < kShapeScalarCount; i++) {
     if (sync_group[i] == 0 || slots[i] == nullptr) {
       continue;
@@ -118,25 +129,19 @@ void NormalizeSyncGroupsImpl(const int sync_group[kShapeScalarCount], Distributi
 
 
 void CanonicalizeSyncGroups(PrismCrystalParam& p) {
-  CanonicalizeSyncGroupsImpl(p.sync_group_, kApplicablePrism);
+  CanonicalizeSyncGroupsImpl(p.sync_group_, PrismSlots(p));
 }
 
 void CanonicalizeSyncGroups(PyramidCrystalParam& p) {
-  CanonicalizeSyncGroupsImpl(p.sync_group_, kApplicablePyramid);
+  CanonicalizeSyncGroupsImpl(p.sync_group_, PyramidSlots(p));
 }
 
 void NormalizeSyncGroups(PrismCrystalParam& p) {
-  Distribution* slots[kShapeScalarCount] = {
-    &p.h_, nullptr, nullptr, nullptr, &p.d_[0], &p.d_[1], &p.d_[2], &p.d_[3], &p.d_[4], &p.d_[5],
-  };
-  NormalizeSyncGroupsImpl(p.sync_group_, slots);
+  NormalizeSyncGroupsImpl(p.sync_group_, PrismSlots(p));
 }
 
 void NormalizeSyncGroups(PyramidCrystalParam& p) {
-  Distribution* slots[kShapeScalarCount] = {
-    nullptr, &p.h_pyr_u_, &p.h_prs_, &p.h_pyr_l_, &p.d_[0], &p.d_[1], &p.d_[2], &p.d_[3], &p.d_[4], &p.d_[5],
-  };
-  NormalizeSyncGroupsImpl(p.sync_group_, slots);
+  NormalizeSyncGroupsImpl(p.sync_group_, PyramidSlots(p));
 }
 
 void PrepareSyncGroups(PrismCrystalParam& p) {
