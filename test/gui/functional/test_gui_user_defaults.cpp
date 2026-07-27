@@ -435,6 +435,38 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // code-review round 2 Major: ApplyAxisPresetOverridesFromJson only ever added/updated slots,
+  // never cleared one whose entry disappeared from the file. MakeNewDocumentState() is called
+  // repeatedly within one process (main.cpp startup, every DoNew(), every DoOpen() .json
+  // import), so a stale g_axis_overrides slot would keep answering with a deleted override
+  // until the process restarts. This test calls MakeNewDocumentState() twice against the same
+  // directory within a single test case (deliberately not calling ResetUserDefaultsChannels()
+  // between the two calls) to reproduce the same-process, file-changed-underneath scenario.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "d8_preset_override_does_not_leak_across_calls");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("d8_leak");
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 3.0f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::MakeNewDocumentState(dir);
+      const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(first.has_value());
+      IM_CHECK_EQ(*first, 3.0f);
+
+      // The user edits the file underneath the running process and removes the override —
+      // no call to ResetUserAxisPresetOverrides() here, matching production (only
+      // ApplyAxisPresetOverridesFromJson's internal reset should apply).
+      json empty_doc = json::object();
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, empty_doc));
+      gui::MakeNewDocumentState(dir);
+      const auto second = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(!second.has_value());
+    };
+  }
+
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "d8_malformed_preset_value_degrades");
     t->TestFunc = [](ImGuiTestContext*) {

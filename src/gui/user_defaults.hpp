@@ -238,8 +238,11 @@ void ApplyAxisPresetOverridesFromJson(const nlohmann::json& root);
 // library UI (a later task); nullopt means "use the factory value".
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
 
-// Drop every loaded preset override. Test-only: production loads the override file once per
-// process, so nothing in production needs to unload it.
+// Drop every loaded preset override. Called at the start of every
+// ApplyAxisPresetOverridesFromJson so each load reflects only its own doc, not an accumulation
+// across MakeNewDocumentState()'s repeated production call sites (startup / DoNew / DoOpen
+// .json import). Also called directly by tests between cases in the same process, for the same
+// reason: without it, one test's overrides would leak into the next.
 void ResetUserAxisPresetOverrides();
 
 // Write `doc` to `<dir>/user_defaults.json`, creating `dir` if needed. WHAT goes in `doc` is

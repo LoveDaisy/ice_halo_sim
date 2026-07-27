@@ -204,6 +204,13 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
 }
 
 void ApplyAxisPresetOverridesFromJson(const nlohmann::json& root) {
+  // MakeNewDocumentState() is called repeatedly within one process (startup, every DoNew(),
+  // every DoOpen() .json import), so g_axis_overrides must reflect only the doc passed in
+  // *this* call, not an accumulation across calls. Reset unconditionally, before the
+  // early-return branches below, so a doc that dropped "presets"/"axis" entirely also clears
+  // whatever a previous call loaded.
+  ResetUserAxisPresetOverrides();
+
   if (!root.is_object() || !root.contains("presets")) {
     return;
   }
