@@ -99,8 +99,11 @@ class CudaTraceBackendTestHooks {
   //
   //   * ReadbackPoolShapeTable — D2H copy of `d_pool_shape_table_` as a flat
   //     vector of `{poly_off, poly_cnt, tri_off, tri_cnt}` rows. .size() ==
-  //     Σ P_ci over every (layer, ci) resolved in this BeginSession (aka the
-  //     value `GetLastBatchCrystalCount()` reports). The device buffer's
+  //     Σ P_ci over every (layer, ci) in the pool as last BUILT. Note this is
+  //     NOT always `GetLastBatchCrystalCount()`: that counts what the CURRENT
+  //     batch sampled, so on a deterministic scene's second batch the pool
+  //     (and this table) is intact while the counter reads 0. The two agree on
+  //     any batch that actually built the pool. The device buffer's
   //     backing storage `Impl::pool_shape_slot_cap_` is set to
   //     `pool_crystals_.size()` at every BuildGeomPool (freed to 0 on
   //     scene-change / no-K path), so it is EXACTLY the current batch's
