@@ -2,7 +2,6 @@
 #define CORE_TRACE_OPS_H_
 
 #include <cstddef>
-#include <vector>
 
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
