@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/export_fbo_renderer.hpp"  // RenderExportToRgba for GL pixel-level assertions
@@ -54,6 +58,54 @@ std::string CoreJson(const gui::GuiState& state) {
   std::string json;
   gui::BuildExportJsonOrWarn(state, &json, nullptr);
   return json;
+}
+
+// ===== Sync-group geometry probes (404.3) =====
+// Deliberate copies of the helpers in test/unit-correctness/server/test_c_api.cpp (namespace-local
+// there): gui_test and the gtest binary are separate targets with no shared TU, and lifting ~30
+// lines into a shared header for one mirrored pair would cost more than it saves. Kept
+// behaviourally identical so a failure here means the same thing it means there.
+//
+// Signed plane offset (centroid · unit normal) of every prism face (face numbers 3..8), in
+// face_number order. Measured off the geometry rather than assuming a face_number <->
+// face_distance[i] mapping, so the assertions stay true statements about "same-group faces sit at
+// the same distance" regardless of internal ordering. BuildCrystalMeshData's Y-Z swap is a
+// rotation and its AABB normalization a uniform scale, so both preserve the equalities asserted.
+std::vector<float> PrismFacePlaneOffsets(const LUMICE_CrystalMesh& mesh) {
+  std::vector<float> offsets(6, std::numeric_limits<float>::quiet_NaN());
+  for (int fi = 0; fi < mesh.face_count; ++fi) {
+    const int fn = mesh.face_numbers_by_face[fi];
+    if (fn < 3 || fn > 8) {
+      continue;  // basal / pyramidal
+    }
+    const int offset = mesh.face_vtx_offsets[fi];
+    const int count = mesh.face_vtx_counts[fi];
+    if (count <= 0) {
+      continue;
+    }
+    float c[3] = { 0.0f, 0.0f, 0.0f };
+    for (int k = 0; k < count; ++k) {
+      const float* p = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+      c[0] += p[0];
+      c[1] += p[1];
+      c[2] += p[2];
+    }
+    const float* n = mesh.face_normals + fi * 3;
+    offsets[fn - 3] = (c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) / static_cast<float>(count);
+  }
+  return offsets;
+}
+
+// Number of distinct values in `v` under `tol`. Phrases "the three C3-equivalent faces collapsed
+// onto one distance" without naming which faces those are.
+size_t CountDistinct(const std::vector<float>& v, float tol) {
+  std::vector<float> uniq;
+  for (float x : v) {
+    if (std::none_of(uniq.begin(), uniq.end(), [&](float u) { return std::fabs(u - x) <= tol; })) {
+      uniq.push_back(x);
+    }
+  }
+  return uniq.size();
 }
 
 template <typename Fn>
@@ -495,6 +547,316 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // an untouched face stays the deterministic default (NO_RANDOM → bare number).
       IM_CHECK(fd[1].is_number());
       IM_CHECK_EQ(fd[1].get<float>(), 1.0f);
+    };
+  }
+
+  // ===================== shape-scalar sync groups (404.3) =====================
+  // The GUI carries sync groups but grows no control for them (that is 404.4), so these tests
+  // drive the data path directly: import → preview, save → load, and the preview's change
+  // detection. The three of them are what makes "a hand-authored config with sync_group works in
+  // the GUI" a checked statement rather than a claim.
+
+  // AC1: a grouping reaches the PREVIEW mesh. Grouped scalars share one draw, so a C3 grouping of
+  // randomized face distances must produce a mesh with exactly two distinct prism-face distances.
+  // White-box on the geometry — the whole point of the feature is a symmetry the eye cannot verify.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_reaches_preview_mesh");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto& cr = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      cr.type = gui::CrystalType::kPrism;
+      for (int i = 0; i < 6; ++i) {
+        cr.face_distance[i] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.0f, 0.1f };
+      }
+
+      // Control: six independent draws → six distinct distances. Without it the grouped case
+      // below would also pass on a mesh that ignored face_distance entirely.
+      LUMICE_CrystalMesh independent{};
+      IM_CHECK(gui::BuildCrystalMeshData(cr, 12345, &independent));
+      IM_CHECK_EQ(CountDistinct(PrismFacePlaneOffsets(independent), 1e-5f), (size_t)6);
+
+      // {FACE_0,FACE_2,FACE_4} and {FACE_1,FACE_3,FACE_5}: two draws, six faces.
+      for (int i = 0; i < 6; ++i) {
+        cr.face_distance[i].sync_group = (i % 2 == 0) ? 1 : 2;
+      }
+      LUMICE_CrystalMesh c3{};
+      IM_CHECK(gui::BuildCrystalMeshData(cr, 12345, &c3));
+      const auto off = PrismFacePlaneOffsets(c3);
+      IM_CHECK_EQ(CountDistinct(off, 1e-5f), (size_t)2);
+      // Named-face form of the same statement: it is faces 0/2/4 that agree, not some other
+      // three-way split that happens to give two distinct values.
+      IM_CHECK(std::fabs(off[0] - off[2]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[2] - off[4]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[1] - off[3]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[3] - off[5]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[0] - off[1]) > 1e-5f);
+    };
+  }
+
+  // AC1, the import half: a HAND-AUTHORED core config carrying sync_group loads into the GUI's
+  // embedded form. This is the task's headline claim ("a config file with sync_group can be
+  // imported by the GUI"), and it runs through the same ParseCrystal the .lmc path uses.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_imports_from_core_json");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      const std::string core_json = R"({
+        "crystal": [
+          {"id": 1, "type": "prism",
+           "shape": {"height": 1.0,
+                     "face_distance": [1,1,1,1,1,1],
+                     "sync_group": {"height": 7, "face_distance": [1,2,1,2,1,2]}}}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0}]}
+          ]
+        }
+      })";
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(core_json, loaded));
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& c = gui::CrystalOf(loaded, loaded.layers[0].entries[0]);
+      IM_CHECK_EQ(c.height.sync_group, 7);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(c.face_distance[i].sync_group, (i % 2 == 0) ? 1 : 2);
+      }
+    };
+  }
+
+  // AC2: .lmc round-trip, every applicable slot. Two crystals because the wire form is type-gated
+  // exactly as the shape scalars themselves are: a prism writes height + face_distance, a pyramid
+  // writes prism_h/upper_h/lower_h + face_distance. Between them all ten LUMICE_SHAPE_SCALAR_*
+  // slots are exercised — a per-slot sweep, because a table that drops one key shows up only as
+  // "that one field's grouping vanished" (the failure mode 404.2 hit as key-name drift).
+  // The pyramid arm also guards the index-order trap: UPPER_H is slot 1 and PRISM_H slot 2, the
+  // reverse of the struct's field order, so distinct values here catch a positional mapping.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_lmc_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto& prism = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      prism.type = gui::CrystalType::kPrism;
+      prism.height.sync_group = 5;
+      for (int i = 0; i < 6; ++i) {
+        prism.face_distance[i].sync_group = (i % 2 == 0) ? 1 : 2;
+      }
+
+      gui::CrystalConfig pyr;
+      pyr.type = gui::CrystalType::kPyramid;
+      pyr.prism_h.sync_group = 3;
+      pyr.upper_h.sync_group = 4;  // != prism_h: a positional mapping swaps these two
+      pyr.lower_h.sync_group = 3;
+      for (int i = 0; i < 6; ++i) {
+        pyr.face_distance[i].sync_group = 6 - i;
+      }
+      gui::EntryCard extra;
+      extra.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      extra.proportion = 50.0f;
+      gui::g_state.crystals.push_back(pyr);
+      gui::g_state.layers[0].entries.push_back(extra);
+
+      // Key names are asserted against the emitted document, not just round-trip stability: a
+      // round-trip is self-consistent even if the GUI writes keys core cannot read (the third
+      // mirror table's failure mode — there is no compile-time link between the three copies).
+      const auto doc = nlohmann::json::parse(gui::SerializeGuiStateJson(gui::g_state));
+      // Presence first: without it a serializer that emits nothing fails by throwing out of
+      // operator[] instead of reporting which expectation broke.
+      IM_CHECK(doc["layers"][0]["entries"][0]["crystal"]["shape"].contains("sync_group"));
+      IM_CHECK(doc["layers"][0]["entries"][1]["crystal"]["shape"].contains("sync_group"));
+      const auto& prism_sg = doc["layers"][0]["entries"][0]["crystal"]["shape"]["sync_group"];
+      IM_CHECK_EQ(prism_sg["height"].get<int>(), 5);
+      IM_CHECK_EQ(prism_sg["face_distance"][2].get<int>(), 1);
+      IM_CHECK(!prism_sg.contains("prism_h"));  // inapplicable to this type, as for the scalars
+      const auto& pyr_sg = doc["layers"][0]["entries"][1]["crystal"]["shape"]["sync_group"];
+      IM_CHECK_EQ(pyr_sg["prism_h"].get<int>(), 3);
+      IM_CHECK_EQ(pyr_sg["upper_h"].get<int>(), 4);
+      IM_CHECK_EQ(pyr_sg["lower_h"].get<int>(), 3);
+      IM_CHECK_EQ(pyr_sg["face_distance"][0].get<int>(), 6);
+      IM_CHECK(!pyr_sg.contains("height"));
+
+      const char* tmp_path = "/tmp/lumice_sync_group_roundtrip.lmc";
+      IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false));
+      gui::DoNew();
+      std::vector<unsigned char> tex_data;
+      int tex_w = 0;
+      int tex_h = 0;
+      IM_CHECK(gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h));
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      const auto& loaded_prism = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      IM_CHECK_EQ(loaded_prism.height.sync_group, 5);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(loaded_prism.face_distance[i].sync_group, (i % 2 == 0) ? 1 : 2);
+      }
+      const auto& loaded_pyr = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[1]);
+      IM_CHECK_EQ(loaded_pyr.prism_h.sync_group, 3);
+      IM_CHECK_EQ(loaded_pyr.upper_h.sync_group, 4);
+      IM_CHECK_EQ(loaded_pyr.lower_h.sync_group, 3);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(loaded_pyr.face_distance[i].sync_group, 6 - i);
+      }
+
+      std::remove(tmp_path);
+    };
+  }
+
+  // AC2, the other half: an all-independent crystal must emit NO "sync_group" key, so every .lmc
+  // written before v4.13 keeps its exact wire form. Paired with a red/green flip — asserting only
+  // absence would pass just as happily on a serializer that never writes the key at all.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_absent_when_all_independent");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      auto& cr = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      cr.type = gui::CrystalType::kPrism;
+      const auto shape_of = [](const std::string& doc_str) {
+        return nlohmann::json::parse(doc_str)["layers"][0]["entries"][0]["crystal"]["shape"];
+      };
+      IM_CHECK(!shape_of(gui::SerializeGuiStateJson(gui::g_state)).contains("sync_group"));
+
+      cr.face_distance[3].sync_group = 1;
+      IM_CHECK(shape_of(gui::SerializeGuiStateJson(gui::g_state)).contains("sync_group"));
+    };
+  }
+
+  // AC3: the preview's change detector sees a grouping change. CrystalParamHash gates the mesh
+  // re-upload, so a hash blind to sync_group leaves the previous crystal on screen — which reads
+  // as "the feature does not work" rather than as a stale cache. Both directions are checked: a
+  // hash that ignored the field would fail the first, one that hashed uninitialized memory the
+  // second.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_changes_param_hash");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      gui::CrystalConfig base;
+      base.type = gui::CrystalType::kPrism;
+      for (int i = 0; i < 6; ++i) {
+        base.face_distance[i] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.0f, 0.1f };
+      }
+
+      gui::CrystalConfig same = base;
+      IM_CHECK_EQ(gui::CrystalParamHash(base), gui::CrystalParamHash(same));
+
+      // Every slot individually: a hash built from a partial field list would pass on some and
+      // fail on others, and "which field is invisible to the preview" is not a guess worth making.
+      for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_COUNT; ++slot) {
+        gui::CrystalConfig grouped = base;
+        gui::ShapeScalarAt(grouped, slot).sync_group = 1;
+        IM_CHECK_NE(gui::CrystalParamHash(base), gui::CrystalParamHash(grouped));
+      }
+    };
+  }
+
+  // AC1 of the Sync column: a C3 grouping BUILT BY CLICKING reaches the geometry. The 404.3 tests
+  // above inject sync_group into the config and check the data path; this one starts from an
+  // all-independent crystal and drives the actual widget — swatch button, then popup item — the way
+  // a user would, then asserts on the mesh the simulator would trace.
+  //
+  // It lives in this file, not next to the other Sync-column tests in test_gui_interaction.cpp,
+  // because gui_test is ONE binary (test/gui/CMakeLists.txt compiles both into add_executable):
+  // the PrismFacePlaneOffsets / CountDistinct probes are already defined in this translation unit,
+  // and this repo copies a test helper only across binaries, never within one.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "sync_group_built_in_ui_reaches_geometry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
+      ctx->Yield(2);
+      auto& entry = gui::g_state.layers[0].entries[0];
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Randomize all six faces first. Without randomization every face keeps the same default
+      // 1.0 and "grouped faces are equal" would hold for a build that ignored sync_group entirely.
+      for (int i = 0; i < 6; ++i) {
+        char rnd_id[64];
+        snprintf(rnd_id, sizeof(rnd_id), "**/##rnd_Face %d##modal_fd", i + 3);
+        ctx->ItemClick(rnd_id);
+        ctx->Yield(2);
+      }
+
+      // Face 3/5/7 (indices 0/2/4) → group 1, Face 4/6/8 (1/3/5) → group 2. Each group is opened
+      // with "+ New group" on its first member and joined via its "###sync_group_N" item after that.
+      const int kGroupMembers[2][3] = { { 3, 5, 7 }, { 4, 6, 8 } };
+      for (int g = 0; g < 2; ++g) {
+        for (int m = 0; m < 3; ++m) {
+          char swatch[64];
+          snprintf(swatch, sizeof(swatch), "**/##sync_Face %d##modal_fd", kGroupMembers[g][m]);
+          ctx->ItemClick(swatch);
+          ctx->Yield(2);
+          if (m == 0) {
+            ctx->ItemClick("**/###sync_new");
+          } else {
+            char item[64];
+            snprintf(item, sizeof(item), "**/###sync_group_%d", g + 1);
+            ctx->ItemClick(item);
+          }
+          ctx->Yield(2);
+        }
+      }
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(3);
+
+      // The committed entry carries the grouping the clicks described.
+      const auto& cr = gui::CrystalOf(gui::g_state, entry);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(cr.face_distance[i].sync_group, (i % 2 == 0) ? 1 : 2);
+        IM_CHECK_EQ(cr.face_distance[i].type, gui::ShapeDistType::kUniform);
+      }
+      // ...and so does the scene handed to core: face_distance's sync_group array is the canonical
+      // [1,2,1,2,1,2]. Read off the commit path, not off g_state again, because the grouping being
+      // present in the GUI and reaching the simulator are separate claims (404.1 found the CLI path
+      // dropping sync_group while the GUI-side data was perfectly correct).
+      const auto scene_j = CommitSceneJson(gui::g_state);
+      const auto& sg = scene_j["crystal"][0]["shape"]["sync_group"]["face_distance"];
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(sg[i].get<int>(), (i % 2 == 0) ? 1 : 2);
+      }
+
+      // White-box on the geometry: two draws, six faces. The eye cannot verify this symmetry in a
+      // halo image, which is the entire reason the feature exists — so it is asserted on the mesh.
+      LUMICE_CrystalMesh mesh{};
+      IM_CHECK(gui::BuildCrystalMeshData(cr, 12345, &mesh));
+      const auto off = PrismFacePlaneOffsets(mesh);
+      IM_CHECK_EQ(CountDistinct(off, 1e-5f), (size_t)2);
+      IM_CHECK(std::fabs(off[0] - off[2]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[2] - off[4]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[1] - off[3]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[3] - off[5]) <= 1e-5f);
+      // The two groups drew separately: a mesh where all six faces collapsed to one value would
+      // satisfy every equality above.
+      IM_CHECK(std::fabs(off[0] - off[1]) > 1e-5f);
+
+      // Control on the same randomized crystal: ungrouped, the six faces draw six distinct values.
+      // Without it, "2 distinct" would also pass on a build that ignored face_distance randomization.
+      gui::CrystalConfig ungrouped = cr;
+      for (int i = 0; i < 6; ++i) {
+        ungrouped.face_distance[i].sync_group = 0;
+      }
+      LUMICE_CrystalMesh independent{};
+      IM_CHECK(gui::BuildCrystalMeshData(ungrouped, 12345, &independent));
+      IM_CHECK_EQ(CountDistinct(PrismFacePlaneOffsets(independent), 1e-5f), (size_t)6);
     };
   }
 

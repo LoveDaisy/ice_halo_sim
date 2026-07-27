@@ -4,8 +4,10 @@
 #include <fstream>
 #include <thread>
 
-#include "IconsFontAwesome6.h"  // ICON_FA_* selectors used to match new icon-prefixed button labels
-#include "gui/log_sink.hpp"     // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
+#include "IconsFontAwesome6.h"      // ICON_FA_* selectors used to match new icon-prefixed button labels
+#include "gui/crystal_preview.hpp"  // BuildCrystalMeshData (core-side sync-group leader oracle)
+#include "gui/file_io.hpp"          // DeserializeFromJson / BuildExportJsonOrWarn (hand-authored-config walkthroughs)
+#include "gui/log_sink.hpp"         // ImGuiLogSink (for log_panel_above_left_panel test sink injection)
 // imgui_internal.h is generally an anti-pattern, but z-order assertions need
 // direct ImGuiContext::Windows access. The relied-on semantics
 // (BringWindowToDisplayFront splices to g.Windows back; creation with
@@ -4073,6 +4075,16 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       std::string name_baseline = gui::CrystalOf(gui::g_state, entry).name;
       gui::CrystalType type_baseline = gui::CrystalOf(gui::g_state, entry).type;
 
+      // Step 1b: declare sync groups (404.3). There is no control for them yet — 404.4 adds the
+      // column — so they are injected straight into the entry, from where the modal copies them
+      // into its edit buffer like any other shape state. Both a scalar and face slots, because
+      // Reset All clears them not by naming them but by assigning whole ShapeDist values; a
+      // future rewrite that switched to per-component assignment would leave exactly these
+      // behind, and nothing else in the suite would notice.
+      gui::CrystalOf(gui::g_state, entry).height.sync_group = 3;
+      gui::CrystalOf(gui::g_state, entry).face_distance[2].sync_group = 1;
+      gui::CrystalOf(gui::g_state, entry).face_distance[4].sync_group = 1;
+
       // Step 2: open modal again, modify height to another non-default (2.0),
       // click Reset All, then OK to commit the reset.
       ctx->ItemClick("**/Edit##cr");
@@ -4094,6 +4106,12 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).lower_alpha, defaults.lower_alpha);
       for (int i = 0; i < 6; ++i) {
         IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[i], defaults.face_distance[i]);
+      }
+      // Sync groups cleared too (404.3). Spelled out rather than left to ShapeDist::operator==
+      // above so the intent is visible at the assertion, not inferred from a comparison operator.
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height.sync_group, 0);
+      for (int i = 0; i < 6; ++i) {
+        IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[i].sync_group, 0);
       }
 
       // Step 4: assert name/type/axis preserved (Reset All must not touch them).
@@ -4135,6 +4153,890 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       // Entry unchanged: Cancel discarded the Reset All effect from the buffer.
       IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).height, 5.0f);
+    };
+  }
+
+  // ============ Sync column: shape-scalar sync groups, driven through the UI ============
+  // These drive the real widget (swatch button → popup Selectable), not the underlying helpers:
+  // the whole point of this column is that a user can build a grouping by clicking, and a test
+  // that called a helper directly would keep passing if the popup stopped being reachable.
+  //
+  // Widget ids, all stable by construction: the swatch is "##sync_<row label>" with the group
+  // number DRAWN on it rather than being part of the label, and the popup items are anchored with
+  // "###sync_none" / "###sync_group_N" / "###sync_new" so the membership text they display can
+  // change without moving the id out from under these paths.
+
+  // p2_modal/sync_group_join_snapshots_and_propagates — AC2, both halves. Joining a group snaps the
+  // row to the group's value; editing any member afterwards writes through to the whole group.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_join_snapshots_and_propagates");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;  // commit the edit buffer to g_state every frame
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");  // default-collapsed section
+      ctx->Yield(2);
+
+      // Face 5 (face_distance[2]) starts a group of its own. "+ New group" allocates id 1 here —
+      // nothing else in this crystal is grouped.
+      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].sync_group, 1);
+      // A brand-new group has no other member, so joining it must NOT disturb the row's own value.
+      IM_CHECK_EQ(crystal().face_distance[2].center, 1.0f);
+
+      // Give the group a distinctive value + randomization, so the snapshot below is checked on all
+      // three fields rather than on a center that happened to already match.
+      ctx->ItemClick("**/##rnd_Face 5##modal_fd");  // → Uniform, spread = 0.2 × center
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Face 5##modal_fd_input", 1.5f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].center, 1.5f);
+      IM_CHECK_EQ(crystal().face_distance[2].type, gui::ShapeDistType::kUniform);
+      const float leader_spread = crystal().face_distance[2].spread;
+      IM_CHECK(leader_spread > 0.0f);
+
+      // Face 7 (face_distance[4]) joins the SAME group by picking it out of the popup. The item is
+      // addressed by its "###sync_group_1" anchor; what the user reads is "1  (Face 5)".
+      IM_CHECK_EQ(crystal().face_distance[4].center, 1.0f);  // differs from the leader pre-join
+      ctx->ItemClick("**/##sync_Face 7##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+
+      // Snapshot: all three fields now equal the leader's, immediately and visibly.
+      IM_CHECK_EQ(crystal().face_distance[4].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[4].center, 1.5f);
+      IM_CHECK_EQ(crystal().face_distance[4].type, gui::ShapeDistType::kUniform);
+      IM_CHECK_EQ(crystal().face_distance[4].spread, leader_spread);
+
+      // Propagation: editing the leader row again moves the subordinate with it.
+      ctx->ItemInputValue("**/##Face 5##modal_fd_input", 0.75f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].center, 0.75f);
+      IM_CHECK_EQ(crystal().face_distance[4].center, 0.75f);
+
+      // ...and so does editing the SUBORDINATE row: a subordinate stays editable and writes through
+      // to the whole group (the owner picked this over greying subordinates out).
+      ctx->ItemInputValue("**/##Face 7##modal_fd_input", 1.25f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[4].center, 1.25f);
+      IM_CHECK_EQ(crystal().face_distance[2].center, 1.25f);
+
+      // An ungrouped row is untouched by any of it — propagation is scoped to the group, not to
+      // "every face row".
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.0f);
+      IM_CHECK_EQ(crystal().face_distance[0].sync_group, 0);
+
+      ctx->ItemClose("**/Face Distance##modal");  // restore the default-collapsed state for later tests
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_group_leave_keeps_value — AC3. Selecting None leaves the group without restoring
+  // the row's pre-join value (no shadow state is kept) and without touching the group it left.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leave_keeps_value");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Build a two-member group with a non-default value, so "value unchanged on leave" is a claim
+      // about a value the group actually imposed.
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.75f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[1].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[1].center, 1.75f);
+
+      // Leave: independent afterwards, and holding the value the group gave it — NOT the 1.0 it
+      // had before joining.
+      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_none");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[1].sync_group, 0);
+      IM_CHECK_EQ(crystal().face_distance[1].center, 1.75f);
+      // The row it left is unaffected, both in membership and in value.
+      IM_CHECK_EQ(crystal().face_distance[0].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.75f);
+      // And it no longer follows the group: editing the ex-leader leaves it where it is.
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.5f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 0.5f);
+      IM_CHECK_EQ(crystal().face_distance[1].center, 1.75f);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_group_cancel_keeps_entry — AC4. Grouping is edit-buffer state like every other
+  // shape field: Cancel discards it. Compared against a baseline captured just before the modal was
+  // opened, not against "the defaults", so the test cannot pass by the entry being reset instead of
+  // preserved.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_cancel_keeps_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();  // leaves modal_immediate_mode false: OK/Cancel atomicity is what is under test
+      ctx->Yield(2);
+      auto& entry = gui::g_state.layers[0].entries[0];
+
+      // Pre-existing grouping on the entry, so Cancel has to preserve a non-trivial value rather
+      // than just "no groups".
+      gui::CrystalOf(gui::g_state, entry).face_distance[0].sync_group = 2;
+      gui::CrystalOf(gui::g_state, entry).face_distance[1].sync_group = 2;
+      const gui::CrystalConfig baseline = gui::CrystalOf(gui::g_state, entry);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Regroup inside the buffer: a third row joins group 2, and one of its members leaves.
+      ctx->ItemClick("**/##sync_Face 6##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_2");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_none");
+      ctx->Yield(2);
+      // Staged mode: none of that reached the entry yet.
+      IM_CHECK(gui::CrystalOf(gui::g_state, entry) == baseline);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(3);
+
+      // Whole-crystal comparison (ShapeDist::operator== includes sync_group), plus the two group
+      // ids spelled out so a failure names the field instead of just "the crystal differs".
+      IM_CHECK(gui::CrystalOf(gui::g_state, entry) == baseline);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[3].sync_group, 0);
+      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, entry).face_distance[0].sync_group, 2);
+    };
+  }
+
+  // p2_modal/sync_group_dormant_across_type_switch — the cross-type visibility assumption, made
+  // checkable. The widget only ever sees the scalars the current crystal type draws, so a group id
+  // sitting on the other type's scalar must survive a type switch untouched and must not appear in
+  // the popup's membership lists. This is D1 ("no commensurability check") implemented as the
+  // smallest possible GUI behavior; a later "tidy-up" that cleared such ids would silently change it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_dormant_across_type_switch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      // height is prism-only; give it a group, then edit as a pyramid.
+      crystal().height.sync_group = 4;
+      crystal().type = gui::CrystalType::kPrism;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemClick("**/Pyramid##modal");  // height's row disappears; the three H rows appear
+      ctx->Yield(3);
+
+      // Group the pyramid's Upper H. "+ New group" must not hand out 4 — the dormant prism group
+      // still holds it, and reusing it would silently merge the two on a switch back.
+      ctx->ItemClick("**/##sync_Upper H##modal_cr");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().upper_h.sync_group, 5);
+      // SLOT-ORDER TRAP guard: it is upper_h that moved, not prism_h (slot 1 vs slot 2, the reverse
+      // of the rows' visual order). A positional slot mapping fails exactly here.
+      IM_CHECK_EQ(crystal().prism_h.sync_group, 0);
+      IM_CHECK_EQ(crystal().lower_h.sync_group, 0);
+      // The dormant prism group is untouched by any of it.
+      IM_CHECK_EQ(crystal().height.sync_group, 4);
+
+      // Switch back: the prism grouping is still there, exactly as it was.
+      ctx->ItemClick("**/Prism##modal");
+      ctx->Yield(3);
+      IM_CHECK_EQ(crystal().height.sync_group, 4);
+      IM_CHECK_EQ(crystal().upper_h.sync_group, 5);
+
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_group_leader_is_lowest_visible_slot — the leader rule, checked across the two
+  // ways "lowest slot index" can disagree with what a naive search finds. lumice.h defines the
+  // group's owner as its lowest-indexed applicable member, and core evaluates that over every slot
+  // the crystal type has (the slot table in crystal_config.cpp, which the GUI queries through
+  // LUMICE_IsShapeScalarApplicable rather than mirroring). The GUI
+  // snapshots from that same slot, over that same set, so what the user sees on join is the value
+  // core will draw with. Two disagreements are exercised, one per group:
+  //   group 1 — slot order vs ROW order: Upper H is slot 1, Lower H slot 3, and Upper H is drawn
+  //             BELOW Prism H. A search following the visual order, or CrystalConfig's field order,
+  //             lands on the wrong one.
+  //   group 2 — slot order vs SYNCABLE order: Prism H (slot 2) is the group's lowest member outright,
+  //             and it has no Sync control (no commensurable partner to offer the user). It is the
+  //             leader all the same. Electing the lowest slot the user can REACH instead — the
+  //             narrower, affordance-driven set — hands out face_distance[1]'s 1.5 while core draws
+  //             with 0.75, so the table would show a distribution the simulation overwrites on
+  //             commit. What a row cannot do is join a group; being in one is not the GUI's call.
+  // Both groups are seeded with members that DISAGREE — the only configuration in which "which member
+  // is the leader" is observable at all. A group built by clicking has equal members by construction,
+  // and a snapshot from either end of it looks identical. (A hand-authored config reaching the GUI in
+  // exactly this state is normal: canonicalization belongs to core's from_json, on commit, not to the
+  // GUI — and group 2 is precisely a grouping the GUI itself cannot build.)
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_is_lowest_visible_slot");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      crystal().type = gui::CrystalType::kPyramid;
+      crystal().upper_h = gui::ShapeDist{ gui::ShapeDistType::kUniform, 0.4f, 0.08f };
+      crystal().upper_h.sync_group = 1;  // slot 1 — group 1's leader
+      crystal().lower_h = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.9f, 0.0f };
+      crystal().lower_h.sync_group = 1;  // slot 3 — the foil for group 1
+      // Prism H: slot 2, no Sync control, and group 2's lowest member by index — hence its leader.
+      // Its value is inside the face slider's [0, 2] range on purpose, so a wrong leader shows up as
+      // the wrong NUMBER rather than as a clamp artifact that could be explained away.
+      crystal().prism_h = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.75f, 0.0f };
+      crystal().prism_h.sync_group = 2;
+      crystal().face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.5f, 0.3f };
+      crystal().face_distance[1].sync_group = 2;  // slot 5 — the foil: lowest slot the user can reach
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Face 3 (slot 4) joins group 1: it must take upper_h's distribution (slot 1), not lower_h's
+      // (slot 3). Every face slot is above all three H slots in the index space, so no face can be
+      // the leader here, and the disagreeing lower_h is sitting there to be picked by a search that
+      // scanned the other way.
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[0].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 0.4f);
+      IM_CHECK_EQ(crystal().face_distance[0].type, gui::ShapeDistType::kUniform);
+      IM_CHECK_EQ(crystal().face_distance[0].spread, 0.08f);
+
+      // Face 5 (slot 6) joins group 2: the leader is prism_h (slot 2), NOT the higher-indexed
+      // face_distance[1] (slot 5) that happens to be the lowest member carrying a Sync control.
+      // 0.75 vs 1.5 is the whole point — this is the value core hands the simulation, so it is the
+      // value the joining row must take, whether or not the row it came from is editable from here.
+      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_2");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].sync_group, 2);
+      IM_CHECK_EQ(crystal().face_distance[2].center, 0.75f);
+      IM_CHECK_EQ(crystal().face_distance[2].type, gui::ShapeDistType::kNoRandom);
+      IM_CHECK_EQ(crystal().face_distance[2].spread, 0.0f);
+
+      // Joining reads the group, it does not write it: every seeded member is untouched, and the two
+      // groups are still internally disagreeing.
+      IM_CHECK_EQ(crystal().upper_h.center, 0.4f);
+      IM_CHECK_EQ(crystal().lower_h.center, 0.9f);
+      IM_CHECK_EQ(crystal().prism_h.center, 0.75f);
+      IM_CHECK_EQ(crystal().prism_h.sync_group, 2);  // still a member, and still the leader
+      IM_CHECK_EQ(crystal().face_distance[1].center, 1.5f);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_group_unsyncable_member_is_a_full_member — a hand-authored config MAY group a
+  // scalar the GUI offers no Sync control for (lumice.h runs no commensurability check, and the GUI
+  // is not a second authority on what is legal). Once such a group exists, core treats that scalar as
+  // an ordinary member — it is applicable, so NormalizeSyncGroups elects it and writes over the rest
+  // of the group from it — and the GUI reports and propagates it the same way. The missing Sync
+  // control means one thing only: the user cannot make this row join a group from here.
+  //
+  // Every consequence is checked in one walkthrough, because the failure mode is a HALF-applied
+  // predicate: hiding the swatch is the affordance, and if the membership list, the leader search or
+  // the propagation followed it, the table would report a distribution core overwrites on commit —
+  // the row silently reverting after the user edited it.
+  //
+  // The config groups prism `height` with `face_distance[0]` — the exact shape the owner named.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_unsyncable_member_is_a_full_member");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Same core-JSON shape as import_export/sync_group_imports_from_core_json, loaded into the live
+      // state so the modal can be driven over it. Exactly two members so the popup's membership label
+      // stays inside ImGuiTestItemInfo::DebugLabel's 32-char buffer and the string checks below are
+      // not reading a truncation.
+      const std::string core_json = R"({
+        "crystal": [
+          {"id": 1, "type": "prism",
+           "shape": {"height": 1.0,
+                     "face_distance": [1,1,1,1,1,1],
+                     "sync_group": {"height": 1, "face_distance": [1,0,0,0,0,0]}}}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0}]}
+          ]
+        }
+      })";
+      // DeserializeFromJson assigns a fresh GuiState (file_io.cpp `state = GuiState{}`), so it
+      // resets the modal's two display-tier flags to their STRUCT defaults — not to whatever the
+      // harness had them at. modal_layout_vertical in particular defaults to true, and the harness
+      // never recomputes it without a window resize, so an import silently hands the following
+      // clicks a vertical modal whose bottom button row is off-screen. Both flags are therefore set
+      // AFTER the import, not before.
+      const bool layout_vertical_before = gui::g_state.modal_layout_vertical;
+      IM_CHECK(gui::DeserializeFromJson(core_json, gui::g_state));
+      gui::g_state.modal_layout_vertical = layout_vertical_before;
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      // The import kept the grouping verbatim — the premise of everything below.
+      IM_CHECK_EQ(crystal().type, gui::CrystalType::kPrism);
+      IM_CHECK_EQ(crystal().height.sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[0].sync_group, 1);
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // (1) No Sync control on the Height row. Two positive controls so a false pass is impossible:
+      // the row itself is still there and editable, and a row that IS syncable still has its swatch.
+      IM_CHECK(!ctx->ItemExists("**/##sync_Height##modal_cr"));
+      IM_CHECK(ctx->ItemExists("**/##Height##modal_cr_input"));
+      IM_CHECK(ctx->ItemExists("**/##sync_Face 3##modal_fd"));
+
+      // (2) The membership list names the group's real members, Height included. It describes the
+      // group the user is about to join, and Height is the member whose value that group carries —
+      // omitting it would understate what joining costs. The popup item's visible label carries the
+      // list, so this reads what is actually on screen rather than re-deriving it. Both names fit
+      // inside ImGuiTestItemInfo::DebugLabel's 32-char buffer, which is why the config has exactly
+      // two members.
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      const ImGuiTestItemInfo group_item = ctx->ItemInfo("**/###sync_group_1");
+      IM_CHECK_NE(group_item.ID, (ImGuiID)0);
+      fprintf(stderr, "[sync_full_member] group 1 popup label = '%s'\n", group_item.DebugLabel);
+      IM_CHECK(strstr(group_item.DebugLabel, "Face 3") != nullptr);  // the list is really being read
+      IM_CHECK(strstr(group_item.DebugLabel, "Height") != nullptr);  // ...and Height is in it
+      // Re-selecting the group the row is already in is a documented no-op, so this only dismisses
+      // the popup (see sync_group_reselect_current_is_noop).
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[0].sync_group, 1);
+
+      // (3) An edit to either row moves the other, in BOTH directions — the group is written whole.
+      // face→height is the destination-side scope (core normalizes Height too, so leaving it behind
+      // would only mean core rewrites the face on commit); height→face is the source-side scope (the
+      // row has no swatch, but it is the group's leader, and an edit to the leader is precisely the
+      // edit the whole group must follow). The Param-name tint on both rows is what makes the paired
+      // movement attributable on screen.
+      //
+      // Both values sit inside BOTH sliders' ranges — Height's [0.01, 100] and a face distance's
+      // [0, 2] — so nothing here is a clamp. Cross-range clamping has its own test
+      // (sync_group_cross_range_converges) and does not belong in this one.
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.75f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 0.75f);
+      IM_CHECK_EQ(crystal().height.center, 0.75f);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", 1.8f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().height.center, 1.8f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.8f);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+
+      // (4) The group id was never the GUI's to clean up: it survives the whole walkthrough in state
+      // AND through the production export path, checked by reading it back rather than by matching
+      // substrings against a JSON dump.
+      IM_CHECK_EQ(crystal().height.sync_group, 1);
+      std::string exported;
+      IM_CHECK(gui::BuildExportJsonOrWarn(gui::g_state, &exported, nullptr));
+      gui::GuiState reloaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(exported, reloaded));
+      const auto& rc = gui::CrystalOf(reloaded, reloaded.layers[0].entries[0]);
+      IM_CHECK_EQ(rc.height.sync_group, rc.face_distance[0].sync_group);
+      IM_CHECK_NE(rc.height.sync_group, 0);
+    };
+  }
+
+  // p2_modal/sync_group_leader_agrees_with_core_mesh_oracle — the mechanism that pins "the GUI's
+  // leader IS core's leader", as opposed to a comment asking the next person to keep them in step.
+  //
+  // The GUI's leader rule and core's are two implementations of one sentence in lumice.h. Nothing
+  // structural forces them together, and they HAVE drifted apart once: a GUI-side affordance
+  // narrowing (some rows get no Sync control) leaked into the leader search, so for a hand-authored
+  // group the table showed, and handed out on join, a distribution core discarded on commit. A test
+  // that hardcodes the expected leader cannot catch the recurrence in general — it freezes today's
+  // GUI-side belief, and if core's rule is what moves, the frozen literal moves with the GUI and the
+  // test stays green while the two diverge.
+  //
+  // So the expected value is not written down here. It is measured, from core, at run time:
+  // BuildCrystalMeshData goes through the public LUMICE_GetCrystalMesh, whose param->JSON->param
+  // round trip runs the real PrepareSyncGroups (canonicalize + leader-normalize) before sampling
+  // geometry. Feed it the disagreeing group and it returns the mesh core would actually draw; compare
+  // that against one control mesh per candidate leader — each the same crystal with the group
+  // flattened to that candidate's value — and exactly one matches. That match names core's leader
+  // without reading a single line of GUI code. The GUI then has to agree with it.
+  //
+  // Consequences, which are the point:
+  //   - core changes its leader rule (its slot-applicability map / the NormalizeSyncGroupsImpl scan)
+  //     → the matching control changes → the GUI, unchanged, disagrees → red.
+  //   - the GUI's mirror side goes back to scoping the leader search by the affordance predicate
+  //     (this bug, recurring) → it hands out 0.75 where the oracle says 1.0 → red.
+  // What this deliberately does NOT catch is the affordance predicate simply excluding one more row.
+  // That is not a silent hazard any more but a no-op: the mirror side no longer reads that predicate
+  // at all, which is the decoupling this test exists on top of, not a gap in it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_agrees_with_core_mesh_oracle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+
+      // The owner's reproduction, verbatim: prism height (slot 0, no Sync control) grouped with
+      // face_distance[0] (slot 4), the two disagreeing. Only a hand-authored config can produce this
+      // state, and it is the only state in which "who is the leader" is observable at all.
+      constexpr float kHeightValue = 1.0f;
+      constexpr float kFaceValue = 0.75f;
+      crystal().type = gui::CrystalType::kPrism;
+      crystal().height = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, kHeightValue, 0.0f };
+      crystal().height.sync_group = 1;
+      crystal().face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, kFaceValue, 0.0f };
+      crystal().face_distance[0].sync_group = 1;
+
+      // --- The oracle: ask core, through the public mesh API, which member it drew with. ---
+      auto build = [](const gui::CrystalConfig& cr, LUMICE_CrystalMesh* out) {
+        // kNoRandom throughout, so the seed selects nothing and the draw is deterministic; passing
+        // the same literal every time keeps that explicit rather than incidental.
+        return lumice::gui::BuildCrystalMeshData(cr, lumice::gui::kPreviewFixedSampleSeed, out);
+      };
+      auto same_mesh = [](const LUMICE_CrystalMesh& a, const LUMICE_CrystalMesh& b) {
+        return a.vertex_count == b.vertex_count && a.edge_count == b.edge_count &&
+               a.triangle_count == b.triangle_count &&
+               std::memcmp(a.vertices, b.vertices, sizeof(float) * a.vertex_count * 3) == 0 &&
+               std::memcmp(a.edges, b.edges, sizeof(int) * a.edge_count * 2) == 0 &&
+               std::memcmp(a.triangles, b.triangles, sizeof(int) * a.triangle_count * 3) == 0;
+      };
+
+      // Candidate controls: the same crystal with the group already flattened onto one candidate,
+      // and no groups left for core to normalize. Leader-normalization writes the leader's
+      // distribution over every member, so core's output for the grouped config must equal exactly
+      // one of these.
+      gui::CrystalConfig flat_height = crystal();
+      flat_height.height.center = kHeightValue;
+      flat_height.face_distance[0].center = kHeightValue;
+      flat_height.height.sync_group = 0;
+      flat_height.face_distance[0].sync_group = 0;
+
+      gui::CrystalConfig flat_face = flat_height;
+      flat_face.height.center = kFaceValue;
+      flat_face.face_distance[0].center = kFaceValue;
+
+      LUMICE_CrystalMesh mesh_core{};
+      LUMICE_CrystalMesh mesh_flat_height{};
+      LUMICE_CrystalMesh mesh_flat_face{};
+      IM_CHECK(build(crystal(), &mesh_core));
+      IM_CHECK(build(flat_height, &mesh_flat_height));
+      IM_CHECK(build(flat_face, &mesh_flat_face));
+
+      const bool core_chose_height = same_mesh(mesh_core, mesh_flat_height);
+      const bool core_chose_face = same_mesh(mesh_core, mesh_flat_face);
+      // Exactly one. Both true would mean the mesh cannot tell the two candidates apart and the
+      // oracle proves nothing; both false would mean core picked something neither control models,
+      // and reading a leader value out of it would be an invention.
+      fprintf(stderr, "[sync_oracle] core_chose_height=%d core_chose_face=%d\n", (int)core_chose_height,
+              (int)core_chose_face);
+      IM_CHECK(core_chose_height != core_chose_face);
+      const float core_leader_value = core_chose_height ? kHeightValue : kFaceValue;
+
+      // --- The GUI must hand out that same value. ---
+      // Face 5 (slot 6) joining group 1 snapshots from whatever the GUI thinks the leader is, so the
+      // value that lands in the row IS the GUI's answer, read through a real click rather than by
+      // calling the predicate directly.
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[2].sync_group, 1);
+      IM_CHECK_EQ(crystal().face_distance[2].center, core_leader_value);
+
+      // AC2, the other half: with the GUI writing the whole group, an edit leaves every member equal,
+      // so core's normalize finds nothing to override — no silent rewrite of the row the user just
+      // typed into, and no leader-override warning on commit. Checked the same way, against core:
+      // after the edit the grouped config's mesh must equal the mesh of the same values carrying no
+      // groups at all, which can only hold if normalization changed nothing.
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.25f);
+      ctx->Yield(2);
+      gui::CrystalConfig after_edit_ungrouped = crystal();
+      for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+        gui::ShapeScalarAt(after_edit_ungrouped, s).sync_group = 0;
+      }
+      LUMICE_CrystalMesh mesh_after_edit{};
+      LUMICE_CrystalMesh mesh_after_edit_ungrouped{};
+      IM_CHECK(build(crystal(), &mesh_after_edit));
+      IM_CHECK(build(after_edit_ungrouped, &mesh_after_edit_ungrouped));
+      IM_CHECK(same_mesh(mesh_after_edit, mesh_after_edit_ungrouped));
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_group_cross_range_converges — grouping scalars whose sliders have DIFFERENT
+  // ranges is permitted (the design deliberately runs no dimensional-commensurability check), and
+  // Upper H [0, 1] with a face distance [0, 2] is the case where that shows. What the group then
+  // settles on is the tighter bound: a value propagated into the Upper H row is clamped by that row's
+  // own slider, and the clamp propagates straight back out.
+  //
+  // The property worth pinning is not the number 1.0 — it is that the loop TERMINATES. Propagation
+  // is triggered by "this row's value changed", and a clamp is a change, so a value that no member
+  // can hold is fed back and forth between rows. Measured: one frame to converge, stable after.
+  // An implementation that ping-ponged (or clamped asymmetrically) would leave the modal visibly
+  // twitching and this test red.
+  //
+  // The edited row is the WIDE one (Face 3) and the clamping row is drawn ABOVE it, so the clamp is
+  // applied on the frame after the edit rather than later in the same frame — the direction that
+  // actually requires a second pass through the table, and the one a "converges immediately because
+  // the rows happen to be in the right order" implementation would fail.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_cross_range_converges");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      crystal().type = gui::CrystalType::kPyramid;
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Upper H##modal_cr");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      // Face 3 snapshotted from its group's only other member, Upper H (default 0.2), which is inside
+      // both ranges — nothing to clamp yet.
+      IM_CHECK_EQ(crystal().upper_h.center, 0.2f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 0.2f);
+
+      // 2.0 is legal for a face distance and outside Upper H's [0, 1].
+      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 2.0f);
+      ctx->Yield(2);
+      // Settled on the Upper H row's maximum, with both members agreeing.
+      IM_CHECK_EQ(crystal().upper_h.center, 1.0f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.0f);
+      // ...and it stays there: no oscillation between the two clamps over the following frames.
+      ctx->Yield(8);
+      IM_CHECK_EQ(crystal().upper_h.center, 1.0f);
+      IM_CHECK_EQ(crystal().face_distance[0].center, 1.0f);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
+    };
+  }
+
+  // p2_modal/sync_column_layout_budget — AC5, as a measurement rather than a look at the modal.
+  // The Sync column is FIXED width and Value is the only stretch column, so every pixel Sync takes
+  // comes out of the slider. Two things could go wrong and neither is visible in a state assertion:
+  // the slider hitting PrepareSliderLayout's 40 px floor (below which it stops shrinking and starts
+  // overflowing its cell instead), and the taller-content case needing a scrollbar in the modal's
+  // fixed-height content pane. Both are checked in the worst case the modal supports: the narrow
+  // vertical layout, a Pyramid (three H rows + two wedge rows), with Face Distance expanded.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_column_layout_budget");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+
+      // The 420 px vertical width is only reached on the frame RenderEditModals observes the
+      // layout flag FLIP; without the flip the window keeps whatever width AlwaysAutoResize last
+      // converged to (see test_gui_modal_layout.cpp for the same dance and why).
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(2);
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      gui::g_state.modal_layout_vertical = true;
+      ctx->Yield(6);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(4);
+
+      ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+      IM_CHECK(win != nullptr);
+      IM_CHECK_EQ(win->Size.x, 420.0f);  // the narrow layout really is what is being measured
+
+      // Value column: the slider must still be laid out by the formula, not clamped by the floor.
+      // PrepareSliderLayout returns max(avail - kInputWidth - spacing, 40); a return of exactly 40
+      // means the cell is too narrow for the [slider][input] pair and the input is overflowing.
+      const auto slider = ctx->ItemInfo("**/##Face 3##modal_fd_slider");
+      const auto input = ctx->ItemInfo("**/##Face 3##modal_fd_input");
+      const auto swatch = ctx->ItemInfo("**/##sync_Face 3##modal_fd");
+      const float slider_w = slider.RectFull.GetWidth();
+      fprintf(stderr, "[sync_layout] vertical modal=%.0f slider_w=%.1f input_right=%.1f swatch=(%.1fx%.1f)\n",
+              win->Size.x, slider_w, input.RectFull.Max.x, swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
+      IM_CHECK_GT(slider_w, 40.0f);
+      // The input sits to the slider's right and must end before the NEXT column's content starts —
+      // i.e. the pair fits the cell instead of spilling into the neighbour. That neighbour is the
+      // Sync column (the order is Param | Value | Sync | Rand | Spread), so the swatch is what this
+      // has to clear; the Rand checkbox is checked too, as the ordering of the three is itself part
+      // of the claim and a silent column-order regression would otherwise still pass.
+      const auto rand_check = ctx->ItemInfo("**/##rnd_Face 3##modal_fd");
+      IM_CHECK_LT(input.RectFull.Max.x, swatch.RectFull.Min.x);
+      IM_CHECK_LT(swatch.RectFull.Max.x, rand_check.RectFull.Min.x);
+      // The swatch is square and exactly one frame tall, so it cannot be what drives row height.
+      IM_CHECK_EQ(swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
+      IM_CHECK_LE(swatch.RectFull.GetHeight(), ImGui::GetFrameHeight());
+
+      // No scrollbar in the modal's fixed-height content pane with everything expanded. The pane is
+      // a BeginChild of the modal; find it by walking ImGui's window list rather than guessing its
+      // auto-generated child name.
+      ImGuiContext& g = *ImGui::GetCurrentContext();
+      bool found_pane = false;
+      for (ImGuiWindow* w : g.Windows) {
+        if (w->ParentWindow == win && w->WasActive && strstr(w->Name, "modal_bottom_pane") != nullptr) {
+          found_pane = true;
+          fprintf(stderr, "[sync_layout] pane '%s' scroll_max_y=%.1f\n", w->Name, w->ScrollMax.y);
+          IM_CHECK_EQ(w->ScrollMax.y, 0.0f);  // content fits: nothing to scroll
+        }
+      }
+      IM_CHECK(found_pane);  // a renamed pane must fail loudly, not silently skip the check
+
+      // Restore the layout flag BEFORE closing, so the modal (and the widths ImGui has cached for
+      // it) is handed back to later tests in the default horizontal form.
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(4);
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+    };
+  }
+
+  // p2_modal/shape_table_fixed_columns_fit_text — the other half of the width budget. Each of the
+  // four fixed columns is sized by TEXT, not by its control: Param by its longest row label
+  // ("Prism H" / "Upper A"), Sync and Rand by their own 4-character headers (the swatch and the
+  // checkbox are both one frame tall and far narrower than that). Their declared widths were
+  // tightened to where the text is what fits last, and both clipping modes are SILENT — ImGui
+  // ellipsizes a header and hard-clips a row label without complaint — so nothing else notices.
+  //
+  // The criterion is ImGui's own layout bookkeeping, never a pixel constant: ContentMaxXHeadersIdeal
+  // is where a header's text WOULD end if nothing clipped it, ContentMaxXUnfrozen is the same for the
+  // row cells, and WorkMaxX is the column's content region. Comparing those three is font- and
+  // DPI-adaptive by construction: a platform whose glyphs render wider fails here instead of shipping
+  // a clipped table (pin the relation, never the number). Both layouts are exercised, since the fixed
+  // columns keep their declared width in each while everything around them moves; and both tables
+  // (params + Face Distance) are checked, since only one has a header row and only the other has the
+  // "Face N" labels.
+  //
+  // Measured margins at the widths this task settled on (identical in both layouts — the fixed
+  // columns do not move): Param 52 vs 49 needed by "Prism H", Sync/Rand 29 vs 28 needed by their
+  // headers, Spread 60 vs 60 (its input is SetNextItemWidth(-FLT_MIN), so it fills the cell exactly
+  // by construction and 0 slack is the correct value, not a near miss). Those are tight on purpose,
+  // and they are not platform-fragile: font_init.hpp uses AddFontDefault(), i.e. the embedded
+  // fixed-width ProggyClean at 13 px, so every one of these strings is exactly 7 px per character on
+  // every platform.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "shape_table_fixed_columns_fit_text");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Pyramid: the type with the widest Param labels ("Prism H", "Upper A", "Lower A").
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+
+      // pass 0 = horizontal (kEditModalMinWidth 820), pass 1 = vertical (kEditModalMinWidthVertical 420).
+      for (int pass = 0; pass < 2; ++pass) {
+        const bool vertical = pass == 1;
+        // Same flag-FLIP dance as sync_column_layout_budget: the width floor is only applied on the
+        // frame RenderEditModals observes the change.
+        gui::g_state.modal_layout_vertical = !vertical;
+        ctx->Yield(2);
+        ctx->ItemClick("**/Edit##cr");
+        ctx->Yield(4);
+        gui::g_state.modal_layout_vertical = vertical;
+        ctx->Yield(6);
+        ctx->ItemOpen("**/Face Distance##modal");
+        ctx->Yield(4);
+
+        ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+        IM_CHECK(win != nullptr);
+        IM_CHECK_EQ(win->Size.x, vertical ? 420.0f : 820.0f);
+
+        // Both shape tables, found by their column signature rather than by an id we would have to
+        // reproduce through the child-window stack.
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        int tables_checked = 0;
+        for (int n = 0; n < g.Tables.GetMapSize(); ++n) {
+          ImGuiTable* table = g.Tables.TryGetMapData(n);
+          if (table == nullptr || table->ColumnsCount != gui::kShapeTableColumnCount ||
+              table->LastFrameActive < g.FrameCount - 1) {
+            continue;
+          }
+          const char* col0 = ImGui::TableGetColumnName(table, 0);
+          if (col0 == nullptr || strcmp(col0, "Param") != 0) {
+            continue;  // some other 5-column table
+          }
+          ++tables_checked;
+          for (int c = 0; c < table->ColumnsCount; ++c) {
+            const ImGuiTableColumn& column = table->Columns[c];
+            const char* name = ImGui::TableGetColumnName(table, c);
+            if (strcmp(name, "Value") == 0) {
+              continue;  // the stretch column absorbs the slack; it is the others that are budgeted
+            }
+            // Widest thing this column would draw if nothing clipped it: its header text, or its
+            // cells' content, whichever reaches further right.
+            const float ideal = ImMax(column.ContentMaxXHeadersIdeal, column.ContentMaxXUnfrozen);
+            fprintf(stderr, "[col_fit] %-6s layout=%-10s table#%d width=%.1f needs=%.1f slack=%.1f\n", name,
+                    vertical ? "vertical" : "horizontal", tables_checked, column.WidthGiven, ideal - column.WorkMinX,
+                    column.WorkMaxX - ideal);
+            IM_CHECK_LE(ideal, column.WorkMaxX);
+          }
+        }
+        IM_CHECK_EQ(tables_checked, 2);  // params + Face Distance; a miss must fail, not silently skip
+
+        ctx->ItemClose("**/Face Distance##modal");
+        ctx->Yield(2);
+        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+        ctx->Yield(2);
+      }
+      // Hand the modal back to later tests in the default horizontal form.
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(2);
+    };
+  }
+
+  // p2_modal/sync_group_reselect_current_is_noop — re-picking the group a row is already in must
+  // not re-snapshot it, i.e. the popup's "if (dist.sync_group != group)" guard is load-bearing.
+  //
+  // The starting state is a group whose two members hold DIFFERENT distributions. That is not
+  // contrived: the GUI passes hand-authored sync_group values through verbatim and never
+  // normalizes them (core's from_json owns that, on commit), so a config file can perfectly well
+  // declare a group over rows that disagree — and it is the only state in which "re-select does
+  // nothing" and "re-select snapshots from the leader" are distinguishable at all. Building the
+  // group by clicking instead would leave its members already equal, and the test would pass just
+  // as happily with the guard deleted.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_reselect_current_is_noop");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = true;
+      ctx->Yield(2);
+      auto crystal = []() -> gui::CrystalConfig& {
+        return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
+      };
+      // Face 3 (leader, lowest slot) and Face 4, same group, deliberately disagreeing.
+      crystal().face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.6f, 0.3f };
+      crystal().face_distance[0].sync_group = 1;
+      crystal().face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kNoRandom, 0.9f, 0.0f };
+      crystal().face_distance[1].sync_group = 1;
+      const gui::ShapeDist leader_before = crystal().face_distance[0];
+      const gui::ShapeDist member_before = crystal().face_distance[1];
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Re-pick the group Face 4 is already in: nothing may move, on either row.
+      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_1");
+      ctx->Yield(2);
+      IM_CHECK(crystal().face_distance[1] == member_before);
+      IM_CHECK(crystal().face_distance[0] == leader_before);
+
+      // Positive control on the same row: picking a DIFFERENT group does snapshot. Without it, a
+      // widget that ignored every popup click would pass the assertions above.
+      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_new");  // group 2, seeded from Face 5's own value
+      ctx->Yield(2);
+      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###sync_group_2");
+      ctx->Yield(2);
+      IM_CHECK_EQ(crystal().face_distance[1].sync_group, 2);
+      IM_CHECK_EQ(crystal().face_distance[1].center, crystal().face_distance[2].center);
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = false;
     };
   }
 

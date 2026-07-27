@@ -25,6 +25,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_geo3d.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_optics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_crystal_sync_group_sampling.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_rng.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_distribution_slots.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_filter.cpp"
@@ -45,6 +46,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/config/test_crystal_sync_group.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_config_snapshot.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_render_config.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_sim_data.cpp"

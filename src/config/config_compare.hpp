@@ -10,8 +10,10 @@ namespace lumice {
 // ---- Core math types ----
 
 inline bool operator==(const Distribution& a, const Distribution& b) {
-  static_assert(sizeof(Distribution) == 12, "Update operator== when Distribution fields change");
-  return a.type == b.type && a.center == b.center && a.spread == b.spread;
+  // Field comparison lives in core/math.hpp next to Distribution itself, so the
+  // sync-group normalization path shares it rather than keeping a second copy in
+  // step. See DistributionValueEqual for the static_assert guard.
+  return DistributionValueEqual(a, b);
 }
 
 inline bool operator==(const AxisDistribution& a, const AxisDistribution& b) {
@@ -21,14 +23,29 @@ inline bool operator==(const AxisDistribution& a, const AxisDistribution& b) {
 
 // ---- Crystal config ----
 
+// sync_group_ is compared in canonical form, on local copies: these operators are
+// the re-simulation trigger predicate, and two spellings of the same partition
+// (`[1,2,1,2,1,2]` vs `[2,1,2,1,2,1]`) must not cost the user a full re-run.
+// Canonicalizing here rather than demanding it of every caller is what makes that
+// hold for hand-built params too, not only for parsed ones.
 inline bool operator==(const PrismCrystalParam& a, const PrismCrystalParam& b) {
-  return a.h_ == b.h_ && std::equal(std::begin(a.d_), std::end(a.d_), std::begin(b.d_));
+  PrismCrystalParam ca = a;
+  PrismCrystalParam cb = b;
+  CanonicalizeSyncGroups(ca);
+  CanonicalizeSyncGroups(cb);
+  return a.h_ == b.h_ && std::equal(std::begin(a.d_), std::end(a.d_), std::begin(b.d_)) &&
+         std::equal(std::begin(ca.sync_group_), std::end(ca.sync_group_), std::begin(cb.sync_group_));
 }
 
 inline bool operator==(const PyramidCrystalParam& a, const PyramidCrystalParam& b) {
+  PyramidCrystalParam ca = a;
+  PyramidCrystalParam cb = b;
+  CanonicalizeSyncGroups(ca);
+  CanonicalizeSyncGroups(cb);
   return a.h_prs_ == b.h_prs_ && a.h_pyr_u_ == b.h_pyr_u_ && a.h_pyr_l_ == b.h_pyr_l_ &&
          std::equal(std::begin(a.d_), std::end(a.d_), std::begin(b.d_)) && a.wedge_angle_u_ == b.wedge_angle_u_ &&
-         a.wedge_angle_l_ == b.wedge_angle_l_;
+         a.wedge_angle_l_ == b.wedge_angle_l_ &&
+         std::equal(std::begin(ca.sync_group_), std::end(ca.sync_group_), std::begin(cb.sync_group_));
 }
 
 inline bool operator==(const CrystalConfig& a, const CrystalConfig& b) {

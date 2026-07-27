@@ -29,7 +29,7 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 ### 常量
 
 ```c
-#define LUMICE_API_VERSION 412        // ABI 版本，编码为 major*100 + minor（v4.12）
+#define LUMICE_API_VERSION 413        // ABI 版本，编码为 major*100 + minor（v4.13）
 #define LUMICE_MAX_RENDER_RESULTS 16  // 渲染结果数组最大容量
 #define LUMICE_MAX_STATS_RESULTS 1    // 统计结果数组最大容量
 ```
@@ -37,12 +37,14 @@ Lumice 提供了完整的C接口，方便与其他语言集成。C接口封装�
 `LUMICE_API_VERSION` 让调用方把编译时依赖的 ABI 钉死，在不匹配时编译期报错，而不是撞上结构体布局漂移导致的静默 UB：
 
 ```c
-static_assert(LUMICE_API_VERSION >= 412, "Lumice header too old for this integration");
+static_assert(LUMICE_API_VERSION >= 413, "Lumice header too old for this integration");
 ```
 
 公开符号集或结构体布局每发生一次 BREAKING 变更就 bump 一次。
 
-**v4.12 就是一次这样的 break。** 宽值结构体 `LUMICE_Config` 及所有只为喂养它而存在的东西被移除：`LUMICE_Config` 本身、三个提交入口（`LUMICE_CommitConfig` / `LUMICE_CommitConfigFromFile` / `LUMICE_CommitConfigStruct`）、`LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile` / `LUMICE_ConfigToJson`、`LUMICE_ConfigCreateColorClasses` / `LUMICE_ConfigReleaseColorClasses` / `LUMICE_ConfigReleaseCompositions` 所有权辅助函数，以及 C++ RAII 头 `src/include/lumice_config_scope.hpp`。`LUMICE_Scene` 取代了它们全部。不提供任何 shim 或别名：调用已移除符号的代码会编译失败——这正是预期的迁移信号。
+**v4.13 就是一次这样的 break。** `LUMICE_CrystalParam` 在结构体末尾新增了一个字段：`int sync_group[LUMICE_SHAPE_SCALAR_COUNT]`，同时新增了十个 `LUMICE_SHAPE_SCALAR_*` 索引常量。核心仿真器自 v4.12 起就已经能表达形状标量 sync group（同组的若干形状标量在一个晶体实例上共享一次随机抽样——完整语义见[`configuration.md` 的形状标量 Sync Group 一节](configuration.md#shape-scalar-sync-groups)），但 `LUMICE_CrystalParam` 当时没有对应槽位，导致配置文件、GUI、以及任何调用方——三者都只能走这唯一一条通路——的声明会被静默丢在地上：核心侧永远收到"全部独立"，且没有任何警告。结构体布局发生了变化，调用方需要重新编译；但行为不变——零初始化的 `sync_group`（与此前一个被清零/`{}` 初始化的 `LUMICE_CrystalParam` 的状态相同）意味着每个标量都独立，与此前完全一致。`LUMICE_SHAPE_SCALAR_*` 按 **RNG 抽取顺序**索引 `sync_group[]`（prism：`HEIGHT` 之后是 `FACE_0..FACE_5`；pyramid：`UPPER_H` 之后是 `PRISM_H`、`LOWER_H`，再之后是 `FACE_0..FACE_5`），这个顺序刻意**不同于** `LUMICE_CrystalParam` 本身的字段声明顺序（`height` / `prism_h` / `upper_h` / `lower_h`——注意 `upper_h` 与 `prism_h` 相对抽取顺序是互换的）。一个组的 leader——即整个组的分布会被规范化到的那个成员——被定义为组内最小的 `LUMICE_SHAPE_SCALAR_*` 索引，所以这个顺序是有约束力的：若把它对齐到结构体字段顺序，会静默改变一个混合组里到底是哪个成员拥有分布。
+
+**v4.12 也是一次 break。** 宽值结构体 `LUMICE_Config` 及所有只为喂养它而存在的东西被移除：`LUMICE_Config` 本身、三个提交入口（`LUMICE_CommitConfig` / `LUMICE_CommitConfigFromFile` / `LUMICE_CommitConfigStruct`）、`LUMICE_ParseConfigString` / `LUMICE_ParseConfigFile` / `LUMICE_ConfigToJson`、`LUMICE_ConfigCreateColorClasses` / `LUMICE_ConfigReleaseColorClasses` / `LUMICE_ConfigReleaseCompositions` 所有权辅助函数，以及 C++ RAII 头 `src/include/lumice_config_scope.hpp`。`LUMICE_Scene` 取代了它们全部。不提供任何 shim 或别名：调用已移除符号的代码会编译失败——这正是预期的迁移信号。
 
 ### 数据类型
 

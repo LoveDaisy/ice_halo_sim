@@ -107,36 +107,36 @@
       }
     },
     "modal_layout": {
-      "generated_at": "2026-07-25T17:19:12",
+      "generated_at": "2026-07-27T09:02:33",
       "n_ref_runs": 10,
-      "n_calib_runs": 60,
+      "n_calib_runs": 10,
       "scenes": {
         "crystal_prism": {
           "psnr_mean": null,
           "psnr_std": null,
-          "identical_runs": 60,
-          "n_samples": 60,
+          "identical_runs": 10,
+          "n_samples": 10,
           "threshold": 40.0
         },
         "crystal_pyramid": {
           "psnr_mean": null,
           "psnr_std": null,
-          "identical_runs": 60,
-          "n_samples": 60,
+          "identical_runs": 10,
+          "n_samples": 10,
           "threshold": 40.0
         },
         "filter_ee": {
           "psnr_mean": null,
           "psnr_std": null,
-          "identical_runs": 60,
-          "n_samples": 60,
+          "identical_runs": 10,
+          "n_samples": 10,
           "threshold": 40.0
         },
         "filter_raypath": {
           "psnr_mean": null,
           "psnr_std": null,
-          "identical_runs": 60,
-          "n_samples": 60,
+          "identical_runs": 10,
+          "n_samples": 10,
           "threshold": 40.0
         }
       }

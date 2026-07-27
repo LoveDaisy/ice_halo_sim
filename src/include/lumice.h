@@ -35,7 +35,7 @@ extern "C" {
 // callers of the removed symbols fail to compile, which is the intended migration signal.
 // The LUMICE_MAX_CONFIG_* ceilings survive the struct: they are now the Scene's Add*/Set*
 // per-kind soft caps, not the dimensions of an inline array.
-#define LUMICE_API_VERSION 412
+#define LUMICE_API_VERSION 413
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -284,12 +284,42 @@ typedef struct LUMICE_Distribution_ {
   float spread;  // role depends on type (see table above); unused for NO_RANDOM
 } LUMICE_Distribution;
 
+// Index space for LUMICE_CrystalParam.sync_group[] — one slot per randomizable shape scalar.
+// A prism only owns HEIGHT + the six faces, a pyramid only owns UPPER_H/PRISM_H/LOWER_H + the six
+// faces; a slot that does not apply to the crystal type is simply never read for that type.
+//
+// ⚠️ The order mirrors core ShapeScalar (src/config/crystal_config.hpp) VERBATIM, and that order is
+// the RNG draw order — which is what makes "a group's leader = its lowest-index applicable member"
+// identical to "the member drawn first", so no second ordering definition is needed on either side.
+// It is therefore DELIBERATELY NOT the field declaration order of LUMICE_CrystalParam below
+// (height / prism_h / upper_h / lower_h — note UPPER_H and PRISM_H are swapped relative to it).
+// Do not "tidy up" the divergence: aligning these two orders silently redefines which member of a
+// mixed group owns the distribution. The core header carries the same warning.
+#define LUMICE_SHAPE_SCALAR_HEIGHT 0   // .height — prism only
+#define LUMICE_SHAPE_SCALAR_UPPER_H 1  // .upper_h — pyramid only
+#define LUMICE_SHAPE_SCALAR_PRISM_H 2  // .prism_h — pyramid only
+#define LUMICE_SHAPE_SCALAR_LOWER_H 3  // .lower_h — pyramid only
+#define LUMICE_SHAPE_SCALAR_FACE_0 4   // .face_distance[0] — both types
+#define LUMICE_SHAPE_SCALAR_FACE_1 5
+#define LUMICE_SHAPE_SCALAR_FACE_2 6
+#define LUMICE_SHAPE_SCALAR_FACE_3 7
+#define LUMICE_SHAPE_SCALAR_FACE_4 8
+#define LUMICE_SHAPE_SCALAR_FACE_5 9
+#define LUMICE_SHAPE_SCALAR_COUNT 10
+
 // BREAKING (v4.10): the five shape scalars below
 // (height/prism_h/upper_h/lower_h/face_distance[6]) were promoted from bare float to
 // LUMICE_Distribution so a randomizable shape can be expressed through the C struct path (they
 // map to core PrismCrystalParam.h_/d_[6] and PyramidCrystalParam.h_prs_/h_pyr_u_/h_pyr_l_, all
 // already Distribution in core). upper_wedge_angle/lower_wedge_angle stay bare float, mirroring
 // core's wedge_angle_u_/l_ (not Distribution). Layout changed; callers must recompile.
+//
+// BREAKING (v4.13): `sync_group[LUMICE_SHAPE_SCALAR_COUNT]` appended at the end (and the ten
+// LUMICE_SHAPE_SCALAR_* index constants added above). Core has expressed shape-scalar sync groups
+// since v4.12, but this struct had no slot for them, so the C API — the only path a config file,
+// the GUI or a python caller ever takes — dropped the declaration on the floor: core always
+// received all-zero and nothing warned. Layout changed; callers must recompile. Behavior does not:
+// a zero-initialized struct means every scalar independent, exactly as before.
 typedef struct LUMICE_CrystalParam_ {
   int id;
   int type;  // 0=prism, 1=pyramid
@@ -315,6 +345,23 @@ typedef struct LUMICE_CrystalParam_ {
   LUMICE_Distribution zenith;
   LUMICE_Distribution azimuth;
   LUMICE_Distribution roll;
+
+  // Shape-scalar sync groups (v4.13), indexed by LUMICE_SHAPE_SCALAR_*: 0 = independent,
+  // 1..N = group id. Members of one group share a SINGLE random draw — the group's first
+  // applicable member (lowest LUMICE_SHAPE_SCALAR_* index) consumes the RNG and owns the
+  // distribution; the rest reuse its value without consuming anything, and a member whose own
+  // distribution differs is overwritten (with a warning, not silently). Mirrors core
+  // PrismCrystalParam/PyramidCrystalParam::sync_group_ (src/config/crystal_config.hpp).
+  //
+  // ZERO-INIT CONTRACT: after `LUMICE_CrystalParam cp{}` (or memset(0)) every scalar is
+  // independent — IDENTICAL to pre-v4.13 behavior, and the serialized JSON stays byte-identical
+  // (the "sync_group" key is emitted only when something is actually synced). No existing caller
+  // needs to change anything.
+  //
+  // Group ids are canonicalized by core on parse: singleton groups collapse to 0 and surviving
+  // groups are renumbered 1..N by first appearance, so {2,1,2,1,2,1} and {1,2,1,2,1,2} are the
+  // same partition and compare equal. Ids need not be dense or ordered on the way in.
+  int sync_group[LUMICE_SHAPE_SCALAR_COUNT];
 } LUMICE_CrystalParam;
 
 // Filter type discriminant for LUMICE_FilterParam.type.
@@ -1038,6 +1085,25 @@ typedef enum LUMICE_CrystalKind_ {
 
 // Returns non-zero if `face` is a legal face number for the given crystal kind.
 int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face);
+
+// Returns non-zero if shape-scalar `slot` (a LUMICE_SHAPE_SCALAR_* index) physically exists on
+// this crystal kind: a prism has .height + the six .face_distance, a pyramid has
+// .upper_h/.prism_h/.lower_h + the six .face_distance. Out-of-range slots answer zero.
+//
+// This is core's own applicability table, not a second copy of it — the same one canonicalization
+// scopes itself by when it zeroes a group declared on a slot the type does not have. Ask it rather
+// than reimplementing the rule: a GUI-side copy that drifted from core is what once made the
+// crystal table display a distribution the simulation did not use.
+int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot);
+
+// Returns the JSON key naming shape-scalar `slot` inside a crystal's `shape.sync_group` object,
+// or NULL when the slot does not apply to this kind (or is out of range). The returned string is
+// static storage — do not free it.
+//
+// All six face slots share the one key "face_distance", whose value is a 6-element array; write it
+// once, not once per face. Use this instead of spelling the key names out: they are core's schema,
+// a layer that misspells one silently drops the field rather than reporting an error.
+const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot);
 
 // =============== Raypath Validation ===============
 // Validation state for raypath text input (GUI border color + OK gate).

@@ -69,7 +69,8 @@ If the `axis` field is absent, the following defaults are used:
 ```json
 {
   "height": <value or distribution>,
-  "face_distance": [<6 values or distributions>]
+  "face_distance": [<6 values or distributions>],
+  "sync_group": { "height": <int>, "face_distance": [<6 ints>] }
 }
 ```
 
@@ -79,6 +80,7 @@ If the `axis` field is absent, the following defaults are used:
 |-------|------|----------|---------|-------------|
 | `height` | value/distribution | no | 1.0 | Height ratio h/a, where h is the prism height and a is the base diameter |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces; [1,1,1,1,1,1] for a regular hexagon |
+| `sync_group` | object | no | all independent | Shape-scalar sync groups — see [Shape-Scalar Sync Groups](#shape-scalar-sync-groups) below |
 
 `face_distance` values may be negative — a negative value is accepted and
 participates in geometry construction with its sign (it is not silently
@@ -110,7 +112,10 @@ dropped and contributes zero energy) rather than silently accepted.
   "lower_h": <value or distribution>,
   "upper_indices": [<3 integers>],
   "lower_indices": [<3 integers>],
-  "face_distance": [<6 values or distributions>]
+  "face_distance": [<6 values or distributions>],
+  "sync_group": {
+    "prism_h": <int>, "upper_h": <int>, "lower_h": <int>, "face_distance": [<6 ints>]
+  }
 }
 ```
 
@@ -124,6 +129,7 @@ dropped and contributes zero energy) rather than silently accepted.
 | `upper_indices` | integer array | no | [1,0,1] | Miller indices for the upper pyramid segment |
 | `lower_indices` | integer array | no | [1,0,1] | Miller indices for the lower pyramid segment |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces |
+| `sync_group` | object | no | all independent | Shape-scalar sync groups — see [Shape-Scalar Sync Groups](#shape-scalar-sync-groups) below |
 
 `face_distance` values may be negative — same construction and rejection
 semantics as the prism type above.
@@ -142,6 +148,109 @@ semantics as the prism type above.
   }
 }
 ```
+
+#### Shape-Scalar Sync Groups
+
+By default every randomizable shape scalar — `height` (prism), `prism_h` /
+`upper_h` / `lower_h` (pyramid), and each of the 6 `face_distance` entries
+(both types) — draws its own independent random sample, so a crystal built
+from distributions with a symmetric mean (e.g. all six `face_distance` means
+equal) is still perturbed into a generically unequal-sided hexagon on every
+sample: nothing keeps the *individual draws* symmetric, only their means.
+
+`sync_group` puts a subset of a crystal's shape scalars into the **same
+group**, so all of them **share a single random draw** for that crystal
+instance instead of drawing independently. This is how to express habits
+that require exact same-sample symmetry — most notably a trigonal (C3)
+hexagonal crystal, where faces 0/2/4 must always equal each other and faces
+1/3/5 must always equal each other, sample by sample.
+
+**Schema** — an optional object keyed by the scalar's own JSON field name
+(the same names used elsewhere in the shape object); `face_distance` takes a
+6-element integer array instead of a scalar, mirroring `face_distance` itself:
+
+```json
+"sync_group": {
+  "height": 1,                        // prism only
+  "prism_h": 1, "upper_h": 2, "lower_h": 2,   // pyramid only
+  "face_distance": [1, 2, 1, 2, 1, 2]         // both types
+}
+```
+
+- **`0` = independent** (the default — an absent `sync_group` key, or an
+  absent per-scalar entry, means every scalar independent, identical to the
+  behavior before sync groups existed). **`1..N` = group id**: every scalar
+  carrying the same id shares one draw. Group ids only need to express a
+  *partition* — they do not need to be dense or already sorted; `{1,2,1,2,1,2}`
+  and `{2,1,2,1,2,1}` describe the same two groups and are normalized to the
+  same canonical form on load (first-appearance renumbering, in the fixed
+  scalar order `height`/`upper_h`/`prism_h`/`lower_h`/`face_distance[0..5]` —
+  the RNG draw order, not the field declaration order above). A group left
+  with only one member collapses back to independent (`0`).
+- **Shared value, not a shared random variable**: a group draws exactly once
+  per crystal instance; every member of the group receives that same raw
+  value. It is not "these scalars are correlated" in some looser statistical
+  sense — they are bit-identical for that instance.
+- **The group's distribution comes from its leader**: the leader is the
+  group's first member in RNG draw order (for `face_distance`, the
+  lowest-indexed face in the group). Every other member's own distribution is
+  overwritten with the leader's at load time. If a non-leader member declared
+  a *different* distribution, that declaration is dropped and a warning is
+  logged — it is not silently ignored and not rejected as an error.
+- **Cross-kind groups (a height synced with a face distance) are mechanically
+  legal but produce a documented asymmetry**: heights are folded through
+  `abs()` before use (a negative height has no independent physical meaning)
+  while `face_distance` stays signed (a negative face distance is a legal,
+  origin-crossing plane offset — see above). A group mixing the two kinds
+  therefore shares the same *raw* draw, but the height member consumes its
+  absolute value while the face member keeps the sign — the two members are
+  not numerically equal in that case, only equal up to sign. The mechanism
+  does not forbid such a group; there is no dimensional-compatibility check.
+- **Physical scope, stated honestly**: `height` / `face_distance`
+  randomization only translates a face along its normal — it never rotates
+  the face's normal direction (see
+  [`geometry-randomization-value-and-measurement.md`](geometry-randomization-value-and-measurement.md)
+  for the underlying measurement). Sync groups inherit that limit: they do
+  not, by themselves, produce halo features at new angles. What they buy is
+  **habit fidelity** — an ensemble whose individual crystals are genuinely
+  symmetric (e.g. a true C3 trigonal population, not merely a C3-on-average
+  one), which matters whenever roll is *not* uniformly random (Parry /
+  Lowitz / fixed-roll configurations — under a full 360° uniform roll, the
+  ensemble average recovers six-fold symmetry regardless of per-instance
+  shape) — plus, as a side effect, syncing an opposite face pair (`i` and
+  `i+3`) guarantees their distances sum to a value with the same sign
+  structure they were configured with, which can reduce the geometric-validity
+  rejection rate under strong face-distance randomization.
+
+**C3 trigonal example** (verified: same-mean, same-spread Gaussian on every
+face, two alternating sync groups — this is the exact scenario the
+`SyncGroupPreview.C3GroupingCollapsesRandomDrawsToTwo` unit test exercises):
+
+```json
+{
+  "id": 1,
+  "type": "prism",
+  "shape": {
+    "height": 1.3,
+    "face_distance": [
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 }
+    ],
+    "sync_group": {
+      "face_distance": [1, 2, 1, 2, 1, 2]
+    }
+  }
+}
+```
+
+Each sampled crystal now has exactly two distinct face distances (faces
+0/2/4 share one draw, faces 1/3/5 share the other) instead of six
+independent ones — a strict trigonal habit on every sample, rather than only
+on average.
 
 #### Distribution Types
 
@@ -613,6 +722,9 @@ The render configuration defines the renderer parameters.
 - `crystal[].shape.face_distance` array length must be 6 (if specified)
 - `crystal[].shape.upper_indices` array length must be 3 (if specified)
 - `crystal[].shape.lower_indices` array length must be 3 (if specified)
+- `crystal[].shape.sync_group.face_distance` array length must be 6 (if specified); a shorter or
+  longer array is truncated/zero-padded rather than rejected — see [Shape-Scalar Sync
+  Groups](#shape-scalar-sync-groups)
 - `render[].resolution` array length must be 2
 
 ### Value Range Validation

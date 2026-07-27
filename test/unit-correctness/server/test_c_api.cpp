@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -15,7 +17,8 @@
 #include <thread>
 #include <vector>
 
-#include "config/filter_config.hpp"         // core FilterConfig + to_json, for emit isomorphism cross-check
+#include "config/crystal_config.hpp"  // core PrismCrystalParam + from_json, the sync-group canonical-form authority
+#include "config/filter_config.hpp"   // core FilterConfig + to_json, for emit isomorphism cross-check
 #include "config/raypath_color_config.hpp"  // core RaypathColorConfig + to_json, for color-class isomorphism
 #include "core/crystal.hpp"
 #include "core/def.hpp"
@@ -1511,6 +1514,78 @@ TEST(IsLegalFaceApi, PyramidIllegalFaces) {
 }
 
 // ============================================================
+// LUMICE_IsShapeScalarApplicable / LUMICE_ShapeScalarSyncKeyName
+// ============================================================
+
+TEST(ShapeScalarApplicableApi, PrismOwnsHeightAndTheSixFaces) {
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_HEIGHT), 0);
+  for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, s), 0) << "slot=" << s;
+  }
+  // The three stacked pyramid heights are not fields a prism has at all.
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_UPPER_H), 0);
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_PRISM_H), 0);
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_LOWER_H), 0);
+}
+
+TEST(ShapeScalarApplicableApi, PyramidOwnsThreeHeightsAndTheSixFaces) {
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_UPPER_H), 0);
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_PRISM_H), 0);
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_LOWER_H), 0);
+  for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, s), 0) << "slot=" << s;
+  }
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_HEIGHT), 0);
+}
+
+TEST(ShapeScalarApplicableApi, OutOfRangeSlotsAnswerFalseRatherThanTrapping) {
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, -1), 0);
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, LUMICE_SHAPE_SCALAR_COUNT), 0);
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, 12345), 0);
+  }
+}
+
+TEST(ShapeScalarSyncKeyNameApi, NamesEveryApplicableSlot) {
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_HEIGHT), "height");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_UPPER_H), "upper_h");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_PRISM_H), "prism_h");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_LOWER_H), "lower_h");
+  // All six faces share one key — its wire value is a 6-element array.
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+      EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(kind, s), "face_distance") << "slot=" << s;
+    }
+  }
+}
+
+TEST(ShapeScalarSyncKeyNameApi, InapplicableAndOutOfRangeSlotsAnswerNull) {
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_UPPER_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_PRISM_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_LOWER_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_HEIGHT), nullptr);
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(kind, -1), nullptr);
+    EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_COUNT), nullptr);
+  }
+}
+
+// The two queries answer the same question about the same slot, so they must never disagree:
+// a slot that applies must be nameable, and a slot that does not must have no name. This is the
+// assertion that keeps the "unreachable" nullptr branch inside ShapeScalarSyncKeyName unreachable
+// — a slot added to the applicability map but not to the key table would land there, and would
+// otherwise show up only as a JSON field that silently goes missing.
+TEST(ShapeScalarSyncKeyNameApi, AgreesWithApplicabilityOnEverySlot) {
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+      const bool applicable = LUMICE_IsShapeScalarApplicable(kind, s) != 0;
+      const char* key = LUMICE_ShapeScalarSyncKeyName(kind, s);
+      EXPECT_EQ(applicable, key != nullptr) << "kind=" << kind << " slot=" << s;
+    }
+  }
+}
+
+// ============================================================
 // LUMICE_ValidateRaypathText
 // ============================================================
 
@@ -2412,6 +2487,261 @@ TEST(DistributionRoundTrip, CommitsToRealServer) {
 
   LUMICE_StopServer(server);
   LUMICE_DestroyServer(server);
+}
+
+// =====================================================================================
+// v4.13 shape-scalar sync groups: LUMICE_CrystalParam.sync_group[] across the C API.
+//
+// The struct field is the whole point of this surface: core has expressed sync groups since
+// v4.12, but with no slot here every declaration made through a config file / the GUI / a python
+// caller was dropped in translation — core received all-zero and nothing warned. So the tests
+// below deliberately cover BOTH halves: the C API's own verbatim round-trip (this layer must not
+// invent semantics), and what core actually does with the JSON this layer emits (the layer must
+// not emit a key core cannot read — the exact failure mode this task exists to close).
+// =====================================================================================
+
+namespace {
+
+// Signed plane offset (centroid · unit normal) of every prism face (face numbers 3..8) in `mesh`,
+// in face_number order. Deliberately measured off the geometry rather than assuming a
+// face_number <-> face_distance[i] mapping, so the assertions below stay true statements about
+// "same-group faces sit at the same distance" no matter how the two are ordered internally.
+std::vector<float> PrismFacePlaneOffsets(const LUMICE_CrystalMesh& mesh) {
+  std::vector<float> offsets(6, std::numeric_limits<float>::quiet_NaN());
+  for (int fi = 0; fi < mesh.face_count; ++fi) {
+    const int fn = mesh.face_numbers_by_face[fi];
+    if (fn < 3 || fn > 8) {
+      continue;  // basal / pyramidal
+    }
+    const int offset = mesh.face_vtx_offsets[fi];
+    const int count = mesh.face_vtx_counts[fi];
+    if (count <= 0) {
+      continue;
+    }
+    float c[3] = { 0.0f, 0.0f, 0.0f };
+    for (int k = 0; k < count; ++k) {
+      const float* p = mesh.vertices + mesh.face_vtx_pool[offset + k] * 3;
+      c[0] += p[0];
+      c[1] += p[1];
+      c[2] += p[2];
+    }
+    const float* n = mesh.face_normals + fi * 3;
+    offsets[fn - 3] = (c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) / static_cast<float>(count);
+  }
+  return offsets;
+}
+
+// Number of distinct values in `v` under `tol`. Used to phrase "the three C3-equivalent faces
+// collapsed onto one distance" without naming which faces those are.
+size_t CountDistinct(const std::vector<float>& v, float tol) {
+  std::vector<float> uniq;
+  for (float x : v) {
+    if (std::none_of(uniq.begin(), uniq.end(), [&](float u) { return std::fabs(u - x) <= tol; })) {
+      uniq.push_back(x);
+    }
+  }
+  return uniq.size();
+}
+
+void ExpectSyncGroupEq(const LUMICE_CrystalParam& out, const LUMICE_CrystalParam& in) {
+  for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; ++i) {
+    EXPECT_EQ(out.sync_group[i], in.sync_group[i]) << "sync_group slot " << i;
+  }
+}
+
+}  // namespace
+
+// AC1 form (a): six prism faces in two C3-symmetric groups — the motivating case.
+TEST(SyncGroupRoundTrip, PrismFacesOnly) {
+  LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  cr.id = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_0] = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_2] = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_4] = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_1] = 2;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_3] = 2;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_5] = 2;
+  ExpectSyncGroupEq(RoundTripCrystal(cr), cr);
+}
+
+// AC1 form (b): the pyramid arm, grouping two of the three height scalars. Also guards the
+// index-order trap — UPPER_H is slot 1 and PRISM_H slot 2, the reverse of this struct's field
+// declaration order, so a translation written by field position instead of by name lands on the
+// wrong keys and this test goes red.
+TEST(SyncGroupRoundTrip, PyramidHeightsOnly) {
+  LUMICE_CrystalParam cr = MakePyramidParam(1.0f, 0.5f, 0.5f);
+  cr.id = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_UPPER_H] = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_LOWER_H] = 1;
+  ExpectSyncGroupEq(RoundTripCrystal(cr), cr);
+}
+
+// AC1 form (c): a group spanning two different scalar KINDS (a height and a face distance).
+// Mixing dimensions is deliberately permitted — the mechanism shares a draw, it does not claim
+// the members are commensurable — so the translation must not quietly drop the cross-kind edge.
+TEST(SyncGroupRoundTrip, MixedHeightAndFace) {
+  LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  cr.id = 1;
+  cr.height = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.1f };
+  cr.face_distance[0] = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.1f };
+  cr.sync_group[LUMICE_SHAPE_SCALAR_HEIGHT] = 1;
+  cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_0] = 1;
+  const auto out = RoundTripCrystal(cr);
+  ExpectSyncGroupEq(out, cr);
+  // Both members' distributions survive the trip too (this layer translates; it does not
+  // leader-normalize — that happens once, in core).
+  EXPECT_EQ(out.height.type, LUMICE_DIST_GAUSS);
+  EXPECT_FLOAT_EQ(out.height.center, 1.0f);
+  EXPECT_FLOAT_EQ(out.height.spread, 0.1f);
+  EXPECT_EQ(out.face_distance[0].type, LUMICE_DIST_GAUSS);
+  EXPECT_FLOAT_EQ(out.face_distance[0].center, 1.0f);
+  EXPECT_FLOAT_EQ(out.face_distance[0].spread, 0.1f);
+}
+
+// AC2: a zero-initialized param stays all-independent through the round trip.
+TEST(SyncGroupRoundTrip, ZeroInitStaysIndependent) {
+  LUMICE_CrystalParam cr = MakePrismParam(1.0f);  // built from LUMICE_CrystalParam{}
+  cr.id = 1;
+  const auto out = RoundTripCrystal(cr);
+  for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; ++i) {
+    EXPECT_EQ(out.sync_group[i], 0) << "sync_group slot " << i;
+  }
+}
+
+// AC2, the stronger half: "all independent" must not merely round-trip, it must leave the wire
+// form untouched — no `sync_group` key at all — so every pre-v4.13 config serializes byte for
+// byte as it did before. The second half is the green counterpart: the key DOES appear once
+// something is actually synced, so the first assertion cannot pass by never emitting anything.
+TEST(SyncGroupWireForm, KeyOmittedWhenAllIndependent) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard cfg_guard(cfg);
+  cfg.crystal_count = 1;
+  cfg.crystals[0] = MakePrismParam(1.0f);
+  cfg.crystals[0].id = 1;
+  EXPECT_EQ(ScratchToJson(cfg).find("sync_group"), std::string::npos);
+
+  cfg.crystals[0].sync_group[LUMICE_SHAPE_SCALAR_FACE_0] = 1;
+  cfg.crystals[0].sync_group[LUMICE_SHAPE_SCALAR_FACE_3] = 1;
+  EXPECT_NE(ScratchToJson(cfg).find("sync_group"), std::string::npos);
+}
+
+// AC3: the preview path. LUMICE_GetCrystalMesh needs no change of its own — it already routes
+// through CrystalShapeToJson -> core from_json -> MakeCrystal — so teaching that translation
+// about sync_group is enough for the mesh to honor grouping. Asserted white-box on the geometry
+// (same-group faces sit at the same plane offset), not by eye.
+TEST(SyncGroupPreview, GroupedFacesShareDistance) {
+  // Control: two faces declared at DIFFERENT distances and NOT synced -> the mesh shows two
+  // distinct prism-face offsets. Without this the grouped case below could pass on a mesh that
+  // ignores face_distance entirely.
+  LUMICE_CrystalParam ungrouped = MakePrismParam(1.0f);
+  ungrouped.id = 1;
+  ungrouped.face_distance[2] = DetDist(1.5f);
+  LUMICE_CrystalMesh mesh{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&ungrouped, /*sample_seed=*/7, &mesh), LUMICE_OK);
+  const auto ungrouped_offsets = PrismFacePlaneOffsets(mesh);
+  EXPECT_EQ(CountDistinct(ungrouped_offsets, 1e-5f), 2u);
+
+  // Same two scalars, now in one group. The leader is the lower ShapeScalar index (FACE_0, the
+  // 1.0), so BOTH land on the leader's value: all six faces collapse onto the single distance
+  // the ungrouped mesh showed five of. This distinguishes "leader wins" from "some member wins".
+  LUMICE_CrystalParam grouped = ungrouped;
+  grouped.sync_group[LUMICE_SHAPE_SCALAR_FACE_0] = 1;
+  grouped.sync_group[LUMICE_SHAPE_SCALAR_FACE_2] = 1;
+  LUMICE_CrystalMesh grouped_mesh{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&grouped, /*sample_seed=*/7, &grouped_mesh), LUMICE_OK);
+  const auto grouped_offsets = PrismFacePlaneOffsets(grouped_mesh);
+  ASSERT_EQ(CountDistinct(grouped_offsets, 1e-5f), 1u);
+
+  // ...and that single distance is the leader's, i.e. the one five of the ungrouped faces had.
+  LUMICE_CrystalParam all_leader = MakePrismParam(1.0f);  // all six at the leader's 1.0
+  all_leader.id = 1;
+  LUMICE_CrystalMesh leader_mesh{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&all_leader, /*sample_seed=*/7, &leader_mesh), LUMICE_OK);
+  const auto leader_offsets = PrismFacePlaneOffsets(leader_mesh);
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(grouped_offsets[i], leader_offsets[i], 1e-5f) << "prism face " << (i + 3);
+  }
+}
+
+// AC3, the payload case: with RANDOMIZED face distances, a C3 grouping must make the sampled
+// mesh itself C3-symmetric — three faces on one drawn distance, three on another. This is what
+// a shared draw buys that leader normalization alone cannot; the control shows six independent
+// draws produce six distinct distances.
+TEST(SyncGroupPreview, C3GroupingCollapsesRandomDrawsToTwo) {
+  LUMICE_CrystalParam cr = MakePrismParam(1.0f);
+  cr.id = 1;
+  for (auto& fd : cr.face_distance) {
+    fd = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.1f };
+  }
+
+  LUMICE_CrystalMesh independent_mesh{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&cr, /*sample_seed=*/12345, &independent_mesh), LUMICE_OK);
+  EXPECT_EQ(CountDistinct(PrismFacePlaneOffsets(independent_mesh), 1e-5f), 6u);
+
+  for (int i = 0; i < 6; ++i) {
+    cr.sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = (i % 2 == 0) ? 1 : 2;
+  }
+  LUMICE_CrystalMesh c3_mesh{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&cr, /*sample_seed=*/12345, &c3_mesh), LUMICE_OK);
+  const auto c3_offsets = PrismFacePlaneOffsets(c3_mesh);
+  ASSERT_EQ(CountDistinct(c3_offsets, 1e-5f), 2u);
+  EXPECT_NEAR(c3_offsets[0], c3_offsets[2], 1e-5f);
+  EXPECT_NEAR(c3_offsets[2], c3_offsets[4], 1e-5f);
+  EXPECT_NEAR(c3_offsets[1], c3_offsets[3], 1e-5f);
+  EXPECT_NEAR(c3_offsets[3], c3_offsets[5], 1e-5f);
+}
+
+// AC4: group ids are labels for a partition, not values. Two spellings of the SAME partition must
+// reach core as the same canonical form. Consumed through core's own from_json — the single
+// authority on what "canonical" means — rather than re-deriving the rule here.
+TEST(SyncGroupCanonicalForm, EquivalentPartitionsCollapse) {
+  LUMICE_CrystalParam canonical = MakePrismParam(1.0f);
+  canonical.id = 1;
+  LUMICE_CrystalParam relabeled = canonical;
+  for (int i = 0; i < 6; ++i) {
+    canonical.sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = (i % 2 == 0) ? 1 : 2;
+    relabeled.sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = (i % 2 == 0) ? 2 : 1;
+  }
+
+  const auto a = CrystalShapeToJson(canonical).at("shape").get<lumice::PrismCrystalParam>();
+  const auto b = CrystalShapeToJson(relabeled).at("shape").get<lumice::PrismCrystalParam>();
+
+  // Guard first: both must actually carry groups. Without this the equality below would also be
+  // satisfied by the pre-v4.13 bug — a key core never reads, both sides silently all-zero.
+  bool any_grouped = false;
+  for (int i = 0; i < lumice::kShapeScalarCount; ++i) {
+    any_grouped = any_grouped || a.sync_group_[i] != 0;
+  }
+  ASSERT_TRUE(any_grouped) << "core received no sync group at all — C API key name drift?";
+
+  for (int i = 0; i < lumice::kShapeScalarCount; ++i) {
+    EXPECT_EQ(a.sync_group_[i], b.sync_group_[i]) << "sync_group_ slot " << i;
+  }
+}
+
+// AC4 at the level a user can observe: the two spellings sample the same crystal. Randomized
+// distributions make this a statement about the RNG draw sequence, not just about stored ids.
+TEST(SyncGroupCanonicalForm, EquivalentPartitionsSampleIdenticalMesh) {
+  LUMICE_CrystalParam canonical = MakePrismParam(1.0f);
+  canonical.id = 1;
+  for (auto& fd : canonical.face_distance) {
+    fd = LUMICE_Distribution{ LUMICE_DIST_GAUSS, 1.0f, 0.1f };
+  }
+  LUMICE_CrystalParam relabeled = canonical;
+  for (int i = 0; i < 6; ++i) {
+    canonical.sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = (i % 2 == 0) ? 1 : 2;
+    relabeled.sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] = (i % 2 == 0) ? 2 : 1;
+  }
+
+  LUMICE_CrystalMesh mesh_a{};
+  LUMICE_CrystalMesh mesh_b{};
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&canonical, /*sample_seed=*/999, &mesh_a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetCrystalMesh(&relabeled, /*sample_seed=*/999, &mesh_b), LUMICE_OK);
+  ASSERT_EQ(mesh_a.vertex_count, mesh_b.vertex_count);
+  ASSERT_GT(mesh_a.vertex_count, 0);
+  for (int i = 0; i < mesh_a.vertex_count * 3; ++i) {
+    EXPECT_FLOAT_EQ(mesh_a.vertices[i], mesh_b.vertices[i]) << "vertex component " << i;
+  }
 }
 
 // Parse cross-check against core from_json (source of truth): parsing a filter JSON via

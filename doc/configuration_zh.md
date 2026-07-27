@@ -68,7 +68,8 @@
 ```json
 {
   "height": <数值或分布>,
-  "face_distance": [<6个数值或分布>]
+  "face_distance": [<6个数值或分布>],
+  "sync_group": { "height": <int>, "face_distance": [<6个int>] }
 }
 ```
 
@@ -78,6 +79,7 @@
 |------|------|------|--------|------|
 | `height` | 数值/分布 | 否 | 1.0 | 高度比 h/a，h是棱柱高度，a是底面直径 |
 | `face_distance` | 数组 | 否 | [1,1,1,1,1,1] | 6个面的距离比，正六边形为[1,1,1,1,1,1] |
+| `sync_group` | 对象 | 否 | 全部独立 | 形状标量 sync group，详见下方[形状标量 Sync Group](#形状标量-sync-group) |
 
 `face_distance` 允许负值：负值会被接受并按其符号参与几何构造（不再被静默折叠为
 正值）。构造后的网格会做实体性校验——若不满足闭合流形条件，该晶体会被拒绝
@@ -107,7 +109,10 @@
   "lower_h": <数值或分布>,
   "upper_indices": [<3个整数>],
   "lower_indices": [<3个整数>],
-  "face_distance": [<6个数值或分布>]
+  "face_distance": [<6个数值或分布>],
+  "sync_group": {
+    "prism_h": <int>, "upper_h": <int>, "lower_h": <int>, "face_distance": [<6个int>]
+  }
 }
 ```
 
@@ -121,6 +126,7 @@
 | `upper_indices` | 整数数组 | 否 | [1,0,1] | 上锥段Miller指数 |
 | `lower_indices` | 整数数组 | 否 | [1,0,1] | 下锥段Miller指数 |
 | `face_distance` | 数组 | 否 | [1,1,1,1,1,1] | 6个面的距离比 |
+| `sync_group` | 对象 | 否 | 全部独立 | 形状标量 sync group，详见下方[形状标量 Sync Group](#形状标量-sync-group) |
 
 `face_distance` 允许负值：构造与拒绝语义与上方 prism 类型一致。
 
@@ -138,6 +144,88 @@
   }
 }
 ```
+
+#### 形状标量 Sync Group
+
+默认情况下，晶体的每个可随机化形状标量——`height`（prism）、`prism_h` /
+`upper_h` / `lower_h`（pyramid），以及两种类型都有的 6 个 `face_distance`——
+各自独立抽样。即使把 6 个 `face_distance` 的均值都配成相等，每次抽样仍会各自
+被扰动成互不相等的不等边六边形：均值对称不代表单次抽样对称。
+
+`sync_group` 把一个晶体的若干形状标量划入**同一组**，使它们在该晶体实例上
+**共享同一次随机抽样**，而不是各自独立抽样。这是表达"每次抽样都严格对称"的
+habit（而不仅是均值对称）的唯一方式——最典型的场景是三方（C3）六棱柱：面
+0/2/4 须逐样本相等，面 1/3/5 须逐样本相等。
+
+**schema**——一个可选对象，键名与 shape 对象里该标量自身的 JSON 字段名相同；
+`face_distance` 取 6 元素整数数组（与 `face_distance` 本身的写法一致），而不是
+标量：
+
+```json
+"sync_group": {
+  "height": 1,                        // 仅 prism
+  "prism_h": 1, "upper_h": 2, "lower_h": 2,   // 仅 pyramid
+  "face_distance": [1, 2, 1, 2, 1, 2]         // 两种类型都有
+}
+```
+
+- **`0` = 独立**（默认值——缺省 `sync_group` 键，或缺省某个标量的条目，均等价于
+  全部独立，与 sync group 出现之前的行为完全一致）。**`1..N` = 组号**：组号相同
+  的标量共享一次抽样。组号只需要表达一个*划分*，不要求连续或已排序——
+  `{1,2,1,2,1,2}` 与 `{2,1,2,1,2,1}` 描述的是同一个划分，加载时会被规范化为同一
+  个标准形（按固定标量顺序——即 RNG 抽取顺序 `height`/`upper_h`/`prism_h`/
+  `lower_h`/`face_distance[0..5]`，而非上面结构体的字段声明顺序——首次出现即
+  重编号）。只剩一个成员的组会退化回独立（`0`）。
+- **共享的是同一个值，不是同一个随机变量**：一个组每个晶体实例只抽一次，组内
+  全部成员拿到同一个原始值；不是统计意义上"相关"，而是逐实例位级相等。
+- **组的分布取自其 leader**：leader 是该组在 RNG 抽取顺序上的第一个成员（对
+  `face_distance` 而言即组内下标最小的面）。其余成员各自声明的分布会在加载时
+  被 leader 的分布覆盖；若某个非 leader 成员声明了不同的分布，该声明会被丢弃
+  并记一条 WARN 日志——既不静默丢弃也不报错拒绝。
+- **跨类组（高度标量与面标量同组）机制上合法，但存在一个已记录的不对称**：
+  高度标量在使用前会取 `abs()`（负高度没有独立于朝向之外的物理含义），而
+  `face_distance` 保持带符号（负的面距离是合法的、跨越原点的平面偏移，见上文）。
+  这类组共享同一个*原始*抽样值，但高度成员取其绝对值而面成员保留符号——两者
+  并非数值相等，只是绝对值相等。机制不阻止这类组，也不做量纲可通约性校验。
+- **物理边界，如实说明**：`height` / `face_distance` 随机化只沿法向平移面，
+  从不旋转面的法向方向（背景见
+  [`geometry-randomization-value-and-measurement.md`](geometry-randomization-value-and-measurement.md)）。
+  sync group 继承这一边界：它本身不会在新的角度产生光晕特征。它买到的是
+  **habit 保真度**——一个逐个晶体都真正对称的 ensemble（例如真正的三方 C3
+  群体，而不只是均值 C3），这在 roll **不是**均匀随机时才真正显形（Parry /
+  Lowitz / 固定 roll 场景；roll 若做完整 360° 均匀随机，ensemble 平均本就会
+  统计性恢复六重对称，与单个晶体是否对称无关）；此外，把对面面对（`i` 与
+  `i+3`）设为同组还有一个副作用——两者之和的符号结构随之固定，可在强随机化下
+  降低几何合法性拒绝率。
+
+**C3 三方晶体示例**（已实测验证：全部面用相同均值、相同标准差的高斯分布，
+配两个交替的 sync group——与单元测试
+`SyncGroupPreview.C3GroupingCollapsesRandomDrawsToTwo` 覆盖的场景完全一致）：
+
+```json
+{
+  "id": 1,
+  "type": "prism",
+  "shape": {
+    "height": 1.3,
+    "face_distance": [
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 },
+      { "type": "gauss", "mean": 1.0, "std": 0.1 }
+    ],
+    "sync_group": {
+      "face_distance": [1, 2, 1, 2, 1, 2]
+    }
+  }
+}
+```
+
+每个采样出的晶体现在只有两个不同的面距离（面 0/2/4 共享一次抽样，面 1/3/5
+共享另一次），而不是六个各自独立的值——每次抽样都是严格的三方 habit，而不是
+仅在均值上如此。
 
 #### 分布类型（Distribution）
 
@@ -618,6 +706,9 @@
 - `crystal[].shape.face_distance` 数组长度必须为 6（如果指定）
 - `crystal[].shape.upper_indices` 数组长度必须为 3（如果指定）
 - `crystal[].shape.lower_indices` 数组长度必须为 3（如果指定）
+- `crystal[].shape.sync_group.face_distance` 数组长度必须为 6（如果指定）；比 6 短会将剩余槽位
+  按独立（0）处理，比 6 长会被截断，而不是报错拒绝——详见[形状标量 Sync
+  Group](#形状标量-sync-group)
 - `render[].resolution` 数组长度必须为 2
 
 ### 数值范围验证

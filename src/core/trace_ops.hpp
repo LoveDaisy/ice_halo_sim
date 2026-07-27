@@ -65,6 +65,21 @@ void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]);
 // Allocate the all_data buffer with expected total-ray capacity for a session.
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num);
 
+// Sample the raw prism shape scalars, honoring PrismCrystalParam::sync_group_
+// (draw order: height, then face_distance[0..5] — the same order MakeCrystal's
+// prism branch has always used). Exposed beyond MakeCrystal so tests can assert
+// on the raw scalars and on the RNG draw count directly: MakeCrystal folds them
+// into closed-form Crystal geometry, which may reject or degenerate the very
+// inputs a sampling test needs to see.
+// Returns h (already abs()'d); dist_out receives the 6 signed face distances.
+float SamplePrismShapeScalars(RandomNumberGenerator& rng, const PrismCrystalParam& p, float dist_out[6]);
+
+// Same for pyramid. Draw order is h_pyr_u_ -> h_prs_ -> h_pyr_l_ ->
+// face_distance[0..5] — NOT the struct declaration order; see ShapeScalar.
+// h1/h2/h3 are already abs()'d.
+void SamplePyramidShapeScalars(RandomNumberGenerator& rng, const PyramidCrystalParam& p, float& h1, float& h2,
+                               float& h3, float dist_out[6]);
+
 // Build a Crystal from a CrystalParam variant using the given RNG. Matches
 // the file-local CrystalMaker visitor used by Simulator (for non-deterministic
 // params each call samples a fresh shape using the RNG).
