@@ -103,10 +103,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac6_sections_are_mutually_exclusive_on_screen");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_ac6");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       // Edit a few settings so §2 is non-empty; without this the exclusivity check would hold
       // vacuously with every row in §3.
@@ -152,10 +155,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // than left as a manual check that only breaks once 405.5 tries to use it.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "entry_point_decides_the_expanded_section");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_entry");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       gui::g_state.bg_alpha = 0.42f;
       const auto rows = CurrentRows();
@@ -185,10 +191,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac7_adoption_round_trip_respects_unchecked_rows");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_ac7");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       gui::g_state.bg_alpha = 0.42f;
       gui::g_state.renderer.fov = 95.0f;
@@ -231,10 +240,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac8_revert_and_reset_all_preserve_presets");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_ac8");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       // Two personal defaults plus a preset-library subtree this panel does not own. The subtree
       // is the point: a wholesale rewrite of the document would delete it silently, and 405.5's
@@ -286,10 +298,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac9_opened_file_beats_the_personal_default");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_ac9");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       // A .lmc that states bg_alpha explicitly — written BEFORE any personal default exists, the
       // way a file someone sends you would be.
@@ -325,10 +340,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac10_search_filters_both_sections");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ResetUserDefaultsChannels();
+      // The guard precedes ResetTestState because ResetTestState -> DoNew ->
+      // MakeNewDocumentState reads the process-wide source: installed afterwards, the
+      // document under test would already carry the running machine's saved defaults.
       const auto dir = FreshOverlayDir("panel_ac10");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
 
       gui::g_state.renderer.fov = 95.0f;
       gui::g_state.bg_alpha = 0.42f;

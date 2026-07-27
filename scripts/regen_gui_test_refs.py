@@ -115,6 +115,23 @@ GROUPS: dict[str, ReferenceGroup] = {
     # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
     # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
     # captured as the modal's own on-screen rectangle.
+    # Defaults-panel layout scene names — must match kScenes[] order in
+    # test/gui/visual/test_gui_defaults_panel.cpp. Each scene is one state of the "Save Current as
+    # Defaults" modal (pending changes / expanded read-only section / filtered / nothing to adopt),
+    # captured as the modal's own on-screen rectangle.
+    "defaults_panel_layout": ReferenceGroup(
+        key="defaults_panel_layout",
+        scenes=[
+            "pending_changes",
+            "other_expanded",
+            "filtered",
+            "no_changes",
+        ],
+        modes=[None],
+        tmp_prefix="lumice_defaults_panel_",
+        ref_prefix="defaults_panel_",
+        source="test/gui/visual/test_gui_defaults_panel.cpp",
+    ),
     "modal_layout": ReferenceGroup(
         key="modal_layout",
         scenes=[

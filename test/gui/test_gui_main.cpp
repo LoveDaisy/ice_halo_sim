@@ -408,6 +408,7 @@ int main(int argc, char** argv) {
   RegisterUserDefaultsTests(engine);
   RegisterDefaultsDiffTests(engine);
   RegisterDefaultsPanelTests(engine);
+  RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);

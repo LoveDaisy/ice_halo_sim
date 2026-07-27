@@ -362,6 +362,10 @@ void RegisterDefaultsDiffTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(gui::FormatDiffValue(json("fisheye_equal_area")).c_str(), "fisheye_equal_area");
       IM_CHECK_STR_EQ(gui::FormatDiffValue(json(0.25)).c_str(), "0.25");
       IM_CHECK_STR_EQ(gui::FormatDiffValue(json()).c_str(), "(absent)");
+      // An array formats element-wise under the same rule, not through dump(): a float color
+      // widened to double comes out of dump() as "[0.800000011920929, ...]", which reads as if the
+      // extra digits were the setting.
+      IM_CHECK_STR_EQ(gui::FormatDiffValue(json::array({ 0.800000011920929, 0.2, 1.0 })).c_str(), "[0.8, 0.2, 1]");
     };
   }
 

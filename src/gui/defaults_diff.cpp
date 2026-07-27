@@ -228,6 +228,22 @@ std::string FormatDiffValue(const nlohmann::json& value) {
     std::snprintf(buffer, sizeof(buffer), "%.6g", value.get<double>());
     return buffer;
   }
+  if (value.is_array()) {
+    // Element-wise rather than dump(): a color triple stored as float and widened to double comes
+    // back out of dump() as "[0.800000011920929, 0.20000000298023224, ...]", which is unreadable
+    // and — worse — invites the reader to believe the extra digits are the setting. Recursing
+    // through this same function keeps one formatting rule for a value whether it stands alone or
+    // sits in an array.
+    std::string out = "[";
+    for (std::size_t i = 0; i < value.size(); ++i) {
+      if (i != 0) {
+        out += ", ";
+      }
+      out += FormatDiffValue(value[i]);
+    }
+    out += "]";
+    return out;
+  }
   return value.dump();
 }
 

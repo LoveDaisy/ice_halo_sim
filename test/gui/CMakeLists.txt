@@ -30,6 +30,7 @@ add_executable(gui_test
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
     visual/test_gui_modal_layout.cpp
+    visual/test_gui_defaults_panel.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
