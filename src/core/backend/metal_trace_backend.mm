@@ -1997,20 +1997,21 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
     // exact regardless of p_ci.
     current_n_idx =
         (spec.wl.wl_ > 1.0f) ? pool_crystals_.front().GetRefractiveIndex(spec.wl.wl_) : 0.0f;
+    // Cross-(layer, ci) running total for GetLastBatchNewCrystalSampleCount.
+    // Counted in THIS branch — not after the if/else, and not inside
+    // UploadCrystalPool — because this is the only branch that draws: the
+    // host-injected branch above uploads a caller-supplied shape and consumes no
+    // rng draw, so it is not a sampling event at all. Whether a draw was NEW is
+    // then the tracker's call: a deterministic param is re-derived every batch by
+    // the loop above, but only its first derivation in this scene sampled
+    // anything.
+    if (sample_tracker_.MarkIfNew(setting.crystal_.param_)) {
+      pool_shape_count_this_batch_ += pool_crystals_.size();
+    }
   }
   current_crystal = pool_crystals_.front();
   have_crystal = true;
   UploadCrystalPool(pool_crystals_);
-  // Cross-(layer, ci) running total for GetLastBatchNewCrystalSampleCount. Counted here
-  // rather than inside UploadCrystalPool because only this scope knows whether a
-  // draw happened at all: the host-injected branch above uploads a shape the
-  // caller supplied, consuming no rng draw, so it is not a sampling event. For
-  // a real draw the tracker decides new-vs-reuse — a deterministic param is
-  // re-derived on every batch (see the else branch above) but only the first
-  // derivation in this scene sampled anything.
-  if (!(use_host && host_batch.crystal != nullptr) && sample_tracker_.MarkIfNew(setting.crystal_.param_)) {
-    pool_shape_count_this_batch_ += pool_crystals_.size();
-  }
   // 330.2 S3b: rebuild the latitude LUT at the same per-ci cadence — it depends
   // only on the axis distribution and is shared by the gen and transit passes of
   // this ci. EnsureLatLutBuffers (inside) keeps the buffers non-nil for binding.
