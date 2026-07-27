@@ -517,12 +517,12 @@ ImVec4 SyncGroupColor(int group) {
 // Height; Pyramid draws Prism/Upper/Lower H; the six faces are drawn by both) — the same condition,
 // promoted from an implicit `if` in the renderer to a predicate the Sync widget can also ask.
 //
-// Everything the widget does is scoped by this: the popup enumerates only visible slots, the leader
-// search only considers visible slots, and propagation only writes visible slots. So a group number
-// on a scalar belonging to the OTHER crystal type lies dormant across a type switch — not cleared,
-// not shown, not joined. That is deliberate: D1 permits such a grouping to exist in storage (no
-// commensurability check), and leaving it alone is the smallest GUI-side behavior that neither
-// invents a cross-type editing model nor destroys data the user may switch back to.
+// Everything the Sync widget does is scoped by this — via IsShapeScalarSyncable below, which adds a
+// second, commensurability-driven narrowing on top. So a group number on a scalar belonging to the
+// OTHER crystal type lies dormant across a type switch — not cleared, not shown, not joined. That is
+// deliberate: D1 permits such a grouping to exist in storage (no commensurability check), and leaving
+// it alone is the smallest GUI-side behavior that neither invents a cross-type editing model nor
+// destroys data the user may switch back to.
 bool IsShapeScalarVisible(CrystalType type, int slot) {
   if (slot >= LUMICE_SHAPE_SCALAR_FACE_0) {
     return true;  // face_distance[0..5]: both types
@@ -534,19 +534,43 @@ bool IsShapeScalarVisible(CrystalType type, int slot) {
          slot == LUMICE_SHAPE_SCALAR_LOWER_H;
 }
 
+// Can this scalar be SYNCED at all? Strictly narrower than IsShapeScalarVisible (syncable ⊂ visible):
+// sharing one drawn value only means something between scalars that are commensurable — same unit,
+// same semantics. Counting each type's randomizable scalars leaves exactly two rows with nothing to
+// pair with:
+//   - prism  HEIGHT  — the only axial length; the six face distances are dimensionless ratios.
+//   - pyramid PRISM_H — a c/a-axis length; upper_h/lower_h are 0..1 relative heights (those two ARE
+//     each other's pair, and are exactly the use case the generalized sync group exists for).
+// So a Sync control on those two rows would offer an operation that can never be meaningful. Barring
+// them here is a UI-affordance narrowing only: storage still permits such a group (lumice.h runs no
+// commensurability check), a hand-authored config carrying one keeps it, and the GUI treats it the
+// same way it treats a group belonging to the other crystal type — not cleared, not shown, not
+// joinable. NextUnusedSyncGroup deliberately does NOT use this predicate: new ids must not collide
+// with a dormant one either.
+bool IsShapeScalarSyncable(CrystalType type, int slot) {
+  return IsShapeScalarVisible(type, slot) && slot != LUMICE_SHAPE_SCALAR_HEIGHT && slot != LUMICE_SHAPE_SCALAR_PRISM_H;
+}
+
 // The slot whose value the group carries: the lowest-indexed applicable member. This is not a GUI
 // approximation of the core rule — it IS the core rule (lumice.h LUMICE_CrystalParam::sync_group:
 // "the group's first applicable member (lowest LUMICE_SHAPE_SCALAR_* index) consumes the RNG and
-// owns the distribution"), evaluated over the same applicable set IsShapeScalarVisible defines. So
-// the value the user sees snap in on join is the value core will actually draw with. `exclude_slot`
-// keeps a row from electing itself as its own leader while it is joining.
+// owns the distribution"), evaluated over the applicable set IsShapeScalarSyncable defines. So the
+// value the user sees snap in on join is the value core will actually draw with. `exclude_slot` keeps
+// a row from electing itself as its own leader while it is joining.
+//
+// Note the deliberate divergence from core here: core's "first applicable member" ranges over ALL
+// slots, so for a hand-authored group containing e.g. height + face_0, core's leader is height while
+// the GUI's is face_0. That is the same trade the dormant-across-type-switch case already makes — the
+// GUI can only elect a leader among rows it lets the user edit, and electing an unreachable one would
+// show a group with no editable owner. The mismatch is confined to groups the GUI itself cannot
+// build; core still owns what is actually drawn with.
 // Returns -1 when the group has no other member (or group == 0).
 int FindGroupLeaderSlot(const CrystalConfig& cr, int group, int exclude_slot) {
   if (group == 0) {
     return -1;
   }
   for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
-    if (s == exclude_slot || !IsShapeScalarVisible(cr.type, s)) {
+    if (s == exclude_slot || !IsShapeScalarSyncable(cr.type, s)) {
       continue;
     }
     if (ShapeScalarAt(cr, s).sync_group == group) {
@@ -572,13 +596,18 @@ int NextUnusedSyncGroup(const CrystalConfig& cr) {
 // Copy `slot`'s distribution onto the rest of its group (type, center and spread — NOT the group id
 // itself). Called after an edit to any row that is in a group: a subordinate row stays editable and
 // writing through it updates the whole group, which the owner picked over greying subordinates out.
+// Gated at BOTH ends by IsShapeScalarSyncable — the source row as well as the destinations. A row
+// with no Sync control must not be a group writer either: a prism Height carrying a hand-authored
+// group id is still an editable row, so without the source-side gate, dragging it would move a face
+// distance that shows a swatch Height itself does not. A value jump with no visible cause is worse
+// than the group simply lying dormant, which is what the rest of the widget already does with it.
 void PropagateToSyncGroup(CrystalConfig& cr, int slot) {
   const ShapeDist src = ShapeScalarAt(cr, slot);
-  if (src.sync_group == 0) {
+  if (src.sync_group == 0 || !IsShapeScalarSyncable(cr.type, slot)) {
     return;
   }
   for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
-    if (s == slot || !IsShapeScalarVisible(cr.type, s)) {
+    if (s == slot || !IsShapeScalarSyncable(cr.type, s)) {
       continue;
     }
     ShapeDist& dst = ShapeScalarAt(cr, s);
@@ -608,11 +637,13 @@ void JoinSyncGroup(CrystalConfig& cr, int slot, int group) {
   dist.spread = src.spread;
 }
 
-// Comma-separated names of `group`'s visible members, empty if the group has none.
+// Comma-separated names of `group`'s syncable members, empty if the group has none. A member the
+// current type does not draw, or draws without a Sync control, is deliberately absent: the list names
+// the rows the user can go and find.
 std::string SyncGroupMemberList(const CrystalConfig& cr, int group) {
   std::string members;
   for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
-    if (!IsShapeScalarVisible(cr.type, s) || ShapeScalarAt(cr, s).sync_group != group) {
+    if (!IsShapeScalarSyncable(cr.type, s) || ShapeScalarAt(cr, s).sync_group != group) {
       continue;
     }
     if (!members.empty()) {
@@ -749,12 +780,18 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
   // gets a `label`-suffixed unique id so multiple rows do not collide and GUI tests can target each.
   ImGui::TableNextRow();
 
+  // Whether this row participates in sync at all. Gates BOTH the Sync cell and the Param-name tint
+  // below: showing a group's color on a row that offers no way to reach that group would be the
+  // "displayed but unreachable" state the predicate exists to prevent, and it is strictly more
+  // confusing than showing nothing.
+  const bool syncable = IsShapeScalarSyncable(cr.type, slot);
+
   // Col 0 — Parameter name. A grouped row also gets its name cell tinted in the group's color (at
   // low alpha, so the text stays readable): together with the filled Sync swatch this makes group
   // membership pre-attentive — the eye finds the rows that move together without reading numbers.
   // CellBg draws above the table's RowBg striping, so the two do not fight.
   ImGui::TableNextColumn();
-  if (dist.sync_group != 0) {
+  if (syncable && dist.sync_group != 0) {
     const ImVec4 tint = SyncGroupColor(dist.sync_group);
     ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, ImGui::GetColorU32(ImVec4(tint.x, tint.y, tint.z, 0.28f)));
   }
@@ -799,9 +836,11 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
 
   ImGui::EndDisabled();
 
-  // Col 4 — sync group swatch + picker popup.
+  // Col 4 — sync group swatch + picker popup. Left BLANK for a non-syncable scalar, the same way the
+  // wedge rows leave their inapplicable columns blank (edit_modals.cpp RenderWedgeTableRow) — the
+  // column is still advanced so the grid stays a rectangle.
   ImGui::TableNextColumn();
-  const bool group_changed = RenderSyncCell(label, cr, slot);
+  const bool group_changed = syncable && RenderSyncCell(label, cr, slot);
 
   // A value edit on a row that is in a group writes through to the whole group. Evaluated after the
   // Sync cell so an edit made in the same frame the row joined a group propagates the joined value
