@@ -89,6 +89,15 @@ extern PendingSaveKind g_pending_save_kind;
 // calls within one import concatenate so all offending filters are reported.
 void SetImportComplexFilterWarning(const std::string& msg);
 
+// Report whatever degraded while the personal-defaults override file was last read, through the
+// same one-shot warning popup an import degradation uses. Call it immediately after a
+// MakeNewDocumentState() whose result the user is actually shown.
+//
+// Why it is a call rather than something MakeNewDocumentState does itself: user_defaults.cpp sits
+// below the app layer and must not reach up to a popup. The counters exist there; the decision to
+// put them in front of a user is the app's.
+void SurfaceUserDefaultsDowngrades();
+
 // Test-only: read the pending warning text without opening the modal.
 std::string PeekImportComplexFilterWarning();
 

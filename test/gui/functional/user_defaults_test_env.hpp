@@ -39,7 +39,7 @@ inline std::filesystem::path FreshOverlayDir(const char* tag) {
 inline void ResetUserDefaultsChannels() {
   gui::ResetUserAxisPresetOverrides();
   gui::TakeUserDefaultsDowngradeCount();
-  gui::TakeUserDefaultsClampNotices();
+  gui::TakeUserDefaultsDowngradeNotices();
 }
 
 inline void WriteRawOverlay(const std::filesystem::path& dir, std::string_view text) {

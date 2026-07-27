@@ -180,7 +180,7 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
 
       // A well-formed file is not a degradation, and an in-domain value is not a clamp.
       IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
-      IM_CHECK_EQ(gui::TakeUserDefaultsClampNotices().size(), static_cast<size_t>(0));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
     };
   }
 
@@ -558,12 +558,12 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       // The clamp must leave a trace naming the key and both values — at load time the user is
       // not looking at the preset panel, so a silent clamp is indistinguishable from a silent
       // drop (the exact failure family this system exists to avoid).
-      const auto notices = gui::TakeUserDefaultsClampNotices();
+      const auto notices = gui::TakeUserDefaultsDowngradeNotices();
       IM_CHECK_EQ(notices.size(), static_cast<size_t>(1));
       IM_CHECK(notices[0].find("column") != std::string::npos);
       IM_CHECK(notices[0].find("25") != std::string::npos);
       // Consumed-on-read, like the shape-dist downgrade counter it mirrors.
-      IM_CHECK_EQ(gui::TakeUserDefaultsClampNotices().size(), static_cast<size_t>(0));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
     };
   }
 
@@ -592,7 +592,7 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       IM_CHECK(*plate > 0.0f);
       IM_CHECK(*plate < gui::kColumnPlateParryZenithStdUpperBound);
 
-      IM_CHECK_EQ(gui::TakeUserDefaultsClampNotices().size(), static_cast<size_t>(2));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(2));
     };
   }
 
@@ -683,7 +683,7 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
       IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
       // A rejected value is a drop, not a clamp — the two channels must not be conflated.
-      IM_CHECK_EQ(gui::TakeUserDefaultsClampNotices().size(), static_cast<size_t>(0));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
     };
   }
 

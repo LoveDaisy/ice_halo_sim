@@ -326,9 +326,67 @@ nlohmann::json ReadOverlayJsonIfPresent(const std::filesystem::path& dir);
 // downgrade is counted — a partially applied overlay would be worse than none.
 void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc);
 
-// The user's zenith-std override for a built-in axis preset, if any. Consumed by the preset
-// library UI (a later task); nullopt means "use the factory value".
+// The user's zenith-std override for a built-in axis preset, if any. nullopt means "use the
+// factory value". Prefer EffectiveAxisPresetZenith() below at consumption sites — this raw
+// accessor exists for the tests and for the panel's "is anything saved for this preset" cell.
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
+
+// --------------------------------------------------------------------------------------------------
+// Preset-library write side.
+//
+// The read side above (405.2) could already resolve an override; nothing could PRODUCE one. These
+// three close that loop. All of them are surgical edits of the existing override document — the
+// GuiState half of the file and every other preset survive by construction, not by each call site
+// remembering to preserve them.
+//
+// Scope of what is storable, and why it is one float rather than a preset's nine fields: the
+// classifier (ClassifyAxisPreset) pins mean to within kEpsilon and requires a full-uniform-360
+// azimuth, so zenith.std is the only field a user can move and still have the preset keep its
+// identity. Storing anything else would let the library define a "Column" the classifier calls
+// Custom, which is the failure this whole design exists to avoid.
+// --------------------------------------------------------------------------------------------------
+
+// What a write did, in the terms the UI has to report. `message` is a ready-to-show sentence
+// (empty when there is nothing to say) rather than a code the two call sites would each render:
+// the panel's warning cell and the modal gesture's status line must not drift into describing the
+// same clamp differently, and the wording is constrained (it must not imply the bound is physical
+// — see the note on the domain in axis_presets.hpp).
+struct AxisPresetWriteResult {
+  bool written = false;       // the value reached disk (false ⇒ nothing changed, in memory or on it)
+  bool clamped = false;       // stored_value differs from the requested one
+  float stored_value = 0.0f;  // what is now in effect; meaningful only when written
+  std::string message;
+};
+
+// Store `raw_value` as the user's zenith std for `preset`, clamped into the classifier's tolerance
+// domain. A preset with no adjustable face (Random / Custom) is REFUSED — with a warning, not an
+// assert: this is the second of two defenses (the first being that the UI draws it no input), and
+// an assert would be compiled out of the release build, i.e. absent from exactly the build the
+// requirement is about.
+//
+// On a failed disk write the in-memory override is left untouched, so "what this session resolves"
+// never disagrees with "what the next launch will read".
+AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value);
+
+// Drop the user's override for one preset, returning it to the factory value. Disk first, memory
+// second — the reverse order would leave a failed write reporting success in this session and
+// resurrecting the old value on the next launch. Other presets and the GuiState half are untouched.
+bool RevertOneAxisPresetOverride(AxisPreset preset);
+
+// The zenith distribution a preset button actually writes: the factory row, with the user's std
+// substituted when one is stored. Single source for that resolution — the axis modal's preset
+// buttons and the library panel both call it, so "what Column gives you" cannot differ between the
+// place you press it and the place you configure it.
+AxisDist EffectiveAxisPresetZenith(const AxisPresetEntry& entry);
+
+// Human-readable form of the domain a preset's zenith std must stay inside, e.g.
+// "greater than 0 and less than 10". For UI copy only.
+std::string DescribeAxisPresetZenithStdDomain(AxisPreset preset);
+
+// Display form of a std value, %.6g. Shared so the panel, the modal gesture and the load-time
+// notice print "0.3" and "9.99999" the same way; std::to_string would render both as a run of
+// trailing zeros or digits that reads like precision the value does not carry.
+std::string FormatAxisPresetStd(float value);
 
 // Drop every loaded preset override. MakeNewDocumentState() no longer needs this itself (it
 // replaces the whole override set with one unconditional assignment on every call — see its
@@ -344,13 +402,22 @@ bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::jso
 // Number of override-file degradations since the last call, then resets — same shape as
 // TakeShapeDistDowngradeCount(), so the load-time notice can be surfaced through the same
 // one-shot import-warning path. Counts: unreadable/invalid file, field-level type error,
-// non-numeric or non-finite preset value.
+// non-numeric or non-finite preset value, a preset value clamped into the tolerance domain, and
+// a hand-edited path node that had to be replaced to honor a write.
 int TakeUserDefaultsDowngradeCount();
 
-// Human-readable descriptions of preset values clamped into the tolerance domain during the
-// last load, then resets. A plain counter would not satisfy the requirement that the user can
-// tell WHICH key was clamped and to what.
-std::vector<std::string> TakeUserDefaultsClampNotices();
+// Human-readable descriptions of the degradations counted above, then resets. A plain counter
+// would not satisfy the requirement that the user can tell WHICH key degraded and how.
+//
+// Named "downgrade" rather than "clamp" because clamping is only one of the things that lands
+// here; the channel is deliberately singular (scrum invariant I3: a degradation leaves a trace,
+// and one trace is one place to look).
+std::vector<std::string> TakeUserDefaultsDowngradeNotices();
+
+// Record one degradation: bumps the counter above and files `notice` for the same load's report.
+// THE way another translation unit contributes to this channel — defaults_diff.cpp writes here
+// rather than reaching for a counter of its own, so a user sees one list, not two.
+void NoteUserDefaultsDowngrade(std::string notice);
 
 // Build the GuiState for a NEW document: factory defaults, plus the user's personal defaults,
 // plus the standard seed contents. This is the ONLY place personal defaults enter a GuiState

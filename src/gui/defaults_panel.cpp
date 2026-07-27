@@ -1,5 +1,7 @@
 #include "gui/defaults_panel.hpp"
 
+#include <cfloat>
+#include <cstddef>
 #include <cstdio>
 #include <optional>
 #include <set>
@@ -7,9 +9,12 @@
 #include <vector>
 
 #include "IconsFontAwesome6.h"
+#include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
 #include "gui/destructive_style.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/panels.hpp"
+#include "gui/user_defaults.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -46,6 +51,27 @@ std::optional<DefaultsPanelSection> g_pending_initial_section;
 // path: this string is inside the visual-regression capture, and a machine-specific path would
 // bake one developer's home directory into a committed reference image.
 std::string g_status_message;
+
+// §1's per-preset warning text, indexed by AxisPreset. The library's own channel, NOT
+// DefaultDiffRow::warnings: BuildDefaultDiffRows walks the serialized GuiState tree, and the
+// presets subtree is not in it — a preset can never produce a DefaultDiffRow to hang a warning on
+// (scrum D1: "presets are not GuiState fields, they do not enter the §2 diff"). Same visual form
+// as §2's "!" column, different data source, on purpose.
+//
+// Whole-value replacement like every other piece of panel session state here: one array assigned
+// on open, one element assigned per write.
+struct PresetWarnings {
+  std::string slots[static_cast<std::size_t>(AxisPreset::kCustom) + 1];
+};
+PresetWarnings g_preset_warnings;
+
+// Live edit buffers for §1's std inputs, so a partially typed number ("0." on the way to "0.3")
+// is not written — and clamped — on every keystroke. Committed on Enter / focus loss
+// (IsItemDeactivatedAfterEdit), which is also when a clamp becomes a fair thing to report.
+struct PresetStdBuffers {
+  float slots[static_cast<std::size_t>(AxisPreset::kCustom) + 1] = {};
+};
+PresetStdBuffers g_preset_std_buffers;
 
 bool IsRowChecked(const std::string& key_path) {
   return g_excluded_keys.find(key_path) == g_excluded_keys.end();
@@ -210,6 +236,199 @@ void RenderOtherTable(const GuiState& state) {
   }
 }
 
+// Reload every §1 std input from what is actually in effect (factory value, or the user's stored
+// override). Called on open and after every write, so the boxes show the stored truth rather than
+// whatever the user last typed into them.
+void RefreshPresetStdBuffers() {
+  g_preset_std_buffers = PresetStdBuffers{};
+  for (const auto& entry : kAxisPresets) {
+    g_preset_std_buffers.slots[static_cast<std::size_t>(entry.id)] = EffectiveAxisPresetZenith(entry).std;
+  }
+}
+
+// One read-only axis row: Type / Mean / Std as DISABLED typed controls rather than as text.
+// Disabled controls, not plain labels, because the point is to show the shape of the value (a
+// distribution picker, a number) while being honest that it cannot be changed here — a text cell
+// would leave a user wondering where the editor for it is, and an enabled control would be a lie.
+void RenderReadOnlyAxisRow(const char* axis_label, const AxisDist& dist) {
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted(axis_label);
+
+  ImGui::TableNextColumn();
+  ImGui::BeginDisabled();
+  int type_index = static_cast<int>(dist.type);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  // SetNextComboPopupTopMost even though a disabled combo cannot open: this panel is a
+  // BeginPopupModal, so the contract in panels.cpp applies to every combo it hosts, and the call
+  // being already in place is what keeps a future decision to enable this cell from regressing
+  // the popup back behind the modal.
+  SetNextComboPopupTopMost();
+  ImGui::Combo("##type", &type_index, kAxisDistTypeComboItems);
+  ImGui::EndDisabled();
+
+  ImGui::TableNextColumn();
+  ImGui::BeginDisabled();
+  float mean = dist.mean;
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::InputFloat("##mean", &mean, 0.0f, 0.0f, "%.1f");
+  ImGui::EndDisabled();
+
+  ImGui::TableNextColumn();
+  ImGui::BeginDisabled();
+  float std_value = dist.std;
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::InputFloat("##std", &std_value, 0.0f, 0.0f, "%.3f");
+  ImGui::EndDisabled();
+
+  ImGui::TableNextColumn();  // warning cell: read-only rows never carry one
+}
+
+// The Zenith row of a preset that HAS an adjustable face: identical to the read-only row except
+// the Std cell is live and the warning cell can fill.
+void RenderEditableZenithRow(const AxisPresetEntry& entry) {
+  const auto slot = static_cast<std::size_t>(entry.id);
+  const AxisDist zenith = EffectiveAxisPresetZenith(entry);
+
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted("Zenith");
+
+  ImGui::TableNextColumn();
+  ImGui::BeginDisabled();
+  int type_index = static_cast<int>(zenith.type);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  SetNextComboPopupTopMost();
+  ImGui::Combo("##type", &type_index, kAxisDistTypeComboItems);
+  ImGui::EndDisabled();
+
+  ImGui::TableNextColumn();
+  ImGui::BeginDisabled();
+  float mean = zenith.mean;
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::InputFloat("##mean", &mean, 0.0f, 0.0f, "%.1f");
+  ImGui::EndDisabled();
+
+  ImGui::TableNextColumn();
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  const std::string std_id = std::string("###preset_std_") + entry.override_json_name;
+  ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f, "%.3f");
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_preset_std_buffers.slots[slot]);
+    // The message is empty on a clean write, which is also how the warning cell is cleared — one
+    // assignment covers both directions, so a warning cannot outlive the value that caused it.
+    g_preset_warnings.slots[slot] = result.message;
+    if (result.written) {
+      g_status_message =
+          std::string("Saved ") + FormatAxisPresetStd(result.stored_value) + " as the " + entry.label + " zenith std.";
+    } else {
+      g_status_message = result.message;
+    }
+    RefreshPresetStdBuffers();
+  }
+
+  ImGui::TableNextColumn();
+  if (!g_preset_warnings.slots[slot].empty()) {
+    ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", g_preset_warnings.slots[slot].c_str());
+    }
+  }
+}
+
+// One preset: a collapsed row that opens onto its three axes. Collapsed by default — six presets
+// times nine fields laid flat is a wall no one reads, and the question a user arrives with is
+// about ONE preset.
+void RenderPresetEntry(const AxisPresetEntry& entry) {
+  const auto slot = static_cast<std::size_t>(entry.id);
+  const bool has_override = GetUserAxisPresetZenithStdOverride(entry.id).has_value();
+
+  // Label carries "(mine)" for a preset the user has retuned, so the collapsed view already
+  // answers "which of these have I changed" without opening all six.
+  const std::string header_id =
+      std::string(entry.label) + (has_override ? " (mine)" : "") + "###preset_" + AxisPresetLabel(entry.id);
+  if (!ImGui::TreeNode(header_id.c_str())) {
+    return;
+  }
+
+  if (!entry.has_adjustable_zenith_std) {
+    // AC7: no input that would be ignored. Random is three uniform-360 axes — there is no narrow
+    // distribution to retune, and a box that accepted a number and discarded it would be worse
+    // than saying so.
+    ImGui::TextWrapped(
+        "%s has no adjustable value: it is defined as three full-360 uniform axes, so there is no "
+        "spread to tune. The values below are shown for reference.",
+        entry.label);
+  } else {
+    ImGui::TextWrapped("Zenith std must stay %s, otherwise this stops being recognised as %s.",
+                       DescribeAxisPresetZenithStdDomain(entry.id).c_str(), entry.label);
+  }
+
+  constexpr ImGuiTableFlags kFlags =
+      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+  const std::string table_id = std::string("##preset_table_") + AxisPresetLabel(entry.id);
+  if (ImGui::BeginTable(table_id.c_str(), 5, kFlags)) {
+    ImGui::TableSetupColumn("Axis", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Mean", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+    ImGui::TableSetupColumn("Std", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+    ImGui::TableSetupColumn("!", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+    ImGui::TableHeadersRow();
+
+    if (entry.has_adjustable_zenith_std) {
+      ImGui::PushID("zenith");
+      RenderEditableZenithRow(entry);
+      ImGui::PopID();
+    } else {
+      ImGui::PushID("zenith");
+      RenderReadOnlyAxisRow("Zenith", entry.zenith);
+      ImGui::PopID();
+    }
+    ImGui::PushID("azimuth");
+    RenderReadOnlyAxisRow("Azimuth", entry.azimuth);
+    ImGui::PopID();
+    ImGui::PushID("roll");
+    RenderReadOnlyAxisRow("Roll", entry.roll);
+    ImGui::PopID();
+    ImGui::EndTable();
+  }
+
+  if (entry.has_adjustable_zenith_std) {
+    const std::string restore_id =
+        ICON_FA_ARROW_ROTATE_LEFT " Restore to factory###preset_restore_" + std::string(entry.override_json_name);
+    ImGui::BeginDisabled(!has_override);
+    if (ImGui::Button(restore_id.c_str())) {
+      if (RevertOneAxisPresetOverride(entry.id)) {
+        g_status_message = std::string(entry.label) + " was restored to its built-in value.";
+      } else {
+        g_status_message = "Could not write your defaults file; nothing was changed.";
+      }
+      // Cleared unconditionally: after a restore the value IS the factory one, so a warning about
+      // the value that was just removed would describe something no longer there.
+      g_preset_warnings.slots[slot].clear();
+      RefreshPresetStdBuffers();
+    }
+    ImGui::EndDisabled();
+  }
+
+  ImGui::TreePop();
+}
+
+void RenderPresetLibrary() {
+  ImGui::TextWrapped(
+      "Retune a built-in preset so its button writes your value. The allowed range per preset is "
+      "what keeps the preset recognisable as itself; a value outside it is adjusted to the nearest "
+      "one that is, and said so.");
+  for (const auto& entry : kAxisPresets) {
+    // Custom is the classifier's "none of the above", not a built-in identity, so there is nothing
+    // for a library to hold about it.
+    if (entry.id == AxisPreset::kCustom) {
+      continue;
+    }
+    RenderPresetEntry(entry);
+  }
+}
+
 }  // namespace
 
 void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
@@ -221,6 +440,8 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   g_excluded_keys.clear();
   g_search_filter.Clear();
   g_status_message.clear();
+  g_preset_warnings = PresetWarnings{};
+  RefreshPresetStdBuffers();
   RefreshRows(state);
 }
 
@@ -261,7 +482,7 @@ void RenderDefaultsPanel(GuiState& state) {
   // which section is expanded" mechanism are the ones 405.5 will extend, not ones it has to
   // introduce.
   if (SectionHeader("Presets###defaults_presets", DefaultsPanelSection::kPresets, /*open_when_pending=*/true)) {
-    ImGui::TextDisabled("The preset library is not editable yet.");
+    RenderPresetLibrary();
   }
 
   int pending_count = 0;
@@ -344,6 +565,8 @@ void ResetDefaultsPanelTestState() {
   g_search_filter.Clear();
   g_pending_initial_section.reset();
   g_status_message.clear();
+  g_preset_warnings = PresetWarnings{};
+  g_preset_std_buffers = PresetStdBuffers{};
 }
 
 }  // namespace lumice::gui

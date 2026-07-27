@@ -198,6 +198,7 @@ int main(int argc, char** argv) {
 
   // Personal defaults apply to a NEW document only (invariant I1) — startup shows one.
   gui::g_state = gui::MakeNewDocumentState();
+  gui::SurfaceUserDefaultsDowngrades();
 
   // skip_calibration already parsed above (before glfwSwapInterval).
 

@@ -1,6 +1,7 @@
 #include "gui/user_defaults.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -20,10 +21,10 @@ namespace {
 // Override-file loading is single-threaded (startup / New / import), so no synchronization is
 // needed and no accumulator has to be threaded through every helper.
 int g_downgrade_count = 0;
-std::vector<std::string> g_clamp_notices;
+std::vector<std::string> g_downgrade_notices;
 
-// Loaded preset-library overrides, indexed by AxisPreset. Only the four presets that have an
-// adjustable face (see kAxisPresetJsonNames) can ever be populated.
+// Loaded preset-library overrides, indexed by AxisPreset. Only the presets whose kAxisPresets row
+// has an adjustable face can ever be populated.
 struct AxisPresetOverride {
   bool has_zenith_std = false;
   float zenith_std = 0.0f;
@@ -42,21 +43,6 @@ struct AxisPresetOverrides {
   AxisPresetOverride slots[kAxisPresetSlotCount];
 };
 AxisPresetOverrides g_axis_overrides;
-
-struct AxisPresetJsonName {
-  const char* name;
-  AxisPreset preset;
-};
-
-// Lowercase JSON names, matching the convention of the other enum name tables in file_io.cpp
-// (kLensTypeJsonNames / kAspectPresetJsonNames). Random has no adjustable face (it is defined
-// as three uniform-360 axes), so it has no key.
-constexpr AxisPresetJsonName kAxisPresetJsonNames[] = {
-  { "column", AxisPreset::kColumn },
-  { "plate", AxisPreset::kPlate },
-  { "parry", AxisPreset::kParry },
-  { "lowitz", AxisPreset::kLowitz },
-};
 
 // Process-wide personal-defaults source, installed once from argv by each binary's main() (see
 // SetUserConfigSourceForProcess). kAutoDetect is the unset value, so a binary that never calls
@@ -96,6 +82,25 @@ bool ClampZenithStdToPresetDomain(AxisPreset preset, float& value) {
   return value != original;
 }
 
+// The ONE sentence describing a clamp, shared by the load path and the two edit paths (the panel's
+// warning cell and the modal's "Save as <preset>" gesture). Three call sites wording the same
+// event differently is how a user ends up believing three different things happened.
+//
+// COPY CONSTRAINT: it must not present the bound as a physical fact. Plate's dead zone [10, 15) is
+// the clearest case — a user asking for std=12 is refused because 12 is where the Lowitz criterion
+// starts, i.e. for an implementation reason. Saying "not physically possible" there would be a
+// lie, and one the user cannot check.
+std::string DescribeAxisPresetClamp(AxisPreset preset, float requested, float stored) {
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  // Both names: the label is what the user pressed, the dotted key is what they would search for
+  // if they open the override file to check. Naming only one leaves whichever half of that they
+  // are holding unmatched.
+  return std::string("Preset '") + entry.label + "' (presets.axis." + entry.override_json_name + "): a zenith std of " +
+         FormatAxisPresetStd(requested) + " is outside the range this preset is still recognised in, so " +
+         FormatAxisPresetStd(stored) + " was stored instead. Allowed: " + DescribeAxisPresetZenithStdDomain(preset) +
+         " — that boundary is where the neighbouring preset's criterion begins, not a physical limit.";
+}
+
 // Reset the ineligible fields that a hand-edited override file could otherwise smuggle in.
 //
 // Most ineligible fields are structurally unreachable from the override file: kDisplay and the
@@ -120,10 +125,16 @@ int TakeUserDefaultsDowngradeCount() {
   return n;
 }
 
-std::vector<std::string> TakeUserDefaultsClampNotices() {
+std::vector<std::string> TakeUserDefaultsDowngradeNotices() {
   std::vector<std::string> notices;
-  notices.swap(g_clamp_notices);
+  notices.swap(g_downgrade_notices);
   return notices;
+}
+
+void NoteUserDefaultsDowngrade(std::string notice) {
+  ++g_downgrade_count;
+  GUI_LOG_WARNING("[GUI] User defaults: {}", notice);
+  g_downgrade_notices.push_back(std::move(notice));
 }
 
 std::optional<std::filesystem::path> GetUserConfigDir() {
@@ -241,7 +252,7 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
 // call. A user may retune a built-in preset, but only within the domain ClassifyAxisPreset still
 // recognizes as that preset — otherwise the preset library would be able to define a "Column"
 // the classifier calls Custom. Values outside the domain are therefore clamped, and each clamp
-// is recorded in TakeUserDefaultsClampNotices(): a silent clamp is a silent data loss.
+// is recorded in TakeUserDefaultsDowngradeNotices(): a silent clamp is a silent data loss.
 AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
   AxisPresetOverrides result{};
 
@@ -257,41 +268,157 @@ AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
     return result;
   }
 
-  for (const auto& entry : kAxisPresetJsonNames) {
-    if (!axis.contains(entry.name)) {
+  for (const auto& entry : kAxisPresets) {
+    if (!entry.has_adjustable_zenith_std) {
+      continue;  // no key on disk for this preset — see AxisPresetEntry's field comments
+    }
+    if (!axis.contains(entry.override_json_name)) {
       continue;
     }
-    const nlohmann::json& node = axis[entry.name];
+    const nlohmann::json& node = axis[entry.override_json_name];
     if (!node.is_object() || !node.contains("zenith_std")) {
       continue;
     }
     const nlohmann::json& value_node = node["zenith_std"];
     if (!value_node.is_number()) {
       ++g_downgrade_count;
-      GUI_LOG_WARNING("[GUI] User defaults: presets.axis.{}.zenith_std is not a number; ignoring it", entry.name);
+      GUI_LOG_WARNING("[GUI] User defaults: presets.axis.{}.zenith_std is not a number; ignoring it",
+                      entry.override_json_name);
       continue;
     }
     float value = value_node.get<float>();
     if (!std::isfinite(value)) {
       ++g_downgrade_count;
-      GUI_LOG_WARNING("[GUI] User defaults: presets.axis.{}.zenith_std is not finite; ignoring it", entry.name);
+      GUI_LOG_WARNING("[GUI] User defaults: presets.axis.{}.zenith_std is not finite; ignoring it",
+                      entry.override_json_name);
       continue;
     }
 
     const float original = value;
-    if (ClampZenithStdToPresetDomain(entry.preset, value)) {
+    if (ClampZenithStdToPresetDomain(entry.id, value)) {
       // Never silent: at load time the user is not looking at the preset panel, so a clamp with
       // no trace would be indistinguishable from the value having been dropped.
-      std::string notice = std::string("Preset '") + entry.name + "': zenith std " + std::to_string(original) +
-                           " is outside the allowed range and was adjusted to " + std::to_string(value);
-      GUI_LOG_WARNING("[GUI] User defaults: {}", notice);
-      g_clamp_notices.push_back(std::move(notice));
+      NoteUserDefaultsDowngrade(DescribeAxisPresetClamp(entry.id, original, value));
     }
 
-    const auto slot = static_cast<std::size_t>(entry.preset);
+    const auto slot = static_cast<std::size_t>(entry.id);
     result.slots[slot] = { true, value };
   }
   return result;
+}
+
+std::string FormatAxisPresetStd(float value) {
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.6g", static_cast<double>(value));
+  return buffer;
+}
+
+std::string DescribeAxisPresetZenithStdDomain(AxisPreset preset) {
+  if (preset == AxisPreset::kLowitz) {
+    return "greater than " + FormatAxisPresetStd(kLowitzZenithStdLowerBound);
+  }
+  return "greater than 0 and less than " + FormatAxisPresetStd(kColumnPlateParryZenithStdUpperBound);
+}
+
+AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value) {
+  AxisPresetWriteResult result;
+
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  if (!entry.has_adjustable_zenith_std) {
+    // Second of two defenses (the UI draws no input for these). A warning rather than an assert:
+    // an assert is compiled out of the release build, which is the build the requirement — that
+    // an unadjustable preset never reaches the override file — is actually about.
+    GUI_LOG_WARNING("[GUI] User defaults: preset '{}' has no adjustable zenith std; nothing was saved", entry.label);
+    result.message = std::string(entry.label) + " has no adjustable value, so nothing was saved.";
+    return result;
+  }
+  if (!std::isfinite(raw_value)) {
+    GUI_LOG_WARNING("[GUI] User defaults: preset '{}' zenith std is not finite; nothing was saved", entry.label);
+    result.message = "That value is not a number, so nothing was saved.";
+    return result;
+  }
+
+  float stored = raw_value;
+  const bool clamped = ClampZenithStdToPresetDomain(preset, stored);
+
+  const auto dir = GetActiveUserConfigDir();
+  if (!dir) {
+    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was saved");
+    result.message = "Your personal defaults file could not be written, so nothing was saved.";
+    return result;
+  }
+  nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  // Surgical: read the whole document, touch ONE key, write the whole document back. A wholesale
+  // rewrite here would take the GuiState half of the file (and every other preset) with it.
+  doc["presets"]["axis"][entry.override_json_name]["zenith_std"] = stored;
+  if (!WriteUserDefaultsFile(*dir, doc)) {
+    // In-memory state deliberately untouched on a failed write: "what this session resolves" must
+    // not disagree with "what the next launch reads".
+    result.message = "Your personal defaults file could not be written, so nothing was saved.";
+    return result;
+  }
+
+  // Whole-struct assignment, never "clear the fields then refill them". This scrum has already
+  // spent three code-review rounds on partial updates to this exact global.
+  g_axis_overrides.slots[static_cast<std::size_t>(preset)] = AxisPresetOverride{ true, stored };
+
+  result.written = true;
+  result.clamped = clamped;
+  result.stored_value = stored;
+  result.message = clamped ? DescribeAxisPresetClamp(preset, raw_value, stored) : std::string();
+  return result;
+}
+
+bool RevertOneAxisPresetOverride(AxisPreset preset) {
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  if (!entry.has_adjustable_zenith_std) {
+    return false;  // nothing can be stored for it, so there is nothing to restore
+  }
+
+  const auto dir = GetActiveUserConfigDir();
+  if (!dir) {
+    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was changed");
+    return false;
+  }
+  nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+
+  // Prune empty parents on the way out, the same way RevertOneDefault does, so a file a user opens
+  // by hand does not accumulate `"presets": {"axis": {}}` skeletons.
+  const auto presets_it = doc.find("presets");
+  if (presets_it != doc.end() && presets_it->is_object()) {
+    const auto axis_it = presets_it->find("axis");
+    if (axis_it != presets_it->end() && axis_it->is_object()) {
+      axis_it->erase(entry.override_json_name);
+      if (axis_it->empty()) {
+        presets_it->erase("axis");
+      }
+    }
+    if (presets_it->empty()) {
+      doc.erase("presets");
+    }
+  }
+
+  if (!WriteUserDefaultsFile(*dir, doc)) {
+    return false;
+  }
+  // Disk first, memory second (see the header): a failed write above returns with the in-memory
+  // override still in place, which is what the next launch would read back anyway.
+  g_axis_overrides.slots[static_cast<std::size_t>(preset)] = AxisPresetOverride{};
+  return true;
+}
+
+AxisDist EffectiveAxisPresetZenith(const AxisPresetEntry& entry) {
+  AxisDist zenith = entry.zenith;
+  if (const auto stored = GetUserAxisPresetZenithStdOverride(entry.id)) {
+    zenith.std = *stored;
+  }
+  return zenith;
 }
 
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset) {

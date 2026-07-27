@@ -633,6 +633,12 @@ void DoOpen(const std::filesystem::path& path) {
     }
     std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     GuiState new_state = MakeNewDocumentState();
+    // Discarded, not reported. DeserializeFromJson opens with `state = GuiState{}`, so this
+    // path keeps NOTHING of the personal defaults — warning about a degraded default the user is
+    // not being given would be a warning about nothing. Draining the channel anyway matters:
+    // left in place, this read's counts would surface on the next New and describe THAT load.
+    TakeUserDefaultsDowngradeCount();
+    TakeUserDefaultsDowngradeNotices();
     if (DeserializeFromJson(json_str, new_state)) {
       // Data restore + command-semantic fields (path/dirty/run_intent stay in handler per
       // plan §2 — they are command intent, not frontend reset).
@@ -688,10 +694,31 @@ void DoOpen(const std::filesystem::path& path) {
   }
 }
 
+void SurfaceUserDefaultsDowngrades() {
+  const int count = TakeUserDefaultsDowngradeCount();
+  const std::vector<std::string> notices = TakeUserDefaultsDowngradeNotices();
+  if (count == 0 && notices.empty()) {
+    return;  // the normal case — no "your defaults loaded fine" noise on every New
+  }
+
+  // The notices carry the detail (which key, which values); the count is what catches a
+  // degradation that produced no sentence — an unreadable or malformed file, where naming a key
+  // is impossible but staying silent would leave the user's saved defaults quietly not applying.
+  std::string msg = "Some of your personal defaults could not be used as saved:";
+  for (const auto& notice : notices) {
+    msg += "\n  - " + notice;
+  }
+  if (notices.empty()) {
+    msg += "\n  - your personal defaults file could not be read; this document uses the built-in values.";
+  }
+  SetImportComplexFilterWarning(msg);
+}
+
 void DoNew() {
   // Data reset (default state), then delegate every frontend reset (preview clear + poller
   // fence + mesh-hash zero + trackball) to the single owner.
   g_state = MakeNewDocumentState();
+  SurfaceUserDefaultsDowngrades();
   ResetFrontendState(g_state, FrontendResetReason::kNewDocument);
   LoadBackgroundWithDegrade(g_state);
   GUI_LOG_INFO("[GUI] DoNew");

@@ -23,6 +23,7 @@
 #include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/symmetry_ui.hpp"
+#include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
 
@@ -126,6 +127,13 @@ static bool g_pending_tab_select = false;
 // Edit buffers
 static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
+
+// Outcome of the last "Save this zenith std as a preset default" press, shown under that row.
+// Transient UI feedback, not document state and with no Revert semantics, so it sits with the
+// other modal statics rather than in GuiState. Cleared whenever the modal opens: a message about
+// a save the user made to a different crystal, still on screen an hour later, reads as if it
+// described THIS one.
+static std::string g_preset_gesture_status;
 
 // Filter modal — H5 sum-of-products editor (task-composition-editor-ui / 333.4).
 // One row per OR summand; each row is a single small-domain AND text box driven
@@ -396,6 +404,7 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   auto& entry = state.layers[ly].entries[en];
   g_modal_layer_idx = ly;
   g_modal_entry_idx = en;
+  g_preset_gesture_status.clear();
 
   // Initialize all three buffers (regardless of req.target) so any tab the user
   // switches to shows the entry's current values. Modal-level OK commits all
@@ -723,34 +732,52 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 // Axis Modal
 // ============================================================
 
-// Preset table: label + id + default (zenith, azimuth, roll). Table-driven so
-// that the active preset (via ClassifyAxisPreset) can be highlighted by looping
-// over the same entries used to write defaults.
-struct AxisPresetEntry {
-  const char* label;
-  AxisPreset id;
-  AxisDist zenith;
-  AxisDist azimuth;
-  AxisDist roll;
-};
+// The preset table (AxisPresetEntry / kAxisPresets) moved to gui/axis_presets.hpp: the preset
+// library panel and the override store read the same rows, and three copies of "what Column is"
+// would be three chances for the modal's buttons and the panel's editor to disagree.
 
-static constexpr AxisDist kAzFullUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
-static constexpr AxisDist kRollFreeUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
-static constexpr AxisDist kRollLockedGauss{ AxisDistType::kGauss, 0.0f, 1.0f };
+namespace {
 
-static constexpr AxisPresetEntry kAxisPresets[] = {
-  { "Column", AxisPreset::kColumn, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
-  { "Plate", AxisPreset::kPlate, { AxisDistType::kGauss, 0.0f, 1.0f }, kAzFullUniform, kRollFreeUniform },
-  { "Parry", AxisPreset::kParry, { AxisDistType::kGauss, 90.0f, 1.0f }, kAzFullUniform, kRollLockedGauss },
-  // Lowitz default zenith uses Gauss (v11 内测反馈：gauss 更符合物理直觉; classifier 仍接受 zigzag).
-  { "Lowitz", AxisPreset::kLowitz, { AxisDistType::kGauss, 0.0f, 40.0f }, kAzFullUniform, kRollLockedGauss },
-  { "Random", AxisPreset::kRandom, kAzFullUniform, kAzFullUniform, kRollFreeUniform },
-  { "Custom",
-    AxisPreset::kCustom,
-    { AxisDistType::kGauss, 90.0f, 20.0f },
-    kAzFullUniform,
-    { AxisDistType::kGauss, 0.0f, 20.0f } },
-};
+// "Save the orientation I am editing as <preset>" — the ONLY way a preset override gets produced
+// from a live crystal, and it is explicit on purpose. A preset is not a GuiState field, so it has
+// no "current value" the defaults diff could pick up; nothing in the session distinguishes "I want
+// Column to mean 0.3 from now on" from "this one crystal happens to be 0.3". That intent is not
+// inferable, so the user states it.
+//
+// Only presets with an adjustable face are offered — the set comes from the shared
+// has_adjustable_zenith_std field, not from a second list of four names here.
+void RenderAxisPresetSaveGesture() {
+  ImGui::Separator();
+  ImGui::TextDisabled("Save this zenith std as a preset default:");
+  for (const auto& entry : kAxisPresets) {
+    if (!entry.has_adjustable_zenith_std) {
+      continue;
+    }
+    ImGui::SameLine();
+    char button_id[64];
+    snprintf(button_id, sizeof(button_id), "%s###save_as_preset_%s", entry.label, entry.override_json_name);
+    if (ImGui::SmallButton(button_id)) {
+      const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_axis_buf[0].std);
+      if (!result.written) {
+        g_preset_gesture_status = result.message;
+      } else if (result.clamped) {
+        // A clamp here is an edit-time clamp like any other, so it says what was actually stored
+        // instead of leaving the user to assume their number went in unchanged. g_axis_buf is
+        // deliberately NOT rewritten to the clamped value: the user is still editing THIS crystal,
+        // and the gesture only saves a copy elsewhere.
+        g_preset_gesture_status = result.message;
+      } else {
+        g_preset_gesture_status =
+            std::string("Saved ") + FormatAxisPresetStd(result.stored_value) + " as the " + entry.label + " default.";
+      }
+    }
+  }
+  if (!g_preset_gesture_status.empty()) {
+    ImGui::TextWrapped("%s", g_preset_gesture_status.c_str());
+  }
+}
+
+}  // namespace
 
 static void RenderAxisModal(GuiState& /*state*/) {
   // Preset buttons — active preset (inferred from current g_axis_buf) is highlighted
@@ -766,7 +793,10 @@ static void RenderAxisModal(GuiState& /*state*/) {
       ImGui::PushStyleColor(ImGuiCol_Button, active_color);
     }
     if (ImGui::SmallButton(entry.label)) {
-      g_axis_buf[0] = entry.zenith;
+      // The user's tuned std when they saved one, the factory row otherwise. Resolved through the
+      // shared accessor rather than read here, so pressing Column gives exactly what the preset
+      // library says Column is.
+      g_axis_buf[0] = EffectiveAxisPresetZenith(entry);
       g_axis_buf[1] = entry.azimuth;
       g_axis_buf[2] = entry.roll;
       // Drive modal preview to the preset's default view (fixes the bug where
@@ -799,6 +829,8 @@ static void RenderAxisModal(GuiState& /*state*/) {
   RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
   SetNextComboPopupTopMost();
   RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
+
+  RenderAxisPresetSaveGesture();
 
   // OK / Cancel handled at modal level (RenderEditModals).
 }

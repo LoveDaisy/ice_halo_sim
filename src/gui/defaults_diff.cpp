@@ -64,12 +64,23 @@ const json* FindByPath(const json& root, const std::vector<std::string>& tokens)
 
 void SetByPath(json& root, const std::vector<std::string>& tokens, const json& value) {
   json* node = &root;
+  std::string walked;
   for (std::size_t i = 0; i + 1 < tokens.size(); ++i) {
+    walked += (i == 0 ? "" : ".") + tokens[i];
     json& child = (*node)[tokens[i]];
     if (!child.is_object()) {
       // A scalar (or a stale array) sitting where an object belongs would make the assignment
       // below throw. The override file is hand-editable, so this is reachable; replacing the
       // node is the only way to honor the write the user just asked for.
+      //
+      // Replacing it DISCARDS whatever was there, which is a data loss — so it goes through the
+      // one degradation channel rather than happening quietly. Silent discard is the failure
+      // family this scrum's invariant I3 exists to close (the GUI dropping randomization data was
+      // the same shape), and a user who hand-edited this file is exactly the user who would
+      // otherwise never learn their edit was overwritten.
+      NoteUserDefaultsDowngrade("'" + walked +
+                                "' in your personal defaults file held a value where a group of "
+                                "settings was expected, so it was replaced and its contents were lost.");
       child = json::object();
     }
     node = &child;

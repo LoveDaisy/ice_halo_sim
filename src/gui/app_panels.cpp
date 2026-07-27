@@ -268,6 +268,12 @@ void RenderTopBar(float window_width) {
       if (ImGui::MenuItem("Save Current as Defaults...")) {
         OpenDefaultsPanel(g_state, DefaultsPanelSection::kPendingChanges);
       }
+      // Same panel, different section expanded. A separate item rather than "open it and scroll":
+      // retuning a preset is a different errand from adopting the current document's settings, and
+      // a user who came to do the first should not have to recognise the second on the way.
+      if (ImGui::MenuItem("Edit My Presets...")) {
+        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPresets);
+      }
       ImGui::Separator();
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
       ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
