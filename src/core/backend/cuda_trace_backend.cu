@@ -1765,7 +1765,7 @@ struct CudaTraceBackend::Impl {
   // Reset in BeginSession (unconditionally, before any geom_pool_built_
   // decision — that placement is what makes a pool-reuse batch report 0);
   // incremented in BuildGeomPool per shape drawn. Consumed by
-  // `GetLastBatchCrystalCount()`, which documents the contract.
+  // `GetLastBatchNewCrystalSampleCount()`, which documents the contract.
   size_t pool_shape_count_this_batch_ = 0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
@@ -4821,7 +4821,7 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
   return ResolveWlPoolSize(logger);
 }
 
-size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
+size_t CudaTraceBackend::GetLastBatchNewCrystalSampleCount() const {
   // Unified with MetalTraceBackend: the number of crystal geometries THIS batch
   // freshly sampled (Σ P_ci over the (layer, ci) pairs it actually drew). See
   // trace_backend.hpp for the cross-backend contract.

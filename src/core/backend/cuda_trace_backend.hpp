@@ -139,7 +139,7 @@ class CudaTraceBackend : public TraceBackend {
   // task-exit-seam-crystal-count: setting count of the final MS layer for the
   // current session. Backed by Impl::final_layer_crystals_ populated during
   // BeginSession — safe to read anytime the session is open.
-  size_t GetLastBatchCrystalCount() const override;
+  size_t GetLastBatchNewCrystalSampleCount() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 
@@ -147,7 +147,7 @@ class CudaTraceBackend : public TraceBackend {
   // migrated to `CudaTraceBackendTestHooks` (see
   // `core/backend/cuda_trace_backend_test_hooks.hpp`). This class's public
   // interface is now production-only, with zero `*ForTest`-suffixed symbols
-  // remaining on it — `GetLastBatchCrystalCount` above never carried that
+  // remaining on it — `GetLastBatchNewCrystalSampleCount` above never carried that
   // suffix and is an ordinary production method, unaffected by this
   // refactor. Tests construct
   // `CudaTraceBackendTestHooks(backend).SetInitialRayBase(...)` etc.

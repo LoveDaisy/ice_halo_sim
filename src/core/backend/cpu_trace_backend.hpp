@@ -72,7 +72,7 @@ class CpuTraceBackend : public TraceBackend {
 
   // Crystal geometries this batch freshly sampled, summed across every
   // (layer, ci). See TraceBackend for the cross-backend contract.
-  size_t GetLastBatchCrystalCount() const override { return new_sample_count_this_batch_; }
+  size_t GetLastBatchNewCrystalSampleCount() const override { return new_sample_count_this_batch_; }
 
  private:
   SessionSpec spec_{};
@@ -83,7 +83,7 @@ class CpuTraceBackend : public TraceBackend {
   int height_ = 0;
 
   size_t root_ray_count_ = 0;
-  // Output register for GetLastBatchCrystalCount: zeroed every BeginSession,
+  // Output register for GetLastBatchNewCrystalSampleCount: zeroed every BeginSession,
   // incremented per (layer, ci) that sample_tracker_ judges to be a new draw.
   size_t new_sample_count_this_batch_ = 0;
   // "Which deterministic (layer, ci) shapes has this scene already sampled" —

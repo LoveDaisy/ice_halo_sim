@@ -163,12 +163,29 @@ Statistics result structure.
 typedef struct LUMICE_StatsResult_ {
   unsigned long ray_seg_num;   // Number of ray segments
   unsigned long sim_ray_num;   // Number of simulated rays
-  unsigned long crystal_num;   // Number of crystals
+  unsigned long crystal_num;   // Distinct crystal geometries this run sampled (see Notes)
 } LUMICE_StatsResult;
 ```
 
 **Notes**:
 - Sentinel marker: all zeros (`sim_ray_num == 0`)
+- `crystal_num` is **how many distinct crystal geometries the run actually
+  sampled**, not how many crystal objects it built. A shape defined by fixed
+  numbers is drawn once and reused for the rest of the run, so a scene with
+  no random shape distributions reports exactly its (scattering layer × entry)
+  count — 3 entries in layer 1 plus 2 in layer 2 reports 5, whatever `ray_num`
+  is. Give a shape a distribution (`{"type": "gauss", ...}` on `height` or
+  `face_distance`) and the count rises with the number of geometries actually
+  drawn, which is how you confirm shape randomization is taking effect.
+- **Not comparable across backends.** The CPU route samples a fresh geometry per
+  ray-group; the GPU route samples per (layer, entry) per dispatch unless the
+  K-shape geometry clock is enabled, which is off by default. The same scene
+  therefore reports different values on different backends. That gap is the
+  sampling-density difference between the routes, not an inconsistency to
+  reconcile.
+- On the multi-worker CPU route each worker samples independently, so the value
+  is scaled by the number of workers that received work (a fixed `sim_seed`
+  collapses the run to one worker, where the count is exact).
 
 #### LUMICE_ServerConfig
 

@@ -489,7 +489,7 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     host.crystal = nullptr;
     backend.TraceLayer(RootRaySource::FromHost(host));
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u);
     backend.EndSession();
 
     // Second batch, same backend instance + same scene: the deterministic shape
@@ -498,7 +498,7 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     // total would grow one per batch.
     backend.BeginSession(spec);
     backend.TraceLayer(RootRaySource::FromHost(host));
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
         << "Reuse batch on a deterministic scene must report 0 new samples";
     backend.EndSession();
   }
@@ -539,7 +539,7 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     // Layer 0 contributes to the running total immediately: the count is a
     // cross-layer accumulation, so it is 1 here rather than "0 until the final
     // layer runs".
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u)
         << "Layer 0's new sample must already be counted (cross-layer accumulation)";
 
     RecombineSpec rspec;
@@ -547,7 +547,8 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u) << "Cross-layer new-sample sum: 1 (layer 0) + 3 (layer 1)";
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 4u)
+        << "Cross-layer new-sample sum: 1 (layer 0) + 3 (layer 1)";
 
     backend.EndSession();
 
@@ -557,7 +558,8 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     ASSERT_NE(h0b, nullptr);
     auto roots1b = backend.Recombine(std::move(h0b), rspec);
     backend.TraceLayer(roots1b);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
+        << "Reuse batch must report 0 across all layers, not 4 again";
     backend.EndSession();
   }
 }
@@ -596,7 +598,7 @@ TEST(CpuTraceBackend, HostInjectedCrystalIsNotANewSample) {
   CpuTraceBackend backend;
   backend.BeginSession(spec);
   backend.TraceLayer(RootRaySource::FromHost(host));
-  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
       << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
   backend.EndSession();
 }

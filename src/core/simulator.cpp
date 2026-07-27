@@ -1522,7 +1522,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       // hits the batch cap here. This sheds the per-batch synchronous D2H tax.
       xyz_win_.pending = true;
       xyz_win_.root_rays += ray_num;
-      xyz_win_.crystals += backend.GetLastBatchCrystalCount();
+      xyz_win_.crystals += backend.GetLastBatchNewCrystalSampleCount();
       xyz_win_.generation = generation;
       xyz_win_.w = w;
       xyz_win_.h = h;
@@ -1543,7 +1543,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
-    sim_data.crystal_count_ = backend.GetLastBatchCrystalCount();
+    sim_data.crystal_count_ = backend.GetLastBatchNewCrystalSampleCount();
     // task-color-degrade-gui-surfacing: carry the GPU color-degrade tally on the
     // legacy per-batch drain too. Dead for today's backends (Metal + CUDA both take
     // the third-clock window branch above), but keeps this path from silently
@@ -1612,7 +1612,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
-  sim_data.crystal_count_ = backend.GetLastBatchCrystalCount();
+  sim_data.crystal_count_ = backend.GetLastBatchNewCrystalSampleCount();
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);

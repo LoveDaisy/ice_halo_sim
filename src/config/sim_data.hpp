@@ -215,10 +215,13 @@ struct SimData {
   // the physical-result fields above (rays_/xyz_pixel_data_/exit_records_).
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 
-  // Crystal count for stats reporting. Populated by legacy path from
-  // all_crystals.size() and by exit-seam path from
-  // TraceBackend::GetLastBatchCrystalCount() (== final-layer setting count).
-  // See scrum-cleanup-cuda-ci-misc/task-exit-seam-crystal-count.
+  // Crystal geometries this batch freshly SAMPLED, for stats reporting — NOT
+  // the size of `crystals_` above, which also counts the copies made when a
+  // shape is reused. StatsConsumer sums this over the run to report "how many
+  // distinct crystal geometries did this run draw". The legacy path counts its
+  // own CrystalMaker calls; the exit-seam path reads
+  // TraceBackend::GetLastBatchNewCrystalSampleCount(), where the contract and
+  // its per-backend caveats are documented.
   size_t crystal_count_ = 0;
 
   // scrum-312 (third-clock drain): how many sim_scene_cnt_ units this SimData

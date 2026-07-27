@@ -520,32 +520,58 @@ class TraceBackend {
   // and the simulator falls back to per-batch wl in SimData.outgoing_wl_.
   virtual uint32_t WlPoolSize() const { return 0; }
 
-  // task-exit-seam-crystal-count: number of crystal settings in the final
-  // (last) MS layer for the most recent session. Populated by the backend
-  // after BeginSession (CUDA) or after the final TraceLayer call (Metal / CPU),
-  // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
+  // How many crystal geometries THIS batch freshly SAMPLED, summed across every
+  // (layer, ci). Read by Simulator into SimData::crystal_count_, which
+  // StatsConsumer sums over the run, so the run-level total answers: "how many
+  // distinct crystal geometries did this run actually draw?" — reported as the
+  // CLI's `Stats: ... crystals=N` and the C API's LUMICE_StatsResult.crystal_num.
   //
-  // Per-backend semantic:
-  //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-INSTANCE count —
-  //     one Crystal emplaced per small batch for random-orientation scenes,
-  //     so the accumulated total grows ~ray_num/128.
-  //   * Metal (K-shape geometry pool): distinct pool shapes built during the
-  //     batch summed across every (layer, ci) — Σ P_ci. At the default knob
-  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1 = the
-  //     cross-layer instance count. With K>0 it grows toward ~ray_num/K and
-  //     converges on the legacy CPU meaning as K → 1.
-  //   * CUDA (K-shape geometry pool): same semantic as Metal — Σ P_ci over
-  //     every (layer, ci) built this batch. At the default knob
-  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1, matching
-  //     Metal's default meaning byte-for-byte. `disable_device_gen_` debug
-  //     fallback still returns 0 until per-ci accounting on that path lands
-  //     (diagnostic-only gap; the primary device-gen path is exact).
-  // The ONLY consumer is the CLI diagnostic line (main.cpp `Stats: ...
-  // crystals=N`); GUI does not display it and no internal logic depends on it,
-  // so a residual factor-of-K gap between CPU and GPU at intermediate K values
-  // is expected and harmless. Do NOT use this value in a bit-parity assertion
-  // against legacy stats.
-  virtual size_t GetLastBatchCrystalCount() const { return 0; }
+  // A batch that only REUSES geometry reports 0. That is the whole point: the
+  // shape a deterministic param produces is bit-identical on every draw, so
+  // re-deriving it samples nothing new, however many times a backend rebuilds
+  // it. Without this the stat was a function of the batch schedule — a
+  // deterministic scene reported ~(layer,ci) × batch count, so sweeping the
+  // LUMICE_DISPATCH_RAY_NUM performance knob alone moved it by two orders of
+  // magnitude, and a scene with stochastic shapes reported the same number as
+  // its deterministic twin (i.e. the stat was blind to whether geometry
+  // randomization was doing anything, the one question it is for).
+  //
+  // What counts as "new" is ONE judgement, shared: trace_ops.hpp's
+  // NewSampleTracker over IsDeterministic. How each arm HOOKS that judgement up
+  // is deliberately heterogeneous — each follows the reuse structure its own
+  // pipeline already had, and forcing one shape on all four would mean rewriting
+  // three pool lifecycles for no gain:
+  //   * legacy CPU (SimulateOneWavelength): counts its real CrystalMaker calls.
+  //     Its per-Run() `crystal_cache` already separated draw from copy, so it
+  //     needs no tracker.
+  //   * CpuTraceBackend: rebuilds every batch and asks the shared tracker
+  //     whether the rebuild sampled anything. It does NOT cache the Crystal —
+  //     that would change the rng draw order, a behaviour change rather than a
+  //     statistics fix.
+  //   * Metal: same shared tracker, hooked at the per-ci pool resolve. At the
+  //     default LUMICE_GPU_GEOM_CLOCK=0 a ci contributes 1; with K>0 a
+  //     stochastic ci contributes its whole fresh pool (~ci_n/K).
+  //   * CUDA: no tracker — it already SKIPS the pool build on a reuse batch, so
+  //     zeroing the counter at BeginSession is enough to make that skip report
+  //     0. (Its `disable_device_gen_` debug fallback reports 0 unconditionally;
+  //     diagnostic-only gap, primary device-gen path is exact.)
+  // If a future backend needs to build such reuse state FROM SCRATCH, hook it to
+  // NewSampleTracker rather than hand-rolling a third copy of the judgement.
+  //
+  // Two properties are deliberately NOT claimed:
+  //   * Cross-backend equality. The CPU arms sample per ray-group; the GPU arms
+  //     default to K off and sample once per (layer, ci) per batch. The numbers
+  //     legitimately differ on the same scene — that difference IS the sampling
+  //     density difference, made visible. Do NOT "fix" it, and do NOT put this
+  //     value in a cross-backend parity assertion.
+  //   * Worker independence on the multi-worker legacy CPU route. Each worker
+  //     owns its own Simulator and its own crystal cache, so a deterministic
+  //     scene is drawn once PER WORKER and the total is (layer,ci) × active
+  //     workers — and since the batch count decides how many workers get work,
+  //     the dispatch knob still moves it there (bounded by core count, where it
+  //     used to be unbounded in ray_num / dispatch). Fixed-seed runs collapse to
+  //     one worker and are exact.
+  virtual size_t GetLastBatchNewCrystalSampleCount() const { return 0; }
 
   // Per-committed-config tally of GPU-side raypath-color drops (see
   // ColorDegradeCounts above). Base + CPU backend have no such caps and return

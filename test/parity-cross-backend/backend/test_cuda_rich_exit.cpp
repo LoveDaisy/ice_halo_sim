@@ -216,7 +216,7 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
 
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u);
     backend.EndSession();
 
     // Second batch, same instance + same scene. This is the white-box lock on
@@ -226,7 +226,7 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
     // batch's value. Without this, the run-level Σ that StatsConsumer reports
     // grows once per batch and stops being a scene property.
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
         << "Reuse batch on a deterministic scene must report 0 new samples "
            "(BuildGeomPool skipped → nothing sampled)";
     backend.EndSession();
@@ -264,13 +264,14 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
 
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 4u)
         << "Cross-layer new-sample sum at K=0: 1 (layer 0) + 3 (layer 1). "
            "Pre-K-pool semantic was final-layer settings only (3).";
     backend.EndSession();
 
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
+        << "Reuse batch must report 0 across all layers, not 4 again";
     backend.EndSession();
   }
 }

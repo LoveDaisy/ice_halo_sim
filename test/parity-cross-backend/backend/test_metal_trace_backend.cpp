@@ -284,7 +284,7 @@ TEST(MetalTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     host.refractive_index = 0.0f;
     backend.TraceLayer(RootRaySource::FromHost(host));
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u);
     backend.EndSession();
 
     // Second batch, same instance + same scene: the deterministic shape has
@@ -293,7 +293,7 @@ TEST(MetalTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     // StatsConsumer reports invariant to the number of batches.
     backend.BeginSession(spec);
     backend.TraceLayer(RootRaySource::FromHost(host));
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
         << "Reuse batch on a deterministic scene must report 0 new samples";
     backend.EndSession();
   }
@@ -341,7 +341,7 @@ TEST(MetalTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 4u)
         << "Cross-layer new-sample sum at K=0: 1 (layer 0) + 3 (layer 1). "
            "Pre-K-pool semantic was final-layer settings only (3).";
     backend.EndSession();
@@ -352,7 +352,8 @@ TEST(MetalTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     ASSERT_NE(h0b, nullptr);
     auto roots1b = backend.Recombine(std::move(h0b), rspec);
     backend.TraceLayer(roots1b);
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
+    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
+        << "Reuse batch must report 0 across all layers, not 4 again";
     backend.EndSession();
   }
 }
@@ -392,7 +393,7 @@ TEST(MetalTraceBackend, HostInjectedCrystalIsNotANewSample) {
   MetalTraceBackend backend;
   backend.BeginSession(spec);
   backend.TraceLayer(RootRaySource::FromHost(host));
-  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
       << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
   backend.EndSession();
 }
@@ -672,7 +673,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
     if (handle) {
       stats = handle->GetLayerStats();
     }
-    size_t crystals = backend.GetLastBatchCrystalCount();
+    size_t crystals = backend.GetLastBatchNewCrystalSampleCount();
     backend.EndSession();
     return std::make_pair(stats, crystals);
   };
@@ -834,7 +835,7 @@ TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_Regression
   // loop, so no pool is built and pool_shape_count_this_batch_ stays 0.
   // The assertion is "we got here without an assert-crash from the p_ci
   // guard chain firing on the empty path".
-  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
       << "empty batch with K enabled must return 0 pool shapes (no pools "
          "built) — non-zero here would mean the empty-batch guard is gone "
          "and the K-shape path partially ran on a zero-ray batch.";

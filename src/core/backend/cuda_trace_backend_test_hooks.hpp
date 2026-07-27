@@ -4,7 +4,7 @@
 // injection points that white-box tests need, while leaving `CudaTraceBackend`
 // itself with a production-clean public interface (`grep -rn ForTest
 // src/core/backend/cuda_trace_backend.hpp` should hit only the enumerated
-// known exception `GetLastBatchCrystalCount` — which is production and NOT a
+// known exception `GetLastBatchNewCrystalSampleCount` — which is production and NOT a
 // test-only symbol; kept in the class body as-is).
 //
 // Access mechanism: this class is declared a `friend` of `CudaTraceBackend` so
@@ -100,7 +100,7 @@ class CudaTraceBackendTestHooks {
   //   * ReadbackPoolShapeTable — D2H copy of `d_pool_shape_table_` as a flat
   //     vector of `{poly_off, poly_cnt, tri_off, tri_cnt}` rows. .size() ==
   //     Σ P_ci over every (layer, ci) in the pool as last BUILT. Note this is
-  //     NOT always `GetLastBatchCrystalCount()`: that counts what the CURRENT
+  //     NOT always `GetLastBatchNewCrystalSampleCount()`: that counts what the CURRENT
   //     batch sampled, so on a deterministic scene's second batch the pool
   //     (and this table) is intact while the counter reads 0. The two agree on
   //     any batch that actually built the pool. The device buffer's
@@ -120,7 +120,7 @@ class CudaTraceBackendTestHooks {
   //     which is far more expensive to trace than a host-side throw here.
   //
   // No `PoolShapeCountThisBatch()` sibling: CUDA already exposes the same
-  // value on the production surface as `GetLastBatchCrystalCount()` — tests
+  // value on the production surface as `GetLastBatchNewCrystalSampleCount()` — tests
   // read that directly (no reason to duplicate the getter here).
   //
   // Design note: both methods D2H-copy into a fresh vector rather than

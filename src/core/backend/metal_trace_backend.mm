@@ -819,7 +819,7 @@ struct MetalTraceBackend::Impl {
   // Running total of crystal geometries this batch freshly SAMPLED, across
   // every (layer, ci). Reset in BeginSession; incremented by
   // ResolveLayerCrystalForCi for the cis that sample_tracker_ judges to be new
-  // draws. Read out by GetLastBatchCrystalCount(); see trace_backend.hpp for
+  // draws. Read out by GetLastBatchNewCrystalSampleCount(); see trace_backend.hpp for
   // the cross-backend contract.
   size_t                   pool_shape_count_this_batch_ = 0;
   // "Which deterministic (layer, ci) shapes has this scene already sampled" —
@@ -2001,7 +2001,7 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
   current_crystal = pool_crystals_.front();
   have_crystal = true;
   UploadCrystalPool(pool_crystals_);
-  // Cross-(layer, ci) running total for GetLastBatchCrystalCount. Counted here
+  // Cross-(layer, ci) running total for GetLastBatchNewCrystalSampleCount. Counted here
   // rather than inside UploadCrystalPool because only this scope knows whether a
   // draw happened at all: the host-injected branch above uploads a shape the
   // caller supplied, consuming no rng draw, so it is not a sampling event. For
@@ -2908,7 +2908,7 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->ms_idx = 0;
   // K-shape pool: reset the per-batch new-sample counter (accumulated by
   // ResolveLayerCrystalForCi across every (layer, ci) resolve inside this
-  // session). See GetLastBatchCrystalCount for the unified semantics.
+  // session). See GetLastBatchNewCrystalSampleCount for the unified semantics.
   impl_->pool_shape_count_this_batch_ = 0u;
   // Per-batch: the counter above. Per-scene: the tracker below, which must NOT
   // be cleared unconditionally here or every batch would re-count its shapes as
@@ -3670,7 +3670,7 @@ uint32_t MetalTraceBackend::WlPoolSize() const {
   return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize(EffectiveLogger(impl_->logger_));
 }
 
-size_t MetalTraceBackend::GetLastBatchCrystalCount() const {
+size_t MetalTraceBackend::GetLastBatchNewCrystalSampleCount() const {
   // K-shape pool: the number of crystal geometries this batch freshly SAMPLED,
   // summed over every (layer, ci) — Σ P_ci restricted to the cis that actually
   // drew. With LUMICE_GPU_GEOM_CLOCK unset (P_ci ≡ 1) a deterministic scene's

@@ -28,7 +28,7 @@
 //
 //   * Test C (KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) — knob-off
 //     structural collapse: with `LUMICE_GPU_GEOM_CLOCK` unset, P_ci ≡ 1
-//     (one pool shape per (layer, ci)) and `GetLastBatchCrystalCount()`
+//     (one pool shape per (layer, ci)) and `GetLastBatchNewCrystalSampleCount()`
 //     equals the total (layer, ci) count. Complements the driver-verified
 //     four-file parity battery (11 passed knob-off) with a structural
 //     assertion that pins the AC2 contract at the pool level (as a
@@ -288,7 +288,7 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");  // isolation from prior test order
 
   // Single-layer stochastic scene — one (layer, ci) pair. K=0 → P_ci = 1 →
-  // pool table has exactly one row, and GetLastBatchCrystalCount() == 1.
+  // pool table has exactly one row, and GetLastBatchNewCrystalSampleCount() == 1.
   auto scene = MakeStochasticPrismScene(/*max_hits=*/4, /*gaussian=*/true);
   auto render = MakeRenderConfig();
 
@@ -314,7 +314,7 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
   // every batch and every draw is a NEW sample — the new-sample count therefore
   // equals Σ P_ci here, unchanged by the counter's semantic tightening (which
   // only zeroes the count on batches that reuse a deterministic shape).
-  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u)
+  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u)
       << "K=0, single-(layer, ci) stochastic scene: Σ P_ci must be 1 (mirrors the new-crystal-sample "
          "count contract for the knob-off configuration).";
 
