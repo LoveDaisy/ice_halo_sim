@@ -28,6 +28,7 @@
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
+#include "gui/user_defaults.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -197,6 +198,28 @@ int main(int argc, char** argv) {
   }
   g_core_log_level = core_log_level;
   g_gui_log_level = gui_log_level;
+
+  // Personal defaults: this binary's no-flag default is DISABLED (kTestHarnessUserConfigDefault),
+  // unlike LumiceGUI's auto-detect. Every scenario reaches MakeNewDocumentState() through
+  // ResetTestState() -> gui::DoNew(), so without this a reference-image comparison would depend on
+  // whichever user_defaults.json the developer running it happens to have saved — green here, red
+  // on the next machine, and only ever as a slightly-low PSNR. --user-config stays available for a
+  // test that deliberately wants a controlled override directory.
+  {
+    const auto parsed = gui::ParseUserConfigArg(argc, argv);
+    if (parsed.missing_value) {
+      fprintf(stderr, "[DIAG] User config: '--user-config' given without a directory after it; ignoring that flag\n");
+    }
+    const gui::UserConfigSource source =
+        gui::ResolveUserConfigSource(parsed.presence, gui::kTestHarnessUserConfigDefault);
+    gui::SetUserConfigSourceForProcess(source, parsed.explicit_dir);
+    if (source == gui::UserConfigSource::kExplicitDir) {
+      fprintf(stderr, "[DIAG] User config: explicit directory '%s' (--user-config)\n",
+              parsed.explicit_dir.string().c_str());
+    } else {
+      fprintf(stderr, "[DIAG] User config: disabled (gui_test default)\n");
+    }
+  }
 
 #ifdef _WIN32
   // Match real app's timer resolution (main.cpp:40).

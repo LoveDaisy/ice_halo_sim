@@ -208,7 +208,10 @@ SUITE_FILTER_EXPR = (
     "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,"
     "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
 )
-SUITE_ARGS = ["--fixed-dt", "--filter", SUITE_FILTER_EXPR]
+# --no-user-config trails SUITE_FILTER_EXPR, matching scripts/build.sh. A reference image is the
+# one artifact where reading the generating machine's personal defaults would be permanent: the
+# contamination ships in the committed .jpg and every other machine inherits it as a threshold miss.
+SUITE_ARGS = ["--fixed-dt", "--filter", SUITE_FILTER_EXPR, "--no-user-config"]
 
 
 def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:

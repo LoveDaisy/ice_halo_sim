@@ -105,6 +105,31 @@ class ScopedNoUserConfigDirEnv {
   std::vector<std::pair<std::string, std::optional<std::string>>> saved_;
 };
 
+// Temporarily installs a different process-wide user-config source, then restores gui_test's
+// baseline. The destructor goes back to kDisabled — the harness's own default (see
+// kTestHarnessUserConfigDefault) — rather than to whatever was set on entry: in a single-process
+// suite "restore what I found" propagates a leak from an earlier test instead of ending it, and
+// every test in this binary is entitled to start from the harness baseline.
+class ScopedUserConfigSource {
+ public:
+  explicit ScopedUserConfigSource(gui::UserConfigSource source, std::filesystem::path dir = {}) {
+    gui::SetUserConfigSourceForProcess(source, std::move(dir));
+  }
+
+  ScopedUserConfigSource(const ScopedUserConfigSource&) = delete;
+  ScopedUserConfigSource& operator=(const ScopedUserConfigSource&) = delete;
+
+  ~ScopedUserConfigSource() { gui::SetUserConfigSourceForProcess(gui::kTestHarnessUserConfigDefault); }
+};
+
+// Compare two states over the fields a personal default is allowed to reach. Written against the
+// serializer rather than as a field list so it cannot go stale: SerializeGuiStateJson is the same
+// surface the override file itself is expressed in, so "the overlay changed nothing observable"
+// and "the two documents serialize identically" are the same statement.
+bool SerializesIdentically(const gui::GuiState& a, const gui::GuiState& b) {
+  return gui::SerializeGuiStateJson(a) == gui::SerializeGuiStateJson(b);
+}
+
 }  // namespace
 
 void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
@@ -305,6 +330,138 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       const gui::GuiState factory{};
       IM_CHECK_EQ(state.raypath_color.size(), factory.raypath_color.size());
       IM_CHECK_EQ(state.raypath_color.size(), static_cast<size_t>(0));
+    };
+  }
+
+  // ================================================================================
+  // The process-wide source switch (--user-config / --no-user-config)
+  //
+  // These exercise the NO-ARG MakeNewDocumentState() — the call production actually makes from
+  // main.cpp / DoNew() / DoOpen() — against each of the three UserConfigSource states. The tests
+  // above all pass an explicit override_dir, which deliberately bypasses the switch entirely.
+  // ================================================================================
+  {
+    // --no-user-config and --user-config <empty dir> must be the same document. Both are "the
+    // user has saved nothing", reached by two different routes, and a user who cannot get the
+    // same result twice has no way to establish a factory baseline.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "switch_disabled_equals_empty_explicit_dir");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto empty_dir = FreshOverlayDir("switch_empty");
+
+      gui::GuiState disabled;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+        disabled = gui::MakeNewDocumentState();
+      }
+      gui::GuiState empty_explicit;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, empty_dir);
+        empty_explicit = gui::MakeNewDocumentState();
+      }
+      IM_CHECK(SerializesIdentically(disabled, empty_explicit));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+
+      // ...and the comparison above is not vacuous: the SAME directory holding a real override
+      // produces a DIFFERENT document through the same code path. Without this arm, a broken
+      // switch that ignored explicit_dir would satisfy the equality assertion perfectly.
+      json doc;
+      doc["renderer"]["lens_type"] = "fisheye_equal_area";
+      doc["bg_alpha"] = 0.25f;
+      IM_CHECK(gui::WriteUserDefaultsFile(empty_dir, doc));
+      gui::GuiState overridden;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, empty_dir);
+        overridden = gui::MakeNewDocumentState();
+      }
+      IM_CHECK(!SerializesIdentically(disabled, overridden));
+      IM_CHECK_EQ(overridden.renderer.lens_type, gui::kLensTypeFisheyeEqualArea);
+      IM_CHECK_EQ(overridden.bg_alpha, 0.25f);
+
+      // And with the switch back to disabled, that same on-disk file is invisible again.
+      gui::GuiState disabled_again;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+        disabled_again = gui::MakeNewDocumentState();
+      }
+      IM_CHECK(SerializesIdentically(disabled, disabled_again));
+    };
+  }
+
+  {
+    // --user-config pointing at a directory whose file is corrupt: the switch must route into
+    // the existing degradation path, not around it.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "switch_explicit_dir_with_broken_file_degrades");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("switch_broken");
+      WriteRawOverlay(dir, "{ this is not json");
+
+      gui::GuiState state;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+        state = gui::MakeNewDocumentState();
+      }
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
+      const gui::GuiState factory = gui::InitDefaultState();
+      IM_CHECK_EQ(state.renderer.lens_type, factory.renderer.lens_type);
+      IM_CHECK_EQ(state.bg_alpha, factory.bg_alpha);
+    };
+  }
+
+  {
+    // --user-config <path to a regular file> — the flag takes a DIRECTORY, and a user who points
+    // it at the user_defaults.json itself must get a degraded startup, not a crash.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "switch_explicit_dir_pointing_at_a_file_is_survivable");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("switch_not_a_dir");
+      const std::filesystem::path file = dir / "plain_file.txt";
+      {
+        std::ofstream out(file, std::ios::trunc);
+        out << "not a directory";
+      }
+
+      gui::GuiState state;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, file);
+        state = gui::MakeNewDocumentState();
+      }
+      const gui::GuiState factory = gui::InitDefaultState();
+      IM_CHECK_EQ(state.renderer.lens_type, factory.renderer.lens_type);
+      IM_CHECK_EQ(state.crystals.size(), factory.crystals.size());
+    };
+  }
+
+  {
+    // The harness's own baseline, asserted from inside the harness. gui_test's main() installs
+    // kTestHarnessUserConfigDefault before any test runs, and every scenario reaches
+    // MakeNewDocumentState() through ResetTestState() -> DoNew(); if that install were dropped or
+    // flipped, this is the case that says so. It reads the switch through its only observable
+    // effect — whether a real override file on disk reaches a new document — because the source
+    // enum itself has no getter, by design (one owner: main()).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "switch_gui_test_baseline_is_isolated");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("switch_baseline");
+      json doc;
+      doc["bg_alpha"] = 0.125f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      // No ScopedUserConfigSource here on purpose: this is the process state gui_test's main()
+      // left behind, i.e. what every other scenario in this binary runs under.
+      const gui::GuiState state = gui::MakeNewDocumentState();
+      const gui::GuiState factory = gui::InitDefaultState();
+      IM_CHECK_EQ(state.bg_alpha, factory.bg_alpha);
+
+      // Detection power for the assertion above: the file IS readable and DOES carry a value
+      // distinguishable from factory — it simply must not be consulted at the baseline.
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+        const gui::GuiState reachable = gui::MakeNewDocumentState();
+        IM_CHECK_EQ(reachable.bg_alpha, 0.125f);
+        IM_CHECK(reachable.bg_alpha != factory.bg_alpha);
+      }
     };
   }
 
@@ -575,7 +732,15 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
 
       // Same process, same override still loaded — but this call's GetUserConfigDir() now
       // resolves to nullopt, the no-arg production call path, not an explicit override_dir.
+      //
+      // The kAutoDetect guard is what keeps this test testing what it says. gui_test's baseline
+      // is kDisabled, and under kDisabled the no-arg path returns nullopt without ever calling
+      // GetUserConfigDir() — the case would still pass (same verdict, by a different route) while
+      // silently no longer exercising "GetUserConfigDir() went unavailable mid-process", the
+      // regression it was written for. Restoring kAutoDetect for this scope re-arms
+      // ScopedNoUserConfigDirEnv, which only has an effect on that branch.
       {
+        ScopedUserConfigSource auto_detect(gui::UserConfigSource::kAutoDetect);
         ScopedNoUserConfigDirEnv no_config_dir;
         gui::MakeNewDocumentState(std::nullopt);
       }

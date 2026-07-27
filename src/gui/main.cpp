@@ -30,6 +30,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "util/path_utils.hpp"
 
 namespace gui = lumice::gui;
 
@@ -86,6 +87,35 @@ int main(int argc, char** argv) {
     // spdlog::err = our warning level (see spdlog_levels.hpp)
     gui::GetGuiLogger().flush_on(spdlog::level::err);
     spdlog::flush_every(std::chrono::seconds(1));
+  }
+
+  // Parse --user-config / --no-user-config before the first MakeNewDocumentState() call further
+  // down — that call is the only place personal defaults enter a session. Passing neither flag
+  // keeps today's behavior (auto-detect the OS per-user config directory).
+  //
+  // The resulting state is logged unconditionally: "which defaults did this machine actually
+  // read" is the first question when a document opens with settings the user did not expect,
+  // and it is not answerable from the UI.
+  {
+    const auto parsed = gui::ParseUserConfigArg(argc, argv);
+    if (parsed.missing_value) {
+      GUI_LOG_WARNING("[GUI] User config: '--user-config' was given without a directory after it; ignoring that flag");
+    }
+    const gui::UserConfigSource source =
+        gui::ResolveUserConfigSource(parsed.presence, gui::kInteractiveAppUserConfigDefault);
+    gui::SetUserConfigSourceForProcess(source, parsed.explicit_dir);
+    switch (source) {
+      case gui::UserConfigSource::kDisabled:
+        GUI_LOG_INFO("[GUI] User config: disabled (--no-user-config); new documents use factory defaults only");
+        break;
+      case gui::UserConfigSource::kExplicitDir:
+        GUI_LOG_INFO("[GUI] User config: explicit directory '{}' (--user-config)",
+                     lumice::PathToU8(parsed.explicit_dir));
+        break;
+      case gui::UserConfigSource::kAutoDetect:
+        GUI_LOG_INFO("[GUI] User config: auto-detect (OS per-user config directory)");
+        break;
+    }
   }
 
   // Parse --skip-calibration flag early.

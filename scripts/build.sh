@@ -51,11 +51,15 @@ build() {
         #         ctx->Yield() calls — fixed-dt (and --no-frame-limit) starve that thread
         #         the same way they starve save_open_visual_consistency's accumulation.
         echo "Running GUI correctness tests (fixed-dt, fast)..."
-        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
+        # --no-user-config is redundant with gui_test's own default and stated anyway: it puts the
+        # contract in the diff where a reviewer sees it, and it survives someone changing that
+        # default. Keep it AFTER --filter — check_policies.py's gui-test-suite-args-sync reads the
+        # filter value with a regex anchored on `--fixed-dt --filter "..."`.
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade" --no-user-config
         ret=$?
         if [[ $ret == 0 ]]; then
           echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
-          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,p2_gpu_color_degrade"
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,p2_gpu_color_degrade" --no-user-config
           ret=$?
         fi
       else
