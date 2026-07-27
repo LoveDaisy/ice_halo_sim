@@ -4400,7 +4400,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // p2_modal/sync_group_leader_is_lowest_visible_slot — the leader rule, checked across the two
   // ways "lowest slot index" can disagree with what a naive search finds. lumice.h defines the
   // group's owner as its lowest-indexed applicable member, and core evaluates that over every slot
-  // the crystal type has (crystal_config.cpp kApplicablePrism / kApplicablePyramid). The GUI
+  // the crystal type has (the slot table in crystal_config.cpp, which the GUI queries through
+  // LUMICE_IsShapeScalarApplicable rather than mirroring). The GUI
   // snapshots from that same slot, over that same set, so what the user sees on join is the value
   // core will draw with. Two disagreements are exercised, one per group:
   //   group 1 — slot order vs ROW order: Upper H is slot 1, Lower H slot 3, and Upper H is drawn

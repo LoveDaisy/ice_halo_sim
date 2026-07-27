@@ -517,25 +517,20 @@ ImVec4 SyncGroupColor(int group) {
 // Height; Pyramid draws Prism/Upper/Lower H; the six faces are drawn by both) — the same condition,
 // promoted from an implicit `if` in the renderer to a predicate the Sync widget can also ask.
 //
-// This is also, deliberately, the same truth table core applies: crystal_config.cpp's
-// kApplicablePrism / kApplicablePyramid — "does this shape-scalar slot physically exist on this
-// crystal type" — agree with it on all ten slots for both types. That agreement is what lets the
-// MIRROR side of the Sync widget (leader election, propagation, membership listing) reproduce core's
-// rule rather than approximate it; see FindGroupLeaderSlot.
+// The question "does this shape-scalar slot physically exist on this crystal type" is core's to
+// answer, and this forwards it verbatim: LUMICE_IsShapeScalarApplicable reads the one slot table in
+// crystal_config.cpp that Canonicalize and Normalize also read. The GUI holds no copy of it. That
+// identity — not an agreement between two hand-kept tables — is what lets the MIRROR side of the Sync
+// widget (leader election, propagation, membership listing) reproduce core's rule rather than
+// approximate it; see FindGroupLeaderSlot.
 //
 // A group number on a scalar belonging to the OTHER crystal type is therefore not visible, and lies
 // dormant across a type switch — not cleared, not shown, not joined. That matches core, which zeroes
 // exactly those slots in CanonicalizeSyncGroups, and it is the smallest GUI-side behavior that
 // neither invents a cross-type editing model nor destroys data the user may switch back to.
 bool IsShapeScalarVisible(CrystalType type, int slot) {
-  if (slot >= LUMICE_SHAPE_SCALAR_FACE_0) {
-    return true;  // face_distance[0..5]: both types
-  }
-  if (type == CrystalType::kPrism) {
-    return slot == LUMICE_SHAPE_SCALAR_HEIGHT;
-  }
-  return slot == LUMICE_SHAPE_SCALAR_PRISM_H || slot == LUMICE_SHAPE_SCALAR_UPPER_H ||
-         slot == LUMICE_SHAPE_SCALAR_LOWER_H;
+  const auto kind = (type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
+  return LUMICE_IsShapeScalarApplicable(kind, slot) != 0;
 }
 
 // Can the user CREATE a sync membership on this scalar? Strictly narrower than IsShapeScalarVisible
@@ -568,8 +563,9 @@ bool IsShapeScalarSyncable(CrystalType type, int slot) {
 // approximation of the core rule — it IS the core rule (lumice.h LUMICE_CrystalParam::sync_group:
 // "the group's first applicable member (lowest LUMICE_SHAPE_SCALAR_* index) consumes the RNG and
 // owns the distribution"), evaluated over the same applicable set: core's NormalizeSyncGroupsImpl
-// takes the argmin over slots its kApplicable* table admits, and IsShapeScalarVisible is that table
-// (see its comment). So the value the user sees snap in on join is the value core will actually draw
+// takes the argmin over the slots its slot table admits, and IsShapeScalarVisible queries that very
+// table through the C API (see its comment). So the value the user sees snap in on join is the value
+// core will actually draw
 // with. `exclude_slot` keeps a row from electing itself as its own leader while it is joining.
 //
 // The scan MUST stay scoped by IsShapeScalarVisible and never by IsShapeScalarSyncable. Electing a
