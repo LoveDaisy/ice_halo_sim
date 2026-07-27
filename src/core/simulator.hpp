@@ -150,6 +150,17 @@ class Simulator {
   // ray_num*2 == 256 for a 128-ray SimBatch. See env_knobs.hpp GeomClock() for
   // the measured exit codes and the full mechanism before raising it.
   size_t geom_clock_ = kSmallBatchRayNum;
+  // Deterministic half of the reported crystal-geometry count for the config
+  // currently in hand — a pure function of that config (see
+  // trace_ops.hpp::DeterministicCrystalCount), so it is derived ONCE per
+  // committed batch in Run() and merely read by the four sites that publish it.
+  // Those sites all aggregate it by OVERWRITE, so recomputing per site was
+  // harmless, but it left the invariant with four derivation points and no
+  // single authority. Assigned in Run() right after the config is obtained
+  // rather than gated on `generation != prev_generation`: `prev_generation`
+  // starts at 0, so a generation-keyed cache would skip the first committed
+  // config whenever generations are 0-based and silently publish 0.
+  size_t deterministic_crystal_count_ = 0;
 
   QueuePtrS<SimBatch> config_queue_;
   QueuePtrS<SimData> data_queue_;

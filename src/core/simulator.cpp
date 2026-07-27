@@ -999,6 +999,9 @@ void Simulator::Run() {
     const auto& config = *batch.scene_;
     auto generation = batch.generation_;
     idle_ = false;
+    // Single derivation point for the config-constant half of the crystal count
+    // (see the member's declaration for why it is not gated on a generation change).
+    deterministic_crystal_count_ = DeterministicCrystalCount(config);
 
     // Reset carry when config changes (new generation = new proportions).
     if (generation != prev_generation) {
@@ -1343,7 +1346,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // what also keeps it from scaling with the worker pool (every worker runs
   // this function on its own Simulator).
   sim_data.stochastic_crystal_sample_count_ = stochastic_sample_count;
-  sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(config);
+  sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
   data_queue_->Emplace(std::move(sim_data));
 }
 
@@ -1547,7 +1550,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       xyz_win_.root_rays += ray_num;
       xyz_win_.stochastic_crystal_samples += backend.GetLastBatchStochasticCrystalSampleCount();
       // OVERWRITE (not +=) — config constant, identical on every batch.
-      xyz_win_.deterministic_crystals = DeterministicCrystalCount(scene);
+      xyz_win_.deterministic_crystals = deterministic_crystal_count_;
       xyz_win_.generation = generation;
       xyz_win_.w = w;
       xyz_win_.h = h;
@@ -1569,7 +1572,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
     sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
-    sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(scene);
+    sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
     // task-color-degrade-gui-surfacing: carry the GPU color-degrade tally on the
     // legacy per-batch drain too. Dead for today's backends (Metal + CUDA both take
     // the third-clock window branch above), but keeps this path from silently
@@ -1639,7 +1642,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
   sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
-  sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(scene);
+  sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);

@@ -146,5 +146,52 @@ TEST(StatsConsumer, ChunkedDispatchAppliesTheRightRuleToEachHalf) {
       << "First-chunk-only dispatch: root_ray_count_ must also only be counted once.";
 }
 
+// CHARACTERIZATION: because the deterministic half is OVERWRITTEN, EVERY SimData
+// that reaches Consume() must carry it — one that leaves the field at its default
+// 0 erases the scene's whole config-constant population from the report.
+//
+// This documents a real coupling rather than a defect. Consume() deliberately does
+// NOT defend against it: the "is this a produced batch" predicate is owned by
+// server.cpp::ConsumeData (`rays_.Empty() && root_ray_count_ == 0` breaks out
+// before any Consume() call, so the shutdown/interruption sentinel never arrives
+// here). Re-deriving that predicate in this class would create a second authority
+// for the same protocol question and let the two drift — the exact anti-pattern
+// this change removed elsewhere, so it is not worth buying defence-in-depth with.
+//
+// What this test is for: the guarantee therefore lives in an upstream convention,
+// and that convention has already been wrong once (its predecessor keyed on
+// is_backend_path_ and mis-flagged exit-seam batches as sentinels). Pinning the
+// consequence here means a future reader who is tempted to relax the sentinel key,
+// add a Consume() call site, or add a producer that forgets the field can see in
+// one place what it costs. The sibling case is already covered above: trailing
+// chunks must re-assert the constant, and that one IS reachable today.
+TEST(StatsConsumer, DeterministicHalfIsOverwrittenSoEveryBatchMustCarryIt) {
+  constexpr size_t kStochastic = 7;
+  constexpr size_t kDeterministic = 5;
+
+  StatsConsumer stats;
+
+  SimData real_batch;
+  real_batch.root_ray_count_ = 128;
+  real_batch.stochastic_crystal_sample_count_ = kStochastic;
+  real_batch.deterministic_crystal_count_ = kDeterministic;
+  stats.Consume(real_batch);
+  EXPECT_EQ(CrystalNum(stats), kStochastic + kDeterministic);
+
+  // A batch that forgets the field: the stochastic half still accumulates, but
+  // the deterministic population is gone. Asserting the erasure (rather than
+  // immunity to it) is the point — it is the cost of the OVERWRITE rule.
+  SimData forgot_deterministic;
+  forgot_deterministic.root_ray_count_ = 128;
+  forgot_deterministic.stochastic_crystal_sample_count_ = 1;
+  stats.Consume(forgot_deterministic);
+
+  EXPECT_EQ(CrystalNum(stats), kStochastic + 1u)
+      << "OVERWRITE semantics: a producer that omits deterministic_crystal_count_ "
+         "silently drops the scene's config-constant population. If this ever "
+         "needs to stop being true, change the aggregation rule deliberately — do "
+         "not re-derive server.cpp's produced-batch predicate here.";
+}
+
 }  // namespace
 }  // namespace lumice
