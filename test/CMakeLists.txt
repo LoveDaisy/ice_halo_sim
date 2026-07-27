@@ -75,6 +75,10 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_exposure_push.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
+  # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
+  # they link against lumice_obj alone; the half that calls file_io.cpp lives in gui_test
+  # (test/gui/functional/test_gui_user_defaults.cpp), which links lumice_gui_obj.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults_eligibility.cpp"
   # backend/: CUDA-only white-box tests for the geometry-pool rebuild gate.
   # Body is `#if LUMICE_CUDA_ENABLED`, so on non-CUDA hosts the TU is empty
   # (zero contributed symbols).

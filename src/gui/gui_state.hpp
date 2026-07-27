@@ -1182,9 +1182,15 @@ inline void SetFilter(GuiState& s, EntryCard& e, const FilterConfig& f) {
   }
 }
 
-inline GuiState InitDefaultState() {
-  GuiState s;
-
+// Populate the collection half of a brand-new document: one crystal in the pool, one layer
+// holding one entry that references it. Factored out of InitDefaultState() because
+// MakeNewDocumentState() (src/gui/user_defaults.hpp) needs the identical seed after applying
+// the user's personal defaults — two hand-kept copies of these four lines would be a
+// comment-maintained invariant, i.e. one that eventually breaks silently.
+//
+// Precondition: the collections are empty (both callers either start from a fresh GuiState or
+// clear them first). This seeds, it does not reset.
+inline void SeedDefaultDocumentContents(GuiState& s) {
   // Seed the crystal pool with the default-constructed CrystalConfig (prism,
   // height=1, uniform random orientation). filter pool starts empty (default
   // entry has no filter).
@@ -1195,6 +1201,12 @@ inline GuiState InitDefaultState() {
   EntryCard entry;  // crystal_id = 0, filter_id = nullopt, proportion = 100
   layer.entries.push_back(entry);
   s.layers.push_back(layer);
+}
+
+inline GuiState InitDefaultState() {
+  GuiState s;
+
+  SeedDefaultDocumentContents(s);
 
   // Default renderer is the default-constructed GuiState::renderer; no ID or index needed.
 

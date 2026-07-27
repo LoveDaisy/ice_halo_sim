@@ -29,6 +29,18 @@ inline const char* AxisPresetLabel(AxisPreset p) {
   return "Custom";
 }
 
+// Zenith-std bounds of the classifier's tolerance domain. Shared by ClassifyAxisPreset below
+// and by the user-defaults preset-override clamp (src/gui/user_defaults.cpp), so the "what
+// counts as this preset" threshold and the "what may a user store" threshold cannot drift
+// apart as two independent literals:
+//   Column / Plate / Parry require zenith.std < kColumnPlateParryZenithStdUpperBound
+//   Lowitz                 requires zenith.std > kLowitzZenithStdLowerBound
+// These are ZENITH bounds only. IsRollLocked's own `std < 10` below is a separate predicate
+// about the ROLL axis that merely shares the number; folding them together would couple two
+// unrelated thresholds.
+inline constexpr float kColumnPlateParryZenithStdUpperBound = 10.0f;
+inline constexpr float kLowitzZenithStdLowerBound = 15.0f;
+
 namespace axis_preset_detail {
 
 // Angular tolerance (degrees) for equality on mean / range=360 comparisons.
@@ -85,27 +97,31 @@ inline AxisPreset ClassifyAxisPreset(const AxisDist& zenith, const AxisDist& azi
 
   // Lowitz: zenith is any of {zigzag, uniform, gauss, gauss_legacy, laplacian} at
   // mean=0, std>15; roll locked; azimuth full-uniform.
-  // strict: std > 15.0f
+  // strict: std > kLowitzZenithStdLowerBound
   using axis_preset_detail::IsLowitzZenithType;
-  if (IsLowitzZenithType(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std > 15.0f && roll_locked && az_full) {
+  if (IsLowitzZenithType(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std > kLowitzZenithStdLowerBound &&
+      roll_locked && az_full) {
     return AxisPreset::kLowitz;
   }
 
   // Parry: zenith gauss-like at mean=90, std<10; roll locked; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < 10.0f && roll_locked && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      roll_locked && az_full) {
     return AxisPreset::kParry;
   }
 
   // Plate: zenith gauss-like at mean=0, std<10; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std < 10.0f && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      az_full) {
     return AxisPreset::kPlate;
   }
 
   // Column: zenith gauss-like at mean=90, std<10; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < 10.0f && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      az_full) {
     return AxisPreset::kColumn;
   }
 

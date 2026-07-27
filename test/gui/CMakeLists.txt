@@ -17,6 +17,7 @@ add_executable(gui_test
     functional/test_gui_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
     functional/test_gui_state_reconcile.cpp
+    functional/test_gui_user_defaults.cpp
     functional/test_project_world_dir.cpp
     functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp

@@ -148,6 +148,15 @@ void DoExportConfigJson();
 void DoOpen();
 void DoOpen(const std::filesystem::path& path);
 void DoNew();
+// Restore the background image named by `state.bg_path`, degrading gracefully when it cannot
+// be loaded (path deleted, moved, or on a machine that never had it): background off, a
+// kMatchBg aspect preset falls back to kFree, one warning logged — never a hard failure, since
+// this runs on the startup path. No-op when bg_path is empty.
+//
+// Called after ResetFrontendState (which clears the background) by every path that can land a
+// non-empty bg_path in the state: `.lmc` open, `.json` import, and New — the last of these
+// only became reachable once bg_path could arrive from the user's personal defaults.
+void LoadBackgroundWithDegrade(GuiState& state);
 void CalibrateQualityThreshold();
 // task-metal-gui-commit-backpressure: DoRun returns `true` when this call reached
 // a terminal outcome that needs NO retry next tick — EITHER it issued a

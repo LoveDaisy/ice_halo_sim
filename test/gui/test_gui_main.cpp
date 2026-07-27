@@ -370,6 +370,7 @@ int main(int argc, char** argv) {
   RegisterStateReconcileTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
+  RegisterUserDefaultsTests(engine);
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);

@@ -25,6 +25,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -164,7 +165,8 @@ int main(int argc, char** argv) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  gui::g_state = gui::InitDefaultState();
+  // Personal defaults apply to a NEW document only (invariant I1) — startup shows one.
+  gui::g_state = gui::MakeNewDocumentState();
 
   // skip_calibration already parsed above (before glfwSwapInterval).
 
@@ -177,9 +179,13 @@ int main(int argc, char** argv) {
   // g_file_log_sink / g_log_file_path, and that runs in the frame loop below, so
   // publishing them this late is not observable.
   {
+    // The log file lives beside the other per-user Lumice artifacts (see GetUserConfigDir),
+    // not at $HOME — a read-only or multi-user install must not scatter files in the home
+    // directory root. Falls back to a CWD-relative path when no config directory is available,
+    // preserving the previous "degrade, never fail to start" behavior.
     std::filesystem::path log_path;
-    if (const char* home = std::getenv("HOME")) {
-      log_path = std::filesystem::path(home) / "lumice.log";
+    if (auto config_dir = gui::GetUserConfigDir()) {
+      log_path = *config_dir / "lumice.log";
     } else {
       log_path = "lumice.log";
     }
