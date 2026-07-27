@@ -109,3 +109,42 @@
 - **绿测 ≠ 真行为**：渲染/多状态类 bug 的 AC 必须验实际可观察输出（GL 像素 / sim_state 值 / FBO 抓图），不可断言 CPU 代理标志（`HasTexture()` 曾连续两次假绿到 owner 肉眼才暴露）。
 - **同一 bug 连修错误层**：偏离 A/B/C 同源于交界无汇聚点；治理须建汇聚点，不可逐点打补丁。
 - **carry-forward / 抗闪烁机制反成陈旧态来源**：改动 display/reset 逻辑时须验证 carry-forward 窗口不泄漏旧帧。
+
+## 8. 用户默认值层（建于本文 §2 的档位表之上）
+
+> 回答另一个总纲："每个可编辑字段是否可以固化为用户个人默认？固化后如何生效、如何回出厂？"这一层不引入新的状态转换档位，而是把 §2 的档位表**复用为资格判定的单一权威**，避免第二份"哪些字段可默认"的手写清单与档位表本身漂移。
+
+### 8.1 四个命名空间
+
+| # | 命名空间 | 成员 | 处置 |
+|---|----------|------|------|
+| ① 单例文档默认 | `FieldTier::kStructSoft` 中的单例字段（`sun` / `sim` / `renderer`） | 进覆盖文件的 GuiState 半区 |
+| ② 预设库 | 内置 axis 预设表每一行可调的 zenith std（该值不是 `GuiState` 的顶层字段，落地时机与运行时形态见 8.5） | 进覆盖文件独立的 `presets` 子树，不占用 GuiState 半区的键名空间 |
+| ③ app 偏好 | `FieldTier::kView` 中未被 `SerializeGuiStateJson` 序列化的那批（日志级别三件套 / 日志面板展开态 / 左侧面板折叠态），以及 `FieldTier::kStructSoft` 但 `auto_diff_excluded=true` 的字段（如渲染后端选择） | 一期不提供个人默认——这批字段的共同点是"不进文档"，归属清楚，故一期排除不留半拉工程；有具体诉求再评估 |
+| ④ 集合区 | `FieldTier::kStructHard` 的成员，以及 `kStructSoft` 里被 `kCollectionFields`（`user_defaults.hpp:64`）标记的容器：晶体 / layer / filter / 染色规则 | 排除。这些容器在序列化后的 key path 里携带文档局部下标（如某个数组的第几项），脱离具体文档后这个下标没有意义 |
+
+### 8.2 资格判定：从档位表派生，不手写第二份清单
+
+`ResolveDefaultEligibility()`（`user_defaults.hpp:105`）以字段名为输入，在 `kDerivedFieldsExcludeList`（`gui_state_tiers.hpp:128`）与 `kFieldTierTable`（`gui_state_tiers.hpp:48`）这一"治理并集"里查找，返回 `kEligible` / `kIneligible`（附一个具体原因）/ `kUnregistered`（后者只应在字段名打错或漏注册时出现，从不是合法结果）。判定完全由已有的、被 `scripts/check_policies.py` 强制"每个 `GuiState` 顶层字段恰好登记一处"的档位表推导，本层没有再引入任何手写字段名列表——新增一个 `GuiState` 字段时，它的默认值资格随档位表的登记自动确定，不需要在这里同步第二处。
+
+这条纪律在生成候选行时同样成立：确认面板要展示的行集合，来自对"当前 `GuiState`"与"当前生效默认（工厂值 + 已保存覆盖）"两份 `SerializeGuiStateJson` 输出做 JSON 树walk-and-diff（`BuildDefaultDiffRows`，`defaults_diff.hpp:75`），而不是任何按字段名枚举的表——新序列化字段零改动即可出现在面板里。
+
+### 8.3 覆盖文件即"残缺的 GuiState 文档"
+
+覆盖文件的 GuiState 半区不是一种新格式：它就是一份省略了大多数 key 的 `SerializeGuiStateJson` 输出，读取时复用既有的反序列化器——后者本就是"缺 key = 走工厂值"的语义。应用时先把工厂 `GuiState{}` 序列化、再用覆盖文档做 JSON merge-patch、最后整体反序列化回 `GuiState`，即"工厂值 + 用户已存的键"，而不是把用户文档合并进调用方当时手上那份可能已被污染的状态。字段级类型错误会让整份覆盖被丢弃（而不是部分应用半份），这条设计取舍见 8.4 I3。
+
+### 8.4 五条不变量
+
+- **I1 — 个人默认只影响"新建"，绝不改写已加载文件里已有的值。** 生效路径只有一条：`MakeNewDocumentState()`（`user_defaults.cpp:480`）的返回值被真正保留下来。`DoNew()`（`app.cpp:717`）走的是这条路径。`.lmc` 二进制加载完全不调用 `MakeNewDocumentState()`，直接把文件内容读入现有状态。CLI JSON 导入（`DoOpen()` 的 `.json` 分支，`app.cpp:628`）表面上也调用了 `MakeNewDocumentState()`，但随后的 `DeserializeFromJson()` 以整体赋值 `state = GuiState{}`（`file_io.cpp:1727`）覆盖掉这次调用的返回值，个人默认值在这条路径上因此不生效——调用点因此显式丢弃该次调用产生的降级计数，避免它被误报成"这次加载丢失了个人默认"。三条路径的净效果一致：打开一份已有文件，永远只看到文件自己写的值或工厂值，看不到别人机器上的个人默认。
+- **I2 — 来源可见 + 一键回出厂。** 确认面板把"未采纳的改动"与"其余条目"分列：前者可勾选采纳，后者对来源为"我的默认"的行提供单行 Revert，外加整体 Reset。
+- **I3 — schema 降级不炸，且留痕。** 覆盖文件比使用者自己保存的项目文件更新周期更松散，几乎必然经历字段增删。文件整体不可解析、字段类型不符、预设覆盖值非数字或非有限、覆盖值越界被 clamp，都归入同一个降级计数 + 说明列表通道，而不是分散成若干条各写各的警告——同一类失效只在一处可查。
+- **I4 — 测试必须能与开发者本机的个人默认隔离。** `--user-config <dir>` / `--no-user-config` 是显式 CLI 开关而非环境变量（用户可见行为不能只靠 env 漂移），GUI 交互式二进制与测试二进制对"什么都不传"时的默认值不同：交互式默认自动探测 OS 用户配置目录，测试二进制默认禁用，从而参考图比对与本机个人默认解耦。
+- **I5 — 覆盖文件位置遵循各平台的用户级配置目录约定**（Windows `%APPDATA%`、macOS `~/Library/Application Support`、Linux `$XDG_CONFIG_HOME` 或回退 `~/.config`），而不是与可执行文件同目录（只读安装 / 多用户机器下后者不可写或跨用户共享）。GUI 原先无条件写在 `$HOME` 下的日志文件一并收编到同一目录。
+
+### 8.5 预设库覆盖值的定案：约束在既有分类器容差域内，不引入身份机制
+
+用户可以覆盖内置 axis 预设（如常用的那几个）的 zenith std，但覆盖值被约束在该预设分类判据既有的容差域内；越界时 clamp 到边界并显式提示，判据本身零改动。这意味着"覆盖一个预设"目前实际上只有一个可调面（zenith std 一个浮点数）——分类判据对均值与方位角分布的约束比这更紧，所以设计上不应在 UI 上暗示可调面比这更宽。这一定案的前提是：触发需求的方向是"往判据合法域内部调紧"而非"越界调宽"；若未来出现真实的越界诉求，需要重新评估是否值得为其引入更重的身份携带机制。
+
+### 8.6 与 `ConfigSnapshot` / Revert baseline 的边界
+
+`GuiState::ConfigSnapshot`（`gui_state.hpp:1067`）只覆盖七个配置字段（晶体 / filter / layer / `sun` / `sim` / `renderer` / 染色规则），不含任何 `kView` 字段——而本层的默认值候选恰恰以 `kView` 为主力。默认值层复用的是 `ConfigSnapshot` 背后"两份状态结构化 diff、按需派生效果"的**模式**，但不能复用其 struct：两者覆盖的字段集合不同，把默认值的 diff 引擎强行套进 `ConfigSnapshot` 会连带改动 Revert 语义。

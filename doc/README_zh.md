@@ -40,6 +40,7 @@ doc/
   - 配置项详细说明和默认值
   - 配置验证规则
   - 常见配置错误和解决方案
+  - GUI 个人默认值：独立的 `user_defaults.json` 文件、各平台的存放位置、`--user-config`/`--no-user-config` 开关
 
 - **[Filter 子系统架构](filter-architecture_zh.md)**: Filter 子系统核心设计约束
   - Filter ↔ 晶体单键绑定模型

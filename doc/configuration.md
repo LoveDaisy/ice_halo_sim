@@ -1006,6 +1006,56 @@ The render configuration defines the renderer parameters.
 2. **Detailed logging**:
    - Check configuration parsing logs to locate issues
 
+## GUI Personal Defaults (User Overrides)
+
+This is a **separate file from the scene configuration above** — it does not live next to `crystal`/`filter`/`scene`/`render` and is only read by the GUI, never by the CLI. It lets a user carry personal preferences (a favorite lens, a retuned axis preset) across every new document on their own machine, without hard-coding one user's habit as everyone's factory default.
+
+#### File location
+
+One JSON file per OS user-config directory, never next to the executable (a read-only install or a multi-user machine may not be writable there):
+
+| Platform | Location |
+|----------|----------|
+| Windows | `%APPDATA%\Lumice\user_defaults.json` |
+| macOS | `~/Library/Application Support/Lumice/user_defaults.json` |
+| Linux | `$XDG_CONFIG_HOME/lumice/user_defaults.json`, falling back to `~/.config/lumice/user_defaults.json` |
+
+The GUI's log file, previously written unconditionally to `$HOME`, now lives in the same directory.
+
+#### Format: a sparse GuiState document, plus a presets subtree
+
+The bulk of the file is **not a new format** — it is a partial dump of the same JSON the GUI's `.lmc` files serialize their configuration section from (the same document-level fields: `sun`, `sim`, `renderer`, and the view-only fields such as overlay colors, aspect preset, background image). Any key it omits falls back to the factory value, because the parser that reads it is the same one used everywhere else, and that parser has always treated a missing key as "use the factory default" — there is no separate merge logic for this file.
+
+Alongside that, a `presets` subtree carries per-preset overrides for the built-in axis-orientation presets, e.g.:
+
+```json
+{
+  "renderer": { "lens_type": "..." },
+  "presets": {
+    "axis": {
+      "column": { "zenith_std": 0.3 }
+    }
+  }
+}
+```
+
+Only the zenith-std of a built-in preset can be overridden, and only within that preset's existing classification tolerance — a value outside the domain is clamped to the boundary rather than rejected, and the clamp is reported (see below). Presets with no adjustable face (e.g. the fully-uniform preset) refuse a stored value entirely.
+
+#### Degraded-input behavior
+
+An unparseable or non-object file, a field with the wrong JSON type, a non-numeric/non-finite preset value, or a clamped preset value are all reported through one notice channel rather than several ad hoc warnings, so a user can always find the full list of what was ignored or adjusted in one place. A field-level type error discards the whole GUI-state half of the overlay (never a half-applied result); the presets subtree is parsed independently.
+
+**Personal defaults only ever apply to a brand-new document** — they never override a value already present in a file being opened, whether that file is a `.lmc` project or a CLI JSON config imported through the GUI. Loading someone else's file always reproduces what that file itself specifies (or the factory value for anything it omits), regardless of what is saved on the machine doing the loading.
+
+#### `--user-config` / `--no-user-config`
+
+Two CLI switches (deliberately not environment variables — a user-facing behavior switch left to an env var causes silent per-machine drift):
+
+- `--user-config <dir>`: use the given directory instead of the OS default, for testing or for running multiple isolated profiles.
+- `--no-user-config`: skip personal defaults entirely; every new document uses factory values only.
+
+The interactive GUI binary defaults to auto-detecting the OS directory when neither flag is passed. The GUI test binary defaults to disabled instead, so a visual-regression reference image never depends on whichever `user_defaults.json` happens to exist on the machine that captured it.
+
 ## Related Documentation
 
 - [README](../README.md): User documentation
