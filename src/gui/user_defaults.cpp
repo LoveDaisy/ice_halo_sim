@@ -29,6 +29,9 @@ struct AxisPresetOverride {
   float zenith_std = 0.0f;
 };
 constexpr std::size_t kAxisPresetSlotCount = 6;  // AxisPreset has 6 enumerators
+static_assert(kAxisPresetSlotCount == static_cast<std::size_t>(AxisPreset::kCustom) + 1,
+              "kAxisPresetSlotCount must track AxisPreset's enumerator count (kCustom is its "
+              "last member) so the g_axis_overrides index never goes out of bounds silently");
 AxisPresetOverride g_axis_overrides[kAxisPresetSlotCount];
 
 struct AxisPresetJsonName {
@@ -303,10 +306,13 @@ GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir)
 
   // Namespace 4 (collections): a key path into these carries a document-local index, so they
   // are never written as defaults — but clear them anyway so a hand-edited file cannot make a
-  // new document start with someone else's crystals/layers/filters.
+  // new document start with someone else's crystals/layers/filters/raypath_color. Must track
+  // kCollectionFields (user_defaults.hpp) exactly — that list, not this line count, is the
+  // single source of truth for which containers are namespace 4.
   state.crystals.clear();
   state.layers.clear();
   state.filters.clear();
+  state.raypath_color.clear();
 
   SeedDefaultDocumentContents(state);
   return state;

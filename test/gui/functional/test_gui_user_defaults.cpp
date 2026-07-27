@@ -237,6 +237,29 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // code-review round 1 Major: raypath_color is namespace 4 (kCollectionFields) exactly like
+  // layers/crystals/filters, but MakeNewDocumentState only cleared the other three. A
+  // hand-edited override file could smuggle a color-class list into every new document.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "ac3_raypath_color_cannot_be_smuggled_in");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("raypath_color_smuggle");
+
+      json doc;
+      // Bare-array wire form (DeserializeGuiStateJson accepts it directly under
+      // "raypath_color"; see file_io.cpp's parse block).
+      doc["raypath_color"] = json::array();
+      doc["raypath_color"].push_back({ { "color", { 1.0f, 0.0f, 0.0f } } });
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      const gui::GuiState state = gui::MakeNewDocumentState(dir);
+      const gui::GuiState factory{};
+      IM_CHECK_EQ(state.raypath_color.size(), factory.raypath_color.size());
+      IM_CHECK_EQ(state.raypath_color.size(), static_cast<size_t>(0));
+    };
+  }
+
   // ================================================================================
   // AC4 — invariant I1
   // ================================================================================
