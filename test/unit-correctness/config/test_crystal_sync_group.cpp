@@ -208,10 +208,12 @@ TEST(ShapeScalarSyncGroupNormalize, AgreeingMembersProduceNoWarning) {
 }
 
 TEST(ShapeScalarSyncGroupNormalize, LeaderIsTheLowestApplicableSlotNotTheLowestDeclared) {
-  // On a pyramid, `height` is inapplicable and dropped by rule 1, so upper_h
-  // becomes the group's leader. Had Normalize run before Canonicalize, the
-  // about-to-be-dropped height slot would have donated its distribution to
-  // everyone — this pins the ordering of the two passes.
+  // On a pyramid, `height` is inapplicable, so upper_h — not the numerically
+  // lower height slot — leads the group. The exclusion is structural: leader
+  // election scans the slot map, and a slot this type does not have is a nullptr
+  // there. It is NOT a consequence of canonicalization having zeroed the slot
+  // first; see NormalizeAloneExcludesInapplicableSlotWithoutCanonicalizeFirst,
+  // which reaches the same leader with only the normalize pass run.
   ns::PyramidCrystalParam p;
   p.h_pyr_u_ = Gauss(0.3f, 0.05f);
   p.h_pyr_l_ = Uniform(9.0f, 9.0f);
@@ -220,6 +222,28 @@ TEST(ShapeScalarSyncGroupNormalize, LeaderIsTheLowestApplicableSlotNotTheLowestD
 
   ns::PrepareSyncGroups(p);
   EXPECT_TRUE(p.h_pyr_l_ == Gauss(0.3f, 0.05f)) << "upper_h leads the group; lower_h must adopt its distribution";
+}
+
+TEST(ShapeScalarSyncGroupNormalize, NormalizeAloneExcludesInapplicableSlotWithoutCanonicalizeFirst) {
+  // NormalizeSyncGroups carries no ordering precondition — this runs it with
+  // CanonicalizeSyncGroups deliberately NOT called, on the very configuration
+  // the old doc comment claimed would misfire: a pyramid whose group also names
+  // `height`, a slot pyramids do not have.
+  ns::PyramidCrystalParam p;
+  p.h_pyr_u_ = Gauss(0.3f, 0.05f);
+  p.h_pyr_l_ = Uniform(9.0f, 9.0f);
+  p.sync_group_[ns::kShapeScalarHeight] = 4;  // inapplicable to a pyramid, and still declared
+  p.sync_group_[ns::kShapeScalarUpperH] = 4;
+  p.sync_group_[ns::kShapeScalarLowerH] = 4;
+
+  ns::NormalizeSyncGroups(p);
+
+  EXPECT_TRUE(p.h_pyr_l_ == Gauss(0.3f, 0.05f))
+      << "upper_h must still lead: the height slot names no field on a pyramid, so it can donate nothing";
+  // Guards the premise of this test rather than its conclusion: had anything
+  // canonicalized `p` along the way, this slot would read 0 and the case above
+  // would no longer be the un-canonicalized one it claims to cover.
+  EXPECT_EQ(p.sync_group_[ns::kShapeScalarHeight], 4) << "NormalizeSyncGroups must not rewrite group numbers at all";
 }
 
 // ==================================================================================================

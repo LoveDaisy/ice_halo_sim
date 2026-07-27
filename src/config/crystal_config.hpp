@@ -95,18 +95,35 @@ void CanonicalizeSyncGroups(PyramidCrystalParam& p);
 //!   overwritten anyway, but only after a LOG_WARNING — neither silent nor
 //!   rejected.
 //!
-//!   PRECONDITION: CanonicalizeSyncGroups must have run first. Otherwise a slot
-//!   that rule 1 is about to zero (inapplicable to this type) could be picked as
-//!   the leader and donate its distribution to the whole group. Prefer
-//!   PrepareSyncGroups, which cannot get the order wrong.
+//!   No ordering precondition: this pass does NOT need CanonicalizeSyncGroups to
+//!   have run first. Both the members it rewrites and the leaders it elects are
+//!   scoped to slots this crystal type actually has, and that scoping is
+//!   structural — an inapplicable slot names no field to read or donate, so it
+//!   can be neither leader nor member no matter what its group number says. The
+//!   other two canonical-form rules cannot move the outcome either: collapsing a
+//!   singleton group turns one no-op (a lone member finds no earlier peer) into
+//!   another (group 0 is skipped), and renumbering is a bijection on non-zero ids
+//!   while this pass only ever compares ids for equality. Pinned by
+//!   NormalizeAloneExcludesInapplicableSlotWithoutCanonicalizeFirst, which runs
+//!   this pass on its own.
+//!
+//!   (An earlier revision of this comment claimed the opposite — that a slot
+//!   rule 1 is about to zero could be elected leader and donate its distribution.
+//!   It cannot: such a slot has no distribution to donate. Prefer
+//!   PrepareSyncGroups anyway, because both passes are needed, not because one
+//!   protects the other.)
 void NormalizeSyncGroups(PrismCrystalParam& p);
 void NormalizeSyncGroups(PyramidCrystalParam& p);
 
-//! @brief Canonicalize-then-normalize, in the only correct order.
+//! @brief Run both sync-group passes: canonicalize, then leader-normalize.
 //!
-//! @details The composed entry point every parse path should call, so the order
-//!   invariant is enforced by the implementation instead of by each caller's
-//!   memory.
+//! @details The composed entry point every parse path should call, so that
+//!   neither pass can be forgotten. Each answers a different question and both
+//!   are required: canonical form is what makes operator== (the re-simulation
+//!   trigger) see equal partitions as equal, leader normalization is what makes
+//!   the group's members carry one distribution. Their relative order does not
+//!   change the result (see NormalizeSyncGroups above); it is fixed here only so
+//!   there is one entry point rather than a choice at every call site.
 void PrepareSyncGroups(PrismCrystalParam& p);
 void PrepareSyncGroups(PyramidCrystalParam& p);
 
