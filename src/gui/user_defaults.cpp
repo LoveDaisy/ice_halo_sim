@@ -336,7 +336,11 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
   AxisPresetWriteResult result;
 
   const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
-  if (!entry.has_adjustable_zenith_std) {
+  // Both halves tested, not just the predicate: override_json_name is what the write below indexes
+  // the document with, and a nullptr there is not a refusal but a crash. The static_assert in
+  // axis_presets.hpp makes the two agree, so this second clause is unreachable today — it is here
+  // so that "refuses cleanly" does not depend on that assert still being in place.
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
     // Second of two defenses (the UI draws no input for these). A warning rather than an assert:
     // an assert is compiled out of the release build, which is the build the requirement — that
     // an unadjustable preset never reaches the override file — is actually about.
@@ -386,7 +390,7 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
 
 bool RevertOneAxisPresetOverride(AxisPreset preset) {
   const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
-  if (!entry.has_adjustable_zenith_std) {
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
     return false;  // nothing can be stored for it, so there is nothing to restore
   }
 

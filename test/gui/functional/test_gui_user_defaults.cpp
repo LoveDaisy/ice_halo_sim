@@ -54,6 +54,33 @@ bool SerializesIdentically(const gui::GuiState& a, const gui::GuiState& b) {
   return gui::SerializeGuiStateJson(a) == gui::SerializeGuiStateJson(b);
 }
 
+// Read presets.axis.<name>.zenith_std, reporting an absent or malformed key as nullopt.
+//
+// Not defensiveness for its own sake: `doc["presets"]["axis"]["column"]["zenith_std"].get<float>()`
+// on a document that LOST the key throws an uncaught json type_error, which aborts this
+// single-process binary and takes every case after it with it — measured, while red-probing the
+// surgical-write assertion below. The regression these cases exist to catch is exactly "the key
+// is gone", so the read has to survive it and report.
+std::optional<float> ReadPresetStd(const json& doc, const char* name) {
+  const auto presets = doc.find("presets");
+  if (presets == doc.end() || !presets->is_object()) {
+    return std::nullopt;
+  }
+  const auto axis = presets->find("axis");
+  if (axis == presets->end() || !axis->is_object()) {
+    return std::nullopt;
+  }
+  const auto node = axis->find(name);
+  if (node == axis->end() || !node->is_object()) {
+    return std::nullopt;
+  }
+  const auto value = node->find("zenith_std");
+  if (value == node->end() || !value->is_number()) {
+    return std::nullopt;
+  }
+  return value->get<float>();
+}
+
 // Read the override file from disk directly, bypassing the production reader. The write-side
 // cases assert on what LANDED, and going through ReadOverlayJsonIfPresent would let a reader bug
 // and a writer bug cancel out into a passing test.
@@ -729,7 +756,9 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       // On disk under the key 405.2's reader already looks for, not merely in memory.
       const json doc = ReadOverlayDoc(dir);
       IM_CHECK(doc.contains("presets"));
-      IM_CHECK_EQ(doc["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+      const auto stored_column = ReadPresetStd(doc, "column");
+      IM_CHECK(stored_column.has_value());
+      IM_CHECK_EQ(*stored_column, 0.3f);
 
       // Drop the in-memory state the way a restart would, then re-resolve from the file.
       gui::ResetUserAxisPresetOverrides();
@@ -857,6 +886,22 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f).written);
       IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kPlate, 0.5f).written);
 
+      // Asserted after the SECOND write, before any revert: the second save must not have taken
+      // the first one with it. Without this line the whole case still passes when the write is a
+      // wholesale rewrite of the presets subtree — measured with exactly that mutation, which is
+      // why the assertion is here and not left implied by the revert checks below.
+      {
+        const json after_two_writes = ReadOverlayDoc(dir);
+        const auto kept_column = ReadPresetStd(after_two_writes, "column");
+        const auto kept_plate = ReadPresetStd(after_two_writes, "plate");
+        IM_CHECK(kept_column.has_value());
+        IM_CHECK(kept_plate.has_value());
+        IM_CHECK_EQ(*kept_column, 0.3f);
+        IM_CHECK_EQ(*kept_plate, 0.5f);
+        IM_CHECK(after_two_writes.contains("bg_alpha"));
+        IM_CHECK_EQ(after_two_writes.value("bg_alpha", 0.0f), 0.42f);
+      }
+
       IM_CHECK(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
 
       // Factory again, field by field against the table itself.
@@ -868,17 +913,19 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(restored.std, column.zenith.std);
 
       const json doc = ReadOverlayDoc(dir);
-      IM_CHECK(!doc["presets"]["axis"].contains("column"));
+      IM_CHECK(!ReadPresetStd(doc, "column").has_value());
       // Untouched: the other preset and the GuiState key sharing the file.
-      IM_CHECK_EQ(doc["presets"]["axis"]["plate"]["zenith_std"].get<float>(), 0.5f);
-      IM_CHECK_EQ(doc["bg_alpha"].get<float>(), 0.42f);
+      const auto survivor = ReadPresetStd(doc, "plate");
+      IM_CHECK(survivor.has_value());
+      IM_CHECK_EQ(*survivor, 0.5f);
+      IM_CHECK_EQ(doc.value("bg_alpha", 0.0f), 0.42f);
 
       // Reverting the last preset prunes the now-empty parents, so a hand-opened file does not
       // accumulate `"presets": {"axis": {}}` skeletons.
       IM_CHECK(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kPlate));
       const json pruned = ReadOverlayDoc(dir);
       IM_CHECK(!pruned.contains("presets"));
-      IM_CHECK_EQ(pruned["bg_alpha"].get<float>(), 0.42f);
+      IM_CHECK_EQ(pruned.value("bg_alpha", 0.0f), 0.42f);
     };
   }
 

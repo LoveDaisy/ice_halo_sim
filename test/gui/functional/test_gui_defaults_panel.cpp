@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,30 @@ void OpenPanelOn(ImGuiTestContext* ctx, gui::DefaultsPanelSection section) {
 void FilterTo(ImGuiTestContext* ctx, const char* text) {
   ctx->ItemInputValue("**/###defaults_search", text);
   ctx->Yield(3);
+}
+
+// Read presets.axis.<name>.zenith_std, reporting an absent or malformed key as nullopt rather
+// than throwing. A regression that DROPS the key is precisely what these cases exist to catch, and
+// nlohmann's operator[] chain would answer it with an uncaught type_error that aborts this
+// single-process binary and hides every case after it.
+std::optional<float> ReadPresetStd(const json& doc, const char* name) {
+  const auto presets = doc.find("presets");
+  if (presets == doc.end() || !presets->is_object()) {
+    return std::nullopt;
+  }
+  const auto axis = presets->find("axis");
+  if (axis == presets->end() || !axis->is_object()) {
+    return std::nullopt;
+  }
+  const auto node = axis->find(name);
+  if (node == axis->end() || !node->is_object()) {
+    return std::nullopt;
+  }
+  const auto value = node->find("zenith_std");
+  if (value == node->end() || !value->is_number()) {
+    return std::nullopt;
+  }
+  return value->get<float>();
 }
 
 std::vector<gui::DefaultDiffRow> CurrentRows() {
@@ -399,10 +424,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/###preset_std_column", 25.0f);
       ctx->Yield(3);
       {
-        const json saved = ReadOverlayFile(dir);
-        const float stored = saved["presets"]["axis"]["column"]["zenith_std"].get<float>();
-        IM_CHECK(stored < gui::kColumnPlateParryZenithStdUpperBound);
-        IM_CHECK(stored > 0.0f);
+        const auto stored = ReadPresetStd(ReadOverlayFile(dir), "column");
+        IM_CHECK(stored.has_value());
+        IM_CHECK(*stored < gui::kColumnPlateParryZenithStdUpperBound);
+        IM_CHECK(*stored > 0.0f);
         IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
       }
 
@@ -412,8 +437,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/###preset_std_column", 0.3f);
       ctx->Yield(3);
       {
-        const json saved = ReadOverlayFile(dir);
-        IM_CHECK_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+        const auto stored = ReadPresetStd(ReadOverlayFile(dir), "column");
+        IM_CHECK(stored.has_value());
+        IM_CHECK_EQ(*stored, 0.3f);
         IM_CHECK(!ctx->ItemExists("**/###preset_warning_column"));
       }
 
@@ -446,8 +472,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       const json saved = ReadOverlayFile(dir);
-      IM_CHECK(!saved["presets"]["axis"].contains("column"));
-      IM_CHECK_EQ(saved["presets"]["axis"]["plate"]["zenith_std"].get<float>(), 0.5f);
+      IM_CHECK(!ReadPresetStd(saved, "column").has_value());
+      const auto survivor = ReadPresetStd(saved, "plate");
+      IM_CHECK(survivor.has_value());
+      IM_CHECK_EQ(*survivor, 0.5f);
 
       // The input box now reads the factory value back, not the number the user last typed.
       IM_CHECK_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std,
@@ -571,8 +599,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/###save_as_preset_column");
       ctx->Yield(3);
 
-      const json saved = ReadOverlayFile(dir);
-      IM_CHECK_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+      const auto gestured = ReadPresetStd(ReadOverlayFile(dir), "column");
+      IM_CHECK(gestured.has_value());
+      IM_CHECK_EQ(*gestured, 0.3f);
       // Random is not a gesture target — it has no adjustable face, so a button for it would
       // write nothing and say nothing.
       IM_CHECK(!ctx->ItemExists("**/###save_as_preset_random"));
@@ -582,7 +611,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // Cancel discards the crystal edit, but the gesture is NOT part of that buffer — it wrote to
       // the library, which is a separate persistent thing. Asserted because the opposite would be
       // an easy and invisible mistake to make.
-      IM_CHECK_EQ(ReadOverlayFile(dir)["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+      const auto after_cancel = ReadPresetStd(ReadOverlayFile(dir), "column");
+      IM_CHECK(after_cancel.has_value());
+      IM_CHECK_EQ(*after_cancel, 0.3f);
     };
   }
 
