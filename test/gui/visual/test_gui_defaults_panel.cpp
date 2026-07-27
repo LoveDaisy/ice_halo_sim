@@ -41,10 +41,12 @@ using lumice::test_user_defaults::ResetUserDefaultsChannels;
 using nlohmann::json;
 
 enum class SceneKind {
-  kPendingChanges,  // §2 populated, §3 collapsed — what the File-menu entry opens
-  kOtherExpanded,   // §3 expanded over a document whose defaults are already saved (Mine + Revert)
-  kFiltered,        // the search box narrowing §2
-  kNoChanges,       // nothing differs — §2's empty state
+  kPendingChanges,   // §2 populated, §3 collapsed — what the File-menu entry opens
+  kOtherExpanded,    // §3 expanded over a document whose defaults are already saved (Mine + Revert)
+  kFiltered,         // the search box narrowing §2
+  kNoChanges,        // nothing differs — §2's empty state
+  kPresetsExpanded,  // §1 open with one preset unfolded — the nine typed cells and their widths
+  kPresetsWarning,   // the same, over an out-of-range stored value, so the warning column is filled
 };
 
 struct DefaultsPanelScene {
@@ -63,10 +65,12 @@ constexpr double kDeterministicThresholdDb = 40.0;
 
 // clang-format off
 const DefaultsPanelScene kScenes[] = {
-  { "pending_changes", SceneKind::kPendingChanges, kDeterministicThresholdDb },
-  { "other_expanded",  SceneKind::kOtherExpanded,  kDeterministicThresholdDb },
-  { "filtered",        SceneKind::kFiltered,       kDeterministicThresholdDb },
-  { "no_changes",      SceneKind::kNoChanges,      kDeterministicThresholdDb },
+  { "pending_changes",  SceneKind::kPendingChanges,  kDeterministicThresholdDb },
+  { "other_expanded",   SceneKind::kOtherExpanded,   kDeterministicThresholdDb },
+  { "filtered",         SceneKind::kFiltered,        kDeterministicThresholdDb },
+  { "no_changes",       SceneKind::kNoChanges,       kDeterministicThresholdDb },
+  { "presets_expanded", SceneKind::kPresetsExpanded, kDeterministicThresholdDb },
+  { "presets_warning",  SceneKind::kPresetsWarning,  kDeterministicThresholdDb },
 };
 // clang-format on
 constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -130,14 +134,48 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
         doc["renderer"]["fov"] = 95.0f;
         IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
         gui::g_state = gui::MakeNewDocumentState();
+      } else if (scene.kind == SceneKind::kPresetsWarning) {
+        // An out-of-range value already on disk, so the row opens with its warning cell filled
+        // without the scene having to type anything. Typing would leave the input active, and an
+        // active InputText draws a caret whose phase depends on the frame count — the exact kind
+        // of pixel that makes a reference flake.
+        json doc;
+        doc["presets"]["axis"]["column"]["zenith_std"] = 25.0f;
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+        gui::g_state = gui::MakeNewDocumentState();
+        // The load clamps and files a notice; drain it so the warning POPUP does not open over the
+        // panel and land in the capture.
+        gui::TakeUserDefaultsDowngradeCount();
+        gui::TakeUserDefaultsDowngradeNotices();
+      } else if (scene.kind == SceneKind::kPresetsExpanded) {
+        json doc;
+        doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;  // in range: the "(mine)" label, no warning
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+        gui::g_state = gui::MakeNewDocumentState();
       } else if (scene.kind != SceneKind::kNoChanges) {
         ApplyEdits();
       }
 
-      gui::OpenDefaultsPanel(gui::g_state, gui::DefaultsPanelSection::kPendingChanges);
+      const bool presets_scene = scene.kind == SceneKind::kPresetsExpanded || scene.kind == SceneKind::kPresetsWarning;
+      gui::OpenDefaultsPanel(gui::g_state, presets_scene ? gui::DefaultsPanelSection::kPresets :
+                                                           gui::DefaultsPanelSection::kPendingChanges);
       ctx->Yield(4);
 
-      if (scene.kind == SceneKind::kOtherExpanded) {
+      if (presets_scene) {
+        // Column unfolded: the three axis rows, the disabled type/mean cells, the live std cell and
+        // the warning column beside it. One preset is enough — the other five render through the
+        // same two row functions, and unfolding all six would push the table past the panel.
+        ctx->ItemOpen("**/###preset_Column");
+        ctx->Yield(3);
+        if (scene.kind == SceneKind::kPresetsWarning) {
+          // The warning cell is only populated by a write, not by the load-time clamp: the panel
+          // reports what IT did. Re-committing the already-clamped value through the real input is
+          // what fills the cell, and it leaves the input deactivated (ItemInputValue presses Enter).
+          ctx->ItemInputValue("**/###preset_std_column", 25.0f);
+          ctx->Yield(3);
+          IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
+        }
+      } else if (scene.kind == SceneKind::kOtherExpanded) {
         ctx->ItemOpen("**/###defaults_other");
         ctx->Yield(3);
       } else if (scene.kind == SceneKind::kFiltered) {

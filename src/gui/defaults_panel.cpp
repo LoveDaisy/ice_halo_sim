@@ -236,6 +236,16 @@ void RenderOtherTable(const GuiState& state) {
   }
 }
 
+// Display format for every std cell in §1.
+//
+// %g rather than a fixed number of decimals, and 7 significant digits rather than 6, because of
+// exactly one value: the clamp target. The domains are OPEN, so clamping Column's std lands on
+// nextafter(10, 0) = 9.99999905 — which "%.3f" renders as "10.000" and "%.6g" as "10", directly
+// under a line that says the value must stay LESS than 10. A user reading that has been told two
+// contradictory things and has no way to tell which is true. 7 digits shows 9.999999, and leaves
+// the values people actually type alone (0.3 stays "0.3", not "0.300000").
+constexpr const char* kPresetStdDisplayFormat = "%.7g";
+
 // Reload every §1 std input from what is actually in effect (factory value, or the user's stored
 // override). Called on open and after every write, so the boxes show the stored truth rather than
 // whatever the user last typed into them.
@@ -278,7 +288,7 @@ void RenderReadOnlyAxisRow(const char* axis_label, const AxisDist& dist) {
   ImGui::BeginDisabled();
   float std_value = dist.std;
   ImGui::SetNextItemWidth(-FLT_MIN);
-  ImGui::InputFloat("##std", &std_value, 0.0f, 0.0f, "%.3f");
+  ImGui::InputFloat("##std", &std_value, 0.0f, 0.0f, kPresetStdDisplayFormat);
   ImGui::EndDisabled();
 
   ImGui::TableNextColumn();  // warning cell: read-only rows never carry one
@@ -312,17 +322,24 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
   ImGui::TableNextColumn();
   ImGui::SetNextItemWidth(-FLT_MIN);
   const std::string std_id = std::string("###preset_std_") + entry.override_json_name;
-  ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f, "%.3f");
+  ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f, kPresetStdDisplayFormat);
   if (ImGui::IsItemDeactivatedAfterEdit()) {
     const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_preset_std_buffers.slots[slot]);
     // The message is empty on a clean write, which is also how the warning cell is cleared — one
     // assignment covers both directions, so a warning cannot outlive the value that caused it.
     g_preset_warnings.slots[slot] = result.message;
-    if (result.written) {
+    if (!result.written) {
+      g_status_message = result.message;
+    } else if (result.clamped) {
+      // Says "adjusted", not "saved". A status line reading "Saved 9.99999905" after the user typed
+      // 25 is technically true and reads as though nothing happened to their number — the icon in
+      // the warning column carries the full reason, but the line the user is already looking at has
+      // to admit the value changed.
+      g_status_message = std::string("Adjusted to ") + FormatAxisPresetStd(result.stored_value) + " and saved as the " +
+                         entry.label + " zenith std.";
+    } else {
       g_status_message =
           std::string("Saved ") + FormatAxisPresetStd(result.stored_value) + " as the " + entry.label + " zenith std.";
-    } else {
-      g_status_message = result.message;
     }
     RefreshPresetStdBuffers();
   }

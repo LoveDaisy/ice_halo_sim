@@ -173,13 +173,26 @@ Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
 `test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
 scene stops comparing pixel-identical.
 
+The `defaults_panel_layout` references cover the "Save Current as Defaults" modal
+(`src/gui/defaults_panel.cpp`) through the same on-screen sub-region capture as `modal_layout`, and
+inherit the same docking coupling. Six deterministic scenes at the 40 dB floor: four over the diff
+sections (`pending_changes` / `other_expanded` / `filtered` / `no_changes`) and two over the preset
+library (`presets_expanded` / `presets_warning`, one preset unfolded to show the nine typed cells,
+the live std input and the warning column beside it). Every scene installs an explicit, freshly
+emptied user-config directory **before** `ResetTestState()` — installed after, the capture is built
+from whatever personal defaults the running machine has saved, which is worth 20.7 dB on a scene
+that looks isolated. Regen trigger: any layout change to the panel's section headers, either diff
+table's columns, the preset table's columns, or the pinned action row. Command:
+`python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. Threshold backfill: the
+`psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
+
 **`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
 `std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
 collection by the driver script.
 
 **Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
-`scripts/regen_gui_test_refs.py`; `capture_harness`, `lens_proj` and `modal_layout` are the
-second, third and fourth. A
+`scripts/regen_gui_test_refs.py`; `capture_harness`, `lens_proj`, `modal_layout` and
+`defaults_panel_layout` are the others. A
 group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
 print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves

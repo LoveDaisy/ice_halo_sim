@@ -142,7 +142,7 @@
       }
     },
     "defaults_panel_layout": {
-      "generated_at": "2026-07-27T21:29:15",
+      "generated_at": "2026-07-28T01:26:52",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -168,6 +168,20 @@
           "threshold": 40.0
         },
         "pending_changes": {
+          "psnr_mean": null,
+          "psnr_std": null,
+          "identical_runs": 10,
+          "n_samples": 10,
+          "threshold": 40.0
+        },
+        "presets_expanded": {
+          "psnr_mean": null,
+          "psnr_std": null,
+          "identical_runs": 10,
+          "n_samples": 10,
+          "threshold": 40.0
+        },
+        "presets_warning": {
           "psnr_mean": null,
           "psnr_std": null,
           "identical_runs": 10,
