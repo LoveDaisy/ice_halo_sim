@@ -4696,10 +4696,14 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[sync_layout] vertical modal=%.0f slider_w=%.1f input_right=%.1f swatch=(%.1fx%.1f)\n",
               win->Size.x, slider_w, input.RectFull.Max.x, swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
       IM_CHECK_GT(slider_w, 40.0f);
-      // The input sits to the slider's right and must end before the Rand column starts — i.e. the
-      // pair fits the cell instead of spilling into the next one.
+      // The input sits to the slider's right and must end before the NEXT column's content starts —
+      // i.e. the pair fits the cell instead of spilling into the neighbour. That neighbour is the
+      // Sync column (the order is Param | Value | Sync | Rand | Spread), so the swatch is what this
+      // has to clear; the Rand checkbox is checked too, as the ordering of the three is itself part
+      // of the claim and a silent column-order regression would otherwise still pass.
       const auto rand_check = ctx->ItemInfo("**/##rnd_Face 3##modal_fd");
-      IM_CHECK_LT(input.RectFull.Max.x, rand_check.RectFull.Min.x);
+      IM_CHECK_LT(input.RectFull.Max.x, swatch.RectFull.Min.x);
+      IM_CHECK_LT(swatch.RectFull.Max.x, rand_check.RectFull.Min.x);
       // The swatch is square and exactly one frame tall, so it cannot be what drives row height.
       IM_CHECK_EQ(swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
       IM_CHECK_LE(swatch.RectFull.GetHeight(), ImGui::GetFrameHeight());

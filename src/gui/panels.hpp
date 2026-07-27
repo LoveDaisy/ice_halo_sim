@@ -62,7 +62,7 @@ constexpr float kShapeDistDefaultSpreadFraction = 0.2f;
 // structure-consumption sites (RenderShapeDistTableRow / the wedge + face rows' TableNextColumn
 // sequences). ImGui does NOT hard-assert when a row emits a different number of columns than the
 // header declares — it silently misaligns — so keeping every site pinned to this one constant is
-// how the "columns everywhere" invariant is enforced. Columns: Param | Value | Rand | Spread | Sync.
+// how the "columns everywhere" invariant is enforced. Columns: Param | Value | Sync | Rand | Spread.
 // (The GUI edits uniform-only — no distribution-type column; non-uniform types loaded from JSON are
 // downgraded to uniform on load, see file_io.cpp ParseShapeDist.)
 constexpr int kShapeTableColumnCount = 5;
@@ -74,7 +74,7 @@ constexpr int kShapeTableColumnCount = 5;
 void ShapeTableParamLabel(const char* label);
 
 // Render one crystal shape distribution as a property-table row:
-//   [Param label] [center slider+input] [Randomize checkbox] [spread input] [sync-group swatch]
+//   [Param label] [center slider+input] [sync-group swatch] [Randomize checkbox] [spread input]
 // The spread column is wrapped in BeginDisabled(!randomize) so a not-yet-randomized field still
 // shows it (greyed = "available to turn on"), matching the owner's "everything on the surface"
 // design — no hidden state, the table stays a regular rectangle. Enabling randomization sets the

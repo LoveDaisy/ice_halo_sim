@@ -802,7 +802,15 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
   ImGui::TableNextColumn();
   changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
 
-  // Col 2 — Randomize checkbox. The GUI is uniform-only, so enabling sets type=Uniform; NO_RANDOM is
+  // Col 2 — sync group swatch + picker popup. Ahead of Rand/Spread because sync is not a property of
+  // randomization: it constrains the row's final value and is equally usable with Rand off. Left
+  // BLANK for a non-syncable scalar, the same way the wedge rows leave their inapplicable columns
+  // blank (edit_modals.cpp RenderWedgeTableRow) — the column is still advanced so the grid stays a
+  // rectangle.
+  ImGui::TableNextColumn();
+  const bool group_changed = syncable && RenderSyncCell(label, cr, slot);
+
+  // Col 3 — Randomize checkbox. The GUI is uniform-only, so enabling sets type=Uniform; NO_RANDOM is
   // expressed via this checkbox being off. Text-less (the header names the column); the ## suffix
   // embeds `label` so the id is unique.
   ImGui::TableNextColumn();
@@ -820,7 +828,7 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
     changed = true;
   }
 
-  // Col 3 — spread input. Rendered even when not randomized, but wrapped in BeginDisabled so it greys
+  // Col 4 — spread input. Rendered even when not randomized, but wrapped in BeginDisabled so it greys
   // out ("available to enable") and cannot be interacted with while dist is NO_RANDOM (spread==0),
   // preserving the disabled-state semantics. A plain number input (not a slider — saves horizontal
   // space in the narrow vertical layout). Same units as center; clamped to [0, center_max].
@@ -836,16 +844,12 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, flo
 
   ImGui::EndDisabled();
 
-  // Col 4 — sync group swatch + picker popup. Left BLANK for a non-syncable scalar, the same way the
-  // wedge rows leave their inapplicable columns blank (edit_modals.cpp RenderWedgeTableRow) — the
-  // column is still advanced so the grid stays a rectangle.
-  ImGui::TableNextColumn();
-  const bool group_changed = syncable && RenderSyncCell(label, cr, slot);
-
-  // A value edit on a row that is in a group writes through to the whole group. Evaluated after the
-  // Sync cell so an edit made in the same frame the row joined a group propagates the joined value
-  // rather than the discarded one. Joining itself does not go through here — that path snapshots
-  // FROM the leader (JoinSyncGroup), it does not push TO the group.
+  // A value edit on a row that is in a group writes through to the whole group. Evaluated after ALL
+  // the cells, hence after the Sync cell, so an edit made in the same frame the row joined a group
+  // propagates the joined value rather than the discarded one — the reason this lives at the end of
+  // the function rather than next to the Value column, and the reason moving the Sync cell earlier in
+  // the column order does not disturb it. Joining itself does not go through here: that path
+  // snapshots FROM the leader (JoinSyncGroup), it does not push TO the group.
   if (changed) {
     PropagateToSyncGroup(cr, slot);
   }

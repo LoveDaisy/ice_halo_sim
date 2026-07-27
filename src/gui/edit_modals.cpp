@@ -587,7 +587,7 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
 
 // Render a wedge-angle parameter (upper_alpha / lower_alpha) as one property-table row. These are
 // structurally NOT randomizable (owner: "no need, don't do it"), so only the Parameter + Value
-// columns are filled; the Rand / Spread / Sync columns are advanced but left BLANK. Blank here
+// columns are filled; the Sync / Rand / Spread columns are advanced but left BLANK. Blank here
 // means "not applicable" — visually distinct from the greyed-but-present state a randomizable row
 // shows when its Randomize checkbox is off. Advances all kShapeTableColumnCount columns.
 static bool RenderWedgeTableRow(const char* label, float* value) {
@@ -598,7 +598,7 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
                                       kWedgePresetCount, /*trailing_label=*/false);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
-  // columns as intentionally-empty cells (Rand / Spread / Sync). Driven by the shared constant
+  // columns as intentionally-empty cells (Sync / Rand / Spread). Driven by the shared constant
   // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
   // kShapeTableColumnCount is load-bearing here, not just asserted in a comment. Empty (not skipped)
   // keeps the grid a rectangle and the headers aligned.
@@ -631,8 +631,8 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 
   // -- Shape parameters (property table) --
   // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
-  // Param | Value | Rand | Spread | Sync); the two Pyramid wedge angles are non-randomizable
-  // RenderWedgeTableRow rows (Rand/Spread/Sync blank). See gui/slider_mapping.hpp for the
+  // Param | Value | Sync | Rand | Spread); the two Pyramid wedge angles are non-randomizable
+  // RenderWedgeTableRow rows (Sync/Rand/Spread blank). See gui/slider_mapping.hpp for the
   // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
   // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
   // drift (ImGui silently misaligns rather than asserting on a mismatch).
@@ -642,13 +642,16 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // Shared column setup: identical fixed widths in the main params table and the Face Distance table
   // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
   // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
-  // clipping the fixed Rand/Spread/Sync cells.
+  // clipping the fixed Sync/Rand/Spread cells.
   const auto setup_shape_columns = []() {
     ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    // Sync sits BEFORE Rand, not after Spread: sync is not a randomization sub-property. It forces
+    // the final value of a geometric parameter to be shared, and works with randomization off just
+    // as well as on — placing it after the Rand/Spread pair read as "a third knob of the randomizer".
+    ImGui::TableSetupColumn("Sync", ImGuiTableColumnFlags_WidthFixed, kShapeSyncColWidth);
     ImGui::TableSetupColumn("Rand", ImGuiTableColumnFlags_WidthFixed, kShapeRandColWidth);
     ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
-    ImGui::TableSetupColumn("Sync", ImGuiTableColumnFlags_WidthFixed, kShapeSyncColWidth);
   };
 
   if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
