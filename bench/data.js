@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785137105807,
+  "lastUpdate": 1785137108216,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "00f9d49fc95fe411dd82ab6686e21fc0de5718e2",
-          "message": "Merge pull request #126 from LoveDaisy/feat/metal-gen-trace-fusion\n\nfeat(metal): fuse gen+trace into one command buffer (task-264)",
-          "timestamp": "2026-06-13T01:45:22+08:00",
-          "tree_id": "9aed83822638731d531d0ae74a7dc2df39d40d92",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/00f9d49fc95fe411dd82ab6686e21fc0de5718e2"
-        },
-        "date": 1781286657434,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 97.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 100.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 99,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "f007991d19cb9c206a4966a0d19133f8838a6762",
           "message": "Merge pull request #127 from LoveDaisy/docs/gpu-seam-design-and-knowledge-base\n\ndocs: promote GPU seam-design blueprint + route history, add knowledge-base discipline",
           "timestamp": "2026-06-13T11:32:14+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 91.5,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1104a952b08241bd61e45bcf7380439a761cbbf7",
+          "message": "Merge pull request #229 from LoveDaisy/feat/crystal-sample-count-semantics\n\nfix(stats): make crystals=N a scene property instead of a schedule artifact",
+          "timestamp": "2026-07-27T15:17:09+08:00",
+          "tree_id": "330fc333a3c88c2f6fcf80ba8e69d53bbf64b031",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1104a952b08241bd61e45bcf7380439a761cbbf7"
+        },
+        "date": 1785137107464,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.9,
             "unit": "%"
           }
         ]
