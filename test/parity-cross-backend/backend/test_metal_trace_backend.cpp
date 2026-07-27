@@ -18,6 +18,7 @@
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"
 #include "core/backend/trace_backend.hpp"
+#include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
 
 namespace lumice {
@@ -251,12 +252,16 @@ TEST(MetalTraceBackend, TraceLayerKernelOccupancy) {
 }
 
 // =============================================================================
-// K-shape geometry pool: GetLastBatchCrystalCount reports the CROSS-LAYER sum
-// of distinct pool shapes built during the batch (Σ layers Σ ci P_ci). At the
-// default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
-// return value equals Σ layers Σ ci 1 = the cross-layer setting count.
+// K-shape geometry pool: the counter reports the CROSS-LAYER sum of crystal
+// geometries this batch freshly SAMPLED (Σ layers Σ ci over the new draws), not
+// the pool shapes it uploaded. At the default knob LUMICE_GPU_GEOM_CLOCK=0,
+// P_ci collapses to 1 per ci, so the first batch of a deterministic scene
+// reports Σ layers Σ ci 1 = the cross-layer setting count — and a subsequent
+// batch reports 0, because every shape is then a reuse. (Metal rebuilds
+// `pool_crystals_` every batch regardless; that upload is not a sampling event
+// once the same deterministic shape has been drawn before.)
 // =============================================================================
-TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
+TEST(MetalTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
@@ -281,12 +286,25 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
 
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
     backend.EndSession();
+
+    // Second batch, same instance + same scene: the deterministic shape has
+    // already been sampled, so this batch's fresh-sample count is 0 even though
+    // Metal re-uploads the pool. This is what makes the run-level Σ that
+    // StatsConsumer reports invariant to the number of batches.
+    backend.BeginSession(spec);
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+        << "Reuse batch on a deterministic scene must report 0 new samples";
+    backend.EndSession();
   }
 
   // Multi-MS: layer 0 has 1 crystal setting, layer 1 has 3. At the default
   // knob (P_ci=1 per ci) the batch-wide sum is 1 + 3 = 4 — this is the exact
   // opposite of the pre-K-pool semantic that returned only the final layer's
   // 3 settings.
+  //
+  // NOTE the two blocks below build their own backend instance, so each starts
+  // with an empty "already sampled" set and its first batch counts every shape.
   {
     auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/2);
     auto& final_ms = scene.ms_.back();
@@ -324,10 +342,59 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
     backend.TraceLayer(roots1);
 
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
-        << "Cross-layer pool-shape sum at K=0: 1 (layer 0) + 3 (layer 1). "
+        << "Cross-layer new-sample sum at K=0: 1 (layer 0) + 3 (layer 1). "
            "Pre-K-pool semantic was final-layer settings only (3).";
     backend.EndSession();
+
+    // Second batch over the same two layers: every shape is a reuse.
+    backend.BeginSession(spec);
+    auto h0b = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0b, nullptr);
+    auto roots1b = backend.Recombine(std::move(h0b), rspec);
+    backend.TraceLayer(roots1b);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
+    backend.EndSession();
   }
+}
+
+// =============================================================================
+// The host-injected crystal path is not a sampling event: when the caller
+// supplies the Crystal (golden-ray hook), ResolveLayerCrystalForCi collapses the
+// pool to that one shape and consumes no rng draw, so nothing was sampled and
+// the counter must stay 0. Asserted explicitly — the pre-existing tests on this
+// path only checked that it runs.
+// =============================================================================
+TEST(MetalTraceBackend, HostInjectedCrystalIsNotANewSample) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 17;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+
+  HostRayBatch host;
+  host.count = 512;
+  host.crystal = &crystal;
+  host.crystal_id = 0;
+  host.refractive_index = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  // Fresh backend instance: the tracker starts empty, so a non-zero result here
+  // could only come from counting the injected crystal.
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  backend.TraceLayer(RootRaySource::FromHost(host));
+  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+      << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
+  backend.EndSession();
 }
 
 // =============================================================================

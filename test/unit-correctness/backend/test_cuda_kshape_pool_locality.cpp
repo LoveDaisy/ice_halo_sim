@@ -310,9 +310,13 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
 
   auto table = hooks.ReadbackPoolShapeTable();
   EXPECT_EQ(table.size(), 1u) << "K=0 must collapse pool to a single shape (P_ci ≡ 1 per (layer, ci)).";
+  // The scene is stochastic (MakeStochasticPrismScene), so this ci re-samples
+  // every batch and every draw is a NEW sample — the new-sample count therefore
+  // equals Σ P_ci here, unchanged by the counter's semantic tightening (which
+  // only zeroes the count on batches that reuse a deterministic shape).
   EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u)
-      << "K=0, single-(layer, ci) scene: Σ P_ci must be 1 (mirrors GetLastBatchCrystalCount contract "
-         "for the knob-off configuration).";
+      << "K=0, single-(layer, ci) stochastic scene: Σ P_ci must be 1 (mirrors the new-crystal-sample "
+         "count contract for the knob-off configuration).";
 
   // Every ray MUST report the single shape's tuple; any spread means the
   // K=0 collapse is broken (P_ci somehow > 1, or the picker sampled a

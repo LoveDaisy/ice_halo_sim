@@ -18,6 +18,7 @@
 #include "core/color_util.hpp"
 #include "core/lens_proj.hpp"
 #include "core/scatter_accum.hpp"
+#include "core/trace_ops.hpp"
 
 namespace lumice {
 namespace {
@@ -463,12 +464,15 @@ TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
 }
 
 // =============================================================================
-// Test — task-exit-seam-crystal-count: GetLastBatchCrystalCount() returns the
-// setting count of the FINAL MS layer (not cross-layer sum). This locks the
-// deliberate semantic decision from plan §2 default assumption 2.
+// Test — new-crystal-sample count: the counter reports how many crystal
+// geometries this BATCH freshly sampled, summed across every (layer, ci) —
+// NOT the final layer's setting count, and NOT "how many crystal objects were
+// materialised". A deterministic param is a new sample the first time the scene
+// asks for it and a reuse forever after, so the second batch on the same
+// backend instance reports 0.
 // =============================================================================
-TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
-  // Single-MS single-crystal → count == 1.
+TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
+  // Single-MS single-crystal → 1 new sample on the first batch, 0 on the next.
   {
     auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
     auto render = MakeRenderConfig();
@@ -487,10 +491,21 @@ TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
 
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
     backend.EndSession();
+
+    // Second batch, same backend instance + same scene: the deterministic shape
+    // was already sampled, so nothing new is drawn. This is the assertion that
+    // makes the run-level Σ (StatsConsumer) dispatch-invariant — without it the
+    // total would grow one per batch.
+    backend.BeginSession(spec);
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+        << "Reuse batch on a deterministic scene must report 0 new samples";
+    backend.EndSession();
   }
 
   // Multi-MS: layer 0 has 1 crystal, layer 1 (final) has 3 crystals.
-  // Return value MUST be 3 (final-layer settings count), NOT 4 (1+3 sum).
+  // Return value MUST be the cross-layer sum 1 + 3 = 4 — the pre-existing
+  // semantic reported the final layer's 3 settings only.
   {
     auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/2);
     // Extend final layer to 3 crystals by cloning the existing setting.
@@ -521,22 +536,69 @@ TEST(CpuTraceBackend, GetLastBatchCrystalCountReturnsFinalLayerSettings) {
     host.crystal = nullptr;
     auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h0, nullptr);
-    // After first (non-final) layer: last_layer count is still 0 (or the
-    // final-layer count once the last layer runs); this test only asserts
-    // the final observed value after all layers, but along the way must not
-    // pick up layer-0's count.
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Non-final layer must not populate last_layer_crystal_count_";
+    // Layer 0 contributes to the running total immediately: the count is a
+    // cross-layer accumulation, so it is 1 here rather than "0 until the final
+    // layer runs".
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u)
+        << "Layer 0's new sample must already be counted (cross-layer accumulation)";
 
     RecombineSpec rspec;
     rspec.shuffle = true;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 3u) << "Final-layer settings count, not cross-layer sum (would be 4)";
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u) << "Cross-layer new-sample sum: 1 (layer 0) + 3 (layer 1)";
 
     backend.EndSession();
-    // After EndSession the counter is reset by BeginSession on next open.
+
+    // Second batch over the same two layers: every (layer, ci) shape is a reuse.
+    backend.BeginSession(spec);
+    auto h0b = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0b, nullptr);
+    auto roots1b = backend.Recombine(std::move(h0b), rspec);
+    backend.TraceLayer(roots1b);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
+    backend.EndSession();
   }
+}
+
+// =============================================================================
+// Test — the host-injected crystal path is not a sampling event.
+//
+// When the caller supplies the Crystal (`RootRaySource::host.crystal != nullptr`,
+// the golden-ray hook), the backend draws no geometry at all: MakeCrystal is
+// never reached on that ci. So the counter must stay at 0 — neither "new" nor
+// "reuse" applies, because no sample happened. Asserted explicitly rather than
+// left to "the suite would crash if it were wrong": the pre-existing tests on
+// this path only checked that it runs.
+// =============================================================================
+TEST(CpuTraceBackend, HostInjectedCrystalIsNotANewSample) {
+  auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRenderConfig();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 7;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+
+  HostRayBatch host;
+  host.count = 256;
+  host.crystal = &crystal;
+  host.crystal_id = 0;
+  host.refractive_index = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  // Fresh backend instance: the tracker starts empty, so a non-zero result here
+  // could only come from counting the injected crystal.
+  CpuTraceBackend backend;
+  backend.BeginSession(spec);
+  backend.TraceLayer(RootRaySource::FromHost(host));
+  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+      << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
+  backend.EndSession();
 }
 
 // =============================================================================

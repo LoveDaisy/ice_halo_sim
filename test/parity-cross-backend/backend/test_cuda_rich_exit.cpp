@@ -190,13 +190,16 @@ TEST(CudaRichExit, ExitFaceIsValid) {
 }
 
 // =============================================================================
-// K-shape geometry pool: GetLastBatchCrystalCount reports the CROSS-LAYER sum
-// of distinct pool shapes built during the batch (Σ layers Σ ci P_ci). At the
-// default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
-// return value equals Σ layers Σ ci 1 = the cross-layer setting count. Same
-// semantic as Metal (see MetalTraceBackend.GetLastBatchCrystalCountSumsPoolShapesAcrossLayers).
+// K-shape geometry pool: the counter reports the CROSS-LAYER sum of crystal
+// geometries this batch freshly SAMPLED (Σ layers Σ ci over the new draws). At
+// the default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
+// first batch of a deterministic scene reports Σ layers Σ ci 1 = the cross-layer
+// setting count — and a subsequent batch reports 0, because a deterministic
+// scene skips BuildGeomPool entirely on the reuse batch (nothing is sampled).
+// Same semantic as Metal (see
+// MetalTraceBackend.CountsNewCrystalSamplesAcrossLayers).
 // =============================================================================
-TEST(CudaBackendCrystalCount, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
+TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host.";
   }
@@ -214,6 +217,18 @@ TEST(CudaBackendCrystalCount, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers
     CudaTraceBackend backend;
     backend.BeginSession(spec);
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    backend.EndSession();
+
+    // Second batch, same instance + same scene. This is the white-box lock on
+    // the deliberate reversal of the old "deterministic scene → the counter
+    // persists across batches" design: BuildGeomPool is skipped on a reuse
+    // batch, so the counter must read 0 rather than replay the previous
+    // batch's value. Without this, the run-level Σ that StatsConsumer reports
+    // grows once per batch and stops being a scene property.
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+        << "Reuse batch on a deterministic scene must report 0 new samples "
+           "(BuildGeomPool skipped → nothing sampled)";
     backend.EndSession();
   }
 
@@ -250,8 +265,12 @@ TEST(CudaBackendCrystalCount, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers
     CudaTraceBackend backend;
     backend.BeginSession(spec);
     EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
-        << "Cross-layer pool-shape sum at K=0: 1 (layer 0) + 3 (layer 1). "
+        << "Cross-layer new-sample sum at K=0: 1 (layer 0) + 3 (layer 1). "
            "Pre-K-pool semantic was final-layer settings only (3).";
+    backend.EndSession();
+
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u) << "Reuse batch must report 0 across all layers, not 4 again";
     backend.EndSession();
   }
 }

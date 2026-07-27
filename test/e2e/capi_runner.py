@@ -83,6 +83,26 @@ assert ctypes.sizeof(LUMICE_RenderResult) == 32, (
     "LUMICE_RenderResult size mismatch — verify lumice.h field layout"
 )
 
+
+# Mirrors LUMICE_StatsResult in src/include/lumice.h. All three fields are
+# LUMICE_RayCount = `unsigned long long` (64-bit on every platform, unlike
+# `unsigned long` on Windows — see the static_assert next to the typedef).
+class LUMICE_StatsResult(ctypes.Structure):
+    _fields_ = [
+        ("ray_seg_num",  ctypes.c_ulonglong),
+        ("sim_ray_num",  ctypes.c_ulonglong),
+        ("crystal_num",  ctypes.c_ulonglong),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_StatsResult) == 24, (
+    "LUMICE_StatsResult size mismatch — verify lumice.h field layout"
+)
+
+# lumice.h LUMICE_MAX_STATS_RESULTS. The out array must hold one extra slot for
+# the all-zero sentinel LUMICE_GetStatsResults writes past the last filled row.
+_LUMICE_MAX_STATS_RESULTS = 1
+
 # Backend constants (lumice.h:391-392).
 LUMICE_BACKEND_CPU = 0
 LUMICE_BACKEND_METAL = 1
@@ -114,11 +134,18 @@ _LUMICE_SERVER_NOT_READY = 2
 
 @dataclass
 class SimResult:
-    """Subset of LUMICE_RawXyzResult fields exposed to test code."""
+    """Subset of LUMICE_RawXyzResult fields exposed to test code.
+
+    `crystal_num` comes from LUMICE_StatsResult (a different C API call), read
+    once after the run reached IDLE-with-valid-data: it is the run-level sum of
+    per-batch new-crystal-sample counts, so it is only meaningful once the
+    simulation finished.
+    """
 
     snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
+    crystal_num: int = 0
 
 
 @dataclass
@@ -144,6 +171,7 @@ class BufferedSimResult:
     routed_backend: str = ""
     fell_back: bool = False
     log_lines: List[str] = field(default_factory=list)
+    crystal_num: int = 0
 
 
 def _project_root() -> Path:
@@ -228,6 +256,13 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_GetRawXyzResults.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(LUMICE_RawXyzResult),
+        ctypes.c_int,
+    ]
+
+    lib.LUMICE_GetStatsResults.restype = ctypes.c_int
+    lib.LUMICE_GetStatsResults.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(LUMICE_StatsResult),
         ctypes.c_int,
     ]
 
@@ -327,6 +362,23 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
+def _read_crystal_num(lib, server) -> int:
+    """Read LUMICE_StatsResult.crystal_num for the run that just finished.
+
+    Call only after the polling loop observed has_valid_data AND IDLE — the
+    field is a run-level accumulation (StatsConsumer sums the per-batch
+    crystal_count_), so reading it mid-run returns a partial total.
+    Returns 0 when no stats row is available (no StatsConsumer output yet).
+    """
+    stats = (LUMICE_StatsResult * (_LUMICE_MAX_STATS_RESULTS + 1))()
+    err = lib.LUMICE_GetStatsResults(server, stats, _LUMICE_MAX_STATS_RESULTS)
+    if err != 0:
+        raise RuntimeError(f"GetStatsResults failed err={err}")
+    # Row 0 is the only stats row (LUMICE_MAX_STATS_RESULTS == 1); sim_ray_num
+    # == 0 is the sentinel meaning "no row produced".
+    return int(stats[0].crystal_num) if stats[0].sim_ray_num != 0 else 0
+
+
 def _commit_config(lib, server, config_path: str) -> None:
     """Parse `config_path` into a LUMICE_Scene handle and commit it, then free the handle.
 
@@ -412,6 +464,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
             snapshot_intensity=float(r.snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
+            crystal_num=_read_crystal_num(lib, server),
         )
 
     finally:
@@ -426,6 +479,7 @@ def run_scene_capi_buffered(
     sim_seed: int = 0,
     timeout_sec: int = 180,
     backend: str = "legacy",
+    preserve_dispatch_env: bool = False,
 ) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out XYZ + RGB buffers.
 
@@ -452,6 +506,13 @@ def run_scene_capi_buffered(
     `routed_backend` and `fell_back` are parsed from the captured core log;
     callers asserting "Metal really ran" must check both
     (routed_backend == "metal" and not fell_back).
+
+    `preserve_dispatch_env` opts out of the LUMICE_DISPATCH_RAY_NUM strip that
+    the legacy arm normally gets (rationale in the comment below). Pass True
+    only when varying the dispatch grain on the legacy arm IS the measurement —
+    the strip protects callers whose observable (energy) is not dispatch-
+    invariant on legacy, which does not apply to a caller asserting invariance
+    of a different observable.
     """
     if backend not in _BACKEND_MODES:
         raise ValueError(f"backend must be one of {_BACKEND_MODES}, got {backend!r}")
@@ -482,7 +543,7 @@ def run_scene_capi_buffered(
     # reflects the GPU backend's correctness alone.
     disp_was_set = "LUMICE_DISPATCH_RAY_NUM" in os.environ
     disp_old = os.environ.get("LUMICE_DISPATCH_RAY_NUM")
-    if backend == "legacy" and disp_was_set:
+    if backend == "legacy" and disp_was_set and not preserve_dispatch_env:
         del os.environ["LUMICE_DISPATCH_RAY_NUM"]
 
     capture = _LogCapture()
@@ -598,22 +659,33 @@ def run_scene_capi_buffered(
                     .reshape(rr_h, rr_w, 3)
                 )
 
-                routed, fell_back = _summarize_backend(log_lines)
-                return BufferedSimResult(
-                    snapshot_intensity=r_snap,
-                    has_valid_data=r_valid,
-                    effective_pixels=r_eff,
-                    img_width=r_w,
-                    img_height=r_h,
-                    flt_buf=flt_buf,
-                    rgb_buf=rgb_buf,
-                    routed_backend=routed,
-                    fell_back=fell_back,
-                    log_lines=list(log_lines),
-                )
+                crystal_num = _read_crystal_num(lib, server)
 
             finally:
                 lib.LUMICE_DestroyServer(server)
+
+            # Log parsing happens AFTER teardown on purpose: ServerImpl::Stop()
+            # (driven by DestroyServer) is what emits the RenderConsumer
+            # "Consume profile: N batches" line, so a caller using the batch
+            # count as a positive control would never see it if the snapshot
+            # were taken before. Every buffer/scalar above was already copied
+            # out of server memory, so nothing here touches the dead server —
+            # and on the exception path this block is skipped entirely (the
+            # finally re-raises), which is why it sits outside the try.
+            routed, fell_back = _summarize_backend(log_lines)
+            return BufferedSimResult(
+                snapshot_intensity=r_snap,
+                has_valid_data=r_valid,
+                effective_pixels=r_eff,
+                img_width=r_w,
+                img_height=r_h,
+                flt_buf=flt_buf,
+                rgb_buf=rgb_buf,
+                routed_backend=routed,
+                fell_back=fell_back,
+                log_lines=list(log_lines),
+                crystal_num=crystal_num,
+            )
     finally:
         # Restore env state regardless of success/failure.
         if backend in ("cpu_backend", "cuda"):
