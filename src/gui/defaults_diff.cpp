@@ -78,9 +78,17 @@ void SetByPath(json& root, const std::vector<std::string>& tokens, const json& v
       // family this scrum's invariant I3 exists to close (the GUI dropping randomization data was
       // the same shape), and a user who hand-edited this file is exactly the user who would
       // otherwise never learn their edit was overwritten.
-      NoteUserDefaultsDowngrade("'" + walked +
-                                "' in your personal defaults file held a value where a group of "
-                                "settings was expected, so it was replaced and its contents were lost.");
+      //
+      // Only when something was actually THERE, though: operator[] default-constructs a null for
+      // a key the document does not have yet, and that is the ordinary path for every first write
+      // to a nested key. Reporting it would fire a data-loss notice on a document that lost
+      // nothing — and a warning that cries wolf on the common case is how the real one gets
+      // dismissed unread.
+      if (!child.is_null()) {
+        NoteUserDefaultsDowngrade("'" + walked +
+                                  "' in your personal defaults file held a value where a group of "
+                                  "settings was expected, so it was replaced and its contents were lost.");
+      }
       child = json::object();
     }
     node = &child;

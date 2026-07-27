@@ -329,7 +329,13 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
 
   ImGui::TableNextColumn();
   if (!g_preset_warnings.slots[slot].empty()) {
-    ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
+    // A Selectable rather than plain text, for the same reason §3's source cell is one: the icon
+    // needs a hover explanation, and text carries no item to hover — nor an id, which is also what
+    // lets a test say "this preset is showing a warning" without reading pixels.
+    // NoAutoClosePopups: a stray click on a read-only cell must not dismiss the panel.
+    const std::string warning_id =
+        ICON_FA_TRIANGLE_EXCLAMATION "###preset_warning_" + std::string(entry.override_json_name);
+    ImGui::Selectable(warning_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", g_preset_warnings.slots[slot].c_str());
     }

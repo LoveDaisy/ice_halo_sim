@@ -21,8 +21,11 @@
 #include <string>
 #include <vector>
 
+#include "IconsFontAwesome6.h"
+#include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
 #include "gui/defaults_panel.hpp"
+#include "gui/edit_modals.hpp"
 #include "gui/user_defaults.hpp"
 #include "test_gui_shared.hpp"
 #include "user_defaults_test_env.hpp"
@@ -367,6 +370,241 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("renderer.fov").c_str()));
       IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
 
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  // ================================================================================
+  // §1 — the preset library (405.5). Driven through the real widgets, asserted on the override
+  // FILE: a panel that only updated its own buffers would satisfy any in-memory check.
+  // ================================================================================
+
+  {
+    // AC3 — the clamp, both states, through the input box a user actually types into. 25 is above
+    // Column's (0, 10) and must be adjusted with the warning cell appearing; 0.3 is inside it and
+    // must be stored verbatim with NO warning. A one-sided test would be satisfied by a panel
+    // that clamped everything.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "preset_std_edit_clamps_and_warns_both_states");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_preset_clamp");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(3);
+
+      // Out of domain.
+      ctx->ItemInputValue("**/###preset_std_column", 25.0f);
+      ctx->Yield(3);
+      {
+        const json saved = ReadOverlayFile(dir);
+        const float stored = saved["presets"]["axis"]["column"]["zenith_std"].get<float>();
+        IM_CHECK(stored < gui::kColumnPlateParryZenithStdUpperBound);
+        IM_CHECK(stored > 0.0f);
+        IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
+      }
+
+      // In domain: the value survives exactly, and the warning from the previous edit is gone —
+      // a warning that outlived the value that caused it would point at a number that is no
+      // longer there.
+      ctx->ItemInputValue("**/###preset_std_column", 0.3f);
+      ctx->Yield(3);
+      {
+        const json saved = ReadOverlayFile(dir);
+        IM_CHECK_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+        IM_CHECK(!ctx->ItemExists("**/###preset_warning_column"));
+      }
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC5 through the UI — Restore to factory removes the key and leaves the neighbouring preset
+    // alone. The store-side case (test_gui_user_defaults.cpp) proves the function; this proves
+    // the button is wired to it and to the right preset.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "preset_restore_button_is_wired_per_preset");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_preset_restore");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_column", 0.3f);
+      ctx->Yield(2);
+      ctx->ItemOpen("**/###preset_Plate");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_plate", 0.5f);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/###preset_restore_column");
+      ctx->Yield(3);
+
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(!saved["presets"]["axis"].contains("column"));
+      IM_CHECK_EQ(saved["presets"]["axis"]["plate"]["zenith_std"].get<float>(), 0.5f);
+
+      // The input box now reads the factory value back, not the number the user last typed.
+      IM_CHECK_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std,
+                  gui::AxisPresetEntryFor(gui::AxisPreset::kColumn).zenith.std);
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC7 — Random offers no input that would be ignored. A structural assertion on the widget
+    // tree rather than a look at the picture: the std input and the restore button exist for
+    // every adjustable preset and for none of the others, derived from the same table the panel
+    // renders from, so this cannot drift into checking a stale list of four names.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "preset_without_adjustable_face_offers_no_input");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_preset_random");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+
+      int adjustable_seen = 0;
+      int fixed_seen = 0;
+      for (const auto& entry : gui::kAxisPresets) {
+        // Custom is the classifier's "none of the above", not a library entry.
+        if (entry.id == gui::AxisPreset::kCustom) {
+          continue;
+        }
+        const std::string node_ref = std::string("**/###preset_") + gui::AxisPresetLabel(entry.id);
+        IM_CHECK(ctx->ItemExists(node_ref.c_str()));
+        ctx->ItemOpen(node_ref.c_str());
+        ctx->Yield(2);
+
+        if (entry.has_adjustable_zenith_std) {
+          ++adjustable_seen;
+          const std::string std_ref = std::string("**/###preset_std_") + entry.override_json_name;
+          const std::string restore_ref = std::string("**/###preset_restore_") + entry.override_json_name;
+          IM_CHECK(ctx->ItemExists(std_ref.c_str()));
+          IM_CHECK(ctx->ItemExists(restore_ref.c_str()));
+        } else {
+          ++fixed_seen;
+          // Nothing keyed on a json name can exist for it — it has none. Probing the two ids an
+          // adjustable preset would carry, spelled from the label instead, since that is the only
+          // name this preset has.
+          const std::string std_ref = std::string("**/###preset_std_") + gui::AxisPresetLabel(entry.id);
+          IM_CHECK(!ctx->ItemExists(std_ref.c_str()));
+        }
+        ctx->ItemClose(node_ref.c_str());
+        ctx->Yield(1);
+      }
+      IM_CHECK_EQ(adjustable_seen, 4);  // Column / Plate / Parry / Lowitz
+      IM_CHECK_EQ(fixed_seen, 1);       // Random
+
+      // Nothing was written by merely looking at the library.
+      IM_CHECK(ReadOverlayFile(dir).empty());
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC1/AC2 through the two real surfaces, end to end: retune Column in the library, then press
+    // the Column button in the axis modal and confirm the crystal got the tuned value AND is
+    // still classified as Column. This is the one case that crosses both halves of the feature —
+    // each half passing on its own would not prove the button reads what the panel wrote.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "library_edit_reaches_the_axis_modal_button");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_preset_to_modal");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_column", 0.3f);
+      ctx->Yield(3);
+      CloseDefaultsPanel(ctx);
+
+      // Now the other surface: the axis tab of a crystal's edit modal.
+      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req, gui::g_state);
+      ctx->Yield(4);
+      ctx->ItemClick("**/Column");
+      ctx->Yield(2);
+      // Committed rather than read out of the modal's buffer: the buffer is TU-private by design
+      // (OK/Cancel atomicity), and "the value reached the document" is the stronger claim anyway.
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(3);
+
+      const auto& edited = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      IM_CHECK_EQ(edited.zenith.std, 0.3f);
+      IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(edited.zenith, edited.azimuth, edited.roll)),
+                  static_cast<int>(gui::AxisPreset::kColumn));
+    };
+  }
+
+  {
+    // Step 3's gesture, the other direction: a crystal's live zenith std saved INTO the library.
+    // A preset is not a GuiState field, so nothing in the session could infer this intent — the
+    // gesture is the only way an override gets produced from a crystal the user is editing.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "axis_modal_gesture_saves_into_the_library");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_gesture");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req, gui::g_state);
+      ctx->Yield(4);
+
+      // Start from Column, then tighten the std to the value the beta user works at.
+      ctx->ItemClick("**/Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/Zenith/##Std_input", 0.3f);
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/###save_as_preset_column");
+      ctx->Yield(3);
+
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+      // Random is not a gesture target — it has no adjustable face, so a button for it would
+      // write nothing and say nothing.
+      IM_CHECK(!ctx->ItemExists("**/###save_as_preset_random"));
+
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+      // Cancel discards the crystal edit, but the gesture is NOT part of that buffer — it wrote to
+      // the library, which is a separate persistent thing. Asserted because the opposite would be
+      // an easy and invisible mistake to make.
+      IM_CHECK_EQ(ReadOverlayFile(dir)["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+    };
+  }
+
+  {
+    // The entry point contract for §1, matching the one already asserted for §2: "Edit My
+    // Presets..." must open the panel with the preset section expanded, not merely open it.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "presets_entry_point_opens_that_section");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_preset_entry");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      // A preset row is only findable when §1 is expanded (the engine cannot see clipped items).
+      IM_CHECK(ctx->ItemExists("**/###preset_Column"));
+      CloseDefaultsPanel(ctx);
+
+      // ...and the OTHER entry point leaves §1 collapsed, so "which section opens" is a real
+      // choice rather than "everything is always open".
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
       CloseDefaultsPanel(ctx);
     };
   }

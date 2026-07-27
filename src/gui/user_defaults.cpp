@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <system_error>
@@ -308,8 +309,19 @@ AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
 }
 
 std::string FormatAxisPresetStd(float value) {
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.6g", static_cast<double>(value));
+  // Shortest form that reads back as the same float, not a fixed precision. A fixed %.6g renders
+  // the tuned values a user types correctly (0.3 stays "0.3") but collapses the clamp target —
+  // nextafter(10, 0) is 9.99999905, which %.6g rounds to "10" and turns the notice into a
+  // contradiction: "10 was stored instead. Allowed: less than 10." Escalating only when the short
+  // form is lossy keeps the common case short AND the boundary case honest.
+  char buffer[40];
+  for (int precision = 6; precision < 9; ++precision) {
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, static_cast<double>(value));
+    if (std::strtof(buffer, nullptr) == value) {
+      return buffer;
+    }
+  }
+  std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
   return buffer;
 }
 

@@ -26,6 +26,8 @@
 #include <utility>
 #include <vector>
 
+#include "gui/app.hpp"
+#include "gui/axis_presets.hpp"
 #include "gui/gui_state_tiers.hpp"
 #include "gui/user_defaults.hpp"
 #include "test_gui_shared.hpp"
@@ -50,6 +52,21 @@ using lumice::test_user_defaults::WriteRawOverlay;
 // and "the two documents serialize identically" are the same statement.
 bool SerializesIdentically(const gui::GuiState& a, const gui::GuiState& b) {
   return gui::SerializeGuiStateJson(a) == gui::SerializeGuiStateJson(b);
+}
+
+// Read the override file from disk directly, bypassing the production reader. The write-side
+// cases assert on what LANDED, and going through ReadOverlayJsonIfPresent would let a reader bug
+// and a writer bug cancel out into a passing test.
+json ReadOverlayDoc(const std::filesystem::path& dir) {
+  std::ifstream in(dir / gui::kUserDefaultsFileName);
+  if (!in.is_open()) {
+    return json::object();
+  }
+  try {
+    return json::parse(in);
+  } catch (const std::exception&) {
+    return json::object();
+  }
 }
 
 }  // namespace
@@ -684,6 +701,341 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
       // A rejected value is a drop, not a clamp — the two channels must not be conflated.
       IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
+    };
+  }
+
+  // ================================================================================
+  // Preset library — the WRITE side (405.5). The read side above could resolve an override;
+  // these cover the functions that produce one, and the property the whole design exists for:
+  // a retuned preset is still classified as that preset.
+  // ================================================================================
+
+  {
+    // AC1 — the round trip a user actually performs: retune Column to the value the beta user
+    // asked for, then confirm a fresh process would read it back. MakeNewDocumentState() is the
+    // "restart" here: it is the exact call startup makes, and it re-reads the file from disk.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_write_round_trips_across_a_reload");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_roundtrip");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      const auto result = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f);
+      IM_CHECK(result.written);
+      IM_CHECK(!result.clamped);
+      IM_CHECK_EQ(result.stored_value, 0.3f);
+      IM_CHECK(result.message.empty());  // a clean write says nothing — the warning cell stays empty
+
+      // On disk under the key 405.2's reader already looks for, not merely in memory.
+      const json doc = ReadOverlayDoc(dir);
+      IM_CHECK(doc.contains("presets"));
+      IM_CHECK_EQ(doc["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+
+      // Drop the in-memory state the way a restart would, then re-resolve from the file.
+      gui::ResetUserAxisPresetOverrides();
+      IM_CHECK(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
+      gui::MakeNewDocumentState(dir);
+
+      const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(reloaded.has_value());
+      IM_CHECK_EQ(*reloaded, 0.3f);
+
+      // And that is what pressing the Column button would write into the crystal.
+      IM_CHECK_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
+    };
+  }
+
+  {
+    // AC2 — the core claim of D8, MEASURED rather than reasoned about: a retuned preset is still
+    // the same preset to ClassifyAxisPreset, which is what keeps its button highlighted and its
+    // preview on the typical-view branch. Four presets, each at a value inside its own domain
+    // (the domains point in opposite directions, so one example would prove nothing about the
+    // other side).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_identity_survives_retuning");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_identity");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      struct Case {
+        gui::AxisPreset preset;
+        float tuned_std;
+      };
+      // Column / Plate / Parry at 0.3 (the beta user's habit, tighter than factory); Lowitz at 20,
+      // which is inside its (15, inf) domain and well away from the factory 40.
+      const Case cases[] = {
+        { gui::AxisPreset::kColumn, 0.3f },
+        { gui::AxisPreset::kPlate, 0.3f },
+        { gui::AxisPreset::kParry, 0.3f },
+        { gui::AxisPreset::kLowitz, 20.0f },
+      };
+
+      for (const auto& c : cases) {
+        const auto& entry = gui::AxisPresetEntryFor(c.preset);
+        const auto result = gui::SaveAxisPresetZenithStdOverride(c.preset, c.tuned_std);
+        IM_CHECK(result.written);
+        IM_CHECK(!result.clamped);
+
+        // Exactly what the modal's preset button assembles into its edit buffer.
+        const gui::AxisDist zenith = gui::EffectiveAxisPresetZenith(entry);
+        IM_CHECK_EQ(zenith.std, c.tuned_std);
+        IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(zenith, entry.azimuth, entry.roll)),
+                    static_cast<int>(c.preset));
+
+        // The preview's typical-view branch is selected by the classified preset, so it follows
+        // from the line above; asserted anyway because "preview goes somewhere else" is the
+        // symptom a user would report, and it should fail HERE rather than as a screenshot.
+        float rotation[16] = {};
+        float typical[16] = {};
+        gui::DefaultPreviewRotation(gui::ClassifyAxisPreset(zenith, entry.azimuth, entry.roll), nullptr, rotation);
+        gui::DefaultPreviewRotation(c.preset, nullptr, typical);
+        for (int i = 0; i < 16; ++i) {
+          IM_CHECK_EQ(rotation[i], typical[i]);
+        }
+      }
+    };
+  }
+
+  {
+    // AC3 (store half) — an out-of-domain edit is clamped AND says so, in both directions, and an
+    // in-domain edit is left exactly as typed. Both states asserted: a clamp that fired on every
+    // write would satisfy a one-sided test while making the feature useless.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_write_clamps_and_reports_both_states");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_write_clamp");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      // Above Column's (0, 10).
+      const auto high = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 25.0f);
+      IM_CHECK(high.written);
+      IM_CHECK(high.clamped);
+      IM_CHECK(high.stored_value < gui::kColumnPlateParryZenithStdUpperBound);
+      IM_CHECK(!high.message.empty());
+      IM_CHECK(high.message.find("Column") != std::string::npos);
+      IM_CHECK(high.message.find("25") != std::string::npos);
+      // The copy must not claim the bound is physical — it is where the neighbouring criterion
+      // starts. Plate's [10, 15) dead zone is the case that makes the distinction matter.
+      IM_CHECK(high.message.find("not a physical limit") != std::string::npos);
+      // Still Column afterwards, which is the point of clamping rather than rejecting.
+      const auto& column = gui::AxisPresetEntryFor(gui::AxisPreset::kColumn);
+      IM_CHECK_EQ(static_cast<int>(
+                      gui::ClassifyAxisPreset(gui::EffectiveAxisPresetZenith(column), column.azimuth, column.roll)),
+                  static_cast<int>(gui::AxisPreset::kColumn));
+
+      // Below Lowitz's (15, inf) — the opposite side.
+      const auto low = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kLowitz, 5.0f);
+      IM_CHECK(low.written);
+      IM_CHECK(low.clamped);
+      IM_CHECK(low.stored_value > gui::kLowitzZenithStdLowerBound);
+
+      // In domain: stored verbatim, nothing reported.
+      const auto ok = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f);
+      IM_CHECK(ok.written);
+      IM_CHECK(!ok.clamped);
+      IM_CHECK_EQ(ok.stored_value, 0.3f);
+      IM_CHECK(ok.message.empty());
+    };
+  }
+
+  {
+    // AC5 — restore one preset to factory: byte-identical to kAxisPresets, key gone from the file
+    // (with its empty parents pruned), and NOTHING else disturbed — neither another preset nor the
+    // GuiState half of the same file. The last part is what a wholesale rewrite would break.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_restore_to_factory_is_surgical");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_restore");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      // A file that already carries a GuiState default, so the write path has a neighbour to
+      // preserve rather than an empty document to overwrite.
+      json seed;
+      seed["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, seed));
+
+      IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f).written);
+      IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kPlate, 0.5f).written);
+
+      IM_CHECK(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
+
+      // Factory again, field by field against the table itself.
+      const auto& column = gui::AxisPresetEntryFor(gui::AxisPreset::kColumn);
+      IM_CHECK(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
+      const gui::AxisDist restored = gui::EffectiveAxisPresetZenith(column);
+      IM_CHECK_EQ(static_cast<int>(restored.type), static_cast<int>(column.zenith.type));
+      IM_CHECK_EQ(restored.mean, column.zenith.mean);
+      IM_CHECK_EQ(restored.std, column.zenith.std);
+
+      const json doc = ReadOverlayDoc(dir);
+      IM_CHECK(!doc["presets"]["axis"].contains("column"));
+      // Untouched: the other preset and the GuiState key sharing the file.
+      IM_CHECK_EQ(doc["presets"]["axis"]["plate"]["zenith_std"].get<float>(), 0.5f);
+      IM_CHECK_EQ(doc["bg_alpha"].get<float>(), 0.42f);
+
+      // Reverting the last preset prunes the now-empty parents, so a hand-opened file does not
+      // accumulate `"presets": {"axis": {}}` skeletons.
+      IM_CHECK(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kPlate));
+      const json pruned = ReadOverlayDoc(dir);
+      IM_CHECK(!pruned.contains("presets"));
+      IM_CHECK_EQ(pruned["bg_alpha"].get<float>(), 0.42f);
+    };
+  }
+
+  {
+    // AC7 — Random has no adjustable face, so nothing about it may reach the file. Asserted at the
+    // STORE, not only at the UI: the UI not drawing an input is the first defense, and a defense
+    // that exists only in a widget is one a future refactor removes without noticing.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_without_adjustable_face_is_never_written");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_random");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      for (const auto preset : { gui::AxisPreset::kRandom, gui::AxisPreset::kCustom }) {
+        const auto result = gui::SaveAxisPresetZenithStdOverride(preset, 3.0f);
+        IM_CHECK(!result.written);
+        IM_CHECK(!result.message.empty());  // refused out loud, not silently dropped
+        IM_CHECK(!gui::GetUserAxisPresetZenithStdOverride(preset).has_value());
+        IM_CHECK(!gui::RevertOneAxisPresetOverride(preset));
+      }
+
+      // Nothing was created at all — not an empty `presets` skeleton either.
+      const json doc = ReadOverlayDoc(dir);
+      IM_CHECK(!doc.contains("presets"));
+
+      // And the table itself agrees about which presets those are, so this test cannot pass by
+      // testing a set that has quietly stopped matching the one the UI renders.
+      int adjustable = 0;
+      for (const auto& entry : gui::kAxisPresets) {
+        if (entry.has_adjustable_zenith_std) {
+          ++adjustable;
+          IM_CHECK(entry.override_json_name != nullptr);
+        } else {
+          IM_CHECK(entry.override_json_name == nullptr);
+        }
+      }
+      IM_CHECK_EQ(adjustable, 4);  // Column / Plate / Parry / Lowitz
+    };
+  }
+
+  {
+    // A failed write must leave the in-memory value alone. Otherwise this session resolves one
+    // value while the next launch reads the older one off disk, and the user sees their setting
+    // "come back" with no event to attribute it to.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_write_failure_leaves_memory_untouched");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("preset_write_fail");
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+        IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f).written);
+      }
+
+      // No writable directory at all — the same shape as a read-only config dir.
+      ScopedUserConfigSource disabled(gui::UserConfigSource::kDisabled);
+      const auto result = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 7.0f);
+      IM_CHECK(!result.written);
+      const auto still = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(still.has_value());
+      IM_CHECK_EQ(*still, 0.3f);  // NOT 7.0 — the failed write changed nothing
+
+      IM_CHECK(!gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
+      const auto after_failed_revert = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(after_failed_revert.has_value());
+      IM_CHECK_EQ(*after_failed_revert, 0.3f);  // a failed revert must not report success in memory
+    };
+  }
+
+  {
+    // AC4 — a load-time clamp must REACH the user, not merely be counted. 405.2 built the
+    // counters; until this task nothing consumed them, so a value silently adjusted at startup
+    // was indistinguishable from one that had been dropped. Asserted through the same one-shot
+    // warning surface an import degradation uses, from the production DoNew() path.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "load_time_clamp_reaches_the_user");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      gui::ClearImportComplexFilterWarning();
+      const auto dir = FreshOverlayDir("clamp_surfaced");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 25.0f;  // above Column's (0, 10)
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      gui::DoNew();
+
+      const std::string warning = gui::PeekImportComplexFilterWarning();
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("Column") != std::string::npos);
+      IM_CHECK(warning.find("25") != std::string::npos);
+      // The clamped value itself, so the user learns what they actually got rather than only that
+      // something was wrong.
+      IM_CHECK(warning.find("9.99999") != std::string::npos);
+      gui::ClearImportComplexFilterWarning();
+    };
+  }
+
+  {
+    // The negative half of AC4: a clean override file must produce NO popup. Without this, a
+    // notice that fired on every New would satisfy the case above while training the user to
+    // dismiss the dialog unread — which is the same as not having one.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "a_clean_load_surfaces_nothing");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      gui::ClearImportComplexFilterWarning();
+      const auto dir = FreshOverlayDir("clamp_quiet");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;  // inside the domain
+      doc["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      gui::DoNew();
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+
+      // A first run with no file at all is the most common case of all, and must be just as quiet.
+      const auto empty_dir = FreshOverlayDir("clamp_quiet_empty");
+      ScopedUserConfigSource empty_guard(gui::UserConfigSource::kExplicitDir, empty_dir);
+      gui::DoNew();
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
+    };
+  }
+
+  {
+    // The JSON-import path reads the override file too, but DeserializeFromJson opens with
+    // `state = GuiState{}` — so nothing of the personal defaults survives it. Reporting a
+    // degradation there would describe a document the user is not getting; leaving the counters
+    // filled would misattribute them to the NEXT New. Draining is the only correct handling, and
+    // this pins it: the import must leave the channel empty.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "json_import_does_not_leak_downgrades_into_the_next_new");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      gui::ClearImportComplexFilterWarning();
+      const auto dir = FreshOverlayDir("import_leak");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 25.0f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      // A minimal but valid CLI config, so DoOpen takes the import branch to completion.
+      const std::filesystem::path config = dir / "imported.json";
+      {
+        std::ofstream out(config, std::ios::trunc);
+        out << R"({"sun": {"altitude": 25.0}})";
+      }
+      gui::DoOpen(config);
+      // Whatever the import path read is gone, reported or not.
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+      IM_CHECK(gui::TakeUserDefaultsDowngradeNotices().empty());
+
+      // The decisive part: the NEXT New reports its own load, and the file is clean by then.
+      IM_CHECK(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
+      gui::ClearImportComplexFilterWarning();
+      gui::DoNew();
+      IM_CHECK(gui::PeekImportComplexFilterWarning().empty());
     };
   }
 

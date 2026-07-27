@@ -17,13 +17,17 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
+#include "gui/gui_state_tiers.hpp"
 #include "gui/user_defaults.hpp"
 #include "test_gui_shared.hpp"
 #include "user_defaults_test_env.hpp"
@@ -432,6 +436,114 @@ void RegisterDefaultsDiffTests(ImGuiTestEngine* engine) {
 
       // And the row set still builds — the panel must remain usable (read-only) in this state.
       IM_CHECK(!gui::BuildDefaultDiffRows(state).empty());
+    };
+  }
+
+  // ================================================================================
+  // Key-path handling gaps carried over from 405.4 (both surfaced by that task's review as
+  // Minor, both on mechanisms this task's preset key paths lean on harder).
+  // ================================================================================
+
+  {
+    // The dot is the path separator, so a key whose own NAME contains a dot would be split into
+    // two tokens and written to the wrong place — silently, since both halves are valid object
+    // keys. Nothing in the code enforced the "no default-able key contains a dot" premise; it held
+    // only because someone had checked the field names by eye. This asserts it over the live
+    // registry, so a future field named "foo.bar" turns red here instead of corrupting a file.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "no_default_eligible_key_contains_the_path_separator");
+    t->TestFunc = [](ImGuiTestContext*) {
+      int checked = 0;
+      for (const auto& entry : gui::kFieldTierTable) {
+        const auto verdict = gui::ResolveDefaultEligibility(entry.name);
+        if (verdict.eligibility != gui::DefaultEligibility::kEligible) {
+          continue;
+        }
+        ++checked;
+        IM_CHECK(std::string_view(entry.name).find('.') == std::string_view::npos);
+      }
+      // The registry is the source; an empty loop would make the assertion above vacuous.
+      IM_CHECK_GT(checked, 0);
+
+      // Root names are only half of it: a NESTED key with a dot ("renderer": {"a.b": 1}) would
+      // split just as wrongly. Checked against the serialized tree rather than against the
+      // emitted key paths, because once a dotted name is joined into "renderer.a.b" the damage is
+      // no longer visible in the string — the two readings are indistinguishable by then.
+      int keys_seen = 0;
+      const std::function<void(const json&)> check_keys = [&](const json& node) {
+        if (!node.is_object()) {
+          return;
+        }
+        for (auto it = node.begin(); it != node.end(); ++it) {
+          ++keys_seen;
+          IM_CHECK(it.key().find('.') == std::string::npos);
+          check_keys(*it);
+        }
+      };
+      check_keys(json::parse(gui::SerializeGuiStateJson(MakeEditedState())));
+      IM_CHECK_GT(keys_seen, 0);
+
+      // The preset library's own key path (presets.axis.<name>.zenith_std) deepens the reliance
+      // on this rule, so its components are held to it too.
+      for (const auto& entry : gui::kAxisPresets) {
+        if (entry.override_json_name != nullptr) {
+          IM_CHECK(std::string_view(entry.override_json_name).find('.') == std::string_view::npos);
+        }
+      }
+    };
+  }
+
+  {
+    // A hand-edited file can put a scalar where a group of settings belongs ("renderer": 3).
+    // Honoring the user's write then means replacing that node — which DISCARDS whatever was
+    // there. That is a data loss, and it used to happen with no counter, no notice and no log:
+    // the same silent-discard family the scrum's I3 invariant exists to close.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "replacing_a_non_object_path_node_is_not_silent");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("setbypath_notice");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      json doc;
+      doc["renderer"] = 3;  // a scalar where an object belongs
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      // Draining first: reading that file back is itself fine (it is valid JSON), but this keeps
+      // the assertion below about the WRITE and nothing else.
+      gui::TakeUserDefaultsDowngradeCount();
+      gui::TakeUserDefaultsDowngradeNotices();
+
+      IM_CHECK(gui::SaveAcceptedDefaults({ "renderer.fov" }, MakeEditedState()));
+
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
+      const auto notices = gui::TakeUserDefaultsDowngradeNotices();
+      IM_CHECK_EQ(notices.size(), static_cast<size_t>(1));
+      IM_CHECK(notices[0].find("renderer") != std::string::npos);
+
+      // The write still landed — the notice reports the loss, it does not refuse the edit.
+      std::ifstream in(dir / gui::kUserDefaultsFileName);
+      IM_CHECK(in.is_open());
+      const json saved = json::parse(in);
+      IM_CHECK(saved["renderer"].is_object());
+      IM_CHECK(saved["renderer"].contains("fov"));
+
+      // Both counters are consumed on read, like every other channel in this family.
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+      IM_CHECK(gui::TakeUserDefaultsDowngradeNotices().empty());
+    };
+  }
+
+  {
+    // The negative half of the case above: a well-formed document must produce NO notice. Without
+    // this, a notice that fired on every write would still pass the test above while burying the
+    // real ones in noise.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "an_ordinary_write_reports_no_downgrade");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("setbypath_quiet");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      IM_CHECK(gui::SaveAcceptedDefaults({ "renderer.fov", "bg_alpha" }, MakeEditedState()));
+      IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+      IM_CHECK(gui::TakeUserDefaultsDowngradeNotices().empty());
     };
   }
 }
