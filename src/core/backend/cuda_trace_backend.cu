@@ -3528,6 +3528,17 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // must report 0: StatsConsumer sums these per batch, and re-reporting a
     // stale non-zero made the run total a function of the batch count instead of
     // the scene. Do not "restore" the old reset point.
+    //
+    // Honest status, measured on dev49 (RTX 4060 Ti) rather than assumed: with the
+    // stochastic gate below in place, DELETING this line changes no observable
+    // behaviour, and CudaBackendCrystalCount stays green. The gate independently
+    // guarantees the 0 — a deterministic (layer, ci) never increments, so there is
+    // no stale non-zero left to leak into a reuse batch. The two mechanisms landed
+    // in that order, and the second subsumed the first's observable effect.
+    // It stays because session start is the right owner of a per-session counter's
+    // lifetime, and because the alternative leaves the counter's zeroing on a path
+    // that legitimately does not run. But do not read the paragraph above as "a
+    // regression test will catch you if you remove this" — none will.
     impl_->pool_shape_count_this_batch_ = 0u;
 
     // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
