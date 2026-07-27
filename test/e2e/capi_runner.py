@@ -137,9 +137,11 @@ class SimResult:
     """Subset of LUMICE_RawXyzResult fields exposed to test code.
 
     `crystal_num` comes from LUMICE_StatsResult (a different C API call), read
-    once after the run reached IDLE-with-valid-data: it is the run-level sum of
-    per-batch new-crystal-sample counts, so it is only meaningful once the
-    simulation finished.
+    once after the run reached IDLE-with-valid-data: how many distinct crystal
+    geometries the run actually drew. Its two halves aggregate differently — the
+    deterministic population is a config constant carried by OVERWRITE, the
+    stochastic draws accumulate per batch and per worker — so it is only
+    meaningful once the simulation finished. See doc/c_api.md for the contract.
     """
 
     snapshot_intensity: float
@@ -365,9 +367,13 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
 def _read_crystal_num(lib, server) -> int:
     """Read LUMICE_StatsResult.crystal_num for the run that just finished.
 
-    Call only after the polling loop observed has_valid_data AND IDLE — the
-    field is a run-level accumulation (StatsConsumer sums the per-batch
-    crystal_count_), so reading it mid-run returns a partial total.
+    Call only after the polling loop observed has_valid_data AND IDLE. The value
+    is the deterministic population (a config constant, OVERWRITTEN on the way
+    through StatsConsumer) plus the stochastic draws (accumulated across batches
+    and workers), so reading it mid-run returns a partial total: the stochastic
+    half is still growing. Not a plain sum — the deterministic half deliberately
+    does NOT scale with the batch count or the worker pool, which is the whole
+    point of the split.
     Returns 0 when no stats row is available (no StatsConsumer output yet).
     """
     stats = (LUMICE_StatsResult * (_LUMICE_MAX_STATS_RESULTS + 1))()

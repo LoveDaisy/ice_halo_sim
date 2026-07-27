@@ -61,6 +61,7 @@ from test.e2e.runner import get_project_root
 
 _CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 _DETERMINISTIC_CFG = _CONFIGS_DIR / "crystal_sample_count_deterministic.json"
+_ZERO_PROPORTION_CFG = _CONFIGS_DIR / "crystal_sample_count_zero_proportion.json"
 _RANDOM_CFG = _CONFIGS_DIR / "crystal_sample_count_random.json"
 
 # Non-zero → single worker on the CPU route (see the module docstring).
@@ -287,4 +288,38 @@ def test_crystal_num_is_worker_invariant(backend: str) -> None:
         f"{many.crystal_num}, expected {expected} = Σ over MS layers of that "
         f"layer's entry count. Equality with the 1-worker run above would also "
         f"hold if both were wrong by the same factor"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("backend", ["legacy", "cpu_backend"])
+def test_crystal_num_counts_scene_slots_not_traced_slots(backend: str) -> None:
+    """A crystal_proportion_ == 0 slot still counts toward the deterministic half.
+
+    This pins the property that BUYS the immunity asserted by the two tests above,
+    and it is the one a well-meaning change is most likely to break: counting only
+    the (layer, ci) slots a run actually reached looks strictly more accurate, and
+    it silently reintroduces exactly the defect this whole gate exists to catch.
+    Which slots get traced is a function of the ray partition, so it moves with the
+    dispatch grain and the worker pool — the deterministic half must be derived
+    from the committed config alone, never from what a particular run touched.
+
+    The fixture is the deterministic scene with its last entry's proportion set to
+    0. That slot never reaches MakeCrystal on any backend, yet the reported count
+    must still be the full slot total, identical to the un-zeroed scene.
+    """
+    expected = _layer_ci_total(_ZERO_PROPORTION_CFG)
+    zeroed = _run(_ZERO_PROPORTION_CFG, backend, None)
+
+    assert zeroed.crystal_num == expected, (
+        f"{backend}: scene with a proportion=0 slot reported crystal_num="
+        f"{zeroed.crystal_num}, expected {expected} = every (layer, ci) slot in "
+        f"the committed config. Counting only slots the run actually traced makes "
+        f"the value a function of the ray partition again, which is what the "
+        f"dispatch- and worker-invariance tests above forbid"
+    )
+    assert zeroed.crystal_num == _layer_ci_total(_DETERMINISTIC_CFG), (
+        f"{backend}: zeroing a slot's proportion changed crystal_num; the "
+        f"deterministic half is a property of the committed config, and setting a "
+        f"population's share to 0 does not remove it from the config"
     )

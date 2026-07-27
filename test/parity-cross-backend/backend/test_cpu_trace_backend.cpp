@@ -57,13 +57,12 @@ SceneConfig MakeSimpleScene(size_t max_hits, size_t ms_layers, const FilterConfi
 // Turn a setting's prism height into a stochastic distribution, so
 // IsDeterministic(param) is false and every MakeCrystal call on it is a real
 // draw. Mirrors what a config with `"height": {"type": "gaussian", ...}` does.
-// Flip a setting's shape params to stochastic so IsDeterministic() returns false.
-// The std is arbitrary — ANY non-zero variance flips the predicate, and no
+// The std is arbitrary — any non-zero variance flips the predicate and no
 // assertion depends on the magnitude — but it is kept identical to the sibling
-// copies in test/metal_test_helpers.hpp and test/cuda_test_helpers.hpp so the
-// number cannot be misread as a meaningful per-backend difference. Those two live
-// behind __APPLE__ / LUMICE_CUDA_ENABLED guards, which is why the three are not
-// one shared helper; if a shared unguarded home ever exists, collapse them.
+// copies in the cpu/metal/cuda test helpers so the number cannot be misread as a
+// meaningful per-backend difference. Those copies exist because the metal/cuda
+// headers sit behind __APPLE__ / LUMICE_CUDA_ENABLED guards; collapse them if a
+// shared unguarded home ever exists.
 void MakeShapeStochastic(ScatteringSetting& setting) {
   auto& prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
   prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
