@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <variant>
 
+#include "core/crystal_kind.hpp"
 #include "core/math.hpp"
 
 namespace lumice {
@@ -126,6 +127,34 @@ void NormalizeSyncGroups(PyramidCrystalParam& p);
 //!   there is one entry point rather than a choice at every call site.
 void PrepareSyncGroups(PrismCrystalParam& p);
 void PrepareSyncGroups(PyramidCrystalParam& p);
+
+//! @brief Does shape-scalar `slot` physically exist on this crystal type?
+//!
+//! @details The runtime query onto the ONE table that answers this — the same
+//!   slot map CanonicalizeSyncGroups and NormalizeSyncGroups scope themselves
+//!   by. It exists so consumers outside this TU (the C API, and through it the
+//!   GUI, which may not include this header) can ask core rather than keep a
+//!   private truth table that has to be edited in lockstep. Out-of-range slots
+//!   answer false rather than trapping, so a caller iterating 0..N over a
+//!   mismatched slot count degrades to "not applicable" instead of reading
+//!   garbage.
+//!
+//!   O(1), no allocation, no side effects — safe to call per row per frame.
+bool IsShapeScalarApplicable(CrystalKind kind, int slot);
+
+//! @brief The JSON key under `shape.sync_group` that names shape-scalar `slot`.
+//!
+//! @details Returns a static string, or nullptr when the slot does not apply to
+//!   `kind` (or is out of range). All six face slots share the single key
+//!   "face_distance", whose value is a 6-element array — callers write it once,
+//!   not once per face.
+//!
+//!   Same motive as IsShapeScalarApplicable: this used to be a `{key, slot}`
+//!   literal table copied into three translation units (here, the C API, the GUI
+//!   file IO) with nothing but a comment tying them together. Drift had no
+//!   symptom — the layer that drifted would silently drop the field — so the
+//!   copies are gone and every layer reads this.
+const char* ShapeScalarSyncKeyName(CrystalKind kind, int slot);
 
 using CrystalParam = std::variant<PrismCrystalParam, PyramidCrystalParam>;
 

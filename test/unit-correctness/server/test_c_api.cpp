@@ -1514,6 +1514,78 @@ TEST(IsLegalFaceApi, PyramidIllegalFaces) {
 }
 
 // ============================================================
+// LUMICE_IsShapeScalarApplicable / LUMICE_ShapeScalarSyncKeyName
+// ============================================================
+
+TEST(ShapeScalarApplicableApi, PrismOwnsHeightAndTheSixFaces) {
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_HEIGHT), 0);
+  for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, s), 0) << "slot=" << s;
+  }
+  // The three stacked pyramid heights are not fields a prism has at all.
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_UPPER_H), 0);
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_PRISM_H), 0);
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_LOWER_H), 0);
+}
+
+TEST(ShapeScalarApplicableApi, PyramidOwnsThreeHeightsAndTheSixFaces) {
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_UPPER_H), 0);
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_PRISM_H), 0);
+  EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_LOWER_H), 0);
+  for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+    EXPECT_NE(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, s), 0) << "slot=" << s;
+  }
+  EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_HEIGHT), 0);
+}
+
+TEST(ShapeScalarApplicableApi, OutOfRangeSlotsAnswerFalseRatherThanTrapping) {
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, -1), 0);
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, LUMICE_SHAPE_SCALAR_COUNT), 0);
+    EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, 12345), 0);
+  }
+}
+
+TEST(ShapeScalarSyncKeyNameApi, NamesEveryApplicableSlot) {
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_HEIGHT), "height");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_UPPER_H), "upper_h");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_PRISM_H), "prism_h");
+  EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_LOWER_H), "lower_h");
+  // All six faces share one key — its wire value is a 6-element array.
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    for (int s = LUMICE_SHAPE_SCALAR_FACE_0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+      EXPECT_STREQ(LUMICE_ShapeScalarSyncKeyName(kind, s), "face_distance") << "slot=" << s;
+    }
+  }
+}
+
+TEST(ShapeScalarSyncKeyNameApi, InapplicableAndOutOfRangeSlotsAnswerNull) {
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_UPPER_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_PRISM_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PRISM, LUMICE_SHAPE_SCALAR_LOWER_H), nullptr);
+  EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_HEIGHT), nullptr);
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(kind, -1), nullptr);
+    EXPECT_EQ(LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_COUNT), nullptr);
+  }
+}
+
+// The two queries answer the same question about the same slot, so they must never disagree:
+// a slot that applies must be nameable, and a slot that does not must have no name. This is the
+// assertion that keeps the "unreachable" nullptr branch inside ShapeScalarSyncKeyName unreachable
+// — a slot added to the applicability map but not to the key table would land there, and would
+// otherwise show up only as a JSON field that silently goes missing.
+TEST(ShapeScalarSyncKeyNameApi, AgreesWithApplicabilityOnEverySlot) {
+  for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
+    for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
+      const bool applicable = LUMICE_IsShapeScalarApplicable(kind, s) != 0;
+      const char* key = LUMICE_ShapeScalarSyncKeyName(kind, s);
+      EXPECT_EQ(applicable, key != nullptr) << "kind=" << kind << " slot=" << s;
+    }
+  }
+}
+
+// ============================================================
 // LUMICE_ValidateRaypathText
 // ============================================================
 

@@ -1086,6 +1086,25 @@ typedef enum LUMICE_CrystalKind_ {
 // Returns non-zero if `face` is a legal face number for the given crystal kind.
 int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face);
 
+// Returns non-zero if shape-scalar `slot` (a LUMICE_SHAPE_SCALAR_* index) physically exists on
+// this crystal kind: a prism has .height + the six .face_distance, a pyramid has
+// .upper_h/.prism_h/.lower_h + the six .face_distance. Out-of-range slots answer zero.
+//
+// This is core's own applicability table, not a second copy of it — the same one canonicalization
+// scopes itself by when it zeroes a group declared on a slot the type does not have. Ask it rather
+// than reimplementing the rule: a GUI-side copy that drifted from core is what once made the
+// crystal table display a distribution the simulation did not use.
+int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot);
+
+// Returns the JSON key naming shape-scalar `slot` inside a crystal's `shape.sync_group` object,
+// or NULL when the slot does not apply to this kind (or is out of range). The returned string is
+// static storage — do not free it.
+//
+// All six face slots share the one key "face_distance", whose value is a 6-element array; write it
+// once, not once per face. Use this instead of spelling the key names out: they are core's schema,
+// a layer that misspells one silently drops the field rather than reporting an error.
+const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot);
+
 // =============== Raypath Validation ===============
 // Validation state for raypath text input (GUI border color + OK gate).
 typedef enum LUMICE_RaypathValidationState_ {

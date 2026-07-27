@@ -3129,6 +3129,16 @@ int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face) {
   return ns::IsLegalFace(core_kind, face) ? 1 : 0;
 }
 
+int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot) {
+  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
+  return ns::IsShapeScalarApplicable(core_kind, slot) ? 1 : 0;
+}
+
+const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot) {
+  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
+  return ns::ShapeScalarSyncKeyName(core_kind, slot);
+}
+
 
 // =============== Raypath Validation ===============
 LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind kind,

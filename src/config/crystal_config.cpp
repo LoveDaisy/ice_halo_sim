@@ -157,6 +157,10 @@ void PrepareSyncGroups(PyramidCrystalParam& p) {
 
 namespace {
 
+// The one key covering all six face slots — its value is a 6-element array, so
+// the key is written once rather than once per face.
+constexpr const char* kFaceDistanceSyncKey = "face_distance";
+
 // Read the optional "sync_group" sub-map. Keys name shape scalars the same way
 // the surrounding shape JSON names their distributions ("height", "prism_h",
 // "upper_h", "lower_h", "face_distance"), so a reader never has to know the
@@ -176,9 +180,9 @@ void ReadSyncGroupJson(const nlohmann::json& j, int sync_group[kShapeScalarCount
       sync_group[scalar_keys[k].second] = sg.at(scalar_keys[k].first).get<int>();
     }
   }
-  if (sg.contains("face_distance")) {
+  if (sg.contains(kFaceDistanceSyncKey)) {
     size_t i = 0;
-    for (const auto& elem : sg.at("face_distance")) {
+    for (const auto& elem : sg.at(kFaceDistanceSyncKey)) {
       if (i >= 6) {
         break;
       }
@@ -204,7 +208,7 @@ void WriteSyncGroupJson(nlohmann::json& j, const int sync_group[kShapeScalarCoun
   }
   if (any_face) {
     // All six, zeros included — matching how face_distance itself serializes.
-    sg["face_distance"] = std::vector<int>(sync_group + kShapeScalarFace0, sync_group + kShapeScalarFace0 + 6);
+    sg[kFaceDistanceSyncKey] = std::vector<int>(sync_group + kShapeScalarFace0, sync_group + kShapeScalarFace0 + 6);
   }
   if (!sg.empty()) {
     j["sync_group"] = sg;
@@ -220,7 +224,51 @@ constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
   { "lower_h", kShapeScalarLowerH },
 };
 
+// Returns nullptr when the table names no key for `slot`. Unreachable while each
+// table covers every applicable non-face slot of its type, which
+// ShapeScalarSyncKeyNameApi.AgreesWithApplicabilityOnEverySlot pins; answering
+// nullptr rather than asserting keeps a slot added to the applicability map but
+// not to these tables from being handed an invented key name.
+const char* LookupSyncKey(const std::pair<const char*, int>* keys, size_t key_cnt, int slot) {
+  for (size_t k = 0; k < key_cnt; k++) {
+    if (keys[k].second == slot) {
+      return keys[k].first;
+    }
+  }
+  return nullptr;
+}
+
 }  // namespace
+
+
+bool IsShapeScalarApplicable(CrystalKind kind, int slot) {
+  if (slot < 0 || slot >= kShapeScalarCount) {
+    return false;
+  }
+  // Derived from the same slot maps the two sync-group passes scope themselves
+  // by, so applicability keeps exactly one definition. The local param exists
+  // only to give those maps addresses to point at — no Distribution is read, and
+  // nothing outlives this call.
+  if (kind == CrystalKind::kPrism) {
+    PrismCrystalParam probe;
+    return PrismSlots(probe)[slot] != nullptr;
+  }
+  PyramidCrystalParam probe;
+  return PyramidSlots(probe)[slot] != nullptr;
+}
+
+const char* ShapeScalarSyncKeyName(CrystalKind kind, int slot) {
+  if (!IsShapeScalarApplicable(kind, slot)) {
+    return nullptr;
+  }
+  if (slot >= kShapeScalarFace0) {
+    return kFaceDistanceSyncKey;
+  }
+  if (kind == CrystalKind::kPrism) {
+    return LookupSyncKey(kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys), slot);
+  }
+  return LookupSyncKey(kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys), slot);
+}
 
 
 // convert to & from json object
