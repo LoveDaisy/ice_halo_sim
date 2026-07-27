@@ -597,6 +597,22 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
   }
 }
 
+namespace {
+
+// The three axis keys, spelled here and nowhere else in the tree. Indexed by
+// AxisScalar; every layer that reads or writes them goes through
+// AxisScalarKeyName below.
+constexpr const char* kAxisScalarKeys[kAxisScalarCount] = { "zenith", "azimuth", "roll" };
+
+}  // namespace
+
+const char* AxisScalarKeyName(int slot) {
+  if (slot < 0 || slot >= kAxisScalarCount) {
+    return nullptr;
+  }
+  return kAxisScalarKeys[slot];
+}
+
 void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
   // Zenith: internal latitude → external zenith (zenith center = 90 - latitude center).
   // Must handle kNoRandom (serialized as number) vs others (serialized as object).
@@ -607,13 +623,13 @@ void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
   } else {
     zenith["mean"] = 90.0f - axis.latitude_dist.center;
   }
-  obj["zenith"] = zenith;
-  obj["azimuth"] = axis.azimuth_dist;
-  obj["roll"] = axis.roll_dist;
+  obj[AxisScalarKeyName(kAxisScalarZenith)] = zenith;
+  obj[AxisScalarKeyName(kAxisScalarAzimuth)] = axis.azimuth_dist;
+  obj[AxisScalarKeyName(kAxisScalarRoll)] = axis.roll_dist;
 }
 
 void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
-  obj.at("zenith").get_to(axis.latitude_dist);
+  obj.at(AxisScalarKeyName(kAxisScalarZenith)).get_to(axis.latitude_dist);
   axis.latitude_dist.center = 90.0f - axis.latitude_dist.center;
 
   axis.azimuth_dist.type = DistributionType::kUniform;
@@ -623,11 +639,13 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   axis.roll_dist.center = 0.0f;
   axis.roll_dist.spread = 360.0f;
 
-  if (obj.contains("azimuth")) {
-    obj.at("azimuth").get_to(axis.azimuth_dist);
+  const char* azimuth_key = AxisScalarKeyName(kAxisScalarAzimuth);
+  if (obj.contains(azimuth_key)) {
+    obj.at(azimuth_key).get_to(axis.azimuth_dist);
   }
-  if (obj.contains("roll")) {
-    obj.at("roll").get_to(axis.roll_dist);
+  const char* roll_key = AxisScalarKeyName(kAxisScalarRoll);
+  if (obj.contains(roll_key)) {
+    obj.at(roll_key).get_to(axis.roll_dist);
   }
 }
 

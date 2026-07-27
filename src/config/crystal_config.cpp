@@ -161,11 +161,19 @@ namespace {
 // the key is written once rather than once per face.
 constexpr const char* kFaceDistanceSyncKey = "face_distance";
 
+// The pyramid-only keys, spelled here and nowhere else in the tree. Every layer
+// that reads or writes them goes through ShapeWedgeAngleKeyName /
+// ShapeIndicesKeyName below.
+constexpr const char* kShapeKeyUpperWedgeAngle = "upper_wedge_angle";
+constexpr const char* kShapeKeyLowerWedgeAngle = "lower_wedge_angle";
+constexpr const char* kShapeKeyUpperIndices = "upper_indices";
+constexpr const char* kShapeKeyLowerIndices = "lower_indices";
+
 // Read the optional "sync_group" sub-map. Keys name shape scalars the same way
 // the surrounding shape JSON names their distributions ("height", "prism_h",
-// "upper_h", "lower_h", "face_distance"), so a reader never has to know the
-// ShapeScalar integers. Absent key = every scalar independent, which is why an
-// older config file needs no edit at all.
+// "upper_h", "lower_h", "face_distance") — literally the same strings, which is
+// why both levels now read them from ShapeScalarSyncKeyName. Absent key = every
+// scalar independent, which is why an older config file needs no edit at all.
 void ReadSyncGroupJson(const nlohmann::json& j, int sync_group[kShapeScalarCount],
                        const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
   for (int i = 0; i < kShapeScalarCount; i++) {
@@ -270,12 +278,20 @@ const char* ShapeScalarSyncKeyName(CrystalKind kind, int slot) {
   return LookupSyncKey(kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys), slot);
 }
 
+const char* ShapeWedgeAngleKeyName(bool upper) {
+  return upper ? kShapeKeyUpperWedgeAngle : kShapeKeyLowerWedgeAngle;
+}
+
+const char* ShapeIndicesKeyName(bool upper) {
+  return upper ? kShapeKeyUpperIndices : kShapeKeyLowerIndices;
+}
+
 
 // convert to & from json object
 // ========== PrismCrystalParam ==========
 void to_json(nlohmann::json& j, const PrismCrystalParam& p) {
-  j["height"] = p.h_;
-  j["face_distance"] = p.d_;
+  j[ShapeScalarSyncKeyName(CrystalKind::kPrism, kShapeScalarHeight)] = p.h_;
+  j[ShapeScalarSyncKeyName(CrystalKind::kPrism, kShapeScalarFace0)] = p.d_;
   // Canonicalize a local copy: serialization must not depend on the caller having
   // normalized, and must not mutate what it was handed either.
   PrismCrystalParam canon = p;
@@ -284,8 +300,9 @@ void to_json(nlohmann::json& j, const PrismCrystalParam& p) {
 }
 
 void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
-  if (j.contains("height")) {
-    j.at("height").get_to(p.h_);
+  const char* height_key = ShapeScalarSyncKeyName(CrystalKind::kPrism, kShapeScalarHeight);
+  if (j.contains(height_key)) {
+    j.at(height_key).get_to(p.h_);
   }
 
   // Face distance: default value 1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
@@ -293,9 +310,10 @@ void from_json(const nlohmann::json& j, PrismCrystalParam& p) {
     x.type = DistributionType::kNoRandom;
     x.center = 1.0f;
   }
-  if (j.contains("face_distance")) {
+  const char* fd_key = ShapeScalarSyncKeyName(CrystalKind::kPrism, kShapeScalarFace0);
+  if (j.contains(fd_key)) {
     size_t i = 0;
-    for (const auto& elem : j.at("face_distance")) {
+    for (const auto& elem : j.at(fd_key)) {
       if (i >= 6) {
         break;
       }
@@ -322,39 +340,43 @@ static float MillerToAlpha(int i1, int i4) {
 
 // ========== PyramidCrystalParam ==========
 void to_json(nlohmann::json& j, const PyramidCrystalParam& p) {
-  j["prism_h"] = p.h_prs_;
-  j["upper_h"] = p.h_pyr_u_;
-  j["lower_h"] = p.h_pyr_l_;
-  j["upper_wedge_angle"] = p.wedge_angle_u_;
-  j["lower_wedge_angle"] = p.wedge_angle_l_;
-  j["face_distance"] = p.d_;
+  constexpr auto kKind = CrystalKind::kPyramid;
+  j[ShapeScalarSyncKeyName(kKind, kShapeScalarPrismH)] = p.h_prs_;
+  j[ShapeScalarSyncKeyName(kKind, kShapeScalarUpperH)] = p.h_pyr_u_;
+  j[ShapeScalarSyncKeyName(kKind, kShapeScalarLowerH)] = p.h_pyr_l_;
+  j[ShapeWedgeAngleKeyName(true)] = p.wedge_angle_u_;
+  j[ShapeWedgeAngleKeyName(false)] = p.wedge_angle_l_;
+  j[ShapeScalarSyncKeyName(kKind, kShapeScalarFace0)] = p.d_;
   PyramidCrystalParam canon = p;
   CanonicalizeSyncGroups(canon);
   WriteSyncGroupJson(j, canon.sync_group_, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
 }
 
 void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
+  constexpr auto kKind = CrystalKind::kPyramid;
+
   // Heights
-  j.at("prism_h").get_to(p.h_prs_);
-  if (j.contains("upper_h")) {
-    j.at("upper_h").get_to(p.h_pyr_u_);
+  j.at(ShapeScalarSyncKeyName(kKind, kShapeScalarPrismH)).get_to(p.h_prs_);
+  const char* upper_h_key = ShapeScalarSyncKeyName(kKind, kShapeScalarUpperH);
+  if (j.contains(upper_h_key)) {
+    j.at(upper_h_key).get_to(p.h_pyr_u_);
   }
-  if (j.contains("lower_h")) {
-    j.at("lower_h").get_to(p.h_pyr_l_);
+  const char* lower_h_key = ShapeScalarSyncKeyName(kKind, kShapeScalarLowerH);
+  if (j.contains(lower_h_key)) {
+    j.at(lower_h_key).get_to(p.h_pyr_l_);
   }
 
-  // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
-  if (j.contains("upper_wedge_angle")) {
-    p.wedge_angle_u_ = j.at("upper_wedge_angle").get<float>();
-  } else if (j.contains("upper_indices") && j.at("upper_indices").is_array() && j.at("upper_indices").size() == 3) {
-    auto& ui = j.at("upper_indices");
-    p.wedge_angle_u_ = MillerToAlpha(ui[0].get<int>(), ui[2].get<int>());
-  }
-  if (j.contains("lower_wedge_angle")) {
-    p.wedge_angle_l_ = j.at("lower_wedge_angle").get<float>();
-  } else if (j.contains("lower_indices") && j.at("lower_indices").is_array() && j.at("lower_indices").size() == 3) {
-    auto& li = j.at("lower_indices");
-    p.wedge_angle_l_ = MillerToAlpha(li[0].get<int>(), li[2].get<int>());
+  // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
+  for (bool upper : { true, false }) {
+    float& wedge_angle = upper ? p.wedge_angle_u_ : p.wedge_angle_l_;
+    const char* angle_key = ShapeWedgeAngleKeyName(upper);
+    const char* indices_key = ShapeIndicesKeyName(upper);
+    if (j.contains(angle_key)) {
+      wedge_angle = j.at(angle_key).get<float>();
+    } else if (j.contains(indices_key) && j.at(indices_key).is_array() && j.at(indices_key).size() == 3) {
+      const auto& idx = j.at(indices_key);
+      wedge_angle = MillerToAlpha(idx[0].get<int>(), idx[2].get<int>());
+    }
   }
 
   // Face distance: default value 1.0 (1.0 = regular hexagon in FillHexCrystalCoef)
@@ -362,9 +384,10 @@ void from_json(const nlohmann::json& j, PyramidCrystalParam& p) {
     x.type = DistributionType::kNoRandom;
     x.center = 1.0f;
   }
-  if (j.contains("face_distance")) {
+  const char* fd_key = ShapeScalarSyncKeyName(kKind, kShapeScalarFace0);
+  if (j.contains(fd_key)) {
     size_t i = 0;
-    for (const auto& elem : j.at("face_distance")) {
+    for (const auto& elem : j.at(fd_key)) {
       if (i >= 6) {
         break;
       }
