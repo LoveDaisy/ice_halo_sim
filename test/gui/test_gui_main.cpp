@@ -213,11 +213,21 @@ int main(int argc, char** argv) {
     const gui::UserConfigSource source =
         gui::ResolveUserConfigSource(parsed.presence, gui::kTestHarnessUserConfigDefault);
     gui::SetUserConfigSourceForProcess(source, parsed.explicit_dir);
-    if (source == gui::UserConfigSource::kExplicitDir) {
-      fprintf(stderr, "[DIAG] User config: explicit directory '%s' (--user-config)\n",
-              parsed.explicit_dir.string().c_str());
-    } else {
-      fprintf(stderr, "[DIAG] User config: disabled (gui_test default)\n");
+    // Report what was actually installed, never what the default is assumed to be. A red-state
+    // probe that flipped kTestHarnessUserConfigDefault to kAutoDetect caught an earlier version of
+    // this line still printing "disabled": the isolation was genuinely broken and the one
+    // diagnostic a reader would consult was asserting the opposite.
+    switch (source) {
+      case gui::UserConfigSource::kExplicitDir:
+        fprintf(stderr, "[DIAG] User config: explicit directory '%s' (--user-config)\n",
+                parsed.explicit_dir.string().c_str());
+        break;
+      case gui::UserConfigSource::kDisabled:
+        fprintf(stderr, "[DIAG] User config: disabled (isolated from this machine's saved defaults)\n");
+        break;
+      case gui::UserConfigSource::kAutoDetect:
+        fprintf(stderr, "[DIAG] User config: AUTO-DETECT — reference comparisons are NOT isolated\n");
+        break;
     }
   }
 
