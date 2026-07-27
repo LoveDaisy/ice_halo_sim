@@ -267,16 +267,17 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
     j["name"] = c.name;
   }
 
+  const LUMICE_CrystalKind kind = (c.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
   if (c.type == CrystalType::kPrism) {
     j["type"] = "prism";
-    j["shape"]["height"] = SerializeShapeDist(c.height);
+    j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT)] = SerializeShapeDist(c.height);
   } else {
     j["type"] = "pyramid";
-    j["shape"]["prism_h"] = SerializeShapeDist(c.prism_h);
-    j["shape"]["upper_h"] = SerializeShapeDist(c.upper_h);
-    j["shape"]["lower_h"] = SerializeShapeDist(c.lower_h);
-    j["shape"]["upper_wedge_angle"] = c.upper_alpha;
-    j["shape"]["lower_wedge_angle"] = c.lower_alpha;
+    j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H)] = SerializeShapeDist(c.prism_h);
+    j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H)] = SerializeShapeDist(c.upper_h);
+    j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H)] = SerializeShapeDist(c.lower_h);
+    j["shape"][LUMICE_ShapeWedgeAngleKeyName(true)] = c.upper_alpha;
+    j["shape"][LUMICE_ShapeWedgeAngleKeyName(false)] = c.lower_alpha;
   }
 
   // face_distance: only write when non-default. The default is the deterministic unit distance
@@ -291,9 +292,11 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
     }
   }
   if (!is_default_fd) {
-    j["shape"]["face_distance"] = { SerializeShapeDist(c.face_distance[0]), SerializeShapeDist(c.face_distance[1]),
-                                    SerializeShapeDist(c.face_distance[2]), SerializeShapeDist(c.face_distance[3]),
-                                    SerializeShapeDist(c.face_distance[4]), SerializeShapeDist(c.face_distance[5]) };
+    j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0)] = {
+      SerializeShapeDist(c.face_distance[0]), SerializeShapeDist(c.face_distance[1]),
+      SerializeShapeDist(c.face_distance[2]), SerializeShapeDist(c.face_distance[3]),
+      SerializeShapeDist(c.face_distance[4]), SerializeShapeDist(c.face_distance[5])
+    };
   }
 
   // shape.sync_group: the embedded per-ShapeDist groups gathered back into the wire form's
@@ -301,15 +304,11 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
   // shape scalars themselves are written above.
   int sg[LUMICE_SHAPE_SCALAR_COUNT];
   FillSyncGroupArray(c, sg);
-  if (c.type == CrystalType::kPrism) {
-    WriteSyncGroupJson(j["shape"], sg, LUMICE_CRYSTAL_PRISM);
-  } else {
-    WriteSyncGroupJson(j["shape"], sg, LUMICE_CRYSTAL_PYRAMID);
-  }
+  WriteSyncGroupJson(j["shape"], sg, kind);
 
-  j["axis"]["zenith"] = SerializeAxisDist(c.zenith);
-  j["axis"]["azimuth"] = SerializeAxisDist(c.azimuth);
-  j["axis"]["roll"] = SerializeAxisDist(c.roll);
+  j["axis"][LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_ZENITH)] = SerializeAxisDist(c.zenith);
+  j["axis"][LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_AZIMUTH)] = SerializeAxisDist(c.azimuth);
+  j["axis"][LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_ROLL)] = SerializeAxisDist(c.roll);
 
   return j;
 }
@@ -721,57 +720,62 @@ static CrystalConfig ParseCrystal(const json& j) {
 
   auto type_str = j.value("type", "prism");
   c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalType::kPrism;
+  const LUMICE_CrystalKind kind = (c.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 
   if (j.contains("shape")) {
     auto& s = j.at("shape");
     if (c.type == CrystalType::kPrism) {
-      if (s.contains("height")) {
-        c.height = ParseShapeDist(s["height"], 1.0f);
+      const char* height_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
+      if (s.contains(height_key)) {
+        c.height = ParseShapeDist(s[height_key], 1.0f);
       }
     } else {
       // Historical fallbacks preserved: prism_h defaults to 1.0, upper_h/lower_h to 0.0 when absent.
-      c.prism_h = s.contains("prism_h") ? ParseShapeDist(s["prism_h"], 1.0f) : ShapeDist(1.0f);
-      c.upper_h = s.contains("upper_h") ? ParseShapeDist(s["upper_h"], 0.0f) : ShapeDist(0.0f);
-      c.lower_h = s.contains("lower_h") ? ParseShapeDist(s["lower_h"], 0.0f) : ShapeDist(0.0f);
-      // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
-      if (s.contains("upper_wedge_angle") && s["upper_wedge_angle"].is_number()) {
-        c.upper_alpha = s["upper_wedge_angle"].get<float>();
-      } else if (s.contains("upper_indices") && s["upper_indices"].is_array() && s["upper_indices"].size() == 3) {
-        c.upper_alpha = MillerToAlpha(s["upper_indices"][0].get<int>(), s["upper_indices"][2].get<int>());
-      }
-      if (s.contains("lower_wedge_angle") && s["lower_wedge_angle"].is_number()) {
-        c.lower_alpha = s["lower_wedge_angle"].get<float>();
-      } else if (s.contains("lower_indices") && s["lower_indices"].is_array() && s["lower_indices"].size() == 3) {
-        c.lower_alpha = MillerToAlpha(s["lower_indices"][0].get<int>(), s["lower_indices"][2].get<int>());
+      const char* prism_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
+      const char* upper_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
+      const char* lower_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
+      c.prism_h = s.contains(prism_h_key) ? ParseShapeDist(s[prism_h_key], 1.0f) : ShapeDist(1.0f);
+      c.upper_h = s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f) : ShapeDist(0.0f);
+      c.lower_h = s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f) : ShapeDist(0.0f);
+      // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
+      for (int upper = 1; upper >= 0; upper--) {
+        float& alpha = upper ? c.upper_alpha : c.lower_alpha;
+        const char* angle_key = LUMICE_ShapeWedgeAngleKeyName(upper);
+        const char* indices_key = LUMICE_ShapeIndicesKeyName(upper);
+        if (s.contains(angle_key) && s[angle_key].is_number()) {
+          alpha = s[angle_key].get<float>();
+        } else if (s.contains(indices_key) && s[indices_key].is_array() && s[indices_key].size() == 3) {
+          alpha = MillerToAlpha(s[indices_key][0].get<int>(), s[indices_key][2].get<int>());
+        }
       }
     }
     // face_distance: common to both Prism and Pyramid
-    if (s.contains("face_distance") && s["face_distance"].is_array()) {
-      size_t n = std::min(s["face_distance"].size(), static_cast<size_t>(6));
+    const char* fd_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
+    if (s.contains(fd_key) && s[fd_key].is_array()) {
+      size_t n = std::min(s[fd_key].size(), static_cast<size_t>(6));
       for (size_t i = 0; i < n; i++) {
-        c.face_distance[i] = ParseShapeDist(s["face_distance"][i], 1.0f);
+        c.face_distance[i] = ParseShapeDist(s[fd_key][i], 1.0f);
       }
     }
     // shape.sync_group: read into the wire form's parallel array, then scatter back into each
     // ShapeDist. Must come AFTER the shape parses above — those assign whole ShapeDist values and
     // would overwrite an already-scattered group with the default 0.
     int sg[LUMICE_SHAPE_SCALAR_COUNT];
-    if (c.type == CrystalType::kPrism) {
-      ReadSyncGroupJson(s, sg, LUMICE_CRYSTAL_PRISM);
-    } else {
-      ReadSyncGroupJson(s, sg, LUMICE_CRYSTAL_PYRAMID);
-    }
+    ReadSyncGroupJson(s, sg, kind);
     ApplySyncGroupArray(sg, c);
   }
 
   if (j.contains("axis")) {
     auto& ax = j.at("axis");
-    if (ax.contains("zenith"))
-      c.zenith = ParseAxisDist(ax["zenith"]);
-    if (ax.contains("azimuth"))
-      c.azimuth = ParseAxisDist(ax["azimuth"]);
-    if (ax.contains("roll"))
-      c.roll = ParseAxisDist(ax["roll"]);
+    const char* zenith_key = LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_ZENITH);
+    const char* azimuth_key = LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_AZIMUTH);
+    const char* roll_key = LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_ROLL);
+    if (ax.contains(zenith_key))
+      c.zenith = ParseAxisDist(ax[zenith_key]);
+    if (ax.contains(azimuth_key))
+      c.azimuth = ParseAxisDist(ax[azimuth_key]);
+    if (ax.contains(roll_key))
+      c.roll = ParseAxisDist(ax[roll_key]);
   }
 
   return c;

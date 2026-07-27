@@ -349,16 +349,17 @@ static void ReadSyncGroupJson(const nlohmann::json& shape_j, int sync_group[LUMI
 // them; the mesh-preview path does not want them).
 nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
   nlohmann::json j;
+  const auto kind = (cr.type == 0) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
   if (cr.type == 0) {
     j["type"] = "prism";
-    j["shape"]["height"] = DistributionToJson(cr.height);
+    j["shape"][ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT)] = DistributionToJson(cr.height);
   } else {
     j["type"] = "pyramid";
-    j["shape"]["prism_h"] = DistributionToJson(cr.prism_h);
-    j["shape"]["upper_h"] = DistributionToJson(cr.upper_h);
-    j["shape"]["lower_h"] = DistributionToJson(cr.lower_h);
-    j["shape"]["upper_wedge_angle"] = cr.upper_wedge_angle;
-    j["shape"]["lower_wedge_angle"] = cr.lower_wedge_angle;
+    j["shape"][ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H)] = DistributionToJson(cr.prism_h);
+    j["shape"][ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H)] = DistributionToJson(cr.upper_h);
+    j["shape"][ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H)] = DistributionToJson(cr.lower_h);
+    j["shape"][ns::ShapeWedgeAngleKeyName(true)] = cr.upper_wedge_angle;
+    j["shape"][ns::ShapeWedgeAngleKeyName(false)] = cr.lower_wedge_angle;
   }
   // face_distance: emit all 6 unconditionally (mirrors core crystal_config.cpp::to_json's
   // `j["face_distance"] = p.d_`). The "only when non-default" shortcut no longer fits now that
@@ -368,15 +369,11 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
   for (int fi = 0; fi < 6; fi++) {
     fd.push_back(DistributionToJson(cr.face_distance[fi]));
   }
-  j["shape"]["face_distance"] = fd;
+  j["shape"][ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0)] = fd;
   // Only the keys applicable to this crystal type are emitted, so an inapplicable declaration
   // never reaches the wire in the first place (core's canonicalization zeroes such slots anyway,
   // as defense in depth).
-  if (cr.type == 0) {
-    WriteSyncGroupJson(j["shape"], cr.sync_group, ns::CrystalKind::kPrism);
-  } else {
-    WriteSyncGroupJson(j["shape"], cr.sync_group, ns::CrystalKind::kPyramid);
-  }
+  WriteSyncGroupJson(j["shape"], cr.sync_group, kind);
   return j;
 }
 
@@ -391,9 +388,9 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
 static nlohmann::json CrystalToJson(const LUMICE_CrystalParam& cr, int id) {
   nlohmann::json j = CrystalShapeToJson(cr);  // {"type","shape"} single-source translation
   j["id"] = id;
-  j["axis"]["zenith"] = DistributionToJson(cr.zenith);
-  j["axis"]["azimuth"] = DistributionToJson(cr.azimuth);
-  j["axis"]["roll"] = DistributionToJson(cr.roll);
+  j["axis"][ns::AxisScalarKeyName(ns::kAxisScalarZenith)] = DistributionToJson(cr.zenith);
+  j["axis"][ns::AxisScalarKeyName(ns::kAxisScalarAzimuth)] = DistributionToJson(cr.azimuth);
+  j["axis"][ns::AxisScalarKeyName(ns::kAxisScalarRoll)] = DistributionToJson(cr.roll);
   return j;
 }
 
@@ -1538,36 +1535,44 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   if (!cj.contains("shape")) {
     return LUMICE_ERR_MISSING_FIELD;  // core: j.at("shape")
   }
+  // One derivation for the whole function: the check above already narrowed type_str to the two
+  // known spellings, so every key query below — per-type and type-independent alike — asks core's
+  // one table with this same kind.
+  const auto kind = (type_str == "prism") ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
   if (type_str == "prism") {
     cr->type = 0;
     // height is OPTIONAL: core PrismCrystalParam::h_ defaults to a deterministic 1.0 and
     // from_json only overwrites it when the key is present.
     cr->height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
-    if (cj.at("shape").contains("height")) {
-      if (auto err = JsonToDistribution(cj.at("shape").at("height"), &cr->height); err != LUMICE_OK) {
+    const char* height_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
+    if (cj.at("shape").contains(height_key)) {
+      if (auto err = JsonToDistribution(cj.at("shape").at(height_key), &cr->height); err != LUMICE_OK) {
         return err;
       }
     }
   } else if (type_str == "pyramid") {
     cr->type = 1;
     const auto& shape = cj.at("shape");
-    // prism_h is required (core: j.at("prism_h")); the two pyramidal heights are optional and
+    // prism_h is required (core: j.at(prism_h)); the two pyramidal heights are optional and
     // default to a deterministic 0.0 (PyramidCrystalParam::h_pyr_u_ / h_pyr_l_).
-    if (!shape.contains("prism_h")) {
+    const char* prism_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
+    if (!shape.contains(prism_h_key)) {
       return LUMICE_ERR_MISSING_FIELD;
     }
-    if (auto err = JsonToDistribution(shape.at("prism_h"), &cr->prism_h); err != LUMICE_OK) {
+    if (auto err = JsonToDistribution(shape.at(prism_h_key), &cr->prism_h); err != LUMICE_OK) {
       return err;
     }
     cr->upper_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
     cr->lower_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
-    if (shape.contains("upper_h")) {
-      if (auto err = JsonToDistribution(shape.at("upper_h"), &cr->upper_h); err != LUMICE_OK) {
+    const char* upper_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
+    if (shape.contains(upper_h_key)) {
+      if (auto err = JsonToDistribution(shape.at(upper_h_key), &cr->upper_h); err != LUMICE_OK) {
         return err;
       }
     }
-    if (shape.contains("lower_h")) {
-      if (auto err = JsonToDistribution(shape.at("lower_h"), &cr->lower_h); err != LUMICE_OK) {
+    const char* lower_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
+    if (shape.contains(lower_h_key)) {
+      if (auto err = JsonToDistribution(shape.at(lower_h_key), &cr->lower_h); err != LUMICE_OK) {
         return err;
       }
     }
@@ -1575,20 +1580,16 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     // explicit angle nor the Miller indices are given — the zeroed struct would mean 0°.
     cr->upper_wedge_angle = 28.0f;
     cr->lower_wedge_angle = 28.0f;
-    // Wedge angle: prefer "upper_wedge_angle", fallback to "upper_indices" conversion
-    if (shape.contains("upper_wedge_angle") && shape.at("upper_wedge_angle").is_number()) {
-      cr->upper_wedge_angle = shape.at("upper_wedge_angle").get<float>();
-    } else if (shape.contains("upper_indices") && shape.at("upper_indices").is_array() &&
-               shape.at("upper_indices").size() == 3) {
-      cr->upper_wedge_angle =
-          MillerToAlpha(shape.at("upper_indices")[0].get<int>(), shape.at("upper_indices")[2].get<int>());
-    }
-    if (shape.contains("lower_wedge_angle") && shape.at("lower_wedge_angle").is_number()) {
-      cr->lower_wedge_angle = shape.at("lower_wedge_angle").get<float>();
-    } else if (shape.contains("lower_indices") && shape.at("lower_indices").is_array() &&
-               shape.at("lower_indices").size() == 3) {
-      cr->lower_wedge_angle =
-          MillerToAlpha(shape.at("lower_indices")[0].get<int>(), shape.at("lower_indices")[2].get<int>());
+    // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
+    for (bool upper : { true, false }) {
+      float& wedge_angle = upper ? cr->upper_wedge_angle : cr->lower_wedge_angle;
+      const char* angle_key = ns::ShapeWedgeAngleKeyName(upper);
+      const char* indices_key = ns::ShapeIndicesKeyName(upper);
+      if (shape.contains(angle_key) && shape.at(angle_key).is_number()) {
+        wedge_angle = shape.at(angle_key).get<float>();
+      } else if (shape.contains(indices_key) && shape.at(indices_key).is_array() && shape.at(indices_key).size() == 3) {
+        wedge_angle = MillerToAlpha(shape.at(indices_key)[0].get<int>(), shape.at(indices_key)[2].get<int>());
+      }
     }
   } else {
     return LUMICE_ERR_INVALID_VALUE;
@@ -1600,8 +1601,9 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   for (int k = 0; k < 6; k++) {
     cr->face_distance[k] = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
   }
-  if (cj.at("shape").contains("face_distance")) {
-    const auto& fd = cj.at("shape").at("face_distance");
+  const char* fd_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
+  if (cj.at("shape").contains(fd_key)) {
+    const auto& fd = cj.at("shape").at(fd_key);
     if (!fd.is_array()) {
       return LUMICE_ERR_INVALID_VALUE;
     }
@@ -1616,11 +1618,7 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   // Sync groups: read verbatim, only the keys this crystal type owns. Canonicalization and
   // leader normalization stay in core's from_json (see WriteSyncGroupJson's note); this struct
   // holds what the caller / config file declared.
-  if (type_str == "prism") {
-    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, ns::CrystalKind::kPrism);
-  } else {
-    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, ns::CrystalKind::kPyramid);
-  }
+  ReadSyncGroupJson(cj.at("shape"), cr->sync_group, kind);
 
   // Axis distributions. The two cases are deliberately NOT symmetric, mirroring core:
   //   - `axis` absent      -> AxisDistribution's default constructor: zenith/azimuth/roll all
@@ -1634,25 +1632,28 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   cr->roll = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
   if (cj.contains("axis")) {
     const auto& axis = cj.at("axis");
-    if (!axis.contains("zenith")) {
+    const char* zenith_key = ns::AxisScalarKeyName(ns::kAxisScalarZenith);
+    if (!axis.contains(zenith_key)) {
       return LUMICE_ERR_MISSING_FIELD;
     }
     // Core reads the zenith key into its latitude slot and then flips it (latitude = 90 - zenith),
     // unconditionally — so a zenith object that omits `mean` inherits the latitude default 90,
     // which is zenith 90 on this side of the flip (NOT zenith 0).
     cr->zenith = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 90.0f, 0.0f };
-    if (auto err = JsonToDistribution(axis.at("zenith"), &cr->zenith); err != LUMICE_OK) {
+    if (auto err = JsonToDistribution(axis.at(zenith_key), &cr->zenith); err != LUMICE_OK) {
       return err;
     }
     cr->azimuth = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 0.0f, 360.0f };
     cr->roll = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 0.0f, 360.0f };
-    if (axis.contains("azimuth")) {
-      if (auto err = JsonToDistribution(axis.at("azimuth"), &cr->azimuth); err != LUMICE_OK) {
+    const char* azimuth_key = ns::AxisScalarKeyName(ns::kAxisScalarAzimuth);
+    if (axis.contains(azimuth_key)) {
+      if (auto err = JsonToDistribution(axis.at(azimuth_key), &cr->azimuth); err != LUMICE_OK) {
         return err;
       }
     }
-    if (axis.contains("roll")) {
-      if (auto err = JsonToDistribution(axis.at("roll"), &cr->roll); err != LUMICE_OK) {
+    const char* roll_key = ns::AxisScalarKeyName(ns::kAxisScalarRoll);
+    if (axis.contains(roll_key)) {
+      if (auto err = JsonToDistribution(axis.at(roll_key), &cr->roll); err != LUMICE_OK) {
         return err;
       }
     }
@@ -3134,6 +3135,27 @@ int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot) {
 const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot) {
   auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
   return ns::ShapeScalarSyncKeyName(core_kind, slot);
+}
+
+const char* LUMICE_ShapeWedgeAngleKeyName(int upper) {
+  return ns::ShapeWedgeAngleKeyName(upper != 0);
+}
+
+const char* LUMICE_ShapeIndicesKeyName(int upper) {
+  return ns::ShapeIndicesKeyName(upper != 0);
+}
+
+
+// =============== Axis Scalars ===============
+// The wire indices are passed straight through to core's, so they must BE core's. A silent
+// mismatch would hand every caller a neighbouring key rather than an error.
+static_assert(LUMICE_AXIS_SCALAR_ZENITH == ns::kAxisScalarZenith &&
+                  LUMICE_AXIS_SCALAR_AZIMUTH == ns::kAxisScalarAzimuth &&
+                  LUMICE_AXIS_SCALAR_ROLL == ns::kAxisScalarRoll && LUMICE_AXIS_SCALAR_COUNT == ns::kAxisScalarCount,
+              "LUMICE_AXIS_SCALAR_* must mirror core's AxisScalar enum");
+
+const char* LUMICE_AxisScalarKeyName(int slot) {
+  return ns::AxisScalarKeyName(slot);
 }
 
 

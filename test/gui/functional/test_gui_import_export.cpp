@@ -711,6 +711,109 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The wedge-angle, Miller-index and axis keys, which the sync_group tests above do not reach:
+  // sync_group covers only the ten shape SCALARS, and lmc_full_roundtrip checks "zenith" alone.
+  // Every key here is a bare string literal on purpose — expressing them through
+  // LUMICE_ShapeWedgeAngleKeyName / LUMICE_AxisScalarKeyName would let the schema and its own test
+  // drift together and pass forever. Import and export are both checked because they are separate
+  // key lists in the code: a round-trip alone is self-consistent even when the GUI writes keys core
+  // cannot read.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "import_export", "wedge_angle_and_axis_keys_roundtrip");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      ResetTestState();
+
+      // --- Import: explicit wedge angles + all three axis keys, each a distinct value so a
+      // swapped pair (zenith read into roll, upper read into lower) cannot pass.
+      const std::string core_json = R"({
+        "crystal": [
+          {"id": 1, "type": "pyramid",
+           "shape": {"prism_h": 1.2, "upper_h": 0.1, "lower_h": 0.5,
+                     "upper_wedge_angle": 33.0, "lower_wedge_angle": 22.0},
+           "axis": {"zenith": {"type": "gauss", "mean": 12.0, "std": 1.0},
+                    "azimuth": {"type": "uniform", "mean": 34.0, "std": 2.0},
+                    "roll": {"type": "gauss", "mean": 56.0, "std": 3.0}}}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0}]}
+          ]
+        }
+      })";
+
+      gui::GuiState loaded = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(core_json, loaded));
+      IM_CHECK_EQ(static_cast<int>(loaded.layers.size()), 1);
+      const auto& c = gui::CrystalOf(loaded, loaded.layers[0].entries[0]);
+      IM_CHECK_EQ(c.type, gui::CrystalType::kPyramid);
+      IM_CHECK_LT(std::abs(c.upper_alpha - 33.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.lower_alpha - 22.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.zenith.mean - 12.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.azimuth.mean - 34.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.azimuth.std - 2.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.roll.mean - 56.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(c.roll.std - 3.0f), 1e-3f);
+
+      // --- Import, legacy arm: with the explicit angles gone, the Miller indices take over. The
+      // expected degrees are the same literals the core-side MillerIndexFallback tests pin.
+      const std::string indices_json = R"({
+        "crystal": [
+          {"id": 1, "type": "pyramid",
+           "shape": {"prism_h": 1.2, "upper_h": 0.1, "lower_h": 0.5,
+                     "upper_indices": [2, 0, 3], "lower_indices": [1, 0, 1]}}
+        ],
+        "scene": {
+          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "ray_num": 1000,
+          "max_hits": 8,
+          "scattering": [
+            {"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0}]}
+          ]
+        }
+      })";
+
+      gui::GuiState legacy = gui::InitDefaultState();
+      IM_CHECK(gui::DeserializeFromJson(indices_json, legacy));
+      const auto& lc = gui::CrystalOf(legacy, legacy.layers[0].entries[0]);
+      IM_CHECK_LT(std::abs(lc.upper_alpha - 38.57f), 0.01f);  // {2,0,3}
+      IM_CHECK_LT(std::abs(lc.lower_alpha - 28.00f), 0.01f);  // {1,0,1}
+
+      // --- Export: the same keys come back out, spelled the same way.
+      auto& cr = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      cr.type = gui::CrystalType::kPyramid;
+      cr.upper_alpha = 33.0f;
+      cr.lower_alpha = 22.0f;
+      cr.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 12.0f, 1.0f };
+      cr.azimuth = gui::AxisDist{ gui::AxisDistType::kUniform, 34.0f, 2.0f };
+      cr.roll = gui::AxisDist{ gui::AxisDistType::kGauss, 56.0f, 3.0f };
+
+      const auto doc = nlohmann::json::parse(gui::SerializeGuiStateJson(gui::g_state));
+      const auto& crystal_j = doc["layers"][0]["entries"][0]["crystal"];
+      const auto& shape = crystal_j["shape"];
+      IM_CHECK(shape.contains("upper_wedge_angle"));
+      IM_CHECK(shape.contains("lower_wedge_angle"));
+      IM_CHECK_LT(std::abs(shape["upper_wedge_angle"].get<float>() - 33.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(shape["lower_wedge_angle"].get<float>() - 22.0f), 1e-3f);
+      // Miller indices are read-only legacy: the writer converts to an angle and never emits them.
+      IM_CHECK(!shape.contains("upper_indices"));
+      IM_CHECK(!shape.contains("lower_indices"));
+
+      const auto& axis = crystal_j["axis"];
+      IM_CHECK(axis.contains("zenith"));
+      IM_CHECK(axis.contains("azimuth"));
+      IM_CHECK(axis.contains("roll"));
+      IM_CHECK_LT(std::abs(axis["zenith"]["mean"].get<float>() - 12.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(axis["azimuth"]["mean"].get<float>() - 34.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(axis["azimuth"]["std"].get<float>() - 2.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(axis["roll"]["mean"].get<float>() - 56.0f), 1e-3f);
+      IM_CHECK_LT(std::abs(axis["roll"]["std"].get<float>() - 3.0f), 1e-3f);
+    };
+  }
+
   // AC2, the other half: an all-independent crystal must emit NO "sync_group" key, so every .lmc
   // written before v4.13 keeps its exact wire form. Paired with a red/green flip — asserting only
   // absence would pass just as happily on a serializer that never writes the key at all.

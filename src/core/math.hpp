@@ -285,6 +285,35 @@ struct AxisDistribution {
   Distribution roll_dist;
 };
 
+//! @brief Index space for the three distributions of a crystal's `axis` object.
+//!
+//! @details Named after ShapeScalar because it answers the same question in the
+//!   same shape — an int slot in, one JSON key out — but the two models are not
+//!   parallel and should not be read as such: an axis has no crystal kind to
+//!   depend on and therefore no "applicable to this type" concept. Every slot
+//!   below always exists. Slot order is the serialization order, nothing more;
+//!   unlike ShapeScalar it is NOT an RNG draw order.
+//!
+//!   Note kAxisScalarZenith names the EXTERNAL wire quantity, which is the
+//!   complement of the internal AxisDistribution::latitude_dist it maps onto
+//!   (zenith = 90 - latitude). The key names the file format, not the field.
+enum AxisScalar : int {
+  kAxisScalarZenith = 0,
+  kAxisScalarAzimuth = 1,
+  kAxisScalarRoll = 2,
+  kAxisScalarCount = 3,
+};
+
+//! @brief The JSON key under a crystal's `axis` that names axis-scalar `slot`.
+//!
+//! @details Returns a static string, or nullptr when `slot` is out of range —
+//!   matching ShapeScalarSyncKeyName's convention, so a caller iterating a
+//!   mismatched slot count degrades to "no such key" instead of an invented one.
+//!
+//!   These three strings are core's schema. A layer that misspells one silently
+//!   drops the field rather than reporting an error, so no layer spells them out.
+const char* AxisScalarKeyName(int slot);
+
 
 namespace detail {
 // Internal — not part of public API.
