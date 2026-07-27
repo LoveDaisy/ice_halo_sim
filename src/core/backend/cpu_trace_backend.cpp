@@ -258,7 +258,11 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
 
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
-  last_layer_crystal_count_ = 0;
+  new_sample_count_this_batch_ = 0;
+  // Per-batch: the counter above. Per-scene: the tracker below — clearing it
+  // here unconditionally would make every batch re-count its shapes as new,
+  // which is the cross-batch double-count the new-sample semantic removes.
+  sample_tracker_.ResetIfSceneChanged(spec.scene);
 
   // Design 2 (task-engine-redirect-design2): build the placement-scoped color
   // gate table for this session's scene × raypath_color config. Missing
@@ -292,13 +296,6 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
   // proportions from setting_[ci].crystal_proportion_ + zeros carry (one
   // session = one wavelength here, no cross-wavelength accumulation).
   size_t crystal_cnt = ms_info.setting_.size();
-  // task-exit-seam-crystal-count: record final MS layer setting count for
-  // Simulator to feed SimData.crystal_count_. Semantics: last layer only,
-  // not cross-layer sum (mirrors CUDA `final_layer_crystals_`; Metal keeps no
-  // host-side final-layer mirror since the emit gate moved on-device).
-  if (ms_idx_ + 1 == spec_.scene->ms_.size()) {
-    last_layer_crystal_count_ = crystal_cnt;
-  }
   std::vector<float> proportions;
   proportions.reserve(crystal_cnt);
   for (size_t ci = 0; ci < crystal_cnt; ci++) {
@@ -356,6 +353,16 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
       crystal = MakeCrystal(rng_, setting.crystal_.param_);
       crystal_id = ci;
       refractive_index = crystal.GetRefractiveIndex(spec_.wl.wl_);
+      // MakeCrystal above stays UNCONDITIONAL on purpose: caching the
+      // deterministic result would change the rng draw order, a behaviour
+      // change well outside a statistics fix. So the shape is re-derived every
+      // batch and the tracker decides whether re-deriving it counts as a new
+      // sample — it does not, once this scene has drawn it before. The
+      // host-supplied branch above deliberately never reaches this: it consumes
+      // no draw at all, so it is neither a new sample nor a reuse.
+      if (sample_tracker_.MarkIfNew(setting.crystal_.param_)) {
+        new_sample_count_this_batch_++;
+      }
     }
 
     auto filter_spec = FilterSpec::Create(setting.filter_, crystal, crystal_axis);
@@ -521,7 +528,11 @@ void CpuTraceBackend::EndSession() {
   in_session_ = false;
   ms_idx_ = 0;
   root_ray_count_ = 0;
-  last_layer_crystal_count_ = 0;  // task-exit-seam-crystal-count: lifecycle symmetry with BeginSession
+  new_sample_count_this_batch_ = 0;  // lifecycle symmetry with BeginSession
+  // sample_tracker_ is intentionally NOT cleared here: EndSession runs once per
+  // batch, and the tracker must outlive the batch cycle to recognise the next
+  // batch's shapes as reuse. Its invalidation signal is a scene change, checked
+  // in BeginSession.
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};

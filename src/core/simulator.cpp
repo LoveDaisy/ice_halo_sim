@@ -1124,6 +1124,11 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   all_crystals.reserve(16);
   std::vector<AxisDistribution> all_axis_dists;
   all_axis_dists.reserve(16);
+  // How many crystal geometries this batch actually SAMPLED, i.e. how many
+  // times below we reach the real CrystalMaker call. Distinct from
+  // all_crystals.size(), which also counts the copies made when a shape is
+  // reused — see the crystal_count_ assignment at the end of this function.
+  size_t new_sample_count = 0;
 
   bool first_ms = true;
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
@@ -1206,6 +1211,9 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           curr_crystal_id = all_crystals.size();
           all_crystals.emplace_back(std::visit(CrystalMaker{ rng_ }, s.crystal_.param_));
           all_axis_dists.emplace_back(s.crystal_.axis_);
+          // The ONLY branch that draws a geometry: the two above copy an
+          // existing shape (from this ci loop, or from the per-Run() cache).
+          new_sample_count++;
           if (deterministic) {
             crystal_cache.emplace_back(param_ptr, all_crystals.back());
             cached_crystal = &crystal_cache.back().second;
@@ -1307,7 +1315,15 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
   sim_data.root_ray_count_ = original_ray_num;
-  sim_data.crystal_count_ = sim_data.crystals_.size();
+  // Newly SAMPLED geometries, not materialised instances. `crystals_` keeps
+  // every instance (the consumers index into it by per-ray crystal id and need
+  // the reuse copies), but reporting its size made the stat a function of the
+  // batch schedule: a deterministic scene re-copied its cached shape once per
+  // small batch, so the run-level sum grew with ray_num / batch size instead of
+  // describing the scene. `crystal_cache` lives in Run() scope, so a
+  // deterministic shape is drawn once per run and this stays at the scene's
+  // (layer, ci) count no matter how the rays are batched.
+  sim_data.crystal_count_ = new_sample_count;
   data_queue_->Emplace(std::move(sim_data));
 }
 

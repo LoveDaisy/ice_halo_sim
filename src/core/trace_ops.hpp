@@ -2,6 +2,7 @@
 #define CORE_TRACE_OPS_H_
 
 #include <cstddef>
+#include <vector>
 
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
@@ -20,7 +21,12 @@ class FilterSpec;
 // not included from simulator.hpp — backends that need these primitives
 // include it directly to keep simulator.hpp's TU set unpolluted.
 //
-// All function bodies live in simulator.cpp.
+// All free-function bodies live in simulator.cpp. The one type declared here
+// (NewSampleTracker, at the bottom) is a deliberate exception to the otherwise
+// stateless character of this header: it carries the minimum state a shared
+// PREDICATE needs to stay a single source. It is a judgement helper, not a
+// pipeline stage — anything with real per-session machinery belongs on a
+// backend, not here.
 
 // Sample crystal origin (p, from_face_, to_face_). Direction d MUST already
 // be set on the buffer.
@@ -93,6 +99,65 @@ Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param);
 // namespace scope — this header only adds the declaration so backends can see
 // it without duplicating the visitor logic).
 bool IsDeterministic(const CrystalParam& param);
+
+// Single source for one question: "is this (layer, ci) about to produce a NEW
+// crystal geometry, or is it re-deriving one this scene already sampled?"
+//
+// It exists so the backends that need that distinction share one judgement
+// instead of hand-writing it each: two hand-written copies of a predicate that
+// must agree are exactly how a semantic drifts (one excludes some path, the
+// other forgets to). Callers own the counter; this owns only the verdict.
+//
+// Rules:
+//   - a stochastic param is ALWAYS a new sample (each MakeCrystal draws a
+//     different shape), and is never remembered;
+//   - a deterministic param is a new sample the first time this scene asks for
+//     it and a reuse for the rest of the scene — MakeCrystal is bit-identical
+//     across repeated calls, so re-deriving it samples nothing new even when a
+//     backend does rebuild it every batch;
+//   - identity is the CrystalParam's ADDRESS, i.e. its (layer, ci) slot in the
+//     scene, not its value: two slots that happen to carry equal params are two
+//     populations, and the legacy path's own crystal cache keys the same way.
+//
+// Lifetime: one instance per backend instance = one Simulator::Run(), NOT one
+// per session. A per-batch reset would degrade it to "did this ci repeat inside
+// one batch", which is the very cross-batch double-count it exists to stop.
+// Scene-pointer identity is the invalidation signal (the pointers in `sampled_`
+// point into that scene's config), mirroring how the CUDA backend guards its
+// geometry pool.
+class NewSampleTracker {
+ public:
+  // Call at each BeginSession: clears the remembered set only when the scene
+  // actually changed, so repeated batches of one scene keep accumulating.
+  void ResetIfSceneChanged(const void* scene) {
+    if (scene == scene_) {
+      return;
+    }
+    scene_ = scene;
+    sampled_.clear();
+  }
+
+  // True = count this as a fresh geometry sample. See the rules above.
+  bool MarkIfNew(const CrystalParam& param) {
+    if (!IsDeterministic(param)) {
+      return true;
+    }
+    const CrystalParam* key = &param;
+    for (const auto* seen : sampled_) {
+      if (seen == key) {
+        return false;
+      }
+    }
+    sampled_.push_back(key);
+    return true;
+  }
+
+ private:
+  const void* scene_ = nullptr;
+  // Deterministic (layer, ci) params already sampled in `scene_`. Linear scan:
+  // the size is the scene's (layer, ci) count — single digits in practice.
+  std::vector<const CrystalParam*> sampled_;
+};
 
 }  // namespace lumice
 
