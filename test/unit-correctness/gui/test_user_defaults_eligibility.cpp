@@ -11,10 +11,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gui/gui_state_tiers.hpp"
@@ -211,6 +213,100 @@ TEST(UserConfigDir, LinuxFallsBackToDotConfigWhenXdgMissingOrEmpty) {
 TEST(UserConfigDir, LinuxWithNeitherVariableYieldsNullopt) {
   EXPECT_FALSE(ComputeLinuxConfigDir(std::nullopt, std::nullopt).has_value());
   EXPECT_FALSE(ComputeLinuxConfigDir(std::string(""), std::string("")).has_value());
+}
+
+// ==================================================================================================
+// The --user-config / --no-user-config CLI surface (pure argv + enum arithmetic)
+// ==================================================================================================
+
+// ParseUserConfigArg takes char**, so the literals have to be writable storage.
+class ArgvBuilder {
+ public:
+  explicit ArgvBuilder(std::vector<std::string> args) : storage_(std::move(args)) {
+    pointers_.reserve(storage_.size());
+    for (auto& arg : storage_) {
+      pointers_.push_back(arg.data());
+    }
+  }
+
+  int argc() const { return static_cast<int>(pointers_.size()); }
+  char** argv() { return pointers_.data(); }
+
+ private:
+  std::vector<std::string> storage_;
+  std::vector<char*> pointers_;
+};
+
+ParsedUserConfigArg ParseArgs(std::vector<std::string> args) {
+  args.insert(args.begin(), "binary");  // argv[0] is skipped by the parser
+  ArgvBuilder builder(std::move(args));
+  return ParseUserConfigArg(builder.argc(), builder.argv());
+}
+
+TEST(UserConfigArg, NoFlagIsAbsent) {
+  const auto parsed = ParseArgs({ "--fixed-dt", "--filter", "foo" });
+  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kAbsent);
+  EXPECT_FALSE(parsed.missing_value);
+}
+
+TEST(UserConfigArg, DisableFlagRecognized) {
+  const auto parsed = ParseArgs({ "--no-user-config" });
+  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kDisableFlag);
+}
+
+TEST(UserConfigArg, ExplicitFlagCapturesPath) {
+  const auto parsed = ParseArgs({ "--user-config", "/tmp/x" });
+  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kExplicitFlag);
+  EXPECT_EQ(parsed.explicit_dir, std::filesystem::path("/tmp/x"));
+}
+
+// A trailing `--user-config` with nothing after it must not read past argv's end, and must not
+// be mistaken for "the user did not ask for anything" — main() warns on missing_value.
+TEST(UserConfigArg, DanglingExplicitFlagIsReportedNotHonored) {
+  const auto parsed = ParseArgs({ "--fixed-dt", "--user-config" });
+  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kAbsent);
+  EXPECT_TRUE(parsed.missing_value);
+}
+
+TEST(UserConfigArg, LastFlagWins) {
+  const auto disable_last = ParseArgs({ "--user-config", "/tmp/x", "--no-user-config" });
+  EXPECT_EQ(disable_last.presence, UserConfigArgPresence::kDisableFlag);
+
+  const auto explicit_last = ParseArgs({ "--no-user-config", "--user-config", "/tmp/x" });
+  EXPECT_EQ(explicit_last.presence, UserConfigArgPresence::kExplicitFlag);
+  EXPECT_EQ(explicit_last.explicit_dir, std::filesystem::path("/tmp/x"));
+
+  // A dangling flag after a good one leaves the honored value in place but still reports.
+  const auto dangling_last = ParseArgs({ "--no-user-config", "--user-config" });
+  EXPECT_EQ(dangling_last.presence, UserConfigArgPresence::kDisableFlag);
+  EXPECT_TRUE(dangling_last.missing_value);
+}
+
+TEST(UserConfigArg, FlagsOutrankTheBinaryDefault) {
+  for (const auto default_source :
+       { UserConfigSource::kAutoDetect, UserConfigSource::kDisabled, UserConfigSource::kExplicitDir }) {
+    EXPECT_EQ(ResolveUserConfigSource(UserConfigArgPresence::kDisableFlag, default_source),
+              UserConfigSource::kDisabled);
+    EXPECT_EQ(ResolveUserConfigSource(UserConfigArgPresence::kExplicitFlag, default_source),
+              UserConfigSource::kExplicitDir);
+    EXPECT_EQ(ResolveUserConfigSource(UserConfigArgPresence::kAbsent, default_source), default_source);
+  }
+}
+
+// The whole point of this task: gui_test must isolate when nobody passes a flag. Reverting that
+// default would stay green on CI (no CI machine has a user_defaults.json to leak) and would only
+// surface as drifted reference images on a developer's machine, so it needs an explicit assertion
+// rather than a build-time-only presence. LumiceGUI's default is asserted alongside it because
+// the two being DIFFERENT is the deliberate design decision, not an oversight.
+TEST(UserConfigArg, BinaryDefaultsAreTheDocumentedOnes) {
+  EXPECT_EQ(kTestHarnessUserConfigDefault, UserConfigSource::kDisabled);
+  EXPECT_EQ(kInteractiveAppUserConfigDefault, UserConfigSource::kAutoDetect);
+
+  // No flag passed → each binary lands on its own default.
+  EXPECT_EQ(ResolveUserConfigSource(UserConfigArgPresence::kAbsent, kTestHarnessUserConfigDefault),
+            UserConfigSource::kDisabled);
+  EXPECT_EQ(ResolveUserConfigSource(UserConfigArgPresence::kAbsent, kInteractiveAppUserConfigDefault),
+            UserConfigSource::kAutoDetect);
 }
 
 }  // namespace

@@ -58,6 +58,12 @@ constexpr AxisPresetJsonName kAxisPresetJsonNames[] = {
   { "lowitz", AxisPreset::kLowitz },
 };
 
+// Process-wide personal-defaults source, installed once from argv by each binary's main() (see
+// SetUserConfigSourceForProcess). kAutoDetect is the unset value, so a binary that never calls
+// the setter keeps the pre-switch behavior.
+UserConfigSource g_process_user_config_source = UserConfigSource::kAutoDetect;
+std::filesystem::path g_process_user_config_explicit_dir;
+
 std::optional<std::string> ReadEnv(const char* key) {
   const char* value = std::getenv(key);
   if (value == nullptr || *value == '\0') {
@@ -144,6 +150,30 @@ std::optional<std::filesystem::path> GetUserConfigDir() {
     return std::nullopt;
   }
   return dir;
+}
+
+namespace {
+
+// The directory MakeNewDocumentState()'s no-arg path reads from, per the process-wide source.
+// Deliberately private: callers state their intent once through SetUserConfigSourceForProcess()
+// rather than each resolving a directory of their own.
+std::optional<std::filesystem::path> ResolveActiveUserConfigDir() {
+  switch (g_process_user_config_source) {
+    case UserConfigSource::kDisabled:
+      return std::nullopt;
+    case UserConfigSource::kExplicitDir:
+      return g_process_user_config_explicit_dir;
+    case UserConfigSource::kAutoDetect:
+      return GetUserConfigDir();
+  }
+  return GetUserConfigDir();  // unreachable; silences -Wreturn-type on some compilers
+}
+
+}  // namespace
+
+void SetUserConfigSourceForProcess(UserConfigSource source, std::filesystem::path explicit_dir) {
+  g_process_user_config_source = source;
+  g_process_user_config_explicit_dir = std::move(explicit_dir);
 }
 
 nlohmann::json ReadOverlayJsonIfPresent(const std::filesystem::path& dir) {
@@ -309,7 +339,9 @@ bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::jso
 GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir) {
   GuiState state{};
 
-  std::optional<std::filesystem::path> dir = override_dir ? std::move(override_dir) : GetUserConfigDir();
+  // An explicit override_dir still outranks everything (tests inject one directly); only the
+  // no-arg production path consults the process-wide source installed from argv.
+  std::optional<std::filesystem::path> dir = override_dir ? std::move(override_dir) : ResolveActiveUserConfigDir();
   const nlohmann::json doc = dir ? ReadOverlayJsonIfPresent(*dir) : nlohmann::json{};
   if (dir) {
     ApplyUserDefaultsOverlay(state, doc);

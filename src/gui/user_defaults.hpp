@@ -169,6 +169,84 @@ inline const char* IneligibleReasonLabel(IneligibleReason reason) {
 // adding another such field turns the test red instead of silently leaving a hole.
 inline constexpr std::size_t kIneligibleScalarResetFieldCount = 1;
 
+// --------------------------------------------------------------------------------------------------
+// Where a process reads personal defaults from — the CLI surface (pure, header-only)
+// --------------------------------------------------------------------------------------------------
+//
+// Everything down to ResolveUserConfigSource() is pure argv/enum arithmetic with no dependency on
+// GetUserConfigDir(), so it stays in Part 1 and is unit-testable from unit_correctness_test. The
+// process-wide setter that consumes the result lives in Part 2 (it has to call GetUserConfigDir()).
+
+enum class UserConfigSource {
+  kAutoDetect,   // GetUserConfigDir() — the interactive application's default
+  kDisabled,     // --no-user-config: skip the directory lookup entirely, factory values only
+  kExplicitDir,  // --user-config <path>: use the caller-supplied directory
+};
+
+enum class UserConfigArgPresence {
+  kAbsent,        // neither --user-config nor --no-user-config appeared
+  kDisableFlag,   // --no-user-config
+  kExplicitFlag,  // --user-config <path>
+};
+
+struct ParsedUserConfigArg {
+  UserConfigArgPresence presence = UserConfigArgPresence::kAbsent;
+  std::filesystem::path explicit_dir;  // meaningful only when presence == kExplicitFlag
+  // A bare trailing `--user-config` with no path after it. Presence stays kAbsent (the flag
+  // cannot be honored), but the caller must be able to SAY so: silently starting in auto-detect
+  // while the user believes an explicit directory took effect is the expensive failure here —
+  // the startup log would even print "auto-detect", actively pointing away from the typo.
+  bool missing_value = false;
+};
+
+// Shared by LumiceGUI's main() and gui_test's main() so the two binaries cannot drift on CLI
+// syntax. Deliberately does NOT decide what "no flag at all" means — that differs per binary and
+// belongs to ResolveUserConfigSource() below. When both flags appear the last one wins, matching
+// the tolerant style of the other argv loops in those two files (no hard error).
+inline ParsedUserConfigArg ParseUserConfigArg(int argc, char** argv) {
+  ParsedUserConfigArg result;
+  for (int i = 1; i < argc; ++i) {
+    std::string_view arg(argv[i]);
+    if (arg == "--no-user-config") {
+      result.presence = UserConfigArgPresence::kDisableFlag;
+      result.missing_value = false;
+    } else if (arg == "--user-config") {
+      if (i + 1 < argc) {
+        result.presence = UserConfigArgPresence::kExplicitFlag;
+        result.explicit_dir = argv[++i];
+        result.missing_value = false;
+      } else {
+        result.missing_value = true;
+      }
+    }
+  }
+  return result;
+}
+
+// The default each binary falls back to when neither flag was passed. These are named constants
+// rather than literals inlined in the two main() bodies because the second one is this whole
+// task's only behavior change, and a literal there would have no automated regression signal:
+// CI machines carry no user_defaults.json, so silently reverting the test harness to kAutoDetect
+// would stay green on CI and only surface as drifted reference images on a developer's machine —
+// exactly the failure mode the isolation switch exists to remove. As constants they are asserted
+// in test/unit-correctness/gui/test_user_defaults_eligibility.cpp.
+inline constexpr UserConfigSource kInteractiveAppUserConfigDefault = UserConfigSource::kAutoDetect;
+inline constexpr UserConfigSource kTestHarnessUserConfigDefault = UserConfigSource::kDisabled;
+
+// Map a parsed flag onto the source a binary should install, given that binary's own default for
+// "no flag passed". Pure, so both mains share one mapping and it can be asserted directly.
+inline UserConfigSource ResolveUserConfigSource(UserConfigArgPresence presence, UserConfigSource default_source) {
+  switch (presence) {
+    case UserConfigArgPresence::kDisableFlag:
+      return UserConfigSource::kDisabled;
+    case UserConfigArgPresence::kExplicitFlag:
+      return UserConfigSource::kExplicitDir;
+    case UserConfigArgPresence::kAbsent:
+      return default_source;
+  }
+  return default_source;
+}
+
 // ==================================================================================================
 // Part 2 — the override store (defined in user_defaults.cpp)
 // ==================================================================================================
@@ -208,6 +286,17 @@ inline std::optional<std::filesystem::path> ComputeLinuxConfigDir(const std::opt
 // (after a GUI_LOG_WARNING) when the environment gives us nothing to anchor to or the
 // directory cannot be created — callers must degrade, never abort.
 std::optional<std::filesystem::path> GetUserConfigDir();
+
+// Install the process-wide source that MakeNewDocumentState()'s no-arg path resolves against.
+// All three production call sites (main.cpp startup, DoNew(), DoOpen()'s JSON import) call it
+// with no argument, so this one setting covers them without threading a directory through each.
+//
+// Call it once, in main(), before the first MakeNewDocumentState(). It is not built for repeated
+// runtime switching: a test that needs a different source for its own scope must save and restore
+// (see ScopedUserConfigSource in test/gui/functional/test_gui_user_defaults.cpp). Left unset, the
+// source is kAutoDetect — i.e. a binary that never calls this behaves exactly as before the
+// switch existed.
+void SetUserConfigSourceForProcess(UserConfigSource source, std::filesystem::path explicit_dir = {});
 
 // Read `<dir>/user_defaults.json`. Three distinct outcomes, deliberately not collapsed:
 //   - file absent      → empty object, downgrade counter untouched (this is the FIRST-RUN path
