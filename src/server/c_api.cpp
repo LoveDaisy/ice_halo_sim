@@ -302,9 +302,10 @@ static void WriteSyncGroupJson(nlohmann::json& shape_j, const int sync_group[LUM
   for (int i = 0; i < 6; i++) {
     any_face = any_face || sync_group[LUMICE_SHAPE_SCALAR_FACE_0 + i] != 0;
   }
-  if (any_face) {
+  const char* face_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
+  if (any_face && face_key != nullptr) {
     // All six, zeros included — matching how face_distance itself serializes.
-    sg[ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0)] =
+    sg[face_key] =
         std::vector<int>(sync_group + LUMICE_SHAPE_SCALAR_FACE_0, sync_group + LUMICE_SHAPE_SCALAR_FACE_0 + 6);
   }
   if (!sg.empty()) {
@@ -330,7 +331,7 @@ static void ReadSyncGroupJson(const nlohmann::json& shape_j, int sync_group[LUMI
     }
   }
   const char* face_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
-  if (sg.contains(face_key)) {
+  if (face_key != nullptr && sg.contains(face_key)) {
     size_t i = 0;
     for (const auto& elem : sg.at(face_key)) {
       if (i >= 6) {
