@@ -985,6 +985,12 @@ struct GuiState {
   // Color window (task-342.3, view preference, session-only, NOT serialized).
   bool color_window_open = false;
 
+  // "Save current settings as my defaults" panel (defaults_panel.cpp). Session-only for the same
+  // reason as color_window_open: which panels are open is not part of the document. The panel's
+  // own contents (search text, which rows are unchecked) do NOT live here — they are TU-local to
+  // defaults_panel.cpp, are rebuilt every time the panel opens, and have no Revert semantics.
+  bool defaults_panel_open = false;
+
   // Simulation state — DERIVED, not directly written. ReconcileSimState (app.cpp) is the single
   // owner (I2): it maps (run_intent, committed_epoch, last backend observation, dirty) → sim_state
   // once per frame in SyncFromPoller. The three inputs below are what business ops (DoRun/DoStop/

@@ -19,6 +19,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
+#include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
@@ -114,8 +115,9 @@ void ResetTestState() {
   // Deterministic per-test reset restores the same-invariant as g_state.
   gui::ResetColorClassSignalCacheForTest();
 
-  // Modal state (edit_modals.cpp file-scope statics)
+  // Modal state (edit_modals.cpp / defaults_panel.cpp file-scope statics)
   gui::ResetModalState();
+  gui::ResetDefaultsPanelTestState();
 
   // Test state
   g_capture.Reset();
@@ -404,6 +406,8 @@ int main(int argc, char** argv) {
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterUserDefaultsTests(engine);
+  RegisterDefaultsDiffTests(engine);
+  RegisterDefaultsPanelTests(engine);
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
@@ -500,6 +504,10 @@ int main(int argc, char** argv) {
     // any UI-driven gui_test — the existing p2_modal AC4 tests could only
     // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
     gui::RenderSaveModifiedPopup(window);
+    // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
+    // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
+    // already paid for twice.
+    gui::RenderDefaultsPanel(gui::g_state);
 
     // Field-tier effect reconcile at frame TAIL — mirrors src/gui/main.cpp M6 placement so widget
     // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one

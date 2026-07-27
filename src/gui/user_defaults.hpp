@@ -287,6 +287,16 @@ inline std::optional<std::filesystem::path> ComputeLinuxConfigDir(const std::opt
 // directory cannot be created — callers must degrade, never abort.
 std::optional<std::filesystem::path> GetUserConfigDir();
 
+// The directory the CURRENT process reads and writes personal defaults in, per the source
+// installed by SetUserConfigSourceForProcess (nullopt under --no-user-config, or when the OS gave
+// us no config directory to anchor to).
+//
+// Public so that the defaults panel's diff/write layer (defaults_diff.cpp) resolves the SAME
+// directory MakeNewDocumentState() reads from. Re-deriving the directory there instead would let
+// "the defaults the panel shows" and "the defaults a New document gets" drift apart silently,
+// which is exactly the split invariant I1 exists to prevent.
+std::optional<std::filesystem::path> GetActiveUserConfigDir();
+
 // Install the process-wide source that MakeNewDocumentState()'s no-arg path resolves against.
 // All three production call sites (main.cpp startup, DoNew(), DoOpen()'s JSON import) call it
 // with no argument, so this one setting covers them without threading a directory through each.

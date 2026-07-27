@@ -152,12 +152,7 @@ std::optional<std::filesystem::path> GetUserConfigDir() {
   return dir;
 }
 
-namespace {
-
-// The directory MakeNewDocumentState()'s no-arg path reads from, per the process-wide source.
-// Deliberately private: callers state their intent once through SetUserConfigSourceForProcess()
-// rather than each resolving a directory of their own.
-std::optional<std::filesystem::path> ResolveActiveUserConfigDir() {
+std::optional<std::filesystem::path> GetActiveUserConfigDir() {
   switch (g_process_user_config_source) {
     case UserConfigSource::kDisabled:
       return std::nullopt;
@@ -168,8 +163,6 @@ std::optional<std::filesystem::path> ResolveActiveUserConfigDir() {
   }
   return GetUserConfigDir();  // unreachable; silences -Wreturn-type on some compilers
 }
-
-}  // namespace
 
 void SetUserConfigSourceForProcess(UserConfigSource source, std::filesystem::path explicit_dir) {
   g_process_user_config_source = source;
@@ -341,7 +334,7 @@ GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir)
 
   // An explicit override_dir still outranks everything (tests inject one directly); only the
   // no-arg production path consults the process-wide source installed from argv.
-  std::optional<std::filesystem::path> dir = override_dir ? std::move(override_dir) : ResolveActiveUserConfigDir();
+  std::optional<std::filesystem::path> dir = override_dir ? std::move(override_dir) : GetActiveUserConfigDir();
   const nlohmann::json doc = dir ? ReadOverlayJsonIfPresent(*dir) : nlohmann::json{};
   if (dir) {
     ApplyUserDefaultsOverlay(state, doc);

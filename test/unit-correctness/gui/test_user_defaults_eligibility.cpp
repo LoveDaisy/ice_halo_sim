@@ -35,7 +35,9 @@ namespace {
 // together — adding a GuiState field necessarily changes it, which forces whoever adds the
 // field to come here and state the field's eligibility on purpose instead of inheriting a
 // default by accident.
-constexpr std::size_t kExpectedGovernedFieldCount = 63;
+// 64 since defaults_panel_open (the defaults panel's open flag) was registered kSession: it is
+// runtime UI state, never persisted, so it is deliberately ineligible as a personal default.
+constexpr std::size_t kExpectedGovernedFieldCount = 64;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;

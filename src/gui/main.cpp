@@ -17,6 +17,7 @@
 
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
+#include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
 #include "gui/font_init.hpp"
@@ -423,6 +424,7 @@ int main(int argc, char** argv) {
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     gui::RenderSaveModifiedPopup(window);
+    gui::RenderDefaultsPanel(gui::g_state);
     gui::RenderImportWarningPopup();
     gui::RenderGuiWarningPopup();
 

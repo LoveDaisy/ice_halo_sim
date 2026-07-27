@@ -213,5 +213,7 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
 void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 void RegisterUserDefaultsTests(ImGuiTestEngine* engine);
+void RegisterDefaultsDiffTests(ImGuiTestEngine* engine);
+void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

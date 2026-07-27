@@ -29,98 +29,20 @@
 #include "gui/gui_state_tiers.hpp"
 #include "gui/user_defaults.hpp"
 #include "test_gui_shared.hpp"
+#include "user_defaults_test_env.hpp"
 
 namespace {
 
 using nlohmann::json;
 
-// Every test writes its override file into a fresh directory under the system temp dir, so no
-// test ever reads (or writes) the developer's real OS config directory. That isolation is
-// hand-rolled here on purpose: the --user-config / --no-user-config switch that will make it a
-// process-wide property is a separate task, and until it lands the only safe injection point is
-// MakeNewDocumentState's override_dir parameter.
-std::filesystem::path FreshOverlayDir(const char* tag) {
-  std::filesystem::path dir = std::filesystem::temp_directory_path() / (std::string("lumice_user_defaults_") + tag);
-  std::error_code ec;
-  std::filesystem::remove_all(dir, ec);
-  std::filesystem::create_directories(dir, ec);
-  return dir;
-}
-
-// Reset every consumable channel so a test starts from a known state regardless of what ran
-// before it in this single-process test binary.
-void ResetUserDefaultsChannels() {
-  gui::ResetUserAxisPresetOverrides();
-  gui::TakeUserDefaultsDowngradeCount();
-  gui::TakeUserDefaultsClampNotices();
-}
-
-void WriteRawOverlay(const std::filesystem::path& dir, std::string_view text) {
-  std::ofstream out(dir / gui::kUserDefaultsFileName, std::ios::trunc);
-  out << text;
-}
-
-// Forces GetUserConfigDir() to resolve to nullopt for the scope of this object, regardless of
-// which platform this binary is running on: it clears every env var one of the three
-// Compute*ConfigDir helpers reads (HOME / XDG_CONFIG_HOME / APPDATA), then restores each to its
-// original value (or absence) on destruction. Needed to exercise MakeNewDocumentState(nullopt) —
-// the exact no-arg call main.cpp / DoNew() / DoOpen() make in production — without leaving this
-// single-process test binary's environment changed for every test that runs after this one.
-class ScopedNoUserConfigDirEnv {
- public:
-  ScopedNoUserConfigDirEnv() {
-    Clear("HOME");
-    Clear("XDG_CONFIG_HOME");
-    Clear("APPDATA");
-  }
-
-  ScopedNoUserConfigDirEnv(const ScopedNoUserConfigDirEnv&) = delete;
-  ScopedNoUserConfigDirEnv& operator=(const ScopedNoUserConfigDirEnv&) = delete;
-
-  ~ScopedNoUserConfigDirEnv() {
-    for (const auto& [name, value] : saved_) {
-      Apply(name, value);
-    }
-  }
-
- private:
-  void Clear(const char* name) {
-    const char* current = std::getenv(name);
-    saved_.emplace_back(name, current ? std::optional<std::string>(current) : std::nullopt);
-    Apply(name, std::nullopt);
-  }
-
-  static void Apply(const std::string& name, const std::optional<std::string>& value) {
-#if defined(_WIN32)
-    _putenv_s(name.c_str(), value ? value->c_str() : "");
-#else
-    if (value) {
-      setenv(name.c_str(), value->c_str(), 1);
-    } else {
-      unsetenv(name.c_str());
-    }
-#endif
-  }
-
-  std::vector<std::pair<std::string, std::optional<std::string>>> saved_;
-};
-
-// Temporarily installs a different process-wide user-config source, then restores gui_test's
-// baseline. The destructor goes back to kDisabled — the harness's own default (see
-// kTestHarnessUserConfigDefault) — rather than to whatever was set on entry: in a single-process
-// suite "restore what I found" propagates a leak from an earlier test instead of ending it, and
-// every test in this binary is entitled to start from the harness baseline.
-class ScopedUserConfigSource {
- public:
-  explicit ScopedUserConfigSource(gui::UserConfigSource source, std::filesystem::path dir = {}) {
-    gui::SetUserConfigSourceForProcess(source, std::move(dir));
-  }
-
-  ScopedUserConfigSource(const ScopedUserConfigSource&) = delete;
-  ScopedUserConfigSource& operator=(const ScopedUserConfigSource&) = delete;
-
-  ~ScopedUserConfigSource() { gui::SetUserConfigSourceForProcess(gui::kTestHarnessUserConfigDefault); }
-};
+// Isolation policy (fresh temp directory per case, scope guards that restore the harness
+// baseline) lives in one place for every gui_test source that touches the store; see
+// user_defaults_test_env.hpp for why it is shared rather than copied.
+using lumice::test_user_defaults::FreshOverlayDir;
+using lumice::test_user_defaults::ResetUserDefaultsChannels;
+using lumice::test_user_defaults::ScopedNoUserConfigDirEnv;
+using lumice::test_user_defaults::ScopedUserConfigSource;
+using lumice::test_user_defaults::WriteRawOverlay;
 
 // Compare two states over the fields a personal default is allowed to reach. Written against the
 // serializer rather than as a field list so it cannot go stale: SerializeGuiStateJson is the same

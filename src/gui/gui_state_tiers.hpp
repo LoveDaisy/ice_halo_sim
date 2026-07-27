@@ -115,6 +115,7 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     // ==== T-session: runtime/session-only, not persisted, not dirty =============================
     { "pick_link_source",           FieldTier::kSession,    false },
     { "color_window_open",          FieldTier::kSession,    false },
+    { "defaults_panel_open",        FieldTier::kSession,    false },
     { "current_file_path",          FieldTier::kSession,    false },
     { "save_texture",               FieldTier::kSession,    false },
     { "screenshot_include_overlay", FieldTier::kSession,    false },
