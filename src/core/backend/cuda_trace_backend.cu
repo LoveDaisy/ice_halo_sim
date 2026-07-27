@@ -1760,10 +1760,12 @@ struct CudaTraceBackend::Impl {
   // flat_ci (逐位等价 today's behavior). Sized (config crystal total) elements.
   std::vector<uint32_t> ci_pool_slot_base_;
   std::vector<uint32_t> ci_pool_shape_count_;
-  // Diagnostic accumulator — sum of distinct pool shapes built this batch
-  // (across every (layer, ci)). Mirrors Metal's `pool_shape_count_this_batch_`
-  // (metal_trace_backend.mm:819). Reset in BeginSession; incremented in
-  // BuildGeomPool per shape built. Consumed by `GetLastBatchCrystalCount()`.
+  // Diagnostic accumulator — stochastic crystal-geometry draws this batch made,
+  // across every (layer, ci). Mirrors Metal's `pool_shape_count_this_batch_`.
+  // Reset in BeginSession (unconditionally, before any geom_pool_built_
+  // decision — that placement is what makes a pool-reuse batch report 0);
+  // incremented in BuildGeomPool per shape drawn by a stochastic ci. Consumed by
+  // `GetLastBatchStochasticCrystalSampleCount()`, which documents the contract.
   size_t pool_shape_count_this_batch_ = 0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
@@ -2662,7 +2664,11 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
   layer_ci_base_.clear();
   ci_pool_slot_base_.clear();
   ci_pool_shape_count_.clear();
-  pool_shape_count_this_batch_ = 0u;
+  // pool_shape_count_this_batch_ is NOT zeroed here: BeginSession owns that, so
+  // a batch which skips this function still reports 0. Re-adding a reset here
+  // would be harmless on its own but would give "who zeroes the counter" a
+  // second answer, and the answer that matters is the one on the path this
+  // function is not on.
 
   std::vector<float>    h_poly_n, h_poly_d, h_tri_vtx, h_tri_norm, h_tri_area;
   std::vector<uint8_t>  h_poly_fn;
@@ -2694,6 +2700,12 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
       // (the "flat config-space ci index") is the plan §3.3 accounting split.
       ci_pool_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
       ci_pool_shape_count_.push_back(p_ci);
+      // Whether this ci's MakeCrystal calls below are sampling EVENTS or just
+      // re-derivations of one fixed shape. Deterministic cis are re-derived here
+      // on every pool build (cheaper than special-casing the loop, and it keeps
+      // the rng draw order intact) but draw nothing, so they are left out of the
+      // counter and carried as the scene's config constant instead.
+      const bool ci_draws = !IsDeterministic(settings[ci].crystal_.param_);
       for (uint32_t s = 0; s < p_ci; ++s) {
         Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
         size_t poly_cnt = crystal.PolygonFaceCount();
@@ -2717,7 +2729,9 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
           pool_tri_off_.push_back(tri_acc);
           pool_tri_cnt_.push_back(0u);
           pool_crystals_.push_back(std::move(crystal));
-          ++pool_shape_count_this_batch_;
+          if (ci_draws) {
+            ++pool_shape_count_this_batch_;
+          }
           continue;
         }
         if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
@@ -2747,7 +2761,9 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         poly_acc += static_cast<uint32_t>(poly_cnt);
         tri_acc  += static_cast<uint32_t>(tri_cnt);
         pool_crystals_.push_back(std::move(crystal));
-        ++pool_shape_count_this_batch_;
+        if (ci_draws) {
+          ++pool_shape_count_this_batch_;
+        }
       }
     }
   }
@@ -3497,6 +3513,33 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
       impl_->rng_seeded_      = true;
     }
     impl_->ray_alloc_carry_.clear();  // per-(layer,ci) partition carry — fresh per session
+
+    // New-crystal-sample counter: zeroed unconditionally, here, BEFORE any
+    // geom_pool_built_ decision below — the value must not depend on whether
+    // this batch ends up rebuilding the pool.
+    //
+    // ⚠️ This REVERSES a deliberate earlier choice, it is not a bug fix. The old
+    // design zeroed the counter inside BuildGeomPool, so on a deterministic
+    // scene — where BuildGeomPool runs once per scene and every later batch
+    // skips it — the counter kept reporting the first batch's value forever, and
+    // that persistence was intentional under the old "how many pool shapes does
+    // this scene have" reading. The counter now answers "how many geometries did
+    // THIS batch draw", so a batch that skips the build drew nothing and
+    // must report 0: StatsConsumer sums these per batch, and re-reporting a
+    // stale non-zero made the run total a function of the batch count instead of
+    // the scene. Do not "restore" the old reset point.
+    //
+    // Honest status, measured on dev49 (RTX 4060 Ti) rather than assumed: with the
+    // stochastic gate below in place, DELETING this line changes no observable
+    // behaviour, and CudaBackendCrystalCount stays green. The gate independently
+    // guarantees the 0 — a deterministic (layer, ci) never increments, so there is
+    // no stale non-zero left to leak into a reuse batch. The two mechanisms landed
+    // in that order, and the second subsumed the first's observable effect.
+    // It stays because session start is the right owner of a per-session counter's
+    // lifetime, and because the alternative leaves the counter's zeroing on a path
+    // that legitimately does not run. But do not read the paragraph above as "a
+    // regression test will catch you if you remove this" — none will.
+    impl_->pool_shape_count_this_batch_ = 0u;
 
     // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
     // cache (geometry pool, filter descriptors, wl pool). Within one scene these are
@@ -4799,30 +4842,27 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
   return ResolveWlPoolSize(logger);
 }
 
-size_t CudaTraceBackend::GetLastBatchCrystalCount() const {
-  // Unified with MetalTraceBackend semantic: return the total distinct pool
-  // shapes built this batch (Σ P_ci over all layers × cis). Reflects the
-  // K-shape geometry pool's actual shape footprint — matches the "how many
-  // distinct crystal instances did we trace against" question the diagnostic
-  // is meant to answer (main.cpp: `Stats: crystals=N`).
+size_t CudaTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
+  // Unified with MetalTraceBackend: the number of STOCHASTIC crystal-geometry
+  // draws THIS batch made (Σ P_ci over the (layer, ci) pairs whose params
+  // consume the rng). See trace_backend.hpp for the cross-backend contract.
   //
-  //   - K==0 (LUMICE_GPU_GEOM_CLOCK unset) or deterministic scene:
-  //       P_ci ≡ 1 per (layer,ci) → count == Σ crystal_cnt over layers
-  //       (== today's semantic behavior even though we replaced the
-  //       `final_layer_crystals_.size()` implementation — which was
-  //       "final-layer crystal_cnt only", NOT the config-total).
-  //   - K>0 stochastic scene: count grows with the pool depth ~ ray_num/K.
-  //   - `disable_device_gen_` debug fallback: BuildGeomPool is skipped, so
-  //     `pool_shape_count_this_batch_` stays 0 — the fallback path uploads
-  //     one crystal per (layer,ci) per batch via UploadCrystalGeometry, so
-  //     the pool footprint is effectively `Σ crystal_cnt`. Mirroring that
-  //     exactly requires per-ci accounting on the fallback path; deferred
-  //     as a diagnostic-only follow-up (the main K-shape path — which is
-  //     the reason this counter was added — is correct).
-  //
-  // Reset in BuildGeomPool (device-gen paths) so the deterministic once-per-
-  // scene rebuild's count persists across batches, and stochastic per-batch
-  // rebuilds' count is refreshed each batch.
+  //   - deterministic scene: reports 0 from every batch, including the first —
+  //     the first batch does build the pool, but re-deriving a deterministic
+  //     shape draws nothing, and the scene's deterministic population is
+  //     carried as a config constant instead. Later batches skip BuildGeomPool
+  //     entirely; zeroing happens in BeginSession precisely so the skip path
+  //     reports 0 rather than replaying the first batch's value.
+  //   - stochastic scene: BeginSession force-invalidates geom_pool_built_, so
+  //     every batch rebuilds and every batch's draws are new — the count repeats
+  //     per batch, and the run-level sum grows with the batch count. That is the
+  //     honest answer for a scene that really does draw fresh shapes per batch.
+  //   - K>0: a stochastic ci contributes ~ci_n/K per batch instead of 1.
+  //   - `disable_device_gen_` debug fallback: BuildGeomPool is skipped, so this
+  //     stays 0 even on the first batch, while the fallback does upload one
+  //     crystal per (layer,ci) per batch via UploadCrystalGeometry. Mirroring
+  //     that requires per-ci accounting on the fallback path; still deferred as
+  //     a diagnostic-only gap (the primary device-gen path is exact).
   return impl_->pool_shape_count_this_batch_;
 }
 

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/crystal_config.hpp"
@@ -100,6 +101,33 @@ inline SceneConfig MakeMetalScene(size_t max_hits, size_t ms_layers) {
     s.crystal_proportion_ = 1.0f;
     ms.setting_.push_back(std::move(s));
     scene.ms_.push_back(std::move(ms));
+  }
+  return scene;
+}
+
+// Turn a setting's prism height into a stochastic distribution, so
+// IsDeterministic(param) is false and every MakeCrystal call on it is a real
+// draw. Mirrors what a config with `"height": {"type": "gaussian", ...}` does.
+// The std is arbitrary — any non-zero variance flips the predicate and no
+// assertion depends on the magnitude — but it is kept identical to the sibling
+// copies in the cpu/metal/cuda test helpers so the number cannot be misread as a
+// meaningful per-backend difference. Those copies exist because the metal/cuda
+// headers sit behind __APPLE__ / LUMICE_CUDA_ENABLED guards; collapse them if a
+// shared unguarded home ever exists.
+inline void MakeShapeStochastic(ScatteringSetting& setting) {
+  auto prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
+  prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
+  setting.crystal_.param_ = prism;
+}
+
+// Random-h prism scene: overrides MakeMetalScene's deterministic h_ to a
+// gaussian so IsDeterministic returns false and the K knob takes effect.
+inline SceneConfig MakeMetalSceneRandomH(size_t max_hits, size_t ms_layers) {
+  SceneConfig scene = MakeMetalScene(max_hits, ms_layers);
+  for (auto& ms : scene.ms_) {
+    for (auto& s : ms.setting_) {
+      MakeShapeStochastic(s);
+    }
   }
   return scene;
 }

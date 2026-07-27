@@ -10,6 +10,7 @@
 #include "core/backend/trace_backend.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/trace_ops.hpp"
 
 namespace lumice {
 
@@ -69,9 +70,9 @@ class CpuTraceBackend : public TraceBackend {
   size_t RootRayCount() const { return root_ray_count_; }
   float TotalLandedWeight() const { return total_landed_weight_; }
 
-  // task-exit-seam-crystal-count: setting count of the final MS layer for the
-  // current session. Set by TraceLayer when processing the last layer.
-  size_t GetLastBatchCrystalCount() const override { return last_layer_crystal_count_; }
+  // Stochastic crystal-geometry draws this batch made, summed across every
+  // (layer, ci). See TraceBackend for the cross-backend contract.
+  size_t GetLastBatchStochasticCrystalSampleCount() const override { return stochastic_sample_count_this_batch_; }
 
  private:
   SessionSpec spec_{};
@@ -82,8 +83,13 @@ class CpuTraceBackend : public TraceBackend {
   int height_ = 0;
 
   size_t root_ray_count_ = 0;
-  size_t last_layer_crystal_count_ = 0;  // task-exit-seam-crystal-count
-  size_t ms_idx_ = 0;                    // advances on each Recombine.
+  // Output register for GetLastBatchStochasticCrystalSampleCount: zeroed every
+  // BeginSession, incremented per (layer, ci) whose params actually draw. Purely
+  // per-batch — no cross-batch state is needed, because the shapes that ARE
+  // reused across batches are the deterministic ones, and those are counted from
+  // the config rather than from any batch.
+  size_t stochastic_sample_count_this_batch_ = 0;
+  size_t ms_idx_ = 0;  // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 
   // Backend-owned storage for the device-resident handle returned by Recombine.

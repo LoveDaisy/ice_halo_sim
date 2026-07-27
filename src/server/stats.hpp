@@ -27,7 +27,10 @@ class StatsConsumer : public IConsume {
  private:
   size_t total_rays_ = 0;
   size_t sim_rays_ = 0;
-  size_t crystals_ = 0;
+  // Two accumulators, two rules — summed vs overwritten. Their sum is the
+  // reported crystal count; see Consume() for why they cannot be one counter.
+  size_t stochastic_crystal_samples_ = 0;
+  size_t deterministic_crystals_ = 0;
   size_t snapshot_total_rays_ = 0;
   size_t snapshot_sim_rays_ = 0;
   size_t snapshot_crystals_ = 0;

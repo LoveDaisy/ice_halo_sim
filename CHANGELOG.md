@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persisted in `.lmc` files and core JSON configs.
 
 ### Changed
+- **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
+  type): the value is now **how many distinct crystal geometries the run actually sampled**,
+  not how many crystal objects it built. A scene with no random shape distributions reports
+  exactly its (scattering layer × entry) count regardless of `ray_num`; give a shape a
+  distribution and the count rises with the geometries actually drawn. Previously the value
+  tracked the batch schedule instead of the scene — sweeping `LUMICE_DISPATCH_RAY_NUM` alone
+  moved it by two orders of magnitude, and a randomized scene reported the same number as its
+  fixed-shape twin. **Expect the reported number to drop sharply** for fixed-shape scenes
+  (e.g. 785 → 5 on a 5-population 20k-ray scene, or 60 → 5 on the default multi-worker CLI);
+  that is the fix, not a regression. The value is now independent of `num_workers` and of the
+  dispatch grain — the fixed-shape part of a scene is counted once from the committed config
+  rather than once per worker per batch — but remains non-comparable across backends (CPU
+  samples per ray-group, the GPU K-shape clock is off by default). See `doc/c_api.md` and the
+  contract block on `TraceBackend::GetLastBatchStochasticCrystalSampleCount`.
 - **Breaking config change (discrete spectra)**: `ray_num` now means the TOTAL number of
   rays traced across ALL wavelengths (previously it was per-wavelength). The server derives
   the per-wavelength budget via `ceil(ray_num / n_wavelengths)`. Externally hand-written

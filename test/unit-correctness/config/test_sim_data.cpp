@@ -58,7 +58,10 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // drain, bumping 296 → 328.
 // task-color-degrade-gui-surfacing adds color_degrade_counts_ (ColorDegradeCounts
 // = 3 × size_t = 24B) for the GPU color-degrade tally, bumping 328 → 352.
-static_assert(sizeof(SimData) == 352,
+// The crystal-sample-count contract splits crystal_count_ into an accumulated
+// stochastic half and an overwritten deterministic half (+1 size_t, 8B),
+// bumping 352 → 360.
+static_assert(sizeof(SimData) == 360,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -123,8 +126,11 @@ SimData MakePopulatedSimData() {
   s.lane_pixel_data_ = { 0.11f, 0.22f, 0.33f, 0.44f };
   s.lane_class_count_ = 2;
   s.crystals_.emplace_back();
-  // task-exit-seam-crystal-count: propagation coverage for the new field.
-  s.crystal_count_ = 4;
+  // Propagation coverage for both halves of the crystal-geometry count. They
+  // are distinct fields with distinct values on purpose: a copy/move that
+  // dropped one and duplicated the other would still pass a single-value probe.
+  s.stochastic_crystal_sample_count_ = 4;
+  s.deterministic_crystal_count_ = 9;
   // scrum-312: third-clock drain counter-balance credit propagation coverage.
   s.sim_scene_credit_ = 11;
   // task-color-degrade-gui-surfacing: GPU color-degrade tally propagation coverage.
@@ -976,7 +982,8 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_FLOAT_EQ(copy.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(copy.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
   EXPECT_EQ(copy.lane_class_count_, 2u) << "lane_class_count_ not copied";
-  EXPECT_EQ(copy.crystal_count_, 4u) << "crystal_count_ not copied";         // task-exit-seam-crystal-count
+  EXPECT_EQ(copy.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not copied";
+  EXPECT_EQ(copy.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not copied";
   EXPECT_EQ(copy.sim_scene_credit_, 11u) << "sim_scene_credit_ not copied";  // scrum-312
   EXPECT_EQ(copy.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not copied";
   EXPECT_EQ(copy.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not copied";
@@ -1034,7 +1041,8 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_FLOAT_EQ(target.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(target.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
   EXPECT_EQ(target.lane_class_count_, 2u) << "lane_class_count_ not assigned";
-  EXPECT_EQ(target.crystal_count_, 4u) << "crystal_count_ not assigned";         // task-exit-seam-crystal-count
+  EXPECT_EQ(target.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not assigned";
+  EXPECT_EQ(target.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not assigned";
   EXPECT_EQ(target.sim_scene_credit_, 11u) << "sim_scene_credit_ not assigned";  // scrum-312
   EXPECT_EQ(target.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not assigned";
   EXPECT_EQ(target.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not assigned";
@@ -1095,7 +1103,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_FLOAT_EQ(moved.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(moved.lane_pixel_data_.size(), 4u);  // task-358.1 Step 4
   EXPECT_EQ(moved.lane_class_count_, 2u) << "lane_class_count_ not moved";
-  EXPECT_EQ(moved.crystal_count_, 4u) << "crystal_count_ not moved";         // task-exit-seam-crystal-count
+  EXPECT_EQ(moved.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not moved";
+  EXPECT_EQ(moved.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not moved";
   EXPECT_EQ(moved.sim_scene_credit_, 11u) << "sim_scene_credit_ not moved";  // scrum-312
   EXPECT_EQ(moved.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not moved";
   EXPECT_EQ(moved.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not moved";
@@ -1144,7 +1153,8 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_FLOAT_EQ(dst.curr_wl_, 550.0f);
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
-  EXPECT_EQ(dst.crystal_count_, 4u) << "crystal_count_ not move-assigned";         // task-exit-seam-crystal-count
+  EXPECT_EQ(dst.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not move-assigned";
+  EXPECT_EQ(dst.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not move-assigned";
   EXPECT_EQ(dst.sim_scene_credit_, 11u) << "sim_scene_credit_ not move-assigned";  // scrum-312
   EXPECT_EQ(dst.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not move-assigned";
   EXPECT_EQ(dst.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not move-assigned";

@@ -520,32 +520,71 @@ class TraceBackend {
   // and the simulator falls back to per-batch wl in SimData.outgoing_wl_.
   virtual uint32_t WlPoolSize() const { return 0; }
 
-  // task-exit-seam-crystal-count: number of crystal settings in the final
-  // (last) MS layer for the most recent session. Populated by the backend
-  // after BeginSession (CUDA) or after the final TraceLayer call (Metal / CPU),
-  // consumed by Simulator to fill SimData.crystal_count_ for stats reporting.
+  // How many STOCHASTIC crystal-geometry draws THIS batch made, summed across
+  // every (layer, ci). Read by Simulator into
+  // SimData::stochastic_crystal_sample_count_.
   //
-  // Per-backend semantic:
-  //   * legacy CPU (SimulateOneWavelength): per-batch Crystal-INSTANCE count —
-  //     one Crystal emplaced per small batch for random-orientation scenes,
-  //     so the accumulated total grows ~ray_num/128.
-  //   * Metal (K-shape geometry pool): distinct pool shapes built during the
-  //     batch summed across every (layer, ci) — Σ P_ci. At the default knob
-  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1 = the
-  //     cross-layer instance count. With K>0 it grows toward ~ray_num/K and
-  //     converges on the legacy CPU meaning as K → 1.
-  //   * CUDA (K-shape geometry pool): same semantic as Metal — Σ P_ci over
-  //     every (layer, ci) built this batch. At the default knob
-  //     LUMICE_GPU_GEOM_CLOCK=0 this collapses to Σ layers Σ ci 1, matching
-  //     Metal's default meaning byte-for-byte. `disable_device_gen_` debug
-  //     fallback still returns 0 until per-ci accounting on that path lands
-  //     (diagnostic-only gap; the primary device-gen path is exact).
-  // The ONLY consumer is the CLI diagnostic line (main.cpp `Stats: ...
-  // crystals=N`); GUI does not display it and no internal logic depends on it,
-  // so a residual factor-of-K gap between CPU and GPU at intermediate K values
-  // is expected and harmless. Do NOT use this value in a bit-parity assertion
-  // against legacy stats.
-  virtual size_t GetLastBatchCrystalCount() const { return 0; }
+  // This is one of the two halves of the user-visible crystal count (the CLI's
+  // `Stats: ... crystals=N`, the C API's LUMICE_StatsResult.crystal_num). The
+  // full contract:
+  //
+  //     crystals = (# of (layer, ci) slots whose shape params are deterministic)
+  //              + Σ over batches and workers of THIS getter
+  //
+  // and the reason it is a sum of two differently-aggregated terms is the whole
+  // design. A deterministic param produces a bit-identical shape on every draw,
+  // so the geometry it contributes is ONE geometry no matter how many batches
+  // re-derive it or how many workers redundantly derive it in parallel — it is a
+  // property of the committed scene, so it is counted once from the config and
+  // OVERWRITTEN on the way through (StatsConsumer::Consume). A stochastic param
+  // draws a genuinely different shape every time, on every worker's independent
+  // RNG stream, so those draws SUM. Conflating the two is what the whole task
+  // was about: the count used to be a per-batch quantity summed blindly, so a
+  // deterministic scene reported ~(layer,ci) × batch count × worker count —
+  // sweeping the LUMICE_DISPATCH_RAY_NUM performance knob alone moved it by two
+  // orders of magnitude, the worker pool scaled it linearly, and a scene with
+  // stochastic shapes reported the same number as its deterministic twin (the
+  // stat was blind to whether geometry randomization was doing anything, the one
+  // question it is for).
+  //
+  // Consequences worth stating outright, because they are choices and not
+  // accidents:
+  //   * A batch that only REUSES geometry reports 0 here, and a fully
+  //     deterministic scene reports 0 from every batch of every backend. Its
+  //     whole count comes from the config-constant term.
+  //   * The deterministic term counts scene SLOTS, not slots that were actually
+  //     traced. A (layer, ci) with crystal_proportion_ == 0 never reaches
+  //     MakeCrystal on the legacy path, yet still counts. That is inherent to
+  //     "config constant", and it is exactly what buys immunity to the dispatch
+  //     grain and the worker count.
+  //
+  // The judgement itself is ONE predicate, already single-sourced:
+  // IsDeterministic() in trace_ops.hpp. Where each arm applies it is deliberately
+  // heterogeneous — each follows the reuse structure its own pipeline already
+  // had, and forcing one shape on all four would mean rewriting three pool
+  // lifecycles for no gain:
+  //   * legacy CPU (SimulateOneWavelength): counts its real CrystalMaker calls,
+  //     minus the deterministic ones. Its per-Run() `crystal_cache` already
+  //     separated draw from copy.
+  //   * CpuTraceBackend: rebuilds every batch, counts the rebuilds that were
+  //     stochastic. It does NOT cache the Crystal — that would change the rng
+  //     draw order, a behaviour change rather than a statistics fix.
+  //   * Metal: same predicate, applied at the per-ci pool resolve. At the default
+  //     LUMICE_GPU_GEOM_CLOCK=0 a stochastic ci contributes 1; with K>0 it
+  //     contributes its whole fresh pool (~ci_n/K).
+  //   * CUDA: same predicate inside the pool build, which it already SKIPS
+  //     entirely on a reuse batch. (Its `disable_device_gen_` debug fallback
+  //     reports 0 unconditionally; diagnostic-only gap, primary device-gen path
+  //     is exact.)
+  // A future backend should apply IsDeterministic at whatever point it draws,
+  // rather than hand-rolling a second copy of the judgement.
+  //
+  // One property is deliberately NOT claimed: cross-backend equality. The CPU
+  // arms sample per ray-group; the GPU arms default to K off and sample once per
+  // (layer, ci) per batch. The numbers legitimately differ on the same scene —
+  // that difference IS the sampling density difference, made visible. Do NOT
+  // "fix" it, and do NOT put this value in a cross-backend parity assertion.
+  virtual size_t GetLastBatchStochasticCrystalSampleCount() const { return 0; }
 
   // Per-committed-config tally of GPU-side raypath-color drops (see
   // ColorDegradeCounts above). Base + CPU backend have no such caps and return

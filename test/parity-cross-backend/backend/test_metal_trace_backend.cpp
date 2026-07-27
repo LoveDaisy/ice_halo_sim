@@ -18,6 +18,7 @@
 #include "core/backend/metal_trace_backend.hpp"
 #include "core/backend/metal_trace_backend_test_hooks.hpp"
 #include "core/backend/trace_backend.hpp"
+#include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
 
 namespace lumice {
@@ -25,6 +26,7 @@ namespace {
 
 using metal_test::ChannelSum;
 using metal_test::MakeMetalScene;
+using metal_test::MakeMetalSceneRandomH;
 using metal_test::MakeRectangularRender;
 using metal_test::RelErr;
 using metal_test::ShouldSkipMetalTests;
@@ -251,17 +253,53 @@ TEST(MetalTraceBackend, TraceLayerKernelOccupancy) {
 }
 
 // =============================================================================
-// K-shape geometry pool: GetLastBatchCrystalCount reports the CROSS-LAYER sum
-// of distinct pool shapes built during the batch (Σ layers Σ ci P_ci). At the
-// default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
-// return value equals Σ layers Σ ci 1 = the cross-layer setting count.
+// K-shape geometry pool: the counter reports the CROSS-LAYER sum of STOCHASTIC
+// crystal-geometry draws this batch made (Σ layers Σ ci over the drawing cis),
+// not the pool shapes it uploaded. At the default knob LUMICE_GPU_GEOM_CLOCK=0,
+// P_ci collapses to 1 per ci, so a stochastic scene reports Σ layers Σ ci 1 =
+// the cross-layer setting count on EVERY batch, while a deterministic scene
+// reports 0 on every batch. (Metal rebuilds `pool_crystals_` every batch
+// regardless; re-deriving a deterministic shape consumes no draw, and that
+// population is reported as a config constant elsewhere.)
 // =============================================================================
-TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
+TEST(MetalTraceBackend, CountsStochasticCrystalDrawsAcrossLayers) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
 
-  // Single-MS single-crystal → 1 layer × 1 ci × P_ci=1 = 1.
+  // Single-MS single-crystal, STOCHASTIC → 1 layer × 1 ci × P_ci=1 = 1 per batch.
+  {
+    auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+    auto render = MakeRectangularRender();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 11;
+
+    MetalTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    host.refractive_index = 0.0f;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u);
+    backend.EndSession();
+
+    // Second batch, same instance + same scene: a stochastic param really does
+    // draw a different shape, so the count repeats rather than dropping to 0.
+    backend.BeginSession(spec);
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "Stochastic scene: every batch draws anew, so the count repeats";
+    backend.EndSession();
+  }
+
+  // The deterministic twin of the block above: same structure, fixed shape →
+  // Metal still rebuilds and re-uploads the pool every batch, and every batch
+  // reports 0 because none of those rebuilds drew anything.
   {
     auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1);
     auto render = MakeRectangularRender();
@@ -278,17 +316,19 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
     host.crystal = nullptr;
     host.refractive_index = 0.0f;
     backend.TraceLayer(RootRaySource::FromHost(host));
-
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
+        << "Deterministic scene: a pool rebuild is not a sampling event";
     backend.EndSession();
   }
 
-  // Multi-MS: layer 0 has 1 crystal setting, layer 1 has 3. At the default
-  // knob (P_ci=1 per ci) the batch-wide sum is 1 + 3 = 4 — this is the exact
-  // opposite of the pre-K-pool semantic that returned only the final layer's
-  // 3 settings.
+  // Multi-MS: layer 0 has 1 crystal setting, layer 1 has 3, and exactly ONE of
+  // the three is stochastic. At the default knob (P_ci=1 per ci) the batch-wide
+  // sum is 1 (layer 0) + 1 (the one drawing ci in layer 1) = 2 — cross-layer,
+  // which is the exact opposite of the pre-K-pool semantic that returned only
+  // the final layer's setting count, and per-ci, so a deterministic sibling in a
+  // partly-stochastic layer is not dragged into the per-batch sum.
   {
-    auto scene = MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/2);
+    auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/2);
     auto& final_ms = scene.ms_.back();
     ScatteringSetting extra1 = final_ms.setting_.front();
     ScatteringSetting extra2 = final_ms.setting_.front();
@@ -297,6 +337,11 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
     extra1.crystal_proportion_ = 0.3f;
     extra2.crystal_.id_ = 101;
     extra2.crystal_proportion_ = 0.3f;
+    // MakeMetalSceneRandomH made all three stochastic; pin two of them back to a
+    // fixed shape so this scene exercises the mixed case.
+    extra1.crystal_.param_ =
+        MakeMetalScene(/*max_hits=*/4, /*ms_layers=*/1).ms_.front().setting_.front().crystal_.param_;
+    extra2.crystal_.param_ = extra1.crystal_.param_;
     final_ms.setting_.push_back(std::move(extra1));
     final_ms.setting_.push_back(std::move(extra2));
     ASSERT_EQ(final_ms.setting_.size(), 3u);
@@ -323,11 +368,67 @@ TEST(MetalTraceBackend, GetLastBatchCrystalCountSumsPoolShapesAcrossLayers) {
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchCrystalCount(), 4u)
-        << "Cross-layer pool-shape sum at K=0: 1 (layer 0) + 3 (layer 1). "
-           "Pre-K-pool semantic was final-layer settings only (3).";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 2u)
+        << "Cross-layer stochastic-draw sum at K=0: 1 (layer 0) + 1 (the single "
+           "stochastic ci of layer 1's three). Pre-K-pool semantic was "
+           "final-layer settings only (3), and a per-scene rather than per-ci "
+           "predicate would give 4.";
+    backend.EndSession();
+
+    // Second batch over the same two layers: the stochastic cis draw again, the
+    // deterministic ones still do not.
+    backend.BeginSession(spec);
+    auto h0b = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0b, nullptr);
+    auto roots1b = backend.Recombine(std::move(h0b), rspec);
+    backend.TraceLayer(roots1b);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 2u)
+        << "Same two stochastic cis draw again on the next batch";
     backend.EndSession();
   }
+}
+
+// =============================================================================
+// The host-injected crystal path is not a sampling event: when the caller
+// supplies the Crystal (golden-ray hook), ResolveLayerCrystalForCi collapses the
+// pool to that one shape and consumes no rng draw, so nothing was sampled and
+// the counter must stay 0. Asserted explicitly — the pre-existing tests on this
+// path only checked that it runs.
+// =============================================================================
+TEST(MetalTraceBackend, HostInjectedCrystalIsNotANewSample) {
+  if (ShouldSkipMetalTests()) {
+    GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
+  }
+
+  // Stochastic scene on purpose: with a deterministic one the assertion below
+  // would hold for the wrong reason (0 because nothing is ever counted), leaving
+  // the injected-crystal branch unprobed.
+  auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
+  auto render = MakeRectangularRender();
+  SessionSpec spec;
+  spec.scene = &scene;
+  spec.render = &render;
+  spec.wl = WlParam{ 550.0f, 1.0f };
+  spec.seed = 17;
+
+  RandomNumberGenerator local_rng(0);
+  local_rng.SetSeed(spec.seed);
+  Crystal crystal = MakeCrystal(local_rng, scene.ms_[0].setting_[0].crystal_.param_);
+
+  HostRayBatch host;
+  host.count = 512;
+  host.crystal = &crystal;
+  host.crystal_id = 0;
+  host.refractive_index = crystal.GetRefractiveIndex(spec.wl.wl_);
+
+  // A non-zero result here could only come from counting the injected crystal:
+  // the scene's own params WOULD count if they were drawn.
+  MetalTraceBackend backend;
+  backend.BeginSession(spec);
+  backend.TraceLayer(RootRaySource::FromHost(host));
+  EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
+      << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
+  backend.EndSession();
 }
 
 // =============================================================================
@@ -408,24 +509,6 @@ TEST(MetalTraceBackend, DeviceAndPsoSharedAcrossInstances) {
 //     are recomputed inside the test WITHOUT calling into production code —
 //     otherwise the assertion would only check that a function calls itself.
 // =============================================================================
-
-namespace {
-
-// Random-h prism scene: overrides MakeMetalScene's deterministic h_ to a
-// gaussian so IsDeterministic returns false and the K knob takes effect.
-SceneConfig MakeMetalSceneRandomH(size_t max_hits, size_t ms_layers) {
-  SceneConfig scene = MakeMetalScene(max_hits, ms_layers);
-  for (auto& ms : scene.ms_) {
-    for (auto& s : ms.setting_) {
-      auto prism = std::get<PrismCrystalParam>(s.crystal_.param_);
-      prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
-      s.crystal_.param_ = prism;
-    }
-  }
-  return scene;
-}
-
-}  // namespace
 
 TEST(MetalTraceBackend, KShapePool_DefaultKnobUnsetGivesPCiOne_AC1) {
   if (ShouldSkipMetalTests()) {
@@ -605,7 +688,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
     if (handle) {
       stats = handle->GetLayerStats();
     }
-    size_t crystals = backend.GetLastBatchCrystalCount();
+    size_t crystals = backend.GetLastBatchStochasticCrystalSampleCount();
     backend.EndSession();
     return std::make_pair(stats, crystals);
   };
@@ -767,7 +850,7 @@ TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_Regression
   // loop, so no pool is built and pool_shape_count_this_batch_ stays 0.
   // The assertion is "we got here without an assert-crash from the p_ci
   // guard chain firing on the empty path".
-  EXPECT_EQ(backend.GetLastBatchCrystalCount(), 0u)
+  EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
       << "empty batch with K enabled must return 0 pool shapes (no pools "
          "built) — non-zero here would mean the empty-batch guard is gone "
          "and the K-shape path partially ran on a zero-ray batch.";

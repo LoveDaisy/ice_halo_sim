@@ -137,12 +137,25 @@ typedef struct LUMICE_RenderResult_ {
 typedef struct LUMICE_StatsResult_ {
   unsigned long ray_seg_num;   // 光线段数量
   unsigned long sim_ray_num;   // 模拟光线数量
-  unsigned long crystal_num;   // 晶体数量
+  unsigned long crystal_num;   // 本次 run 实际采样出的不同晶体几何数（见"注意"）
 } LUMICE_StatsResult;
 ```
 
 **注意**：
 - 哨兵标识：全零（`sim_ray_num == 0`）
+- `crystal_num` 是**本次 run 实际采样出了几个不同的晶体几何**，不是构造了几个晶体对象。
+  形状由固定数值给定时只会抽样一次、之后全程复用，所以形状不含随机分布的场景恰好报出
+  它的（散射层 × entry）总数 —— 第 1 层 3 个 entry 加第 2 层 2 个就报 5，与 `ray_num`
+  无关。给形状加上分布（`height` / `face_distance` 上的 `{"type": "gauss", ...}`）后，
+  这个数随实际抽出的几何数增长 —— 这正是用来确认形状随机化是否真的生效的观察量。
+- **不可跨后端比较**。CPU 路线逐 ray-group 抽新几何；GPU 路线在 K-shape 几何时钟关闭
+  （默认关闭）时每 dispatch 每 (层, entry) 只抽一次。同一场景在不同后端上因此报出不同的
+  数值：这个差距就是两条路线的采样密度差异本身，不是需要抹平的不一致。
+- 与 `num_workers`、与 batch/dispatch 粒度都无关。场景中形状固定的那部分按 committed
+  config 清点一次，不是每 worker 一次、也不是每 batch 一次，所以性能旋钮动不了它；
+  随机抽出的那部分则逐次累加 —— 那些确实是不同的几何，累加正是想要的答案。
+- 形状固定的 entry 即使没分到光线（例如 `crystal_proportion` 为 0）也计入。
+  这个量描述的是场景，不是调度。
 
 #### LUMICE_ServerConfig
 

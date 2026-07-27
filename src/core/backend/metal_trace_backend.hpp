@@ -134,12 +134,12 @@ class MetalTraceBackend : public TraceBackend {
   // thereafter for the backend instance's lifetime.
   uint32_t WlPoolSize() const override;
 
-  // K-shape pool: total distinct crystal INSTANCES built during this batch
-  // across every (layer, ci) — the sum of P_ci over the whole scene. At
-  // LUMICE_GPU_GEOM_CLOCK unset (P_ci = 1 per ci) this equals the cross-layer
-  // instance count. Simulator reads it after the MS loop to fill
-  // SimData.crystal_count_ for stats reporting.
-  size_t GetLastBatchCrystalCount() const override;
+  // K-shape pool: stochastic crystal-geometry draws made during this batch
+  // across every (layer, ci) — Σ P_ci restricted to the cis whose params
+  // consume the rng. Simulator reads it after the MS loop to fill
+  // SimData.stochastic_crystal_sample_count_; see TraceBackend for the
+  // cross-backend contract.
+  size_t GetLastBatchStochasticCrystalSampleCount() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 

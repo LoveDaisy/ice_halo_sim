@@ -14,6 +14,7 @@
 #if defined(LUMICE_CUDA_ENABLED)
 
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "config/crystal_config.hpp"
@@ -88,6 +89,21 @@ inline SceneConfig MakePrismScene(size_t max_hits) {
   ms.setting_.push_back(std::move(s));
   scene.ms_.push_back(std::move(ms));
   return scene;
+}
+
+// Turn a setting's prism height into a stochastic distribution, so
+// IsDeterministic(param) is false and every MakeCrystal call on it is a real
+// draw. Mirrors what a config with `"height": {"type": "gaussian", ...}` does.
+// The std is arbitrary — any non-zero variance flips the predicate and no
+// assertion depends on the magnitude — but it is kept identical to the sibling
+// copies in the cpu/metal/cuda test helpers so the number cannot be misread as a
+// meaningful per-backend difference. Those copies exist because the metal/cuda
+// headers sit behind __APPLE__ / LUMICE_CUDA_ENABLED guards; collapse them if a
+// shared unguarded home ever exists.
+inline void MakeShapeStochastic(ScatteringSetting& setting) {
+  auto prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
+  prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
+  setting.crystal_.param_ = prism;
 }
 
 // Single-crystal random-axis prism scene. Random orientation makes the gen

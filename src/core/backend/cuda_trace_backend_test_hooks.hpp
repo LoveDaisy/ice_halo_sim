@@ -4,8 +4,8 @@
 // injection points that white-box tests need, while leaving `CudaTraceBackend`
 // itself with a production-clean public interface (`grep -rn ForTest
 // src/core/backend/cuda_trace_backend.hpp` should hit only the enumerated
-// known exception `GetLastBatchCrystalCount` — which is production and NOT a
-// test-only symbol; kept in the class body as-is).
+// known exception `GetLastBatchStochasticCrystalSampleCount` — which is production and
+// NOT a test-only symbol; kept in the class body as-is).
 //
 // Access mechanism: this class is declared a `friend` of `CudaTraceBackend` so
 // its methods can reach the private pimpl `impl_`. The method bodies live in
@@ -99,8 +99,12 @@ class CudaTraceBackendTestHooks {
   //
   //   * ReadbackPoolShapeTable — D2H copy of `d_pool_shape_table_` as a flat
   //     vector of `{poly_off, poly_cnt, tri_off, tri_cnt}` rows. .size() ==
-  //     Σ P_ci over every (layer, ci) resolved in this BeginSession (aka the
-  //     value `GetLastBatchCrystalCount()` reports). The device buffer's
+  //     Σ P_ci over every (layer, ci) in the pool as last BUILT. Note this is
+  //     NOT `GetLastBatchStochasticCrystalSampleCount()`: that counts only the
+  //     STOCHASTIC draws of the CURRENT batch, so a deterministic scene has a
+  //     fully-populated table while the counter reads 0 on every batch, and on
+  //     a mixed scene the table also holds the deterministic cis' slots. The two
+  //     agree only on a batch that built the pool from all-stochastic cis. The device buffer's
   //     backing storage `Impl::pool_shape_slot_cap_` is set to
   //     `pool_crystals_.size()` at every BuildGeomPool (freed to 0 on
   //     scene-change / no-K path), so it is EXACTLY the current batch's
@@ -117,7 +121,7 @@ class CudaTraceBackendTestHooks {
   //     which is far more expensive to trace than a host-side throw here.
   //
   // No `PoolShapeCountThisBatch()` sibling: CUDA already exposes the same
-  // value on the production surface as `GetLastBatchCrystalCount()` — tests
+  // value on the production surface as `GetLastBatchStochasticCrystalSampleCount()` — tests
   // read that directly (no reason to duplicate the getter here).
   //
   // Design note: both methods D2H-copy into a fresh vector rather than

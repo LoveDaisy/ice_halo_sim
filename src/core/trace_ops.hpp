@@ -20,7 +20,8 @@ class FilterSpec;
 // not included from simulator.hpp — backends that need these primitives
 // include it directly to keep simulator.hpp's TU set unpolluted.
 //
-// All function bodies live in simulator.cpp.
+// All free-function bodies live in simulator.cpp. This header is stateless by
+// design — anything with real per-session machinery belongs on a backend.
 
 // Sample crystal origin (p, from_face_, to_face_). Direction d MUST already
 // be set on the buffer.
@@ -93,6 +94,15 @@ Crystal MakeCrystal(RandomNumberGenerator& rng, const CrystalParam& param);
 // namespace scope — this header only adds the declaration so backends can see
 // it without duplicating the visitor logic).
 bool IsDeterministic(const CrystalParam& param);
+
+// How many (layer, ci) slots of `config` carry deterministic shape params —
+// the config-constant half of the reported crystal-geometry count (the other
+// half being TraceBackend::GetLastBatchStochasticCrystalSampleCount, where the
+// contract is documented in full). Counts scene slots, NOT slots that a given
+// run happened to trace: being a pure function of the committed config is
+// precisely what makes the reported count immune to the dispatch grain and to
+// the worker-pool size.
+size_t DeterministicCrystalCount(const SceneConfig& config);
 
 }  // namespace lumice
 
