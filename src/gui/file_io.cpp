@@ -276,8 +276,8 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
     j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H)] = SerializeShapeDist(c.prism_h);
     j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H)] = SerializeShapeDist(c.upper_h);
     j["shape"][LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H)] = SerializeShapeDist(c.lower_h);
-    j["shape"][LUMICE_ShapeWedgeAngleKeyName(1)] = c.upper_alpha;
-    j["shape"][LUMICE_ShapeWedgeAngleKeyName(0)] = c.lower_alpha;
+    j["shape"][LUMICE_ShapeWedgeAngleKeyName(true)] = c.upper_alpha;
+    j["shape"][LUMICE_ShapeWedgeAngleKeyName(false)] = c.lower_alpha;
   }
 
   // face_distance: only write when non-default. The default is the deterministic unit distance

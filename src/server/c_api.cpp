@@ -1535,13 +1535,16 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   if (!cj.contains("shape")) {
     return LUMICE_ERR_MISSING_FIELD;  // core: j.at("shape")
   }
+  // One derivation for the whole function: the check above already narrowed type_str to the two
+  // known spellings, so every key query below — per-type and type-independent alike — asks core's
+  // one table with this same kind.
+  const auto kind = (type_str == "prism") ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
   if (type_str == "prism") {
     cr->type = 0;
-    constexpr auto kKind = ns::CrystalKind::kPrism;
     // height is OPTIONAL: core PrismCrystalParam::h_ defaults to a deterministic 1.0 and
     // from_json only overwrites it when the key is present.
     cr->height = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 1.0f, 0.0f };
-    const char* height_key = ns::ShapeScalarSyncKeyName(kKind, LUMICE_SHAPE_SCALAR_HEIGHT);
+    const char* height_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
     if (cj.at("shape").contains(height_key)) {
       if (auto err = JsonToDistribution(cj.at("shape").at(height_key), &cr->height); err != LUMICE_OK) {
         return err;
@@ -1549,11 +1552,10 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     }
   } else if (type_str == "pyramid") {
     cr->type = 1;
-    constexpr auto kKind = ns::CrystalKind::kPyramid;
     const auto& shape = cj.at("shape");
     // prism_h is required (core: j.at(prism_h)); the two pyramidal heights are optional and
     // default to a deterministic 0.0 (PyramidCrystalParam::h_pyr_u_ / h_pyr_l_).
-    const char* prism_h_key = ns::ShapeScalarSyncKeyName(kKind, LUMICE_SHAPE_SCALAR_PRISM_H);
+    const char* prism_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
     if (!shape.contains(prism_h_key)) {
       return LUMICE_ERR_MISSING_FIELD;
     }
@@ -1562,13 +1564,13 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     }
     cr->upper_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
     cr->lower_h = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
-    const char* upper_h_key = ns::ShapeScalarSyncKeyName(kKind, LUMICE_SHAPE_SCALAR_UPPER_H);
+    const char* upper_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
     if (shape.contains(upper_h_key)) {
       if (auto err = JsonToDistribution(shape.at(upper_h_key), &cr->upper_h); err != LUMICE_OK) {
         return err;
       }
     }
-    const char* lower_h_key = ns::ShapeScalarSyncKeyName(kKind, LUMICE_SHAPE_SCALAR_LOWER_H);
+    const char* lower_h_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
     if (shape.contains(lower_h_key)) {
       if (auto err = JsonToDistribution(shape.at(lower_h_key), &cr->lower_h); err != LUMICE_OK) {
         return err;
@@ -1592,10 +1594,6 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   } else {
     return LUMICE_ERR_INVALID_VALUE;
   }
-
-  // Both shape-key groups below are type-independent in spelling, but the query still takes a
-  // kind: it is core's one table, and the six face slots are applicable to both types.
-  const auto kind = (type_str == "prism") ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
 
   // face_distance: every element defaults to a deterministic 1.0 (regular hexagon). A shorter
   // array leaves the remaining faces at that default and a longer one is truncated at 6 — core
