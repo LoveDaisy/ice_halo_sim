@@ -1078,6 +1078,11 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 // =============== Crystal Kind ===============
 // Coarse crystal classification used for raypath face-number validation.
 // GUI uses this to determine which face numbers are legal for a given crystal.
+// A value matching neither enumerator is treated as LUMICE_CRYSTAL_PYRAMID rather than reported:
+// every entry taking this type (LUMICE_IsLegalFace, LUMICE_IsShapeScalarApplicable,
+// LUMICE_ShapeScalarSyncKeyName) tests for LUMICE_CRYSTAL_PRISM and falls through. That is the
+// contract, not an oversight — but it is a lenient one, so a caller computing a kind rather than
+// writing a literal should validate before calling if it wants a bad value to be visible.
 typedef enum LUMICE_CrystalKind_ {
   LUMICE_CRYSTAL_PRISM,    // Basal + prism lateral faces (1,2,3-8)
   LUMICE_CRYSTAL_PYRAMID,  // All faces including upper/lower pyramidal (1,2,3-8,13-18,23-28)
@@ -1096,14 +1101,52 @@ int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face);
 // crystal table display a distribution the simulation did not use.
 int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot);
 
-// Returns the JSON key naming shape-scalar `slot` inside a crystal's `shape.sync_group` object,
-// or NULL when the slot does not apply to this kind (or is out of range). The returned string is
-// static storage — do not free it.
+// Returns the JSON key naming shape-scalar `slot` — both inside a crystal's `shape` object and
+// inside its `shape.sync_group` sub-map, which name each scalar identically. NULL when the slot
+// does not apply to this kind (or is out of range). The returned string is static storage — do
+// not free it.
 //
 // All six face slots share the one key "face_distance", whose value is a 6-element array; write it
 // once, not once per face. Use this instead of spelling the key names out: they are core's schema,
 // a layer that misspells one silently drops the field rather than reporting an error.
+//
+// The name still says "sync" for compatibility with v4.13, which shipped it: the contract has not
+// changed, only the set of callers that ask.
 const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot);
+
+// Returns the JSON key inside a crystal's `shape` object holding a pyramidal wedge angle, in
+// degrees — the upper one when `upper` is non-zero, the lower one otherwise. Never NULL; static
+// storage, do not free.
+//
+// Takes a plain flag rather than a kind + slot pair because there is nothing for a kind to select:
+// both wedge angles exist only on a pyramid, and a caller is already inside a pyramid branch
+// before it needs the key. Same reason there is no LUMICE_AXIS_/LUMICE_SHAPE_SCALAR_-style index
+// constant to go with it — two states, no third.
+const char* LUMICE_ShapeWedgeAngleKeyName(int upper);
+
+// Returns the JSON key inside a crystal's `shape` object holding a pyramidal face's Miller
+// indices — the legacy read-side spelling of the quantity LUMICE_ShapeWedgeAngleKeyName names. A
+// parser converts these three indices into an angle when the explicit wedge-angle key is absent;
+// write paths never emit it. Never NULL; static storage, do not free.
+const char* LUMICE_ShapeIndicesKeyName(int upper);
+
+// =============== Axis Scalars ===============
+// Index space for the three distributions of a crystal's `axis` object, for LUMICE_AxisScalarKeyName.
+//
+// Named like the LUMICE_SHAPE_SCALAR_* indices and used the same way, but the two models are NOT
+// parallel: an axis has no crystal kind, hence no applicability concept — all three always exist.
+// The order is the serialization order only; unlike the shape scalars it is not an RNG draw order.
+#define LUMICE_AXIS_SCALAR_ZENITH 0   // .zenith
+#define LUMICE_AXIS_SCALAR_AZIMUTH 1  // .azimuth
+#define LUMICE_AXIS_SCALAR_ROLL 2     // .roll
+#define LUMICE_AXIS_SCALAR_COUNT 3
+
+// Returns the JSON key naming axis-scalar `slot` (a LUMICE_AXIS_SCALAR_* index) inside a crystal's
+// `axis` object, or NULL when `slot` is out of range. Static storage — do not free it.
+//
+// Note LUMICE_AXIS_SCALAR_ZENITH names the wire quantity, which is the complement of core's
+// internal latitude (zenith = 90 - latitude): the key names the file format, not the field.
+const char* LUMICE_AxisScalarKeyName(int slot);
 
 // =============== Raypath Validation ===============
 // Validation state for raypath text input (GUI border color + OK gate).
