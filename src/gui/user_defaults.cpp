@@ -32,7 +32,16 @@ constexpr std::size_t kAxisPresetSlotCount = 6;  // AxisPreset has 6 enumerators
 static_assert(kAxisPresetSlotCount == static_cast<std::size_t>(AxisPreset::kCustom) + 1,
               "kAxisPresetSlotCount must track AxisPreset's enumerator count (kCustom is its "
               "last member) so the g_axis_overrides index never goes out of bounds silently");
-AxisPresetOverride g_axis_overrides[kAxisPresetSlotCount];
+
+// Value type (not a bare array) so MakeNewDocumentState() can replace the whole thing with one
+// unconditional assignment instead of a loop gated behind a branch. code-review round 4: gating
+// the reset inside `if (dir)` was the second time a branch wrapped around this reset produced a
+// stale-slot leak (round 2's Major, fixed by 806eff19, was the first) — the fix this time is to
+// make the assignment itself unconditional rather than adding another conditional reset.
+struct AxisPresetOverrides {
+  AxisPresetOverride slots[kAxisPresetSlotCount];
+};
+AxisPresetOverrides g_axis_overrides;
 
 struct AxisPresetJsonName {
   const char* name;
@@ -203,24 +212,26 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
   state = std::move(overlaid);
 }
 
-void ApplyAxisPresetOverridesFromJson(const nlohmann::json& root) {
-  // MakeNewDocumentState() is called repeatedly within one process (startup, every DoNew(),
-  // every DoOpen() .json import), so g_axis_overrides must reflect only the doc passed in
-  // *this* call, not an accumulation across calls. Reset unconditionally, before the
-  // early-return branches below, so a doc that dropped "presets"/"axis" entirely also clears
-  // whatever a previous call loaded.
-  ResetUserAxisPresetOverrides();
+// Parse the preset-library half of an override document: root["presets"]["axis"]["<preset>"]
+// ["zenith_std"]. Pure function — it neither reads nor writes g_axis_overrides; the caller
+// (MakeNewDocumentState()) decides how the result replaces the global, unconditionally on every
+// call. A user may retune a built-in preset, but only within the domain ClassifyAxisPreset still
+// recognizes as that preset — otherwise the preset library would be able to define a "Column"
+// the classifier calls Custom. Values outside the domain are therefore clamped, and each clamp
+// is recorded in TakeUserDefaultsClampNotices(): a silent clamp is a silent data loss.
+AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
+  AxisPresetOverrides result{};
 
   if (!root.is_object() || !root.contains("presets")) {
-    return;
+    return result;
   }
   const nlohmann::json& presets = root["presets"];
   if (!presets.is_object() || !presets.contains("axis")) {
-    return;
+    return result;
   }
   const nlohmann::json& axis = presets["axis"];
   if (!axis.is_object()) {
-    return;
+    return result;
   }
 
   for (const auto& entry : kAxisPresetJsonNames) {
@@ -255,22 +266,21 @@ void ApplyAxisPresetOverridesFromJson(const nlohmann::json& root) {
     }
 
     const auto slot = static_cast<std::size_t>(entry.preset);
-    g_axis_overrides[slot] = { true, value };
+    result.slots[slot] = { true, value };
   }
+  return result;
 }
 
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset) {
   const auto slot = static_cast<std::size_t>(preset);
-  if (slot >= kAxisPresetSlotCount || !g_axis_overrides[slot].has_zenith_std) {
+  if (slot >= kAxisPresetSlotCount || !g_axis_overrides.slots[slot].has_zenith_std) {
     return std::nullopt;
   }
-  return g_axis_overrides[slot].zenith_std;
+  return g_axis_overrides.slots[slot].zenith_std;
 }
 
 void ResetUserAxisPresetOverrides() {
-  for (auto& slot : g_axis_overrides) {
-    slot = AxisPresetOverride{};
-  }
+  g_axis_overrides = AxisPresetOverrides{};
 }
 
 bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::json& doc) {
@@ -300,11 +310,18 @@ GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir)
   GuiState state{};
 
   std::optional<std::filesystem::path> dir = override_dir ? std::move(override_dir) : GetUserConfigDir();
+  const nlohmann::json doc = dir ? ReadOverlayJsonIfPresent(*dir) : nlohmann::json{};
   if (dir) {
-    const nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
     ApplyUserDefaultsOverlay(state, doc);
-    ApplyAxisPresetOverridesFromJson(doc);
   }
+  // Deliberately NOT gated behind the `if (dir)` above (code-review round 4 Major): `state` is a
+  // fresh local, so it is zero-residue on every call regardless of `dir`, but g_axis_overrides is
+  // a persistent global across MakeNewDocumentState()'s repeated production calls (startup,
+  // every DoNew(), every DoOpen() .json import). GetUserConfigDir() can flip from available to
+  // unavailable within one process (its own doc comment: the directory can become uncreatable at
+  // runtime) — reusing the same `if (dir)` to guard this assignment would leave a prior call's
+  // overrides live on exactly that flip, the one case this function exists to degrade from.
+  g_axis_overrides = dir ? ParseAxisPresetOverrides(doc) : AxisPresetOverrides{};
 
   // The override file is user-editable, so the read path — not just the write path — has to
   // enforce eligibility. Otherwise "which fields may be defaults" would be advisory metadata

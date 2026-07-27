@@ -227,22 +227,14 @@ nlohmann::json ReadOverlayJsonIfPresent(const std::filesystem::path& dir);
 // downgrade is counted — a partially applied overlay would be worse than none.
 void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc);
 
-// Apply the preset-library half: root["presets"]["axis"]["<preset>"]["zenith_std"].
-// A user may retune a built-in preset, but only within the domain ClassifyAxisPreset still
-// recognizes as that preset — otherwise the preset library would be able to define a "Column"
-// the classifier calls Custom. Values outside the domain are therefore clamped, and each clamp
-// is recorded in TakeUserDefaultsClampNotices(): a silent clamp is a silent data loss.
-void ApplyAxisPresetOverridesFromJson(const nlohmann::json& root);
-
 // The user's zenith-std override for a built-in axis preset, if any. Consumed by the preset
 // library UI (a later task); nullopt means "use the factory value".
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
 
-// Drop every loaded preset override. Called at the start of every
-// ApplyAxisPresetOverridesFromJson so each load reflects only its own doc, not an accumulation
-// across MakeNewDocumentState()'s repeated production call sites (startup / DoNew / DoOpen
-// .json import). Also called directly by tests between cases in the same process, for the same
-// reason: without it, one test's overrides would leak into the next.
+// Drop every loaded preset override. MakeNewDocumentState() no longer needs this itself (it
+// replaces the whole override set with one unconditional assignment on every call — see its
+// definition in user_defaults.cpp), but tests still call it directly between cases in the same
+// process: without it, one test's overrides would leak into the next.
 void ResetUserAxisPresetOverrides();
 
 // Write `doc` to `<dir>/user_defaults.json`, creating `dir` if needed. WHAT goes in `doc` is

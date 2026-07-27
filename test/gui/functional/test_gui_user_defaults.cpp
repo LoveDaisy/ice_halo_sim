@@ -14,13 +14,16 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gui/gui_state_tiers.hpp"
@@ -56,6 +59,51 @@ void WriteRawOverlay(const std::filesystem::path& dir, std::string_view text) {
   std::ofstream out(dir / gui::kUserDefaultsFileName, std::ios::trunc);
   out << text;
 }
+
+// Forces GetUserConfigDir() to resolve to nullopt for the scope of this object, regardless of
+// which platform this binary is running on: it clears every env var one of the three
+// Compute*ConfigDir helpers reads (HOME / XDG_CONFIG_HOME / APPDATA), then restores each to its
+// original value (or absence) on destruction. Needed to exercise MakeNewDocumentState(nullopt) —
+// the exact no-arg call main.cpp / DoNew() / DoOpen() make in production — without leaving this
+// single-process test binary's environment changed for every test that runs after this one.
+class ScopedNoUserConfigDirEnv {
+ public:
+  ScopedNoUserConfigDirEnv() {
+    Clear("HOME");
+    Clear("XDG_CONFIG_HOME");
+    Clear("APPDATA");
+  }
+
+  ScopedNoUserConfigDirEnv(const ScopedNoUserConfigDirEnv&) = delete;
+  ScopedNoUserConfigDirEnv& operator=(const ScopedNoUserConfigDirEnv&) = delete;
+
+  ~ScopedNoUserConfigDirEnv() {
+    for (const auto& [name, value] : saved_) {
+      Apply(name, value);
+    }
+  }
+
+ private:
+  void Clear(const char* name) {
+    const char* current = std::getenv(name);
+    saved_.emplace_back(name, current ? std::optional<std::string>(current) : std::nullopt);
+    Apply(name, std::nullopt);
+  }
+
+  static void Apply(const std::string& name, const std::optional<std::string>& value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value ? value->c_str() : "");
+#else
+    if (value) {
+      setenv(name.c_str(), value->c_str(), 1);
+    } else {
+      unsetenv(name.c_str());
+    }
+#endif
+  }
+
+  std::vector<std::pair<std::string, std::optional<std::string>>> saved_;
+};
 
 }  // namespace
 
@@ -305,6 +353,40 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // A real-GUI manual walkthrough ("set a user_defaults.json, start the GUI, observe New picking
+  // up the default and .lmc Open unaffected") is a one-time human check that leaves no trace and
+  // has to be redone by hand every time this file changes. This test programmatically covers the
+  // same assertion pair instead — the two halves already exist separately in
+  // ac3_sparse_overlay_round_trip and ac4_file_value_beats_personal_default; this is the pair in
+  // one place, self-contained.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults",
+                                    "m2_new_document_picks_up_personal_default_and_lmc_open_is_unaffected");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("m2_walkthrough");
+
+      json doc;
+      doc["bg_alpha"] = 0.33f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      // "New document picks up the personal default."
+      const gui::GuiState new_doc = gui::MakeNewDocumentState(dir);
+      IM_CHECK_EQ(new_doc.bg_alpha, 0.33f);
+
+      // "Opening an .lmc is unaffected" — an explicit file that does not mention bg_alpha must
+      // load the FACTORY value, never the personal default that New just picked up in this same
+      // process. DeserializeGuiStateJson is the .lmc/.json load path; it never consults
+      // MakeNewDocumentState() or the personal-default store.
+      json lmc_doc = json::parse(gui::SerializeGuiStateJson(gui::InitDefaultState()));
+      lmc_doc.erase("bg_alpha");
+      gui::GuiState opened;
+      IM_CHECK(gui::DeserializeGuiStateJson(lmc_doc.dump(), opened));
+      IM_CHECK_EQ(opened.bg_alpha, gui::GuiState{}.bg_alpha);
+      IM_CHECK(opened.bg_alpha != 0.33f);
+    };
+  }
+
   // ================================================================================
   // AC5 — degradation, never a crash
   // ================================================================================
@@ -462,6 +544,41 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       json empty_doc = json::object();
       IM_CHECK(gui::WriteUserDefaultsFile(dir, empty_doc));
       gui::MakeNewDocumentState(dir);
+      const auto second = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(!second.has_value());
+    };
+  }
+
+  // code-review round 4 Major: the leak test above always passes an explicit override_dir, so
+  // `dir` is truthy on both calls and never exercises the branch where GetUserConfigDir() itself
+  // (not an explicit override_dir) resolves to nullopt. That is exactly the gap: the previous fix
+  // reset g_axis_overrides only inside `if (dir)`, so a process where the FIRST
+  // MakeNewDocumentState() call loaded a preset override and a LATER call's GetUserConfigDir()
+  // becomes unavailable (its own doc comment says this can happen at runtime — directory removed
+  // out from under the process, permissions revoked, disk full) would keep answering with the
+  // first call's override forever. This test forces that exact flip via the no-arg production
+  // call path (main.cpp / DoNew() / DoOpen() all call MakeNewDocumentState() with no argument).
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults",
+                                    "d8_preset_override_does_not_leak_when_config_dir_becomes_unavailable");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("d8_leak_no_dir");
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 3.0f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::MakeNewDocumentState(dir);
+      const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(first.has_value());
+      IM_CHECK_EQ(*first, 3.0f);
+
+      // Same process, same override still loaded — but this call's GetUserConfigDir() now
+      // resolves to nullopt, the no-arg production call path, not an explicit override_dir.
+      {
+        ScopedNoUserConfigDirEnv no_config_dir;
+        gui::MakeNewDocumentState(std::nullopt);
+      }
       const auto second = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
       IM_CHECK(!second.has_value());
     };
