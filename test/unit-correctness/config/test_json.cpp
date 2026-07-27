@@ -555,4 +555,147 @@ TEST(LensConfigGlobe, FFieldMapsLikeLinear) {
   EXPECT_NEAR(l.fov_, ll.fov_, 1e-5f);
 }
 
+
+// =============== Crystal schema key names ===============
+// Every key below is written as a bare string literal ON PURPOSE. These tests pin the wire format
+// against the file corpus in the wild, so their expectations must be independent of the functions
+// under test: expressing them as ShapeScalarSyncKeyName(...) would make the authority table and its
+// own test drift together and pass forever. That is also what makes them the red-state criterion —
+// renaming a key in core turns these red even though core would still be self-consistent, which is
+// the one class of drift a parser-vs-parser differential test cannot see.
+//
+// The sync_group SUB-map keys are pinned the same way in test_crystal_sync_group.cpp; these cover
+// the top-level `shape` object and the `axis` object.
+
+TEST(CrystalSchemaKeyNames, PrismToJsonEmitsTheDocumentedKeys) {
+  PrismCrystalParam p;
+  p.h_ = Distribution{ DistributionType::kGaussian, 1.3f, 0.2f };
+  for (int i = 0; i < 6; i++) {
+    p.d_[i] = Distribution{ DistributionType::kNoRandom, 0.7f + 0.1f * i, 0.0f };
+  }
+
+  nlohmann::json j = p;
+
+  ASSERT_TRUE(j.contains("height"));
+  EXPECT_EQ(j["height"]["mean"].get<float>(), 1.3f);
+  EXPECT_EQ(j["height"]["std"].get<float>(), 0.2f);
+  ASSERT_TRUE(j.contains("face_distance"));
+  ASSERT_EQ(j["face_distance"].size(), 6u);
+  EXPECT_NEAR(j["face_distance"][0].get<float>(), 0.7f, 1e-5f);
+  EXPECT_NEAR(j["face_distance"][5].get<float>(), 1.2f, 1e-5f);
+
+  // The pyramid-only keys must be ABSENT, not merely defaulted. This pins the type branch rather
+  // than just the spelling: a to_json that emitted every key for every type would satisfy the
+  // positive assertions above while putting a wedge angle on a crystal that has no pyramid.
+  EXPECT_FALSE(j.contains("prism_h"));
+  EXPECT_FALSE(j.contains("upper_h"));
+  EXPECT_FALSE(j.contains("lower_h"));
+  EXPECT_FALSE(j.contains("upper_wedge_angle"));
+  EXPECT_FALSE(j.contains("lower_wedge_angle"));
+  EXPECT_FALSE(j.contains("upper_indices"));
+  EXPECT_FALSE(j.contains("lower_indices"));
+}
+
+TEST(CrystalSchemaKeyNames, PyramidToJsonEmitsTheDocumentedKeys) {
+  PyramidCrystalParam p;
+  p.h_prs_ = Distribution{ DistributionType::kNoRandom, 1.2f, 0.0f };
+  p.h_pyr_u_ = Distribution{ DistributionType::kNoRandom, 0.1f, 0.0f };
+  p.h_pyr_l_ = Distribution{ DistributionType::kNoRandom, 0.5f, 0.0f };
+  p.wedge_angle_u_ = 38.57f;
+  p.wedge_angle_l_ = 14.9f;
+  for (auto& d : p.d_) {
+    d = Distribution{ DistributionType::kNoRandom, 0.9f, 0.0f };
+  }
+
+  nlohmann::json j = p;
+
+  ASSERT_TRUE(j.contains("prism_h"));
+  EXPECT_NEAR(j["prism_h"].get<float>(), 1.2f, 1e-5f);
+  ASSERT_TRUE(j.contains("upper_h"));
+  EXPECT_NEAR(j["upper_h"].get<float>(), 0.1f, 1e-5f);
+  ASSERT_TRUE(j.contains("lower_h"));
+  EXPECT_NEAR(j["lower_h"].get<float>(), 0.5f, 1e-5f);
+  ASSERT_TRUE(j.contains("upper_wedge_angle"));
+  EXPECT_NEAR(j["upper_wedge_angle"].get<float>(), 38.57f, 1e-5f);
+  ASSERT_TRUE(j.contains("lower_wedge_angle"));
+  EXPECT_NEAR(j["lower_wedge_angle"].get<float>(), 14.9f, 1e-5f);
+  ASSERT_TRUE(j.contains("face_distance"));
+  ASSERT_EQ(j["face_distance"].size(), 6u);
+  EXPECT_NEAR(j["face_distance"][3].get<float>(), 0.9f, 1e-5f);
+
+  // Miller indices are a read-only legacy spelling — the write side never emits them.
+  EXPECT_FALSE(j.contains("upper_indices"));
+  EXPECT_FALSE(j.contains("lower_indices"));
+  // And the prism-only height key stays off a pyramid.
+  EXPECT_FALSE(j.contains("height"));
+}
+
+TEST(CrystalSchemaKeyNames, PyramidFromJsonReadsTheDocumentedKeys) {
+  // Explicit angles win over indices, so give both and expect the angles.
+  nlohmann::json j = {
+    { "prism_h", 1.2f },
+    { "upper_h", 0.1f },
+    { "lower_h", 0.5f },
+    { "upper_wedge_angle", 33.0f },
+    { "lower_wedge_angle", 22.0f },
+    { "upper_indices", nlohmann::json::array({ 2, 0, 3 }) },
+    { "lower_indices", nlohmann::json::array({ 1, 0, 1 }) },
+    { "face_distance", nlohmann::json::array({ 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f }) },
+  };
+
+  auto p = j.get<PyramidCrystalParam>();
+  EXPECT_NEAR(p.h_prs_.center, 1.2f, 1e-5f);
+  EXPECT_NEAR(p.h_pyr_u_.center, 0.1f, 1e-5f);
+  EXPECT_NEAR(p.h_pyr_l_.center, 0.5f, 1e-5f);
+  EXPECT_NEAR(p.wedge_angle_u_, 33.0f, 1e-5f);
+  EXPECT_NEAR(p.wedge_angle_l_, 22.0f, 1e-5f);
+  EXPECT_NEAR(p.d_[0].center, 0.5f, 1e-5f);
+  EXPECT_NEAR(p.d_[5].center, 1.0f, 1e-5f);
+
+  // Drop the explicit angles and the Miller keys take over — the fallback reads its own two keys,
+  // not the ones it falls back from. Expected angles are the literals MillerIndexFallback pins.
+  j.erase("upper_wedge_angle");
+  j.erase("lower_wedge_angle");
+  auto q = j.get<PyramidCrystalParam>();
+  EXPECT_NEAR(q.wedge_angle_u_, 38.57f, 0.01f);  // {2,0,3}
+  EXPECT_NEAR(q.wedge_angle_l_, 28.00f, 0.01f);  // {1,0,1}
+}
+
+TEST(CrystalSchemaKeyNames, PrismFromJsonReadsTheDocumentedKeys) {
+  nlohmann::json j = {
+    { "height", 1.7f },
+    { "face_distance", nlohmann::json::array({ 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f }) },
+  };
+
+  auto p = j.get<PrismCrystalParam>();
+  EXPECT_NEAR(p.h_.center, 1.7f, 1e-5f);
+  EXPECT_NEAR(p.d_[0].center, 0.5f, 1e-5f);
+  EXPECT_NEAR(p.d_[5].center, 1.0f, 1e-5f);
+}
+
+TEST(CrystalSchemaKeyNames, AxisJsonUsesZenithAzimuthRoll) {
+  AxisDistribution axis;
+  axis.latitude_dist = Distribution{ DistributionType::kNoRandom, 65.0f, 0.0f };  // zenith 25
+  axis.azimuth_dist = Distribution{ DistributionType::kUniform, 10.0f, 40.0f };
+  axis.roll_dist = Distribution{ DistributionType::kGaussian, 5.0f, 1.5f };
+
+  nlohmann::json j = axis;
+
+  ASSERT_TRUE(j.contains("zenith"));
+  EXPECT_NEAR(j["zenith"].get<float>(), 25.0f, 1e-5f);  // 90 - latitude, the wire's own quantity
+  ASSERT_TRUE(j.contains("azimuth"));
+  EXPECT_NEAR(j["azimuth"]["mean"].get<float>(), 10.0f, 1e-5f);
+  ASSERT_TRUE(j.contains("roll"));
+  EXPECT_NEAR(j["roll"]["mean"].get<float>(), 5.0f, 1e-5f);
+  EXPECT_NEAR(j["roll"]["std"].get<float>(), 1.5f, 1e-5f);
+
+  // Read side: each of the three keys lands in its own slot, so a swap would show.
+  auto back = j.get<AxisDistribution>();
+  EXPECT_NEAR(back.latitude_dist.center, 65.0f, 1e-5f);
+  EXPECT_NEAR(back.azimuth_dist.center, 10.0f, 1e-5f);
+  EXPECT_NEAR(back.azimuth_dist.spread, 40.0f, 1e-5f);
+  EXPECT_NEAR(back.roll_dist.center, 5.0f, 1e-5f);
+  EXPECT_NEAR(back.roll_dist.spread, 1.5f, 1e-5f);
+}
+
 }  // namespace
