@@ -19,19 +19,27 @@ that definition, and this file gates both:
    number on the `cpu_backend` arm — the stat was blind to the one question it
    is meant to answer.
 
+3. **Worker invariance.** The CPU route runs `PhysicalCoreCount()` workers by
+   default, each owning its own Simulator and therefore its own geometry
+   sampling. A deterministic scene's geometry set does not depend on how many
+   threads redundantly derive it, so `crystal_num` must not scale with the pool
+   size. Historically it did — exactly `(layer, ci) count x workers` — which is
+   the same defect as (1) with a different knob, and it hid from the first two
+   tests because pinning `sim_seed` collapses the CPU route to one worker.
+
 Both arms covered here are pure-CPU (`legacy` = the default in-simulator trace
 path, `cpu_backend` = the `CpuTraceBackend` seam implementation), so they run
 anywhere pytest runs. Metal/CUDA carry the same contract but are gated by their
-own backend-level unit tests (`GetLastBatchNewCrystalSampleCount*` in
+own backend-level unit tests (`GetLastBatchStochasticCrystalSampleCount*` in
 test/parity-cross-backend/backend/), which assert the per-batch half directly —
 "a reuse batch reports 0" — without needing a GPU device in this file.
 
-Single-worker is a hard requirement, not a convenience: each worker owns its own
-Simulator (and therefore its own crystal cache / new-sample tracker), so a
-P-worker run legitimately samples each geometry up to P times and how many
-workers receive work depends on the batch count. `sim_seed != 0` collapses the
-CPU route to one worker (server.cpp ServerImpl), which is what makes the exact
-expected value below well-defined.
+Why the first two tests pin `sim_seed != 0` and the third must NOT: a non-zero
+seed collapses the CPU route to a single worker (server.cpp ServerImpl), which
+removes one source of variance from tests (1) and (2) so their expected values
+are exact. But it also removes the very axis test (3) exists to sweep, and the
+shipped CLI never sets a seed — so test (3) runs at `sim_seed == 0` and pins
+`num_workers` explicitly instead.
 
 Marked `@pytest.mark.slow`: drives the C API through the shared library
 (`./scripts/build.sh -sj release`), like every other capi_runner-based test.
@@ -73,7 +81,15 @@ _DISPATCH_WHOLE_RUN = 20000
 # incidental jitter.
 _MIN_BATCH_COUNT_RATIO = 4.0
 
+# Worker counts swept by the worker-invariance test. 1 is the reference; 4 is
+# well above it yet available on any CI box (the default pool is
+# PhysicalCoreCount(), so a hardcoded larger value would be untestable on small
+# runners). Pre-fix these reported expected*1 vs expected*4.
+_WORKERS_ONE = 1
+_WORKERS_MANY = 4
+
 _RE_CONSUME_PROFILE = re.compile(r"Consume profile: (\d+) batches")
+_RE_WORKER_COUNT = re.compile(r"ServerImpl: gpu_route=\w+ worker_count=(\d+)")
 
 
 def _layer_ci_total(config_path) -> int:
@@ -121,13 +137,22 @@ def _consumed_batches(result: BufferedSimResult) -> int:
     return max(counts) if counts else 0
 
 
-def _run(config_path, backend: str, dispatch: Optional[int]) -> BufferedSimResult:
+def _worker_count(result: BufferedSimResult) -> int:
+    """Workers the server actually spawned (0 if the line never logged)."""
+    counts = [int(m.group(1)) for ln in result.log_lines
+              for m in [_RE_WORKER_COUNT.search(ln)] if m]
+    return max(counts) if counts else 0
+
+
+def _run(config_path, backend: str, dispatch: Optional[int],
+         sim_seed: int = _SIM_SEED, num_workers: int = 0) -> BufferedSimResult:
     with _dispatch_grain(dispatch):
         result = run_scene_capi_buffered(
             str(config_path),
-            sim_seed=_SIM_SEED,
+            sim_seed=sim_seed,
             backend=backend,
             timeout_sec=_TIMEOUT,
+            num_workers=num_workers,
             # The legacy arm normally has this knob stripped (it protects parity
             # oracles whose energy is not dispatch-invariant); here sweeping it
             # IS the measurement.
@@ -218,4 +243,48 @@ def test_crystal_num_observes_shape_randomization(backend: str) -> None:
         f"{expected} crystal populations — expected at least {expected * 10}. "
         f"Too close to the deterministic value {fixed.crystal_num} to "
         f"distinguish 'randomization observed' from measurement noise"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("backend", ["legacy", "cpu_backend"])
+def test_crystal_num_is_worker_invariant(backend: str) -> None:
+    """Same scene, 1 vs N workers → identical crystal_num.
+
+    Runs at `sim_seed == 0` on purpose: a pinned seed clamps the CPU route to a
+    single worker, so a seeded version of this test would sweep nothing and pass
+    against a counter that scales linearly with the pool. That is precisely how
+    this defect survived the first two tests in this file.
+    """
+    expected = _layer_ci_total(_DETERMINISTIC_CFG)
+
+    one = _run(_DETERMINISTIC_CFG, backend, None, sim_seed=0, num_workers=_WORKERS_ONE)
+    many = _run(_DETERMINISTIC_CFG, backend, None, sim_seed=0, num_workers=_WORKERS_MANY)
+
+    # Positive control: `num_workers` is a request, and the server is free to
+    # clamp it (GPU route pins 1; a non-zero seed pins 1). If both runs ended up
+    # with the same pool, equality below would be vacuous.
+    w_one, w_many = _worker_count(one), _worker_count(many)
+    assert w_one == _WORKERS_ONE and w_many == _WORKERS_MANY, (
+        f"{backend}: asked for {_WORKERS_ONE} / {_WORKERS_MANY} workers but the "
+        f"server spawned {w_one} / {w_many} (from the 'ServerImpl: ... "
+        f"worker_count=' log line) — the pool size did not vary, so the "
+        f"invariance assertion below would prove nothing"
+    )
+
+    assert one.crystal_num == many.crystal_num, (
+        f"{backend}: crystal_num scaled with the worker pool — "
+        f"{one.crystal_num} @ {_WORKERS_ONE} worker vs {many.crystal_num} @ "
+        f"{_WORKERS_MANY}. Each worker owns its own Simulator and redundantly "
+        f"derives the same deterministic geometries; crystal_num counts the "
+        f"geometries the SCENE has, so how many threads re-derive them is not "
+        f"its business. A ratio of ~{_WORKERS_MANY}x means the deterministic "
+        f"population is being summed per worker instead of carried as the "
+        f"config constant it is"
+    )
+    assert many.crystal_num == expected, (
+        f"{backend}: {_WORKERS_MANY}-worker run reported crystal_num="
+        f"{many.crystal_num}, expected {expected} = Σ over MS layers of that "
+        f"layer's entry count. Equality with the 1-worker run above would also "
+        f"hold if both were wrong by the same factor"
     )

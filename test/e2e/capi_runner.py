@@ -480,6 +480,7 @@ def run_scene_capi_buffered(
     timeout_sec: int = 180,
     backend: str = "legacy",
     preserve_dispatch_env: bool = False,
+    num_workers: int = 0,
 ) -> BufferedSimResult:
     """Run a Lumice sim via the C API and copy out XYZ + RGB buffers.
 
@@ -513,6 +514,13 @@ def run_scene_capi_buffered(
     the strip protects callers whose observable (energy) is not dispatch-
     invariant on legacy, which does not apply to a caller asserting invariance
     of a different observable.
+
+    `num_workers` pins the CPU-route worker pool (0 = the shipped default,
+    PhysicalCoreCount()). It is honoured independently of `sim_seed`: a caller
+    that pins a seed already gets one worker (server.cpp clamps the
+    deterministic CPU contract to a single simulator), so sweeping this knob is
+    only meaningful at `sim_seed == 0`. The GPU route ignores it (single
+    engine).
     """
     if backend not in _BACKEND_MODES:
         raise ValueError(f"backend must be one of {_BACKEND_MODES}, got {backend!r}")
@@ -550,8 +558,8 @@ def run_scene_capi_buffered(
 
     try:
         with capture as log_lines:
-            if sim_seed != 0:
-                cfg = LUMICE_ServerConfig(num_workers=0, sim_seed=sim_seed)
+            if sim_seed != 0 or num_workers != 0:
+                cfg = LUMICE_ServerConfig(num_workers=num_workers, sim_seed=sim_seed)
                 server = lib.LUMICE_CreateServerEx(ctypes.byref(cfg))
             else:
                 server = lib.LUMICE_CreateServer()
