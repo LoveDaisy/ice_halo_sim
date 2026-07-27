@@ -4733,6 +4733,98 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // p2_modal/shape_table_fixed_columns_fit_text — the other half of the width budget. Each of the
+  // four fixed columns is sized by TEXT, not by its control: Param by its longest row label
+  // ("Prism H" / "Upper A"), Sync and Rand by their own 4-character headers (the swatch and the
+  // checkbox are both one frame tall and far narrower than that). Their declared widths were
+  // tightened to where the text is what fits last, and both clipping modes are SILENT — ImGui
+  // ellipsizes a header and hard-clips a row label without complaint — so nothing else notices.
+  //
+  // The criterion is ImGui's own layout bookkeeping, never a pixel constant: ContentMaxXHeadersIdeal
+  // is where a header's text WOULD end if nothing clipped it, ContentMaxXUnfrozen is the same for the
+  // row cells, and WorkMaxX is the column's content region. Comparing those three is font- and
+  // DPI-adaptive by construction: a platform whose glyphs render wider fails here instead of shipping
+  // a clipped table (pin the relation, never the number). Both layouts are exercised, since the fixed
+  // columns keep their declared width in each while everything around them moves; and both tables
+  // (params + Face Distance) are checked, since only one has a header row and only the other has the
+  // "Face N" labels.
+  //
+  // Measured margins at the widths this task settled on (identical in both layouts — the fixed
+  // columns do not move): Param 52 vs 49 needed by "Prism H", Sync/Rand 29 vs 28 needed by their
+  // headers, Spread 60 vs 60 (its input is SetNextItemWidth(-FLT_MIN), so it fills the cell exactly
+  // by construction and 0 slack is the correct value, not a near miss). Those are tight on purpose,
+  // and they are not platform-fragile: font_init.hpp uses AddFontDefault(), i.e. the embedded
+  // fixed-width ProggyClean at 13 px, so every one of these strings is exactly 7 px per character on
+  // every platform.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "shape_table_fixed_columns_fit_text");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      // Pyramid: the type with the widest Param labels ("Prism H", "Upper A", "Lower A").
+      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
+
+      // pass 0 = horizontal (kEditModalMinWidth 820), pass 1 = vertical (kEditModalMinWidthVertical 420).
+      for (int pass = 0; pass < 2; ++pass) {
+        const bool vertical = pass == 1;
+        // Same flag-FLIP dance as sync_column_layout_budget: the width floor is only applied on the
+        // frame RenderEditModals observes the change.
+        gui::g_state.modal_layout_vertical = !vertical;
+        ctx->Yield(2);
+        ctx->ItemClick("**/Edit##cr");
+        ctx->Yield(4);
+        gui::g_state.modal_layout_vertical = vertical;
+        ctx->Yield(6);
+        ctx->ItemOpen("**/Face Distance##modal");
+        ctx->Yield(4);
+
+        ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+        IM_CHECK(win != nullptr);
+        IM_CHECK_EQ(win->Size.x, vertical ? 420.0f : 820.0f);
+
+        // Both shape tables, found by their column signature rather than by an id we would have to
+        // reproduce through the child-window stack.
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        int tables_checked = 0;
+        for (int n = 0; n < g.Tables.GetMapSize(); ++n) {
+          ImGuiTable* table = g.Tables.TryGetMapData(n);
+          if (table == nullptr || table->ColumnsCount != gui::kShapeTableColumnCount ||
+              table->LastFrameActive < g.FrameCount - 1) {
+            continue;
+          }
+          const char* col0 = ImGui::TableGetColumnName(table, 0);
+          if (col0 == nullptr || strcmp(col0, "Param") != 0) {
+            continue;  // some other 5-column table
+          }
+          ++tables_checked;
+          for (int c = 0; c < table->ColumnsCount; ++c) {
+            const ImGuiTableColumn& column = table->Columns[c];
+            const char* name = ImGui::TableGetColumnName(table, c);
+            if (strcmp(name, "Value") == 0) {
+              continue;  // the stretch column absorbs the slack; it is the others that are budgeted
+            }
+            // Widest thing this column would draw if nothing clipped it: its header text, or its
+            // cells' content, whichever reaches further right.
+            const float ideal = ImMax(column.ContentMaxXHeadersIdeal, column.ContentMaxXUnfrozen);
+            fprintf(stderr, "[col_fit] %-6s layout=%-10s table#%d width=%.1f needs=%.1f slack=%.1f\n", name,
+                    vertical ? "vertical" : "horizontal", tables_checked, column.WidthGiven, ideal - column.WorkMinX,
+                    column.WorkMaxX - ideal);
+            IM_CHECK_LE(ideal, column.WorkMaxX);
+          }
+        }
+        IM_CHECK_EQ(tables_checked, 2);  // params + Face Distance; a miss must fail, not silently skip
+
+        ctx->ItemClose("**/Face Distance##modal");
+        ctx->Yield(2);
+        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+        ctx->Yield(2);
+      }
+      // Hand the modal back to later tests in the default horizontal form.
+      gui::g_state.modal_layout_vertical = false;
+      ctx->Yield(2);
+    };
+  }
+
   // p2_modal/sync_group_reselect_current_is_noop — re-picking the group a row is already in must
   // not re-snapshot it, i.e. the popup's "if (dist.sync_group != group)" guard is load-bearing.
   //

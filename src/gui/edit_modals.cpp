@@ -77,9 +77,9 @@ constexpr float kEditModalMinWidth = 820.0f;
 // vertical modal is exactly 2× the horizontal modal height plus chrome.
 //
 // Held at 420 for the Crystal-tab shape property table. Fixed columns
-// (Param kShapeParamColWidth=60 + Rand kShapeRandColWidth=36 + Spread
-// kShapeSpreadColWidth=60 + Sync kShapeSyncColWidth=40) sum to ~196; the stretch Value column then gets a
-// long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
+// (Param kShapeParamColWidth=52 + Sync kShapeSyncColWidth=29 + Rand
+// kShapeRandColWidth=29 + Spread kShapeSpreadColWidth=60) sum to ~170; the stretch Value column then
+// gets a long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
 // readable, plus inner borders / cell padding. (The GUI is uniform-only, so there
 // is no Type column; that reclaimed width goes to the Value slider.)
 constexpr float kEditModalMinWidthVertical = 420.0f;
@@ -90,14 +90,23 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 // length instead of starving it: Rand only needs the checkbox + "Rand" header,
 // Spread fits "100.0000" (%.4f). Shared by the main params table and the Face
 // Distance table so their columns line up.
-constexpr float kShapeParamColWidth = 60.0f;
-constexpr float kShapeRandColWidth = 36.0f;
+//
+// Settled by measuring the owner-walkthrough references rather than by eye: ImGui renders each of
+// these ~9 px wider than declared (cell padding ×2 + inner border), and what actually sets the floor
+// for all three narrow columns is TEXT — the header string or the longest row label — never the
+// control. Param fits its widest label ("Prism H" / "Upper H" / "Lower A", 7 chars ≈ 48 px) with
+// symmetric ~6 px margins; the 26 px reclaimed from the three of them all goes to the Value slider
+// (vertical layout: 181 → 207 px). Anything that lengthens a header or a row label has to revisit
+// these — sync_column_layout_budget in test_gui_interaction.cpp is what notices.
+constexpr float kShapeParamColWidth = 52.0f;
+constexpr float kShapeRandColWidth = 29.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
-// Sync (shape-scalar sync group): a ~20px square swatch button plus cell padding, widened to
-// kShapeSyncColWidth so the "Sync" header text is not clipped by the column (the swatch itself
-// would fit in 24). Starting value — the owner walkthrough after this task lands is what settles
-// the final swatch width and palette.
-constexpr float kShapeSyncColWidth = 40.0f;
+// Sync (shape-scalar sync group): a square swatch button one frame tall (~19 px), so like Rand this
+// column is sized by its 4-character header, not by its control. That it lands on the SAME number as
+// kShapeRandColWidth is a coincidence of two identical constraints, not evidence that they are one
+// concept — kept as two constants so a later header rename on either column cannot silently drag the
+// other along.
+constexpr float kShapeSyncColWidth = 29.0f;
 
 static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
