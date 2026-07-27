@@ -215,14 +215,26 @@ struct SimData {
   // the physical-result fields above (rays_/xyz_pixel_data_/exit_records_).
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
 
-  // Crystal geometries this batch freshly SAMPLED, for stats reporting — NOT
-  // the size of `crystals_` above, which also counts the copies made when a
-  // shape is reused. StatsConsumer sums this over the run to report "how many
-  // distinct crystal geometries did this run draw". The legacy path counts its
-  // own CrystalMaker calls; the exit-seam path reads
-  // TraceBackend::GetLastBatchNewCrystalSampleCount(), where the contract and
-  // its per-backend caveats are documented.
-  size_t crystal_count_ = 0;
+  // The reported crystal-geometry count is carried as TWO fields because its
+  // two halves aggregate differently. StatsConsumer reports their sum; see
+  // TraceBackend::GetLastBatchStochasticCrystalSampleCount for the full
+  // contract.
+  //
+  // (a) Stochastic draws THIS batch made — ACCUMULATED over batches and over
+  //     workers. Every such draw is a genuinely different geometry (each worker
+  //     has its own RNG stream), so summing is the right answer. NOT the size of
+  //     `crystals_` above, which also counts the copies made when a shape is
+  //     reused. The legacy path counts its own CrystalMaker calls; the
+  //     exit-seam path reads the backend getter named above.
+  size_t stochastic_crystal_sample_count_ = 0;
+  // (b) How many (layer, ci) slots of the committed scene carry deterministic
+  //     shape params — a CONFIG CONSTANT, so OVERWRITE, never accumulate (same
+  //     discipline as color_degrade_counts_ below). Each such slot is one
+  //     geometry no matter how many batches re-derive it or how many workers
+  //     redundantly derive it in parallel, which is exactly why it cannot be
+  //     counted per batch: doing so made the stat a function of the dispatch
+  //     grain and the worker-pool size instead of a property of the scene.
+  size_t deterministic_crystal_count_ = 0;
 
   // scrum-312 (third-clock drain): how many sim_scene_cnt_ units this SimData
   // accounts for on the consumer side. Normally 1 (one SimData per

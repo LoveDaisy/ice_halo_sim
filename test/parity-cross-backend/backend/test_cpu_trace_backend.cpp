@@ -54,6 +54,14 @@ SceneConfig MakeSimpleScene(size_t max_hits, size_t ms_layers, const FilterConfi
   return scene;
 }
 
+// Turn a setting's prism height into a stochastic distribution, so
+// IsDeterministic(param) is false and every MakeCrystal call on it is a real
+// draw. Mirrors what a config with `"height": {"type": "gaussian", ...}` does.
+void MakeShapeStochastic(ScatteringSetting& setting) {
+  auto& prism = std::get<PrismCrystalParam>(setting.crystal_.param_);
+  prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.2f };
+}
+
 RenderConfig MakeRenderConfig() {
   RenderConfig cfg;
   cfg.id_ = 0;
@@ -464,15 +472,17 @@ TEST(CpuTraceBackend, CrossHitFanoutDoesNotOverflowWorkspace) {
 }
 
 // =============================================================================
-// Test — new-crystal-sample count: the counter reports how many crystal
-// geometries this BATCH freshly sampled, summed across every (layer, ci) —
-// NOT the final layer's setting count, and NOT "how many crystal objects were
-// materialised". A deterministic param is a new sample the first time the scene
-// asks for it and a reuse forever after, so the second batch on the same
-// backend instance reports 0.
+// Test — stochastic crystal-draw count: the counter reports how many STOCHASTIC
+// geometry draws this BATCH made, summed across every (layer, ci) — NOT the
+// final layer's setting count, and NOT "how many crystal objects were
+// materialised". A deterministic param draws nothing however many times the
+// backend re-derives it (its population is reported as a config constant
+// elsewhere), so a deterministic scene reports 0 from every batch.
 // =============================================================================
-TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
-  // Single-MS single-crystal → 1 new sample on the first batch, 0 on the next.
+TEST(CpuTraceBackend, CountsStochasticCrystalDrawsAcrossLayers) {
+  // Deterministic single-MS: 0 on every batch, including the first. The shape is
+  // re-derived per batch but that consumes no rng draw, so counting it would put
+  // a scene constant into a per-batch sum.
   {
     auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
     auto render = MakeRenderConfig();
@@ -489,21 +499,17 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     host.crystal = nullptr;
     backend.TraceLayer(RootRaySource::FromHost(host));
 
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
+        << "Deterministic shape: re-deriving it draws nothing, on the first batch as on any other";
     backend.EndSession();
 
-    // Second batch, same backend instance + same scene: the deterministic shape
-    // was already sampled, so nothing new is drawn. This is the assertion that
-    // makes the run-level Σ (StatsConsumer) dispatch-invariant — without it the
-    // total would grow one per batch.
     backend.BeginSession(spec);
     backend.TraceLayer(RootRaySource::FromHost(host));
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
-        << "Reuse batch on a deterministic scene must report 0 new samples";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u) << "…and the reuse batch likewise reports 0";
     backend.EndSession();
   }
 
-  // Multi-MS: layer 0 has 1 crystal, layer 1 (final) has 3 crystals.
+  // Multi-MS, all-stochastic: layer 0 has 1 crystal, layer 1 (final) has 3.
   // Return value MUST be the cross-layer sum 1 + 3 = 4 — the pre-existing
   // semantic reported the final layer's 3 settings only.
   {
@@ -521,6 +527,11 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     final_ms.setting_.push_back(std::move(extra2));
     ASSERT_EQ(final_ms.setting_.size(), 3u);
     ASSERT_EQ(scene.ms_.front().setting_.size(), 1u);
+    for (auto& ms : scene.ms_) {
+      for (auto& setting : ms.setting_) {
+        MakeShapeStochastic(setting);
+      }
+    }
 
     auto render = MakeRenderConfig();
     SessionSpec spec;
@@ -539,27 +550,65 @@ TEST(CpuTraceBackend, CountsNewCrystalSamplesAcrossLayers) {
     // Layer 0 contributes to the running total immediately: the count is a
     // cross-layer accumulation, so it is 1 here rather than "0 until the final
     // layer runs".
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u)
-        << "Layer 0's new sample must already be counted (cross-layer accumulation)";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "Layer 0's draw must already be counted (cross-layer accumulation)";
 
     RecombineSpec rspec;
     rspec.shuffle = true;
     auto roots1 = backend.Recombine(std::move(h0), rspec);
     backend.TraceLayer(roots1);
 
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 4u)
-        << "Cross-layer new-sample sum: 1 (layer 0) + 3 (layer 1)";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 4u)
+        << "Cross-layer stochastic-draw sum: 1 (layer 0) + 3 (layer 1)";
 
     backend.EndSession();
 
-    // Second batch over the same two layers: every (layer, ci) shape is a reuse.
+    // Second batch over the same two layers: stochastic params really do draw
+    // fresh shapes every batch, so the count repeats rather than dropping to 0.
+    // This is the half of the contract that makes randomization observable.
     backend.BeginSession(spec);
     auto h0b = backend.TraceLayer(RootRaySource::FromHost(host));
     ASSERT_NE(h0b, nullptr);
     auto roots1b = backend.Recombine(std::move(h0b), rspec);
     backend.TraceLayer(roots1b);
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
-        << "Reuse batch must report 0 across all layers, not 4 again";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 4u)
+        << "Stochastic scene: every batch draws anew, so the count repeats";
+    backend.EndSession();
+  }
+
+  // Mixed scene: only the stochastic cis are counted. Without the per-ci
+  // predicate, a scene with any stochastic ci would drag its deterministic
+  // siblings into the per-batch sum too.
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/2);
+    auto& final_ms = scene.ms_.back();
+    ScatteringSetting extra = final_ms.setting_.front();
+    extra.crystal_.id_ = 100;
+    extra.crystal_proportion_ = 0.5f;
+    final_ms.setting_.front().crystal_proportion_ = 0.5f;
+    MakeShapeStochastic(extra);  // final layer: one deterministic + one stochastic
+    final_ms.setting_.push_back(std::move(extra));
+
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 5;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = 512;
+    host.crystal = nullptr;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    RecombineSpec rspec;
+    rspec.shuffle = true;
+    auto roots1 = backend.Recombine(std::move(h0), rspec);
+    backend.TraceLayer(roots1);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "3 (layer, ci) slots, exactly one of them stochastic";
     backend.EndSession();
   }
 }
@@ -593,12 +642,18 @@ TEST(CpuTraceBackend, HostInjectedCrystalIsNotANewSample) {
   host.crystal_id = 0;
   host.refractive_index = crystal.GetRefractiveIndex(spec.wl.wl_);
 
-  // Fresh backend instance: the tracker starts empty, so a non-zero result here
-  // could only come from counting the injected crystal.
+  // The scene's params are made stochastic on purpose: with a deterministic
+  // scene this assertion would hold for the wrong reason (0 because nothing is
+  // ever counted), and the injected-crystal branch would go unprobed.
+  for (auto& ms : scene.ms_) {
+    for (auto& setting : ms.setting_) {
+      MakeShapeStochastic(setting);
+    }
+  }
   CpuTraceBackend backend;
   backend.BeginSession(spec);
   backend.TraceLayer(RootRaySource::FromHost(host));
-  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
+  EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
       << "Host-supplied crystal consumes no MakeCrystal draw, so it is not a sample";
   backend.EndSession();
 }

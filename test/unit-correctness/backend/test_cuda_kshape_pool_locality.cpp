@@ -28,8 +28,9 @@
 //
 //   * Test C (KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) — knob-off
 //     structural collapse: with `LUMICE_GPU_GEOM_CLOCK` unset, P_ci ≡ 1
-//     (one pool shape per (layer, ci)) and `GetLastBatchNewCrystalSampleCount()`
-//     equals the total (layer, ci) count. Complements the driver-verified
+//     (one pool shape per (layer, ci)) and, on a stochastic scene,
+//     `GetLastBatchStochasticCrystalSampleCount()` equals the total (layer, ci)
+//     count. Complements the driver-verified
 //     four-file parity battery (11 passed knob-off) with a structural
 //     assertion that pins the AC2 contract at the pool level (as a
 //     white-box structural anchor, not a re-verification of bit-equivalence
@@ -288,7 +289,8 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
   ::unsetenv("LUMICE_GPU_GEOM_CLOCK");  // isolation from prior test order
 
   // Single-layer stochastic scene — one (layer, ci) pair. K=0 → P_ci = 1 →
-  // pool table has exactly one row, and GetLastBatchNewCrystalSampleCount() == 1.
+  // pool table has exactly one row, and
+  // GetLastBatchStochasticCrystalSampleCount() == 1.
   auto scene = MakeStochasticPrismScene(/*max_hits=*/4, /*gaussian=*/true);
   auto render = MakeRenderConfig();
 
@@ -310,12 +312,13 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
 
   auto table = hooks.ReadbackPoolShapeTable();
   EXPECT_EQ(table.size(), 1u) << "K=0 must collapse pool to a single shape (P_ci ≡ 1 per (layer, ci)).";
-  // The scene is stochastic (MakeStochasticPrismScene), so this ci re-samples
-  // every batch and every draw is a NEW sample — the new-sample count therefore
-  // equals Σ P_ci here, unchanged by the counter's semantic tightening (which
-  // only zeroes the count on batches that reuse a deterministic shape).
-  EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u)
-      << "K=0, single-(layer, ci) stochastic scene: Σ P_ci must be 1 (mirrors the new-crystal-sample "
+  // The scene is stochastic (MakeStochasticPrismScene), so this ci draws afresh
+  // every batch — the count therefore equals Σ P_ci here. On a deterministic
+  // scene it would be 0 instead, with that population reported as a config
+  // constant; this test deliberately stays on the stochastic side so the
+  // structural Σ P_ci claim is what it measures.
+  EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+      << "K=0, single-(layer, ci) stochastic scene: Σ P_ci must be 1 (mirrors the stochastic-crystal-draw "
          "count contract for the knob-off configuration).";
 
   // Every ray MUST report the single shape's tuple; any spread means the

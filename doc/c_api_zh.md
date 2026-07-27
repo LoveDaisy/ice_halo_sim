@@ -151,8 +151,11 @@ typedef struct LUMICE_StatsResult_ {
 - **不可跨后端比较**。CPU 路线逐 ray-group 抽新几何；GPU 路线在 K-shape 几何时钟关闭
   （默认关闭）时每 dispatch 每 (层, entry) 只抽一次。同一场景在不同后端上因此报出不同的
   数值：这个差距就是两条路线的采样密度差异本身，不是需要抹平的不一致。
-- 多 worker 的 CPU 路线上每个 worker 独立抽样，故该值会按拿到任务的 worker 数放大
-  （固定 `sim_seed` 会把整个 run 收敛为单 worker，此时计数是精确的）。
+- 与 `num_workers`、与 batch/dispatch 粒度都无关。场景中形状固定的那部分按 committed
+  config 清点一次，不是每 worker 一次、也不是每 batch 一次，所以性能旋钮动不了它；
+  随机抽出的那部分则逐次累加 —— 那些确实是不同的几何，累加正是想要的答案。
+- 形状固定的 entry 即使没分到光线（例如 `crystal_proportion` 为 0）也计入。
+  这个量描述的是场景，不是调度。
 
 #### LUMICE_ServerConfig
 

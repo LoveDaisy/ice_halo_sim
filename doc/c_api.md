@@ -183,9 +183,13 @@ typedef struct LUMICE_StatsResult_ {
   therefore reports different values on different backends. That gap is the
   sampling-density difference between the routes, not an inconsistency to
   reconcile.
-- On the multi-worker CPU route each worker samples independently, so the value
-  is scaled by the number of workers that received work (a fixed `sim_seed`
-  collapses the run to one worker, where the count is exact).
+- Independent of `num_workers` and of the batch/dispatch grain. The fixed-shape
+  part of a scene is counted once from the committed config, not once per worker
+  or per batch, so a performance knob can never move it. The randomly-drawn part
+  is summed over every draw, which is the intended answer: those really are
+  different geometries.
+- A fixed-shape entry counts even if it never receives rays (e.g.
+  `crystal_proportion` 0). The count describes the scene, not the schedule.
 
 #### LUMICE_ServerConfig
 

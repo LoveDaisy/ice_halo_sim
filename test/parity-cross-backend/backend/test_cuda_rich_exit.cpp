@@ -190,21 +190,52 @@ TEST(CudaRichExit, ExitFaceIsValid) {
 }
 
 // =============================================================================
-// K-shape geometry pool: the counter reports the CROSS-LAYER sum of crystal
-// geometries this batch freshly SAMPLED (Σ layers Σ ci over the new draws). At
-// the default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so the
-// first batch of a deterministic scene reports Σ layers Σ ci 1 = the cross-layer
-// setting count — and a subsequent batch reports 0, because a deterministic
-// scene skips BuildGeomPool entirely on the reuse batch (nothing is sampled).
-// Same semantic as Metal (see
-// MetalTraceBackend.CountsNewCrystalSamplesAcrossLayers).
+// K-shape geometry pool: the counter reports the CROSS-LAYER sum of STOCHASTIC
+// crystal-geometry draws this batch made (Σ layers Σ ci over the drawing cis).
+// At the default knob LUMICE_GPU_GEOM_CLOCK=0, P_ci collapses to 1 per ci, so a
+// stochastic scene reports Σ layers Σ ci 1 = the cross-layer setting count on
+// every batch, while a deterministic scene reports 0 on every batch — its first
+// batch does build the pool but draws nothing, and its later batches skip
+// BuildGeomPool entirely. Same semantic as Metal (see
+// MetalTraceBackend.CountsStochasticCrystalDrawsAcrossLayers).
 // =============================================================================
-TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
+TEST(CudaBackendCrystalCount, CountsStochasticCrystalDrawsAcrossLayers) {
   if (!CudaDeviceAvailable()) {
     GTEST_SKIP() << "No CUDA device available on this host.";
   }
 
-  // Case 1 — single MS, single crystal setting → count == 1.
+  // Case 1a — single MS, single STOCHASTIC crystal setting → 1 per batch.
+  {
+    auto scene = MakePrismScene(/*max_hits=*/4);
+    cuda_test::MakeShapeStochastic(scene.ms_.front().setting_.front());
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 21;
+
+    CudaTraceBackend backend;
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u);
+    backend.EndSession();
+
+    // A stochastic scene force-invalidates the pool every BeginSession, so the
+    // next batch really does draw again and the count repeats.
+    backend.BeginSession(spec);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "Stochastic scene: every batch rebuilds and re-draws";
+    backend.EndSession();
+  }
+
+  // Case 1b — the deterministic twin: 0 on EVERY batch, including the first,
+  // which does build the pool. This is the white-box lock on the deliberate
+  // reversal of the old "deterministic scene → the counter persists across
+  // batches" design: the reuse batch skips BuildGeomPool and must read 0 rather
+  // than replay the previous batch's value, and the build batch must read 0 too
+  // because re-deriving a fixed shape draws nothing. Without both, the
+  // run-level Σ that StatsConsumer reports grows with the batch count and the
+  // worker count instead of describing the scene.
   {
     auto scene = MakePrismScene(/*max_hits=*/4);
     auto render = MakeRenderConfig();
@@ -216,25 +247,20 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
 
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 1u);
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
+        << "Deterministic scene, pool-building batch: a rebuild is not a draw";
     backend.EndSession();
 
-    // Second batch, same instance + same scene. This is the white-box lock on
-    // the deliberate reversal of the old "deterministic scene → the counter
-    // persists across batches" design: BuildGeomPool is skipped on a reuse
-    // batch, so the counter must read 0 rather than replay the previous
-    // batch's value. Without this, the run-level Σ that StatsConsumer reports
-    // grows once per batch and stops being a scene property.
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
-        << "Reuse batch on a deterministic scene must report 0 new samples "
-           "(BuildGeomPool skipped → nothing sampled)";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 0u)
+        << "Deterministic scene, reuse batch: BuildGeomPool skipped → 0";
     backend.EndSession();
   }
 
-  // Case 2 — multi MS scene with 3 settings on the FINAL layer, 1 on the
-  // first. Return value MUST be the cross-layer sum 1 + 3 = 4, not the
-  // final-layer-only count (3).
+  // Case 2 — multi MS scene with 3 settings on the FINAL layer, 1 on the first,
+  // and exactly ONE of the four stochastic. Return value MUST be the cross-layer
+  // sum over the DRAWING cis: 1, not the final-layer-only count (3), and not 4
+  // (which is what a per-scene rather than per-ci predicate would give).
   {
     auto scene = MakePrismScene(/*max_hits=*/4);
     // Convert single-MS scene to 2-MS: original layer becomes the first
@@ -254,6 +280,9 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
     scene.ms_.push_back(std::move(final_ms));
     ASSERT_EQ(scene.ms_.back().setting_.size(), 3u);
     ASSERT_EQ(scene.ms_.front().setting_.size(), 1u);
+    // One drawing ci, in the middle of the final layer's three, so a mistake
+    // that counts per-layer or per-scene rather than per-ci shows up.
+    cuda_test::MakeShapeStochastic(scene.ms_.back().setting_[1]);
 
     auto render = MakeRenderConfig();
     SessionSpec spec;
@@ -264,14 +293,16 @@ TEST(CudaBackendCrystalCount, CountsNewCrystalSamplesAcrossLayers) {
 
     CudaTraceBackend backend;
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 4u)
-        << "Cross-layer new-sample sum at K=0: 1 (layer 0) + 3 (layer 1). "
-           "Pre-K-pool semantic was final-layer settings only (3).";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "Only the one stochastic ci draws. Pre-K-pool semantic was "
+           "final-layer settings only (3); a per-scene predicate would give 4.";
     backend.EndSession();
 
+    // The scene carries a stochastic ci, so the pool is rebuilt every batch and
+    // that one ci draws again — the count repeats rather than dropping to 0.
     backend.BeginSession(spec);
-    EXPECT_EQ(backend.GetLastBatchNewCrystalSampleCount(), 0u)
-        << "Reuse batch must report 0 across all layers, not 4 again";
+    EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
+        << "The stochastic ci draws again on the next batch";
     backend.EndSession();
   }
 }

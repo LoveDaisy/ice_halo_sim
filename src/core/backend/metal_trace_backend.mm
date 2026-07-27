@@ -816,18 +816,15 @@ struct MetalTraceBackend::Impl {
   std::vector<std::array<uint32_t, 4>> pool_shape_table_h_;
   id<MTLBuffer> pool_shape_table_buf_ = nil;  // pool_capacity_ × uint4 (shape offsets)
   size_t        pool_shape_capacity_  = 0;
-  // Running total of crystal geometries this batch freshly SAMPLED, across
+  // Running total of stochastic crystal-geometry draws this batch made, across
   // every (layer, ci). Reset in BeginSession; incremented by
-  // ResolveLayerCrystalForCi for the cis that sample_tracker_ judges to be new
-  // draws. Read out by GetLastBatchNewCrystalSampleCount(); see trace_backend.hpp for
-  // the cross-backend contract.
+  // ResolveLayerCrystalForCi for the cis whose params consume the rng. Metal
+  // rebuilds pool_crystals_ every batch regardless, but re-deriving a
+  // deterministic shape draws nothing, so those cis are left to the scene's
+  // config-constant term. Read out by
+  // GetLastBatchStochasticCrystalSampleCount(); see trace_backend.hpp for the
+  // cross-backend contract.
   size_t                   pool_shape_count_this_batch_ = 0;
-  // "Which deterministic (layer, ci) shapes has this scene already sampled" —
-  // NOT reset per BeginSession (only on a scene change), because it must span
-  // the per-batch session cycle. Metal rebuilds pool_crystals_ every batch
-  // regardless; this is what keeps a rebuild of an already-drawn deterministic
-  // shape from being reported as a fresh sample. See NewSampleTracker.
-  NewSampleTracker         sample_tracker_;
 
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
@@ -1997,15 +1994,15 @@ void MetalTraceBackend::Impl::ResolveLayerCrystalForCi(const ScatteringSetting& 
     // exact regardless of p_ci.
     current_n_idx =
         (spec.wl.wl_ > 1.0f) ? pool_crystals_.front().GetRefractiveIndex(spec.wl.wl_) : 0.0f;
-    // Cross-(layer, ci) running total for GetLastBatchNewCrystalSampleCount.
-    // Counted in THIS branch — not after the if/else, and not inside
-    // UploadCrystalPool — because this is the only branch that draws: the
-    // host-injected branch above uploads a caller-supplied shape and consumes no
-    // rng draw, so it is not a sampling event at all. Whether a draw was NEW is
-    // then the tracker's call: a deterministic param is re-derived every batch by
-    // the loop above, but only its first derivation in this scene sampled
-    // anything.
-    if (sample_tracker_.MarkIfNew(setting.crystal_.param_)) {
+    // Cross-(layer, ci) running total for
+    // GetLastBatchStochasticCrystalSampleCount. Counted in THIS branch — not
+    // after the if/else, and not inside UploadCrystalPool — because this is the
+    // only branch that draws: the host-injected branch above uploads a
+    // caller-supplied shape and consumes no rng draw, so it is not a sampling
+    // event at all. A deterministic param is re-derived every batch by the loop
+    // above while consuming no draw; it rides the scene's config-constant term
+    // instead of this counter.
+    if (!IsDeterministic(setting.crystal_.param_)) {
       pool_shape_count_this_batch_ += pool_crystals_.size();
     }
   }
@@ -2907,14 +2904,11 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->spec = spec;
   impl_->in_session = true;
   impl_->ms_idx = 0;
-  // K-shape pool: reset the per-batch new-sample counter (accumulated by
+  // K-shape pool: reset the per-batch stochastic-draw counter (accumulated by
   // ResolveLayerCrystalForCi across every (layer, ci) resolve inside this
-  // session). See GetLastBatchNewCrystalSampleCount for the unified semantics.
+  // session). See GetLastBatchStochasticCrystalSampleCount for the unified
+  // semantics.
   impl_->pool_shape_count_this_batch_ = 0u;
-  // Per-batch: the counter above. Per-scene: the tracker below, which must NOT
-  // be cleared unconditionally here or every batch would re-count its shapes as
-  // new samples.
-  impl_->sample_tracker_.ResetIfSceneChanged(spec.scene);
   // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
   // single per-config entry point, BEFORE both the color-class clamp below
   // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
@@ -3671,14 +3665,14 @@ uint32_t MetalTraceBackend::WlPoolSize() const {
   return impl_->wl_pool_size_ != 0u ? impl_->wl_pool_size_ : ResolveWlPoolSize(EffectiveLogger(impl_->logger_));
 }
 
-size_t MetalTraceBackend::GetLastBatchNewCrystalSampleCount() const {
-  // K-shape pool: the number of crystal geometries this batch freshly SAMPLED,
-  // summed over every (layer, ci) — Σ P_ci restricted to the cis that actually
-  // drew. With LUMICE_GPU_GEOM_CLOCK unset (P_ci ≡ 1) a deterministic scene's
-  // first batch reports Σ layers Σ ci 1 and every later batch reports 0, since
-  // rebuilding an already-drawn deterministic shape samples nothing; a
-  // stochastic ci draws fresh shapes every batch and keeps counting. With the K
-  // knob on, a stochastic ci contributes ~ci_n/K per batch.
+size_t MetalTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
+  // K-shape pool: the number of stochastic crystal-geometry draws this batch
+  // made, summed over every (layer, ci) — Σ P_ci restricted to the cis whose
+  // params actually consume the rng. A fully deterministic scene reports 0 from
+  // every batch (its whole count is the config constant); a stochastic ci draws
+  // fresh shapes every batch and keeps counting. With LUMICE_GPU_GEOM_CLOCK
+  // unset (P_ci ≡ 1) such a ci contributes 1 per batch; with the K knob on it
+  // contributes ~ci_n/K.
   return impl_->pool_shape_count_this_batch_;
 }
 

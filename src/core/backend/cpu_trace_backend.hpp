@@ -70,9 +70,9 @@ class CpuTraceBackend : public TraceBackend {
   size_t RootRayCount() const { return root_ray_count_; }
   float TotalLandedWeight() const { return total_landed_weight_; }
 
-  // Crystal geometries this batch freshly sampled, summed across every
+  // Stochastic crystal-geometry draws this batch made, summed across every
   // (layer, ci). See TraceBackend for the cross-backend contract.
-  size_t GetLastBatchNewCrystalSampleCount() const override { return new_sample_count_this_batch_; }
+  size_t GetLastBatchStochasticCrystalSampleCount() const override { return stochastic_sample_count_this_batch_; }
 
  private:
   SessionSpec spec_{};
@@ -83,14 +83,12 @@ class CpuTraceBackend : public TraceBackend {
   int height_ = 0;
 
   size_t root_ray_count_ = 0;
-  // Output register for GetLastBatchNewCrystalSampleCount: zeroed every BeginSession,
-  // incremented per (layer, ci) that sample_tracker_ judges to be a new draw.
-  size_t new_sample_count_this_batch_ = 0;
-  // "Which deterministic (layer, ci) shapes has this scene already sampled" —
-  // deliberately NOT reset by BeginSession/EndSession (only by a scene change),
-  // because its whole job is to span the per-batch session cycle. See
-  // NewSampleTracker's lifetime note.
-  NewSampleTracker sample_tracker_;
+  // Output register for GetLastBatchStochasticCrystalSampleCount: zeroed every
+  // BeginSession, incremented per (layer, ci) whose params actually draw. Purely
+  // per-batch — no cross-batch state is needed, because the shapes that ARE
+  // reused across batches are the deterministic ones, and those are counted from
+  // the config rather than from any batch.
+  size_t stochastic_sample_count_this_batch_ = 0;
   size_t ms_idx_ = 0;  // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 

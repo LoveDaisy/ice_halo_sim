@@ -1180,9 +1180,11 @@ void ServerImpl::ConsumeData() {
           auto t_lock1 = std::chrono::steady_clock::now();
           // task-268.4: chunk by kCommitCap on the backend exit-seam path
           // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
-          // carries root_ray_count_ + crystals_ — StatsConsumer accumulates
-          // both, so spreading them across chunks would N×-count and break
-          // the stats invariant. Legacy CPU SimData (rays_ non-empty) are
+          // carries root_ray_count_ + the stochastic crystal-draw count —
+          // StatsConsumer accumulates both, so spreading them across chunks
+          // would N×-count and break the stats invariant. (The deterministic
+          // crystal count is the opposite case; see the chunk fill below.)
+          // Legacy CPU SimData (rays_ non-empty) are
           // delivered whole because their consumers project via per-ray
           // indices into rays_, which has no clean sub-batch slice.
           // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
@@ -1200,15 +1202,21 @@ void ServerImpl::ConsumeData() {
               SimData chunk;
               chunk.curr_wl_ = sim_data.curr_wl_;
               chunk.generation_ = sim_data.generation_;
-              // Stats fields only on the first chunk; rest carry 0 / empty
-              // so StatsConsumer's sim_rays_ / crystals_ accumulate to the
-              // same totals as a single whole-Consume call would yield.
+              // ACCUMULATED stats fields go on the first chunk only; the rest
+              // carry 0 / empty so StatsConsumer's running sums land on the same
+              // totals a single whole-Consume call would yield.
               if (emitted == 0) {
                 chunk.root_ray_count_ = sim_data.root_ray_count_;
-                chunk.crystal_count_ = sim_data.crystal_count_;
+                chunk.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
                 chunk.crystals_ = sim_data.crystals_;
                 chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
               }
+              // OVERWRITTEN stats fields must go on EVERY chunk — the consumer
+              // stores rather than adds, so leaving this at 0 on the trailing
+              // chunks would have the last one wipe the value the first chunk
+              // published. The inverse of the rule above, for the inverse
+              // aggregation.
+              chunk.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
               if (chunk_count > 0) {
                 chunk.outgoing_d_.assign(
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,

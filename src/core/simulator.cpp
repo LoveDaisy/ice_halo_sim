@@ -470,6 +470,18 @@ bool IsDeterministic(const CrystalParam& param) {
       param);
 }
 
+size_t DeterministicCrystalCount(const SceneConfig& config) {
+  size_t n = 0;
+  for (const auto& ms : config.ms_) {
+    for (const auto& setting : ms.setting_) {
+      if (IsDeterministic(setting.crystal_.param_)) {
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
@@ -1124,11 +1136,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   all_crystals.reserve(16);
   std::vector<AxisDistribution> all_axis_dists;
   all_axis_dists.reserve(16);
-  // How many crystal geometries this batch actually SAMPLED, i.e. how many
-  // times below we reach the real CrystalMaker call. Distinct from
-  // all_crystals.size(), which also counts the copies made when a shape is
-  // reused — see the crystal_count_ assignment at the end of this function.
-  size_t new_sample_count = 0;
+  // How many STOCHASTIC crystal geometries this batch drew, i.e. how many times
+  // below we reach the real CrystalMaker call with a param that actually
+  // consumes the RNG. Distinct from all_crystals.size(), which also counts the
+  // copies made when a shape is reused, and it deliberately excludes
+  // deterministic draws — see the assignment at the end of this function.
+  size_t stochastic_sample_count = 0;
 
   bool first_ms = true;
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
@@ -1213,11 +1226,16 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           all_axis_dists.emplace_back(s.crystal_.axis_);
           // The ONLY branch that draws a geometry: the two above copy an
           // existing shape (from this ci loop, or from the per-Run() cache).
-          new_sample_count++;
+          // Deterministic draws are excluded from the counter because they are
+          // already accounted for by the scene's config-constant term —
+          // counting them here would put them in a per-worker sum and scale the
+          // stat by the pool size.
           if (deterministic) {
             crystal_cache.emplace_back(param_ptr, all_crystals.back());
             cached_crystal = &crystal_cache.back().second;
             ci_crystal_id = curr_crystal_id;
+          } else {
+            stochastic_sample_count++;
           }
         }
         const auto& curr_crystal = all_crystals[curr_crystal_id];
@@ -1315,15 +1333,17 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
   sim_data.root_ray_count_ = original_ray_num;
-  // Newly SAMPLED geometries, not materialised instances. `crystals_` keeps
-  // every instance (the consumers index into it by per-ray crystal id and need
-  // the reuse copies), but reporting its size made the stat a function of the
-  // batch schedule: a deterministic scene re-copied its cached shape once per
-  // small batch, so the run-level sum grew with ray_num / batch size instead of
-  // describing the scene. `crystal_cache` lives in Run() scope, so a
-  // deterministic shape is drawn once per run and this stays at the scene's
-  // (layer, ci) count no matter how the rays are batched.
-  sim_data.crystal_count_ = new_sample_count;
+  // Newly DRAWN stochastic geometries, not materialised instances. `crystals_`
+  // keeps every instance (the consumers index into it by per-ray crystal id and
+  // need the reuse copies), but reporting its size made the stat a function of
+  // the batch schedule: a deterministic scene re-copied its cached shape once
+  // per small batch, so the run-level sum grew with ray_num / batch size
+  // instead of describing the scene. The deterministic half of the scene rides
+  // the config-constant field below instead of any per-batch counter, which is
+  // what also keeps it from scaling with the worker pool (every worker runs
+  // this function on its own Simulator).
+  sim_data.stochastic_crystal_sample_count_ = stochastic_sample_count;
+  sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(config);
   data_queue_->Emplace(std::move(sim_data));
 }
 
@@ -1374,7 +1394,10 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   sim_data.curr_wl_ = xyz_win_.wl;
   sim_data.generation_ = xyz_win_.generation;
   sim_data.root_ray_count_ = xyz_win_.root_rays;
-  sim_data.crystal_count_ = xyz_win_.crystals;
+  sim_data.stochastic_crystal_sample_count_ = xyz_win_.stochastic_crystal_samples;
+  // OVERWRITE semantics, same as color_degrade_counts_ below: a config constant
+  // is carried through the window, never summed over its batches.
+  sim_data.deterministic_crystal_count_ = xyz_win_.deterministic_crystals;
   // task-color-degrade-gui-surfacing: carry the window's GPU color-degrade tally
   // into the drained SimData (config constant, direct copy — not accumulated).
   sim_data.color_degrade_counts_ = xyz_win_.color_degrade_counts_;
@@ -1522,7 +1545,9 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       // hits the batch cap here. This sheds the per-batch synchronous D2H tax.
       xyz_win_.pending = true;
       xyz_win_.root_rays += ray_num;
-      xyz_win_.crystals += backend.GetLastBatchNewCrystalSampleCount();
+      xyz_win_.stochastic_crystal_samples += backend.GetLastBatchStochasticCrystalSampleCount();
+      // OVERWRITE (not +=) — config constant, identical on every batch.
+      xyz_win_.deterministic_crystals = DeterministicCrystalCount(scene);
       xyz_win_.generation = generation;
       xyz_win_.w = w;
       xyz_win_.h = h;
@@ -1543,7 +1568,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
-    sim_data.crystal_count_ = backend.GetLastBatchNewCrystalSampleCount();
+    sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
+    sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(scene);
     // task-color-degrade-gui-surfacing: carry the GPU color-degrade tally on the
     // legacy per-batch drain too. Dead for today's backends (Metal + CUDA both take
     // the third-clock window branch above), but keeps this path from silently
@@ -1612,7 +1638,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
-  sim_data.crystal_count_ = backend.GetLastBatchNewCrystalSampleCount();
+  sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
+  sim_data.deterministic_crystal_count_ = DeterministicCrystalCount(scene);
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);

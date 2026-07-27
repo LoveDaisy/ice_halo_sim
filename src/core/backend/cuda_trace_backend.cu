@@ -1760,12 +1760,12 @@ struct CudaTraceBackend::Impl {
   // flat_ci (逐位等价 today's behavior). Sized (config crystal total) elements.
   std::vector<uint32_t> ci_pool_slot_base_;
   std::vector<uint32_t> ci_pool_shape_count_;
-  // Diagnostic accumulator — crystal geometries this batch freshly SAMPLED,
+  // Diagnostic accumulator — stochastic crystal-geometry draws this batch made,
   // across every (layer, ci). Mirrors Metal's `pool_shape_count_this_batch_`.
   // Reset in BeginSession (unconditionally, before any geom_pool_built_
   // decision — that placement is what makes a pool-reuse batch report 0);
-  // incremented in BuildGeomPool per shape drawn. Consumed by
-  // `GetLastBatchNewCrystalSampleCount()`, which documents the contract.
+  // incremented in BuildGeomPool per shape drawn by a stochastic ci. Consumed by
+  // `GetLastBatchStochasticCrystalSampleCount()`, which documents the contract.
   size_t pool_shape_count_this_batch_ = 0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
@@ -2700,6 +2700,12 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
       // (the "flat config-space ci index") is the plan §3.3 accounting split.
       ci_pool_slot_base_.push_back(static_cast<uint32_t>(pool_crystals_.size()));
       ci_pool_shape_count_.push_back(p_ci);
+      // Whether this ci's MakeCrystal calls below are sampling EVENTS or just
+      // re-derivations of one fixed shape. Deterministic cis are re-derived here
+      // on every pool build (cheaper than special-casing the loop, and it keeps
+      // the rng draw order intact) but draw nothing, so they are left out of the
+      // counter and carried as the scene's config constant instead.
+      const bool ci_draws = !IsDeterministic(settings[ci].crystal_.param_);
       for (uint32_t s = 0; s < p_ci; ++s) {
         Crystal crystal = MakeCrystal(rng_, settings[ci].crystal_.param_);
         size_t poly_cnt = crystal.PolygonFaceCount();
@@ -2723,7 +2729,9 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
           pool_tri_off_.push_back(tri_acc);
           pool_tri_cnt_.push_back(0u);
           pool_crystals_.push_back(std::move(crystal));
-          ++pool_shape_count_this_batch_;
+          if (ci_draws) {
+            ++pool_shape_count_this_batch_;
+          }
           continue;
         }
         if (tri_cnt > static_cast<size_t>(lm_pcg::kMaxTriPerKernel)) {
@@ -2753,7 +2761,9 @@ void CudaTraceBackend::Impl::BuildGeomPool(const SceneConfig& scene, size_t ray_
         poly_acc += static_cast<uint32_t>(poly_cnt);
         tri_acc  += static_cast<uint32_t>(tri_cnt);
         pool_crystals_.push_back(std::move(crystal));
-        ++pool_shape_count_this_batch_;
+        if (ci_draws) {
+          ++pool_shape_count_this_batch_;
+        }
       }
     }
   }
@@ -3514,7 +3524,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // skips it — the counter kept reporting the first batch's value forever, and
     // that persistence was intentional under the old "how many pool shapes does
     // this scene have" reading. The counter now answers "how many geometries did
-    // THIS batch sample", so a batch that skips the build sampled nothing and
+    // THIS batch draw", so a batch that skips the build drew nothing and
     // must report 0: StatsConsumer sums these per batch, and re-reporting a
     // stale non-zero made the run total a function of the batch count instead of
     // the scene. Do not "restore" the old reset point.
@@ -4821,16 +4831,17 @@ uint32_t CudaTraceBackend::WlPoolSize() const {
   return ResolveWlPoolSize(logger);
 }
 
-size_t CudaTraceBackend::GetLastBatchNewCrystalSampleCount() const {
-  // Unified with MetalTraceBackend: the number of crystal geometries THIS batch
-  // freshly sampled (Σ P_ci over the (layer, ci) pairs it actually drew). See
-  // trace_backend.hpp for the cross-backend contract.
+size_t CudaTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
+  // Unified with MetalTraceBackend: the number of STOCHASTIC crystal-geometry
+  // draws THIS batch made (Σ P_ci over the (layer, ci) pairs whose params
+  // consume the rng). See trace_backend.hpp for the cross-backend contract.
   //
-  //   - deterministic scene: the first batch of a scene builds the pool and
-  //     reports Σ P_ci (at K==0, Σ layers Σ ci 1 = the config total); every
-  //     later batch skips BuildGeomPool entirely, samples nothing, and reports
-  //     0. Zeroing happens in BeginSession precisely so the skip path reports 0
-  //     rather than replaying the first batch's value.
+  //   - deterministic scene: reports 0 from every batch, including the first —
+  //     the first batch does build the pool, but re-deriving a deterministic
+  //     shape draws nothing, and the scene's deterministic population is
+  //     carried as a config constant instead. Later batches skip BuildGeomPool
+  //     entirely; zeroing happens in BeginSession precisely so the skip path
+  //     reports 0 rather than replaying the first batch's value.
   //   - stochastic scene: BeginSession force-invalidates geom_pool_built_, so
   //     every batch rebuilds and every batch's draws are new — the count repeats
   //     per batch, and the run-level sum grows with the batch count. That is the

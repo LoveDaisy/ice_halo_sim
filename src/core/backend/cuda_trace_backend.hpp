@@ -136,10 +136,11 @@ class CudaTraceBackend : public TraceBackend {
   // driving loop queries it first). Mirrors MetalTraceBackend::WlPoolSize().
   uint32_t WlPoolSize() const override;
 
-  // task-exit-seam-crystal-count: setting count of the final MS layer for the
-  // current session. Backed by Impl::final_layer_crystals_ populated during
-  // BeginSession — safe to read anytime the session is open.
-  size_t GetLastBatchNewCrystalSampleCount() const override;
+  // Stochastic crystal-geometry draws this batch made, across every
+  // (layer, ci). Backed by Impl::pool_shape_count_this_batch_, zeroed at
+  // BeginSession and incremented inside the pool build — which a reuse batch
+  // skips entirely. See TraceBackend for the cross-backend contract.
+  size_t GetLastBatchStochasticCrystalSampleCount() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 
@@ -147,7 +148,7 @@ class CudaTraceBackend : public TraceBackend {
   // migrated to `CudaTraceBackendTestHooks` (see
   // `core/backend/cuda_trace_backend_test_hooks.hpp`). This class's public
   // interface is now production-only, with zero `*ForTest`-suffixed symbols
-  // remaining on it — `GetLastBatchNewCrystalSampleCount` above never carried that
+  // remaining on it — `GetLastBatchStochasticCrystalSampleCount` above never carried that
   // suffix and is an ordinary production method, unaffected by this
   // refactor. Tests construct
   // `CudaTraceBackendTestHooks(backend).SetInitialRayBase(...)` etc.

@@ -109,9 +109,14 @@ class Simulator {
   // display cadence (producer-pause / generation-change / run-exit / batch cap),
   // not per batch — see Run() and DrainDeviceXyz.
   struct XyzDrainWindow {
-    bool pending = false;     // undrained device accumulation present
-    size_t root_rays = 0;     // Σ ray_num over the window (normalization denom)
-    size_t crystals = 0;      // Σ crystal_count over the window (stats)
+    bool pending = false;  // undrained device accumulation present
+    size_t root_rays = 0;  // Σ ray_num over the window (normalization denom)
+    // Stats: Σ stochastic draws over the window (accumulated) alongside the
+    // scene's deterministic slot count (OVERWRITTEN — config constant, same
+    // discipline as color_degrade_counts_ below). See TraceBackend::
+    // GetLastBatchStochasticCrystalSampleCount for why the two cannot be one.
+    size_t stochastic_crystal_samples = 0;
+    size_t deterministic_crystals = 0;
     uint64_t generation = 0;  // generation the window belongs to
     int w = 0;                // render resolution of the window
     int h = 0;
