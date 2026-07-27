@@ -1024,6 +1024,39 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
   }
 
   {
+    // The other clamp direction: Lowitz's domain is a LOWER bound (must stay greater than 15),
+    // the mirror image of Column's upper bound above. A prior code-review round found that the
+    // §1 panel's std cell used a fixed "%.7g" while this load-time notice (via FormatAxisPresetStd)
+    // used adaptive precision — nextafter(10, 0) needs 7 digits and happened to work under the
+    // fixed format, but nextafter(15, +inf) needs 8 and collapsed to "15" under it, printing the
+    // clamped value as the boundary itself. Column's direction alone could not have caught that:
+    // both call sites need exercising on the direction that actually needs the extra digit.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "load_time_clamp_reaches_the_user_lowitz_lower_bound");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      gui::ClearImportComplexFilterWarning();
+      const auto dir = FreshOverlayDir("clamp_surfaced_lowitz");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      json doc;
+      doc["presets"]["axis"]["lowitz"]["zenith_std"] = 5.0f;  // below Lowitz's (15, inf)
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      gui::DoNew();
+
+      const std::string warning = gui::PeekImportComplexFilterWarning();
+      IM_CHECK(!warning.empty());
+      IM_CHECK(warning.find("Lowitz") != std::string::npos);
+      IM_CHECK(warning.find("5") != std::string::npos);
+      // The full clamped value, not the boundary alone: nextafter(15, +inf) needs 8 significant
+      // digits ("15.000001"), so a warning reading bare "15" would mean the display collapsed the
+      // stored value into the very boundary the neighbouring sentence says it must stay above.
+      IM_CHECK(warning.find("15.000001") != std::string::npos);
+      gui::ClearImportComplexFilterWarning();
+    };
+  }
+
+  {
     // The negative half of AC4: a clean override file must produce NO popup. Without this, a
     // notice that fired on every New would satisfy the case above while training the user to
     // dismiss the dialog unread — which is the same as not having one.

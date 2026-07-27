@@ -236,15 +236,20 @@ void RenderOtherTable(const GuiState& state) {
   }
 }
 
-// Display format for every std cell in §1.
+// Display format for a §1 std cell showing `value`, e.g. "%.7g".
 //
-// %g rather than a fixed number of decimals, and 7 significant digits rather than 6, because of
-// exactly one value: the clamp target. The domains are OPEN, so clamping Column's std lands on
-// nextafter(10, 0) = 9.99999905 — which "%.3f" renders as "10.000" and "%.6g" as "10", directly
-// under a line that says the value must stay LESS than 10. A user reading that has been told two
-// contradictory things and has no way to tell which is true. 7 digits shows 9.999999, and leaves
-// the values people actually type alone (0.3 stays "0.3", not "0.300000").
-constexpr const char* kPresetStdDisplayFormat = "%.7g";
+// Built per-value from RoundTripPrecisionForAxisPresetStd rather than a fixed digit count: the
+// domains are OPEN, so clamping Column's std lands on nextafter(10, 0) = 9.99999905 (needs 7
+// digits) while clamping Lowitz's lands on nextafter(15, +inf) = 15.000001 (needs 8) — a fixed
+// "%.7g" renders the first correctly but rounds the second to "15", directly under a line that
+// says the value must stay GREATER than 15. Sharing the precision rule with FormatAxisPresetStd
+// (used for the adjacent status/warning text) is what keeps the input box and the prose that
+// explains it from ever disagreeing about what the stored value is.
+std::string PresetStdDisplayFormat(float value) {
+  char format[8];
+  std::snprintf(format, sizeof(format), "%%.%dg", RoundTripPrecisionForAxisPresetStd(value));
+  return format;
+}
 
 // Reload every §1 std input from what is actually in effect (factory value, or the user's stored
 // override). Called on open and after every write, so the boxes show the stored truth rather than
@@ -288,7 +293,7 @@ void RenderReadOnlyAxisRow(const char* axis_label, const AxisDist& dist) {
   ImGui::BeginDisabled();
   float std_value = dist.std;
   ImGui::SetNextItemWidth(-FLT_MIN);
-  ImGui::InputFloat("##std", &std_value, 0.0f, 0.0f, kPresetStdDisplayFormat);
+  ImGui::InputFloat("##std", &std_value, 0.0f, 0.0f, PresetStdDisplayFormat(std_value).c_str());
   ImGui::EndDisabled();
 
   ImGui::TableNextColumn();  // warning cell: read-only rows never carry one
@@ -322,7 +327,8 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
   ImGui::TableNextColumn();
   ImGui::SetNextItemWidth(-FLT_MIN);
   const std::string std_id = std::string("###preset_std_") + entry.override_json_name;
-  ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f, kPresetStdDisplayFormat);
+  ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f,
+                    PresetStdDisplayFormat(g_preset_std_buffers.slots[slot]).c_str());
   if (ImGui::IsItemDeactivatedAfterEdit()) {
     const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_preset_std_buffers.slots[slot]);
     // The message is empty on a clean write, which is also how the warning cell is cleared — one
@@ -423,12 +429,15 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
     if (ImGui::Button(restore_id.c_str())) {
       if (RevertOneAxisPresetOverride(entry.id)) {
         g_status_message = std::string(entry.label) + " was restored to its built-in value.";
+        // Cleared only on success: the value IS the factory one now, so a warning about the value
+        // that was just removed would describe something no longer there. On failure the override
+        // (and the value it produced) is untouched — "disk first, memory second" means a failed
+        // write changes nothing — so the warning explaining that still-current value must survive,
+        // or the user is left staring at a clamped number with no clue where it came from.
+        g_preset_warnings.slots[slot].clear();
       } else {
         g_status_message = "Could not write your defaults file; nothing was changed.";
       }
-      // Cleared unconditionally: after a restore the value IS the factory one, so a warning about
-      // the value that was just removed would describe something no longer there.
-      g_preset_warnings.slots[slot].clear();
       RefreshPresetStdBuffers();
     }
     ImGui::EndDisabled();

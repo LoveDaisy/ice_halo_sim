@@ -383,9 +383,19 @@ AxisDist EffectiveAxisPresetZenith(const AxisPresetEntry& entry);
 // "greater than 0 and less than 10". For UI copy only.
 std::string DescribeAxisPresetZenithStdDomain(AxisPreset preset);
 
-// Display form of a std value, %.6g. Shared so the panel, the modal gesture and the load-time
-// notice print "0.3" and "9.99999" the same way; std::to_string would render both as a run of
-// trailing zeros or digits that reads like precision the value does not carry.
+// The shortest %g precision (6..9) that still reads back as exactly this float via strtof. Shared
+// by FormatAxisPresetStd below and by the §1 panel's InputFloat display format so both places pick
+// precision the same way: a fixed digit count anywhere renders the tuned values a user types
+// correctly (0.3 stays "0.3") but collapses a clamp target that happens to need one more digit —
+// nextafter(10, 0) needs 7 ("9.999999"), nextafter(15, +inf) needs 8 ("15.000001") — and a value
+// that reads as the boundary itself contradicts the "must stay less/greater than N" text next to
+// it. Escalating only when the shorter form is lossy keeps the common case short everywhere.
+int RoundTripPrecisionForAxisPresetStd(float value);
+
+// Display form of a std value, via RoundTripPrecisionForAxisPresetStd. Shared so the panel, the
+// modal gesture and the load-time notice print "0.3" and "9.99999" the same way; std::to_string
+// would render both as a run of trailing zeros or digits that reads like precision the value does
+// not carry.
 std::string FormatAxisPresetStd(float value);
 
 // Drop every loaded preset override. MakeNewDocumentState() no longer needs this itself (it

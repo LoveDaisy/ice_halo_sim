@@ -308,6 +308,17 @@ AxisPresetOverrides ParseAxisPresetOverrides(const nlohmann::json& root) {
   return result;
 }
 
+int RoundTripPrecisionForAxisPresetStd(float value) {
+  char buffer[40];
+  for (int precision = 6; precision < 9; ++precision) {
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, static_cast<double>(value));
+    if (std::strtof(buffer, nullptr) == value) {
+      return precision;
+    }
+  }
+  return 9;
+}
+
 std::string FormatAxisPresetStd(float value) {
   // Shortest form that reads back as the same float, not a fixed precision. A fixed %.6g renders
   // the tuned values a user types correctly (0.3 stays "0.3") but collapses the clamp target —
@@ -315,13 +326,7 @@ std::string FormatAxisPresetStd(float value) {
   // contradiction: "10 was stored instead. Allowed: less than 10." Escalating only when the short
   // form is lossy keeps the common case short AND the boundary case honest.
   char buffer[40];
-  for (int precision = 6; precision < 9; ++precision) {
-    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, static_cast<double>(value));
-    if (std::strtof(buffer, nullptr) == value) {
-      return buffer;
-    }
-  }
-  std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
+  std::snprintf(buffer, sizeof(buffer), "%.*g", RoundTripPrecisionForAxisPresetStd(value), static_cast<double>(value));
   return buffer;
 }
 
