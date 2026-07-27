@@ -4633,8 +4633,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // without reading a single line of GUI code. The GUI then has to agree with it.
   //
   // Consequences, which are the point:
-  //   - core changes its leader rule (kApplicable* / the NormalizeSyncGroupsImpl scan) → the matching
-  //     control changes → the GUI, unchanged, disagrees → red.
+  //   - core changes its leader rule (its slot-applicability map / the NormalizeSyncGroupsImpl scan)
+  //     → the matching control changes → the GUI, unchanged, disagrees → red.
   //   - the GUI's mirror side goes back to scoping the leader search by the affordance predicate
   //     (this bug, recurring) → it hands out 0.75 where the oracle says 1.0 → red.
   // What this deliberately does NOT catch is the affordance predicate simply excluding one more row.

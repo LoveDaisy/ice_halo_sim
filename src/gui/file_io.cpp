@@ -171,35 +171,26 @@ static json SerializeShapeDist(const ShapeDist& d) {
   return j;
 }
 
-// SYNC: these two key tables must stay byte-identical to kPrismSyncGroupKeys /
-// kPyramidSyncGroupKeys in src/server/c_api.cpp and src/config/crystal_config.cpp. This is the
-// third copy: the GUI may not include core/config headers (public-API boundary), and c_api.cpp's
-// copy is TU-private, so the table is duplicated rather than shared. There is no compile-time
-// mechanism tying the three together — a single character of drift here means a .lmc the GUI
-// writes declares a group under a key core never reads, and the declaration silently degenerates
-// to "all independent" with nothing to warn. These SYNC comments are the only defense; changing a
-// key name means editing all three.
-// "face_distance" is common to both types and handled separately (a 6-element array, mirroring how
-// face_distance itself serializes).
-static constexpr std::pair<const char*, int> kPrismSyncGroupKeys[] = {
-  { "height", LUMICE_SHAPE_SCALAR_HEIGHT },
-};
-static constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
-  { "prism_h", LUMICE_SHAPE_SCALAR_PRISM_H },
-  { "upper_h", LUMICE_SHAPE_SCALAR_UPPER_H },
-  { "lower_h", LUMICE_SHAPE_SCALAR_LOWER_H },
-};
+// The sync_group schema key names come from core, read through LUMICE_ShapeScalarSyncKeyName.
+// The GUI may not include core/config headers (public-API boundary), so this file used to carry a
+// third hand-maintained copy of the {key, slot} table, kept in step with core's and the C API's by
+// comment alone. Drift had no symptom to notice: a .lmc the GUI wrote would declare a group under a
+// key core never reads, and the declaration would silently degenerate to "all independent".
+// The face slots all answer "face_distance", whose value is one 6-element array, so they are
+// handled as a block rather than per slot.
 
 // Write shape.sync_group. Emits nothing when nothing is synced, so every .lmc written before
 // v4.13 (and every all-independent crystal today) keeps its byte-identical wire form — the same
 // "non-default only" convention face_distance already follows here.
-// Mirrors WriteSyncGroupJson in src/server/c_api.cpp / src/config/crystal_config.cpp.
 static void WriteSyncGroupJson(json& shape_j, const int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
-                               const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+                               LUMICE_CrystalKind kind) {
   json sg = json::object();
-  for (size_t k = 0; k < scalar_key_cnt; k++) {
-    if (sync_group[scalar_keys[k].second] != 0) {
-      sg[scalar_keys[k].first] = sync_group[scalar_keys[k].second];
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_FACE_0; slot++) {
+    // A null key means the slot does not apply to this type, so an inapplicable declaration never
+    // reaches the file in the first place.
+    const char* key = LUMICE_ShapeScalarSyncKeyName(kind, slot);
+    if (key != nullptr && sync_group[slot] != 0) {
+      sg[key] = sync_group[slot];
     }
   }
   bool any_face = false;
@@ -208,7 +199,7 @@ static void WriteSyncGroupJson(json& shape_j, const int sync_group[LUMICE_SHAPE_
   }
   if (any_face) {
     // All six, zeros included — matching how face_distance itself serializes.
-    sg["face_distance"] =
+    sg[LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0)] =
         std::vector<int>(sync_group + LUMICE_SHAPE_SCALAR_FACE_0, sync_group + LUMICE_SHAPE_SCALAR_FACE_0 + 6);
   }
   if (!sg.empty()) {
@@ -217,9 +208,9 @@ static void WriteSyncGroupJson(json& shape_j, const int sync_group[LUMICE_SHAPE_
 }
 
 // Read shape.sync_group. An absent key leaves every slot 0 (all independent), which is why an
-// older .lmc needs no migration. Mirrors ReadSyncGroupJson in the two files named above.
-static void ReadSyncGroupJson(const json& shape_j, int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
-                              const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+// older .lmc needs no migration. The is_number_integer / is_array guards are this file's standing
+// tolerance for hand-edited or damaged .lmc files, unrelated to where the key names come from.
+static void ReadSyncGroupJson(const json& shape_j, int sync_group[LUMICE_SHAPE_SCALAR_COUNT], LUMICE_CrystalKind kind) {
   for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; i++) {
     sync_group[i] = 0;
   }
@@ -227,14 +218,16 @@ static void ReadSyncGroupJson(const json& shape_j, int sync_group[LUMICE_SHAPE_S
     return;
   }
   const auto& sg = shape_j.at("sync_group");
-  for (size_t k = 0; k < scalar_key_cnt; k++) {
-    if (sg.contains(scalar_keys[k].first) && sg.at(scalar_keys[k].first).is_number_integer()) {
-      sync_group[scalar_keys[k].second] = sg.at(scalar_keys[k].first).get<int>();
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_FACE_0; slot++) {
+    const char* key = LUMICE_ShapeScalarSyncKeyName(kind, slot);
+    if (key != nullptr && sg.contains(key) && sg.at(key).is_number_integer()) {
+      sync_group[slot] = sg.at(key).get<int>();
     }
   }
-  if (sg.contains("face_distance") && sg.at("face_distance").is_array()) {
+  const char* face_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
+  if (sg.contains(face_key) && sg.at(face_key).is_array()) {
     size_t i = 0;
-    for (const auto& elem : sg.at("face_distance")) {
+    for (const auto& elem : sg.at(face_key)) {
       if (i >= 6) {
         break;
       }
@@ -308,9 +301,9 @@ static json SerializeCrystal(const CrystalConfig& c, int id) {
   int sg[LUMICE_SHAPE_SCALAR_COUNT];
   FillSyncGroupArray(c, sg);
   if (c.type == CrystalType::kPrism) {
-    WriteSyncGroupJson(j["shape"], sg, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+    WriteSyncGroupJson(j["shape"], sg, LUMICE_CRYSTAL_PRISM);
   } else {
-    WriteSyncGroupJson(j["shape"], sg, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+    WriteSyncGroupJson(j["shape"], sg, LUMICE_CRYSTAL_PYRAMID);
   }
 
   j["axis"]["zenith"] = SerializeAxisDist(c.zenith);
@@ -763,9 +756,9 @@ static CrystalConfig ParseCrystal(const json& j) {
     // would overwrite an already-scattered group with the default 0.
     int sg[LUMICE_SHAPE_SCALAR_COUNT];
     if (c.type == CrystalType::kPrism) {
-      ReadSyncGroupJson(s, sg, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+      ReadSyncGroupJson(s, sg, LUMICE_CRYSTAL_PRISM);
     } else {
-      ReadSyncGroupJson(s, sg, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+      ReadSyncGroupJson(s, sg, LUMICE_CRYSTAL_PYRAMID);
     }
     ApplySyncGroupArray(sg, c);
   }

@@ -274,21 +274,12 @@ static void ColorPredicateToJson(const LUMICE_ColorPredicate& p, nlohmann::json&
   }
 }
 
-// SYNC: these two key tables must stay byte-identical to kPrismSyncGroupKeys /
-// kPyramidSyncGroupKeys in src/config/crystal_config.cpp (private to that TU's anonymous
-// namespace, hence duplicated rather than shared). The core from_json looks the keys up by name;
-// a single character of drift here means the C API emits a key core never reads, and a declared
-// sync group silently degenerates back to "all independent" with no warning anywhere.
-// "face_distance" is common to both types and handled separately (a 6-element array, mirroring
-// how face_distance itself serializes).
-static constexpr std::pair<const char*, int> kPrismSyncGroupKeys[] = {
-  { "height", LUMICE_SHAPE_SCALAR_HEIGHT },
-};
-static constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
-  { "prism_h", LUMICE_SHAPE_SCALAR_PRISM_H },
-  { "upper_h", LUMICE_SHAPE_SCALAR_UPPER_H },
-  { "lower_h", LUMICE_SHAPE_SCALAR_LOWER_H },
-};
+// The sync_group schema key names come from core (ns::ShapeScalarSyncKeyName), which owns them.
+// This layer used to carry its own copy of the {key, slot} table; the core from_json looks the keys
+// up by name, so a single character of drift meant the C API emitted a key core never reads and a
+// declared sync group silently degenerated back to "all independent" with no warning anywhere.
+// The face slots all answer "face_distance", whose value is one 6-element array, so they are
+// handled as a block rather than per slot.
 
 // struct -> JSON. Passes sync_group through verbatim: canonicalization (drop inapplicable slots,
 // collapse singletons, renumber) and leader normalization belong to core's from_json, which every
@@ -297,11 +288,14 @@ static constexpr std::pair<const char*, int> kPyramidSyncGroupKeys[] = {
 // Writes nothing at all when no scalar is synced, keeping the wire form of every pre-v4.13 config
 // byte-identical. Mirrors WriteSyncGroupJson in src/config/crystal_config.cpp.
 static void WriteSyncGroupJson(nlohmann::json& shape_j, const int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
-                               const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+                               ns::CrystalKind kind) {
   nlohmann::json sg = nlohmann::json::object();
-  for (size_t k = 0; k < scalar_key_cnt; k++) {
-    if (sync_group[scalar_keys[k].second] != 0) {
-      sg[scalar_keys[k].first] = sync_group[scalar_keys[k].second];
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_FACE_0; slot++) {
+    // A null key means the slot does not apply to this type, so an inapplicable declaration never
+    // reaches the wire in the first place.
+    const char* key = ns::ShapeScalarSyncKeyName(kind, slot);
+    if (key != nullptr && sync_group[slot] != 0) {
+      sg[key] = sync_group[slot];
     }
   }
   bool any_face = false;
@@ -310,7 +304,7 @@ static void WriteSyncGroupJson(nlohmann::json& shape_j, const int sync_group[LUM
   }
   if (any_face) {
     // All six, zeros included — matching how face_distance itself serializes.
-    sg["face_distance"] =
+    sg[ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0)] =
         std::vector<int>(sync_group + LUMICE_SHAPE_SCALAR_FACE_0, sync_group + LUMICE_SHAPE_SCALAR_FACE_0 + 6);
   }
   if (!sg.empty()) {
@@ -321,7 +315,7 @@ static void WriteSyncGroupJson(nlohmann::json& shape_j, const int sync_group[LUM
 // JSON -> struct. Absent "sync_group" leaves every slot 0 (all independent), which is why an
 // older config file needs no edit. Mirrors ReadSyncGroupJson in src/config/crystal_config.cpp.
 static void ReadSyncGroupJson(const nlohmann::json& shape_j, int sync_group[LUMICE_SHAPE_SCALAR_COUNT],
-                              const std::pair<const char*, int>* scalar_keys, size_t scalar_key_cnt) {
+                              ns::CrystalKind kind) {
   for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; i++) {
     sync_group[i] = 0;
   }
@@ -329,14 +323,16 @@ static void ReadSyncGroupJson(const nlohmann::json& shape_j, int sync_group[LUMI
     return;
   }
   const auto& sg = shape_j.at("sync_group");
-  for (size_t k = 0; k < scalar_key_cnt; k++) {
-    if (sg.contains(scalar_keys[k].first)) {
-      sync_group[scalar_keys[k].second] = sg.at(scalar_keys[k].first).get<int>();
+  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_FACE_0; slot++) {
+    const char* key = ns::ShapeScalarSyncKeyName(kind, slot);
+    if (key != nullptr && sg.contains(key)) {
+      sync_group[slot] = sg.at(key).get<int>();
     }
   }
-  if (sg.contains("face_distance")) {
+  const char* face_key = ns::ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_FACE_0);
+  if (sg.contains(face_key)) {
     size_t i = 0;
-    for (const auto& elem : sg.at("face_distance")) {
+    for (const auto& elem : sg.at(face_key)) {
       if (i >= 6) {
         break;
       }
@@ -376,9 +372,9 @@ nlohmann::json CrystalShapeToJson(const LUMICE_CrystalParam& cr) {
   // never reaches the wire in the first place (core's canonicalization zeroes such slots anyway,
   // as defense in depth).
   if (cr.type == 0) {
-    WriteSyncGroupJson(j["shape"], cr.sync_group, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+    WriteSyncGroupJson(j["shape"], cr.sync_group, ns::CrystalKind::kPrism);
   } else {
-    WriteSyncGroupJson(j["shape"], cr.sync_group, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+    WriteSyncGroupJson(j["shape"], cr.sync_group, ns::CrystalKind::kPyramid);
   }
   return j;
 }
@@ -1620,9 +1616,9 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   // leader normalization stay in core's from_json (see WriteSyncGroupJson's note); this struct
   // holds what the caller / config file declared.
   if (type_str == "prism") {
-    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, kPrismSyncGroupKeys, std::size(kPrismSyncGroupKeys));
+    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, ns::CrystalKind::kPrism);
   } else {
-    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, kPyramidSyncGroupKeys, std::size(kPyramidSyncGroupKeys));
+    ReadSyncGroupJson(cj.at("shape"), cr->sync_group, ns::CrystalKind::kPyramid);
   }
 
   // Axis distributions. The two cases are deliberately NOT symmetric, mirroring core:
