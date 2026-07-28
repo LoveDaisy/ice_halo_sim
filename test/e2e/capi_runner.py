@@ -219,7 +219,7 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def lib_candidates(root: Path, build_type: str = "Release") -> List[Path]:
+def lib_candidates_probe_r2(root: Path, build_type: str = "Release") -> List[Path]:
     """The paths `_find_lib` searches, in load order.
 
     Split out of `_find_lib` and made public so `scripts/test.sh` can *read* this
@@ -259,7 +259,7 @@ def _find_lib() -> Path:
             raise FileNotFoundError(f"LUMICE_LIB={env_lib} does not exist")
         return p
 
-    for c in lib_candidates(_project_root()):
+    for c in lib_candidates_probe_r2(_project_root()):
         if c.exists():
             return c
     raise FileNotFoundError(
