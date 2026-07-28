@@ -2180,4 +2180,81 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       CloseDefaultsPanel(ctx);
     };
   }
+
+  {
+    // Regression guard for a "logically distinct control, structurally the same per-frame-commit
+    // bug" family: a field type must gate its write-back on the interaction actually ending, not on
+    // ImGui's per-frame "value changed" return. Sliders (see the inline_ tests above) get this from
+    // IsItemDeactivatedAfterEdit(); ColorField carried the identical bug because ColorEdit3's picker
+    // popup is drag-continuous just like a slider, but its return value was taken as the commit
+    // signal directly. This pins the field-value side of it: the underlying GuiState field must NOT
+    // change while the picker's sv-square is held, and must change the instant it is released — the
+    // same "commit on release, not on delta" contract the inline_ tests above already pin for
+    // sliders via a single-frame ItemInputValue (which cannot distinguish "changed on release" from
+    // "changed every frame", since it never holds a frame in between — this test is the one that
+    // can).
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac1_color_commits_on_release_not_per_frame");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state = gui::MakeNewDocumentState();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_grid_color");
+
+      const float base[3] = { gui::g_state.grid_color[0], gui::g_state.grid_color[1], gui::g_state.grid_color[2] };
+
+      // The swatch button id, reproducing ColorEdit4's internal `PushID(label)` + `ColorButton
+      // ("##ColorButton", ...)` chain against the table-seeded group id — see SettingsCellID's own
+      // comment for why this has to be computed rather than found by a "**/" label search.
+      const ImGuiID group_id = SettingsCellID(ctx, "##value_overlay_grid_color");
+      IM_CHECK(group_id != 0);
+      const ImGuiID swatch_id = ImGui::GetIDWithSeed("##ColorButton", nullptr, group_id);
+      ctx->ItemClick(swatch_id);
+      ctx->Yield(2);
+
+      // Inside the picker popup now. "sv" is ColorPicker4's saturation/value square — an ordinary
+      // InvisibleButton, unlike the swatch it IS registered with the test engine (test_gui_lifecycle
+      // .cpp's raypath-color test relies on the same "**/sv" lookup for the same reason).
+      IM_CHECK(ctx->ItemExists("**/sv"));
+      const ImGuiTestItemInfo sv = ctx->ItemInfo("**/sv");
+      const ImVec2 sv_lo = sv.RectFull.Min;
+      const ImVec2 sv_hi = sv.RectFull.Max;
+      ctx->LogWarning("DIAG sv rect (%.1f,%.1f)-(%.1f,%.1f) window=%s", sv_lo.x, sv_lo.y, sv_hi.x, sv_hi.y,
+                      sv.Window ? sv.Window->Name : "null");
+      // Two corners rather than "wherever the mouse already is": guarantees a real S/V delta
+      // regardless of MakeNewDocumentState()'s starting grid_color, the same guarantee the
+      // lifecycle precedent gets for free by always landing on the S=1,V=1 corner.
+      const ImVec2 start(sv_lo.x + (sv_hi.x - sv_lo.x) * 0.15f, sv_lo.y + (sv_hi.y - sv_lo.y) * 0.15f);
+      const ImVec2 end(sv_lo.x + (sv_hi.x - sv_lo.x) * 0.85f, sv_lo.y + (sv_hi.y - sv_lo.y) * 0.85f);
+
+      ctx->MouseMoveToPos(start);
+      ctx->MouseDown(0);
+      ctx->Yield(2);
+      // Held, not yet released: the pre-fix bug wrote every one of these frames straight into
+      // grid_color (ColorEdit3 bound the live field directly) — this is the assertion that would
+      // have caught it.
+      IM_CHECK_EQ(gui::g_state.grid_color[0], base[0]);
+      IM_CHECK_EQ(gui::g_state.grid_color[1], base[1]);
+      IM_CHECK_EQ(gui::g_state.grid_color[2], base[2]);
+
+      ctx->MouseMoveToPos(end);
+      ctx->Yield(2);
+      // Still held after moving further — same claim, a second time, so a fix that merely
+      // special-cased the first frame of the drag would not pass.
+      IM_CHECK_EQ(gui::g_state.grid_color[0], base[0]);
+      IM_CHECK_EQ(gui::g_state.grid_color[1], base[1]);
+      IM_CHECK_EQ(gui::g_state.grid_color[2], base[2]);
+
+      ctx->MouseUp(0);
+      ctx->Yield(2);
+      // Released: the commit lands now, and the drag actually reached a different colour (sanity
+      // that the corner-to-corner move landed on the square rather than missing it).
+      IM_CHECK(gui::g_state.grid_color[0] != base[0] || gui::g_state.grid_color[1] != base[1] ||
+               gui::g_state.grid_color[2] != base[2]);
+
+      ctx->PopupCloseAll();
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+    };
+  }
 }

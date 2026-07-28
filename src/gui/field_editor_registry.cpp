@@ -130,6 +130,15 @@ FieldEditorEntry BoolField(bool* (*access)(GuiState&), ApplicabilityFn applicabl
   return entry;
 }
 
+// Per-field drag scratch for ColorField, keyed by the field's own slot address below — that address
+// is stable for the lifetime of the process (GuiState is one long-lived object; MakeNewDocumentState()
+// assigns new field values into it but never relocates it), so a single map shared by all colour
+// fields correctly keeps each field's in-progress picker state independent of the others.
+struct ColorFieldDragState {
+  float working[3] = { 0.0f, 0.0f, 0.0f };
+  bool was_active = false;
+};
+
 // A colour triple. No numeric domain on purpose: ColorEdit3 has no min/max to restate, which is
 // also why the three fields with no main-UI colour control at all (see the registry below) carry no
 // risk of inventing a constraint that disagrees with one.
@@ -138,9 +147,43 @@ FieldEditorEntry ColorField(float* (*access)(GuiState&)) {
   entry.kind = FieldEditorKind::kColor;
   entry.Constraint = [](const GuiState&) { return FieldEditorConstraint{}; };
   entry.Render = [access](GuiState& state, const char* id_base) {
+    float* slot = access(state);
     // NoInputs — the swatch only, exactly the form the main UI's overlay rows use, and the only one
-    // that fits a table cell.
-    return ImGui::ColorEdit3(HiddenLabel(id_base).c_str(), access(state), ImGuiColorEditFlags_NoInputs);
+    // that fits a table cell. Clicking it opens a picker popup whose hue/sat/value bars are ordinary
+    // continuous drag widgets.
+    //
+    // ImGui::IsItemDeactivatedAfterEdit() on THIS call does not work for that popup, unlike it does
+    // for FloatField/IntField's slider: ColorEdit4 remaps its own LastItemData.ID to the popup's
+    // active id only while `g.ActiveId != 0` (imgui_widgets.cpp: "so IsItemActive() will function on
+    // ColorEdit4()") — but on the exact frame the mouse is released, ActiveId has already gone back
+    // to 0 by the time that remap line runs, so the remap never happens for the release frame, and
+    // IsItemDeactivatedAfterEdit() (which compares the current item id against *last* frame's active
+    // id) never finds a match to call deactivated. The naive `if (!IsItemDeactivatedAfterEdit())
+    // return false;` gate therefore never commits at all — verified by driving an actual picker drag
+    // in inline_ac1_color_commits_on_release_not_per_frame. IsItemActive() alone, on the other hand,
+    // IS set correctly by that same remap while the drag is in progress, so track the active/inactive
+    // edge by hand instead of trusting the built-in "after edit" helper.
+    static std::unordered_map<const float*, ColorFieldDragState> drag_states;
+    ColorFieldDragState& drag = drag_states[slot];
+    if (!drag.was_active) {
+      drag.working[0] = slot[0];
+      drag.working[1] = slot[1];
+      drag.working[2] = slot[2];
+    }
+    ImGui::ColorEdit3(HiddenLabel(id_base).c_str(), drag.working, ImGuiColorEditFlags_NoInputs);
+    const bool active_now = ImGui::IsItemActive();
+    const bool just_released = drag.was_active && !active_now;
+    drag.was_active = active_now;
+    if (!just_released) {
+      return false;
+    }
+    if (drag.working[0] == slot[0] && drag.working[1] == slot[1] && drag.working[2] == slot[2]) {
+      return false;
+    }
+    slot[0] = drag.working[0];
+    slot[1] = drag.working[1];
+    slot[2] = drag.working[2];
+    return true;
   };
   return entry;
 }
