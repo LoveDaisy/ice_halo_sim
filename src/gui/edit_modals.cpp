@@ -128,13 +128,6 @@ static bool g_pending_tab_select = false;
 static CrystalConfig g_crystal_buf;
 static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 
-// Outcome of the last "Save this zenith std as a preset default" press, shown under that row.
-// Transient UI feedback, not document state and with no Revert semantics, so it sits with the
-// other modal statics rather than in GuiState. Cleared whenever the modal opens: a message about
-// a save the user made to a different crystal, still on screen an hour later, reads as if it
-// described THIS one.
-static std::string g_preset_gesture_status;
-
 // Filter modal — H5 sum-of-products editor (task-composition-editor-ui / 333.4).
 // One row per OR summand; each row is a single small-domain AND text box driven
 // by ValidateSummandText / ParseSummandText (raypath_segments.hpp). The prior
@@ -404,7 +397,6 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   auto& entry = state.layers[ly].entries[en];
   g_modal_layer_idx = ly;
   g_modal_entry_idx = en;
-  g_preset_gesture_status.clear();
 
   // Initialize all three buffers (regardless of req.target) so any tab the user
   // switches to shows the entry's current values. Modal-level OK commits all
@@ -736,49 +728,15 @@ static void RenderCrystalModal(GuiState& /*state*/) {
 // library panel and the override store read the same rows, and three copies of "what Column is"
 // would be three chances for the modal's buttons and the panel's editor to disagree.
 
-namespace {
-
-// "Save the orientation I am editing as <preset>" — the ONLY way a preset override gets produced
-// from a live crystal, and it is explicit on purpose. A preset is not a GuiState field, so it has
-// no "current value" the defaults diff could pick up; nothing in the session distinguishes "I want
-// Column to mean 0.3 from now on" from "this one crystal happens to be 0.3". That intent is not
-// inferable, so the user states it.
-//
-// Only presets with an adjustable face are offered — the set comes from the shared
-// has_adjustable_zenith_std field, not from a second list of four names here.
-void RenderAxisPresetSaveGesture() {
-  ImGui::Separator();
-  ImGui::TextDisabled("Save this zenith std as a preset default:");
-  for (const auto& entry : kAxisPresets) {
-    if (!entry.has_adjustable_zenith_std) {
-      continue;
-    }
-    ImGui::SameLine();
-    char button_id[64];
-    snprintf(button_id, sizeof(button_id), "%s###save_as_preset_%s", entry.label, entry.override_json_name);
-    if (ImGui::SmallButton(button_id)) {
-      const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_axis_buf[0].std);
-      if (!result.written) {
-        g_preset_gesture_status = result.message;
-      } else if (result.clamped) {
-        // A clamp here is an edit-time clamp like any other, so it says what was actually stored
-        // instead of leaving the user to assume their number went in unchanged. g_axis_buf is
-        // deliberately NOT rewritten to the clamped value: the user is still editing THIS crystal,
-        // and the gesture only saves a copy elsewhere.
-        g_preset_gesture_status = result.message;
-      } else {
-        g_preset_gesture_status =
-            std::string("Saved ") + FormatAxisPresetStd(result.stored_value) + " as the " + entry.label + " default.";
-      }
-    }
-  }
-  if (!g_preset_gesture_status.empty()) {
-    ImGui::TextWrapped("%s", g_preset_gesture_status.c_str());
-  }
-}
-
-}  // namespace
-
+// This modal READS the preset library and never writes to it. It used to also carry a row of
+// "Save this zenith std as the <preset> default" buttons — the reasoning being that a preset is
+// not a GuiState field, so nothing in the session distinguishes "I want Column to mean 0.3 from
+// now on" from "this one crystal happens to be 0.3", and the user therefore had to state that
+// intent here. The conclusion that the intent is not inferable still holds; what changed is the
+// answer to it. Rather than ask for the distinction at the point of confusion — inside a modal
+// about ONE crystal, where a control that quietly edits a global library reads as a mistake —
+// the product answers it by not inferring at all: presets are retuned where they are listed, in
+// the defaults panel's preset library, and this modal stays a pure consumer of them.
 static void RenderAxisModal(GuiState& /*state*/) {
   // Preset buttons — active preset (inferred from current g_axis_buf) is highlighted
   // using the theme's ButtonActive color so it adapts to light/dark style changes.
@@ -829,8 +787,6 @@ static void RenderAxisModal(GuiState& /*state*/) {
   RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
   SetNextComboPopupTopMost();
   RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
-
-  RenderAxisPresetSaveGesture();
 
   // OK / Cancel handled at modal level (RenderEditModals).
 }

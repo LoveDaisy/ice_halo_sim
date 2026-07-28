@@ -679,18 +679,20 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
-    // Step 3's gesture, the other direction: a crystal's live zenith std saved INTO the library.
-    // A preset is not a GuiState field, so nothing in the session could infer this intent — the
-    // gesture is the only way an override gets produced from a crystal the user is editing.
+    // The axis modal no longer writes to the preset library. It once carried a row of "save this
+    // zenith std as the <preset> default" buttons; the product answer is now that a preset is
+    // retuned where it is listed, and this modal only reads.
     //
-    // This case reads the file straight after the click and that is DELIBERATE, not an oversight
-    // left over from before the panel became a pure editor. The gesture is not part of a panel
-    // session: the defaults panel is not even open, so there is no copy to edit and no Close for
-    // "discard" to attach to. A one-shot button that commits when pressed is the only semantics
-    // available to it.
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "axis_modal_gesture_saves_into_the_library");
+    // Asserted rather than left to "the code is gone": a widget id nobody looks for is exactly the
+    // kind of thing that comes back by accident. The positive half of the same contract — that
+    // editing the library still reaches this modal's buttons — is
+    // library_edit_reaches_the_axis_modal_button above; the two together say "read yes, write no",
+    // which is the whole claim. Note what this case must NOT be shortened to: asserting only that
+    // the button is absent, without its sibling asserting the read path still works, would pass
+    // just as well if the preset feature had been deleted outright.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "axis_modal_does_not_write_to_the_library");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      const auto dir = FreshOverlayDir("panel_gesture");
+      const auto dir = FreshOverlayDir("panel_no_gesture");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
       ResetTestState();
       ResetUserDefaultsChannels();
@@ -699,30 +701,27 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::OpenEditModal(req, gui::g_state);
       ctx->Yield(4);
 
-      // Start from Column, then tighten the std to the value the beta user works at.
+      // Same starting point the gesture case used: Column, then a std the user tuned. If any
+      // write-through survived, this is the edit it would carry into the library.
       ctx->ItemClick("**/Column");
       ctx->Yield(2);
       ctx->ItemInputValue("**/Zenith/##Std_input", 0.3f);
       ctx->Yield(2);
 
-      ctx->ItemClick("**/###save_as_preset_column");
+      // The controls themselves are gone — every preset that once had a button, not just the one
+      // the old case happened to click.
+      IM_CHECK(!ctx->ItemExists("**/###save_as_preset_column"));
+      IM_CHECK(!ctx->ItemExists("**/###save_as_preset_plate"));
+      IM_CHECK(!ctx->ItemExists("**/###save_as_preset_lowitz"));
+
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(3);
 
-      const auto gestured = ReadPresetStd(ReadOverlayFile(dir), "column");
-      IM_CHECK(gestured.has_value());
-      IM_CHECK_EQ(*gestured, 0.3f);
-      // Random is not a gesture target — it has no adjustable face, so a button for it would
-      // write nothing and say nothing.
-      IM_CHECK(!ctx->ItemExists("**/###save_as_preset_random"));
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-      // Cancel discards the crystal edit, but the gesture is NOT part of that buffer — it wrote to
-      // the library, which is a separate persistent thing. Asserted because the opposite would be
-      // an easy and invisible mistake to make.
-      const auto after_cancel = ReadPresetStd(ReadOverlayFile(dir), "column");
-      IM_CHECK(after_cancel.has_value());
-      IM_CHECK_EQ(*after_cancel, 0.3f);
+      // The crystal took the edit; the library did not. OK rather than Cancel on purpose: a
+      // discarded edit could not have reached the file either way, so it would prove nothing.
+      const auto& edited = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
+      IM_CHECK_EQ(edited.zenith.std, 0.3f);
+      IM_CHECK(!ReadPresetStd(ReadOverlayFile(dir), "column").has_value());
     };
   }
 
