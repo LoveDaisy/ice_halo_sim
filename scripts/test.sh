@@ -203,6 +203,23 @@ ${lines}"
 }
 
 GUI_TEST_BIN=""
+GUI_FILTER_FIXED=""
+GUI_FILTER_REAL=""
+
+# Both filters are extracted before any layer runs, not lazily inside the gui
+# layer: extraction failure is fatal, and a fatal error raised in the third layer
+# throws away the ctest and e2e minutes already spent and prints no summary —
+# which is the "run it again to find out what happened" behaviour this script
+# exists to remove. Cheap enough to do unconditionally-when-needed: two greps.
+preflight_gui_filters() {
+  GUI_FILTER_FIXED=$(extract_gui_filter fixed) || exit $?
+  GUI_FILTER_REAL=$(extract_gui_filter real) || exit $?
+  # The two pools partition the suite; identical expressions would mean one pool
+  # is running under the other's timing mode, which no amount of green output
+  # would reveal.
+  [[ ${GUI_FILTER_FIXED} != "${GUI_FILTER_REAL}" ]] \
+    || die "gui filter extraction: both pools in scripts/build.sh read the same filter (${GUI_FILTER_FIXED})"
+}
 
 gui_skip_reason() {
   # build.sh documents both knobs ("Set CI=1 or LUMICE_SKIP_GUI_TESTS=1 to skip
@@ -216,31 +233,22 @@ gui_skip_reason() {
 }
 
 run_gui_layer() { # name fixed|real
-  local name=$1 pool=$2 reason filter other
+  local name=$1 pool=$2 reason
   reason=$(gui_skip_reason)
   if [[ -n ${reason} ]]; then
     skip_layer "${name}" "${reason}"
     return 0
   fi
   GUI_TEST_BIN="build/${BUILD_TYPE}/static/bin/gui_test"
-  filter=$(extract_gui_filter "${pool}") || exit $?
-  # The two pools partition the suite; identical expressions would mean one pool
-  # is running under the other's timing mode, which no amount of green output
-  # would reveal.
-  if [[ ${pool} == fixed ]]; then other=$(extract_gui_filter real) || exit $?
-  else other=$(extract_gui_filter fixed) || exit $?
-  fi
-  [[ ${filter} != "${other}" ]] \
-    || die "gui filter extraction: both pools in scripts/build.sh read the same filter (${filter})"
   if [[ ! -x ${GUI_TEST_BIN} ]]; then
     record_layer "${name}" FAIL 0 "${GUI_TEST_BIN} not found — build it with ./scripts/build.sh -tgj ${BUILD_TYPE_LOWER}"
     printf '\n========== [FAIL] %s: %s not found ==========\n' "${name}" "${GUI_TEST_BIN}"
     return 1
   fi
   if [[ ${pool} == fixed ]]; then
-    run_layer "${name}" "${GUI_TEST_BIN}" --fixed-dt --filter "${filter}" --no-user-config
+    run_layer "${name}" "${GUI_TEST_BIN}" --fixed-dt --filter "${GUI_FILTER_FIXED}" --no-user-config
   else
-    run_layer "${name}" "${GUI_TEST_BIN}" --filter "${filter}" --no-user-config
+    run_layer "${name}" "${GUI_TEST_BIN}" --filter "${GUI_FILTER_REAL}" --no-user-config
   fi
 }
 
@@ -414,6 +422,9 @@ fi
 
 detect_build_type
 check_pytest_addopts
+if [[ -z $(gui_skip_reason) ]]; then
+  preflight_gui_filters
+fi
 
 printf 'test.sh: scope=%s  build_type=%s  flavor=static\n' "${SCOPE}" "${BUILD_TYPE}"
 
