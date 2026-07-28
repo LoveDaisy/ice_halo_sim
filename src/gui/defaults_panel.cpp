@@ -558,7 +558,15 @@ void RenderSettingsTable(GuiState& state, float table_height) {
     RenderCurrentValueCell(state, row, rows_are_stale);
 
     ImGui::TableNextColumn();
-    ImGui::TextUnformatted(FormatDiffValue(row.factory_value).c_str());
+    // A DISABLED Selectable rather than plain text, and the id is deliberately the "##" form so it
+    // carries the rendered value: ImGui::Text* items are submitted with id 0 and are therefore
+    // invisible to the test engine, so "this column shows the FACTORY value, not the saved one" —
+    // the whole point of the column — could otherwise only be asserted against the row struct the
+    // panel is supposed to be reading. With "##" (not "###") the item's id hashes the whole label,
+    // so a test that addresses it by the value it expects is asserting what was drawn.
+    // Disabled: it is read-only, and greying it says so without adding a control.
+    const std::string origin_id = FormatDiffValue(row.factory_value) + "##origin_" + row.key_path;
+    ImGui::Selectable(origin_id.c_str(), false, ImGuiSelectableFlags_Disabled);
 
     ImGui::TableNextColumn();
     // Source is "is this key written in my override file", not "does its value differ from

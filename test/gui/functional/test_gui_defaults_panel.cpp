@@ -50,6 +50,7 @@
 #include "gui/defaults_diff.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui_internal.h"
 #include "imgui_te_utils.h"
@@ -239,6 +240,53 @@ ImGuiTestItemInfo SettingsHeaderInfo(ImGuiTestContext* ctx, ImGuiTable* table, c
 void RewindSettingsList(ImGuiTestContext* ctx, ImGuiTable* table) {
   ctx->ScrollToTop(table->InnerWindow->ID);
   ctx->Yield(2);
+}
+
+// The three shapes a row's value-cell widget id can take. A slider cell is TWO items (the slider
+// and its input box, ids built by PrepareSliderLayout); a checkbox / colour / combo cell is one.
+// Kept as a set because the negative claim ("this row has no editor") has to cover all of them —
+// checking only the one the key would have used had it been registered proves nothing.
+std::string ValueInputRef(const std::string& key_path) {
+  return "**/##value_" + key_path + "_input";
+}
+
+std::string ValueWidgetRef(const std::string& key_path) {
+  return "**/##value_" + key_path;
+}
+
+// The id of a value-cell widget, computed rather than searched for by label.
+//
+// Forced, not stylistic: ImGui::BeginCombo is the one control shape here that never calls
+// IMGUI_TEST_ENGINE_ITEM_INFO, so the engine's wildcard LABEL search cannot see a combo cell at all
+// (test_gui_interaction.cpp carries the same note for the main UI's lens combo). Every item is
+// recorded by ItemAdd under its id regardless, so going through the id covers all five control
+// shapes uniformly — which is what a coverage claim over the whole row set needs.
+// The seed is the TABLE's id, not its inner window's: imgui_tables.cpp pushes an override id
+// (PushOverrideID(table->ID)) for the whole body, so every cell widget hashes against that rather
+// than against whatever window it happens to be drawn in.
+ImGuiID SettingsCellID(ImGuiTestContext* ctx, const std::string& label) {
+  ImGuiTable* table = SettingsTable(ctx);
+  if (table == nullptr) {
+    return 0;
+  }
+  return ImGui::GetIDWithSeed(label.c_str(), nullptr, table->ID);
+}
+
+bool AnyValueWidgetExists(ImGuiTestContext* ctx, const std::string& key_path) {
+  for (const char* suffix : { "", "_input", "_slider" }) {
+    const ImGuiID id = SettingsCellID(ctx, "##value_" + key_path + suffix);
+    if (id != 0 && ctx->ItemExists(id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The Origin cell, addressed BY THE VALUE IT SHOULD BE SHOWING (see the "##origin_" comment in
+// defaults_panel.cpp): the item's id hashes the whole label, so this exists only if the cell drew
+// exactly `expected`.
+std::string OriginCellRef(const std::string& key_path, const std::string& expected_text) {
+  return "**/" + expected_text + "##origin_" + key_path;
 }
 
 // Whether a row of the settings list is actually DRAWN right now — not merely submitted.
@@ -1589,6 +1637,494 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->Yield(8);
       IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
 
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  // ================================================================================
+  // Inline cell editing. The claim under test throughout is NOT "a control appears in the cell" —
+  // it is that the control is the SAME one, with the SAME constraint, as the main UI's.
+  // ================================================================================
+
+  {
+    // AC1 — an out-of-range entry lands in the same place whether it is typed into the table or
+    // into the main UI's own control.
+    //
+    // Three fields, one per constraint SHAPE the registry has to express, rather than three
+    // arbitrary fields:
+    //   renderer.fov        — a bound that is a function of the state (the lens type's max FOV)
+    //   overlay_grid_alpha  — a constant bound
+    //   sim.max_hits        — an integer bound, through the newly exported SliderIntWithInput
+    // The fourth shape the issue asked for (a float on a non-linear slider scale) has no
+    // representative: not one of the 42 candidate defaults is edited on a kSqrt/kLog scale in the
+    // main UI — those are all axis-distribution fields, which are per-crystal and never defaults.
+    // Its stand-in here is the state-dependent bound, which is the harder of the two.
+    //
+    // Each field is driven twice from the same starting value, and the final assertion is that the
+    // two agree AND that they agree on the CLAMPED value rather than on "nothing happened" — a
+    // panel whose cell silently ignored input would otherwise pass by matching a main UI that was
+    // never touched either.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac1_table_clamps_like_the_main_ui");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_ac1");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      const float max_fov = LUMICE_MaxFov(static_cast<LUMICE_LensType>(gui::g_state.renderer.lens_type));
+      IM_CHECK_GT(max_fov, 90.0f);  // the probe below has to be outside the domain to test anything
+
+      // ---- renderer.fov ----
+      gui::g_state.renderer.fov = 90.0f;
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "renderer.fov");
+      ctx->ItemInputValue(ValueInputRef("renderer.fov").c_str(), 900.0f);
+      ctx->Yield(3);
+      const float fov_from_table = gui::g_state.renderer.fov;
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+
+      gui::g_state.renderer.fov = 90.0f;
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##FOV##view_input", 900.0f);
+      ctx->Yield(3);
+      const float fov_from_main_ui = gui::g_state.renderer.fov;
+
+      IM_CHECK_EQ(fov_from_table, fov_from_main_ui);
+      IM_CHECK_EQ(fov_from_table, max_fov);  // non-vacuous: both clamped, neither ignored the input
+
+      // ---- overlay_grid_alpha (constant domain) ----
+      gui::g_state.grid_alpha = 0.3f;
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_grid_alpha");
+      ctx->ItemInputValue(ValueInputRef("overlay_grid_alpha").c_str(), 7.5f);
+      ctx->Yield(3);
+      const float alpha_from_table = gui::g_state.grid_alpha;
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+
+      gui::g_state.grid_alpha = 0.3f;
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Alpha##grid_input", 7.5f);
+      ctx->Yield(3);
+      const float alpha_from_main_ui = gui::g_state.grid_alpha;
+
+      IM_CHECK_EQ(alpha_from_table, alpha_from_main_ui);
+      IM_CHECK_EQ(alpha_from_table, 1.0f);
+
+      // ---- sim.max_hits (integer domain) ----
+      gui::g_state.sim.max_hits = 8;
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "sim.max_hits");
+      ctx->ItemInputValue(ValueInputRef("sim.max_hits").c_str(), 4096);
+      ctx->Yield(3);
+      const int hits_from_table = gui::g_state.sim.max_hits;
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+
+      gui::g_state.sim.max_hits = 8;
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/##Max hits_input", 4096);
+      ctx->Yield(3);
+      const int hits_from_main_ui = gui::g_state.sim.max_hits;
+
+      IM_CHECK_EQ(hits_from_table, hits_from_main_ui);
+      IM_CHECK_EQ(hits_from_table, 64);
+    };
+  }
+
+  {
+    // AC1, second half — the cell edits the SAME FIELD the main UI edits, for the control shapes
+    // where "out of range" is not a meaningful input (a checkbox and a combo cannot be given an
+    // out-of-domain value; their constraint IS the shape of the control).
+    //
+    // Also the applicability half: a field whose main-UI control is disabled in some configuration
+    // must be disabled in the table in the SAME configuration, or the table becomes a second way to
+    // reach states the main UI refuses — which is the cross-field question the issue asked this
+    // task to take a position on.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac1_bool_combo_and_applicability");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_ac1b");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      gui::g_state.show_grid_line = false;
+      gui::g_state.renderer.visible = gui::kVisibleFull;
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      // A checkbox cell writes the field itself.
+      FilterTo(ctx, "overlay_grid_line");
+      ctx->ItemClick(ValueWidgetRef("overlay_grid_line").c_str());
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.show_grid_line);
+
+      // A combo cell writes the enum the main UI's radio buttons write.
+      //
+      // Opened and picked by hand rather than through ComboClick: that helper splits its path at
+      // the FIRST '/', which lands on the "**/" wildcard every ref in this file starts with.
+      FilterTo(ctx, "renderer.visible");
+      const ImGuiID visible_combo = SettingsCellID(ctx, "##value_renderer.visible");
+      IM_CHECK(visible_combo != 0);
+      ctx->ItemClick(visible_combo);
+      ctx->Yield(2);
+      // The popup's entries ARE label-addressable (Selectable registers its label), so only the
+      // combo button itself needs the id treatment. Addressed through the popup window's own name,
+      // the way ComboClick does it internally.
+      ImGuiWindow* combo_popup = ctx->GetWindowByRef("//$FOCUSED");
+      IM_CHECK(combo_popup != nullptr);
+      ctx->ItemClick((std::string("//") + combo_popup->Name + "/**/Upper").c_str());
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.renderer.visible, gui::kVisibleUpper);
+
+      // Applicability: roll applies under a linear lens...
+      FilterTo(ctx, "renderer.roll");
+      IM_CHECK(ctx->ItemExists(ValueInputRef("renderer.roll").c_str()));
+      IM_CHECK((ctx->ItemInfo(ValueInputRef("renderer.roll").c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+
+      // ...and not under a full-sky one, in the table exactly as in the main UI.
+      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+      IM_CHECK(gui::LensIsFullSky(gui::g_state.renderer.lens_type));
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "renderer.roll");
+      IM_CHECK((ctx->ItemInfo(ValueInputRef("renderer.roll").c_str()).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC2 — a field with no registered editor cannot be edited here, and does not merely LOOK
+    // uneditable.
+    //
+    // The row still exists (it is still a default the user can hold), which is what makes the
+    // negative claim non-vacuous: the checkbox is found, so the row was drawn, and the absence of a
+    // value widget is a fact about the cell rather than about the scroll position. Every id shape a
+    // value cell could have taken is probed, and a registered neighbour is probed the same way as
+    // the positive control.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac2_unregistered_field_is_read_only");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_ac2");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      // The registry's answer, asked directly. This IS the mechanical criterion the panel branches
+      // on, so it is asserted rather than inferred from what got drawn.
+      IM_CHECK(gui::FindFieldEditor("bg_path") == nullptr);
+      IM_CHECK(gui::FindFieldEditor("overlay_sun_circle_angles") == nullptr);
+      IM_CHECK(gui::FindFieldEditor("overlay_grid_alpha") != nullptr);
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      for (const char* unregistered : { "bg_path", "overlay_sun_circle_angles" }) {
+        FilterTo(ctx, unregistered);
+        IM_CHECK(ctx->ItemExists(AdoptCheckboxRef(unregistered).c_str()));  // the row IS on screen
+        IM_CHECK(!AnyValueWidgetExists(ctx, unregistered));
+      }
+
+      // The positive control, through the same probe: a registered row of the same list DOES carry
+      // a value widget, so the probe can tell the two apart.
+      FilterTo(ctx, "overlay_grid_alpha");
+      IM_CHECK(AnyValueWidgetExists(ctx, "overlay_grid_alpha"));
+
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC3 — coverage as a COUNTABLE deliverable, not "the mechanism works".
+    //
+    // Every leaf of the serialized document is named below with the control it must be edited
+    // with, and the case fails on the first row whose classification disagrees. A count would not
+    // do: it passes just as well when two fields swap classes, and it says nothing at all about
+    // WHICH field regressed. The two deliberately-unregistered leaves are named here too, so
+    // "read-only" is an asserted decision rather than an omission that looks like one.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac3_registry_covers_every_row");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      const auto dir = FreshOverlayDir("panel_inline_ac3");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      using Kind = gui::FieldEditorKind;
+      struct Expected {
+        const char* key_path;
+        bool registered;
+        Kind kind;  // ignored when !registered
+      };
+      // Order follows SerializeGuiStateJson so the two can be read side by side.
+      static const Expected kExpected[] = {
+        { "sun.altitude", true, Kind::kFloatSlider },
+        { "sun.diameter", true, Kind::kFloatSlider },
+        { "sun.spectrum", true, Kind::kCombo },
+        { "sim.ray_num_millions", true, Kind::kFloatSlider },
+        { "sim.max_hits", true, Kind::kIntSlider },
+        { "sim.infinite", true, Kind::kCheckbox },
+        { "renderer.lens_type", true, Kind::kCombo },
+        { "renderer.fov", true, Kind::kFloatSlider },
+        { "renderer.elevation", true, Kind::kFloatSlider },
+        { "renderer.azimuth", true, Kind::kFloatSlider },
+        { "renderer.roll", true, Kind::kFloatSlider },
+        // The named special case: serialized as a VALUE (1024) while its control edits an index.
+        // Registered as editable — the registry translates — rather than left read-only.
+        { "renderer.sim_resolution", true, Kind::kCombo },
+        { "renderer.visible", true, Kind::kCombo },
+        { "renderer.front", true, Kind::kCheckbox },
+        { "renderer.background", true, Kind::kColor },
+        { "renderer.ray_color", true, Kind::kColor },
+        { "renderer.opacity", true, Kind::kFloatSlider },
+        { "renderer.exposure_offset", true, Kind::kFloatSlider },
+        { "aspect_ratio", true, Kind::kCombo },
+        { "aspect_portrait", true, Kind::kCheckbox },
+        { "bg_path", false, Kind::kCheckbox },
+        { "bg_show", true, Kind::kCheckbox },
+        { "bg_alpha", true, Kind::kFloatSlider },
+        { "overlay_horizon_line", true, Kind::kCheckbox },
+        { "overlay_horizon_label", true, Kind::kCheckbox },
+        { "overlay_grid_line", true, Kind::kCheckbox },
+        { "overlay_grid_label", true, Kind::kCheckbox },
+        { "overlay_sun_circles_line", true, Kind::kCheckbox },
+        { "overlay_sun_circles_label", true, Kind::kCheckbox },
+        { "overlay_sun_circle_angles", false, Kind::kCheckbox },
+        { "overlay_horizon_color", true, Kind::kColor },
+        { "overlay_grid_color", true, Kind::kColor },
+        { "overlay_sun_circles_color", true, Kind::kColor },
+        { "overlay_horizon_alpha", true, Kind::kFloatSlider },
+        { "overlay_grid_alpha", true, Kind::kFloatSlider },
+        { "overlay_sun_circles_alpha", true, Kind::kFloatSlider },
+        { "overlay_zenith_nadir_line", true, Kind::kCheckbox },
+        { "overlay_zenith_nadir_color", true, Kind::kColor },
+        { "overlay_zenith_nadir_alpha", true, Kind::kFloatSlider },
+        { "overlay_zenith_nadir_radius_px", true, Kind::kFloatSlider },
+        { "right_panel_collapsed", true, Kind::kCheckbox },
+        { "modal_layout_vertical", true, Kind::kCheckbox },
+      };
+
+      // Against the REAL row set of a factory document, so this cannot drift from what the panel
+      // actually lists: a field added to the serializer makes the row set larger than the table
+      // below and fails here, which is the reminder to classify it.
+      gui::g_state = gui::MakeNewDocumentState();
+      const auto rows = CurrentRows();
+      std::set<std::string> row_keys;
+      for (const auto& row : rows) {
+        row_keys.insert(row.key_path);
+      }
+      IM_CHECK_EQ(row_keys.size(), std::size(kExpected));
+
+      for (const auto& expected : kExpected) {
+        IM_CHECK_SILENT(row_keys.count(expected.key_path) == 1);
+        const gui::FieldEditorEntry* entry = gui::FindFieldEditor(expected.key_path);
+        if (expected.registered) {
+          IM_CHECK_SILENT(entry != nullptr);
+          IM_CHECK_SILENT(entry->kind == expected.kind);
+        } else {
+          IM_CHECK_SILENT(entry == nullptr);
+        }
+      }
+
+      // Nothing is registered that the document does not produce: an entry for a key that no longer
+      // exists is dead weight the panel can never reach, and it would silently survive the loop
+      // above.
+      for (const auto& key : gui::RegisteredFieldEditorKeyPaths()) {
+        IM_CHECK_SILENT(row_keys.count(key) == 1);
+      }
+    };
+  }
+
+  {
+    // AC4 — "Origin value" is the FACTORY value, not the effective (saved) default.
+    //
+    // Asserted through the drawn cell rather than through the row struct: the cell's id carries the
+    // text it rendered, so this fails if the column is re-pointed at default_value even though the
+    // row struct still holds the right factory value. The two values are deliberately made
+    // different first, otherwise the claim is unfalsifiable.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac4_origin_column_is_the_factory_value");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_ac4");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["overlay_grid_alpha"] = 0.75f;  // saved default, deliberately not the factory 0.3
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_grid_alpha");
+
+      const auto rows = CurrentRows();
+      const auto row = std::find_if(rows.begin(), rows.end(),
+                                    [](const gui::DefaultDiffRow& r) { return r.key_path == "overlay_grid_alpha"; });
+      IM_CHECK(row != rows.end());
+      IM_CHECK(row->has_saved_override);
+      // The premise: the saved default and the factory value really do differ here.
+      IM_CHECK(row->default_value != row->factory_value);
+
+      const std::string factory_text = gui::FormatDiffValue(row->factory_value);
+      const std::string saved_text = gui::FormatDiffValue(row->default_value);
+      IM_CHECK(ctx->ItemExists(OriginCellRef("overlay_grid_alpha", factory_text).c_str()));
+      IM_CHECK(!ctx->ItemExists(OriginCellRef("overlay_grid_alpha", saved_text).c_str()));
+
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC5b — the row tint's predicate, over the four states the issue enumerates.
+    //
+    // Asserted on the predicate rather than on pixels, deliberately and with the gap named: ImGui
+    // keeps a table's per-row background colour only for the row being submitted, so there is no
+    // frame-independent handle on "row N was tinted". What binds the predicate to what is PAINTED
+    // is the defaults_panel_layout reference group — the pending_changes scene contains tinted rows
+    // at a 40 dB floor, so a call site that stopped tinting turns that scene red.
+    //
+    // The fourth state is the one this whole predicate exists for: a key saved long ago, untouched
+    // since. It differs from factory forever, yet Save would not move it, so it must NOT be tinted.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac5b_row_tint_predicate_four_states");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      IM_UNUSED(ctx);
+      gui::DefaultDiffRow row;
+      row.key_path = "probe";
+
+      // (1) nothing saved, nothing adopted — Save writes nothing for this key.
+      row.current_value = 0.5f;
+      row.default_value = 0.5f;
+      row.factory_value = 0.5f;
+      row.has_saved_override = false;
+      IM_CHECK(!gui::RowWouldChangeOnSave(row, /*checked=*/false));
+
+      // (2) the same row, adopted: Save would ADD the key. Tinted even though the value equals the
+      // factory one — presence is a change.
+      IM_CHECK(gui::RowWouldChangeOnSave(row, /*checked=*/true));
+
+      // (3) changed in the GUI, never saved: adopted by default, and Save would write the new
+      // value.
+      row.current_value = 0.9f;
+      IM_CHECK(gui::RowWouldChangeOnSave(row, /*checked=*/true));
+      // ...and un-checking it takes it back to "Save writes nothing", which is also no change.
+      IM_CHECK(!gui::RowWouldChangeOnSave(row, /*checked=*/false));
+
+      // (4) saved earlier, untouched since: differs from factory, equals what is on disk. NOT
+      // tinted — the state that separates this predicate from the "Differs from factory" filter.
+      row.current_value = 0.9f;
+      row.default_value = 0.9f;  // has_saved_override ⇒ default_value IS the stored value
+      row.factory_value = 0.5f;
+      row.has_saved_override = true;
+      IM_CHECK(!gui::RowWouldChangeOnSave(row, /*checked=*/true));
+      // Un-checking it would REMOVE the key from the file — a change.
+      IM_CHECK(gui::RowWouldChangeOnSave(row, /*checked=*/false));
+    };
+  }
+
+  {
+    // AC5 — the two notice icons are separate, and each has a producer that can actually fire.
+    //
+    // The out-of-range icon's reachability is the finding this case pins, because it inverts the
+    // obvious guess: SliderWithInput ends with an unconditional clamp and the main UI calls it
+    // every frame, so a hand-edited out-of-range ALPHA is pulled back into its domain before this
+    // panel ever sees it. The reachable fields are the ones with no main-UI control at all. Both
+    // directions are asserted — the field that keeps the poison and two that cannot — so "this
+    // notice can fire" is not confused with "this notice fires for everything".
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_ac5_note_icons_are_distinct");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_ac5");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      // A hand-edited defaults file, out of range on three fields.
+      json doc;
+      doc["renderer"]["opacity"] = 3.0f;  // no main-UI control ⇒ nothing clamps it
+      doc["overlay_grid_alpha"] = 7.0f;   // its own slider clamps it every frame
+      doc["renderer"]["fov"] = 4000.0f;   // the per-frame renderer invariant clamps it
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      IM_CHECK_EQ(gui::g_state.renderer.opacity, 3.0f);  // the poison did land
+      ctx->Yield(4);  // let the main UI render — this is where the other two get pulled back
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      // Positive: the field nothing clamps still holds its out-of-range value, and says so.
+      FilterTo(ctx, "renderer.opacity");
+      IM_CHECK(ctx->ItemExists("**/###note_range_renderer.opacity"));
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_renderer.opacity"));
+
+      // Negative, twice, for the two different mechanisms that pull a value back in range.
+      FilterTo(ctx, "overlay_grid_alpha");
+      IM_CHECK_EQ(gui::g_state.grid_alpha, 1.0f);
+      IM_CHECK(!ctx->ItemExists("**/###note_range_overlay_grid_alpha"));
+      FilterTo(ctx, "renderer.fov");
+      IM_CHECK(!ctx->ItemExists("**/###note_range_renderer.fov"));
+
+      // The other icon: editing a value HERE marks that row, and only that row.
+      ctx->ItemInputValue(ValueInputRef("renderer.fov").c_str(), 45.0f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 45.0f);
+      IM_CHECK(ctx->ItemExists("**/###note_edited_renderer.fov"));
+      FilterTo(ctx, "renderer.elevation");
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_renderer.elevation"));
+
+      // Both at once, on one row: the out-of-range field, once edited, carries the pencil AND
+      // keeps the warning until the edit takes it back into the domain. Editing it to a value
+      // inside [0,1] clears the warning and leaves the pencil, which is the pair's whole point —
+      // they are independent.
+      FilterTo(ctx, "renderer.opacity");
+      ctx->ItemInputValue(ValueInputRef("renderer.opacity").c_str(), 0.25f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.opacity, 0.25f);
+      IM_CHECK(ctx->ItemExists("**/###note_edited_renderer.opacity"));
+      IM_CHECK(!ctx->ItemExists("**/###note_range_renderer.opacity"));
+
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // The round trip the whole feature exists for: change a setting the user has never touched in
+    // the main UI, from the table, and have it land in the defaults file.
+    //
+    // Also pins the two consequences of an in-cell edit that are decisions rather than mechanics:
+    // the row joins the checked set (otherwise the edit would be silently dropped at Save), and
+    // nothing is written until Save is actually pressed.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "inline_edit_round_trips_through_save");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_inline_roundtrip");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+      gui::g_state = gui::MakeNewDocumentState();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+      IM_CHECK(!RowIsChecked(ctx, "overlay_zenith_nadir_radius_px"));  // untouched rows open unchecked
+
+      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 12.5f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 12.5f);
+      // The edit adopted the row: an edit that Save would discard is the failure this avoids.
+      IM_CHECK(RowIsChecked(ctx, "overlay_zenith_nadir_radius_px"));
+      // ...but nothing has been written yet.
+      IM_CHECK(!ReadOverlayBytes(dir).has_value() ||
+               !gui::DocHasKeyPath(ReadOverlayFile(dir), "overlay_zenith_nadir_radius_px"));
+
+      SaveDefaultsPanel(ctx);
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(gui::DocHasKeyPath(saved, "overlay_zenith_nadir_radius_px"));
+      IM_CHECK_EQ(saved["overlay_zenith_nadir_radius_px"].get<float>(), 12.5f);
+      // Saved ⇒ the "you changed this here" pencil is retired: it would now be a lie.
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
+
+      FilterTo(ctx, "");
       CloseDefaultsPanel(ctx);
     };
   }
