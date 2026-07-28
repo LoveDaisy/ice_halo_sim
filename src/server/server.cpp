@@ -1178,6 +1178,15 @@ void ServerImpl::ConsumeData() {
           auto t_lock0 = std::chrono::steady_clock::now();
           std::lock_guard<TicketMutex> lock(consumer_mutex_);
           auto t_lock1 = std::chrono::steady_clock::now();
+          // WARNING for anyone adding a SimData field: the chunk below is a
+          // hand-rolled field-by-field copy, NOT a copy of sim_data, so a new
+          // field silently arrives at the consumers as a default-constructed 0
+          // on this path — and ONLY on this path, which is what makes it hard to
+          // see (the legacy CPU route hands the whole SimData over intact, so it
+          // keeps working while the backend route quietly reports nothing).
+          // Every stats field needs a line here, on the correct side of the
+          // accumulated/overwritten split below.
+          //
           // task-268.4: chunk by kCommitCap on the backend exit-seam path
           // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
           // carries root_ray_count_ + the stochastic crystal-draw count —
@@ -1208,6 +1217,7 @@ void ServerImpl::ConsumeData() {
               if (emitted == 0) {
                 chunk.root_ray_count_ = sim_data.root_ray_count_;
                 chunk.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
+                chunk.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
                 chunk.crystals_ = sim_data.crystals_;
                 chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
               }
@@ -1217,6 +1227,7 @@ void ServerImpl::ConsumeData() {
               // published. The inverse of the rule above, for the inverse
               // aggregation.
               chunk.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
+              chunk.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
               if (chunk_count > 0) {
                 chunk.outgoing_d_.assign(
                     sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,

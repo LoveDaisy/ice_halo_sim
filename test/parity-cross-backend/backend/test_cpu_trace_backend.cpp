@@ -68,6 +68,16 @@ void MakeShapeStochastic(ScatteringSetting& setting) {
   prism.h_ = Distribution{ DistributionType::kGaussian, 1.0f, 0.15f };
 }
 
+// The orientation-side counterpart: flip the AXIS to a distribution so
+// IsAxisDeterministic() is false and InitRay_rot draws per ray. Only azimuth is
+// touched — one field is enough to flip the predicate, and leaving latitude/roll
+// alone keeps this from doubling as a full-sphere-uniform scene (which takes a
+// different sampler branch and would confound "did the count move" with "did the
+// sampling path change").
+void MakeAxisStochastic(ScatteringSetting& setting) {
+  setting.crystal_.axis_.azimuth_dist = Distribution{ DistributionType::kUniform, 0.0f, 360.0f };
+}
+
 RenderConfig MakeRenderConfig() {
   RenderConfig cfg;
   cfg.id_ = 0;
@@ -615,6 +625,101 @@ TEST(CpuTraceBackend, CountsStochasticCrystalDrawsAcrossLayers) {
     backend.TraceLayer(roots1);
     EXPECT_EQ(backend.GetLastBatchStochasticCrystalSampleCount(), 1u)
         << "3 (layer, ci) slots, exactly one of them stochastic";
+    backend.EndSession();
+  }
+}
+
+// =============================================================================
+// Test — stochastic ORIENTATION-draw count. Sibling of the crystal counter
+// above and deliberately NOT the same number: orientations are redrawn per RAY
+// with no ray-group reuse, so a stochastic-axis (layer, ci) contributes its whole
+// ray count, not 1. A deterministic axis contributes 0 (its population rides the
+// scene's config constant), exactly as a deterministic shape does on the counter
+// above.
+// =============================================================================
+TEST(CpuTraceBackend, CountsStochasticOrientationDrawsAcrossLayers) {
+  constexpr size_t kRays = 256;
+
+  // Deterministic axis: MakeSimpleScene leaves axis_ default-constructed, which
+  // is all-kNoRandom (one fixed rotation, zero rng draws) — so 0 on every batch.
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
+    ASSERT_TRUE(scene.ms_[0].setting_[0].crystal_.axis_.IsAxisDeterministic())
+        << "precondition: this arm needs a deterministic axis to mean anything";
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 1;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = kRays;
+    host.crystal = nullptr;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    EXPECT_EQ(backend.GetLastBatchStochasticOrientationSampleCount(), 0u)
+        << "Deterministic axis: every ray gets the same fixed rotation and no rng draw happens";
+    backend.EndSession();
+  }
+
+  // Stochastic axis, single layer: every one of the layer's rays is a draw.
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/1);
+    MakeAxisStochastic(scene.ms_[0].setting_[0]);
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 3;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = kRays;
+    host.crystal = nullptr;
+    backend.TraceLayer(RootRaySource::FromHost(host));
+    EXPECT_EQ(backend.GetLastBatchStochasticOrientationSampleCount(), kRays)
+        << "Per-RAY, not per-ray-group: a count near kRays/kSmallBatchRayNum would mean the "
+           "orientation counter picked up the geometry side's batch-reuse structure, which "
+           "orientation sampling does not have";
+    backend.EndSession();
+  }
+
+  // Multi-MS, stochastic axes on both layers: the count is the cross-layer sum
+  // of each layer's ray count. Layer 1 traces the continuation rays that
+  // survived layer 0, so the total exceeds kRays but is not a fixed multiple —
+  // assert the structure (strictly more than one layer's worth) rather than a
+  // number that would silently encode this scene's survival rate.
+  {
+    auto scene = MakeSimpleScene(/*max_hits=*/4, /*ms_layers=*/2);
+    MakeAxisStochastic(scene.ms_[0].setting_[0]);
+    MakeAxisStochastic(scene.ms_[1].setting_[0]);
+    auto render = MakeRenderConfig();
+    SessionSpec spec;
+    spec.scene = &scene;
+    spec.render = &render;
+    spec.wl = WlParam{ 550.0f, 1.0f };
+    spec.seed = 5;
+
+    CpuTraceBackend backend;
+    backend.BeginSession(spec);
+    HostRayBatch host;
+    host.count = kRays;
+    host.crystal = nullptr;
+    auto h0 = backend.TraceLayer(RootRaySource::FromHost(host));
+    ASSERT_NE(h0, nullptr);
+    EXPECT_EQ(backend.GetLastBatchStochasticOrientationSampleCount(), kRays) << "after layer 0";
+
+    RecombineSpec rspec;
+    rspec.shuffle = true;
+    auto roots1 = backend.Recombine(std::move(h0), rspec);
+    backend.TraceLayer(roots1);
+    EXPECT_GT(backend.GetLastBatchStochasticOrientationSampleCount(), kRays)
+        << "the continuation layer resamples orientation for its own rays too (InitRayOtherMs "
+           "calls InitRay_rot), so the counter must keep climbing across MS layers";
     backend.EndSession();
   }
 }

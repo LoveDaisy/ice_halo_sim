@@ -84,20 +84,53 @@ assert ctypes.sizeof(LUMICE_RenderResult) == 32, (
 )
 
 
-# Mirrors LUMICE_StatsResult in src/include/lumice.h. All three fields are
+# Mirrors LUMICE_StatsResult in src/include/lumice.h. All four fields are
 # LUMICE_RayCount = `unsigned long long` (64-bit on every platform, unlike
 # `unsigned long` on Windows — see the static_assert next to the typedef).
 class LUMICE_StatsResult(ctypes.Structure):
     _fields_ = [
-        ("ray_seg_num",  ctypes.c_ulonglong),
-        ("sim_ray_num",  ctypes.c_ulonglong),
-        ("crystal_num",  ctypes.c_ulonglong),
+        ("ray_seg_num",      ctypes.c_ulonglong),
+        ("sim_ray_num",      ctypes.c_ulonglong),
+        ("crystal_num",      ctypes.c_ulonglong),
+        ("orientation_num",  ctypes.c_ulonglong),
     ]
 
 
-assert ctypes.sizeof(LUMICE_StatsResult) == 24, (
-    "LUMICE_StatsResult size mismatch — verify lumice.h field layout"
-)
+def _assert_stats_mirror_matches_header() -> None:
+    """Cross-check this mirror against the field list in lumice.h.
+
+    A plain ``assert ctypes.sizeof(...) == N`` — which is what guarded this
+    struct until orientation_num was added — compares the mirror to a number
+    typed next to it, so it cannot notice the C struct growing underneath: both
+    sides of the comparison live in this file. It stayed green while the C side
+    went to four fields, and the failure it let through is not a wrong assertion
+    but a heap overflow: LUMICE_GetStatsResults writes sizeof(C struct) per row
+    into an array Python sized from the mirror, so a stale mirror means the
+    library writes past the end of the buffer (and the sentinel memset writes
+    further still). Read the header instead, so the next added field turns this
+    red at import time rather than corrupting memory in whichever test runs first.
+    """
+    header = Path(__file__).resolve().parents[2] / "src" / "include" / "lumice.h"
+    if not header.is_file():  # source tree not available (e.g. installed wheel)
+        return
+    body = re.search(
+        r"typedef struct LUMICE_StatsResult_\s*\{(.*?)\}\s*LUMICE_StatsResult;",
+        header.read_text(encoding="utf-8"),
+        re.DOTALL,
+    )
+    assert body is not None, "could not locate LUMICE_StatsResult in lumice.h"
+    # Field declarations only: strip // comments, then take `<type> <name>;`.
+    decls = re.sub(r"//.*", "", body.group(1))
+    header_fields = re.findall(r"LUMICE_RayCount\s+(\w+)\s*;", decls)
+    mirror_fields = [name for name, _ in LUMICE_StatsResult._fields_]
+    assert header_fields == mirror_fields, (
+        f"LUMICE_StatsResult drift — lumice.h has {header_fields}, "
+        f"this mirror has {mirror_fields}. Update the mirror (and any code "
+        f"reading the struct) before the C API writes past the Python buffer."
+    )
+
+
+_assert_stats_mirror_matches_header()
 
 # lumice.h LUMICE_MAX_STATS_RESULTS. The out array must hold one extra slot for
 # the all-zero sentinel LUMICE_GetStatsResults writes past the last filled row.
@@ -136,18 +169,23 @@ _LUMICE_SERVER_NOT_READY = 2
 class SimResult:
     """Subset of LUMICE_RawXyzResult fields exposed to test code.
 
-    `crystal_num` comes from LUMICE_StatsResult (a different C API call), read
-    once after the run reached IDLE-with-valid-data: how many distinct crystal
-    geometries the run actually drew. Its two halves aggregate differently — the
-    deterministic population is a config constant carried by OVERWRITE, the
-    stochastic draws accumulate per batch and per worker — so it is only
-    meaningful once the simulation finished. See doc/c_api.md for the contract.
+    `crystal_num` and `orientation_num` come from LUMICE_StatsResult (a
+    different C API call), read once after the run reached
+    IDLE-with-valid-data: how many distinct crystal geometries, and how many
+    crystal orientations, the run actually drew. Each has two halves that
+    aggregate differently — the deterministic population is a config constant
+    carried by OVERWRITE, the stochastic draws accumulate per batch and per
+    worker — so both are only meaningful once the simulation finished. The two
+    are independent quantities, not a rescaling of each other: a scene of fixed
+    shapes under random axes reports a tiny crystal_num and a huge
+    orientation_num. See doc/c_api.md for the contract.
     """
 
     snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
     crystal_num: int = 0
+    orientation_num: int = 0
 
 
 @dataclass
@@ -174,6 +212,7 @@ class BufferedSimResult:
     fell_back: bool = False
     log_lines: List[str] = field(default_factory=list)
     crystal_num: int = 0
+    orientation_num: int = 0
 
 
 def _project_root() -> Path:
@@ -364,8 +403,12 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
-def _read_crystal_num(lib, server) -> int:
-    """Read LUMICE_StatsResult.crystal_num for the run that just finished.
+def _read_sample_counts(lib, server) -> tuple:
+    """Read (crystal_num, orientation_num) from LUMICE_StatsResult.
+
+    One call rather than two: both come from the same LUMICE_GetStatsResults
+    row, and LUMICE_GetStatsResults triggers DoSnapshot, so reading them
+    separately would take two snapshots of a run that is supposed to be over.
 
     Call only after the polling loop observed has_valid_data AND IDLE. The value
     is the deterministic population (a config constant, OVERWRITTEN on the way
@@ -382,7 +425,9 @@ def _read_crystal_num(lib, server) -> int:
         raise RuntimeError(f"GetStatsResults failed err={err}")
     # Row 0 is the only stats row (LUMICE_MAX_STATS_RESULTS == 1); sim_ray_num
     # == 0 is the sentinel meaning "no row produced".
-    return int(stats[0].crystal_num) if stats[0].sim_ray_num != 0 else 0
+    if stats[0].sim_ray_num == 0:
+        return 0, 0
+    return int(stats[0].crystal_num), int(stats[0].orientation_num)
 
 
 def _commit_config(lib, server, config_path: str) -> None:
@@ -466,11 +511,13 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
             time.sleep(0.2)
 
         r = results[0]
+        crystal_num, orientation_num = _read_sample_counts(lib, server)
         return SimResult(
             snapshot_intensity=float(r.snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
-            crystal_num=_read_crystal_num(lib, server),
+            crystal_num=crystal_num,
+            orientation_num=orientation_num,
         )
 
     finally:
@@ -673,7 +720,7 @@ def run_scene_capi_buffered(
                     .reshape(rr_h, rr_w, 3)
                 )
 
-                crystal_num = _read_crystal_num(lib, server)
+                crystal_num, orientation_num = _read_sample_counts(lib, server)
 
             finally:
                 lib.LUMICE_DestroyServer(server)
@@ -699,6 +746,7 @@ def run_scene_capi_buffered(
                 fell_back=fell_back,
                 log_lines=list(log_lines),
                 crystal_num=crystal_num,
+                orientation_num=orientation_num,
             )
     finally:
         # Restore env state regardless of success/failure.

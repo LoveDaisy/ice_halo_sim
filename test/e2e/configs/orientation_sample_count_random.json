@@ -1,0 +1,199 @@
+{
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": {
+        "height": 1.0
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 90.0,
+          "std": 1.0
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "prism",
+      "shape": {
+        "height": 0.3
+      },
+      "axis": {
+        "zenith": {
+          "type": "gauss",
+          "mean": 0.0,
+          "std": 1.0
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "prism",
+      "shape": {
+        "height": 1.2
+      },
+      "axis": {
+        "zenith": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "prism",
+      "shape": {
+        "height": 0.6
+      },
+      "axis": {
+        "zenith": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "prism",
+      "shape": {
+        "height": 2.0
+      },
+      "axis": {
+        "zenith": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        },
+        "roll": {
+          "type": "uniform",
+          "mean": 0.0,
+          "std": 360.0
+        }
+      }
+    }
+  ],
+  "filter": [],
+  "render": [
+    {
+      "id": 1,
+      "lens": {
+        "type": "dual_fisheye_equal_area",
+        "fov": 360.0
+      },
+      "view": {
+        "azimuth": 0.0,
+        "elevation": 0.0,
+        "roll": 0.0
+      },
+      "resolution": [
+        256,
+        128
+      ],
+      "background": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "intensity_factor": 1.0,
+      "opacity": 1.0,
+      "visible": "full"
+    }
+  ],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 20.0,
+      "azimuth": 0.0,
+      "diameter": 0.5,
+      "spectrum": [
+        {
+          "wavelength": 540,
+          "weight": 1.0
+        }
+      ]
+    },
+    "ray_num": 20000,
+    "max_hits": 6,
+    "scattering": [
+      {
+        "prob": 0.6,
+        "entries": [
+          {
+            "crystal": 1,
+            "proportion": 60.0
+          },
+          {
+            "crystal": 2,
+            "proportion": 40.0
+          }
+        ]
+      },
+      {
+        "prob": 0.0,
+        "entries": [
+          {
+            "crystal": 3,
+            "proportion": 40.0
+          },
+          {
+            "crystal": 4,
+            "proportion": 30.0
+          },
+          {
+            "crystal": 5,
+            "proportion": 30.0
+          }
+        ]
+      }
+    ]
+  }
+}
