@@ -129,6 +129,26 @@ std::string FormatDiffValue(const nlohmann::json& value);
 // two-valued predicate over one row set, which is the property test_gui_defaults_diff.cpp asserts.
 bool RowNeedsAdoption(const DefaultDiffRow& row);
 
+// Whether pressing Save right now would change what the override file holds for this key, given
+// the row's current checkbox state. The panel tints such rows, so "the thing this panel is for" is
+// visible per row instead of only through a filter that hides the others.
+//
+// A DIFFERENT question from both filters, and the distinction is the whole reason it exists:
+//   "Differs from factory"  — compares the value with the built-in one. A key the user saved long
+//                             ago and has not touched since differs from factory forever, yet
+//                             saving would not move it.
+//   "Edited this session"   — compares the checkbox with its state at open. Says nothing about a
+//                             value edited in place while the checkbox stayed put.
+//   this predicate          — compares what Save would write with what is on disk. That is the
+//                             copy-vs-disk judgement the panel is built around.
+//
+// Both sides are "present with a value, or absent": checked means Save writes current_value,
+// unchecked means Save removes the key, and has_saved_override says whether the file holds one
+// today (in which case default_value IS that stored value — see the field's comment). Presence has
+// to be compared as well as value, otherwise checking a key whose value already equals the stored
+// one would read as no change when it would in fact ADD the key to the file, and vice versa.
+bool RowWouldChangeOnSave(const DefaultDiffRow& row, bool checked);
+
 // ------------------------------------------------------------------------------------------------
 // The panel's write-back rule. Surgical key-level edits of an existing document, never a wholesale
 // replacement: the override file also carries the "presets" subtree, and a full rewrite here would

@@ -420,6 +420,40 @@ inline ViewDefaults DefaultViewParamsFor(int lens_type) {
   return { fov, 0.0f, azimuth, 0.0f };
 }
 
+// The whole of "the user picked a different lens": the new lens type plus the pose fix-ups that go
+// with it. Called by every control that offers the choice — the View panel's combo and the defaults
+// panel's per-row editor — because these fix-ups are not decoration, they are what keeps the view
+// pointing at the same thing across the switch, and a second control that only assigned lens_type
+// would leave a pose the first control can never produce.
+//
+// Deliberately NOT applied by .lmc loading or by tests that write lens_type directly: those carry
+// their own fov/pose and must keep them.
+inline void ApplyLensTypeSelection(RenderConfig& r, int new_lens_type) {
+  if (r.lens_type == new_lens_type) {
+    return;
+  }
+  const bool was_globe = (r.lens_type == kLensTypeGlobe);
+  const bool now_globe = (new_lens_type == kLensTypeGlobe);
+  r.lens_type = new_lens_type;
+  // Reset fov to the new lens' default so e.g. first-time entry to Globe uses 30° instead of
+  // inheriting Linear's 90°.
+  r.fov = DefaultViewParamsFor(new_lens_type).fov;
+  if (was_globe != now_globe) {
+    // Globe is outside-in: crossing the boundary inverts both az and el.
+    // az: add 180 (mod 360) — self-inverse, same formula both directions.
+    r.azimuth += 180.0f;
+    if (r.azimuth > 180.0f) {
+      r.azimuth -= 360.0f;
+    }
+    // el: negate — self-inverse, same formula both directions.
+    r.elevation = -r.elevation;
+    // Globe el is limited to ±89° to avoid view-matrix degeneracy.
+    if (now_globe) {
+      r.elevation = std::max(-89.0f, std::min(89.0f, r.elevation));
+    }
+  }
+}
+
 // Globe lens forces roll=0 at render time without writing back to the stored
 // RenderConfig.roll (so switching back to a non-Globe lens preserves the
 // user's prior roll value). Apply this helper at every ViewParam.roll fill

@@ -666,31 +666,10 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       for (int idx : kLensTypePresentationOrder) {
         bool selected = (r.lens_type == idx);
         if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          if (r.lens_type != idx) {
-            bool was_globe = (r.lens_type == kLensTypeGlobe);
-            bool now_globe = (idx == kLensTypeGlobe);
-            r.lens_type = idx;
-            ViewDefaults d = DefaultViewParamsFor(idx);
-            // Reset fov to the new lens' default so e.g. first-time entry to
-            // Globe uses 30° instead of inheriting Linear's 90°. .lmc loading
-            // and tests bypass this combo by writing lens_type directly, so
-            // they keep their fov.
-            r.fov = d.fov;
-            if (was_globe != now_globe) {
-              // Globe is outside-in: crossing the boundary inverts both az and el.
-              // az: add 180 (mod 360) — self-inverse, same formula both directions.
-              r.azimuth += 180.0f;
-              if (r.azimuth > 180.0f) {
-                r.azimuth -= 360.0f;
-              }
-              // el: negate — self-inverse, same formula both directions.
-              r.elevation = -r.elevation;
-              // Globe el is limited to ±89° to avoid view-matrix degeneracy.
-              if (now_globe) {
-                r.elevation = std::max(-89.0f, std::min(89.0f, r.elevation));
-              }
-            }
-          }
+          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+          // lens_type directly, so they keep their fov.
+          ApplyLensTypeSelection(r, idx);
         }
         if (selected) {
           ImGui::SetItemDefaultFocus();

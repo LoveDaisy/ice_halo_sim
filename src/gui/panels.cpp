@@ -330,12 +330,12 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
 // Returns true if value changed.
-static bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val) {
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id));
+                                       sizeof(input_id), trailing_label);
 
   const int old_value = *value;
 

@@ -340,6 +340,19 @@ bool RowNeedsAdoption(const DefaultDiffRow& row) {
   return row.current_value != row.default_value;
 }
 
+bool RowWouldChangeOnSave(const DefaultDiffRow& row, bool checked) {
+  if (checked != row.has_saved_override) {
+    // Save would add the key, or remove it. Either way the file moves.
+    return true;
+  }
+  if (!checked) {
+    // Absent before, absent after.
+    return false;
+  }
+  // Present on both sides: it comes down to the value Save would write.
+  return row.current_value != row.default_value;
+}
+
 bool DocHasKeyPath(const nlohmann::json& doc, const std::string& key_path) {
   return FindByPath(doc, SplitKeyPath(key_path)) != nullptr;
 }

@@ -22,6 +22,15 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
                      SliderScale scale = SliderScale::kLinear, bool trailing_label = true);
 
+// SliderInt + InputInt + label text — SliderWithInput's integer sibling, same layout and the same
+// `trailing_label = false` table-cell mode. Returns true if the value changed.
+//
+// Exported (it was file-static in panels.cpp) because the defaults panel's field-editor registry
+// renders integer settings with it: an integer setting has to be edited by the SAME control the
+// main UI uses, or the two disagree about what a valid value is — which is the whole point of that
+// registry.
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true);
+
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };
 

@@ -4,6 +4,7 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -15,6 +16,7 @@
 #include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
 #include "gui/destructive_style.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/panels.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui.h"
@@ -83,6 +85,16 @@ std::vector<DefaultDiffRow> g_rows;
 // ------------------------------------------------------------------------------------------------
 std::set<std::string> g_checked_keys;
 std::set<std::string> g_initial_checked_keys;
+
+// Every row's value AS THE PANEL OPENED, frozen for the session. The baseline for the notice
+// column's "you edited this here" icon — a question about the VALUE, deliberately separate from the
+// "Edited this session" filter, which is about the CHECKBOX. Two different things a user can change
+// about a row, and this scrum has already paid for conflating two questions into one control once.
+//
+// No "touched" flag set alongside the edits is needed to make that read correct: the panel is a
+// modal, so the main UI cannot move a value behind it, and a row whose value differs from this
+// snapshot can only have been edited HERE.
+std::map<std::string, nlohmann::json> g_opening_current_values;
 
 // Which rows the list shows, on top of the search box (they AND: a row must pass both).
 //
@@ -155,12 +167,50 @@ bool IsRowChecked(const std::string& key_path) {
   return g_checked_keys.find(key_path) != g_checked_keys.end();
 }
 
+// Fill DefaultDiffRow::warnings for values that sit OUTSIDE the domain their editor allows.
+//
+// The interface has existed (unfilled) since the panel was built; this is its first producer. What
+// makes such a value reachable at all: the override file is hand-editable and nothing rewrites a
+// loaded value until some control touches it. A control TOUCHING it is also what makes most fields
+// unreachable — SliderWithInput ends with an unconditional std::clamp and the main UI calls it
+// every frame, so an out-of-range alpha is pulled back inside the domain on the first frame after
+// load. The reachable fields are therefore precisely the ones with no main-UI control at all
+// (renderer.opacity today), plus anything a user reaches before its owning panel section is drawn.
+// That inversion is worth knowing when writing a test for this: the "obvious" field to poison is
+// the one that cannot hold the poison.
+//
+// Written here rather than in defaults_diff.cpp on purpose: the domain comes from the field-editor
+// registry, and that file's stated boundary is that it walks JSON and knows nothing about controls.
+void ApplyOutOfDomainWarnings(const GuiState& state, std::vector<DefaultDiffRow>& rows) {
+  for (auto& row : rows) {
+    const FieldEditorEntry* editor = FindFieldEditor(row.key_path);
+    if (editor == nullptr || !row.current_value.is_number()) {
+      continue;
+    }
+    const FieldEditorConstraint constraint = editor->Constraint(state);
+    if (!constraint.has_numeric_domain) {
+      continue;
+    }
+    const double value = row.current_value.get<double>();
+    if (value >= constraint.min_value && value <= constraint.max_value) {
+      continue;
+    }
+    char message[192];
+    std::snprintf(message, sizeof(message),
+                  "This value (%g) is outside the range this setting allows (%g to %g). It was most likely "
+                  "hand-edited into your defaults file; editing the cell puts it back in range.",
+                  value, constraint.min_value, constraint.max_value);
+    row.warnings.emplace_back(message);
+  }
+}
+
 void RefreshRows(const GuiState& state) {
   // Built against the FROZEN snapshot, and nothing is re-answered from the working copy afterwards.
   // 405.4's model needed that second pass because a Revert click changed has_saved_override before
   // any write; with the checkbox as the only expression of that intent, the copy's GuiState half no
   // longer moves until Save, so BuildDefaultDiffRows' answer is already the right one.
   g_rows = BuildDefaultDiffRows(state, g_snapshot_doc);
+  ApplyOutOfDomainWarnings(state, g_rows);
 }
 
 // Rebuild the checkbox set from the rows: a key is checked at open exactly when it is already in
@@ -182,6 +232,22 @@ void RecomputeCheckedKeys() {
   }
   g_initial_checked_keys = checked;
   g_checked_keys = std::move(checked);
+}
+
+// Re-anchor the "you edited this value here" baseline to the rows as they stand.
+//
+// Called on open and after a successful Save, in step with RecomputeCheckedKeys and for the same
+// reason: once a value has been written, saying "changed here, not saved yet" about it is simply
+// false. Built whole and assigned in one go — never cleared and refilled — so there is no window in
+// which a half-built baseline could be read.
+//
+// Must run AFTER RefreshRows: it is a function of the rows.
+void FreezeOpeningValues() {
+  std::map<std::string, nlohmann::json> values;
+  for (const auto& row : g_rows) {
+    values.emplace(row.key_path, row.current_value);
+  }
+  g_opening_current_values = std::move(values);
 }
 
 // The two filter predicates, each answering its own question about one row.
@@ -339,6 +405,92 @@ float SettingsNaturalHeight(int visible_row_count) {
   return header_h + static_cast<float>(visible_row_count) * row_h + borders;
 }
 
+// Whether this row's VALUE has moved since the panel opened — see g_opening_current_values.
+bool RowValueEditedThisSession(const DefaultDiffRow& row) {
+  const auto it = g_opening_current_values.find(row.key_path);
+  return it != g_opening_current_values.end() && it->second != row.current_value;
+}
+
+// The "Current value" cell: the field's REAL control, bound to the same GuiState field the main UI
+// edits, in one of three forms.
+//
+//   registered + applicable   — the live control. Editing here is editing the setting; there is no
+//                               separate edit buffer and no per-cell state machine, because the
+//                               panel is modal and this is therefore the only way that field can
+//                               move while it is open.
+//   registered + not applying — the same control, disabled, with the reason on hover. A full-sky
+//                               lens has no roll: the row still exists (it is still a default you
+//                               can hold), it just cannot be given a value right now.
+//   unregistered              — greyed TEXT, with no control frame at all. Deliberately a different
+//                               shape from the disabled control above: "there is no editor for this
+//                               here" and "this editor does not apply right now" are different
+//                               facts, and a user who cannot tell them apart cannot tell whether
+//                               changing something else would make the cell usable.
+//
+// Sets `rows_are_stale` instead of refreshing: see the call site.
+void RenderCurrentValueCell(GuiState& state, const DefaultDiffRow& row, bool& rows_are_stale) {
+  const FieldEditorEntry* editor = FindFieldEditor(row.key_path);
+  if (editor == nullptr) {
+    ImGui::TextDisabled("%s", FormatDiffValue(row.current_value).c_str());
+    return;
+  }
+
+  const FieldEditorConstraint constraint = editor->Constraint(state);
+  // The cell's own id fragment. The key path is unique by construction, so no two cells can
+  // collide; every widget an entry builds from it inherits that uniqueness.
+  const std::string id_base = "value_" + row.key_path;
+
+  // Grouped so the hover test below covers the WHOLE control: a slider cell is two items (slider
+  // and input box), and hovering only the last of them would leave half the cell silent.
+  ImGui::BeginGroup();
+  ImGui::BeginDisabled(!constraint.enabled);
+  if (editor->Render(state, id_base.c_str())) {
+    // An edit is a statement that this value should be the default — so the row joins the set
+    // Save writes. Leaving the checkbox alone would make an edit on an unchecked row a silent
+    // no-op at Save time, which is the "changed something, nothing happened" family this scrum
+    // keeps closing.
+    g_checked_keys.insert(row.key_path);
+    rows_are_stale = true;
+  }
+  ImGui::EndDisabled();
+  ImGui::EndGroup();
+
+  if (!constraint.enabled && constraint.disabled_reason != nullptr &&
+      ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", constraint.disabled_reason);
+  }
+}
+
+// The notice cell: up to two icons, side by side, each with its own explanation.
+//
+// SIDE BY SIDE rather than one-wins: they answer different questions ("you changed this" vs "what
+// was loaded is out of range"), a row can legitimately carry both, and a priority rule would hide
+// whichever the user needed. Each is a Selectable rather than text for the reason the Source cell
+// already is one — text carries neither a hover target nor an id, so it can be neither explained
+// nor addressed by a test.
+void RenderNoteCell(const DefaultDiffRow& row) {
+  const bool edited = RowValueEditedThisSession(row);
+  if (edited) {
+    const std::string edited_id = ICON_FA_PEN "###note_edited_" + row.key_path;
+    ImGui::Selectable(edited_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups,
+                      ImVec2(ImGui::CalcTextSize(ICON_FA_PEN).x, 0.0f));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("You changed this value in this panel. It is not saved until you press Save.");
+    }
+  }
+  if (!row.warnings.empty()) {
+    if (edited) {
+      ImGui::SameLine();
+    }
+    const std::string warning_id = ICON_FA_TRIANGLE_EXCLAMATION "###note_range_" + row.key_path;
+    ImGui::Selectable(warning_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups,
+                      ImVec2(ImGui::CalcTextSize(ICON_FA_TRIANGLE_EXCLAMATION).x, 0.0f));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", row.warnings.front().c_str());
+    }
+  }
+}
+
 // The one settings table: every candidate default, one row each, one checkbox each.
 //
 // `table_height` is what makes the header row stick: ImGuiTableFlags_ScrollY only takes effect when
@@ -346,22 +498,32 @@ float SettingsNaturalHeight(int visible_row_count) {
 // whole remaining region — i.e. no bound, no inner scroll, and the page scrolling back. The table is
 // its own scroll container, which is also why nothing here is wrapped in a BeginChild: a child
 // around a ScrollY table is the two-layer scroll this task exists to remove.
-void RenderSettingsTable(float table_height) {
+void RenderSettingsTable(GuiState& state, float table_height) {
   constexpr ImGuiTableFlags kFlags =
       ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
   if (!ImGui::BeginTable("##defaults_settings_table", 6, kFlags, ImVec2(0.0f, table_height))) {
     return;
   }
-  ImGui::TableSetupColumn("##adopt", ImGuiTableColumnFlags_WidthFixed, 24.0f);
-  ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  ImGui::TableSetupColumn("Effective default", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  // Column order is owner-specified: key, the value Save would write, the built-in value, where the
+  // current default comes from, notices, and the "is this key mine" checkbox LAST. The checkbox
+  // moved off the left edge deliberately — it is the conclusion of the row, not its identity.
+  ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 1.1f);
+  // Widest stretch share of the three: this column now holds a live control (a slider plus its
+  // input box is the widest of them), not a formatted string.
+  ImGui::TableSetupColumn("Current value", ImGuiTableColumnFlags_WidthStretch, 1.3f);
+  // The LITERAL factory value (row.factory_value), NOT the effective default it used to show.
+  // Under the copy model up to four values are in play for one key — factory, what is saved, what
+  // the GUI holds now, what Save would write — and showing the saved value here made "I changed
+  // this but have not saved" and "I saved this" render identically.
+  ImGui::TableSetupColumn("Origin value", ImGuiTableColumnFlags_WidthStretch, 0.9f);
   ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-  // The warning column (scrum D8). Built and sized here, filled by 405.5's preset-range clamp:
-  // owner chose a column over a tooltip precisely because a tooltip is invisible to the reference
-  // images, so the column has to exist in the captured layout before there is anything to put in
-  // it.
-  ImGui::TableSetupColumn("!", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+  // The notice column (scrum D8), now with two producers that must stay TELLABLE APART: a pencil
+  // for "you changed this value here" and a warning triangle for "the value loaded from your file
+  // is outside the allowed range". Sized for both side by side rather than for one, because a row
+  // can carry both and hiding one behind the other would make the pair unreadable exactly when it
+  // matters most.
+  ImGui::TableSetupColumn("Note", ImGuiTableColumnFlags_WidthFixed, 46.0f);
+  ImGui::TableSetupColumn("##adopt", ImGuiTableColumnFlags_WidthFixed, 24.0f);
   // AFTER every TableSetupColumn and BEFORE TableHeadersRow — ImGui's required call order. This one
   // line is the whole of AC1: row 0 (the header) stays put while the body scrolls under it. It is a
   // different mechanism from the section headers staying put (those are simply not inside any
@@ -369,38 +531,34 @@ void RenderSettingsTable(float table_height) {
   ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableHeadersRow();
 
+  // Deferred to after EndTable, never called inside the loop: RefreshRows REPLACES g_rows, and the
+  // loop below holds a reference into it. Deferring also coalesces a burst of edits in one frame
+  // into a single rebuild.
+  bool rows_are_stale = false;
+
   for (const auto& row : g_rows) {
     if (!RowIsVisible(row)) {
       continue;
     }
     ImGui::TableNextRow();
 
-    ImGui::TableNextColumn();
-    bool checked = IsRowChecked(row.key_path);
-    // The key path is the widget ID. It is unique by construction (it IS the row's identity), so
-    // there is no index to keep in sync — the PushID(int) addressing trap that has bitten GUI
-    // tests here before cannot arise. Every id this panel exposes uses "###" so the ID is the
-    // short suffix alone: a test ref then does not have to carry the icon glyphs of a label.
-    const std::string check_id = "###adopt_" + row.key_path;
-    if (ImGui::Checkbox(check_id.c_str(), &checked)) {
-      if (checked) {
-        g_checked_keys.insert(row.key_path);
-      } else {
-        g_checked_keys.erase(row.key_path);
-      }
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Checked: this setting is part of your personal defaults after you save.");
+    // The row tint: "pressing Save would change this row". Derived from the style's own header
+    // colour rather than a literal so it stays coherent under a theme change, and laid on RowBg0 so
+    // the table's alternating stripes still read through it.
+    if (RowWouldChangeOnSave(row, IsRowChecked(row.key_path))) {
+      ImVec4 tint = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+      tint.w = 0.45f;
+      ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(tint));
     }
 
     ImGui::TableNextColumn();
     ImGui::TextUnformatted(row.key_path.c_str());
 
     ImGui::TableNextColumn();
-    ImGui::TextUnformatted(FormatDiffValue(row.current_value).c_str());
+    RenderCurrentValueCell(state, row, rows_are_stale);
 
     ImGui::TableNextColumn();
-    ImGui::TextUnformatted(FormatDiffValue(row.default_value).c_str());
+    ImGui::TextUnformatted(FormatDiffValue(row.factory_value).c_str());
 
     ImGui::TableNextColumn();
     // Source is "is this key written in my override file", not "does its value differ from
@@ -423,14 +581,31 @@ void RenderSettingsTable(float table_height) {
     }
 
     ImGui::TableNextColumn();
-    if (!row.warnings.empty()) {
-      ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", row.warnings.front().c_str());
+    RenderNoteCell(row);
+
+    ImGui::TableNextColumn();
+    bool checked = IsRowChecked(row.key_path);
+    // The key path is the widget ID. It is unique by construction (it IS the row's identity), so
+    // there is no index to keep in sync — the PushID(int) addressing trap that has bitten GUI
+    // tests here before cannot arise. Every id this panel exposes uses "###" so the ID is the
+    // short suffix alone: a test ref then does not have to carry the icon glyphs of a label.
+    const std::string check_id = "###adopt_" + row.key_path;
+    if (ImGui::Checkbox(check_id.c_str(), &checked)) {
+      if (checked) {
+        g_checked_keys.insert(row.key_path);
+      } else {
+        g_checked_keys.erase(row.key_path);
       }
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Checked: this setting is part of your personal defaults after you save.");
     }
   }
   ImGui::EndTable();
+
+  if (rows_are_stale) {
+    RefreshRows(state);
+  }
 }
 
 // Display format for a §1 std cell showing `value`, e.g. "%.7g".
@@ -695,6 +870,7 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   RefreshRows(state);
   // After RefreshRows, never before: the checkbox set is a function of the rows.
   RecomputeCheckedKeys();
+  FreezeOpeningValues();
 }
 
 void RenderDefaultsPanel(GuiState& state) {
@@ -839,7 +1015,7 @@ void RenderDefaultsPanel(GuiState& state) {
       const float settings_avail = ImGui::GetContentRegionAvail().y - footer_height;
       const float settings_h = std::min(std::max(SettingsNaturalHeight(visible_count), min_section_h),
                                         std::max(settings_avail, min_section_h));
-      RenderSettingsTable(settings_h);
+      RenderSettingsTable(state, settings_h);
     }
   }
 
@@ -884,10 +1060,11 @@ void RenderDefaultsPanel(GuiState& state) {
     }
     RefreshRows(state);
     if (committed) {
-      // Re-freeze the baseline against the document that was just written — after RefreshRows, so
-      // it is computed from the re-anchored rows. Skipped on failure, where the user's checkbox
-      // set is still an uncommitted intent they may want to retry.
+      // Re-freeze BOTH baselines against the document that was just written — after RefreshRows, so
+      // they are computed from the re-anchored rows. Skipped on failure, where the user's checkbox
+      // set and their in-panel value edits are still an uncommitted intent they may want to retry.
       RecomputeCheckedKeys();
+      FreezeOpeningValues();
     }
   }
   ImGui::SameLine();
@@ -933,6 +1110,7 @@ void ResetDefaultsPanelTestState() {
   g_copy_doc = nlohmann::json::object();
   g_checked_keys.clear();
   g_initial_checked_keys.clear();
+  g_opening_current_values.clear();
   g_search_filter.Clear();
   g_row_filter = DefaultsRowFilter::kAll;
   g_pending_initial_section.reset();
