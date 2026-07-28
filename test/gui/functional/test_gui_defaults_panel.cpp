@@ -17,6 +17,12 @@
 //   AC10 — the search box narrows the list, and clearing it restores every row
 //   plus the entry-point contract: which section an entry point opens expanded
 //
+// The panel's entry and exit controls add three more, all of them claims about what a user can
+// SEE rather than about what the code can reach:
+//   the top-bar Settings button is visible with nothing opened, and the Save menu no longer
+//   hosts the entry; the title-bar X discards like Close AND actually closes; and the axis
+//   modal reads the preset library without writing to it
+//
 // The copy model (the panel is a pure editor: edits go into an in-memory copy, Save writes it once,
 // closing discards it) adds three more, and rewrites the timing half of several of the above:
 //   copy AC1 — a mixed batch of edits, closed WITHOUT Save, leaves the file byte-identical
@@ -234,6 +240,73 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(unchanged_seen > 0);
 
       CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // Discoverability, not reachability. The panel spent its first iteration behind two items in
+    // the Save dropdown, where it was reachable by every automated measure and found by nobody:
+    // a user looking for their settings does not open a Save menu. So the claim under test is
+    // specifically "visible from the default state with NOTHING opened" — no menu clicked, no
+    // window toggled, no scrolling — which is why this case yields from ResetTestState straight
+    // into ItemExists and does not touch a single control first.
+    //
+    // A test that opened the menu and found the entry there would pass on the version that failed
+    // the owner. That is the trap this case exists to avoid, so keep the "no interaction before
+    // the assertion" shape if it is ever edited.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "settings_entry_is_visible_without_opening_anything");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_topbar_entry");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+      ctx->Yield(2);
+
+      const char* kSettingsRef = "##TopBar/" ICON_FA_GEAR " Settings";
+      IM_CHECK(ctx->ItemExists(kSettingsRef));
+
+      // A simulation running must not take the entry away: settings are not a document operation,
+      // and an entry that vanishes while the user is watching a render is one they cannot find at
+      // the moment they think to look for it.
+      gui::g_state.run_intent = gui::RunIntent::kRunning;
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists(kSettingsRef));
+      auto info = ctx->ItemInfo(kSettingsRef);
+      IM_CHECK((info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      ctx->Yield(2);
+
+      // Not a decoration: it opens the panel, on the settings section.
+      IM_CHECK(!gui::g_state.defaults_panel_open);
+      ctx->ItemClick(kSettingsRef);
+      ctx->Yield(4);
+      IM_CHECK(gui::g_state.defaults_panel_open);
+      IM_CHECK(ctx->ItemExists("**/###defaults_save"));
+      IM_CHECK(ctx->ItemExists("**/###defaults_settings"));
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // The old home of the entry, asserted empty. Deleting the two Save-menu items is the half of
+    // "promote the entry" that a passing top-bar assertion says nothing about, and leaving them
+    // would quietly restore the state the promotion was meant to end: two ways in, one of which
+    // teaches the user to look in the wrong place.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "save_menu_no_longer_hosts_the_entry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("##TopBar/Save");
+      ctx->Yield(2);
+      IM_CHECK(!ctx->ItemExists("**/Save Current as Defaults..."));
+      IM_CHECK(!ctx->ItemExists("**/Edit My Presets..."));
+      // The menu itself still works — this is a removal, not a broken popup.
+      IM_CHECK(ctx->ItemExists("**/Config JSON..."));
+
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
     };
   }
 
@@ -954,8 +1027,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
   {
     // The entry point contract for §1, matching the one already asserted for the settings list:
-    // "Edit My Presets..." must open the panel with the preset section expanded, not merely open
-    // it.
+    // kPresets must open the panel with the preset section expanded, not merely open it. No menu
+    // item points here any more — the top-bar Settings button opens on kSettings and the preset
+    // library is a section inside — but the section argument is still the panel's API, and
+    // OpenDefaultsPanel is what this asserts about.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "presets_entry_point_opens_that_section");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       const auto dir = FreshOverlayDir("panel_preset_entry");

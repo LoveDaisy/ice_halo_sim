@@ -262,19 +262,11 @@ void RenderTopBar(float window_width) {
         DoExportConfigJson();
       }
       ImGui::Separator();
-      // Personal defaults live next to the other document-level "where do my settings go"
-      // commands rather than in a toolbar of their own: this writes what a NEW document starts
-      // from, which is a file-scope decision, not a view toggle.
-      if (ImGui::MenuItem("Save Current as Defaults...")) {
-        OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
-      }
-      // Same panel, different section expanded. A separate item rather than "open it and scroll":
-      // retuning a preset is a different errand from adopting the current document's settings, and
-      // a user who came to do the first should not have to recognise the second on the way.
-      if (ImGui::MenuItem("Edit My Presets...")) {
-        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPresets);
-      }
-      ImGui::Separator();
+      // Personal defaults are NOT in this menu. They used to be, on the reasoning that "what a new
+      // document starts from" is a file-scope decision and so belongs with the other export
+      // commands. The reasoning was sound and the placement still failed the only test that
+      // matters: a user looking for their settings does not open a Save menu to find them, and in
+      // practice did not. The entry is now a Settings button in the top bar — see RenderTopBar.
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
       ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
       ImGui::EndPopup();
@@ -421,6 +413,27 @@ void RenderTopBar(float window_width) {
             "class is currently hidden. Open the Colors window to inspect per-class details.");
       }
     }
+  }
+
+  // Personal defaults, promoted out of the Save menu. The panel it opens edits what a NEW document
+  // starts from, so by file-scope logic it belonged with the export commands — but it was reached
+  // by nobody who had not been told where it was, which is the only measure a settings entry has.
+  //
+  // Two deliberate choices, both worth knowing before this button gets tidied away again:
+  //   - It is separated from the Colors group by the same "|" the file group uses, because the two
+  //     are different kinds of control. Colors and the Colored checkbox are toggles that change
+  //     what the viewport shows; this opens a modal that edits persistent preferences. Sharing a
+  //     run of buttons with no break would let a modal launcher read as one more view toggle.
+  //   - It is NOT gated on `busy`. Reading and editing personal defaults is independent of whether
+  //     a simulation is running, same as Colors — a settings entry that disappears while the thing
+  //     the user is watching runs is a settings entry they cannot find when they think to look.
+  // The panel's preset library is one section inside it, so retuning a preset is still reachable;
+  // it no longer has a menu item of its own pointing straight at that section.
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_GEAR " Settings")) {
+    OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
   }
 
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
