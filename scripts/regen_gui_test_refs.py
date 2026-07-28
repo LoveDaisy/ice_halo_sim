@@ -539,8 +539,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--binary",
-        default="build/Release/bin/gui_test",
-        help="Path to gui_test binary (default: build/Release/bin/gui_test)",
+        default="build/Release/static/bin/gui_test",
+        help="Path to gui_test binary (default: build/Release/static/bin/gui_test)",
     )
     parser.add_argument(
         "--n", type=int, default=10, help="Phase A: number of reference runs (default: 10)"

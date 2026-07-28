@@ -25,7 +25,7 @@ Lineage: framework (run / measure_cell / _cov / _fmt_*) was lifted from
 format or CoV decision tree changes there, mirror the change here.
 
 Usage:
-    ./scripts/build.sh -j release   # ensure build/cmake_install/Lumice exists
+    ./scripts/build.sh -j release   # ensure build/cmake_install/static/Lumice exists
     python scripts/bench_throughput.py
 """
 from __future__ import annotations
@@ -45,17 +45,31 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # BIN/lib are env-overridable so the same harness runs on dev49 (CUDA bench, Linux
-# docker: binary at /work/build/Release/bin/Lumice) as on a local Mac. Default is
-# the local install path.
+# docker: binary at /work/build/Release/shared/bin/Lumice) as on a local Mac.
+# Default is the local install path.
+#
+# The install tree is per-flavor, so the default is a two-candidate probe rather
+# than one path: this harness supports both the documented `-j` recipe (static)
+# and the `-sj` one the LIB_DIRS workaround below exists for, and neither is
+# "the" default. First existing wins; if neither is built, fall back to the
+# static path so the not-found message names the recipe in the usage docstring.
 _BIN_ENV = os.environ.get("LUMICE_BENCH_BIN")
-BIN = Path(_BIN_ENV) if _BIN_ENV else PROJECT_ROOT / "build" / "cmake_install" / "Lumice"
+_BIN_CANDIDATES = [
+    PROJECT_ROOT / "build" / "cmake_install" / "static" / "Lumice",
+    PROJECT_ROOT / "build" / "cmake_install" / "shared" / "Lumice",
+]
+if _BIN_ENV:
+    BIN = Path(_BIN_ENV)
+else:
+    BIN = next((c for c in _BIN_CANDIDATES if c.exists()), _BIN_CANDIDATES[0])
 # rpath workaround for -sj shared-lib builds (backlog #345). Harmless for -j.
-# LUMICE_BENCH_LIBDIR prepends a dir (dev49: /work/build/Release/lib).
+# Shared flavor only — a static build has no dylib to find.
+# LUMICE_BENCH_LIBDIR prepends a dir (dev49: /work/build/Release/shared/lib).
 _LIBDIR_ENV = os.environ.get("LUMICE_BENCH_LIBDIR")
 LIB_DIRS = ([Path(_LIBDIR_ENV)] if _LIBDIR_ENV else []) + [
-    PROJECT_ROOT / "build" / "Release" / "lib",
-    PROJECT_ROOT / "build" / "cmake_install" / "lib",
-    PROJECT_ROOT / "build" / "RelWithDebInfo" / "lib",
+    PROJECT_ROOT / "build" / "Release" / "shared" / "lib",
+    PROJECT_ROOT / "build" / "cmake_install" / "shared" / "lib",
+    PROJECT_ROOT / "build" / "RelWithDebInfo" / "shared" / "lib",
 ]
 # Shared-lib search-path env var differs by platform: macOS=DYLD_, Linux=LD_.
 LIB_PATH_VAR = "DYLD_LIBRARY_PATH" if platform.system() == "Darwin" else "LD_LIBRARY_PATH"

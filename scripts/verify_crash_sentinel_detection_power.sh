@@ -89,7 +89,7 @@ git worktree add --detach "$FIXED_WORKTREE" "$FIXED_HEAD"
   rm -rf build
   ./scripts/build.sh -sj release >/dev/null
 )
-FIXED_BIN="$FIXED_WORKTREE/build/cmake_install/Lumice"
+FIXED_BIN="$FIXED_WORKTREE/build/cmake_install/shared/Lumice"
 FIXED_MD5="$(md5 -q "$FIXED_BIN" 2>/dev/null || md5sum "$FIXED_BIN" | awk '{print $1}')"
 echo "fixed arm binary: $FIXED_BIN"
 echo "fixed arm md5:    $FIXED_MD5"
@@ -101,7 +101,7 @@ git worktree add --detach "$REVERTED_WORKTREE" "$REVERT_BASE"
   rm -rf build
   ./scripts/build.sh -sj release >/dev/null
 )
-REVERTED_BIN="$REVERTED_WORKTREE/build/cmake_install/Lumice"
+REVERTED_BIN="$REVERTED_WORKTREE/build/cmake_install/shared/Lumice"
 REVERTED_MD5="$(md5 -q "$REVERTED_BIN" 2>/dev/null || md5sum "$REVERTED_BIN" | awk '{print $1}')"
 echo "reverted arm binary: $REVERTED_BIN"
 echo "reverted arm md5:    $REVERTED_MD5"

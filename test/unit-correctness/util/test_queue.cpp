@@ -279,7 +279,7 @@ TEST(QueueTest, ConcurrentShutdownWakesBlockedConsumer) {
 // Performance micro-benchmarks (DISABLED_ by default; manual invocation only)
 //
 // Run manually:
-//   ./build/cmake_install/unit_test --gtest_also_run_disabled_tests --gtest_filter='*Perf*'
+//   ./build/Release/static/bin/unit_correctness_test --gtest_also_run_disabled_tests --gtest_filter='*Perf*'
 //
 // Verified: scripts/build.sh:21 invokes `ctest` without --gtest_also_run_disabled_tests,
 // so these tests never run in CI.

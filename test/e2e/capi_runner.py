@@ -12,9 +12,9 @@ the server.
 
 Library lookup order:
     1. ``LUMICE_LIB`` environment variable (full path to the shared library).
-    2. ``build/Release/lib/liblumice.{dylib,so}``
-    3. ``build/cmake_install/{liblumice.{dylib,so}, lib/liblumice.{dylib,so}}``
-    4. ``build/cmake_build/liblumice.{dylib,so}``
+    2. ``build/Release/shared/lib/liblumice.{dylib,so}``
+    3. ``build/cmake_install/shared/{liblumice.{dylib,so}, lib/liblumice.{dylib,so}}``
+    4. ``build/cmake_build/shared/liblumice.{dylib,so}``
 
 The library must be built with ``BUILD_SHARED_LIBS=ON`` (the default release
 recipe). If lookup fails, raises :class:`FileNotFoundError`.
@@ -229,14 +229,17 @@ def _find_lib() -> Path:
 
     root = _project_root()
     candidates = [
-        root / "build" / "Release" / "lib" / "liblumice.dylib",
-        root / "build" / "Release" / "lib" / "liblumice.so",
-        root / "build" / "cmake_install" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "liblumice.so",
-        root / "build" / "cmake_install" / "lib" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "lib" / "liblumice.so",
-        root / "build" / "cmake_build" / "liblumice.dylib",
-        root / "build" / "cmake_build" / "liblumice.so",
+        # Every candidate is under the "shared" flavor: this runner loads the
+        # dylib through ctypes, which only exists in a BUILD_SHARED_LIBS=ON build.
+        # A static build writes to .../static/ and is correctly not found here.
+        root / "build" / "Release" / "shared" / "lib" / "liblumice.dylib",
+        root / "build" / "Release" / "shared" / "lib" / "liblumice.so",
+        root / "build" / "cmake_install" / "shared" / "liblumice.dylib",
+        root / "build" / "cmake_install" / "shared" / "liblumice.so",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.dylib",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.so",
+        root / "build" / "cmake_build" / "shared" / "liblumice.dylib",
+        root / "build" / "cmake_build" / "shared" / "liblumice.so",
     ]
     for c in candidates:
         if c.exists():
