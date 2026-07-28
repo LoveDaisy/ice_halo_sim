@@ -552,29 +552,34 @@ End-to-end tests verify the complete CLI simulation pipeline, from configuration
 #### Framework
 
 - **Python**: pytest + Pillow (for image comparison)
-- **Location**: `test/e2e/`
+- **Location**: `test/e2e-correctness/` (tests); `test/e2e/` holds only shared fixtures the
+  layers import from — see `test/e2e/README.md`
 
 #### Test Structure
 
 ```
+test/e2e-correctness/
+├── test_smoke.py             # Smoke tests with PSNR image verification
+├── test_cli.py                # CLI behavior
+├── ...                         # other correctness tests — see doc/testing-architecture.md §1.4
+├── references/                 # Reference output images (*.jpg)
 test/e2e/
-├── test_smoke.py            # Smoke tests with PSNR image verification
-├── test_errors.py           # Error scenario tests (exit code verification)
-├── configs/                 # Test configuration JSON files
-└── references/              # Reference output images (*.jpg)
+├── configs/                     # Scenario JSON configs shared across layers
+└── runner.py, base.py, ...      # Shared fixtures — see test/e2e/README.md
 ```
 
 #### Running E2E Tests
 
 ```bash
 # Requires a built binary at build/cmake_install/static/Lumice
-pytest test/e2e/ -v
+pytest -v          # fast subset (pinned by pyproject.toml addopts; matches CI)
+pytest -v -m ''     # full set
 ```
 
 #### Image Verification
 
 E2E smoke tests compare output images against reference images using PSNR (Peak Signal-to-Noise Ratio):
-- Reference images are stored in `test/e2e/references/*.jpg`
+- Reference images are stored in `test/e2e-correctness/references/*.jpg`
 - PSNR threshold: tests pass if PSNR exceeds a defined minimum (typically 40 dB)
 - To update reference images: run the simulation with the test config and replace the reference file
 
@@ -582,7 +587,7 @@ E2E smoke tests compare output images against reference images using PSNR (Peak 
 
 1. Create a configuration JSON in `test/e2e/configs/`
 2. Generate the reference image by running the CLI with the new config
-3. Save the reference to `test/e2e/references/`
+3. Save the reference to `test/e2e-correctness/references/`
 4. Add a test case in `test_smoke.py` or a new test file
 
 ## Debugging Tips

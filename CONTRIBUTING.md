@@ -39,7 +39,7 @@ authoritative regardless of whether the hook is installed.
 ```bash
 ./scripts/build.sh -tj release            # Unit tests (GoogleTest via CTest)
 ./scripts/build.sh -gtj release           # GUI tests (requires display server)
-pytest test/e2e/ -v               # E2E tests (requires Pillow)
+pytest -v                                 # E2E tests, fast subset (requires Pillow)
 ```
 
 ## Branch Naming

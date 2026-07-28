@@ -25,13 +25,15 @@ Core conventions:
 ./build/cmake_install/static/Lumice -f examples/config_example.json
 ./build/cmake_install/static/Lumice -f config.json -v
 
-# Tests
-./scripts/build.sh -tj release
-./scripts/build.sh -gtj release
-LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release
-pytest -v                                 # fast e2e only (matches CI; testpaths in pyproject.toml)
-./scripts/build.sh -sj release && \
-  pytest -v -m slow                       # slow e2e (needs shared lib; run before PR)
+# Tests — scripts/test.sh is the recommended entry point; see the test-scope
+# table under "Testing and Platform Notes" for which one fits a given situation.
+LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release   # headless: build gui_test, skip running it
+./scripts/test.sh quick                   # after -tgj above: ctest + fast e2e + gui_test correctness pool
+./scripts/test.sh full                    # quick + gui_test real-timing pool
+./scripts/test.sh pr                      # full + shared-lib freshness + slow e2e (before opening a PR)
+pytest -v                                 # fast e2e only, direct — pinned by pyproject.toml addopts (matches CI)
+pytest -v -m ''                           # full e2e set — the addopts pin's escape hatch
+pytest -v -m slow                         # slow e2e only (needs shared lib: ./scripts/build.sh -sj release)
 
 # Format
 ./scripts/format.sh
@@ -45,9 +47,12 @@ python3 scripts/check_new_refs.py --range A..B    # same, over a commit range (w
 ```
 
 Build trees and install trees are per-flavor: `-s` (shared) and no `-s` (static) never share a
-directory, so both stay warm and switching between them does not force a rebuild. Release
-artifacts are installed to `build/cmake_install/<flavor>/`; the CMake build tree is
-`build/cmake_build/<flavor>/` and compiler output lands in `build/<BUILD_TYPE>/<flavor>/{bin,lib}/`.
+directory, so both stay warm and switching between them does not force a rebuild. `-t`/`-g`/`-b`
+choose *what* to build (tests / GUI app / benchmarks) and compose with either flavor — only `-s`
+switches the flavor itself, and it defaults to static when omitted, so `-t`/`-g` alone never
+produce a shared library. Release artifacts are installed to `build/cmake_install/<flavor>/`; the
+CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
+`build/<BUILD_TYPE>/<flavor>/{bin,lib}/`.
 
 ## Code Structure
 
@@ -137,10 +142,38 @@ artifacts are installed to `build/cmake_install/<flavor>/`; the CMake build tree
   - `test/regression-sentinel/` — bug-resurfacing guards (errors, capi sentinel overflow, MS filter leak)
   - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `configs/`).
 - E2E test split:
-  - Default `pytest -v` runs the fast subset — matches CI behavior (CI uses `-m "not slow"`). Test paths come from `pyproject.toml` `testpaths`.
-  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release`) and are excluded from CI to keep PR feedback fast. Run them locally with `pytest -v -m slow` before opening a PR that touches the simulator core, query filter, or C API surface.
+  - `./scripts/test.sh <quick|full|pr>` is the recommended entry point for a local run — see the
+    test-scope table below for which one fits a given situation. It runs ctest, the fast e2e
+    subset, `gui_test`, and (for `pr`) the shared-lib slow e2e leg as one call and prints a single
+    per-layer summary ending in one `RESULT: PASS`/`FAIL` line, so one invocation is enough to
+    read the outcome — see the judgment-discipline note below for why that matters.
+  - Bare `pytest -v` runs the fast subset directly. This is pinned by `pyproject.toml`'s
+    `addopts` (`-m "not slow"`), so it is structurally true rather than a convention a caller has
+    to remember, and it matches CI's fast leg. `pytest -v -m ''` is the escape hatch back to the
+    full set; because a command-line `-m` replaces `addopts` instead of combining with it, any
+    invocation that needs the full set (or a marker CI never uses) must pass `-m` explicitly.
+    See `doc/testing-architecture.md` §5 for the `addopts` rationale and the incident it fixed.
+  - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release` —
+    `-g`/`-t` alone never produce it, see "Build trees..." above) and are excluded from CI's fast
+    leg. Run them locally with `pytest -v -m slow` before opening a PR that touches the simulator
+    core, query filter, or C API surface.
     - `test/regression-sentinel/test_capi_sentinel_overflow.py` — sentinel-overflow regression: 3-config × 12 rounds = 36 server lifecycles via `LUMICE_GetRawXyzResults(max_count=1)`; guards against reintroduction of the c_api.cpp off-by-one sentinel write (fix: 5287efe)
     - `test/regression-sentinel/test_ms_filter_leak.py` — Design A filter-fail termination regression: confirms filter-fail rays do not propagate across MS layers
+  - **Test-scope table** — which command fits a given situation:
+
+    | Situation | Run |
+    |---|---|
+    | Verify the change you just made | `./scripts/test.sh quick` |
+    | Right after a static rebuild, before moving on | `./scripts/test.sh quick` |
+    | Broader regression sweep — unsure how far a change reaches | `./scripts/test.sh full` |
+    | Before opening a PR — reproduce the CI e2e-slow shape locally | `./scripts/test.sh pr` |
+    | Confirm one specific gate/test actually fails on a deliberately-broken state (not a general sweep) | run that one check directly against the broken state, then again after the fix: `ctest -R <label>`, `pytest <file>::<test> -m ''`, or `gui_test --filter <name>` |
+
+  - **Judgment discipline**: a command's exit code is the only thing that says pass/fail.
+    Running it through a pipe (`cmd | tail`, `cmd > log 2>&1`) hands back the pipeline's last
+    stage's status instead of the command's own, which is how a finished run still needs a second
+    call just to learn the outcome. Read `$?` straight off the foregrounded command, or use
+    `./scripts/test.sh`, which already does this for every layer.
 - GUI screenshot references live under `test/gui/references/`.
 - GUI tests (the C++ `gui_test` binary and the `test/gui/` e2e layer that drives it) are isolated
   from personal defaults by default: `gui_test`'s own `--user-config`/

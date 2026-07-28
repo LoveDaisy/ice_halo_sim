@@ -552,29 +552,34 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 #### 框架
 
 - **Python**：pytest + Pillow（图像比较）
-- **位置**：`test/e2e/`
+- **位置**：`test/e2e-correctness/`（测试本体）；`test/e2e/` 现在只存放各层共用的 fixture，
+  见 `test/e2e/README.md`
 
 #### 测试结构
 
 ```
+test/e2e-correctness/
+├── test_smoke.py             # 冒烟测试（PSNR 图像验证）
+├── test_cli.py                # CLI 行为
+├── ...                          # 其它正确性测试 — 见 doc/testing-architecture.md §1.4
+├── references/                  # 参考输出图片（*.jpg）
 test/e2e/
-├── test_smoke.py            # 冒烟测试（PSNR 图像验证）
-├── test_errors.py           # 错误场景测试（退出码验证）
-├── configs/                 # 测试配置 JSON 文件
-└── references/              # 参考输出图片（*.jpg）
+├── configs/                      # 各层共用的场景 JSON 配置
+└── runner.py, base.py, ...       # 共用 fixture — 见 test/e2e/README.md
 ```
 
 #### 运行 E2E 测试
 
 ```bash
 # 需要已构建的二进制文件 build/cmake_install/static/Lumice
-pytest test/e2e/ -v
+pytest -v           # fast 子集（由 pyproject.toml 的 addopts 钉住；与 CI 一致）
+pytest -v -m ''      # 全量
 ```
 
 #### 图像验证
 
 E2E 冒烟测试使用 PSNR（峰值信噪比）将输出图像与参考图像进行比较：
-- 参考图片存放在 `test/e2e/references/*.jpg`
+- 参考图片存放在 `test/e2e-correctness/references/*.jpg`
 - PSNR 阈值：通常为 40 dB，超过即通过
 - 更新参考图片：使用测试配置运行 CLI 模拟，替换参考文件
 
@@ -582,7 +587,7 @@ E2E 冒烟测试使用 PSNR（峰值信噪比）将输出图像与参考图像�
 
 1. 在 `test/e2e/configs/` 中创建配置 JSON
 2. 使用新配置运行 CLI 生成参考图像
-3. 将参考图像保存到 `test/e2e/references/`
+3. 将参考图像保存到 `test/e2e-correctness/references/`
 4. 在 `test_smoke.py` 或新测试文件中添加测试用例
 
 ## 调试技巧
