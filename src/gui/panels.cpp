@@ -13,6 +13,7 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/destructive_style.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
@@ -1427,14 +1428,22 @@ void RenderSceneControls(GuiState& state) {
   // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
   // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.
   // last_committed_state.sun). The pre-migration DIRTY_IF wrapper is retired at this call site.
-  SliderWithInput("Altitude", &state.sun.altitude, -90.0f, 90.0f);
+  // Domain and format read from the field editor registry, not written here. `fmt` is passed
+  // explicitly even though it currently equals SliderWithInput's own default: relying on the
+  // default would leave the display precision as a second statement this call site makes on its
+  // own, which is the thing being removed.
+  const FieldEditorConstraint alt_c = ConstraintFor("sun.altitude", state);
+  SliderWithInput("Altitude", &state.sun.altitude, static_cast<float>(alt_c.min_value),
+                  static_cast<float>(alt_c.max_value), alt_c.fmt, alt_c.scale);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sun elevation angle above the horizon");
   }
   ImGui::BeginGroup();
   // AC2 migration path: same rationale as sun.altitude above.
-  SliderWithInput("Diameter", &state.sun.diameter, 0.1f, 5.0f);
+  const FieldEditorConstraint dia_c = ConstraintFor("sun.diameter", state);
+  SliderWithInput("Diameter", &state.sun.diameter, static_cast<float>(dia_c.min_value),
+                  static_cast<float>(dia_c.max_value), dia_c.fmt, dia_c.scale);
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
@@ -1484,13 +1493,15 @@ void RenderSceneControls(GuiState& state) {
   }
   ImGui::PopItemWidth();
   ImGui::BeginGroup();
-  if (!state.sim.infinite) {
-    SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
-  } else {
-    ImGui::BeginDisabled();
-    SliderWithInput("Rays(M)", &state.sim.ray_num_millions, 0.1f, 100.0f);
-    ImGui::EndDisabled();
-  }
+  // One call, not one per branch. The two branches were identical apart from the BeginDisabled
+  // wrapper, and `enabled` (the registry's "infinite rays is on, so no ray total applies") is
+  // exactly the condition they split on — so the split has nothing left to express, and collapsing
+  // it removes the only way this field could still hold two constraints that disagree.
+  const FieldEditorConstraint rays_c = ConstraintFor("sim.ray_num_millions", state);
+  ImGui::BeginDisabled(!rays_c.enabled);
+  SliderWithInput("Rays(M)", &state.sim.ray_num_millions, static_cast<float>(rays_c.min_value),
+                  static_cast<float>(rays_c.max_value), rays_c.fmt, rays_c.scale);
+  ImGui::EndDisabled();
   ImGui::EndGroup();
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip(
@@ -1499,7 +1510,10 @@ void RenderSceneControls(GuiState& state) {
         "ceil(total / N_wavelengths) per wavelength.");
   }
   ImGui::BeginGroup();
-  SliderIntWithInput("Max hits", &state.sim.max_hits, 1, 64);
+  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
+  const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", state);
+  SliderIntWithInput("Max hits", &state.sim.max_hits, static_cast<int>(hits_c.min_value),
+                     static_cast<int>(hits_c.max_value));
   ImGui::EndGroup();
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");

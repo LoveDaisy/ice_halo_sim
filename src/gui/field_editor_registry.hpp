@@ -30,10 +30,10 @@
 // sequence of main-UI actions can produce and which the loader would then quietly ignore).
 //
 // It cannot, and by construction rather than by a list of forbidden pairs:
-//   1. every entry's `enabled` restates the BeginDisabled(...) expression at the field's main-UI
-//      call site, so the set of (field, configuration) pairs this table will write is the same set
-//      the main UI will write. A field that does not apply is greyed here exactly when it is greyed
-//      there;
+//   1. every entry's `enabled` IS the BeginDisabled(...) expression at the field's main-UI call
+//      site — that call site reads this one — so the set of (field, configuration) pairs this table
+//      will write is the same set the main UI will write. A field that does not apply is greyed
+//      here exactly when it is greyed there;
 //   2. the renderer invariants in app_panels.cpp (RenderPreviewPanel) run every frame, panel open
 //      or not — this is a popup, not a replacement for the frame. Setting roll and THEN switching
 //      to a full-sky lens does not smuggle the pair through: roll is forced back to 0 on the next
@@ -44,19 +44,27 @@
 // this does NOT do is validate combinations that ARE reachable from the main UI — those need no
 // defending, since a user could have saved them by hand anyway.
 //
-// KNOWN DEBT, stated here because it is invisible at the call sites: each entry currently
-// RE-STATES the constraint its main-UI call site spells out inline (the same min/max/format/
-// disabled-when expression, written a second time). The two can therefore drift, and only the
-// parity tests in test_gui_defaults_panel.cpp would notice. Folding the main UI's ~16 slider call
-// sites onto this registry — so the constraint has one home instead of two — is a separate,
-// already-scoped task; keeping every restatement inside THIS file (rather than letting the panel
-// compute a bound of its own) is what keeps that migration a one-file change.
+// ONE HOME, NOT TWO: the main UI's slider call sites do not restate any of this. Every one of the
+// 16 sliders whose field is a registered leaf (View / Display / Overlay in app_panels.cpp, Sun /
+// Simulation in panels.cpp) reads its domain, format, scale and disabled-when from `ConstraintFor`
+// below — the literal bounds that used to sit at those call sites are gone, so an edit here moves
+// the main UI and the panel together and there is no second copy left to drift from. The eight
+// slider call sites this does NOT cover are the collection-domain ones (crystal axis Mean/Std/
+// Range/Amplitude/Scale, the shape table, entry proportion, layer probability): their key paths
+// carry an in-document index, so user_defaults.hpp rules them out as defaults and they have no
+// entry here to read.
+//
+// What that claim does NOT yet cover, stated so nobody reads it as wider than it is: the preview's
+// own mouse handlers in app_panels.cpp (RenderPreviewPanel — drag clamps elevation, wheel clamps
+// fov) still hold their own copy of those two bounds. They are not slider call sites and were left
+// alone deliberately; that copy is the remaining place elevation's ±89/±90 is written twice.
 
 #include <functional>
 #include <string>
 #include <vector>
 
 #include "gui/gui_state.hpp"
+#include "gui/panels.hpp"  // SliderScale — part of a float field's constraint, see below
 
 namespace lumice::gui {
 
@@ -87,6 +95,17 @@ struct FieldEditorConstraint {
   bool has_numeric_domain = false;
   double min_value = 0.0;
   double max_value = 0.0;
+  // How the domain is DISPLAYED and traversed. Part of the constraint rather than a separate
+  // "presentation" struct, because a bound and the precision it is shown at answer the same
+  // question — what this field allows a user to enter. `%.2f` on an alpha and `%.0f` on a field of
+  // view are as much a constraint on the reachable values as [0,1] and [1,180] are.
+  //
+  // Both carry the same defaults SliderWithInput itself declares, which is what lets the four
+  // non-float factories keep their positional aggregate initialisation: they list five
+  // initialisers, and these two members take their default member initialiser. Anything added
+  // after this point must therefore also go at the END of the struct.
+  const char* fmt = "%.1f";
+  SliderScale scale = SliderScale::kLinear;
 };
 
 struct FieldEditorEntry {
@@ -105,6 +124,17 @@ struct FieldEditorEntry {
 // The editor for `key_path`, or nullptr when the field is read-only in the panel. Total function:
 // nullptr is a legitimate, designed answer, not a lookup failure.
 const FieldEditorEntry* FindFieldEditor(const std::string& key_path);
+
+// The constraint on `key_path` right now — the form the main UI's call sites use, where the key is
+// a compile-time literal the caller has already registered above.
+//
+// Aborts when the key has no entry, and the asymmetry with FindFieldEditor is deliberate rather
+// than a stricter mood: FindFieldEditor's nullptr answers "does this document leaf happen to have
+// an editor", asked while walking leaves nobody chose. This one is asked with a literal key by a
+// call site that ships a control for that exact field, so a miss is a typo or a rename that lost a
+// call site — a state in which the control has no domain to draw and silently substituting one
+// would be worse than stopping.
+FieldEditorConstraint ConstraintFor(const std::string& key_path, const GuiState& state);
 
 // Every registered key path. For coverage assertions ("which of the document's leaves have an
 // editor") — the panel itself never enumerates, it looks up per row.

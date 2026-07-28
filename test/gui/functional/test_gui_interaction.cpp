@@ -2690,10 +2690,62 @@ void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.dirty, false);
     };
   }
+
+  // ===== The main UI's sliders read their domain from the field editor registry =====
+  //
+  // Every expected value below is a LITERAL, not a second call to the registry. That is the whole
+  // point: the call site and the registry are now the same code, so a test that asked
+  // ConstraintFor() what to expect would agree with any bound, including a wrong one. What these
+  // pin is the number a user typing into the real widget actually lands on.
+
+  // p1_slider/registry_diameter_domain — sun.diameter, the Scene panel's other float slider.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "registry_diameter_domain");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemInputValue("**/##Diameter_input", 40.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.sun.diameter, 5.0f);
+
+      ctx->ItemInputValue("**/##Diameter_input", -1.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.sun.diameter, 0.1f);
+    };
+  }
+
+  // p1_slider/registry_rays_single_path — the ray-total slider is ONE call site now, greyed by the
+  // registry's `enabled` instead of by a second copy of it in an else-branch. Both states are
+  // asserted on the same widget id, which is what makes "there is only one" observable: a
+  // reintroduced second call site under `infinite` would be a different item, and the id that
+  // exists in one state would then have to stop existing in the other.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_slider", "registry_rays_single_path");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(gui::g_state.sim.infinite, false);
+      IM_CHECK((ctx->ItemInfo("**/##Rays(M)_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      gui::g_state.sim.infinite = true;
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists("**/##Rays(M)_input"));
+      IM_CHECK((ctx->ItemInfo("**/##Rays(M)_input").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      gui::g_state.sim.infinite = false;
+      ctx->Yield(3);
+      IM_CHECK((ctx->ItemInfo("**/##Rays(M)_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+  }
 }
 
 // ========== task-test-gui-interaction: P2 Render (lens switch / overlay) ==========
 
+
+// Set by registry_bg_alpha_domain_and_gate's TestFunc, consumed by its GuiFunc on the main thread.
+static bool g_bg_upload_requested = false;
 
 void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
   // p2_render/lens_switch_fov_clamp — switching lens type clamps fov to new lens's MaxFov
@@ -3503,6 +3555,206 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       auto info_front = ctx->ItemInfo("**/Front##visible");
       IM_CHECK(info_upper.ItemFlags & ImGuiItemFlags_Disabled);
       IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
+    };
+  }
+
+  // ===== The View / Display / Overlay sliders read the field editor registry =====
+  //
+  // Expected values are literals throughout, for the reason spelled out at the head of the
+  // matching block in RegisterP1SliderBoundaryTests: the call site and the registry are one piece
+  // of code now, so re-asking the registry what to expect would prove nothing.
+
+  // p2_render/registry_view_slider_domains — the four View sliders, including the one bound that
+  // is a function of the state: elevation stops one degree short of the pole under Globe and at
+  // the pole under every other lens. Driven at BOTH lens types, since a registry that had gone
+  // back to a constant would satisfy either one alone.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "registry_view_slider_domains");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+
+      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 90.0f);
+      ctx->ItemInputValue("**/##Elevation##view_input", -200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -90.0f);
+
+      ctx->ItemInputValue("**/##Azimuth##view_input", 400.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
+      ctx->ItemInputValue("**/##Azimuth##view_input", -400.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, -180.0f);
+
+      ctx->ItemInputValue("**/##Roll##view_input", 400.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 180.0f);
+      ctx->ItemInputValue("**/##Roll##view_input", -400.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.roll, -180.0f);
+
+      // Switching to Globe tightens elevation's bound under a value that was legal a frame ago —
+      // the slider pulls it in on its own, with nothing else in the frame touching elevation.
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
+      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);
+    };
+  }
+
+  // p2_render/registry_view_applicability — which View sliders are greyed, per lens. This is the
+  // half of the migration that is NOT a number: BeginDisabled at these four call sites now takes
+  // the registry's `enabled` rather than a locally recomputed full_sky / is_globe. The three
+  // configurations differ from each other in exactly one field's answer (Globe greys roll and
+  // nothing else), so a gate that had collapsed to a single condition fails here.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "registry_view_applicability");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const char* const kViewInputs[] = { "**/##FOV##view_input", "**/##Elevation##view_input",
+                                          "**/##Azimuth##view_input", "**/##Roll##view_input" };
+
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+      for (const char* ref : kViewInputs) {
+        IM_CHECK((ctx->ItemInfo(ref).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      }
+
+      // Globe: roll is locked to 0 by the lens, the other three still apply.
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      IM_CHECK((ctx->ItemInfo("**/##FOV##view_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK((ctx->ItemInfo("**/##Elevation##view_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK((ctx->ItemInfo("**/##Azimuth##view_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK((ctx->ItemInfo("**/##Roll##view_input").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // Full-sky: no view angle applies at all. Iterates the SSOT array, like
+      // lens_full_sky_view_controls_disabled, so a new full-sky lens is covered automatically.
+      for (const int lens : gui::kFullSkyLensTypes) {
+        gui::g_state.renderer.lens_type = lens;
+        ctx->Yield(3);
+        for (const char* ref : kViewInputs) {
+          IM_CHECK((ctx->ItemInfo(ref).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        }
+      }
+    };
+  }
+
+  // p2_render/registry_display_overlay_domains — the six remaining unconditional sliders.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "registry_display_overlay_domains");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemInputValue("**/##EV##display_input", 20.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, 6.0f);
+      ctx->ItemInputValue("**/##EV##display_input", -20.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, -6.0f);
+
+      struct AlphaCase {
+        const char* input_ref;
+        float* slot;
+      };
+      const AlphaCase kAlphas[] = {
+        { "**/##Alpha##horizon_input", &gui::g_state.horizon_alpha },
+        { "**/##Alpha##grid_input", &gui::g_state.grid_alpha },
+        { "**/##Alpha##sun_circles_input", &gui::g_state.sun_circles_alpha },
+      };
+      for (const AlphaCase& c : kAlphas) {
+        ctx->ItemInputValue(c.input_ref, 7.5f);
+        ctx->Yield();
+        IM_CHECK_EQ(*c.slot, 1.0f);
+        ctx->ItemInputValue(c.input_ref, -3.0f);
+        ctx->Yield();
+        IM_CHECK_EQ(*c.slot, 0.0f);
+      }
+
+      // The Zenith/Nadir pair sits below the fold of the right panel: with every group expanded it
+      // is clipped, and a clipped item is never submitted, so the engine cannot find it by id
+      // (this is why no earlier test drives these two). Scroll first, and hand the panel back at
+      // the top — gui_test is one process and the scroll position outlives the test.
+      ctx->ScrollToBottom("//##RightPanel");
+      ctx->Yield(2);
+
+      ctx->ItemInputValue("**/##Alpha##zenith_nadir_input", 7.5f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_alpha, 1.0f);
+      ctx->ItemInputValue("**/##Alpha##zenith_nadir_input", -3.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_alpha, 0.0f);
+
+      // The one overlay slider whose domain is neither [0,1] nor symmetric.
+      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", 200.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
+      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", 0.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 2.0f);
+
+      ctx->ScrollToTop("//##RightPanel");
+      ctx->Yield(2);
+    };
+  }
+
+  // p2_render/registry_bg_alpha_domain_and_gate — the background alpha slider, the one migrated
+  // field whose gate has two conditions (no image loaded OR image hidden).
+  //
+  // KNOWN LIMIT, so the next reader does not take this for more than it is: the "no image loaded"
+  // half is NOT distinguishable from here. That slider sits inside an outer BeginDisabled(no_bg)
+  // which also wraps the Show checkbox and therefore stays; it greys the slider on its own whether
+  // or not the registry's gate agrees. What this test does separate is the OTHER half — with an
+  // image loaded, greyed follows bg_show, and that is the condition the call site used to compute
+  // for itself.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "registry_bg_alpha_domain_and_gate");
+    t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
+      // UploadBgTexture is a GL call, so it has to happen on the main thread rather than in the
+      // test coroutine — same handoff test_gui_visual.cpp uses for the preview texture.
+      if (g_bg_upload_requested) {
+        static const unsigned char kPixels[2 * 2 * 3] = { 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255 };
+        gui::g_preview.UploadBgTexture(kPixels, 2, 2);
+        g_bg_upload_requested = false;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_preview.HasBackground());
+
+      g_bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      gui::g_state.bg_show = false;
+      ctx->Yield(3);
+      IM_CHECK((ctx->ItemInfo("**/##Alpha##display_input").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      gui::g_state.bg_show = true;
+      ctx->Yield(3);
+      IM_CHECK((ctx->ItemInfo("**/##Alpha##display_input").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      ctx->ItemInputValue("**/##Alpha##display_input", 7.5f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_alpha, 1.0f);
+      ctx->ItemInputValue("**/##Alpha##display_input", -3.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_alpha, 0.0f);
+
+      // gui_test is one process with one shared preview: hand the background back before leaving,
+      // rather than relying on the next test's ResetTestState to do it.
+      gui::g_preview.ClearBackground();
+      gui::g_state.bg_show = false;
+      ctx->Yield(2);
     };
   }
 }

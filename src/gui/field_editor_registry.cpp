@@ -9,6 +9,7 @@
 #include "gui/panels.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
+#include "util/fatal.hpp"
 
 namespace lumice::gui {
 
@@ -18,13 +19,14 @@ namespace {
 // Entry factories.
 //
 // Each factory takes the field's domain ONCE and hands the same closure to both halves of the
-// entry, so the bound the range check uses and the bound the widget clamps to cannot disagree. That
-// is the only duplication this file actively prevents; the duplication against the MAIN UI's call
-// site is the acknowledged debt described in the header.
+// entry, so the bound the range check uses and the bound the widget clamps to cannot disagree. The
+// main UI's call site is a third reader of that same closure (through ConstraintFor) rather than a
+// copy of it — see the header.
 // ------------------------------------------------------------------------------------------------
 
 // Whether the field applies at all in the current configuration, and what to tell the user when it
-// does not. Mirrors the BeginDisabled(...) expression at the field's main-UI call site.
+// does not. This IS the BeginDisabled(...) expression at the field's main-UI call site: that call
+// site passes `!ConstraintFor(key, state).enabled` rather than recomputing the condition.
 struct Applicability {
   bool enabled = true;
   // Named to match FieldEditorConstraint::disabled_reason, which this becomes: keeping the two
@@ -76,10 +78,10 @@ FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, c
                             SliderScale scale = SliderScale::kLinear, ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kFloatSlider;
-  entry.Constraint = [domain, applicable](const GuiState& state) {
+  entry.Constraint = [domain, applicable, fmt, scale](const GuiState& state) {
     const auto range = domain(state);
     const Applicability a = applicable(state);
-    return FieldEditorConstraint{ a.enabled, a.disabled_reason, true, range.first, range.second };
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, true, range.first, range.second, fmt, scale };
   };
   entry.Render = [access, domain, fmt, scale](GuiState& state, const char* id_base) {
     const auto range = domain(state);
@@ -217,8 +219,8 @@ FieldEditorEntry ComboField(int* (*access)(GuiState&), const char* const* names,
 }
 
 // ------------------------------------------------------------------------------------------------
-// Shared applicability gates. Each is the main-UI BeginDisabled(...) expression, restated once
-// here rather than once per field that shares it.
+// Shared applicability gates. Each is written once here and read by every field that shares it —
+// and, through ConstraintFor, by that field's main-UI BeginDisabled(...) as well.
 // ------------------------------------------------------------------------------------------------
 
 Applicability NotUnderFullSky(const GuiState& state) {
@@ -496,6 +498,16 @@ const FieldEditorEntry* FindFieldEditor(const std::string& key_path) {
   const auto& registry = Registry();
   const auto it = registry.find(key_path);
   return it != registry.end() ? &it->second : nullptr;
+}
+
+FieldEditorConstraint ConstraintFor(const std::string& key_path, const GuiState& state) {
+  const FieldEditorEntry* entry = FindFieldEditor(key_path);
+  if (entry == nullptr) {
+    // Not an assert: the gate has to hold in the release build the GUI actually ships, where NDEBUG
+    // would strip one and leave a null dereference with no diagnostic in its place.
+    FatalAbort("field editor registry has no entry for key path \"%s\"", key_path.c_str());
+  }
+  return entry->Constraint(state);
 }
 
 std::vector<std::string> RegisteredFieldEditorKeyPaths() {
