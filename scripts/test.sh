@@ -312,14 +312,26 @@ EOF
   return 1
 }
 
+# Written after a successful shared build. The library's own mtime is not a
+# sufficient reference point: a source change that the shared flavor does not
+# compile (src/gui/, which this flavor does not build) leaves ninja with nothing
+# to relink, so the .dylib stays older than that source forever and every
+# subsequent run would re-report "stale" and rebuild again. The question the
+# check actually wants to ask is "have sources changed since a build last
+# succeeded", which is what the stamp records. Living under the shared build
+# tree, it is removed by `build.sh -ks` along with everything else it vouches for.
+SHARED_STAMP="build/cmake_build/shared/.lumice_test_sh_build_stamp"
+
 # mtime, not git state: a locally modified but uncommitted source file is exactly
 # the case where a stale library produces failures that look like real
 # regressions. Consequence worth knowing: right after a fresh clone or a branch
 # switch, every source file is newer than any pre-existing library, so this
 # reports stale and rebuilds. That is the safe direction, not a defect.
 shared_lib_stale_reason() { # lib
-  local newer
-  newer=$(find src CMakeLists.txt cmake/CPM.cmake -newer "$1" -print 2>/dev/null | head -1)
+  local ref=$1 newer
+  # The stamp only ever moves the reference point forward, never back.
+  if [[ -f ${SHARED_STAMP} && ${SHARED_STAMP} -nt ${ref} ]]; then ref=${SHARED_STAMP}; fi
+  newer=$(find src CMakeLists.txt cmake/CPM.cmake -newer "${ref}" -print 2>/dev/null | head -1)
   [[ -n ${newer} ]] && printf 'stale (%s is newer)' "${newer}"
 }
 
@@ -356,6 +368,17 @@ ensure_shared_lib() {
   run_layer shared-lib ./scripts/build.sh -sj "${BUILD_TYPE_LOWER}"
   local rc=$?
   annotate_last_layer "${reason}"
+  if [[ ${rc} -eq 0 ]]; then
+    # Only after the build succeeded, and only if it produced something to vouch
+    # for: a build that leaves no library behind must not be recorded as fresh.
+    if find_shared_lib > /dev/null; then
+      : > "${SHARED_STAMP}" || printf 'test.sh: warning: could not write %s\n' "${SHARED_STAMP}" >&2
+    else
+      annotate_last_layer "build succeeded but no liblumice found in any candidate path"
+      rc=1
+      LAYER_STATUS[$(( ${#LAYER_STATUS[@]} - 1 ))]=FAIL
+    fi
+  fi
   return ${rc}
 }
 
