@@ -412,8 +412,14 @@ void WriteAxisPresetZenithStdToDoc(nlohmann::json& doc, AxisPreset preset, float
 
 void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
   const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
-  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr || !doc.is_object()) {
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
     return;
+  }
+  // Same normalization as WriteAxisPresetZenithStdToDoc: a malformed top-level document (hand-edited,
+  // truncated, or a bare null/array) must become a valid empty object rather than being written back
+  // to disk unchanged by the caller.
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
   }
   const auto presets_it = doc.find("presets");
   if (presets_it == doc.end() || !presets_it->is_object()) {

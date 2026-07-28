@@ -223,6 +223,15 @@ json ReadActiveOverlayDoc() {
   return ReadOverlayJsonIfPresent(*dir);
 }
 
+bool WriteOverlayDocument(const json& doc) {
+  const auto dir = GetActiveUserConfigDir();
+  if (!dir) {
+    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was saved");
+    return false;
+  }
+  return WriteUserDefaultsFile(*dir, doc);
+}
+
 std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current) {
   return BuildDefaultDiffRows(current, ReadActiveOverlayDoc());
 }

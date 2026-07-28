@@ -77,6 +77,14 @@ inline constexpr const char* kDiffEngineExcludedRootKeys[] = { "layers", "schema
 // to prevent (see the note on GetActiveUserConfigDir in user_defaults.hpp).
 nlohmann::json ReadActiveOverlayDoc();
 
+// Writes `doc` verbatim to the active user-config directory's override file. Public for the same
+// reason ReadActiveOverlayDoc is: the panel's Save is a whole-document commit (it builds the next
+// document in memory, then writes it), not a read-mutate-write of one key, so it needs the write
+// half of UpdateOverlayDocument's directory resolution without the read/mutate half. A second
+// inline GetActiveUserConfigDir() + WriteUserDefaultsFile() at the call site would be the same
+// drift risk ReadActiveOverlayDoc's comment already flags for the read side.
+bool WriteOverlayDocument(const nlohmann::json& doc);
+
 // The whole row set for `current`, against the currently effective defaults (factory + whatever is
 // saved in the active user-config directory). Sorted by key_path for a stable panel order.
 //

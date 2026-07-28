@@ -14,7 +14,6 @@
 #include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
 #include "gui/destructive_style.hpp"
-#include "gui/gui_logger.hpp"
 #include "gui/panels.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui.h"
@@ -62,26 +61,6 @@ namespace {
 // ------------------------------------------------------------------------------------------------
 nlohmann::json g_snapshot_doc = nlohmann::json::object();
 nlohmann::json g_copy_doc = nlohmann::json::object();
-
-// §1 preset edits made in this session, so that a successful Save can push them into the
-// process-wide preset cache (g_axis_overrides, behind user_defaults.hpp) without re-parsing the
-// whole document.
-//
-// Re-parsing would be the obvious move and is wrong: ParseAxisPresetOverrides re-runs the clamp and
-// files a downgrade notice for every out-of-domain value in the document, including ones this
-// session never touched and the LOAD path already reported. The user would get a fresh "your value
-// was adjusted" notice for pressing Save on something else entirely.
-//
-// `touched` is separate from the value for the same reason: nullopt is a real edit ("Restore to
-// factory"), not the absence of one.
-struct PresetPendingEdit {
-  bool touched = false;
-  std::optional<float> stored_value;  // nullopt with touched ⇒ restore to the factory value
-};
-struct PresetPendingEdits {
-  PresetPendingEdit slots[static_cast<std::size_t>(AxisPreset::kCustom) + 1];
-};
-PresetPendingEdits g_preset_pending;
 
 // Row set, rebuilt on open and after every edit of the copy. Not rebuilt per frame: BuildDefaultDiffRows
 // re-serializes the whole GuiState twice, and a per-frame call would do that 60x a second.
@@ -178,32 +157,30 @@ bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted)
   if (!ApplyAcceptedDefaultsToDoc(next, accepted, state)) {
     return false;
   }
-  const auto dir = GetActiveUserConfigDir();
-  if (!dir) {
-    GUI_LOG_WARNING("[GUI] Defaults panel: no user-config directory available; nothing was saved");
-    return false;
-  }
-  if (!WriteUserDefaultsFile(*dir, next)) {
+  if (!WriteOverlayDocument(next)) {
     return false;
   }
 
   // ORDER IS PART OF THE CONTRACT — disk first, then memory, then the anchors:
   //  1. the write above has landed, so the process-wide preset cache may now follow it. Only the
-  //     presets this session actually edited are pushed (see g_preset_pending): re-deriving the
-  //     cache from the document would re-clamp values this session never touched and file a
-  //     duplicate downgrade notice for each, on a Save that had nothing to do with them.
+  //     presets that actually changed this session are pushed — read directly off the two
+  //     documents (next vs the frozen open-time snapshot) rather than tracked through a parallel
+  //     "touched" shadow, so there is exactly one place a preset edit can go missing: the document
+  //     itself. Re-parsing the whole document instead would be wrong for a different reason: it
+  //     would re-clamp values this session never touched and file a duplicate downgrade notice for
+  //     each, on a Save that had nothing to do with them.
   //  2. the copy becomes the new snapshot, because "what is on disk" is now literally this
   //     document. That re-anchors the §2/§3 partition, which is what moves the adopted rows out
   //     of §2 — the visible confirmation that the save landed.
   //  3. the exclusion set is dropped: it described the previous set of pending rows, and after the
   //     re-anchor the rows it named are no longer pending.
   for (const auto& entry : kAxisPresets) {
-    const auto slot = static_cast<std::size_t>(entry.id);
-    if (g_preset_pending.slots[slot].touched) {
-      AdoptAxisPresetZenithStdOverrideInMemory(entry.id, g_preset_pending.slots[slot].stored_value);
+    const auto after = ReadAxisPresetZenithStdFromDoc(next, entry.id);
+    const auto before = ReadAxisPresetZenithStdFromDoc(g_snapshot_doc, entry.id);
+    if (after != before) {
+      AdoptAxisPresetZenithStdOverrideInMemory(entry.id, after);
     }
   }
-  g_preset_pending = PresetPendingEdits{};
   g_copy_doc = std::move(next);
   g_snapshot_doc = g_copy_doc;
   g_excluded_keys.clear();
@@ -471,7 +448,6 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
       g_status_message = result.message;
     } else {
       WriteAxisPresetZenithStdToDoc(g_copy_doc, entry.id, result.stored_value);
-      g_preset_pending.slots[slot] = PresetPendingEdit{ /*touched=*/true, result.stored_value };
       if (result.clamped) {
         // Says "adjusted", not just the number. A status line reading "9.99999905" after the user
         // typed 25 reads as though nothing happened to their number — the icon in the warning
@@ -569,7 +545,6 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
       // why the warning is now cleared unconditionally: the value it described is gone from the
       // copy, so there is no state in which it still applies.
       EraseAxisPresetZenithStdFromDoc(g_copy_doc, entry.id);
-      g_preset_pending.slots[slot] = PresetPendingEdit{ /*touched=*/true, std::nullopt };
       g_status_message = std::string(entry.label) + " will go back to its built-in value when you save.";
       g_preset_warnings.slots[slot].clear();
       RefreshPresetStdBuffers();
@@ -610,7 +585,6 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   // one of the ways out (the button today, an X or Esc later).
   g_snapshot_doc = ReadActiveOverlayDoc();
   g_copy_doc = g_snapshot_doc;
-  g_preset_pending = PresetPendingEdits{};
   g_excluded_keys.clear();
   g_search_filter.Clear();
   g_status_message.clear();
@@ -700,10 +674,18 @@ void RenderDefaultsPanel(GuiState& state) {
     // "nothing to do" — the old panel could say that only because those other edits had already
     // written themselves to disk behind the user's back.
     const std::vector<std::string> accepted = CheckedPendingKeys();
+    // Read-only preview of what CommitCopy is about to write, so the status line can tell "nothing
+    // in this session actually differs from what's on disk" apart from "the copy matched the
+    // snapshot but there were accepted rows" — accepted.empty() alone conflates the two, since a
+    // Revert/Reset/§1 edit followed by re-doing it back to the original value is empty-but-changed
+    // by that test.
+    nlohmann::json preview = g_copy_doc;
+    const bool has_changes = ApplyAcceptedDefaultsToDoc(preview, accepted, state) && preview != g_snapshot_doc;
     if (CommitCopy(state, accepted)) {
-      g_status_message = accepted.empty() ?
-                             "Your defaults were updated." :
-                             "Saved " + std::to_string(accepted.size()) + " setting(s) as your defaults.";
+      g_status_message = !has_changes ? "No changes to save." :
+                         accepted.empty() ?
+                                        "Your defaults were updated." :
+                                        "Saved " + std::to_string(accepted.size()) + " setting(s) as your defaults.";
     } else {
       g_status_message = "Could not write your defaults file; nothing was saved.";
     }
@@ -757,7 +739,6 @@ void ResetDefaultsPanelTestState() {
   g_rows.clear();
   g_snapshot_doc = nlohmann::json::object();
   g_copy_doc = nlohmann::json::object();
-  g_preset_pending = PresetPendingEdits{};
   g_excluded_keys.clear();
   g_search_filter.Clear();
   g_pending_initial_section.reset();
