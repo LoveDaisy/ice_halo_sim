@@ -196,6 +196,26 @@ void ApplyAcceptedKeys(json& doc, const std::vector<std::string>& accepted_key_p
   }
 }
 
+// Drop one key path from `doc`, so it falls back to the factory value. Empty parent objects left
+// behind are pruned, keeping the file readable by hand.
+void EraseKeyPath(json& doc, const std::string& key_path) {
+  ErasePath(doc, SplitKeyPath(key_path));
+}
+
+// Drop every GuiState key from `doc`. "presets" survives untouched — it belongs to namespace 2 and
+// is not what this panel edits.
+void EraseEveryGuiStateKey(json& doc) {
+  json preserved = json::object();
+  // Namespace 2 (the preset library) is a sibling section this panel does not edit. Keeping it
+  // by name — rather than deleting the GuiState keys one by one — means a future GuiState key
+  // is reset without anyone having to remember to add it here.
+  const auto presets = doc.find("presets");
+  if (presets != doc.end()) {
+    preserved["presets"] = *presets;
+  }
+  doc = std::move(preserved);
+}
+
 // Shared read-modify-write for all three disk-side wrappers. `mutate` receives the EXISTING document
 // (never a fresh one), so a subtree this panel does not own — "presets" above all — survives every
 // write by construction rather than by three call sites each remembering to preserve it.
@@ -239,9 +259,13 @@ std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current) {
 std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current, const nlohmann::json& overlay_doc) {
   json current_json;
   json default_json;
+  // The literal factory document, serialized ONCE for the whole walk rather than re-derived per
+  // row: GuiState{} with nothing layered over it, which is what factory_value reports.
+  json factory_json;
   try {
     current_json = json::parse(SerializeGuiStateJson(current));
     default_json = json::parse(SerializeGuiStateJson(EffectiveDefaultState(overlay_doc)));
+    factory_json = json::parse(SerializeGuiStateJson(GuiState{}));
   } catch (const std::exception& e) {
     // SerializeGuiStateJson builds its document programmatically, so this is not expected; log
     // rather than abort, because a panel that cannot list rows must still not take the app down.
@@ -260,6 +284,10 @@ std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current, const 
 
   for (auto& row : rows) {
     row.has_saved_override = DocHasKeyPath(overlay_doc, row.key_path);
+    // Absent from the factory document reads as null, the same convention WalkDiff already uses
+    // for a key only one side has (FormatDiffValue renders it as "(absent)").
+    const json* factory = FindByPath(factory_json, SplitKeyPath(row.key_path));
+    row.factory_value = factory != nullptr ? *factory : json();
   }
 
   std::sort(rows.begin(), rows.end(),
@@ -316,30 +344,32 @@ bool DocHasKeyPath(const nlohmann::json& doc, const std::string& key_path) {
   return FindByPath(doc, SplitKeyPath(key_path)) != nullptr;
 }
 
-bool ApplyAcceptedDefaultsToDoc(nlohmann::json& doc, const std::vector<std::string>& accepted_key_paths,
-                                const GuiState& current) {
+bool ApplyCheckedRowsToDoc(nlohmann::json& doc, const std::vector<DefaultDiffRow>& rows,
+                           const std::set<std::string>& checked_key_paths, const GuiState& current) {
   json current_json;
+  // Deliberately before the first mutation, which is what makes this all-or-nothing: it is the
+  // only way this function can fail, so once the loop starts there is no half-applied state to
+  // roll back. Same mechanism ApplyAcceptedDefaultsToDoc used before it was folded into this one.
   if (!SerializeCurrentState(current, current_json)) {
     return false;
   }
-  ApplyAcceptedKeys(doc, accepted_key_paths, current_json);
-  return true;
-}
-
-void ApplyRevertToDoc(nlohmann::json& doc, const std::string& key_path) {
-  ErasePath(doc, SplitKeyPath(key_path));
-}
-
-void ApplyResetAllToDoc(nlohmann::json& doc) {
-  json preserved = json::object();
-  // Namespace 2 (the preset library) is a sibling section this panel does not edit. Keeping it
-  // by name — rather than deleting the GuiState keys one by one — means a future GuiState key
-  // is reset without anyone having to remember to add it here.
-  const auto presets = doc.find("presets");
-  if (presets != doc.end()) {
-    preserved["presets"] = *presets;
+  for (const auto& row : rows) {
+    const auto tokens = SplitKeyPath(row.key_path);
+    if (tokens.empty() || IsExcludedRootKey(tokens.front())) {
+      // Defense in depth: BuildDefaultDiffRows never emits an excluded key, but this is the only
+      // place that turns a row into a written key, and a namespace-4 key path in the file would
+      // be read back by MakeNewDocumentState.
+      continue;
+    }
+    if (checked_key_paths.find(row.key_path) == checked_key_paths.end()) {
+      EraseKeyPath(doc, row.key_path);
+    } else if (const json* value = FindByPath(current_json, tokens)) {
+      SetByPath(doc, tokens, *value);
+    } else {
+      ErasePath(doc, tokens);
+    }
   }
-  doc = std::move(preserved);
+  return true;
 }
 
 bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, const GuiState& current) {
@@ -353,11 +383,11 @@ bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, co
 }
 
 bool RevertOneDefault(const std::string& key_path) {
-  return UpdateOverlayDocument([&](json& doc) { ApplyRevertToDoc(doc, key_path); });
+  return UpdateOverlayDocument([&](json& doc) { EraseKeyPath(doc, key_path); });
 }
 
 bool ResetAllDefaults() {
-  return UpdateOverlayDocument([](json& doc) { ApplyResetAllToDoc(doc); });
+  return UpdateOverlayDocument([](json& doc) { EraseEveryGuiStateKey(doc); });
 }
 
 }  // namespace lumice::gui

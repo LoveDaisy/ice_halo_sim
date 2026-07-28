@@ -4,14 +4,17 @@
 // The "save current settings as my defaults" panel: a modal over the row set produced by
 // defaults_diff.hpp.
 //
-// Three sections, in this order:
-//   §1 Presets       — placeholder in this task; the preset library lands with 405.5.
-//   §2 Changes       — rows whose current value differs from the effective default. Checked by
-//                      default (opening this panel already means "adopt what I have"), unchecking
-//                      excludes a row from the save.
-//   §3 Other entries — everything else, read-only, collapsed by default. Carries the source of
-//                      each value (factory vs mine) plus Revert / Reset all.
-// §2 and §3 partition ONE row set (RowNeedsAdoption and its negation), so no key can appear twice.
+// Two sections, in this order:
+//   §1 Presets  — the preset library (a retuned built-in preset, namespace 2).
+//   §2 Settings — ONE list of every key that could be a personal default, each with a checkbox
+//                 that means exactly "this key is in my defaults". Save writes the checked rows'
+//                 current values and removes the unchecked ones; a filter narrows the list.
+//
+// The single list replaces a two-section split ("changes to adopt" above "other entries") whose
+// halves had different controls — a checkbox in one, a per-row Revert button in the other — for
+// what turned out to be one decision. A user could not tell from the screen which of the two
+// mechanisms would decide the fate of a given key, and Reset all had to reach across both. One
+// list, one control, one meaning.
 //
 // Modal on purpose: the row set is read once when the panel opens, and a modal makes that
 // snapshot correct by construction — the user cannot edit the document behind an open panel, so
@@ -22,19 +25,18 @@
 namespace lumice::gui {
 
 // Which section the panel starts expanded on. The entry point chooses; the panel does not
-// hard-code one. 405.5 adds a second entry ("edit my presets") that opens on kPresets without
-// touching the mechanism.
+// hard-code one.
 enum class DefaultsPanelSection {
-  kPresets,        // §1
-  kPendingChanges  // §2
+  kPresets,  // §1 — the preset library
+  kSettings  // §2 — the merged settings list
 };
 
 // Window title, exported so tests address the modal by the same string the panel registers.
 inline constexpr const char* kDefaultsPanelTitle = "Save Current as Defaults";
 
-// Open the panel and rebuild its row set from the CURRENT state. Also clears the per-session
-// unchecked set and the search filter: every opening starts from "adopt everything, show
-// everything", which is the semantics the entry button promises.
+// Open the panel and rebuild its row set from the CURRENT state. Also recomputes the checkbox set
+// from scratch and clears the search/filter controls: every opening starts from "here is what your
+// defaults would be if you saved right now, showing everything".
 void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section);
 
 // Render the panel; a no-op when it is not open. Must be called once per frame from the top-level
@@ -43,7 +45,7 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section);
 void RenderDefaultsPanel(GuiState& state);
 
 // Drop every file-scope static this TU owns. Called from gui_test's ResetTestState() so one
-// scenario's unchecked rows / search text cannot reach the next in a single-process suite.
+// scenario's checkbox set / search text / filter cannot reach the next in a single-process suite.
 void ResetDefaultsPanelTestState();
 
 }  // namespace lumice::gui

@@ -48,33 +48,60 @@ namespace {
 // need a reconciliation story with edits made behind it.
 //
 // TWO documents, not one, and the split is load-bearing:
-//   g_snapshot_doc — what was on disk when the panel opened. FROZEN for the session. It anchors the
-//                    §2/§3 partition (RowNeedsAdoption compares against the defaults this document
-//                    resolves), so rows do not jump between sections as the user edits. Anchoring
-//                    the partition on the working copy instead would move a row out of §2 the
-//                    moment the copy gained its value — with the user having pressed nothing.
-//   g_copy_doc     — what pressing Save right now would write. Revert, Reset all and every §1
-//                    preset edit mutate this and nothing else. It is also the source for each
-//                    row's has_saved_override, which is how §3's Source cell and Revert button
-//                    show an uncommitted Revert immediately (the visible feedback the old
-//                    write-through model failed to give).
+//   g_snapshot_doc — what was on disk when the panel opened. FROZEN for the session. It anchors
+//                    every judgement the list makes about a row (its effective default, its
+//                    Source, its opening checkbox state), so nothing moves under the user while
+//                    they work. Anchoring on the working copy instead would re-answer "is this
+//                    mine" from a document the user has not committed.
+//   g_copy_doc     — what pressing Save right now would write. Only §1's preset edits mutate it
+//                    directly; the settings list expresses its intent as a checkbox set that is
+//                    folded in once, at Save (see CommitCopy).
 // ------------------------------------------------------------------------------------------------
 nlohmann::json g_snapshot_doc = nlohmann::json::object();
 nlohmann::json g_copy_doc = nlohmann::json::object();
 
-// Row set, rebuilt on open and after every edit of the copy. Not rebuilt per frame: BuildDefaultDiffRows
-// re-serializes the whole GuiState twice, and a per-frame call would do that 60x a second.
+// Row set, rebuilt on open and after a Save. Not rebuilt per frame: BuildDefaultDiffRows
+// re-serializes the whole GuiState three times, and a per-frame call would do that 60x a second.
 std::vector<DefaultDiffRow> g_rows;
 
-// §2 rows the user UNCHECKED. Stored as the exclusion set rather than the selection set so a row
-// is checked by default with no per-open initialization pass: pressing the entry button already
-// means "adopt my current settings", and the checkbox exists to take individual rows back out.
-std::set<std::string> g_excluded_keys;
+// ------------------------------------------------------------------------------------------------
+// The checkbox set. ONE meaning for every row in the list: "this key is in my defaults", i.e. what
+// Save would leave the override file holding.
+//
+//   g_checked_keys         — the current answer, edited by clicking a checkbox.
+//   g_initial_checked_keys — the same set frozen at open (and re-frozen after a successful Save).
+//                            It is the BASELINE for "edited this session": a row counts as edited
+//                            exactly when its checkbox state differs from this. Deriving that from
+//                            the row's values instead would answer a different question — "differs
+//                            from factory" — which is the other filter, and conflating the two is
+//                            the confusion this task exists to remove.
+//
+// A selection set rather than 405.4's exclusion set: rows are no longer checked-by-default (a key
+// that is neither changed nor already saved opens unchecked), so there is no default state for an
+// exclusion set to be the complement of.
+// ------------------------------------------------------------------------------------------------
+std::set<std::string> g_checked_keys;
+std::set<std::string> g_initial_checked_keys;
+
+// Which rows the list shows, on top of the search box (they AND: a row must pass both).
+//
+// Three-way single choice rather than two independent toggles, because the two questions are NOT
+// the same question and the panel must not let them read as one: a value can differ from the
+// factory value without the user having touched it this session (they changed it in the main UI,
+// or saved it long ago), and a row can be edited this session without differing from factory (the
+// user checked a key whose value happens to be the built-in one). Two checkboxes would have raised
+// a third question — whether ticking both means AND or OR — that has no natural answer.
+enum class DefaultsRowFilter {
+  kAll,
+  kDiffersFromFactory,  // row.current_value != row.factory_value
+  kEditedThisSession    // the checkbox moved since the panel opened
+};
+DefaultsRowFilter g_row_filter = DefaultsRowFilter::kAll;
 
 ImGuiTextFilter g_search_filter;
 
 // Consumed on the first frame after an open: which section starts expanded. nullopt on every
-// other frame, so a user who collapses §2 keeps it collapsed while the panel stays open.
+// other frame, so a section the user collapses stays collapsed while the panel is open.
 std::optional<DefaultsPanelSection> g_pending_initial_section;
 
 // Outcome of the last write, shown at the bottom of the panel. Deliberately carries NO directory
@@ -85,8 +112,8 @@ std::string g_status_message;
 // §1's per-preset warning text, indexed by AxisPreset. The library's own channel, NOT
 // DefaultDiffRow::warnings: BuildDefaultDiffRows walks the serialized GuiState tree, and the
 // presets subtree is not in it — a preset can never produce a DefaultDiffRow to hang a warning on
-// (scrum D1: "presets are not GuiState fields, they do not enter the §2 diff"). Same visual form
-// as §2's "!" column, different data source, on purpose.
+// (scrum D1: "presets are not GuiState fields, they do not enter the diff"). Same visual form as
+// the settings list's "!" column, different data source, on purpose.
 //
 // Whole-value replacement like every other piece of panel session state here: one array assigned
 // on open, one element assigned per write.
@@ -104,18 +131,57 @@ struct PresetStdBuffers {
 PresetStdBuffers g_preset_std_buffers;
 
 bool IsRowChecked(const std::string& key_path) {
-  return g_excluded_keys.find(key_path) == g_excluded_keys.end();
+  return g_checked_keys.find(key_path) != g_checked_keys.end();
 }
 
 void RefreshRows(const GuiState& state) {
-  // Rows are built against the FROZEN snapshot (so the §2/§3 partition holds still for the whole
-  // session), then each row's "is this key mine" is re-answered from the WORKING COPY (so an
-  // uncommitted Revert or Reset all is visible immediately). The two data sources are the whole
-  // point of the split — see the comment on g_snapshot_doc.
+  // Built against the FROZEN snapshot, and nothing is re-answered from the working copy afterwards.
+  // 405.4's model needed that second pass because a Revert click changed has_saved_override before
+  // any write; with the checkbox as the only expression of that intent, the copy's GuiState half no
+  // longer moves until Save, so BuildDefaultDiffRows' answer is already the right one.
   g_rows = BuildDefaultDiffRows(state, g_snapshot_doc);
-  for (auto& row : g_rows) {
-    row.has_saved_override = DocHasKeyPath(g_copy_doc, row.key_path);
+}
+
+// Rebuild the checkbox set from the rows: a key is checked at open exactly when it is already in
+// the defaults, OR when the user's current value differs from what a new document would start with.
+//
+// The OR is the whole "what does this checkbox mean" answer. Reading it the other way round —
+// which keys would be in my defaults if I saved right now — the first term keeps what is already
+// saved, and the second adopts what the user has changed since. The three states AC2 names fall
+// out of it: changed-not-saved and already-saved both open checked, neither opens unchecked.
+//
+// Whole-value assignment of BOTH sets, so the "edited this session" baseline cannot drift from the
+// state it is supposed to be the baseline of.
+void RecomputeCheckedKeys() {
+  std::set<std::string> checked;
+  for (const auto& row : g_rows) {
+    if (RowNeedsAdoption(row) || row.has_saved_override) {
+      checked.insert(row.key_path);
+    }
   }
+  g_initial_checked_keys = checked;
+  g_checked_keys = std::move(checked);
+}
+
+// The two filter predicates, each answering its own question about one row.
+bool PassesRowFilter(const DefaultDiffRow& row) {
+  switch (g_row_filter) {
+    case DefaultsRowFilter::kDiffersFromFactory:
+      // Against the LITERAL factory value, never against row.default_value: for a key the user has
+      // already saved a default for, default_value IS that saved value, so comparing with it would
+      // report "same as factory" for precisely the keys they have customised.
+      return row.current_value != row.factory_value;
+    case DefaultsRowFilter::kEditedThisSession:
+      return IsRowChecked(row.key_path) != (g_initial_checked_keys.find(row.key_path) != g_initial_checked_keys.end());
+    case DefaultsRowFilter::kAll:
+      break;
+  }
+  return true;
+}
+
+// Both narrowing controls, ANDed: a row is shown when it passes the search box AND the filter.
+bool RowIsVisible(const DefaultDiffRow& row) {
+  return g_search_filter.PassFilter(row.key_path.c_str()) && PassesRowFilter(row);
 }
 
 // What §1 shows for a preset: the value in the working copy, if it holds one.
@@ -144,17 +210,28 @@ AxisDist EffectiveCopyPresetZenith(const AxisPresetEntry& entry) {
   return zenith;
 }
 
-// The panel's ONE write. Every other action in this file edits g_copy_doc and stops there.
+// The document Save would write: the working copy with the checkbox set folded in.
 //
-// `accepted` are the §2 rows still checked; they are folded into the copy here rather than when
-// the checkbox is clicked, because a checkbox is a statement about what Save should do, not an
-// edit in its own right (unchecking one must not look like a change to the document).
-bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted) {
+// Split out from CommitCopy so the button can preview it (to tell "nothing to save" from "saved")
+// with exactly the code that performs the write, rather than a second rule that agrees with it
+// today. Returns false when the current state could not be serialized — see ApplyCheckedRowsToDoc.
+bool BuildNextDoc(const GuiState& state, nlohmann::json& out) {
+  out = g_copy_doc;
+  return ApplyCheckedRowsToDoc(out, g_rows, g_checked_keys, state);
+}
+
+// The panel's ONE write. Every other action in this file edits g_copy_doc (or the checkbox set) and
+// stops there.
+//
+// The checkbox set is folded into the copy HERE rather than when a box is clicked, because a
+// checkbox is a statement about what Save should do, not an edit in its own right — ticking one
+// must not look like a change to the document until the user commits it.
+bool CommitCopy(const GuiState& state) {
   // Built beside the copy and only adopted once the write succeeds. On any failure below the copy
   // is left exactly as the user has it, so a second attempt (after fixing whatever blocked the
   // write) still carries their edits instead of a half-applied version of them.
-  nlohmann::json next = g_copy_doc;
-  if (!ApplyAcceptedDefaultsToDoc(next, accepted, state)) {
+  nlohmann::json next;
+  if (!BuildNextDoc(state, next)) {
     return false;
   }
   if (!WriteActiveOverlayDoc(next)) {
@@ -170,10 +247,11 @@ bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted)
   //     would re-clamp values this session never touched and file a duplicate downgrade notice for
   //     each, on a Save that had nothing to do with them.
   //  2. the copy becomes the new snapshot, because "what is on disk" is now literally this
-  //     document. That re-anchors the §2/§3 partition, which is what moves the adopted rows out
-  //     of §2 — the visible confirmation that the save landed.
-  //  3. the exclusion set is dropped: it described the previous set of pending rows, and after the
-  //     re-anchor the rows it named are no longer pending.
+  //     document. That re-anchors every judgement the list makes — a row the user just adopted now
+  //     reads as Mine, which is the visible confirmation that the save landed.
+  //  3. the caller then rebuilds the rows and re-freezes the checkbox baseline against the new
+  //     anchor (see the Save button). Leaving the old baseline in place would report every row the
+  //     save just committed as still "edited this session".
   for (const auto& entry : kAxisPresets) {
     const auto after = ReadAxisPresetZenithStdFromDoc(next, entry.id);
     const auto before = ReadAxisPresetZenithStdFromDoc(g_snapshot_doc, entry.id);
@@ -183,18 +261,7 @@ bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted)
   }
   g_copy_doc = std::move(next);
   g_snapshot_doc = g_copy_doc;
-  g_excluded_keys.clear();
   return true;
-}
-
-std::vector<std::string> CheckedPendingKeys() {
-  std::vector<std::string> keys;
-  for (const auto& row : g_rows) {
-    if (RowNeedsAdoption(row) && IsRowChecked(row.key_path)) {
-      keys.push_back(row.key_path);
-    }
-  }
-  return keys;
 }
 
 // Section header whose open state is forced only on the frame an entry point requested it.
@@ -205,32 +272,47 @@ bool SectionHeader(const char* label, DefaultsPanelSection section, bool open_wh
   return ImGui::CollapsingHeader(label);
 }
 
-// §3's header: it is never an entry target, so it is forced CLOSED on an initial-section frame
-// (rather than left to whatever the previous opening left in ImGui's storage) — "§3 starts
-// collapsed" is a product requirement, not a remembered preference.
-bool OtherEntriesHeader(const char* label) {
-  if (g_pending_initial_section.has_value()) {
-    ImGui::SetNextItemOpen(false, ImGuiCond_Always);
+// The search box and the filter, side by side. Together they answer "which rows am I looking at";
+// keeping them on one line says so, and leaves the table the full height of the body.
+void RenderListControls() {
+  // "Search", not 405.4's "Filter": the word now belongs to the control beside it, and two things
+  // called Filter that narrow the same list by different rules is the confusion this task is here
+  // to remove, not to relocate.
+  g_search_filter.Draw(ICON_FA_MAGNIFYING_GLASS " Search###defaults_search", 240.0f);
+
+  // Labels ARE the definitions — the point owner made about this control is that a vague "only
+  // show changes" switch is what produced the confusion in the first place, so each option says
+  // which of the two meanings it carries, on screen and not only in a comment here.
+  ImGui::SameLine();
+  int filter = static_cast<int>(g_row_filter);
+  ImGui::RadioButton("All###filter_all", &filter, static_cast<int>(DefaultsRowFilter::kAll));
+  ImGui::SameLine();
+  ImGui::RadioButton("Differs from factory###filter_differs", &filter,
+                     static_cast<int>(DefaultsRowFilter::kDiffersFromFactory));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Rows whose current value is not the built-in one — whether or not you saved it.");
   }
-  return ImGui::CollapsingHeader(label);
+  ImGui::SameLine();
+  ImGui::RadioButton("Edited this session###filter_edited", &filter,
+                     static_cast<int>(DefaultsRowFilter::kEditedThisSession));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Rows whose checkbox you changed since this panel opened.");
+  }
+  g_row_filter = static_cast<DefaultsRowFilter>(filter);
 }
 
-void SetupCommonColumns(bool with_checkbox) {
-  if (with_checkbox) {
-    ImGui::TableSetupColumn("##adopt", ImGuiTableColumnFlags_WidthFixed, 24.0f);
-  }
-  ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-}
-
-void RenderPendingTable() {
+// The one settings table: every candidate default, one row each, one checkbox each.
+void RenderSettingsTable() {
   constexpr ImGuiTableFlags kFlags =
       ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-  if (!ImGui::BeginTable("##defaults_pending_table", 5, kFlags)) {
+  if (!ImGui::BeginTable("##defaults_settings_table", 6, kFlags)) {
     return;
   }
-  SetupCommonColumns(/*with_checkbox=*/true);
+  ImGui::TableSetupColumn("##adopt", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+  ImGui::TableSetupColumn("Setting", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("Effective default", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 110.0f);
   // The warning column (scrum D8). Built and sized here, filled by 405.5's preset-range clamp:
   // owner chose a column over a tooltip precisely because a tooltip is invisible to the reference
   // images, so the column has to exist in the captured layout before there is anything to put in
@@ -239,7 +321,7 @@ void RenderPendingTable() {
   ImGui::TableHeadersRow();
 
   for (const auto& row : g_rows) {
-    if (!RowNeedsAdoption(row) || !g_search_filter.PassFilter(row.key_path.c_str())) {
+    if (!RowIsVisible(row)) {
       continue;
     }
     ImGui::TableNextRow();
@@ -253,10 +335,13 @@ void RenderPendingTable() {
     const std::string check_id = "###adopt_" + row.key_path;
     if (ImGui::Checkbox(check_id.c_str(), &checked)) {
       if (checked) {
-        g_excluded_keys.erase(row.key_path);
+        g_checked_keys.insert(row.key_path);
       } else {
-        g_excluded_keys.insert(row.key_path);
+        g_checked_keys.erase(row.key_path);
       }
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Checked: this setting is part of your personal defaults after you save.");
     }
 
     ImGui::TableNextColumn();
@@ -269,6 +354,26 @@ void RenderPendingTable() {
     ImGui::TextUnformatted(FormatDiffValue(row.default_value).c_str());
 
     ImGui::TableNextColumn();
+    // Source is "is this key written in my override file", not "does its value differ from
+    // factory": a value deliberately saved that happens to equal the factory one is still the
+    // user's, and hiding that would leave them unable to see what they saved. It reports the file
+    // as it was when the panel opened — what the checkbox would CHANGE it to is the checkbox's own
+    // job to say.
+    //
+    // A Selectable rather than plain text because the distinction needs a hover explanation, and
+    // text carries no item to hover (nor an id, which is also what lets a test address the row's
+    // source without reading pixels). NoAutoClosePopups: a stray click on a read-only cell must
+    // not dismiss the panel.
+    const std::string source_id =
+        std::string(row.has_saved_override ? "Mine" : "Factory") + "###source_" + row.key_path;
+    ImGui::Selectable(source_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", row.has_saved_override ?
+                                  "Saved in your personal defaults file. Un-check it to remove it on save." :
+                                  "The built-in value. Nothing is saved for this setting.");
+    }
+
+    ImGui::TableNextColumn();
     if (!row.warnings.empty()) {
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
       if (ImGui::IsItemHovered()) {
@@ -277,69 +382,6 @@ void RenderPendingTable() {
     }
   }
   ImGui::EndTable();
-}
-
-void RenderOtherTable(const GuiState& state) {
-  constexpr ImGuiTableFlags kFlags =
-      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-  if (!ImGui::BeginTable("##defaults_other_table", 4, kFlags)) {
-    return;
-  }
-  SetupCommonColumns(/*with_checkbox=*/false);
-  ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-  ImGui::TableSetupColumn("##revert", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-  ImGui::TableHeadersRow();
-
-  std::string revert_key;
-  for (const auto& row : g_rows) {
-    if (RowNeedsAdoption(row) || !g_search_filter.PassFilter(row.key_path.c_str())) {
-      continue;
-    }
-    ImGui::TableNextRow();
-
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted(row.key_path.c_str());
-
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted(FormatDiffValue(row.current_value).c_str());
-
-    ImGui::TableNextColumn();
-    // Source is "is this key written in my override file", not "does its value differ from
-    // factory": a value deliberately saved that happens to equal the factory one is still the
-    // user's, and hiding that would leave them unable to see (or revert) what they saved.
-    //
-    // A Selectable rather than plain text because the distinction needs a hover explanation, and
-    // text carries no item to hover (nor an id, which is also what lets a test say "this key is
-    // rendered in §3" without reading pixels). NoAutoClosePopups: a stray click on a read-only
-    // cell must not dismiss the panel.
-    const std::string source_id =
-        std::string(row.has_saved_override ? "Mine" : "Factory") + "###source_" + row.key_path;
-    ImGui::Selectable(source_id.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups);
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", row.has_saved_override ? "Saved in your personal defaults file. Revert removes it." :
-                                                       "The built-in value. Nothing is saved for this setting.");
-    }
-
-    ImGui::TableNextColumn();
-    if (row.has_saved_override) {
-      const std::string revert_id = ICON_FA_ARROW_ROTATE_LEFT " Revert###revert_" + row.key_path;
-      if (ImGui::SmallButton(revert_id.c_str())) {
-        revert_key = row.key_path;
-      }
-    }
-  }
-  ImGui::EndTable();
-
-  // Applied after the loop: RefreshRows rebuilds g_rows, and mutating the container being iterated
-  // would invalidate the loop's own references.
-  if (!revert_key.empty()) {
-    // Copy only — no file is touched until Save. There is no failure branch left to report: a
-    // key-level erase from an in-memory document cannot fail the way a write to a directory that
-    // vanished can.
-    ApplyRevertToDoc(g_copy_doc, revert_key);
-    g_status_message = "'" + revert_key + "' will go back to the factory value when you save.";
-    RefreshRows(state);
-  }
 }
 
 // Display format for a §1 std cell showing `value`, e.g. "%.7g".
@@ -465,7 +507,7 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
 
   ImGui::TableNextColumn();
   if (!g_preset_warnings.slots[slot].empty()) {
-    // A Selectable rather than plain text, for the same reason §3's source cell is one: the icon
+    // A Selectable rather than plain text, for the same reason the Source cell is one: the icon
     // needs a hover explanation, and text carries no item to hover — nor an id, which is also what
     // lets a test say "this preset is showing a warning" without reading pixels.
     // NoAutoClosePopups: a stray click on a read-only cell must not dismiss the panel.
@@ -576,8 +618,8 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   state.defaults_panel_open = true;
   g_pending_initial_section = initial_section;
   // Whole-value resets, not "clear the parts that look stale": every opening of this panel is a
-  // fresh decision, and a row unchecked in an earlier opening silently staying unchecked would
-  // contradict the "checked by default" contract the entry button promises.
+  // fresh decision, and a checkbox left over from an earlier opening would be an intent the user
+  // stated about a session they have already closed.
   //
   // This is also where the previous session's working copy is discarded — closing the panel needs
   // no teardown of its own, because nothing survives this assignment. "Close = discard" is
@@ -586,8 +628,8 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   // Belt-and-suspenders, not a fix for a live bug: ReadActiveOverlayDoc()'s current implementation
   // (ReadOverlayJsonIfPresent) already turns a hand-edited/interrupted-write file whose top level
   // is not an object into json::object() itself, so g_snapshot_doc is never actually non-object
-  // today. But the copy model's every mutator (ApplyAcceptedKeys/ApplyRevertToDoc/
-  // ApplyResetAllToDoc/§1 preset writes) assumes an object root, and that assumption should not
+  // today. But the copy model's every mutator (ApplyCheckedRowsToDoc and §1's preset writes)
+  // assumes an object root, and that assumption should not
   // depend on an implementation detail two calls away that nothing here names. Establishing the
   // guarantee explicitly at the copy's single origin makes it true by construction of THIS
   // function, not by a property of whichever read function it happens to call today.
@@ -596,12 +638,14 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
     g_snapshot_doc = nlohmann::json::object();
   }
   g_copy_doc = g_snapshot_doc;
-  g_excluded_keys.clear();
   g_search_filter.Clear();
+  g_row_filter = DefaultsRowFilter::kAll;
   g_status_message.clear();
   g_preset_warnings = PresetWarnings{};
   RefreshPresetStdBuffers();
   RefreshRows(state);
+  // After RefreshRows, never before: the checkbox set is a function of the rows.
+  RecomputeCheckedKeys();
 }
 
 void RenderDefaultsPanel(GuiState& state) {
@@ -625,11 +669,11 @@ void RenderDefaultsPanel(GuiState& state) {
       "personal defaults file; opening an existing file always uses the values in that file.");
   ImGui::Separator();
 
-  g_search_filter.Draw(ICON_FA_MAGNIFYING_GLASS " Filter###defaults_search", 240.0f);
+  RenderListControls();
   ImGui::Separator();
 
-  // The three sections scroll inside a child; the action row below stays pinned. Without the
-  // split, expanding §3 (40+ rows) pushes Save / Close off the bottom of a fixed-size modal — the
+  // The two sections scroll inside a child; the action row below stays pinned. Without the split,
+  // the settings list (40+ rows) pushes Save / Close off the bottom of a fixed-size modal — the
   // user would have to scroll past every setting to reach the button that commits their decision.
   // The reserved footer height is constant (one status line is budgeted whether or not there is a
   // message) so the body does not resize as the panel reports what it just did.
@@ -637,34 +681,30 @@ void RenderDefaultsPanel(GuiState& state) {
       ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
   ImGui::BeginChild("##defaults_sections", ImVec2(0.0f, -footer_height));
 
-  // §1 — the preset library (405.5). Present so the section order and the "entry point decides
-  // which section is expanded" mechanism are the ones 405.5 will extend, not ones it has to
-  // introduce.
+  // §1 — the preset library (namespace 2). Its own section because a preset is not a GuiState
+  // field: it never produces a row in the list below, and it is edited in place rather than
+  // checked on or off.
   if (SectionHeader("Presets###defaults_presets", DefaultsPanelSection::kPresets, /*open_when_pending=*/true)) {
     RenderPresetLibrary();
   }
 
-  int pending_count = 0;
+  // §2 — the settings list. The count is the number of rows CURRENTLY SHOWN against the total, so
+  // a narrowed list says so in its own header rather than looking like a shorter settings set.
+  int visible_count = 0;
   for (const auto& row : g_rows) {
-    if (RowNeedsAdoption(row)) {
-      ++pending_count;
+    if (RowIsVisible(row)) {
+      ++visible_count;
     }
   }
-  char pending_label[96];
-  snprintf(pending_label, sizeof(pending_label), "Changes to adopt (%d)###defaults_pending", pending_count);
-  if (SectionHeader(pending_label, DefaultsPanelSection::kPendingChanges, /*open_when_pending=*/true)) {
-    if (pending_count == 0) {
-      ImGui::TextDisabled("Nothing differs from your current defaults.");
+  char settings_label[96];
+  snprintf(settings_label, sizeof(settings_label), "Settings (%d of %d)###defaults_settings", visible_count,
+           static_cast<int>(g_rows.size()));
+  if (SectionHeader(settings_label, DefaultsPanelSection::kSettings, /*open_when_pending=*/true)) {
+    if (visible_count == 0) {
+      ImGui::TextDisabled("No setting matches the search box and filter.");
     } else {
-      RenderPendingTable();
+      RenderSettingsTable();
     }
-  }
-
-  char other_label[96];
-  snprintf(other_label, sizeof(other_label), "Other entries (%d)###defaults_other",
-           static_cast<int>(g_rows.size()) - pending_count);
-  if (OtherEntriesHeader(other_label)) {
-    RenderOtherTable(state);
   }
 
   ImGui::EndChild();
@@ -676,31 +716,35 @@ void RenderDefaultsPanel(GuiState& state) {
   // Budgeted unconditionally (see footer_height): an empty line keeps the body height constant.
   ImGui::TextWrapped("%s", g_status_message.c_str());
 
-  // Commit-and-stay rather than commit-and-close: after a save the adopted rows move from §2 to
-  // §3 with source "Mine", which IS the confirmation that the write landed, and the failure path
-  // (no writable config directory) has somewhere to say so.
+  // Commit-and-stay rather than commit-and-close: after a save the adopted rows read as "Mine",
+  // which IS the confirmation that the write landed, and the failure path (no writable config
+  // directory) has somewhere to say so.
   if (ImGui::Button(ICON_FA_FLOPPY_DISK " Save as my defaults###defaults_save", ImVec2(200.0f, 0.0f))) {
-    // Save commits the WHOLE copy, not just the checked §2 rows: the Reverts, the Reset all and
-    // the §1 preset edits are already in it. `accepted` being empty therefore does NOT mean
-    // "nothing to do" — the old panel could say that only because those other edits had already
-    // written themselves to disk behind the user's back.
-    const std::vector<std::string> accepted = CheckedPendingKeys();
-    // Read-only preview of what CommitCopy is about to write, so the status line can tell "nothing
-    // in this session actually differs from what's on disk" apart from "the copy matched the
-    // snapshot but there were accepted rows" — accepted.empty() alone conflates the two, since a
-    // Revert/Reset/§1 edit followed by re-doing it back to the original value is empty-but-changed
-    // by that test.
-    nlohmann::json preview = g_copy_doc;
-    const bool has_changes = ApplyAcceptedDefaultsToDoc(preview, accepted, state) && preview != g_snapshot_doc;
-    if (CommitCopy(state, accepted)) {
-      g_status_message = !has_changes ? "No changes to save." :
-                         accepted.empty() ?
-                                        "Your defaults were updated." :
-                                        "Saved " + std::to_string(accepted.size()) + " setting(s) as your defaults.";
+    // Read-only preview of the document CommitCopy is about to write, so "nothing changed" is
+    // decided by comparing that document with the one on disk rather than by counting clicks. The
+    // count of checked rows would be the wrong measure twice over: it says nothing about §1's
+    // preset edits, and a checkbox ticked and un-ticked again is a change by any click-counting
+    // rule and no change at all by this one.
+    nlohmann::json preview;
+    const bool has_changes = BuildNextDoc(state, preview) && preview != g_snapshot_doc;
+    const bool committed = CommitCopy(state);
+    if (committed) {
+      // Deliberately not "saved N settings". Under the merged model the checkbox set covers EVERY
+      // row, so any count would have to pick a denominator ("all checked" is most of the list;
+      // "newly checked" is a diff the user did not ask about) and the number would read as a
+      // measure of what happened. It is not one — what happened is that the file now matches the
+      // list, and the list is on screen.
+      g_status_message = has_changes ? "Your personal defaults were updated." : "No changes to save.";
     } else {
       g_status_message = "Could not write your defaults file; nothing was saved.";
     }
     RefreshRows(state);
+    if (committed) {
+      // Re-freeze the baseline against the document that was just written — after RefreshRows, so
+      // it is computed from the re-anchored rows. Skipped on failure, where the user's checkbox
+      // set is still an uncommitted intent they may want to retry.
+      RecomputeCheckedKeys();
+    }
   }
   ImGui::SameLine();
   // Cancel semantics: the working copy is simply not committed. Nothing is written and nothing is
@@ -712,32 +756,25 @@ void RenderDefaultsPanel(GuiState& state) {
     ImGui::CloseCurrentPopup();
   }
 
-  // "Reset all" sits in the pinned action row rather than under §3's table. It is not a §3
-  // operation: it removes EVERY personal default, including the ones §2 is offering to add, so
-  // burying it under one section's rows would understate its reach — and a destructive control a
-  // user has to scroll 40 rows to find is also one they cannot check the state of before pressing.
+  // "Reset all" sits in the pinned action row rather than inside the list. It is not a per-row
+  // operation: it clears EVERY row's checkbox at once, so burying it among the rows would
+  // understate its reach — and a destructive control a user has to scroll 40 rows to find is also
+  // one they cannot check the state of before pressing.
   ImGui::SameLine();
   const float reset_width = 220.0f;
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - reset_width - ImGui::GetStyle().WindowPadding.x);
   PushDestructiveStyle();
   if (ImGui::Button(ICON_FA_TRASH " Reset all my defaults###defaults_reset_all", ImVec2(reset_width, 0.0f))) {
-    // Copy only, like every other edit here — this is the button whose old write-through behavior
-    // made the panel dishonest, since it emptied the file while the screen did not move.
-    ApplyResetAllToDoc(g_copy_doc);
-    RefreshRows(state);
-    // ...and un-check every pending row, because otherwise this button cannot do what it says.
-    // §2's rows are checked by default, so Save would immediately re-adopt them and the "reset"
-    // would write a full set of defaults straight back. With Save as the only write, that
-    // contradiction is now reachable in one visible sequence (Reset all, then Save) instead of
-    // being hidden behind a file that had already been emptied; the behavior AC2 asks for is that
-    // Save then writes an EMPTY override set. Nothing is taken away — any row can be re-checked.
-    std::set<std::string> excluded;
-    for (const auto& row : g_rows) {
-      if (RowNeedsAdoption(row)) {
-        excluded.insert(row.key_path);
-      }
-    }
-    g_excluded_keys = std::move(excluded);  // whole-value, like every other reset in this file
+    // "Un-check everything", and nothing else. It touches neither the file (405.5's write-through
+    // behavior, which emptied the file while the screen did not move) NOR the working copy
+    // (405.6's, which had to be paired with a separate pass over the checkbox set to stop Save
+    // re-adopting the rows it had just cleared). With the checkbox as the single expression of
+    // "this key is in my defaults", clearing the set IS the reset, and Save applies it like any
+    // other state of the list — one rule, no second half to keep in step.
+    //
+    // Nothing is taken away: any row can be re-checked before saving, and closing without saving
+    // discards this like every other edit.
+    g_checked_keys.clear();
     g_status_message =
         "Every personal default will be removed when you save; new documents will start from factory values.";
   }
@@ -750,8 +787,10 @@ void ResetDefaultsPanelTestState() {
   g_rows.clear();
   g_snapshot_doc = nlohmann::json::object();
   g_copy_doc = nlohmann::json::object();
-  g_excluded_keys.clear();
+  g_checked_keys.clear();
+  g_initial_checked_keys.clear();
   g_search_filter.Clear();
+  g_row_filter = DefaultsRowFilter::kAll;
   g_pending_initial_section.reset();
   g_status_message.clear();
   g_preset_warnings = PresetWarnings{};

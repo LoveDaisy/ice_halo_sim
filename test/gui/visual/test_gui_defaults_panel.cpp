@@ -1,7 +1,13 @@
 // Defaults-panel layout pixel regression — a disk-reference baseline for the internal layout of
-// the "Save Current as Defaults" modal (src/gui/defaults_panel.cpp): the section headers, the two
-// tables' column widths, the warning column that 405.5 will fill, the source column and its Revert
-// button, and the pinned action row.
+// the "Save Current as Defaults" modal (src/gui/defaults_panel.cpp): the section headers, the
+// settings table's column widths, the warning column, the source column, the search box and filter
+// row, and the pinned action row.
+//
+// The committed references predate the merge of the two settings sections into one list and are
+// EXPECTED to be red until they are re-shot together with the column layout that follows this
+// change. What this file must keep doing in the meantime is compile and run — a scene that errored
+// on a widget id that no longer exists would stop reporting anything at all, including the parts of
+// the layout that did not move.
 //
 // Why this exists: the functional suite (test/gui/functional/test_gui_defaults_panel.cpp) asserts
 // what the panel DOES — which key lands in which section, what a click writes to disk. Nothing
@@ -41,10 +47,10 @@ using lumice::test_user_defaults::ResetUserDefaultsChannels;
 using nlohmann::json;
 
 enum class SceneKind {
-  kPendingChanges,   // §2 populated, §3 collapsed — what the File-menu entry opens
-  kOtherExpanded,    // §3 expanded over a document whose defaults are already saved (Mine + Revert)
-  kFiltered,         // the search box narrowing §2
-  kNoChanges,        // nothing differs — §2's empty state
+  kPendingChanges,   // the settings list over an edited document — what the File-menu entry opens
+  kOtherExpanded,    // the same list over a document whose defaults are already saved ("Mine" rows)
+  kFiltered,         // the search box narrowing the list
+  kNoChanges,        // nothing differs from factory — every row unchecked
   kPresetsExpanded,  // §1 open with one preset unfolded — the nine typed cells and their widths
   kPresetsWarning,   // the same, over an out-of-range stored value, so the warning column is filled
 };
@@ -127,8 +133,9 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       g_fullframe_capture.Reset();
 
       if (scene.kind == SceneKind::kOtherExpanded) {
-        // A document that already carries its own defaults, so §3 has both "Mine" rows (with a
-        // Revert button) and "Factory" rows in the same table.
+        // A document that already carries its own defaults, so the list holds both "Mine" rows and
+        // "Factory" rows — which was always the point of this scene; before the merge it took an
+        // extra click to expand the section that showed them.
         json doc;
         doc["bg_alpha"] = 0.42f;
         doc["renderer"]["fov"] = 95.0f;
@@ -157,8 +164,8 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       }
 
       const bool presets_scene = scene.kind == SceneKind::kPresetsExpanded || scene.kind == SceneKind::kPresetsWarning;
-      gui::OpenDefaultsPanel(gui::g_state, presets_scene ? gui::DefaultsPanelSection::kPresets :
-                                                           gui::DefaultsPanelSection::kPendingChanges);
+      gui::OpenDefaultsPanel(
+          gui::g_state, presets_scene ? gui::DefaultsPanelSection::kPresets : gui::DefaultsPanelSection::kSettings);
       ctx->Yield(4);
 
       if (presets_scene) {
@@ -175,9 +182,6 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
           ctx->Yield(3);
           IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
         }
-      } else if (scene.kind == SceneKind::kOtherExpanded) {
-        ctx->ItemOpen("**/###defaults_other");
-        ctx->Yield(3);
       } else if (scene.kind == SceneKind::kFiltered) {
         // KeyCharsReplaceEnter (inside ItemInputValue) presses Enter, which deactivates the input:
         // an ACTIVE InputText draws a blinking caret, and a caret whose phase depends on the frame

@@ -7,23 +7,27 @@
 // from", and a panel that updated only its own vector would satisfy any in-memory assertion.
 //
 // Coverage:
-//   AC6  — §2 / §3 are mutually exclusive ON SCREEN, row by row (not by eyeballing a screenshot)
+//   AC1  — the merged list renders EVERY candidate default, once each: one row, one checkbox
+//   AC2  — what a checkbox says on open, over all three states a row can be in
+//   AC3  — Reset all un-checks every row and writes nothing until Save
+//   AC4  — the two filters are two different questions, each with a hit and a miss
 //   AC7  — adoption round-trip: uncheck one row, save, and the unchecked key is NOT in the file
-//   AC8  — Revert one row / Reset all, asserted file-side, with the presets subtree preserved
+//   AC8  — un-checking a saved row / Reset all, asserted file-side, with the presets subtree kept
 //   AC9  — invariant I1 through the full GUI path: an opened .lmc beats the personal default
-//   AC10 — the search box filters both sections, and clearing it restores every row
+//   AC10 — the search box narrows the list, and clearing it restores every row
 //   plus the entry-point contract: which section an entry point opens expanded
 //
 // The copy model (the panel is a pure editor: edits go into an in-memory copy, Save writes it once,
-// closing discards it) adds four more, and rewrites the timing half of several of the above:
+// closing discards it) adds three more, and rewrites the timing half of several of the above:
 //   copy AC1 — a mixed batch of edits, closed WITHOUT Save, leaves the file byte-identical
 //   copy AC2 — Reset all in both directions: discarded on close, and committed on Save
 //   copy AC3 — a preset edit closed without Save reaches neither the cache nor the file
-//   copy AC4 — §3's Source / Revert follow the COPY, while the §2/§3 partition follows the
-//              snapshot the panel opened with
 //
 // Where a case used to click and read the file, it now clicks, asserts the file has NOT moved,
 // then saves and asserts it has. That is the assertion the old model could not make.
+//
+// Two cases from the two-section model were RETIRED here rather than migrated — see the block
+// comment above the AC1 case for why neither is a claim the merged list can still make.
 
 #include <algorithm>
 #include <filesystem>
@@ -31,6 +35,7 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -68,13 +73,9 @@ std::string AdoptCheckboxRef(const std::string& key_path) {
   return "**/###adopt_" + key_path;
 }
 
-std::string RevertButtonRef(const std::string& key_path) {
-  return "**/###revert_" + key_path;
-}
-
-// §3's per-row source cell. §3 has no checkbox by design (its rows already equal the effective
-// default, so "adopt" would be a no-op), so this is the widget that says "this key is rendered in
-// §3" — the counterpart to §2's checkbox.
+// The per-row source cell ("Mine" / "Factory"). Every row in the merged list has one, next to its
+// checkbox — the two answer different questions (what the file holds NOW vs what Save would leave
+// it holding), which is why both are addressable.
 std::string SourceCellRef(const std::string& key_path) {
   return "**/###source_" + key_path;
 }
@@ -97,13 +98,28 @@ void OpenPanelOn(ImGuiTestContext* ctx, gui::DefaultsPanelSection section) {
 // Narrow the panel to (at most) the rows whose key contains `text`.
 //
 // Not a convenience: the test engine's wildcard lookup only finds items it can SEE ("clipped
-// items are unaware of their labels" — imgui_te_context.cpp), and §3 alone is 40+ rows in a
-// fixed-height modal. Filtering first makes "is this key rendered in §2 or §3" a question about
-// the panel rather than about where the scroll happened to be, and it exercises the search box on
-// every case instead of only in the one written for it.
+// items are unaware of their labels" — imgui_te_context.cpp), and the merged list is 40+ rows in a
+// fixed-height modal. Filtering first makes "is this key rendered" a question about the panel
+// rather than about where the scroll happened to be, and it exercises the search box on every case
+// instead of only in the one written for it.
 void FilterTo(ImGuiTestContext* ctx, const char* text) {
   ctx->ItemInputValue("**/###defaults_search", text);
   ctx->Yield(3);
+}
+
+// Whether a row's checkbox is ticked, asked of the REAL widget rather than of the panel's internal
+// set (which is TU-private, and which a panel could keep correct while rendering something else).
+// The row must be on screen — narrow with FilterTo first, or ItemInfo reports a missing item.
+bool RowIsChecked(ImGuiTestContext* ctx, const std::string& key_path) {
+  return ctx->ItemIsChecked(AdoptCheckboxRef(key_path).c_str());
+}
+
+// Click a row's checkbox, first narrowing the list to it so the click cannot land on a row that
+// happens to be scrolled into that position.
+void ToggleRow(ImGuiTestContext* ctx, const std::string& key_path) {
+  FilterTo(ctx, key_path.c_str());
+  ctx->ItemClick(AdoptCheckboxRef(key_path).c_str());
+  ctx->Yield(2);
 }
 
 // Read presets.axis.<name>.zenith_std, reporting an absent or malformed key as nullopt rather
@@ -157,61 +173,74 @@ void SaveDefaultsPanel(ImGuiTestContext* ctx) {
 
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   // ================================================================================
-  // AC6 — the two sections are mutually exclusive on screen
+  // AC1 — the merged list is complete: every row, once, with the same two controls
+  //
+  // This is the successor to 405.4's ac6_sections_are_mutually_exclusive_on_screen, which asserted
+  // "a checkbox XOR a source cell" per row. That XOR was a statement about the two-section layout,
+  // not about the data: §2 rows had a checkbox and §3 rows had a source cell, so exactly one of
+  // the two probes could find any given key. In the merged list EVERY row has both, so the old
+  // assertion would fail — correctly, and permanently. What it was actually protecting (no key
+  // missing, no key rendered twice) is what this case asserts instead, in the shape the merged
+  // list can still make it: both controls present, on every row, exactly once.
   // ================================================================================
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac6_sections_are_mutually_exclusive_on_screen");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac1_merged_list_renders_every_row_once");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       // The guard precedes ResetTestState because ResetTestState -> DoNew ->
       // MakeNewDocumentState reads the process-wide source: installed afterwards, the
       // document under test would already carry the running machine's saved defaults.
-      const auto dir = FreshOverlayDir("panel_ac6");
+      const auto dir = FreshOverlayDir("panel_ac1");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
       ResetTestState();
       ResetUserDefaultsChannels();
 
-      // Edit a few settings so §2 is non-empty; without this the exclusivity check would hold
-      // vacuously with every row in §3.
-      gui::g_state.bg_alpha = 0.42f;
+      // Edited AND saved keys both present, so the sweep below covers rows in every state rather
+      // than a list that happens to be uniform.
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
       gui::g_state.renderer.fov = 95.0f;
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
-      ctx->ItemOpen("**/###defaults_other");
-      ctx->Yield(3);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
 
       const auto rows = CurrentRows();
       IM_CHECK(!rows.empty());
-      int pending_seen = 0;
-      int other_seen = 0;
+      // No duplicates in the row set itself: "rendered once" would be unfalsifiable through the
+      // widget tree alone, since two rows with the same key path would also share a widget id.
+      std::set<std::string> unique_keys;
       for (const auto& row : rows) {
-        // One key at a time (see FilterTo): with both sections showing only this key, whichever
-        // section renders it is unambiguous and nothing is off-screen.
+        unique_keys.insert(row.key_path);
+      }
+      IM_CHECK_EQ(unique_keys.size(), rows.size());
+
+      int changed_seen = 0;
+      int unchanged_seen = 0;
+      for (const auto& row : rows) {
+        // One key at a time (see FilterTo): nothing is off-screen, so "not found" means "not
+        // rendered" rather than "scrolled past".
         FilterTo(ctx, row.key_path.c_str());
-        // A §2 row is addressable by its checkbox and a §3 row is not (the section has none), so
-        // "which section is this key rendered in" is a machine-readable question.
-        const bool in_pending = ctx->ItemExists(AdoptCheckboxRef(row.key_path).c_str());
-        // §3 renders the source of every row it holds, so the key is visible there and only there.
-        const bool in_other = ctx->ItemExists(SourceCellRef(row.key_path).c_str());
-        IM_CHECK(in_pending != in_other);  // exactly one section, never both, never neither
+        IM_CHECK(ctx->ItemExists(AdoptCheckboxRef(row.key_path).c_str()));
+        IM_CHECK(ctx->ItemExists(SourceCellRef(row.key_path).c_str()));
         if (gui::RowNeedsAdoption(row)) {
-          IM_CHECK(in_pending);
-          ++pending_seen;
+          ++changed_seen;
         } else {
-          IM_CHECK(in_other);
-          ++other_seen;
+          ++unchanged_seen;
         }
       }
-      IM_CHECK(pending_seen > 0);
-      IM_CHECK(other_seen > 0);
+      // Non-vacuous in both directions: the sweep really did cover rows that differ from the
+      // effective default and rows that do not, which used to be the two sections.
+      IM_CHECK(changed_seen > 0);
+      IM_CHECK(unchanged_seen > 0);
 
       CloseDefaultsPanel(ctx);
     };
   }
 
   {
-    // The "entry point decides the initial section" mechanism (405.5 attaches its own entry to
-    // it). Asserted through an observable consequence — whether §2's rows are on screen — rather
-    // than left as a manual check that only breaks once 405.5 tries to use it.
+    // The "entry point decides the initial section" mechanism. Asserted through an observable
+    // consequence — whether the settings list's rows are on screen — rather than left as a manual
+    // check that only breaks once a second entry point tries to use it.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "entry_point_decides_the_expanded_section");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       // The guard precedes ResetTestState because ResetTestState -> DoNew ->
@@ -224,22 +253,19 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       gui::g_state.bg_alpha = 0.42f;
       const auto rows = CurrentRows();
-      const auto pending = std::find_if(rows.begin(), rows.end(),
-                                        [](const gui::DefaultDiffRow& row) { return gui::RowNeedsAdoption(row); });
-      IM_CHECK(pending != rows.end());
+      const auto probe = std::find_if(rows.begin(), rows.end(),
+                                      [](const gui::DefaultDiffRow& row) { return gui::RowNeedsAdoption(row); });
+      IM_CHECK(probe != rows.end());
 
-      // Opened on §2: its rows are rendered, and §3 is collapsed (its rows are not).
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
-      IM_CHECK(ctx->ItemExists(AdoptCheckboxRef(pending->key_path).c_str()));
-      const auto other = std::find_if(rows.begin(), rows.end(),
-                                      [](const gui::DefaultDiffRow& row) { return !gui::RowNeedsAdoption(row); });
-      IM_CHECK(other != rows.end());
+      // Opened on §2: the settings list is expanded, so its rows are rendered.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      IM_CHECK(ctx->ItemExists(AdoptCheckboxRef(probe->key_path).c_str()));
       CloseDefaultsPanel(ctx);
 
       // Opened on §1: the SAME row is no longer rendered, i.e. the section choice actually
       // travelled from the entry point into the panel.
       OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
-      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef(pending->key_path).c_str()));
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef(probe->key_path).c_str()));
       CloseDefaultsPanel(ctx);
     };
   }
@@ -261,9 +287,11 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state.bg_alpha = 0.42f;
       gui::g_state.renderer.fov = 95.0f;
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
-      // Uncheck exactly one row, leaving the rest checked (the panel opens with everything
-      // checked — pressing the entry button already means "adopt what I have").
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      // Both edited keys open checked (their current value differs from the effective default);
+      // uncheck exactly one of them, leaving the other alone.
+      IM_CHECK(RowIsChecked(ctx, "bg_alpha"));
+      IM_CHECK(RowIsChecked(ctx, "renderer.fov"));
       ctx->ItemClick(AdoptCheckboxRef("bg_alpha").c_str());
       ctx->Yield(2);
       ctx->ItemClick("**/###defaults_save");
@@ -280,8 +308,8 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(fresh.renderer.fov, 95.0f);
       IM_CHECK_EQ(fresh.bg_alpha, gui::GuiState{}.bg_alpha);
 
-      // After the save the adopted row is no longer a pending change: current == effective
-      // default, and the panel now attributes it to the user.
+      // After the save the adopted row no longer differs from the effective default, and the panel
+      // now attributes it to the user.
       const auto rows = CurrentRows();
       const auto fov = std::find_if(rows.begin(), rows.end(),
                                     [](const gui::DefaultDiffRow& row) { return row.key_path == "renderer.fov"; });
@@ -294,10 +322,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   // ================================================================================
-  // AC8 — Revert one row / Reset all, file-side, presets preserved
+  // AC8 — un-checking a saved row / Reset all, file-side, presets preserved
+  //
+  // 405.4 clicked a per-row Revert button here. That button is gone: un-checking the row expresses
+  // the same intent through the one control the merged list has, and Save is the one place it
+  // lands. The file-side claims below are unchanged — they are what the case was ever about.
   // ================================================================================
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac8_revert_and_reset_all_preserve_presets");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac8_uncheck_and_reset_all_preserve_presets");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       // The guard precedes ResetTestState because ResetTestState -> DoNew ->
       // MakeNewDocumentState reads the process-wide source: installed afterwards, the
@@ -316,26 +348,26 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
       IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
 
-      // Start from a document that already carries those defaults, so both keys sit in §3 with
-      // source "Mine" and therefore have a Revert button.
+      // Start from a document that already carries those defaults, so both keys open CHECKED
+      // because they are already in the defaults (not because their value differs).
       gui::g_state = gui::MakeNewDocumentState();
       IM_CHECK_EQ(gui::g_state.bg_alpha, 0.42f);
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
-      ctx->ItemOpen("**/###defaults_other");
-      ctx->Yield(2);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       FilterTo(ctx, "bg_alpha");
+      IM_CHECK(RowIsChecked(ctx, "bg_alpha"));
 
-      // MIGRATED for the copy model (405.4 asserted the file the instant Revert was clicked).
-      // Split in two: the click must NOT reach the file, and it must still be visible on screen.
-      const auto before_revert = ReadOverlayBytes(dir);
-      IM_CHECK(before_revert.has_value());
-      ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());
+      // The click must NOT reach the file, and it must still be visible on screen. (405.4 asserted
+      // the file the instant its Revert button was clicked; 405.6 split the claim in two, and the
+      // split is what survives the control changing.)
+      const auto before_uncheck = ReadOverlayBytes(dir);
+      IM_CHECK(before_uncheck.has_value());
+      ctx->ItemClick(AdoptCheckboxRef("bg_alpha").c_str());
       ctx->Yield(3);
-      IM_CHECK_EQ(ReadOverlayBytes(dir), before_revert);
-      // ...and the feedback the old write-through model failed to give: the row already reads as
-      // Factory (no Revert button left on it) even though the file still holds the value.
-      IM_CHECK(!ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_uncheck);
+      IM_CHECK(!RowIsChecked(ctx, "bg_alpha"));
+      // The Source cell still reads "Mine": it reports the file, which has not changed yet. The
+      // checkbox reports the intent. Two questions, two answers, both on screen.
       IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
 
       SaveDefaultsPanel(ctx);
@@ -392,7 +424,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       // Now save a DIFFERENT value as the personal default, through the panel.
       gui::g_state.bg_alpha = 0.77f;
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       ctx->ItemClick("**/###defaults_save");
       ctx->Yield(3);
       CloseDefaultsPanel(ctx);
@@ -412,10 +444,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   // ================================================================================
-  // AC10 (functional half) — the search box
+  // AC10 (functional half) — the search box over the merged list
   // ================================================================================
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac10_search_filters_both_sections");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac10_search_filters_the_merged_list");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       // The guard precedes ResetTestState because ResetTestState -> DoNew ->
       // MakeNewDocumentState reads the process-wide source: installed afterwards, the
@@ -428,7 +460,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.fov = 95.0f;
       gui::g_state.bg_alpha = 0.42f;
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("renderer.fov").c_str()));
       IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
 
@@ -722,7 +754,8 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       const auto before = ReadOverlayBytes(dir);
       IM_CHECK(before.has_value());
 
-      // An unsaved GuiState change, so §2 has a checked pending row on top of everything else.
+      // An unsaved GuiState change, so the list has a row that opens checked because its value
+      // differs, on top of the ones that open checked because they are already saved.
       gui::g_state.sun.altitude = 33.0f;
 
       OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
@@ -738,11 +771,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemClose("**/###preset_Plate");
       ctx->Yield(2);
 
-      ctx->ItemOpen("**/###defaults_other");
+      ctx->ItemOpen("**/###defaults_settings");
       ctx->Yield(2);
-      FilterTo(ctx, "bg_alpha");
-      ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());  // §3 revert
-      ctx->Yield(2);
+      ToggleRow(ctx, "bg_alpha");  // un-check a key that IS in the defaults
       FilterTo(ctx, "");
 
       ctx->ItemClick("**/###defaults_reset_all");  // the whole GuiState half
@@ -786,24 +817,23 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(before.has_value());
 
       // (a) discarded.
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "renderer.fov");
+      IM_CHECK(RowIsChecked(ctx, "renderer.fov"));
       ctx->ItemClick("**/###defaults_reset_all");
       ctx->Yield(3);
-      // The panel shows the reset immediately — this is the feedback the old model owed the user
-      // and could not give: §3's rows have lost their Revert buttons though the file still holds
-      // the values.
-      ctx->ItemOpen("**/###defaults_other");
-      ctx->Yield(2);
-      FilterTo(ctx, "renderer.fov");
+      // The panel shows the reset immediately — this is the feedback the old write-through model
+      // owed the user and could not give: the row is un-checked though the file still holds the
+      // value, and its Source still says so.
+      IM_CHECK(!RowIsChecked(ctx, "renderer.fov"));
       IM_CHECK(ctx->ItemExists(SourceCellRef("renderer.fov").c_str()));
-      IM_CHECK(!ctx->ItemExists(RevertButtonRef("renderer.fov").c_str()));
       CloseDefaultsPanel(ctx);
       IM_CHECK_EQ(ReadOverlayBytes(dir), before);
 
-      // (b) committed. Save after Reset all must write an EMPTY override set — not re-adopt §2's
-      // checked rows, which would put a full set of defaults straight back and make the button a
-      // no-op the user cannot see through.
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      // (b) committed. Save after Reset all must write an EMPTY override set — not re-adopt the
+      // rows that were checked when the panel opened, which would put a full set of defaults
+      // straight back and make the button a no-op the user cannot see through.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       ctx->ItemClick("**/###defaults_reset_all");
       ctx->Yield(2);
       SaveDefaultsPanel(ctx);
@@ -866,59 +896,16 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  {
-    // copy AC4 — which document each judgement reads.
-    //
-    // Two states of one row, in one session: copy == disk, then copy != disk. The Source cell and
-    // the Revert button follow the COPY (they answer "what would Save leave me with"), while which
-    // SECTION the row is in follows the snapshot the panel opened with, so rows do not move under
-    // the user while they edit.
-    //
-    // The last assertion is the case the acceptance criterion names explicitly: a value that
-    // differs from factory but is already stored in the defaults counts as NOT pending. bg_alpha
-    // is exactly that — 0.42 against a factory value, and saved.
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_ac4_source_follows_copy_section_follows_snapshot");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      const auto dir = FreshOverlayDir("panel_copy_ac4");
-      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-      ResetTestState();
-      ResetUserDefaultsChannels();
-
-      json doc;
-      doc["bg_alpha"] = 0.42f;
-      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
-      gui::g_state = gui::MakeNewDocumentState();
-      IM_CHECK_EQ(gui::g_state.bg_alpha, 0.42f);
-      IM_CHECK_NE(gui::g_state.bg_alpha, gui::GuiState{}.bg_alpha);
-
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
-      ctx->ItemOpen("**/###defaults_other");
-      ctx->Yield(2);
-      FilterTo(ctx, "bg_alpha");
-
-      // State 1: copy == disk. Differs from factory, but it is already saved, so it is NOT a
-      // pending change — it sits in §3 (no adopt checkbox) and reads as Mine.
-      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
-      IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
-      IM_CHECK(ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
-
-      // State 2: copy != disk. The Revert button is gone the moment the copy loses the key —
-      // before anything is written.
-      ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());
-      ctx->Yield(3);
-      IM_CHECK(!ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
-      IM_CHECK(ReadOverlayFile(dir).contains("bg_alpha"));  // ...and the disk still has it
-
-      // The row did NOT move to §2, though its value now differs from what the copy would resolve.
-      // Section membership is anchored to the opening snapshot on purpose: a row that jumped
-      // sections on a click the user has not committed would be exactly the disorientation this
-      // panel is being fixed to remove.
-      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
-      IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
-
-      CloseDefaultsPanel(ctx);
-    };
-  }
+  // RETIRED: copy_ac4_source_follows_copy_section_follows_snapshot.
+  //
+  // It asserted that a row's Source cell and Revert button tracked the WORKING COPY while its
+  // §2/§3 membership tracked the opening SNAPSHOT — a distinction that only existed because the
+  // panel had two mechanisms whose feedback had to be told apart. Both halves are gone: there are
+  // no sections to move between, and there is no per-row operation that edits the copy before
+  // Save, so Source is answered from the snapshot for the whole session (RefreshRows no longer
+  // re-derives it from the copy at all). The claim underneath it — an uncommitted intent must be
+  // visible on screen without touching the file — is now made by ac8 and copy AC2, both of which
+  // assert the checkbox flips while the file bytes do not.
 
   {
     // Esc is the OTHER way out of a BeginPopupModal, and the one no button owns. AC1 is a claim
@@ -944,7 +931,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       const auto before = ReadOverlayBytes(dir);
       IM_CHECK(before.has_value());
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       ctx->ItemClick("**/###defaults_reset_all");
       ctx->Yield(2);
       ctx->KeyPress(ImGuiKey_Escape);
@@ -967,8 +954,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
-    // The entry point contract for §1, matching the one already asserted for §2: "Edit My
-    // Presets..." must open the panel with the preset section expanded, not merely open it.
+    // The entry point contract for §1, matching the one already asserted for the settings list:
+    // "Edit My Presets..." must open the panel with the preset section expanded, not merely open
+    // it.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "presets_entry_point_opens_that_section");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       const auto dir = FreshOverlayDir("panel_preset_entry");
@@ -983,7 +971,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       // ...and the OTHER entry point leaves §1 collapsed, so "which section opens" is a real
       // choice rather than "everything is always open".
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
       CloseDefaultsPanel(ctx);
     };
@@ -996,8 +984,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // scenario cannot currently reach a non-object copy through any path this repo ships — but the
     // panel's normalization should not depend on that being true two calls away forever, so this
     // pins the panel's OWN guarantee rather than the upstream implementation detail it happens to
-    // ride on today. §2 is checked by default, so this is the ordinary Save path with no
-    // interaction beyond Open/Save.
+    // ride on today. This is the ordinary Save path with no interaction beyond Open/Save.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_open_normalizes_a_non_object_override_file");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       const auto dir = FreshOverlayDir("panel_copy_non_object");
@@ -1007,12 +994,197 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       IM_CHECK(gui::WriteUserDefaultsFile(dir, json::array()));
 
-      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
       SaveDefaultsPanel(ctx);
       CloseDefaultsPanel(ctx);
 
       const json saved = ReadOverlayFile(dir);
       IM_CHECK(saved.is_object());
+    };
+  }
+
+  // ================================================================================
+  // AC2 — what the checkbox says when the panel opens, over all three states
+  // ================================================================================
+  {
+    // The checkbox means "this key is in my defaults", and its opening value is the OR of the two
+    // conditions that can put it there. All three reachable states are constructed in one document
+    // so the answers cannot be right for one reason and wrong for another:
+    //   (1) changed in the GUI, not saved   -> checked (saving now would add it)
+    //   (2) already saved, value unchanged  -> checked (saving now would keep it)
+    //   (3) neither                         -> unchecked
+    // (1) and (2) are the two halves of the OR, and (3) is the state that makes the OR falsifiable.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac2_checkbox_opens_on_in_my_defaults");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_ac2_states");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      // State (2): saved, and the document starts from that saved value, so it does NOT also
+      // qualify through "differs from the effective default" — otherwise the case would pass with
+      // the panel looking at only one of the two conditions.
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      IM_CHECK_EQ(gui::g_state.bg_alpha, 0.42f);
+
+      // State (1): changed here and now, nothing on disk about it.
+      gui::g_state.renderer.fov = 95.0f;
+
+      // The three rows, taken from the engine so the premises are checked rather than assumed.
+      const auto rows = CurrentRows();
+      const gui::DefaultDiffRow* changed = nullptr;
+      const gui::DefaultDiffRow* saved = nullptr;
+      const gui::DefaultDiffRow* neither = nullptr;
+      for (const auto& row : rows) {
+        if (row.key_path == "renderer.fov") {
+          changed = &row;
+        } else if (row.key_path == "bg_alpha") {
+          saved = &row;
+        } else if (row.key_path == "bg_show") {
+          neither = &row;
+        }
+      }
+      IM_CHECK(changed != nullptr && saved != nullptr && neither != nullptr);
+      IM_CHECK(gui::RowNeedsAdoption(*changed) && !changed->has_saved_override);
+      IM_CHECK(!gui::RowNeedsAdoption(*saved) && saved->has_saved_override);
+      IM_CHECK(!gui::RowNeedsAdoption(*neither) && !neither->has_saved_override);
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      FilterTo(ctx, "renderer.fov");
+      IM_CHECK(RowIsChecked(ctx, "renderer.fov"));
+      FilterTo(ctx, "bg_alpha");
+      IM_CHECK(RowIsChecked(ctx, "bg_alpha"));
+      FilterTo(ctx, "bg_show");
+      IM_CHECK(!RowIsChecked(ctx, "bg_show"));
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  // ================================================================================
+  // AC3 — Reset all clears every checkbox, and writes nothing until Save
+  // ================================================================================
+  {
+    // The whole sweep, not a spot check: "all" is the claim, and a Reset that cleared only the
+    // rows it could see (or only the ones that were checked for one of the two reasons) would
+    // satisfy any single-row assertion.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac3_reset_all_unchecks_every_row_without_writing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_ac3_reset");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      // Checked for the OTHER reason too, so the sweep covers both halves of the OR.
+      gui::g_state.sun.altitude = 33.0f;
+
+      const auto before = ReadOverlayBytes(dir);
+      IM_CHECK(before.has_value());
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      // Non-vacuous: something really was checked before the click.
+      FilterTo(ctx, "bg_alpha");
+      IM_CHECK(RowIsChecked(ctx, "bg_alpha"));
+      FilterTo(ctx, "sun.altitude");
+      IM_CHECK(RowIsChecked(ctx, "sun.altitude"));
+
+      FilterTo(ctx, "");
+      ctx->ItemClick("**/###defaults_reset_all");
+      ctx->Yield(3);
+
+      // Nothing on disk moved (AC3's second half, inherited from the copy model).
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before);
+
+      const auto rows = CurrentRows();
+      IM_CHECK(!rows.empty());
+      for (const auto& row : rows) {
+        FilterTo(ctx, row.key_path.c_str());
+        IM_CHECK(!RowIsChecked(ctx, row.key_path));
+      }
+
+      FilterTo(ctx, "");
+      SaveDefaultsPanel(ctx);
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(!saved.contains("bg_alpha"));
+      IM_CHECK(!saved.contains("sun"));
+      // The preset library is a sibling namespace this button does not reach.
+      IM_CHECK_EQ(ReadPresetStd(saved, "column").value_or(-1.0f), 0.3f);
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  // ================================================================================
+  // AC4 — the two filters are two DIFFERENT questions
+  // ================================================================================
+  {
+    // The trap this case exists to catch is the two meanings of "has changes" collapsing into one
+    // switch. So the two samples are chosen to be orthogonal — each hits exactly one filter:
+    //   A (renderer.fov)  value differs from factory, checkbox NOT touched this session
+    //   B (bg_show)       value IS the factory one, checkbox touched this session
+    // A single "only show changes" toggle cannot separate these, whichever of the two it means.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "ac4_filters_separate_value_from_edit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_ac4_filter");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      gui::g_state.renderer.fov = 95.0f;                           // sample A
+      IM_CHECK_EQ(gui::g_state.bg_show, gui::GuiState{}.bg_show);  // sample B starts at factory
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      // A opens checked (its value differs) and B opens unchecked, so toggling B is what makes it
+      // "edited this session" — and A stays un-edited despite being checked. That asymmetry is the
+      // point: "checked" and "edited" are not the same thing either.
+      FilterTo(ctx, "renderer.fov");
+      IM_CHECK(RowIsChecked(ctx, "renderer.fov"));
+      ToggleRow(ctx, "bg_show");
+      IM_CHECK(RowIsChecked(ctx, "bg_show"));
+      FilterTo(ctx, "");
+
+      // Filter 1 — value layer. A hits, B misses.
+      ctx->ItemClick("**/###filter_differs");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("renderer.fov").c_str()));
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_show").c_str()));
+
+      // ...and the search box ANDs with it rather than replacing it: a key that passes the search
+      // but fails the filter stays hidden.
+      FilterTo(ctx, "bg_show");
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_show").c_str()));
+      FilterTo(ctx, "");
+
+      // Filter 2 — operation layer. B hits, A misses. Both directions, so neither filter can be
+      // an alias of the other.
+      ctx->ItemClick("**/###filter_edited");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(AdoptCheckboxRef("bg_show").c_str()));
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("renderer.fov").c_str()));
+
+      // A row hidden by a filter is still a row: Save applies the whole list, not the visible part
+      // of it. (A filter that silently narrowed what gets written would be a data-loss bug wearing
+      // a view control's clothes.)
+      SaveDefaultsPanel(ctx);
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(saved.contains("renderer"));  // A was hidden, and still written
+      IM_CHECK_EQ(saved["renderer"]["fov"].get<float>(), 95.0f);
+      IM_CHECK(saved.contains("bg_show"));  // B was visible, and written
+
+      // Back to All, so the next scenario in this single-process suite starts from a full list.
+      ctx->ItemClick("**/###filter_all");
+      ctx->Yield(2);
+      CloseDefaultsPanel(ctx);
     };
   }
 }

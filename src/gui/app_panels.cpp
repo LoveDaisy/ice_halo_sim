@@ -266,7 +266,7 @@ void RenderTopBar(float window_width) {
       // commands rather than in a toolbar of their own: this writes what a NEW document starts
       // from, which is a file-scope decision, not a view toggle.
       if (ImGui::MenuItem("Save Current as Defaults...")) {
-        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPendingChanges);
+        OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
       }
       // Same panel, different section expanded. A separate item rather than "open it and scroll":
       // retuning a preset is a different errand from adopting the current document's settings, and

@@ -8,11 +8,13 @@
 // Coverage:
 //   AC1 — generativity: every serialized root key is either excluded by name or produces rows,
 //         so a newly serialized GuiState field appears in the panel with no engine change
-//   AC2 — the two sections partition one row set (no key in both, no key missing, no duplicates)
+//   AC2 — RowNeedsAdoption is total and two-valued over one row set (no key in both halves, no
+//         key missing, no duplicates) — the property the panel's opening checkbox state rests on
 //   AC3 — namespace 4 (layers / crystals / filters / raypath_color) never reaches the row set
 //   AC4 — an array is ONE row, not one row per element
 //   AC5 — "effective default" layers the saved override over factory, and enums read as names
-//   plus the write-back contract (adopt / revert / reset all) that AC7 and AC8 drive from the UI
+//   plus factory_value (the LITERAL factory value, which is NOT the effective default once a key
+//   has been saved) and ApplyCheckedRowsToDoc (the panel's one write-back rule)
 
 #include <algorithm>
 #include <filesystem>
@@ -144,7 +146,12 @@ void RegisterDefaultsDiffTests(ImGuiTestEngine* engine) {
   }
 
   // ================================================================================
-  // AC2 — §2 and §3 partition the row set
+  // AC2 — RowNeedsAdoption partitions the row set
+  //
+  // Written when the predicate decided which of two SECTIONS a row lived in. The sections are
+  // gone; the predicate is not — it is one half of the OR that decides a row's opening checkbox
+  // state — and this is still the property that guarantees the panel asks it of every row exactly
+  // once. Kept unchanged on purpose: it is a statement about the engine, not about the layout.
   // ================================================================================
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "ac2_sections_partition_the_row_set");
@@ -373,8 +380,147 @@ void RegisterDefaultsDiffTests(ImGuiTestEngine* engine) {
     };
   }
 
+  {
+    // factory_value vs default_value. They are equal until the key is saved, and that is exactly
+    // why the panel cannot use default_value for its "differs from factory" filter: once a
+    // non-factory default IS saved, default_value becomes the saved value, and the comparison
+    // would report "same as factory" for the one row the user definitely customised.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "factory_value_is_not_the_effective_default");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("diff_factory_value");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      const float kFactoryAlpha = gui::GuiState{}.bg_alpha;
+      const float kSavedAlpha = kFactoryAlpha + 0.25f;
+
+      // State 1: nothing saved. The two agree, which is the case that makes the confusion possible.
+      {
+        gui::GuiState state = gui::InitDefaultState();
+        const auto rows = gui::BuildDefaultDiffRows(state);
+        const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
+        IM_CHECK(row != nullptr);
+        IM_CHECK(row->factory_value == row->default_value);
+        IM_CHECK_EQ(row->factory_value.get<float>(), kFactoryAlpha);
+      }
+
+      // State 2: a non-factory default saved, and the document sitting on it. The effective
+      // default follows the file; factory_value does not move.
+      {
+        json doc;
+        doc["bg_alpha"] = kSavedAlpha;
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+        gui::GuiState state = gui::InitDefaultState();
+        state.bg_alpha = kSavedAlpha;
+        const auto rows = gui::BuildDefaultDiffRows(state);
+        const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
+        IM_CHECK(row != nullptr);
+        IM_CHECK_EQ(row->default_value.get<float>(), kSavedAlpha);
+        IM_CHECK_EQ(row->factory_value.get<float>(), kFactoryAlpha);
+        IM_CHECK(row->factory_value != row->default_value);
+        // The two filter questions, side by side on ONE row, answering differently: the value
+        // differs from factory, and the row does not need adopting (it already matches the
+        // effective default). A panel that used default_value for both would say "no" twice.
+        IM_CHECK(row->current_value != row->factory_value);
+        IM_CHECK(!gui::RowNeedsAdoption(*row));
+      }
+    };
+  }
+
   // ================================================================================
-  // Write-back contract (the engine half of AC7 / AC8)
+  // The panel's write-back rule: one pass over the row set, driven by the checkbox state
+  // ================================================================================
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "apply_checked_rows_adopts_and_removes_in_one_pass");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      const auto dir = FreshOverlayDir("diff_checked_rows");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+
+      // A document holding one key that will be un-checked, plus a preset subtree the rule must
+      // not reach (it produces no row, so it is never named).
+      json doc;
+      doc["bg_show"] = false;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+
+      const gui::GuiState state = MakeEditedState();
+      const auto rows = gui::BuildDefaultDiffRows(state, doc);
+      IM_CHECK(!rows.empty());
+      IM_CHECK(FindRow(rows, "bg_show") != nullptr);
+      IM_CHECK(FindRow(rows, "renderer.fov") != nullptr);
+
+      // Checked: one key that is NOT in the document. Everything else — including bg_show, which
+      // is — is left out of the set, i.e. un-checked.
+      json next = doc;
+      IM_CHECK(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov" }, state));
+
+      IM_CHECK(next.contains("renderer"));
+      IM_CHECK_EQ(next["renderer"]["fov"].get<float>(), state.renderer.fov);
+      IM_CHECK(!next.contains("bg_show"));  // un-checked -> removed, in the same pass
+      // Untouched by construction rather than by a special case: no row names it.
+      IM_CHECK_EQ(next["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+      // And nothing else was adopted just because it was serialized.
+      IM_CHECK(!next.contains("sun"));
+      IM_CHECK(!next.contains("bg_alpha"));
+
+      // Un-checking EVERYTHING is Reset all: every GuiState key goes, the sibling subtree stays.
+      json emptied = doc;
+      IM_CHECK(gui::ApplyCheckedRowsToDoc(emptied, rows, {}, state));
+      IM_CHECK(!emptied.contains("bg_show"));
+      IM_CHECK_EQ(emptied.size(), static_cast<size_t>(1));
+      IM_CHECK(emptied.contains("presets"));
+    };
+  }
+
+  {
+    // A checked key that the CURRENT state does not serialize (an optional key) is removed rather
+    // than written as null — "adopt what I have now" reads the same either way, and a null in the
+    // file would be read back as a value.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "apply_checked_rows_removes_an_absent_optional_key");
+    t->TestFunc = [](ImGuiTestContext*) {
+      ResetUserDefaultsChannels();
+      ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+
+      const gui::GuiState state = gui::InitDefaultState();
+      const json current = json::parse(gui::SerializeGuiStateJson(state));
+      // The premise, asserted rather than assumed: this key really is one the default state does
+      // not serialize. If it ever becomes unconditional, this line says so instead of the case
+      // below quietly testing nothing.
+      IM_CHECK(!current.contains("sun") || !current["sun"].contains("custom_spectrum"));
+
+      // The row is hand-built rather than taken from BuildDefaultDiffRows: whether a row for an
+      // absent key EXISTS depends on the overlay loader putting the key back into the effective
+      // default, which is a different mechanism from the one under test here. ApplyCheckedRowsToDoc
+      // takes the rows and the current state as separate inputs, so the branch can be driven
+      // directly.
+      gui::DefaultDiffRow row;
+      row.key_path = "sun.custom_spectrum";
+      const std::vector<gui::DefaultDiffRow> rows = { row };
+
+      // The emptied parent is pruned with the key...
+      {
+        json doc;
+        doc["sun"]["custom_spectrum"] = json::array({ 400.0, 1.0 });
+        IM_CHECK(gui::ApplyCheckedRowsToDoc(doc, rows, { "sun.custom_spectrum" }, state));
+        IM_CHECK(!doc.contains("sun"));
+      }
+      // ...but a parent that still holds something is not.
+      {
+        json doc;
+        doc["sun"]["custom_spectrum"] = json::array({ 400.0, 1.0 });
+        doc["sun"]["altitude"] = 33.0f;
+        IM_CHECK(gui::ApplyCheckedRowsToDoc(doc, rows, { "sun.custom_spectrum" }, state));
+        IM_CHECK(doc.contains("sun"));
+        IM_CHECK(!doc["sun"].contains("custom_spectrum"));
+        IM_CHECK_EQ(doc["sun"]["altitude"].get<float>(), 33.0f);
+      }
+    };
+  }
+
+  // ================================================================================
+  // Write-back contract (the disk-side wrappers)
   // ================================================================================
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_diff", "write_back_is_surgical_and_keeps_presets");
