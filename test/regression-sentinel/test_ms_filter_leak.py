@@ -56,7 +56,7 @@ def test_impossible_filter_produces_zero_intensity():
     main output buffer.
     """
     result = run_scene_capi(str(CONFIGS_DIR / "ms_filter_leak_impossible.json"))
-    assert result.snapshot_intensity == pytest.approx(1.0, abs=1e-6), (
+    assert result.snapshot_intensity == pytest.approx(0.0, abs=1e-6), (
         f"Expected zero snapshot_intensity (impossible filter blocks all rays), "
         f"got {result.snapshot_intensity:.6g}"
     )
