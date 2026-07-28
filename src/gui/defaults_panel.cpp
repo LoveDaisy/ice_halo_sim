@@ -731,9 +731,22 @@ void RenderDefaultsPanel(GuiState& state) {
     // Copy only, like every other edit here — this is the button whose old write-through behavior
     // made the panel dishonest, since it emptied the file while the screen did not move.
     ApplyResetAllToDoc(g_copy_doc);
+    RefreshRows(state);
+    // ...and un-check every pending row, because otherwise this button cannot do what it says.
+    // §2's rows are checked by default, so Save would immediately re-adopt them and the "reset"
+    // would write a full set of defaults straight back. With Save as the only write, that
+    // contradiction is now reachable in one visible sequence (Reset all, then Save) instead of
+    // being hidden behind a file that had already been emptied; the behavior AC2 asks for is that
+    // Save then writes an EMPTY override set. Nothing is taken away — any row can be re-checked.
+    std::set<std::string> excluded;
+    for (const auto& row : g_rows) {
+      if (RowNeedsAdoption(row)) {
+        excluded.insert(row.key_path);
+      }
+    }
+    g_excluded_keys = std::move(excluded);  // whole-value, like every other reset in this file
     g_status_message =
         "Every personal default will be removed when you save; new documents will start from factory values.";
-    RefreshRows(state);
   }
   PopDestructiveStyle();
 
