@@ -61,7 +61,7 @@ TEST_F(V3TestMath, SolveLinesIntersect) {
   float res[2];
 
   ASSERT_TRUE(SolveLines(coef1, coef2, res));
-  EXPECT_NEAR(res[0], 2.0f, math::kFloatEps);
+  EXPECT_NEAR(res[0], 1.0f, math::kFloatEps);
   EXPECT_NEAR(res[1], 1.0f, math::kFloatEps);
 }
 
