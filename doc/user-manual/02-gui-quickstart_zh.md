@@ -4,12 +4,12 @@
 
 本章带你在 Lumice GUI 中完成首次交互式模拟：启动应用、加载内置示例、跑一次模拟、读懂预览。看完你会知道点哪些面板、各浮窗是什么含义。
 
-> **前置**：构建产物含 GUI（`./scripts/build.sh -j release` 会同时产出 `build/cmake_install/LumiceGUI`）。
+> **前置**：构建产物含 GUI（`./scripts/build.sh -j release` 会同时产出 `build/cmake_install/static/LumiceGUI`）。
 
 ## 1. 启动
 
 ```bash
-./build/cmake_install/LumiceGUI
+./build/cmake_install/static/LumiceGUI
 ```
 
 首次启动后主窗口为空载状态：

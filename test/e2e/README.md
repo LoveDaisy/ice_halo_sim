@@ -13,7 +13,7 @@ They run the built `Lumice` binary with test configurations and check results.
 pip install Pillow
 ```
 
-The tests expect the binary at `build/cmake_install/Lumice`. Override with `LUMICE_BIN` env var.
+The tests expect the binary at `build/cmake_install/static/Lumice`. Override with `LUMICE_BIN` env var.
 
 ## Running Tests
 
@@ -70,7 +70,7 @@ To regenerate after rendering code changes:
 for cfg in test/e2e/configs/*.json; do
     name=$(basename "$cfg" .json)
     tmpdir=$(mktemp -d)
-    ./build/cmake_install/Lumice -f "$cfg" -o "$tmpdir"
+    ./build/cmake_install/static/Lumice -f "$cfg" -o "$tmpdir"
     for img in "$tmpdir"/img_*.jpg; do
         rid=$(echo "$img" | grep -o '[0-9]*\.jpg' | sed 's/\.jpg//')
         cp "$img" "test/e2e/references/${name}_$(printf '%02d' $rid).jpg"

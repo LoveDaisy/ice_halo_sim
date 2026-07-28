@@ -451,14 +451,14 @@ the drain cadence):
 ./scripts/build.sh -j release
 
 # Benchmark mode (recommended — structured output, no image I/O)
-./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+./build/cmake_install/static/Lumice --benchmark -f examples/bench_config.json -o /tmp
 
 # Manual mode (info level — with image output)
-time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
+time ./build/cmake_install/static/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
 # Manual mode (debug level — Consume breakdown)
-time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
+time ./build/cmake_install/static/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
@@ -500,10 +500,10 @@ GPU number), and reports median + CoV with thermal re-runs.
 
 ```bash
 # On dev49, inside the CUDA docker (build first: -DLUMICE_CUDA_ENABLED=ON
-# -DBUILD_SHARED_LIBS=ON -> build/Release/{bin/Lumice, lib/liblumice.so}).
+# -DBUILD_SHARED_LIBS=ON -> build/Release/shared/{bin/Lumice, lib/liblumice.so}).
 # Canonical CUDA throughput run (legacy baseline + CUDA, full canonical scene set):
-LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice \
-LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
+LUMICE_BENCH_BIN=/work/build/Release/shared/bin/Lumice \
+LUMICE_BENCH_LIBDIR=/work/build/Release/shared/lib \
 LUMICE_BENCH_BACKENDS=legacy,cuda \
   python3 scripts/bench_throughput.py
 # Narrow to the comparable light scene only (vs the 25M/s hardware-capability target):
@@ -690,12 +690,12 @@ Two scenarios:
 ./scripts/build.sh -gtj release
 
 # Run perf tests only (PERF output on stderr, server logs on stdout)
-./build/Release/bin/gui_test --filter perf_test \
+./build/Release/static/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
 
 # With debug level (adds ConsumeData per-batch + Consume profile)
-./build/Release/bin/gui_test --filter perf_test --log-level debug \
+./build/Release/static/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
 grep "Consume profile" /tmp/perf_stdout_debug.txt
 ```

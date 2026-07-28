@@ -23,7 +23,7 @@ External libraries (spdlog, nlohmann/json, stb, googletest, …) are fetched aut
 The convenience script `scripts/build.sh` is the supported way to build:
 
 ```bash
-# Release build, parallel, install artefacts under build/cmake_install/
+# Release build, parallel, install artefacts under build/cmake_install/static/
 ./scripts/build.sh -j release
 ```
 
@@ -40,10 +40,12 @@ After a successful release build, the artefacts you care about live here:
 
 | Artefact | Path | Purpose |
 |----------|------|---------|
-| CLI binary | `build/cmake_install/Lumice` | Run a JSON config from the command line |
-| GUI binary | `build/cmake_install/LumiceGUI` | Interactive GUI app (requires Qt) |
+| CLI binary | `build/cmake_install/static/Lumice` | Run a JSON config from the command line |
+| GUI binary | `build/cmake_install/static/LumiceGUI` | Interactive GUI app (requires Qt) |
 
-> Debug builds land in `build/cmake_build/` instead. Release artefacts in `build/cmake_install/` are what the rest of this manual assumes.
+> Both trees are per-flavor: a `-s` (shared) build never shares a directory with a static one. The
+> CMake build tree is `build/cmake_build/<flavor>/`. Release artefacts in `build/cmake_install/static/`
+> are what the rest of this manual assumes.
 
 ![Lumice CLI startup banner](../figs/cli_screenshot_01.jpg)
 
@@ -52,7 +54,7 @@ After a successful release build, the artefacts you care about live here:
 Run the bundled example config to confirm the binary works end-to-end. From the project root:
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json -o /tmp/lumice-smoke
+./build/cmake_install/static/Lumice -f examples/config_example.json -o /tmp/lumice-smoke
 ```
 
 You should see:

@@ -22,8 +22,8 @@ Core conventions:
 ./scripts/build.sh -k release
 
 # Run
-./build/cmake_install/Lumice -f examples/config_example.json
-./build/cmake_install/Lumice -f config.json -v
+./build/cmake_install/static/Lumice -f examples/config_example.json
+./build/cmake_install/static/Lumice -f config.json -v
 
 # Tests
 ./scripts/build.sh -tj release
@@ -44,7 +44,10 @@ python3 scripts/check_new_refs.py --range A..B    # same, over a commit range (w
 ./scripts/install-hooks.sh           # install the non-interactive pre-commit hook (one-time)
 ```
 
-Release artifacts land in `build/cmake_install/`. Debug builds stay in `build/cmake_build/`.
+Build trees and install trees are per-flavor: `-s` (shared) and no `-s` (static) never share a
+directory, so both stay warm and switching between them does not force a rebuild. Release
+artifacts are installed to `build/cmake_install/<flavor>/`; the CMake build tree is
+`build/cmake_build/<flavor>/` and compiler output lands in `build/<BUILD_TYPE>/<flavor>/{bin,lib}/`.
 
 ## Code Structure
 

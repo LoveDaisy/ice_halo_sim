@@ -20,7 +20,8 @@ Thank you for your interest in contributing to Lumice! This guide covers the dev
 ./scripts/build.sh -k release             # Clean rebuild (preserves dependency cache)
 ```
 
-Build output: `build/cmake_install/` (Release), `build/cmake_build/` (Debug)
+Build output: `build/cmake_install/<flavor>/` (install tree), `build/cmake_build/<flavor>/` (CMake
+build tree), where `<flavor>` is `shared` with `-s` and `static` without it
 
 ### Git hooks (recommended, one-time)
 

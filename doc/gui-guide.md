@@ -11,7 +11,7 @@ This document describes the Lumice GUI application — an interactive graphical 
 ./scripts/build.sh -gj release
 
 # Run
-./build/cmake_install/LumiceGUI
+./build/cmake_install/static/LumiceGUI
 ```
 
 The GUI requires a display server and a GPU with OpenGL 3.2 Core Profile support.

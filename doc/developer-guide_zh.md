@@ -87,7 +87,7 @@ sudo apt-get install cmake ninja-build
 
 ```bash
 ./scripts/build.sh debug
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 (lldb) run -f examples/config_example.json
 ```
 
@@ -95,7 +95,7 @@ lldb ./build/cmake_build/Lumice
 
 ```bash
 ./scripts/build.sh debug
-gdb ./build/cmake_build/Lumice
+gdb ./build/Debug/static/bin/Lumice
 (gdb) run -f examples/config_example.json
 ```
 
@@ -106,8 +106,8 @@ Lumice 仅在构建脚本和测试工具中使用少量环境变量。产品代�
 | 变量 | 位置 | 用途 |
 |------|------|------|
 | `LUMICE_SKIP_GUI_TESTS` | `scripts/build.sh` | 设为 `1` 可跳过 GUI 测试的编译和执行。CI 通过 `CI` 变量自动检测无头环境。 |
-| `LUMICE_BIN` | `test/e2e/runner.py` | 覆盖 E2E 子进程测试使用的 CLI 可执行文件路径。默认为 `build/cmake_install/Lumice`。 |
-| `LUMICE_LIB` | `test/e2e/capi_runner.py` | 覆盖 E2E C API 测试使用的共享库路径。默认为 `build/cmake_install/liblumice.dylib`（macOS）或 `.so`（Linux）。 |
+| `LUMICE_BIN` | `test/e2e/runner.py` | 覆盖 E2E 子进程测试使用的 CLI 可执行文件路径。默认为 `build/cmake_install/static/Lumice`。 |
+| `LUMICE_LIB` | `test/e2e/capi_runner.py` | 覆盖 E2E C API 测试使用的共享库路径。默认为第一个存在的 shared flavor 候选，首选 `build/Release/shared/lib/liblumice.dylib`（macOS）或 `.so`（Linux）。 |
 
 **设计原则**：确定性模拟种子通过 C API（`LUMICE_ServerConfig.sim_seed`）传递，而非环境变量，以确保程序行为显式且可复现。详见 [C 接口文档](c_api_zh.md)。
 
@@ -485,7 +485,7 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 ./scripts/build.sh -t release
 
 # 或手动运行
-cd build/cmake_build
+cd build/cmake_build/static
 ctest
 ```
 
@@ -567,7 +567,7 @@ test/e2e/
 #### 运行 E2E 测试
 
 ```bash
-# 需要已构建的二进制文件 build/cmake_install/Lumice
+# 需要已构建的二进制文件 build/cmake_install/static/Lumice
 pytest test/e2e/ -v
 ```
 
@@ -648,7 +648,7 @@ lumice::GetGlobalLogger().SetLevel(lumice::LogLevel::kDebug);  // 设置为 debu
 
 ```bash
 # 启动调试
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 
 # 设置断点
 (lldb) breakpoint set --file crystal.cpp --line 100
@@ -673,18 +673,18 @@ lldb ./build/cmake_build/Lumice
 #### Valgrind内存检查（Linux）
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/Lumice -f examples/config_example.json
+valgrind --leak-check=full ./build/Debug/static/bin/Lumice -f examples/config_example.json
 ```
 
 #### 性能分析
 
 ```bash
 # 使用 perf (Linux)
-perf record ./build/cmake_install/Lumice -f examples/config_example.json
+perf record ./build/cmake_install/static/Lumice -f examples/config_example.json
 perf report
 
 # 使用 Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/Lumice -f examples/config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/static/Lumice -f examples/config_example.json
 ```
 
 ### 常见问题排查

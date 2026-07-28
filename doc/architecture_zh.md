@@ -293,7 +293,7 @@ Server::GetResults()
 - 通过 `lumice.h` 公共 API 与核心库交互
 - 使用方式：
   ```bash
-  ./build/cmake_install/Lumice -f examples/config_example.json
+  ./build/cmake_install/static/Lumice -f examples/config_example.json
   ```
 
 **`src/gui/main.cpp` → `LumiceGUI`**（GUI，需要 `-g` 构建选项）
@@ -301,7 +301,7 @@ Server::GetResults()
 - 提供晶体 3D 预览、渲染预览、参数编辑和 `.lmc` 文件管理
 - 使用方式：
   ```bash
-  ./build/cmake_install/LumiceGUI
+  ./build/cmake_install/static/LumiceGUI
   ```
 
 构建目标：

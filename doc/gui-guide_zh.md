@@ -11,7 +11,7 @@
 ./scripts/build.sh -gj release
 
 # 运行
-./build/cmake_install/LumiceGUI
+./build/cmake_install/static/LumiceGUI
 ```
 
 GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。

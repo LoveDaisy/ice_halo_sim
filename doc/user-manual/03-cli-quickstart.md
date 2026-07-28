@@ -4,20 +4,20 @@
 
 This chapter shows how to run Lumice from the command line — useful for batch jobs, CI, headless servers, and reproducible recipes.
 
-> **Prerequisite**: `build/cmake_install/Lumice` exists. If not, see [`01-install.md`](01-install.md).
+> **Prerequisite**: `build/cmake_install/static/Lumice` exists. If not, see [`01-install.md`](01-install.md).
 
 ## 1. Basic invocation
 
 The minimal call is:
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json
+./build/cmake_install/static/Lumice -f examples/config_example.json
 ```
 
 This writes JPEG output(s) to the current working directory. To pick an output directory:
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json -o /tmp/lumice-out
+./build/cmake_install/static/Lumice -f examples/config_example.json -o /tmp/lumice-out
 ```
 
 ![Lumice startup](../figs/cli_screenshot_01.jpg)
@@ -43,18 +43,18 @@ The console also prints a `Stats:` block summarising the simulation (ray counts,
 ## 3. Verbose and debug modes
 
 ```bash
-./build/cmake_install/Lumice -f config.json -v   # trace-level logs
-./build/cmake_install/Lumice -f config.json -d   # debug-level logs
+./build/cmake_install/static/Lumice -f config.json -v   # trace-level logs
+./build/cmake_install/static/Lumice -f config.json -d   # debug-level logs
 ```
 
 `-v` is roughly "show me the per-batch ray counts as they are produced"; `-d` adds extra diagnostics (RNG seeds, scattering layer dispatch). Use `-v` first; reach for `-d` only when chasing a bug.
 
 ## 4. All flags at a glance
 
-The complete set of flags as printed by `Lumice -h` (anchor source: `./build/cmake_install/Lumice -h`):
+The complete set of flags as printed by `Lumice -h` (anchor source: `./build/cmake_install/static/Lumice -h`):
 
 ```text
-Usage: ./build/cmake_install/Lumice -f <config_file> [options]
+Usage: ./build/cmake_install/static/Lumice -f <config_file> [options]
 
 Options:
   -f <file>          Specify the configuration file (required)

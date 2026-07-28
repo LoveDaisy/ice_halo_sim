@@ -62,7 +62,7 @@
 
 三个欧拉角各自配 `uniform`（`mean=0, std=360`）让晶体取向在球面上各向同性——sampler 会把这个组合识别为标准全球面采样（见 `src/core/math.cpp` 中的 `AxisDistribution::IsFullSphereUniform`）。如果省略 `axis` 块，晶体会默认为单一固定取向，输出只会是弧线或亮斑，无法形成完整的 22° 圆环。单条 `scattering` 配 `prob: 0.0` 表示每条出射光线直接射出（单次散射 recipe）；多次散射写法见配方 3。
 
-跑：`./build/cmake_install/Lumice -f recipes/22-halo.json -o /tmp/out`
+跑：`./build/cmake_install/static/Lumice -f recipes/22-halo.json -o /tmp/out`
 
 棱柱字段语义见 [`../configuration_zh.md`](../configuration_zh.md) §`crystal`。
 
