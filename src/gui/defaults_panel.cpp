@@ -660,7 +660,34 @@ void RenderDefaultsPanel(GuiState& state) {
   // a function of how many settings differ, and a modal that changes size with the diff would
   // make every visual-regression scene a different capture rectangle.
   ImGui::SetNextWindowSize(ImVec2(760.0f, 560.0f), ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal(kDefaultsPanelTitle, nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+  // Passing a p_open is what puts the X in the title bar. Re-initialized to true every frame on
+  // purpose: it is not a state we keep, only the one-frame channel ImGui uses to report "the X was
+  // pressed", read below and then thrown away.
+  bool title_x_open = true;
+  if (!ImGui::BeginPopupModal(kDefaultsPanelTitle, &title_x_open, ImGuiWindowFlags_NoSavedSettings)) {
+    // WHERE this check sits is the whole point, and it is deliberately NOT where the Custom
+    // Spectrum modal in edit_modals.cpp puts its equivalent. On the frame the X is clicked,
+    // BeginPopupModal sees *p_open go false right after Begin() and closes the popup stack itself
+    // (EndPopup + ClosePopupToLevel), then returns FALSE. So the body of this function does not
+    // run that frame, and any "if (!title_x_open)" written after the early return is unreachable
+    // for a plain BeginPopupModal.
+    //
+    // What ImGui closed is the popup. What it knows nothing about is defaults_panel_open, and the
+    // OpenPopup guard a few lines up reopens the popup on the very next frame for as long as that
+    // flag is set — which is exactly why Esc does not close this panel today (Esc's close happens
+    // during navigation, earlier in the frame than the guard, so p_open never observes it and this
+    // branch never fires for Esc; that behavior is unchanged here and pinned by its own test).
+    // Clearing the flag here is what makes the X actually close the panel rather than blink it.
+    //
+    // Discard semantics come for free and are NOT implemented here: the working copy is simply
+    // never committed, and the next OpenDefaultsPanel replaces it wholesale. That is the same
+    // reason the Close button below writes nothing either — see the comment there. Note the two
+    // paths are not duplicates worth folding into a shared helper: this one must not call
+    // CloseCurrentPopup (ImGui already closed the popup and there is no popup on the stack to
+    // address), and the button path must.
+    if (!title_x_open) {
+      state.defaults_panel_open = false;
+    }
     return;
   }
 

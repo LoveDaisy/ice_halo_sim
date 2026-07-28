@@ -1026,6 +1026,70 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
+    // The title-bar X: the third way out, and the one that has to prove BOTH halves. "Writes
+    // nothing" alone would be satisfied by a panel that never closes (Esc satisfies it that way,
+    // and the case above says so), so the file assertion is paired here with two that say the
+    // panel is actually gone — the flag cleared AND the widgets off screen. They are not the same
+    // claim: ImGui closes the popup itself on the frame the X is pressed, so a version that forgot
+    // to clear defaults_panel_open would look closed for exactly one frame and be re-opened by the
+    // OpenPopup guard on the next. Yielding several frames before asking is what makes that
+    // failure visible rather than a coin flip.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "title_x_discards_and_actually_closes");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_title_x");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      const auto before = ReadOverlayBytes(dir);
+      IM_CHECK(before.has_value());
+
+      // Real pending edits in both halves, so "nothing was written" is a statement about a session
+      // that had something to write, not about an untouched panel.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_column", 0.5f);
+      ctx->Yield(2);
+      ctx->ItemClose("**/###preset_Column");
+      ctx->ItemOpen("**/###defaults_settings");
+      ctx->Yield(2);
+      ToggleRow(ctx, "bg_alpha");
+      FilterTo(ctx, "");
+      ctx->Yield(2);
+
+      // Addressed through the title constant rather than a "**/" wildcard: "#CLOSE" is ImGui's id
+      // for EVERY window's title-bar X, so a wildcard could match some other window's and pass
+      // while this panel's X does nothing.
+      const std::string close_x_ref = std::string(gui::kDefaultsPanelTitle) + "/#CLOSE";
+      ctx->ItemClick(close_x_ref.c_str());
+      ctx->Yield(4);
+
+      // Discard, same as the Close button: the working copy was never committed.
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before);
+      // ...and unlike Esc, the panel stays closed.
+      IM_CHECK(!gui::g_state.defaults_panel_open);
+      IM_CHECK(!ctx->ItemExists("**/###defaults_save"));
+
+      // Re-opening starts from the file, not from the discarded copy — the edits above are gone
+      // rather than merely unwritten. Without this, "discard" would be indistinguishable from
+      // "deferred": a copy that survived the X would be committed by the next session's Save, and
+      // the file assertion above would still have passed at the moment it was made.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      SaveDefaultsPanel(ctx);
+      CloseDefaultsPanel(ctx);
+      const auto after = ReadOverlayFile(dir);
+      IM_CHECK_EQ(ReadPresetStd(after, "column"), std::optional<float>(0.3f));
+      IM_CHECK(after.contains("bg_alpha"));
+    };
+  }
+
+  {
     // The entry point contract for §1, matching the one already asserted for the settings list:
     // kPresets must open the panel with the preset section expanded, not merely open it. No menu
     // item points here any more — the top-bar Settings button opens on kSettings and the preset
