@@ -191,6 +191,13 @@ void ApplyOutOfDomainWarnings(const GuiState& state, std::vector<DefaultDiffRow>
     if (!constraint.has_numeric_domain) {
       continue;
     }
+    // Not just "no editor" but "no editor RIGHT NOW": the message below promises the cell can be
+    // edited back into range, and a disabled cell (its editor exists but does not apply under the
+    // current configuration, e.g. bg_alpha with no background loaded) cannot honor that promise
+    // until the state that disables it changes.
+    if (!constraint.enabled) {
+      continue;
+    }
     const double value = row.current_value.get<double>();
     if (value >= constraint.min_value && value <= constraint.max_value) {
       continue;

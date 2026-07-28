@@ -27,7 +27,9 @@ namespace {
 // does not. Mirrors the BeginDisabled(...) expression at the field's main-UI call site.
 struct Applicability {
   bool enabled = true;
-  const char* reason = nullptr;
+  // Named to match FieldEditorConstraint::disabled_reason, which this becomes: keeping the two
+  // spellings in sync avoids a reader having to hold "these are the same thing" in their head.
+  const char* disabled_reason = nullptr;
 };
 using ApplicabilityFn = std::function<Applicability(const GuiState&)>;
 using FloatDomainFn = std::function<std::pair<float, float>(const GuiState&)>;
@@ -77,13 +79,17 @@ FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, c
   entry.Constraint = [domain, applicable](const GuiState& state) {
     const auto range = domain(state);
     const Applicability a = applicable(state);
-    return FieldEditorConstraint{ a.enabled, a.reason, true, range.first, range.second };
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, true, range.first, range.second };
   };
   entry.Render = [access, domain, fmt, scale](GuiState& state, const char* id_base) {
     const auto range = domain(state);
     float* slot = access(state);
     float working = *slot;
-    SliderWithInput(id_base, &working, range.first, range.second, fmt, scale, /*trailing_label=*/false);
+    bool committed = false;
+    SliderWithInput(id_base, &working, range.first, range.second, fmt, scale, /*trailing_label=*/false, &committed);
+    if (!committed) {
+      return false;
+    }
     return CommitIfEdited(*slot, working, range.first, range.second);
   };
   return entry;
@@ -95,13 +101,17 @@ FieldEditorEntry IntField(int* (*access)(GuiState&), int min_value, int max_valu
   entry.kind = FieldEditorKind::kIntSlider;
   entry.Constraint = [min_value, max_value, applicable](const GuiState& state) {
     const Applicability a = applicable(state);
-    return FieldEditorConstraint{ a.enabled, a.reason, true, static_cast<double>(min_value),
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, true, static_cast<double>(min_value),
                                   static_cast<double>(max_value) };
   };
   entry.Render = [access, min_value, max_value](GuiState& state, const char* id_base) {
     int* slot = access(state);
     int working = *slot;
-    SliderIntWithInput(id_base, &working, min_value, max_value, /*trailing_label=*/false);
+    bool committed = false;
+    SliderIntWithInput(id_base, &working, min_value, max_value, /*trailing_label=*/false, &committed);
+    if (!committed) {
+      return false;
+    }
     return CommitIfEdited(*slot, working, min_value, max_value);
   };
   return entry;
@@ -112,7 +122,7 @@ FieldEditorEntry BoolField(bool* (*access)(GuiState&), ApplicabilityFn applicabl
   entry.kind = FieldEditorKind::kCheckbox;
   entry.Constraint = [applicable](const GuiState& state) {
     const Applicability a = applicable(state);
-    return FieldEditorConstraint{ a.enabled, a.reason, false, 0.0, 0.0 };
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, false, 0.0, 0.0 };
   };
   entry.Render = [access](GuiState& state, const char* id_base) {
     return ImGui::Checkbox(HiddenLabel(id_base).c_str(), access(state));
@@ -145,7 +155,7 @@ FieldEditorEntry ComboField(int* (*access)(GuiState&), const char* const* names,
   entry.kind = FieldEditorKind::kCombo;
   entry.Constraint = [applicable](const GuiState& state) {
     const Applicability a = applicable(state);
-    return FieldEditorConstraint{ a.enabled, a.reason, false, 0.0, 0.0 };
+    return FieldEditorConstraint{ a.enabled, a.disabled_reason, false, 0.0, 0.0 };
   };
   entry.Render = [access, names, count](GuiState& state, const char* id_base) {
     int* slot = access(state);
