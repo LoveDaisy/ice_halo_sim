@@ -337,12 +337,12 @@ std::string DescribeAxisPresetZenithStdDomain(AxisPreset preset) {
   return "greater than 0 and less than " + FormatAxisPresetStd(kColumnPlateParryZenithStdUpperBound);
 }
 
-AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value) {
-  AxisPresetWriteResult result;
+AxisPresetClampResult ClampAxisPresetZenithStdForSave(AxisPreset preset, float raw_value) {
+  AxisPresetClampResult result;
 
   const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
-  // Both halves tested, not just the predicate: override_json_name is what the write below indexes
-  // the document with, and a nullptr there is not a refusal but a crash. The static_assert in
+  // Both halves tested, not just the predicate: override_json_name is what a write indexes the
+  // document with, and a nullptr there is not a refusal but a crash. The static_assert in
   // axis_presets.hpp makes the two agree, so this second clause is unreachable today — it is here
   // so that "refuses cleanly" does not depend on that assert still being in place.
   if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
@@ -360,7 +360,25 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
   }
 
   float stored = raw_value;
-  const bool clamped = ClampZenithStdToPresetDomain(preset, stored);
+  result.clamped = ClampZenithStdToPresetDomain(preset, stored);
+  result.accepted = true;
+  result.stored_value = stored;
+  result.message = result.clamped ? DescribeAxisPresetClamp(preset, raw_value, stored) : std::string();
+  return result;
+}
+
+AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value) {
+  AxisPresetWriteResult result;
+
+  // The decision half is shared with the panel's uncommitted-edit path; only the IO below is this
+  // function's own.
+  const AxisPresetClampResult clamp = ClampAxisPresetZenithStdForSave(preset, raw_value);
+  if (!clamp.accepted) {
+    result.message = clamp.message;
+    return result;
+  }
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  const float stored = clamp.stored_value;
 
   const auto dir = GetActiveUserConfigDir();
   if (!dir) {
@@ -387,9 +405,9 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
   g_axis_overrides.slots[static_cast<std::size_t>(preset)] = AxisPresetOverride{ true, stored };
 
   result.written = true;
-  result.clamped = clamped;
+  result.clamped = clamp.clamped;
   result.stored_value = stored;
-  result.message = clamped ? DescribeAxisPresetClamp(preset, raw_value, stored) : std::string();
+  result.message = clamp.message;
   return result;
 }
 

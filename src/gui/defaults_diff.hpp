@@ -67,12 +67,35 @@ struct DefaultDiffRow {
 //                     out of §3, where it would only read as "is this a setting?".
 inline constexpr const char* kDiffEngineExcludedRootKeys[] = { "layers", "schema_version" };
 
+// The raw (un-merged) override document in the active user-config directory. Empty object when
+// personal defaults are disabled or unavailable, which is also what "nothing saved" looks like.
+//
+// Public so the panel takes its opening snapshot through the SAME directory resolution the diff
+// engine and MakeNewDocumentState() use. Re-deriving it there from GetActiveUserConfigDir() +
+// ReadOverlayJsonIfPresent() would put a second copy of the "no directory ⇒ empty" degradation
+// rule in the panel, and two resolution paths for one question is the drift invariant I1 exists
+// to prevent (see the note on GetActiveUserConfigDir in user_defaults.hpp).
+nlohmann::json ReadActiveOverlayDoc();
+
 // The whole row set for `current`, against the currently effective defaults (factory + whatever is
 // saved in the active user-config directory). Sorted by key_path for a stable panel order.
 //
 // Reads the override file, so it is a "call on open / call after a write" operation, not a
 // per-frame one (see defaults_panel.cpp, which caches the result for the life of the modal).
 std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current);
+
+// Same, against an EXPLICIT override document instead of whatever is on disk right now.
+//
+// This is the overload the panel uses. The panel is a pure editor: it takes one snapshot of the
+// file when it opens and compares against that frozen document for the whole session, so a Revert
+// or a Reset the user has not committed yet cannot move rows between sections underneath them.
+// The single-argument version above is exactly this one applied to ReadActiveOverlayDoc().
+std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current, const nlohmann::json& overlay_doc);
+
+// Whether `key_path` is written in `doc` itself (the in-document form of
+// DefaultDiffRow::has_saved_override — see that field's comment for why presence, not value
+// equality, is the question).
+bool DocHasKeyPath(const nlohmann::json& doc, const std::string& key_path);
 
 // Display form of a JSON leaf. DISPLAY ONLY — comparison is done on the raw json values
 // (RowNeedsAdoption below), so no amount of formatting loss can make two different values look
@@ -84,22 +107,47 @@ std::string FormatDiffValue(const nlohmann::json& value);
 bool RowNeedsAdoption(const DefaultDiffRow& row);
 
 // ------------------------------------------------------------------------------------------------
-// Write-back. All three are surgical key-level edits of the existing document, never a wholesale
-// replacement: the override file also carries the "presets" subtree (405.1/405.2 read it; its UI
-// comes later), and a full rewrite here would silently delete a user's preset overrides.
+// Document mutators. All three are surgical key-level edits of an existing document, never a
+// wholesale replacement: the override file also carries the "presets" subtree, and a full rewrite
+// here would silently delete a user's preset overrides.
+//
+// These are pure — they take a document and change it, they do no IO. That is what lets the panel's
+// in-memory copy and the on-disk document be edited by the SAME code: the panel applies them to its
+// working copy and writes once on Save, while the three disk-side wrappers further down apply them
+// to the file. Two mirrored implementations of "what a Revert does" would be a twin that drifts the
+// first time one side is fixed.
 // ------------------------------------------------------------------------------------------------
 
-// Copy each accepted key path's CURRENT value into the override document. A key path that is
-// absent from the current document (an optional key such as sun.custom_spectrum) is REMOVED from
-// the override instead — "adopt what I have now" reads the same either way.
+// Copy each accepted key path's CURRENT value into `doc`. A key path that is absent from the
+// serialized current state (an optional key such as sun.custom_spectrum) is REMOVED from `doc`
+// instead — "adopt what I have now" reads the same either way.
+//
+// Returns false (leaving `doc` untouched) when `current` could not be serialized. The caller must
+// not commit in that case: writing a document that is missing the very keys it was asked to adopt,
+// while reporting a successful save, is a silent wrong answer.
+bool ApplyAcceptedDefaultsToDoc(nlohmann::json& doc, const std::vector<std::string>& accepted_key_paths,
+                                const GuiState& current);
+
+// Drop one key path from `doc`, so it falls back to the factory value. Empty parent objects left
+// behind are pruned, keeping the file readable by hand.
+void ApplyRevertToDoc(nlohmann::json& doc, const std::string& key_path);
+
+// Drop every GuiState key from `doc`. "presets" survives untouched — it belongs to namespace 2 and
+// is not what this panel edits.
+void ApplyResetAllToDoc(nlohmann::json& doc);
+
+// ------------------------------------------------------------------------------------------------
+// Disk-side wrappers: read the override file, apply the matching mutator above, write it back.
+//
+// The panel does NOT use these — it is a pure editor and commits once, through its own copy (see
+// defaults_panel.cpp). They remain the API for anything that wants a one-shot committed edit, and
+// they are what test_gui_defaults_diff.cpp exercises the mutators' semantics through.
+// ------------------------------------------------------------------------------------------------
+
 bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, const GuiState& current);
 
-// Drop one key path from the override document, so it falls back to the factory value. Empty
-// parent objects left behind are pruned, keeping the file readable by hand.
 bool RevertOneDefault(const std::string& key_path);
 
-// Drop every GuiState key from the override document. "presets" survives untouched — it belongs to
-// namespace 2 and is not what this panel edits.
 bool ResetAllDefaults();
 
 }  // namespace lumice::gui

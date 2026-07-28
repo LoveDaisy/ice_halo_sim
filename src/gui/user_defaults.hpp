@@ -358,6 +358,31 @@ struct AxisPresetWriteResult {
   std::string message;
 };
 
+// What a write WOULD do, with no IO: the clamp decision on its own.
+//
+// `accepted` is the counterpart of AxisPresetWriteResult::written for a caller that has not
+// committed anything yet — false means the value was refused outright (an unadjustable preset, a
+// non-finite number) and there is nothing to store; `message` then says why. It is a distinct
+// struct from AxisPresetWriteResult rather than a reuse of it precisely because `written` cannot
+// be answered here, and a struct whose fields are only sometimes meaningful invites reading the
+// one that is not.
+struct AxisPresetClampResult {
+  bool accepted = false;      // the value can be stored (false ⇒ refused; `message` says why)
+  bool clamped = false;       // stored_value differs from the requested one
+  float stored_value = 0.0f;  // what would be stored; meaningful only when accepted
+  std::string message;
+};
+
+// The clamp WITHOUT the write: what storing `raw_value` for `preset` would produce, in the same
+// terms AxisPresetWriteResult reports (`written` is meaningless here and stays false).
+//
+// Exists because there are now two commit timings for one rule. The axis modal's "Save as <preset>"
+// gesture writes immediately, while the defaults panel is a pure editor that keeps its edits in an
+// in-memory copy until Save. Both must clamp identically and word the clamp identically, so both go
+// through this function — SaveAxisPresetZenithStdOverride below is this function plus the IO. A
+// second clamp implementation in the panel would drift from this one the first time a domain moves.
+AxisPresetClampResult ClampAxisPresetZenithStdForSave(AxisPreset preset, float raw_value);
+
 // Store `raw_value` as the user's zenith std for `preset`, clamped into the classifier's tolerance
 // domain. A preset with no adjustable face (Random / Custom) is REFUSED — with a warning, not an
 // assert: this is the second of two defenses (the first being that the UI draws it no input), and
