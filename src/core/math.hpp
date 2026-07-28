@@ -287,13 +287,20 @@ struct AxisDistribution {
   //!   independent axes of a crystal setting, and conflating them is exactly the gap this
   //!   predicate closes — the commonest halo setup (fixed shape + random orientation) is
   //!   deterministic on the shape axis and stochastic on this one.
-  //! @note It needs no !IsFullSphereUniform() guard. InitRay_rot's `full_sphere` branch
-  //!   variable IS that predicate (a literal call, simulator.cpp), and the predicate requires
-  //!   both azimuth_dist and latitude_dist to be kUniform, so a full-sphere axis can never
-  //!   satisfy the all-kNoRandom test — the two are mutually exclusive by construction and an
-  //!   added guard would be a dead conjunct. That mutual exclusion is implicit, so the test
-  //!   AxisDeterminismMatchesRuntimeOrientation pins this predicate against what InitRay_rot
-  //!   actually produces; a future decoupling turns it red rather than silently misreporting.
+  //! @note It needs no !IsFullSphereUniform() guard: that predicate requires both
+  //!   azimuth_dist and latitude_dist to be kUniform, so a full-sphere axis can never satisfy
+  //!   the all-kNoRandom test below. The two are mutually exclusive by construction and an
+  //!   added guard would be a dead conjunct.
+  //! @note What AxisDeterminismMatchesRuntimeOrientation (test_simulator.cpp) pins, and what it
+  //!   does not. It pins the load-bearing claim: an all-kNoRandom axis really does yield one
+  //!   bit-identical rotation for every ray, and a stochastic one really does vary. That is what
+  //!   the sample count depends on, and it is invisible to a truth-table test — a change making
+  //!   kNoRandom consume the RNG turns the pin red while every truth-table case stays green
+  //!   (verified by mutation). It does NOT pin which branch InitRay_rot takes: since the unified
+  //!   area-measure LatLut, the full_sphere fast path and the parameterized path are
+  //!   statistically equivalent (measured: fraction of |world z| < 0.5 is 0.5000 vs 0.4977 over
+  //!   20k samples), so that branch is an optimization rather than a correctness fork and
+  //!   decoupling it is not behaviorally detectable. Do not add a test claiming otherwise.
   bool IsAxisDeterministic() const;
 
   Distribution azimuth_dist;

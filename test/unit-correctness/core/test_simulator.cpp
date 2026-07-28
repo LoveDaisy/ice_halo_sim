@@ -543,9 +543,17 @@ std::vector<std::array<float, 9>> SampleOrientations(const AxisDistribution& axi
 // the predicate to what InitRay_rot ACTUALLY PRODUCES, not to another pure
 // predicate: an assertion like "a full-sphere axis is not axis-deterministic"
 // reads the same dist.type fields both predicates read, so it is true by
-// construction and stays green even if InitRay_rot's branch stops being driven
-// by IsFullSphereUniform. Comparing rotations instead makes that decoupling —
-// or any loosening of either predicate — turn this red.
+// construction and cannot fail.
+//
+// Scope, established by mutation rather than assumed. This catches a change that
+// makes kNoRandom stop meaning "no draw" at runtime — jittering the kNoRandom
+// latitude branch turns the first case red while all five truth-table cases in
+// test_math.cpp stay green, which is the gap this test exists to fill. It does
+// NOT catch InitRay_rot's full_sphere branch being decoupled from
+// IsFullSphereUniform: the two sampler paths are statistically equivalent since
+// the unified area-measure LatLut, so nothing observable changes. Do not "fix"
+// that by weakening these assertions into a distributional check — there is no
+// difference to detect.
 TEST(AxisDeterminismMatchesRuntimeOrientation, DeterministicAxisYieldsOneFixedRotation) {
   AxisDistribution axis;  // default ctor: all three kNoRandom
   ASSERT_TRUE(axis.IsAxisDeterministic());
