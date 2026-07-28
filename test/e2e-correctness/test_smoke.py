@@ -145,5 +145,5 @@ class TestSmoke(LumiceTestCase):
             ["-f", str(cfg), "-o", self.output_dir]
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("Stats:", result.stdout)
+        self.assertIn("StatsProbeP2:", result.stdout)
         self.assertIn("Saved:", result.stdout)
