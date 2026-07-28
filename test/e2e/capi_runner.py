@@ -219,6 +219,38 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def lib_candidates(root: Path, build_type: str = "Release") -> List[Path]:
+    """The paths `_find_lib` searches, in load order.
+
+    Split out of `_find_lib` and made public so `scripts/test.sh` can *read* this
+    list instead of keeping a hand-maintained copy of it. The pr scope's
+    shared-library freshness check has to look in the same places this loader
+    does; a copy is a second source of truth that goes stale silently, and a
+    stale copy fails in the worst direction — it decides the library is missing
+    or fresh by looking somewhere the tests never load from, and reports success
+    either way. Keep this function importable with no side effects: the shell
+    reads it through `python3 -c`, so an import that builds, loads or logs
+    anything would run on every pr-scope invocation.
+
+    `build_type` is a parameter rather than a constant because the shell knows
+    which build type its static tree was configured with, while `_find_lib`
+    itself has only the Release default to go on.
+    """
+    return [
+        # Every candidate is under the "shared" flavor: this runner loads the
+        # dylib through ctypes, which only exists in a BUILD_SHARED_LIBS=ON build.
+        # A static build writes to .../static/ and is correctly not found here.
+        root / "build" / build_type / "shared" / "lib" / "liblumice.dylib",
+        root / "build" / build_type / "shared" / "lib" / "liblumice.so",
+        root / "build" / "cmake_install" / "shared" / "liblumice.dylib",
+        root / "build" / "cmake_install" / "shared" / "liblumice.so",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.dylib",
+        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.so",
+        root / "build" / "cmake_build" / "shared" / "liblumice.dylib",
+        root / "build" / "cmake_build" / "shared" / "liblumice.so",
+    ]
+
+
 def _find_lib() -> Path:
     env_lib = os.environ.get("LUMICE_LIB")
     if env_lib:
@@ -227,21 +259,7 @@ def _find_lib() -> Path:
             raise FileNotFoundError(f"LUMICE_LIB={env_lib} does not exist")
         return p
 
-    root = _project_root()
-    candidates = [
-        # Every candidate is under the "shared" flavor: this runner loads the
-        # dylib through ctypes, which only exists in a BUILD_SHARED_LIBS=ON build.
-        # A static build writes to .../static/ and is correctly not found here.
-        root / "build" / "Release" / "shared" / "lib" / "liblumice.dylib",
-        root / "build" / "Release" / "shared" / "lib" / "liblumice.so",
-        root / "build" / "cmake_install" / "shared" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "shared" / "liblumice.so",
-        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.dylib",
-        root / "build" / "cmake_install" / "shared" / "lib" / "liblumice.so",
-        root / "build" / "cmake_build" / "shared" / "liblumice.dylib",
-        root / "build" / "cmake_build" / "shared" / "liblumice.so",
-    ]
-    for c in candidates:
+    for c in lib_candidates(_project_root()):
         if c.exists():
             return c
     raise FileNotFoundError(

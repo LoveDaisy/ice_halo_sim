@@ -291,20 +291,47 @@ layer_slow_e2e_cmd() {
 # Shared library (pr scope only)
 # ---------------------------------------------------------------------------
 
-# Mirrors test/e2e/capi_runner.py::_find_lib()'s candidate list and its order,
-# because that is the code which actually loads the library. The build/<type>
-# pair is parameterised on the detected BUILD_TYPE while _find_lib() hard-codes
-# Release there; see the non-Release warning in ensure_shared_lib.
+# Read — not copied — out of test/e2e/capi_runner.py, because that is the code
+# which actually loads the library, and the same reasoning applies here as in
+# extract_gui_filter above: a copy is a second source of truth that goes stale
+# silently. A stale copy fails in the worst direction, deciding "missing" or
+# "fresh" by looking somewhere the slow e2e layer never loads from, and
+# reporting success either way. BUILD_TYPE is ours to supply: the shell knows
+# how its static tree was configured, while lib_candidates() defaults to
+# Release — see the non-Release warning in ensure_shared_lib.
+SHARED_LIB_CANDIDATES=""
+
+read_shared_lib_candidates() {
+  local out bad
+  out=$(python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, ".")
+from test.e2e.capi_runner import lib_candidates
+for p in lib_candidates(Path("."), sys.argv[1]):
+    print(p)
+' "${BUILD_TYPE}") || die "shared-lib candidates: could not read test/e2e/capi_runner.py::lib_candidates via python3 — the pr scope cannot tell which library the slow e2e layer would load"
+  [[ -n ${out} ]] || die "shared-lib candidates: capi_runner.py::lib_candidates returned nothing"
+  # Shape check, in the same fail-loud spirit as extract_gui_filter's count
+  # check: it cannot prove the list is right (nothing here can — that is the
+  # point of reading it from the loader), but it does catch a refactor that
+  # leaves the function importable while returning something that is no longer
+  # a list of library paths.
+  bad=$(printf '%s\n' "${out}" | grep -vE 'liblumice\.(dylib|so)$')
+  [[ -z ${bad} ]] || die "shared-lib candidates: capi_runner.py::lib_candidates returned a non-library path:
+${bad}"
+  printf '%s' "${out}"
+}
+
+# Reads what preflight resolved rather than resolving on demand, so the python3
+# call happens once per run and before any layer. Unset means a caller reached
+# here without the preflight the pr scope does — an empty candidate list would
+# otherwise read as "library not found", which is a wrong answer that looks like
+# a normal one.
 shared_lib_candidates() {
-  printf '%s\n' \
-    "build/${BUILD_TYPE}/shared/lib/liblumice.dylib" \
-    "build/${BUILD_TYPE}/shared/lib/liblumice.so" \
-    "build/cmake_install/shared/liblumice.dylib" \
-    "build/cmake_install/shared/liblumice.so" \
-    "build/cmake_install/shared/lib/liblumice.dylib" \
-    "build/cmake_install/shared/lib/liblumice.so" \
-    "build/cmake_build/shared/liblumice.dylib" \
-    "build/cmake_build/shared/liblumice.so"
+  [[ -n ${SHARED_LIB_CANDIDATES} ]] \
+    || die "shared_lib_candidates called before read_shared_lib_candidates — no candidate list to search"
+  printf '%s\n' "${SHARED_LIB_CANDIDATES}"
 }
 
 find_shared_lib() {
@@ -355,9 +382,10 @@ ensure_shared_lib() {
   fi
 
   if [[ ${BUILD_TYPE} != Release ]]; then
-    printf 'test.sh: warning: BUILD_TYPE is %s, but capi_runner.py::_find_lib() anchors its\n' "${BUILD_TYPE}" >&2
-    printf '         first candidate on build/Release/shared/lib — a non-Release shared build\n' >&2
-    printf '         may not be the library the slow e2e layer actually loads.\n' >&2
+    printf 'test.sh: warning: BUILD_TYPE is %s, but capi_runner.py::_find_lib() calls\n' "${BUILD_TYPE}" >&2
+    printf '         lib_candidates() with its Release default, anchoring its first candidate on\n' >&2
+    printf '         build/Release/shared/lib — a non-Release shared build may not be the library\n' >&2
+    printf '         the slow e2e layer actually loads.\n' >&2
   fi
 
   lib=$(find_shared_lib) || lib=""
@@ -424,6 +452,11 @@ detect_build_type
 check_pytest_addopts
 if [[ -z $(gui_skip_reason) ]]; then
   preflight_gui_filters
+fi
+# Same reasoning as preflight_gui_filters: resolved before any layer runs, so a
+# read failure costs nothing already spent. Only the pr scope consults it.
+if [[ ${SCOPE} == pr ]]; then
+  SHARED_LIB_CANDIDATES=$(read_shared_lib_candidates) || exit $?
 fi
 
 printf 'test.sh: scope=%s  build_type=%s  flavor=static\n' "${SCOPE}" "${BUILD_TYPE}"
