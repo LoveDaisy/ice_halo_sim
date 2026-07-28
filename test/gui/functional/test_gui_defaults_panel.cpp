@@ -13,10 +13,22 @@
 //   AC9  — invariant I1 through the full GUI path: an opened .lmc beats the personal default
 //   AC10 — the search box filters both sections, and clearing it restores every row
 //   plus the entry-point contract: which section an entry point opens expanded
+//
+// The copy model (the panel is a pure editor: edits go into an in-memory copy, Save writes it once,
+// closing discards it) adds four more, and rewrites the timing half of several of the above:
+//   copy AC1 — a mixed batch of edits, closed WITHOUT Save, leaves the file byte-identical
+//   copy AC2 — Reset all in both directions: discarded on close, and committed on Save
+//   copy AC3 — a preset edit closed without Save reaches neither the cache nor the file
+//   copy AC4 — §3's Source / Revert follow the COPY, while the §2/§3 partition follows the
+//              snapshot the panel opened with
+//
+// Where a case used to click and read the file, it now clicks, asserts the file has NOT moved,
+// then saves and asserts it has. That is the assertion the old model could not make.
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -120,6 +132,25 @@ std::optional<float> ReadPresetStd(const json& doc, const char* name) {
 
 std::vector<gui::DefaultDiffRow> CurrentRows() {
   return gui::BuildDefaultDiffRows(gui::g_state);
+}
+
+// The override file as RAW BYTES, or nullopt when it does not exist.
+//
+// Byte-level rather than parsed: "the file did not change" is the claim, and comparing two parsed
+// documents would call a rewrite with reordered keys or different spacing equal. A panel that
+// rewrote the file on every click while preserving its meaning would still be the panel this
+// change exists to remove.
+std::optional<std::string> ReadOverlayBytes(const std::filesystem::path& dir) {
+  std::ifstream in(dir / gui::kUserDefaultsFileName, std::ios::binary);
+  if (!in.is_open()) {
+    return std::nullopt;
+  }
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void SaveDefaultsPanel(ImGuiTestContext* ctx) {
+  ctx->ItemClick("**/###defaults_save");
+  ctx->Yield(3);
 }
 
 }  // namespace
@@ -294,8 +325,20 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemOpen("**/###defaults_other");
       ctx->Yield(2);
       FilterTo(ctx, "bg_alpha");
+
+      // MIGRATED for the copy model (405.4 asserted the file the instant Revert was clicked).
+      // Split in two: the click must NOT reach the file, and it must still be visible on screen.
+      const auto before_revert = ReadOverlayBytes(dir);
+      IM_CHECK(before_revert.has_value());
       ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());
       ctx->Yield(3);
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_revert);
+      // ...and the feedback the old write-through model failed to give: the row already reads as
+      // Factory (no Revert button left on it) even though the file still holds the value.
+      IM_CHECK(!ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
+      IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
+
+      SaveDefaultsPanel(ctx);
 
       json saved = ReadOverlayFile(dir);
       IM_CHECK(!saved.contains("bg_alpha"));
@@ -305,8 +348,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // point, not a panel-local undo.
       IM_CHECK_EQ(gui::MakeNewDocumentState().bg_alpha, gui::GuiState{}.bg_alpha);
 
+      // Same shape for Reset all: click, file unmoved, save, file emptied of GuiState keys.
+      const auto before_reset = ReadOverlayBytes(dir);
+      IM_CHECK(before_reset.has_value());
       ctx->ItemClick("**/###defaults_reset_all");
       ctx->Yield(3);
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_reset);
+
+      SaveDefaultsPanel(ctx);
 
       saved = ReadOverlayFile(dir);
       IM_CHECK(!saved.contains("renderer"));
@@ -420,15 +469,22 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemOpen("**/###preset_Column");
       ctx->Yield(3);
 
-      // Out of domain.
+      // MIGRATED for the copy model: 405.5 read the file straight after each blur, because the
+      // blur wrote it. A §1 edit is now an edit of the panel's copy, so each state is asserted the
+      // same way every other edit in this panel is — save, THEN read. The warning-cell assertions
+      // are untouched: they are pure UI state and never depended on the file.
       ctx->ItemInputValue("**/###preset_std_column", 25.0f);
       ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
+      SaveDefaultsPanel(ctx);
       {
         const auto stored = ReadPresetStd(ReadOverlayFile(dir), "column");
         IM_CHECK(stored.has_value());
         IM_CHECK(*stored < gui::kColumnPlateParryZenithStdUpperBound);
         IM_CHECK(*stored > 0.0f);
-        IM_CHECK(ctx->ItemExists("**/###preset_warning_column"));
+        // The clamp is reported once, when the panel adjusts the value — not again on the Save
+        // that commits it. A second notice would tell the user something new had gone wrong.
+        IM_CHECK_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
       }
 
       // In domain: the value survives exactly, and the warning from the previous edit is gone —
@@ -436,11 +492,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // longer there.
       ctx->ItemInputValue("**/###preset_std_column", 0.3f);
       ctx->Yield(3);
+      IM_CHECK(!ctx->ItemExists("**/###preset_warning_column"));
+      SaveDefaultsPanel(ctx);
       {
         const auto stored = ReadPresetStd(ReadOverlayFile(dir), "column");
         IM_CHECK(stored.has_value());
         IM_CHECK_EQ(*stored, 0.3f);
-        IM_CHECK(!ctx->ItemExists("**/###preset_warning_column"));
       }
 
       CloseDefaultsPanel(ctx);
@@ -468,8 +525,17 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/###preset_std_plate", 0.5f);
       ctx->Yield(2);
 
+      // MIGRATED for the copy model: the two edits above and the restore below are all copy edits
+      // now, so the file is only consulted after a Save. The restore click is additionally checked
+      // for NOT reaching the file, which is the property this task adds.
+      SaveDefaultsPanel(ctx);
+      const auto before_restore = ReadOverlayBytes(dir);
+      IM_CHECK(before_restore.has_value());
+
       ctx->ItemClick("**/###preset_restore_column");
       ctx->Yield(3);
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_restore);
+      SaveDefaultsPanel(ctx);
 
       const json saved = ReadOverlayFile(dir);
       IM_CHECK(!ReadPresetStd(saved, "column").has_value());
@@ -555,6 +621,11 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemInputValue("**/###preset_std_column", 0.3f);
       ctx->Yield(3);
+      // MIGRATED for the copy model: an explicit Save, where 405.5 relied on the blur itself
+      // committing. Without it this case would now assert that an edit the user never saved
+      // reached the axis modal — the opposite of what the copy model promises (and what the
+      // discard case below it asserts).
+      SaveDefaultsPanel(ctx);
       CloseDefaultsPanel(ctx);
 
       // Now the other surface: the axis tab of a crystal's edit modal.
@@ -579,6 +650,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // Step 3's gesture, the other direction: a crystal's live zenith std saved INTO the library.
     // A preset is not a GuiState field, so nothing in the session could infer this intent — the
     // gesture is the only way an override gets produced from a crystal the user is editing.
+    //
+    // This case reads the file straight after the click and that is DELIBERATE, not an oversight
+    // left over from before the panel became a pure editor. The gesture is not part of a panel
+    // session: the defaults panel is not even open, so there is no copy to edit and no Close for
+    // "discard" to attach to. A one-shot button that commits when pressed is the only semantics
+    // available to it.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "axis_modal_gesture_saves_into_the_library");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       const auto dir = FreshOverlayDir("panel_gesture");
@@ -614,6 +691,232 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       const auto after_cancel = ReadPresetStd(ReadOverlayFile(dir), "column");
       IM_CHECK(after_cancel.has_value());
       IM_CHECK_EQ(*after_cancel, 0.3f);
+    };
+  }
+
+  // ================================================================================
+  // The copy model — the panel is a pure editor with one commit point
+  // ================================================================================
+
+  {
+    // copy AC1 — a mixed batch of edits, closed WITHOUT Save, leaves the file BYTE-identical.
+    //
+    // Every kind of edit the panel offers is exercised in one session, because the claim is about
+    // the panel and not about one button: if any single path still wrote through, this fails.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_ac1_closing_without_save_writes_nothing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_ac1");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      // A file with something in every half, so each edit below has something real to change.
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      doc["renderer"]["fov"] = 95.0f;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      doc["presets"]["axis"]["plate"]["zenith_std"] = 0.6f;  // the one the restore below drops
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+
+      const auto before = ReadOverlayBytes(dir);
+      IM_CHECK(before.has_value());
+
+      // An unsaved GuiState change, so §2 has a checked pending row on top of everything else.
+      gui::g_state.sun.altitude = 33.0f;
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_column", 0.5f);  // §1 edit
+      ctx->Yield(2);
+      ctx->ItemClose("**/###preset_Column");
+      ctx->ItemOpen("**/###preset_Plate");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###preset_restore_plate");  // §1 restore
+      ctx->Yield(2);
+      ctx->ItemClose("**/###preset_Plate");
+      ctx->Yield(2);
+
+      ctx->ItemOpen("**/###defaults_other");
+      ctx->Yield(2);
+      FilterTo(ctx, "bg_alpha");
+      ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());  // §3 revert
+      ctx->Yield(2);
+      FilterTo(ctx, "");
+
+      ctx->ItemClick("**/###defaults_reset_all");  // the whole GuiState half
+      ctx->Yield(2);
+
+      CloseDefaultsPanel(ctx);
+
+      // Byte-for-byte, not json-equal: a rewrite that preserved meaning would still be a write.
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before);
+      // ...and nothing leaked into the in-memory halves either — both directions of the §1 edit
+      // (a changed value, a dropped override) and the GuiState half.
+      const auto column = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(column.has_value());
+      IM_CHECK_EQ(*column, 0.3f);
+      const auto plate = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kPlate);
+      IM_CHECK(plate.has_value());
+      IM_CHECK_EQ(*plate, 0.6f);
+      IM_CHECK_EQ(gui::MakeNewDocumentState().bg_alpha, 0.42f);
+    };
+  }
+
+  {
+    // copy AC2 — Reset all in BOTH directions. One discard, one commit, in one case so that the
+    // pair cannot drift apart; the second half re-opens the panel, because the first Close is
+    // precisely what threw the first copy away.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_ac2_reset_all_discarded_then_committed");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_ac2");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      doc["renderer"]["fov"] = 95.0f;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+
+      const auto before = ReadOverlayBytes(dir);
+      IM_CHECK(before.has_value());
+
+      // (a) discarded.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      ctx->ItemClick("**/###defaults_reset_all");
+      ctx->Yield(3);
+      // The panel shows the reset immediately — this is the feedback the old model owed the user
+      // and could not give: §3's rows have lost their Revert buttons though the file still holds
+      // the values.
+      ctx->ItemOpen("**/###defaults_other");
+      ctx->Yield(2);
+      FilterTo(ctx, "renderer.fov");
+      IM_CHECK(ctx->ItemExists(SourceCellRef("renderer.fov").c_str()));
+      IM_CHECK(!ctx->ItemExists(RevertButtonRef("renderer.fov").c_str()));
+      CloseDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before);
+
+      // (b) committed. Save after Reset all must write an EMPTY override set — not re-adopt §2's
+      // checked rows, which would put a full set of defaults straight back and make the button a
+      // no-op the user cannot see through.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      ctx->ItemClick("**/###defaults_reset_all");
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      CloseDefaultsPanel(ctx);
+
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(!saved.contains("bg_alpha"));
+      IM_CHECK(!saved.contains("renderer"));
+      // The preset library is a sibling namespace this button does not reach.
+      IM_CHECK_EQ(ReadPresetStd(saved, "column").value_or(-1.0f), 0.3f);
+      IM_CHECK_EQ(gui::MakeNewDocumentState().bg_alpha, gui::GuiState{}.bg_alpha);
+    };
+  }
+
+  {
+    // copy AC3 — a preset edit closed without Save reaches NEITHER the process-wide cache nor the
+    // file. The cache half matters on its own: it is what the axis modal's preset buttons read, so
+    // a leak there would hand the user an uncommitted value through a completely different surface.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_ac3_preset_edit_discarded_on_close");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_ac3");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+
+      const auto before_bytes = ReadOverlayBytes(dir);
+      IM_CHECK(before_bytes.has_value());
+      const auto before_cache = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(before_cache.has_value());
+      IM_CHECK_EQ(*before_cache, 0.3f);
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemInputValue("**/###preset_std_column", 0.7f);
+      ctx->Yield(3);
+      // The panel itself shows the edit — it is uncommitted, not ignored.
+      IM_CHECK_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
+      CloseDefaultsPanel(ctx);
+
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_bytes);
+      IM_CHECK_EQ(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn), before_cache);
+
+      // Restore-to-factory is the other direction of the same claim: it must not silently drop a
+      // stored override either.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      ctx->ItemOpen("**/###preset_Column");
+      ctx->Yield(2);
+      ctx->ItemClick("**/###preset_restore_column");
+      ctx->Yield(3);
+      CloseDefaultsPanel(ctx);
+
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before_bytes);
+      IM_CHECK_EQ(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn), before_cache);
+    };
+  }
+
+  {
+    // copy AC4 — which document each judgement reads.
+    //
+    // Two states of one row, in one session: copy == disk, then copy != disk. The Source cell and
+    // the Revert button follow the COPY (they answer "what would Save leave me with"), while which
+    // SECTION the row is in follows the snapshot the panel opened with, so rows do not move under
+    // the user while they edit.
+    //
+    // The last assertion is the case the acceptance criterion names explicitly: a value that
+    // differs from factory but is already stored in the defaults counts as NOT pending. bg_alpha
+    // is exactly that — 0.42 against a factory value, and saved.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_ac4_source_follows_copy_section_follows_snapshot");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_ac4");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      IM_CHECK_EQ(gui::g_state.bg_alpha, 0.42f);
+      IM_CHECK_NE(gui::g_state.bg_alpha, gui::GuiState{}.bg_alpha);
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      ctx->ItemOpen("**/###defaults_other");
+      ctx->Yield(2);
+      FilterTo(ctx, "bg_alpha");
+
+      // State 1: copy == disk. Differs from factory, but it is already saved, so it is NOT a
+      // pending change — it sits in §3 (no adopt checkbox) and reads as Mine.
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
+      IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
+      IM_CHECK(ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
+
+      // State 2: copy != disk. The Revert button is gone the moment the copy loses the key —
+      // before anything is written.
+      ctx->ItemClick(RevertButtonRef("bg_alpha").c_str());
+      ctx->Yield(3);
+      IM_CHECK(!ctx->ItemExists(RevertButtonRef("bg_alpha").c_str()));
+      IM_CHECK(ReadOverlayFile(dir).contains("bg_alpha"));  // ...and the disk still has it
+
+      // The row did NOT move to §2, though its value now differs from what the copy would resolve.
+      // Section membership is anchored to the opening snapshot on purpose: a row that jumped
+      // sections on a click the user has not committed would be exactly the disorientation this
+      // panel is being fixed to remove.
+      IM_CHECK(!ctx->ItemExists(AdoptCheckboxRef("bg_alpha").c_str()));
+      IM_CHECK(ctx->ItemExists(SourceCellRef("bg_alpha").c_str()));
+
+      CloseDefaultsPanel(ctx);
     };
   }
 
