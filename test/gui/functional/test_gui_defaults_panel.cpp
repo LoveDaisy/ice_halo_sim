@@ -51,6 +51,8 @@
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/user_defaults.hpp"
+#include "imgui_internal.h"
+#include "imgui_te_utils.h"
 #include "test_gui_shared.hpp"
 #include "user_defaults_test_env.hpp"
 
@@ -173,6 +175,78 @@ std::optional<std::string> ReadOverlayBytes(const std::filesystem::path& dir) {
 void SaveDefaultsPanel(ImGuiTestContext* ctx) {
   ctx->ItemClick("**/###defaults_save");
   ctx->Yield(3);
+}
+
+// Scroll the settings list by the user's own gesture — point at a row of it and turn the wheel —
+// rather than by writing a scroll value into a window this test would first have to name. WHICH
+// region receives the wheel is half of what is under test: pointing at the list must scroll the
+// list and nothing else, which is exactly the claim a SetScrollY() would assume rather than check.
+//
+// The mouse is placed once and left there: after the first turn the row it was addressed by has
+// scrolled away, and re-addressing it every turn would fail on an item that no longer exists.
+//
+// Eight turns of ten lines reaches the far end of a 40-row list several times over — the claims
+// below are about the bottom of the scroll range, not about a nudge.
+void ScrollSettingsListDown(ImGuiTestContext* ctx, const std::string& hover_ref) {
+  ctx->MouseMove(hover_ref.c_str());
+  for (int i = 0; i < 8; ++i) {
+    ctx->MouseWheelY(-10.0f);
+    ctx->Yield(2);
+  }
+  ctx->Yield(2);
+}
+
+// The settings table object, which is what the geometric claims about its header have to go
+// through.
+//
+// The id is the one BeginTable computed: the table is created directly in the panel window with
+// nothing pushed on the ID stack, so the window's own GetID reproduces it.
+ImGuiTable* SettingsTable(ImGuiTestContext* ctx) {
+  ImGuiWindow* win = ctx->GetWindowByRef(gui::kDefaultsPanelTitle);
+  if (win == nullptr) {
+    return nullptr;
+  }
+  return ImGui::TableFindByID(win->GetID("##defaults_settings_table"));
+}
+
+// Where the header cell of `column` was drawn this frame.
+//
+// Addressed by computed id rather than by a "**/Setting" path, and that is forced rather than
+// stylistic: imgui_tables.cpp adds header cells through ItemAdd (so the engine does record their
+// geometry, under the id) but never calls the test engine's label hook — IMGUI_TEST_ENGINE_ITEM_INFO
+// appears throughout imgui_widgets.cpp and not once in imgui_tables.cpp — and a "**/" path is
+// resolved BY that label. So the id is the entire gap, and TableGetHeaderID closes it by
+// reproducing the PushID(column_n) + GetID(name) that TableHeadersRow used.
+//
+// imgui_internal.h is an anti-pattern in this suite generally (test_gui_interaction.cpp carries the
+// same caveat for its z-order assertions) and unavoidable for the same reason here: "did this stay
+// where it was drawn" is not a question the public API answers.
+ImGuiTestItemInfo SettingsHeaderInfo(ImGuiTestContext* ctx, ImGuiTable* table, const char* column) {
+  return ctx->ItemInfo(TableGetHeaderID(table, column));
+}
+
+// Put the settings list back at its top.
+//
+// Needed because ImGui keeps a scroll position per window ID, and the table's inner window is not
+// torn down when the panel closes: in this single-process suite a case that scrolls the list to the
+// bottom hands the NEXT case a list already at the bottom, where its own "the top row is on screen"
+// premise is false. Rewinding here rather than at the end of whoever scrolled makes each case
+// depend on nothing but itself.
+void RewindSettingsList(ImGuiTestContext* ctx, ImGuiTable* table) {
+  ctx->ScrollToTop(table->InnerWindow->ID);
+  ctx->Yield(2);
+}
+
+// Whether a row of the settings list is actually DRAWN right now — not merely submitted.
+//
+// Deliberately not ItemExists, and the difference is what makes the scroll cases below non-vacuous:
+// a Checkbox registers its label with the test engine even on the branch where ItemAdd CLIPPED it
+// (imgui_widgets.cpp calls IMGUI_TEST_ENGINE_ITEM_INFO before returning false), so ItemExists stays
+// true for a row that has scrolled out of view and would have reported "nothing scrolled" for a
+// list that scrolled all the way to its end. The clipped rectangle is the part that collapses to
+// nothing when the row leaves the visible band.
+bool RowIsOnScreen(ImGuiTestContext* ctx, const std::string& row_ref) {
+  return ctx->ItemInfo(row_ref.c_str(), ImGuiTestOpFlags_NoError).RectClipped.GetHeight() > 0.0f;
 }
 
 }  // namespace
@@ -1322,6 +1396,195 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // Back to All, so the next scenario in this single-process suite starts from a full list.
       ctx->ItemClick("**/###filter_all");
       ctx->Yield(2);
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  // ================================================================================
+  // Sticky headers — what stays put while the list scrolls
+  //
+  // Three claims, all of them geometric, and none of them expressible as "can I still click it":
+  // an item that has scrolled off the top is still perfectly clickable after the engine scrolls it
+  // back, so a reachability test would pass on the panel this change exists to fix.
+  //
+  // Two INDEPENDENT mechanisms are under test and neither substitutes for the other:
+  //   the table's frozen header row     -> TableSetupScrollFreeze(0, 1)
+  //   the two section headers standing still -> they are not inside any scrolling region at all
+  // A single case covering both would not say which one broke.
+  // ================================================================================
+  {
+    // AC1 — the settings table's header row does not move, and the columns do not shift, while the
+    // body scrolls under it.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "sticky_ac1_table_header_survives_scrolling");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_sticky_ac1");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+
+      const auto rows = CurrentRows();
+      IM_CHECK(!rows.empty());
+
+      ImGuiTable* table = SettingsTable(ctx);
+      IM_CHECK(table != nullptr);
+      IM_CHECK(table->InnerWindow != nullptr);
+      RewindSettingsList(ctx, table);
+
+      // The premise this case rests on, asserted rather than assumed: the list is longer than the
+      // box it was given, so there is something for the wheel to do. Without it, "the header did not
+      // move" would be just as true of a list too short to scroll at all.
+      IM_CHECK_GT(table->InnerWindow->ScrollMax.y, 0.0f);
+      IM_CHECK_EQ(table->InnerWindow->Scroll.y, 0.0f);
+
+      // Two header cells rather than one, at opposite ends of the row: a header that stayed at the
+      // right Y while its columns slid sideways would satisfy a single-cell check.
+      const auto setting_before = SettingsHeaderInfo(ctx, table, "Setting");
+      const auto source_before = SettingsHeaderInfo(ctx, table, "Source");
+      IM_CHECK(setting_before.ID != 0);
+      IM_CHECK(source_before.ID != 0);
+
+      const std::string top_row = AdoptCheckboxRef(rows.front().key_path);
+      IM_CHECK(RowIsOnScreen(ctx, top_row));
+
+      ScrollSettingsListDown(ctx, top_row);
+
+      // The list moved, and it is the LIST that moved: the wheel landed on the table's own scroll
+      // region, and the row that was under the header is no longer drawn.
+      table = SettingsTable(ctx);
+      IM_CHECK(table != nullptr);
+      IM_CHECK(table->InnerWindow != nullptr);
+      IM_CHECK_GT(table->InnerWindow->Scroll.y, 0.0f);
+      IM_CHECK(!RowIsOnScreen(ctx, top_row));
+
+      // ...and the header did not, in either axis, and is still drawn (a header scrolled out of the
+      // clip rect would keep its RectFull and report an empty RectClipped).
+      const auto setting_after = SettingsHeaderInfo(ctx, table, "Setting");
+      const auto source_after = SettingsHeaderInfo(ctx, table, "Source");
+      IM_CHECK_EQ(setting_after.RectFull.Min.y, setting_before.RectFull.Min.y);
+      IM_CHECK_EQ(setting_after.RectFull.Min.x, setting_before.RectFull.Min.x);
+      IM_CHECK_EQ(source_after.RectFull.Min.x, source_before.RectFull.Min.x);
+      IM_CHECK_GT(setting_after.RectClipped.GetHeight(), 0.0f);
+      IM_CHECK_GT(source_after.RectClipped.GetHeight(), 0.0f);
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC2 — the two section headers do not move while a section's body scrolls, and the panel
+    // window itself never scrolls.
+    //
+    // The second half is the "two-layer scroll" trap the change had to avoid: a table given its own
+    // ScrollY while the old shared child was still wrapped around it would look correct in a
+    // screenshot and feel wrong under the wheel. ScrollMax.y == 0 says there is exactly one
+    // scrolling region under the pointer, and it is the section's.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "sticky_ac2_section_headers_do_not_scroll");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_sticky_ac2");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      // Both sections expanded, so both headers are on screen at once and the one above the
+      // scrolling body is as much at risk as the one below it.
+      ctx->ItemOpen("**/###defaults_presets");
+      ctx->Yield(3);
+
+      ImGuiTable* table = SettingsTable(ctx);
+      IM_CHECK(table != nullptr);
+      IM_CHECK(table->InnerWindow != nullptr);
+      RewindSettingsList(ctx, table);
+      IM_CHECK_GT(table->InnerWindow->ScrollMax.y, 0.0f);
+
+      const auto presets_before = ctx->ItemInfo("**/###defaults_presets");
+      const auto settings_before = ctx->ItemInfo("**/###defaults_settings");
+      IM_CHECK(presets_before.ID != 0);
+      IM_CHECK(settings_before.ID != 0);
+
+      const auto rows = CurrentRows();
+      IM_CHECK(!rows.empty());
+      const std::string top_row = AdoptCheckboxRef(rows.front().key_path);
+      IM_CHECK(RowIsOnScreen(ctx, top_row));
+
+      ScrollSettingsListDown(ctx, top_row);
+      IM_CHECK(!RowIsOnScreen(ctx, top_row));  // non-vacuous: something did scroll
+
+      const auto presets_after = ctx->ItemInfo("**/###defaults_presets");
+      const auto settings_after = ctx->ItemInfo("**/###defaults_settings");
+      IM_CHECK_EQ(presets_after.RectFull.Min.y, presets_before.RectFull.Min.y);
+      IM_CHECK_EQ(settings_after.RectFull.Min.y, settings_before.RectFull.Min.y);
+
+      // Neither header is merely "at the same coordinates while clipped away".
+      IM_CHECK_GT(presets_after.RectClipped.GetHeight(), 0.0f);
+      IM_CHECK_GT(settings_after.RectClipped.GetHeight(), 0.0f);
+
+      // The panel window has nothing to scroll: every scrolling region is inside a section.
+      ImGuiWindow* win = ctx->GetWindowByRef(gui::kDefaultsPanelTitle);
+      IM_CHECK(win != nullptr);
+      IM_CHECK_EQ(win->ScrollMax.y, 0.0f);
+
+      CloseDefaultsPanel(ctx);
+    };
+  }
+
+  {
+    // AC3 — the layout change did not cost the panel its folding behavior. Two separate claims:
+    //
+    //   (a) both CollapsingHeaders still fold and unfold on a click. Each section's body is now a
+    //       child/table that only exists inside the `if (header)` branch, so a header that stopped
+    //       reporting its state would take the whole section with it.
+    //   (b) the entry point's initial section still wins on the opening frame, and ONLY on that
+    //       frame — a section the user collapses afterwards must stay collapsed. That "one frame
+    //       only" half is what an SetNextItemOpen(ImGuiCond_Always) left running every frame would
+    //       break, and it is invisible to a test that merely opens the panel and looks.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "sticky_ac3_sections_still_fold_and_honor_entry_point");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_sticky_ac3");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      // A row that is unambiguously present, narrowed to so the settings body is one short list.
+      gui::g_state.renderer.fov = 95.0f;
+
+      // (a) §2 first: opened expanded by the entry point, then folded and unfolded by hand.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "renderer.fov");
+      const std::string probe_row = AdoptCheckboxRef("renderer.fov");
+      IM_CHECK(ctx->ItemExists(probe_row.c_str()));
+
+      ctx->ItemClick("**/###defaults_settings");  // fold
+      ctx->Yield(3);
+      IM_CHECK(!ctx->ItemExists(probe_row.c_str()));
+      ctx->ItemClick("**/###defaults_settings");  // unfold
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(probe_row.c_str()));
+
+      // ...and §1, whose body is the other of the two new scrolling regions.
+      ctx->ItemClick("**/###defaults_presets");  // unfold (it opened collapsed on kSettings)
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists("**/###preset_Column"));
+      ctx->ItemClick("**/###defaults_presets");  // fold
+      ctx->Yield(3);
+      IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+
+      // (b) the entry point decides the opening frame — and then lets go. Collapsing §1 while the
+      // panel is open must stick for as long as it stays open.
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+      IM_CHECK(ctx->ItemExists("**/###preset_Column"));
+      ctx->ItemClick("**/###defaults_presets");
+      ctx->Yield(4);
+      IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
+      // Several more frames: a forced-open state re-applied every frame would have snapped it back
+      // by now, and one Yield would not have caught it.
+      ctx->Yield(8);
+      IM_CHECK(!ctx->ItemExists("**/###preset_Column"));
+
       CloseDefaultsPanel(ctx);
     };
   }
