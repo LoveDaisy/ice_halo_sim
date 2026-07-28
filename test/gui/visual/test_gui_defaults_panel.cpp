@@ -3,11 +3,10 @@
 // settings table's column widths, the warning column, the source column, the search box and filter
 // row, and the pinned action row.
 //
-// The committed references predate the merge of the two settings sections into one list and are
-// EXPECTED to be red until they are re-shot together with the column layout that follows this
-// change. What this file must keep doing in the meantime is compile and run — a scene that errored
-// on a widget id that no longer exists would stop reporting anything at all, including the parts of
-// the layout that did not move.
+// The committed references were re-shot for the merge of the two settings sections into one list,
+// and again for the panel's title-bar rename to "Settings" — both changes moved pixels the
+// sub-region capture below covers. All six scenes compare pixel-identical against the current
+// references.
 //
 // Why this exists: the functional suite (test/gui/functional/test_gui_defaults_panel.cpp) asserts
 // what the panel DOES — which key lands in which section, what a click writes to disk. Nothing
