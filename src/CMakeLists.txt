@@ -16,9 +16,9 @@ target_link_libraries(Lumice PRIVATE
     lumice)
 # Shared builds link the CLI against @rpath/liblumice.dylib. Give the installed
 # CLI an rpath into the sibling lib/ dir (where the dylib is installed, see the
-# root CMakeLists) so build/cmake_install/Lumice is self-contained and runnable
-# without rebuilding static — fixes "dyld: no LC_RPATH's found" when switching
-# from a static to a shared build. Static builds archive lumice into the CLI, so
+# root CMakeLists) so build/cmake_install/shared/Lumice is self-contained and
+# runnable without rebuilding static — fixes "dyld: no LC_RPATH's found" when
+# switching from a static to a shared build. Static builds archive lumice into the CLI, so
 # there is no @rpath dependency and this rpath is simply not applied.
 if(BUILD_SHARED_LIBS)
   if(APPLE)
