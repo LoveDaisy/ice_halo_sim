@@ -140,6 +140,7 @@ class MetalTraceBackend : public TraceBackend {
   // SimData.stochastic_crystal_sample_count_; see TraceBackend for the
   // cross-backend contract.
   size_t GetLastBatchStochasticCrystalSampleCount() const override;
+  size_t GetLastBatchStochasticOrientationSampleCount() const override;
   // task-color-degrade-gui-surfacing: per-config GPU color-degrade tally.
   ColorDegradeCounts GetLastColorDegradeCounts() const override;
 

@@ -74,6 +74,13 @@ class CpuTraceBackend : public TraceBackend {
   // (layer, ci). See TraceBackend for the cross-backend contract.
   size_t GetLastBatchStochasticCrystalSampleCount() const override { return stochastic_sample_count_this_batch_; }
 
+  // Stochastic ORIENTATION draws this batch made — rays, not geometries. See
+  // TraceBackend for the cross-backend contract and why the two counts differ
+  // by orders of magnitude on the same scene.
+  size_t GetLastBatchStochasticOrientationSampleCount() const override {
+    return stochastic_orientation_sample_count_this_batch_;
+  }
+
  private:
   SessionSpec spec_{};
   RandomNumberGenerator rng_;
@@ -89,6 +96,11 @@ class CpuTraceBackend : public TraceBackend {
   // reused across batches are the deterministic ones, and those are counted from
   // the config rather than from any batch.
   size_t stochastic_sample_count_this_batch_ = 0;
+  // Output register for GetLastBatchStochasticOrientationSampleCount, same
+  // per-batch lifecycle as the counter above. Incremented by the whole
+  // population's ray count (not by 1) per (layer, ci) whose axis draws, because
+  // orientation is resampled per ray with no reuse at all.
+  size_t stochastic_orientation_sample_count_this_batch_ = 0;
   size_t ms_idx_ = 0;  // advances on each Recombine.
   float total_landed_weight_ = 0.0f;
 

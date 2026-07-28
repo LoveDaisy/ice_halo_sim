@@ -117,6 +117,11 @@ class Simulator {
     // GetLastBatchStochasticCrystalSampleCount for why the two cannot be one.
     size_t stochastic_crystal_samples = 0;
     size_t deterministic_crystals = 0;
+    // Orientation stats ride the window under the identical two-rule split (Σ
+    // vs OVERWRITE). Separate from the crystal pair above because they are a
+    // separate statistic -- see SimData for the field-level contract.
+    size_t stochastic_orientation_samples = 0;
+    size_t deterministic_orientations = 0;
     uint64_t generation = 0;  // generation the window belongs to
     int w = 0;                // render resolution of the window
     int h = 0;
@@ -161,6 +166,9 @@ class Simulator {
   // starts at 0, so a generation-keyed cache would skip the first committed
   // config whenever generations are 0-based and silently publish 0.
   size_t deterministic_crystal_count_ = 0;
+  // Same role for the orientation count, derived at the same single point in
+  // Run() from the same committed config, for the same reasons.
+  size_t deterministic_orientation_count_ = 0;
 
   QueuePtrS<SimBatch> config_queue_;
   QueuePtrS<SimData> data_queue_;

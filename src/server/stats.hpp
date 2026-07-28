@@ -31,9 +31,15 @@ class StatsConsumer : public IConsume {
   // reported crystal count; see Consume() for why they cannot be one counter.
   size_t stochastic_crystal_samples_ = 0;
   size_t deterministic_crystals_ = 0;
+  // Same two accumulators, same two rules, for the orientation count. A second
+  // pair rather than a reuse of the one above: the two statistics answer
+  // different questions and routinely disagree by orders of magnitude.
+  size_t stochastic_orientation_samples_ = 0;
+  size_t deterministic_orientations_ = 0;
   size_t snapshot_total_rays_ = 0;
   size_t snapshot_sim_rays_ = 0;
   size_t snapshot_crystals_ = 0;
+  size_t snapshot_orientations_ = 0;
 };
 
 }  // namespace lumice

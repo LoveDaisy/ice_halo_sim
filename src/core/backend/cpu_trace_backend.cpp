@@ -259,6 +259,7 @@ void CpuTraceBackend::BeginSession(const SessionSpec& spec) {
   continuation_buf_ = RayBuffer{};
   exit_records_.clear();
   stochastic_sample_count_this_batch_ = 0;
+  stochastic_orientation_sample_count_this_batch_ = 0;
 
   // Design 2 (task-engine-redirect-design2): build the placement-scoped color
   // gate table for this session's scene × raypath_color config. Missing
@@ -391,6 +392,16 @@ LayerHandlePtr CpuTraceBackend::TraceLayer(const RootRaySource& roots) {
                                        roots.host.w != nullptr && roots.host.tf != nullptr) ?
                                           &roots.host :
                                           nullptr;
+    // Orientation draws for this (layer, ci). Gated on host_inject, NOT on the
+    // roots.host.crystal branch that gates the geometry counter above: the two
+    // host conditions are genuinely different (crystal vs d/p/w/tf pointers),
+    // and it is THIS one that decides whether TraceCrystalBatch reaches
+    // InitRayFirstMs/InitRayOtherMs at all — the host-ray path fills d/p/w/tf
+    // itself and never calls InitRay_rot, so it samples no orientation. Counting
+    // ci_n there would report draws that never happened.
+    if (host_inject == nullptr && !crystal_axis.IsAxisDeterministic()) {
+      stochastic_orientation_sample_count_this_batch_ += ci_n;
+    }
     BatchTraceSpec batch{ ms_info,
                           filter_spec.get(),
                           spec_.scene->light_source_.param_,
@@ -525,6 +536,7 @@ void CpuTraceBackend::EndSession() {
   ms_idx_ = 0;
   root_ray_count_ = 0;
   stochastic_sample_count_this_batch_ = 0;  // lifecycle symmetry with BeginSession
+  stochastic_orientation_sample_count_this_batch_ = 0;
   total_landed_weight_ = 0.0f;
   xyz_buf_.reset();
   continuation_buf_ = RayBuffer{};

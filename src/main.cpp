@@ -307,7 +307,8 @@ void PrintStats(LUMICE_Server* server) {
     return;
   }
   for (int i = 0; stats[i].sim_ray_num != 0; i++) {
-    std::cout << "Stats: sim_rays=" << stats[i].sim_ray_num << ", crystals=" << stats[i].crystal_num << "\n";
+    std::cout << "Stats: sim_rays=" << stats[i].sim_ray_num << ", crystals=" << stats[i].crystal_num
+              << ", orientations=" << stats[i].orientation_num << "\n";
   }
 }
 
