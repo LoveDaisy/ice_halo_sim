@@ -4194,6 +4194,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       cudaMemcpyAsync(impl_->d_root_wl_idx_, impl_->pinned_root_wl_idx_, ci_n * sizeof(uint32_t),
                       cudaMemcpyHostToDevice);
       ck_reset(cudaGetLastError(), "H2D batch");
+      // Same per-ray orientation draw as the device-gen branch above, just on
+      // the host: InitRayFirstMs samples a fresh orientation for each of the
+      // ci_n rays. This branch is only taken under LUMICE_DISABLE_DEVICE_GEN,
+      // which is exactly why it is easy to leave out of a count — and why
+      // leaving it out yields a plausible-looking low number rather than an
+      // obvious zero.
+      if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
+        impl_->orientation_count_this_batch_ += ci_n;
+      }
     } else {
       // ── Continuation: transit cont[in_slot] slice [ci_start, ci_start+ci_n) ──
       // into root buf [0, ci_n) using THIS ci's crystal (orientation resample +
