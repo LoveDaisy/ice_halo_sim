@@ -1745,7 +1745,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     unsigned long long r_init = 0;
     unsigned long long b_init = 0;
     ReadRedBlueSums(r_init, b_init);
-    IM_CHECK(r_init < b_init);  // painter: z_order=0 (red) on top of z_order=1 (blue)
+    IM_CHECK(r_init > b_init);  // painter: z_order=0 (red) on top of z_order=1 (blue)
 
     // Field-write path (Step 2/3 channel): drag-reorder swap — promote blue to the top (lower
     // z_order == higher painter priority). Pure display-time edit; yield a few frames so the
