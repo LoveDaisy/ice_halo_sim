@@ -50,7 +50,7 @@ target_include_directories(gui_test PRIVATE
 # symbols that a shared `lumice` does not export, and linking the objects keeps exactly
 # one copy of core state in the process. lumice_gui_obj deliberately declares no core
 # dependency of its own — see src/gui/CMakeLists.txt.
-target_link_libraries(gui_test PRIVATE lumice_gui_obj lumice_obj)
+target_link_libraries(gui_test PRIVATE lumice_gui_obj)
 
 target_compile_definitions(gui_test PRIVATE
     IMGUI_ENABLE_TEST_ENGINE
