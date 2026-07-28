@@ -2,9 +2,12 @@
 set -e
 
 ROOT_DIR=$(cd "$(dirname "$0")/.."; pwd)
-BUILD_DIR="${ROOT_DIR}/build/cmake_build"
-INSTALL_DIR="${ROOT_DIR}/build/cmake_install"
 PROJ_DIR=${ROOT_DIR}
+
+# BUILD_DIR / INSTALL_DIR / GUI_TEST_BIN / FLAVOR are all derived from -s and are
+# therefore assigned *after* getopts (see the resolve_flavor_paths call below),
+# not here — assigning them at the top would freeze them at the static values
+# before -s has been seen.
 
 build() {
   mkdir -p "${BUILD_DIR}"
@@ -29,7 +32,7 @@ build() {
       fi
       echo "Skipping GUI tests ($skip_reason)"
     else
-      GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/bin/gui_test"
+      GUI_TEST_BIN="${ROOT_DIR}/build/${BUILD_TYPE}/${FLAVOR}/bin/gui_test"
       if [[ -x "$GUI_TEST_BIN" ]]; then
         # Two pools (see scratchpad/task-gui-test-fixed-dt):
         #  1. Correctness pool: --fixed-dt injects a deterministic 1/60s frame dt
@@ -79,7 +82,10 @@ build() {
 help() {
   echo "Usage:"
   echo "  ./build.sh [-tgbjksxh] <debug|release|minsizerel>"
-  echo "    Executables will be installed at build/cmake_install"
+  echo "    Executables will be installed at build/cmake_install/<flavor>,"
+  echo "    where <flavor> is shared with -s and static without it. The two"
+  echo "    flavors have separate build and install trees, so they coexist and"
+  echo "    switching between them does not force a rebuild."
   echo "OPTIONS:"
   echo "  -t:          Build test cases and run unit/parity/golden tests"
   echo "               (CTest -L \"unit-correctness|parity|golden-analytic\")."
@@ -88,15 +94,32 @@ help() {
   echo "  -g:          Build GUI application (Dear ImGui + GLFW + OpenGL)."
   echo "  -b:          Build benchmarks (Google Benchmark)."
   echo "  -j:          Build in parallel, i.e. use make -j"
-  echo "  -k:          Clean build artifacts (keep dependency cache)."
-  echo "  -x:          Clean everything including dependency cache."
+  echo "  -k:          Clean build artifacts of the selected flavor only"
+  echo "               (keep dependency cache). -k cleans static, -ks cleans shared."
+  echo "  -x:          Clean everything including dependency cache (both flavors)."
   echo "  -s:          Build shared library (default: static)."
   echo "  -h:          Show this message."
 }
 
 
+# Derive every flavor-dependent path from BUILD_SHARED. Called once, after
+# getopts, so -s has already been seen no matter where it appeared in the flag
+# string (the reason clean_all is deferred too — see DO_CLEAN_ALL below).
+resolve_flavor_paths() {
+  if [[ $BUILD_SHARED == ON ]]; then
+    FLAVOR=shared
+  else
+    FLAVOR=static
+  fi
+  BUILD_DIR="${ROOT_DIR}/build/cmake_build/${FLAVOR}"
+  INSTALL_DIR="${ROOT_DIR}/build/cmake_install/${FLAVOR}"
+}
+
+# Cleans the selected flavor only. That narrowing is not a new feature: BUILD_DIR
+# and INSTALL_DIR simply are per-flavor paths now, and -k cleans what they name.
+# The other flavor's tree is left warm on purpose.
 clean_all() {
-  echo "Cleaning build artifacts..."
+  echo "Cleaning build artifacts (${FLAVOR})..."
   rm -rf "${BUILD_DIR}" "${INSTALL_DIR}"
 }
 
@@ -113,6 +136,8 @@ BUILD_GUI=OFF
 BUILD_SHARED=OFF
 INSTALL_FLAG=OFF
 MAKE_J_N=1
+DO_CLEAN_ALL=OFF
+DO_CLEAN_EVERYTHING=OFF
 
 if [ $# -eq 0 ]; then
   help
@@ -142,10 +167,10 @@ while getopts "htgbjksx" opt; do
     MAKE_J_N=$(nproc 2>/dev/null) || MAKE_J_N=$(sysctl -n hw.ncpu 2>/dev/null) || MAKE_J_N=8
     ;;
   k)
-    clean_all
+    DO_CLEAN_ALL=ON
     ;;
   x)
-    clean_everything
+    DO_CLEAN_EVERYTHING=ON
     ;;
   s)
     BUILD_SHARED=ON
@@ -158,6 +183,18 @@ while getopts "htgbjksx" opt; do
 done
 
 shift $((OPTIND-1))
+
+# Flavor is known only now: -s may appear anywhere in the flag string (-ks vs
+# -sk). Resolving inside the getopts loop would make "which flavor does -k
+# clean?" depend on flag order.
+resolve_flavor_paths
+
+if [[ $DO_CLEAN_EVERYTHING == ON ]]; then
+  clean_everything
+fi
+if [[ $DO_CLEAN_ALL == ON ]]; then
+  clean_all
+fi
 
 [ "${1:-}" = "--" ] && shift
 
