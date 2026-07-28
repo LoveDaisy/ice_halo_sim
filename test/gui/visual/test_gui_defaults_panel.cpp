@@ -1,5 +1,5 @@
 // Defaults-panel layout pixel regression — a disk-reference baseline for the internal layout of
-// the "Save Current as Defaults" modal (src/gui/defaults_panel.cpp): the section headers, the
+// the "Settings" modal (src/gui/defaults_panel.cpp): the section headers, the
 // settings table's column widths, the warning column, the source column, the search box and filter
 // row, and the pinned action row.
 //

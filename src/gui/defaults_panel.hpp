@@ -32,7 +32,12 @@ enum class DefaultsPanelSection {
 };
 
 // Window title, exported so tests address the modal by the same string the panel registers.
-inline constexpr const char* kDefaultsPanelTitle = "Save Current as Defaults";
+//
+// Word-for-word the top-bar button that opens it (app_panels.cpp: ICON_FA_GEAR " Settings"). It
+// used to read "Save Current as Defaults", which described the panel when Save was the only thing
+// it did; the panel now EDITS these settings, and a title naming one of its buttons made the
+// entry point and the window it opens look like two different features.
+inline constexpr const char* kDefaultsPanelTitle = "Settings";
 
 // Open the panel and rebuild its row set from the CURRENT state. Also recomputes the checkbox set
 // from scratch and clears the search/filter controls: every opening starts from "here is what your
