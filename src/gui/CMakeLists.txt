@@ -65,14 +65,21 @@ add_library(lumice_gui_obj OBJECT
 
 target_include_directories(lumice_gui_obj PUBLIC
     ${PROJ_SRC_DIR}
+    ${PROJ_SRC_DIR}/include        # public C API header, was reached via `lumice`
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${stb_SOURCE_DIR}
     ${IconFontCppHeaders_SOURCE_DIR})
 
+# lumice_gui_obj deliberately does NOT declare a dependency on `lumice`, so that each
+# final target picks the core flavor it needs: LumiceGUI links the `lumice` library
+# (the product boundary — GUI reaches core only through the C API), while gui_test links
+# `lumice_obj` directly (white-box tests reference internal symbols, which a shared
+# `lumice` does not export). CMake OBJECT libraries do not forward another OBJECT
+# library's `.o` files, so this split cannot be expressed on lumice_gui_obj itself;
+# `PRIVATE` would not help either — it still propagates as `$<LINK_ONLY:...>`.
 if(WIN32)
   target_link_libraries(lumice_gui_obj PUBLIC
-      lumice
       glfw
       nfd
       glad_gl
@@ -80,11 +87,18 @@ if(WIN32)
   # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
 else()
   target_link_libraries(lumice_gui_obj PUBLIC
-      lumice
       glfw
       nfd
       OpenGL::GL)
 endif()
+
+# The GUI uses these header-only libs directly (gui_logger.hpp, file_io). They used to
+# arrive incidentally through `lumice_obj PUBLIC ... -> lumice -> lumice_gui_obj`;
+# declare them here now that the dependency on `lumice` is gone.
+target_link_libraries(lumice_gui_obj PUBLIC
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog_header_only
+    tl::expected)
 
 # GLFW_INCLUDE_NONE: prevent GLFW from including GL headers — gl_common.h provides them
 # per platform (macOS: gl3.h, Linux: GL/gl.h+glext.h, Windows: glad/gl.h)
@@ -105,7 +119,9 @@ endif()
 add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/main.cpp
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
-target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
+# `lumice` (shared: the dylib; static: the archive) — the product keeps reaching core
+# through the C API only.
+target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj lumice)
 
 # Windows: embed icon via .rc resource.
 # Console subsystem (no WIN32_EXECUTABLE) is used intentionally — GUI subsystem
