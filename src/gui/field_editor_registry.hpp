@@ -24,6 +24,24 @@
 //   Render(state, id) — draws the real control, bound to the SAME GuiState field the main UI
 //                       edits. Returns true when the call actually wrote a new value.
 //
+// CROSS-FIELD COMBINATIONS — the position, because a per-field editor raises the question and
+// silence would be an answer by default. This table must not become a second way to reach states
+// the main UI refuses (a saved default of "full-sky lens WITH a non-zero roll", say, which no
+// sequence of main-UI actions can produce and which the loader would then quietly ignore).
+//
+// It cannot, and by construction rather than by a list of forbidden pairs:
+//   1. every entry's `enabled` restates the BeginDisabled(...) expression at the field's main-UI
+//      call site, so the set of (field, configuration) pairs this table will write is the same set
+//      the main UI will write. A field that does not apply is greyed here exactly when it is greyed
+//      there;
+//   2. the renderer invariants in app_panels.cpp (RenderPreviewPanel) run every frame, panel open
+//      or not — this is a popup, not a replacement for the frame. Setting roll and THEN switching
+//      to a full-sky lens does not smuggle the pair through: roll is forced back to 0 on the next
+//      frame, before any Save can see it.
+// Point 1 is the rule; point 2 is why a mistake in point 1 still cannot produce the bad state. What
+// this does NOT do is validate combinations that ARE reachable from the main UI — those need no
+// defending, since a user could have saved them by hand anyway.
+//
 // KNOWN DEBT, stated here because it is invisible at the call sites: each entry currently
 // RE-STATES the constraint its main-UI call site spells out inline (the same min/max/format/
 // disabled-when expression, written a second time). The two can therefore drift, and only the
