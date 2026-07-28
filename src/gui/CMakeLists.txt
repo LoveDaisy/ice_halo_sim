@@ -80,7 +80,6 @@ target_include_directories(lumice_gui_obj PUBLIC
 # `PRIVATE` would not help either — it still propagates as `$<LINK_ONLY:...>`.
 if(WIN32)
   target_link_libraries(lumice_gui_obj PUBLIC
-      lumice
       glfw
       nfd
       glad_gl
@@ -88,7 +87,6 @@ if(WIN32)
   # ImGui auto-detects GLAD2 via __has_include(<glad/gl.h>) — no loader definition needed.
 else()
   target_link_libraries(lumice_gui_obj PUBLIC
-      lumice
       glfw
       nfd
       OpenGL::GL)
@@ -123,7 +121,7 @@ add_executable(LumiceGUI
     ${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp)
 # `lumice` (shared: the dylib; static: the archive) — the product keeps reaching core
 # through the C API only.
-target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj)
+target_link_libraries(LumiceGUI PRIVATE lumice_gui_obj lumice)
 
 # Windows: embed icon via .rc resource.
 # Console subsystem (no WIN32_EXECUTABLE) is used intentionally — GUI subsystem
