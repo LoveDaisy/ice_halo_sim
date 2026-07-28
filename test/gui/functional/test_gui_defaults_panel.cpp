@@ -200,7 +200,11 @@ void ScrollSettingsListDown(ImGuiTestContext* ctx, const std::string& hover_ref)
 // through.
 //
 // The id is the one BeginTable computed: the table is created directly in the panel window with
-// nothing pushed on the ID stack, so the window's own GetID reproduces it.
+// nothing pushed on the ID stack, so the window's own GetID reproduces it. Should the table ever be
+// wrapped in a child again — the shared scrolling child this task removed — the seed changes and
+// this returns null. That null IS the regression signal, not a broken helper: measured by putting
+// the old shared child back, which turns both scroll cases below red here while the folding case
+// stays green.
 ImGuiTable* SettingsTable(ImGuiTestContext* ctx) {
   ImGuiWindow* win = ctx->GetWindowByRef(gui::kDefaultsPanelTitle);
   if (win == nullptr) {
