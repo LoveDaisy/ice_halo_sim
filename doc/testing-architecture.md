@@ -332,6 +332,18 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
 - **pytest markers**: `slow` (requires shared-lib build; excluded from CI fast path) and
   `heavy` (slow + redundant parity variant; deselected per-PR via `not heavy`) are run-cadence
   markers and stay. Layer/subsystem are expressed via directory + marker in the target state.
+- **`addopts = ["-m", "not slow"]` (`pyproject.toml`)**: bare `pytest` is pinned to the fast
+  subset so the "bare pytest = e2e fast subset" claim above is structurally true rather than a
+  convention callers must remember. Before this was added, bare `pytest` collected the full
+  166-test set (not the 81-test fast subset `-m "not slow"` selects) despite `AGENTS.md`
+  documenting it as fast-only; a runner-history sample showed callers consistently believed they
+  were on the fast path while running the whole suite, which is why the fix is a gate rather
+  than a doc correction (a reminder can't catch a mistake the caller doesn't know they're
+  making). Command-line `-m` overrides addopts entirely (not an AND-combine), so `-m ''` remains
+  the full-suite escape hatch and `-m slow` / `-m "slow and not heavy"` still select the CI slow
+  leg unchanged. Any pytest invocation that relies on the old "no `-m` = run everything under
+  this path" default needs an explicit `-m` added — see `doc/gpu-remote-cuda-build-testing.md`'s
+  CUDA parity recipes for one such fix.
 
 **Migration anchor checklist (mandatory for every 270.3–270.7 move).** CI hard-codes these;
 any rename/move/marker-change that misses one turns CI red:

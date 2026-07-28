@@ -272,6 +272,15 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 - **pytest marker**：`slow`（需 shared-lib 构建；排除出 CI 快路径）与 `heavy`（slow + 冗余 parity
   变体；按 PR 用 `not heavy` 取消选择）是运行节奏 marker，保留。层/subsystem 在目标态用目录 +
   marker 表达。
+- **`addopts = ["-m", "not slow"]`（`pyproject.toml`）**：裸 `pytest` 被钳定到 fast 子集，让上文
+  "裸 pytest = e2e fast 子集" 的说法从需要调用方记住的约定变成结构性事实。加之前，裸 `pytest`
+  实测 collected 全集 166 个（而非 `-m "not slow"` 选出的 81 个 fast 子集），尽管 `AGENTS.md`
+  一直把它文档化为 fast-only；runner 历史样本显示调用方**一贯以为**自己在跑 fast 路径、实际却
+  跑了全集——这正是选择「门禁」而非「改文档」的原因（提醒型约束抓不住调用方本来就不知道自己
+  错了的失效模式）。命令行 `-m` 会整体覆盖 addopts（不是 AND 组合），所以 `-m ''` 仍是取全集的
+  逃生口，`-m slow` / `-m "slow and not heavy"` 也仍不受影响地选中 CI 慢腿。任何依赖旧「无 `-m`
+  = 跑该路径下全部」默认语义的 pytest 调用点都需要补上显式 `-m`——见
+  `doc/gpu-remote-cuda-build-testing.md` 里 CUDA parity recipe 的修正案例。
 
 **迁移锚 checklist（每次 270.3–270.7 移动强制）。** CI 硬编码了以下锚点；任何 rename/move/marker
 改动漏掉一条都会让 CI 变红：
