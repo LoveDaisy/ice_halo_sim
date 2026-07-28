@@ -24,26 +24,26 @@ jobs:
             os: ubuntu-24.04
             build_gui: ON
             cache_key: ubuntu-x64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
             build_gui: OFF
             cache_key: ubuntu-arm64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: macOS ARM64
             os: macos-15
             build_gui: ON
             cache_key: macos-arm64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: Windows MSVC x86_64
             os: windows-2025
             build_gui: ON
             cache_key: windows-msvc-x64
             msvc: true
-            benchmark_bin: build/Release/bin/Lumice.exe
+            benchmark_bin: build/Release/static/bin/Lumice.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -141,9 +141,9 @@ jobs:
         with:
           name: gui-test-windows-msvc
           path: |
-            build/Release/bin/gui_test.exe
-            build/Release/bin/LumiceGUI.exe
-            build/Release/bin/Lumice.exe
+            build/Release/static/bin/gui_test.exe
+            build/Release/static/bin/LumiceGUI.exe
+            build/Release/static/bin/Lumice.exe
           retention-days: 7
 
   # CUDA compile-only: nvcc actually compiles the .cu translation units on every
@@ -406,7 +406,7 @@ jobs:
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install/static
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DLUMICE_NATIVE_ARCH=OFF
@@ -502,7 +502,7 @@ jobs:
         #
         # CLI-based Darwin slow gates (test_metal_throughput, test_metal_batch_invariance
         # exit-conservation) drive the `Lumice` CLI via runner.find_lumice_binary(), which
-        # looks for build/cmake_install/Lumice or $LUMICE_BIN. This shared-lib build does
+        # looks for build/cmake_install/static/Lumice or $LUMICE_BIN. This shared-lib build does
         # not install, so point LUMICE_BIN at the build-tree binary (its build-tree rpath
         # resolves liblumice; DYLD/LD_LIBRARY_PATH set as a belt-and-suspenders fallback).
         # No-op on legs where the binary is absent. (The parity leg uses the shared lib via
