@@ -140,7 +140,7 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   - `test/performance/` — throughput gates (Metal throughput)
   - `test/gui/` — GUI acceptance (Metal GUI north-star) alongside the C++ GUI tests (`functional/`, `visual/`, `responsiveness/` subdirs; target `gui_test`)
   - `test/regression-sentinel/` — bug-resurfacing guards (errors, capi sentinel overflow, MS filter leak)
-  - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `configs/`).
+  - Shared fixtures stay under `test/e2e/` (`base.py`, `runner.py`, `capi_runner.py`, `image_utils.py`, `_parity_metrics.py`, `_projection_battery.py`, `configs/`).
 - E2E test split:
   - `./scripts/test.sh <quick|full|pr>` is the recommended entry point for a local run — see the
     test-scope table below for which one fits a given situation. It runs ctest, the fast e2e
@@ -150,8 +150,9 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   - Bare `pytest -v` runs the fast subset directly. This is pinned by `pyproject.toml`'s
     `addopts` (`-m "not slow"`), so it is structurally true rather than a convention a caller has
     to remember, and it matches CI's fast leg. `pytest -v -m ''` is the escape hatch back to the
-    full set; because a command-line `-m` replaces `addopts` instead of combining with it, any
-    invocation that needs the full set (or a marker CI never uses) must pass `-m` explicitly.
+    full set; because a command-line `-m` overrides `addopts`'s `-m` value rather than combining
+    with it (any other `addopts` flags stay in effect), any invocation that needs the full set
+    (or a marker CI never uses) must pass `-m` explicitly.
     See `doc/testing-architecture.md` §5 for the `addopts` rationale and the incident it fixed.
   - `@pytest.mark.slow` tests require the shared-lib build (`./scripts/build.sh -sj release` —
     `-g`/`-t` alone never produce it, see "Build trees..." above) and are excluded from CI's fast
