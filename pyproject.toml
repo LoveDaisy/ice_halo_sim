@@ -12,6 +12,17 @@ testpaths = [
     "test/gui",
     "test/regression-sentinel",
 ]
+# AGENTS.md has long documented bare `pytest` as "fast e2e only (matches CI)",
+# but without this addopts that was only true if the caller remembered to add
+# `-m "not slow"` by hand. Measured: bare `pytest` collected the full 166-test
+# set, not the 81-test fast subset, and 5 days of runner history showed callers
+# consistently believed they were invoking the fast path while actually running
+# the whole suite. A reminder in prose cannot fix a mistake the caller doesn't
+# know they're making, so the default is pinned here instead (a09: constraints
+# need a gate, not just documentation). Escape hatches remain: `-m ''` on the
+# command line overrides addopts and restores the full 166-test collection;
+# `-m slow` / `-m "slow and not heavy"` also override cleanly for the CI slow leg.
+addopts = ["-m", "not slow"]
 pythonpath = ["."]
 # pytest-xdist parallelism is safe for this suite: xdist runs each test in a
 # separate worker PROCESS, so capi_runner's process-global os.environ + log

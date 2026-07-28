@@ -66,7 +66,7 @@
     export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
     export LUMICE_LIB=/work/build/Release/lib/liblumice.so
     export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    python3 -m pytest -v test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
+    python3 -m pytest -v -m slow test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
   ```
   判据 = 退出码 0 且看到 `N passed`（无需再加 `-p no:faulthandler`）。
   （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
@@ -124,7 +124,7 @@
   set PATH=C:\lumice-src\build\Release\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin;%PATH%
   set PYTHONUTF8=1
   cd /d C:\lumice-src
-  C:\lumice-test\py311\python.exe -m pytest -v test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
+  C:\lumice-test\py311\python.exe -m pytest -v -m slow test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
   ```
   耗时 ~7min，1070Ti/sm_61 走 compute_61 PTX JIT。
   - ⚠️ **`set PYTHONUTF8=1` 必带**：中文 Windows 控制台默认 GBK codec，parity 测试的
