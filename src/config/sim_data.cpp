@@ -39,8 +39,10 @@ namespace lumice {
 // = 3 × size_t = 24B) for the GPU color-degrade tally, bumping 328 → 352.
 // The crystal-sample-count contract splits crystal_count_ into an accumulated
 // stochastic half and an overwritten deterministic half (+1 size_t, 8B),
-// bumping 352 → 360.
-static_assert(sizeof(SimData) == 360, "SimData size changed — update copy/move ctors and operators");
+// bumping 352 → 360. The orientation-sample-count statistic adds its own
+// stochastic/deterministic pair (+2 size_t, 16B) — a separate statistic from the
+// crystal one, not a widening of it — bumping 360 → 376.
+static_assert(sizeof(SimData) == 376, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -398,8 +400,10 @@ SimData::SimData(const SimData& other)
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
       stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
-      deterministic_crystal_count_(other.deterministic_crystal_count_), sim_scene_credit_(other.sim_scene_credit_),
-      color_degrade_counts_(other.color_degrade_counts_) {}
+      deterministic_crystal_count_(other.deterministic_crystal_count_),
+      stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
+      deterministic_orientation_count_(other.deterministic_orientation_count_),
+      sim_scene_credit_(other.sim_scene_credit_), color_degrade_counts_(other.color_degrade_counts_) {}
 
 SimData::SimData(SimData&& other) noexcept
     : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
@@ -410,8 +414,10 @@ SimData::SimData(SimData&& other) noexcept
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(std::move(other.lane_pixel_data_)),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
       stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
-      deterministic_crystal_count_(other.deterministic_crystal_count_), sim_scene_credit_(other.sim_scene_credit_),
-      color_degrade_counts_(other.color_degrade_counts_) {}
+      deterministic_crystal_count_(other.deterministic_crystal_count_),
+      stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
+      deterministic_orientation_count_(other.deterministic_orientation_count_),
+      sim_scene_credit_(other.sim_scene_credit_), color_degrade_counts_(other.color_degrade_counts_) {}
 
 SimData& SimData::operator=(const SimData& other) {
   if (&other == this) {
@@ -438,6 +444,8 @@ SimData& SimData::operator=(const SimData& other) {
   root_ray_count_ = other.root_ray_count_;
   stochastic_crystal_sample_count_ = other.stochastic_crystal_sample_count_;
   deterministic_crystal_count_ = other.deterministic_crystal_count_;
+  stochastic_orientation_sample_count_ = other.stochastic_orientation_sample_count_;
+  deterministic_orientation_count_ = other.deterministic_orientation_count_;
   sim_scene_credit_ = other.sim_scene_credit_;
   color_degrade_counts_ = other.color_degrade_counts_;  // task-color-degrade-gui-surfacing (POD)
   return *this;
@@ -473,6 +481,8 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   root_ray_count_ = other.root_ray_count_;
   stochastic_crystal_sample_count_ = other.stochastic_crystal_sample_count_;
   deterministic_crystal_count_ = other.deterministic_crystal_count_;
+  stochastic_orientation_sample_count_ = other.stochastic_orientation_sample_count_;
+  deterministic_orientation_count_ = other.deterministic_orientation_count_;
   sim_scene_credit_ = other.sim_scene_credit_;
   color_degrade_counts_ = other.color_degrade_counts_;  // task-color-degrade-gui-surfacing (POD)
   return *this;

@@ -1279,6 +1279,11 @@ TEST_F(ServerLifecycleApi, GetStatsResults) {
   // After running 1000 rays through one crystal with single-pass scattering:
   EXPECT_GT(out[0].sim_ray_num, 0u);
   EXPECT_GT(out[0].crystal_num, 0u);
+  // The orientation half must be mapped too. c_api.cpp fills this struct with a
+  // hand-written field-by-field copy, which is the copy-paste shape where a new
+  // field is easiest to forget — and forgetting it yields 0, which reads as
+  // "this scene never randomizes orientation" rather than as a missing wire.
+  EXPECT_GT(out[0].orientation_num, 0u);
 
   // Sentinel: sim_ray_num == 0 marks end of array
   EXPECT_EQ(out[1].sim_ray_num, 0u);
@@ -1301,6 +1306,7 @@ TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
   ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached), LUMICE_OK);
   EXPECT_EQ(cached.sim_ray_num, fresh[0].sim_ray_num);
   EXPECT_EQ(cached.crystal_num, fresh[0].crystal_num);
+  EXPECT_EQ(cached.orientation_num, fresh[0].orientation_num);
   EXPECT_EQ(cached.ray_seg_num, fresh[0].ray_seg_num);
 
   // Cache stability: a second GetCachedStats call without any intervening Get*Results
@@ -1309,6 +1315,7 @@ TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
   ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached_again), LUMICE_OK);
   EXPECT_EQ(cached_again.sim_ray_num, cached.sim_ray_num);
   EXPECT_EQ(cached_again.crystal_num, cached.crystal_num);
+  EXPECT_EQ(cached_again.orientation_num, cached.orientation_num);
 }
 
 

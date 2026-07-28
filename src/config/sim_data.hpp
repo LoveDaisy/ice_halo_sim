@@ -236,6 +236,24 @@ struct SimData {
   //     grain and the worker-pool size instead of a property of the scene.
   size_t deterministic_crystal_count_ = 0;
 
+  // The reported ORIENTATION count, carried as the same two-field pair and
+  // aggregated by the same two rules. It is a separate statistic, not a second
+  // view of the one above: IsDeterministic(CrystalParam) judges shape params
+  // only, so the commonest halo setup — a fixed shape under a random axis —
+  // reports one geometry and a great many orientations. Reporting only the
+  // former hides the sampling richness of the quantity that actually decides
+  // the halo shape.
+  //
+  // (c) Stochastic orientation draws THIS batch made — ACCUMULATED, same
+  //     reasoning as (a). Counts RAYS, not geometries: InitRay_rot resamples
+  //     the rotation for every ray of the buffer even when the geometry it is
+  //     paired with came from cache, so there is no geom_clock_-style reuse to
+  //     divide by and this number is legitimately much larger than (a).
+  size_t stochastic_orientation_sample_count_ = 0;
+  // (d) How many (layer, ci) slots of the committed scene carry an axis that
+  //     never draws — a CONFIG CONSTANT, so OVERWRITE, same reasoning as (b).
+  size_t deterministic_orientation_count_ = 0;
+
   // scrum-312 (third-clock drain): how many sim_scene_cnt_ units this SimData
   // accounts for on the consumer side. Normally 1 (one SimData per
   // SimulateOneWavelength* call, paired 1:1 with GenerateScene's per-wavelength

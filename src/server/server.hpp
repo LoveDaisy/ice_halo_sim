@@ -161,6 +161,9 @@ struct StatsResult {
   size_t ray_seg_num_;
   size_t sim_ray_num_;
   size_t crystal_num_;
+  // Distinct crystal ORIENTATIONS sampled, alongside the geometry count above.
+  // Not derivable from crystal_num_ — see SimData for the field-level contract.
+  size_t orientation_num_;
 };
 
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;

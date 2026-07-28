@@ -280,6 +280,29 @@ struct AxisDistribution {
   //! @details Only checks the azimuth type and its full range; latitude and roll are ignored.
   bool IsAzRotationallySymmetric() const;
 
+  //! @brief Check whether every one of azimuth/latitude/roll is kNoRandom — i.e. this axis
+  //!   never consumes the RNG and yields one fixed orientation for every ray.
+  //! @details The orientation-side counterpart of IsDeterministic(const CrystalParam&)
+  //!   (trace_ops.hpp), and deliberately NOT the same predicate: shape and axis are
+  //!   independent axes of a crystal setting, and conflating them is exactly the gap this
+  //!   predicate closes — the commonest halo setup (fixed shape + random orientation) is
+  //!   deterministic on the shape axis and stochastic on this one.
+  //! @note It needs no !IsFullSphereUniform() guard: that predicate requires both
+  //!   azimuth_dist and latitude_dist to be kUniform, so a full-sphere axis can never satisfy
+  //!   the all-kNoRandom test below. The two are mutually exclusive by construction and an
+  //!   added guard would be a dead conjunct.
+  //! @note What AxisDeterminismMatchesRuntimeOrientation (test_simulator.cpp) pins, and what it
+  //!   does not. It pins the load-bearing claim: an all-kNoRandom axis really does yield one
+  //!   bit-identical rotation for every ray, and a stochastic one really does vary. That is what
+  //!   the sample count depends on, and it is invisible to a truth-table test — a change making
+  //!   kNoRandom consume the RNG turns the pin red while every truth-table case stays green
+  //!   (verified by mutation). It does NOT pin which branch InitRay_rot takes: since the unified
+  //!   area-measure LatLut, the full_sphere fast path and the parameterized path are
+  //!   statistically equivalent (measured: fraction of |world z| < 0.5 is 0.5000 vs 0.4977 over
+  //!   20k samples), so that branch is an optimization rather than a correctness fork and
+  //!   decoupling it is not behaviorally detectable. Do not add a test claiming otherwise.
+  bool IsAxisDeterministic() const;
+
   Distribution azimuth_dist;
   Distribution latitude_dist;
   Distribution roll_dist;

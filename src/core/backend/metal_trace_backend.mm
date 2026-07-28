@@ -826,6 +826,20 @@ struct MetalTraceBackend::Impl {
   // cross-backend contract.
   size_t                   pool_shape_count_this_batch_ = 0;
 
+  // Stochastic ORIENTATION draws this batch made, in RAYS. Metal samples the
+  // per-ray rotation on device (gen_root_kernel / transit_root_kernel both call
+  // sample_lat_lon_roll per tid) or, on the host-gen fallback, through the very
+  // same InitRayFirstMs the CPU arms use — either way one draw per ray, with no
+  // K-shape pool reuse: the pool diversifies GEOMETRY, orientation is redrawn
+  // regardless of which pool slot a ray picks. So unlike the shape counter above
+  // this one is NOT a function of P_ci. Incremented at exactly the three sites
+  // that advance root_ray_count / transit_ray_count_, which is the existing
+  // single authority on "this ray consumed a gen draw"; the test-only
+  // InjectHostRoots path advances neither and samples no orientation, so it is
+  // correctly excluded for free. Read out by
+  // GetLastBatchStochasticOrientationSampleCount().
+  size_t                   orientation_count_this_batch_ = 0;
+
   // Unified area-measure inverse-CDF latitude LUT (330.2). Three fixed-size
   // (LatLut::kNodes float) shared buffers rebuilt per-ci by UploadLatLut when the
   // orientation distribution routes to kLatPathLutInverseCdf. Metal forbids nil
@@ -2054,6 +2068,9 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
     // is always consumed within the same ci iteration.
     pending_gen_params_ = gp;
     root_ray_count += crystal_ray_num;
+    if (!setting.crystal_.axis_.IsAxisDeterministic()) {
+      orientation_count_this_batch_ += crystal_ray_num;
+    }
     return crystal_ray_num;
   }
 
@@ -2147,6 +2164,9 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   // Accumulate the host-gen count too so a future device-gen-eligible call
   // within the same session keeps gen_ray_base globally monotone.
   root_ray_count += n;
+  if (!setting.crystal_.axis_.IsAxisDeterministic()) {
+    orientation_count_this_batch_ += n;
+  }
   return n;
 }
 
@@ -2909,6 +2929,7 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // session). See GetLastBatchStochasticCrystalSampleCount for the unified
   // semantics.
   impl_->pool_shape_count_this_batch_ = 0u;
+  impl_->orientation_count_this_batch_ = 0u;
   // task-color-degrade-gui-surfacing: reset the GPU color-degrade tally at the
   // single per-config entry point, BEFORE both the color-class clamp below
   // (~L2700) and EnsureFilterBuffers (~L2711, where the symmetry-group /
@@ -3363,6 +3384,9 @@ LayerHandlePtr MetalTraceBackend::TraceLayer(const RootRaySource& roots) {
         // via WaitAndReadbackLayer's status check (same recovery semantics as
         // gen+trace fusion — assert in debug, log+continue in release).
         impl_->transit_ray_count_ += ci_n;
+        if (!setting.crystal_.axis_.IsAxisDeterministic()) {
+          impl_->orientation_count_this_batch_ += ci_n;
+        }
         ci_start += ci_n;
         in_count = ci_n;  // all cont rays already filter+prob-passed by the
                           // prior layer's device emit gate; transit cannot
@@ -3674,6 +3698,14 @@ size_t MetalTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
   // unset (P_ci ≡ 1) such a ci contributes 1 per batch; with the K knob on it
   // contributes ~ci_n/K.
   return impl_->pool_shape_count_this_batch_;
+}
+
+size_t MetalTraceBackend::GetLastBatchStochasticOrientationSampleCount() const {
+  // Rays whose orientation was drawn this batch. Deliberately unrelated to the
+  // K-shape pool size — see the member's declaration. Comparable in KIND to the
+  // CPU arms' number (both are per-ray, no reuse), though still not assertable
+  // as equal across backends: which rays exist at all differs.
+  return impl_->orientation_count_this_batch_;
 }
 
 ColorDegradeCounts MetalTraceBackend::GetLastColorDegradeCounts() const {

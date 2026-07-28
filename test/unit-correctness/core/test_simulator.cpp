@@ -516,6 +516,126 @@ TEST(CollectDataFilterDispatch, FilterPassNoProbEmitsOutgoing) {
 // (see the inline notes at each one).
 // ============================================================================
 
+// --- Orientation-count predicate: behavioral pin + config aggregation ---
+
+// Sample `n` orientations for `axis` through the production path and return
+// the raw 3x3 matrices, so a caller can compare them bit-for-bit.
+std::vector<std::array<float, 9>> SampleOrientations(const AxisDistribution& axis, size_t n, uint32_t seed) {
+  RandomNumberGenerator rng(seed);
+  RayBuffer buffer_data[2];
+  buffer_data[0].Reset(n);
+  buffer_data[1].Reset(n);
+  buffer_data[0].size_ = n;
+  InitRay_rot(rng, axis, buffer_data);
+
+  std::vector<std::array<float, 9>> out;
+  out.reserve(n);
+  for (size_t i = 0; i < n; i++) {
+    std::array<float, 9> m{};
+    const float* mat = buffer_data[0].rays_[i].crystal_rot_.GetMat();
+    std::copy(mat, mat + 9, m.begin());
+    out.push_back(m);
+  }
+  return out;
+}
+
+// The pin AxisDistribution::IsAxisDeterministic's doc comment names. It binds
+// the predicate to what InitRay_rot ACTUALLY PRODUCES, not to another pure
+// predicate: an assertion like "a full-sphere axis is not axis-deterministic"
+// reads the same dist.type fields both predicates read, so it is true by
+// construction and cannot fail.
+//
+// Scope, established by mutation rather than assumed. This catches a change that
+// makes kNoRandom stop meaning "no draw" at runtime — jittering the kNoRandom
+// latitude branch turns the first case red while all five truth-table cases in
+// test_math.cpp stay green, which is the gap this test exists to fill. It does
+// NOT catch InitRay_rot's full_sphere branch being decoupled from
+// IsFullSphereUniform: the two sampler paths are statistically equivalent since
+// the unified area-measure LatLut, so nothing observable changes. Do not "fix"
+// that by weakening these assertions into a distributional check — there is no
+// difference to detect.
+TEST(AxisDeterminismMatchesRuntimeOrientation, DeterministicAxisYieldsOneFixedRotation) {
+  AxisDistribution axis;  // default ctor: all three kNoRandom
+  ASSERT_TRUE(axis.IsAxisDeterministic());
+
+  constexpr size_t kN = 16;
+  auto mats = SampleOrientations(axis, kN, /*seed=*/1234);
+  ASSERT_EQ(mats.size(), kN);
+  for (size_t i = 1; i < kN; i++) {
+    EXPECT_EQ(mats[i], mats[0]) << "ray " << i << " got a different rotation from a deterministic axis";
+  }
+}
+
+TEST(AxisDeterminismMatchesRuntimeOrientation, FullSphereAxisIsStochasticAndVaries) {
+  // roll stays kNoRandom on purpose: this is the combination most likely to be
+  // misjudged by a predicate that stops short of all three fields.
+  AxisDistribution axis;
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  ASSERT_TRUE(axis.IsFullSphereUniform());
+  EXPECT_FALSE(axis.IsAxisDeterministic());
+
+  constexpr size_t kN = 16;
+  auto mats = SampleOrientations(axis, kN, /*seed=*/1234);
+  ASSERT_EQ(mats.size(), kN);
+  size_t distinct_from_first = 0;
+  for (size_t i = 1; i < kN; i++) {
+    if (mats[i] != mats[0]) {
+      distinct_from_first++;
+    }
+  }
+  EXPECT_EQ(distinct_from_first, kN - 1) << "predicate says stochastic but InitRay_rot repeated a rotation";
+}
+
+TEST(DeterministicOrientationCountTest, CountsAxisDeterministicSlotsAcrossLayers) {
+  auto make_setting = [](bool axis_random) {
+    ScatteringSetting s;
+    s.crystal_.id_ = 0;
+    s.crystal_.param_ = PrismCrystalParam{};
+    if (axis_random) {
+      s.crystal_.axis_.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+    }
+    s.crystal_proportion_ = 1.0f;
+    return s;
+  };
+
+  SceneConfig config{};
+  MsInfo layer0;
+  layer0.prob_ = 0.0f;
+  layer0.setting_.push_back(make_setting(/*axis_random=*/false));
+  layer0.setting_.push_back(make_setting(/*axis_random=*/true));
+  layer0.setting_.push_back(make_setting(/*axis_random=*/false));
+  MsInfo layer1;
+  layer1.prob_ = 0.0f;
+  layer1.setting_.push_back(make_setting(/*axis_random=*/true));
+  layer1.setting_.push_back(make_setting(/*axis_random=*/false));
+  config.ms_.push_back(std::move(layer0));
+  config.ms_.push_back(std::move(layer1));
+
+  // 3 of the 5 (layer, ci) slots carry a deterministic axis, across BOTH layers.
+  EXPECT_EQ(DeterministicOrientationCount(config), 3u);
+}
+
+TEST(DeterministicOrientationCountTest, IsIndependentOfTheShapePredicate) {
+  // The task in one assertion: the commonest halo setup is deterministic on the
+  // shape axis and stochastic on the orientation axis. Wiring the orientation
+  // count to IsDeterministic(CrystalParam) would make these two counts equal.
+  ScatteringSetting s;
+  s.crystal_.id_ = 0;
+  s.crystal_.param_ = PrismCrystalParam{};  // fixed shape
+  s.crystal_.axis_.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  s.crystal_proportion_ = 1.0f;
+
+  SceneConfig config{};
+  MsInfo layer;
+  layer.prob_ = 0.0f;
+  layer.setting_.push_back(std::move(s));
+  config.ms_.push_back(std::move(layer));
+
+  EXPECT_EQ(DeterministicCrystalCount(config), 1u) << "shape is fixed";
+  EXPECT_EQ(DeterministicOrientationCount(config), 0u) << "axis is random";
+}
+
 TEST(ComponentMaskPropagation, InitRayFirstMsZeroesComponentSlots) {
   Crystal crystal = Crystal::CreatePrism(1.0f);
   RandomNumberGenerator rng(42);

@@ -35,7 +35,17 @@ extern "C" {
 // callers of the removed symbols fail to compile, which is the intended migration signal.
 // The LUMICE_MAX_CONFIG_* ceilings survive the struct: they are now the Scene's Add*/Set*
 // per-kind soft caps, not the dimensions of an inline array.
-#define LUMICE_API_VERSION 413
+//
+// BREAKING (v4.14): LUMICE_StatsResult gains a fourth field, `orientation_num`
+// — the count of distinct crystal ORIENTATIONS sampled, previously invisible
+// (only the geometry count was reported, and on the commonest halo setup, a
+// fixed shape under a random axis, that count is 1 no matter how richly the
+// orientation was sampled). This is an APPEND, not a removal or a reorder, so
+// existing field offsets are unchanged; but sizeof(LUMICE_StatsResult) grows
+// from 24 to 32, so a caller that was NOT recompiled and passes an array of the
+// old struct to LUMICE_GetStatsResults will have it written past the end of
+// each element. Recompile against this header.
+#define LUMICE_API_VERSION 414
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -177,7 +187,18 @@ typedef struct LUMICE_RawXyzResult_ {
 typedef struct LUMICE_StatsResult_ {
   LUMICE_RayCount ray_seg_num;
   LUMICE_RayCount sim_ray_num;
-  LUMICE_RayCount crystal_num;
+  LUMICE_RayCount crystal_num;  // Distinct crystal GEOMETRIES sampled this run.
+  // Distinct crystal ORIENTATIONS sampled this run. A separate quantity, not a
+  // rescaling of crystal_num: the shape and the axis of a crystal setting are
+  // independent, and the commonest halo configuration — a fixed shape under a
+  // random axis — yields one geometry and a great many orientations. Expect this
+  // to be far larger than crystal_num: orientation is redrawn per ray with no
+  // reuse, while geometry is reused across a batch of rays.
+  //
+  // NOT comparable across backends, and not usable as a parity assertion: the
+  // CPU and GPU routes sample at different densities and that difference is
+  // precisely what the number exposes.
+  LUMICE_RayCount orientation_num;
   // Sentinel: all zeros (sim_ray_num == 0)
 } LUMICE_StatsResult;
 

@@ -586,6 +586,44 @@ class TraceBackend {
   // "fix" it, and do NOT put this value in a cross-backend parity assertion.
   virtual size_t GetLastBatchStochasticCrystalSampleCount() const { return 0; }
 
+  // How many STOCHASTIC ORIENTATION draws THIS batch made, summed across every
+  // (layer, ci). Read by Simulator into
+  // SimData::stochastic_orientation_sample_count_. Same two-term structure as
+  // the crystal count above:
+  //
+  //     orientations = (# of (layer, ci) slots whose axis is deterministic)
+  //                  + Σ over batches and workers of THIS getter
+  //
+  // with the same aggregation split for the same reasons, and the same single
+  // predicate rule: the judgement is AxisDistribution::IsAxisDeterministic, and
+  // a new backend should apply THAT at whatever point it draws rather than
+  // hand-rolling a second copy — or, worse, reusing IsDeterministic(CrystalParam).
+  // The two predicates disagree in the case that matters most: a fixed shape
+  // under a random axis is deterministic on shape and stochastic on orientation,
+  // which is precisely why this is a second statistic instead of a second name
+  // for the first one.
+  //
+  // What differs from the crystal count, and is not an oversight:
+  //   * This counts RAYS, not draws-of-a-reusable-thing. On the CPU arms
+  //     InitRay_rot resamples the rotation for every ray in the buffer even when
+  //     the geometry was served from cache, so there is no reuse factor to
+  //     divide by. Expect this number to dwarf the crystal count on the same
+  //     scene; that ratio is the reuse asymmetry, made visible.
+  //   * A batch whose axes are all deterministic reports 0 here, and its whole
+  //     count comes from the config-constant term.
+  //
+  // Cross-backend equality is NOT claimed — MORE emphatically than for the
+  // crystal count, because the GPU arms do not necessarily sample orientation
+  // per ray at all. Do not put this value in a cross-backend parity assertion,
+  // and do not "fix" a divergence. What a backend must NOT do is report a
+  // plausible-looking stand-in when it cannot count: neither a silent 0 (which
+  // reads as "this backend never randomizes orientation" — a lie, not an
+  // absence) nor the crystal count copied across (structurally impossible given
+  // the per-ray/no-reuse asymmetry above, and the disclaimer would live in a
+  // source comment no CLI or C API caller ever sees). Report an explicitly
+  // unavailable value that both consumer surfaces can distinguish instead.
+  virtual size_t GetLastBatchStochasticOrientationSampleCount() const { return 0; }
+
   // Per-committed-config tally of GPU-side raypath-color drops (see
   // ColorDegradeCounts above). Base + CPU backend have no such caps and return
   // all-zeros; Metal/CUDA override. Value is recomputed from scratch on each

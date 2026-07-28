@@ -482,6 +482,18 @@ size_t DeterministicCrystalCount(const SceneConfig& config) {
   return n;
 }
 
+size_t DeterministicOrientationCount(const SceneConfig& config) {
+  size_t n = 0;
+  for (const auto& ms : config.ms_) {
+    for (const auto& setting : ms.setting_) {
+      if (setting.crystal_.axis_.IsAxisDeterministic()) {
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
@@ -1002,6 +1014,7 @@ void Simulator::Run() {
     // Single derivation point for the config-constant half of the crystal count
     // (see the member's declaration for why it is not gated on a generation change).
     deterministic_crystal_count_ = DeterministicCrystalCount(config);
+    deterministic_orientation_count_ = DeterministicOrientationCount(config);
 
     // Reset carry when config changes (new generation = new proportions).
     if (generation != prev_generation) {
@@ -1145,6 +1158,13 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // copies made when a shape is reused, and it deliberately excludes
   // deterministic draws — see the assignment at the end of this function.
   size_t stochastic_sample_count = 0;
+  // The orientation counterpart, and NOT the same number: orientations are
+  // resampled per ray with no reuse whatsoever (InitRay_rot loops over every ray
+  // of the buffer even when the geometry above was served from cache), so this
+  // counts rays, not geometry draws, and is legitimately far larger. Declared
+  // beside stochastic_sample_count and therefore OUTSIDE the ms loop below, so
+  // continuation layers' resampling (InitRayOtherMs) accumulates here too.
+  size_t stochastic_orientation_sample_count = 0;
 
   bool first_ms = true;
   for (size_t mi = 0; mi < config.ms_.size() && !stop_; mi++) {
@@ -1187,6 +1207,18 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
           ColorGatePlacementFor(color_gate_table, static_cast<IdType>(mi), s.crystal_.id_);
 
       bool deterministic = IsDeterministic(s.crystal_.param_);
+
+      // Orientation draws for this (layer, ci), added ONCE here rather than in
+      // the cn loop below: whether the axis is stochastic is a ci-level
+      // constant, and the cn loop's curr_ray_num sums to exactly
+      // crystal_ray_num[ci], so the ci-level add is the same number without an
+      // increment on the batch path. It is exact rather than an upper bound
+      // because a `stop_` anywhere below returns before any SimData is
+      // emplaced (see the `if (stop_) return;` after the ms loop) — a partial
+      // count is never published.
+      if (!s.crystal_.axis_.IsAxisDeterministic()) {
+        stochastic_orientation_sample_count += crystal_ray_num[ci];
+      }
 
       // Look up cross-call cache for deterministic crystal params.
       const CrystalParam* param_ptr = &s.crystal_.param_;
@@ -1347,6 +1379,8 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   // this function on its own Simulator).
   sim_data.stochastic_crystal_sample_count_ = stochastic_sample_count;
   sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
+  sim_data.stochastic_orientation_sample_count_ = stochastic_orientation_sample_count;
+  sim_data.deterministic_orientation_count_ = deterministic_orientation_count_;
   data_queue_->Emplace(std::move(sim_data));
 }
 
@@ -1401,6 +1435,8 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   // OVERWRITE semantics, same as color_degrade_counts_ below: a config constant
   // is carried through the window, never summed over its batches.
   sim_data.deterministic_crystal_count_ = xyz_win_.deterministic_crystals;
+  sim_data.stochastic_orientation_sample_count_ = xyz_win_.stochastic_orientation_samples;
+  sim_data.deterministic_orientation_count_ = xyz_win_.deterministic_orientations;
   // task-color-degrade-gui-surfacing: carry the window's GPU color-degrade tally
   // into the drained SimData (config constant, direct copy — not accumulated).
   sim_data.color_degrade_counts_ = xyz_win_.color_degrade_counts_;
@@ -1549,8 +1585,10 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       xyz_win_.pending = true;
       xyz_win_.root_rays += ray_num;
       xyz_win_.stochastic_crystal_samples += backend.GetLastBatchStochasticCrystalSampleCount();
+      xyz_win_.stochastic_orientation_samples += backend.GetLastBatchStochasticOrientationSampleCount();
       // OVERWRITE (not +=) — config constant, identical on every batch.
       xyz_win_.deterministic_crystals = deterministic_crystal_count_;
+      xyz_win_.deterministic_orientations = deterministic_orientation_count_;
       xyz_win_.generation = generation;
       xyz_win_.w = w;
       xyz_win_.h = h;
@@ -1573,6 +1611,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.root_ray_count_ = ray_num;
     sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
     sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
+    sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();
+    sim_data.deterministic_orientation_count_ = deterministic_orientation_count_;
     // task-color-degrade-gui-surfacing: carry the GPU color-degrade tally on the
     // legacy per-batch drain too. Dead for today's backends (Metal + CUDA both take
     // the third-clock window branch above), but keeps this path from silently
@@ -1643,6 +1683,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
                                        // server.cpp::ConsumeData).
   sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
   sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
+  sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();
+  sim_data.deterministic_orientation_count_ = deterministic_orientation_count_;
   sim_data.outgoing_d_ = std::move(exit_d);
   sim_data.outgoing_w_ = std::move(exit_w);
   sim_data.outgoing_wl_ = std::move(exit_wl);

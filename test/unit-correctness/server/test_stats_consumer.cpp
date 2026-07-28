@@ -193,5 +193,106 @@ TEST(StatsConsumer, DeterministicHalfIsOverwrittenSoEveryBatchMustCarryIt) {
          "not re-derive server.cpp's produced-batch predicate here.";
 }
 
+size_t OrientationNum(StatsConsumer& stats) {
+  stats.PrepareSnapshot();
+  auto result = stats.GetResult();
+  EXPECT_TRUE(std::holds_alternative<StatsResult>(result));
+  return std::get<StatsResult>(result).orientation_num_;
+}
+
+// ── Orientation half ────────────────────────────────────────────────────────
+// The orientation count carries the SAME two-rule split as the crystal count
+// (stochastic ACCUMULATE / deterministic OVERWRITE), so it inherits the same
+// defect family. These are separate tests rather than extra assertions inside
+// the crystal ones on purpose: the two counts are independent axes of a crystal
+// setting, and a test that only ever moves them together cannot tell a genuine
+// orientation counter from one that shadows the crystal count.
+
+TEST(StatsConsumer, StochasticOrientationSamplesAccumulateAcrossBatches) {
+  StatsConsumer stats;
+
+  SimData batch1;
+  batch1.stochastic_orientation_sample_count_ = 30;
+  batch1.root_ray_count_ = 100;
+  stats.Consume(batch1);
+
+  SimData batch2;
+  batch2.stochastic_orientation_sample_count_ = 50;
+  batch2.root_ray_count_ = 200;
+  stats.Consume(batch2);
+
+  EXPECT_EQ(OrientationNum(stats), 80u) << "orientation is redrawn per ray with no reuse — draws sum";
+}
+
+TEST(StatsConsumer, DeterministicOrientationCountIsOverwrittenNotSummed) {
+  constexpr size_t kSceneDeterministicAxes = 5;
+  constexpr int kProducers = 4;
+
+  StatsConsumer stats;
+  for (int i = 0; i < kProducers; i++) {
+    SimData batch;
+    batch.root_ray_count_ = 64;
+    batch.deterministic_orientation_count_ = kSceneDeterministicAxes;
+    stats.Consume(batch);
+  }
+
+  EXPECT_EQ(OrientationNum(stats), kSceneDeterministicAxes)
+      << "the deterministic-axis population is a config constant every producer reports "
+         "identically; summing it would make the stat scale with the worker pool";
+}
+
+// The task's whole point at unit scope: shape determinism and axis determinism
+// are independent, so the two reported counts must be able to diverge. The
+// headline scene — one fixed geometry, an orientation redrawn per ray — is
+// exactly where a counter that merely shadows the crystal count looks right in
+// every other test and is wrong here.
+TEST(StatsConsumer, OrientationAndCrystalCountsAreIndependentAxes) {
+  StatsConsumer stats;
+
+  SimData batch;
+  batch.root_ray_count_ = 20000;
+  batch.deterministic_crystal_count_ = 1;  // one fixed shape
+  batch.stochastic_crystal_sample_count_ = 0;
+  batch.deterministic_orientation_count_ = 0;
+  batch.stochastic_orientation_sample_count_ = 20000;  // redrawn per ray
+  stats.Consume(batch);
+
+  stats.PrepareSnapshot();
+  auto result = stats.GetResult();
+  ASSERT_TRUE(std::holds_alternative<StatsResult>(result));
+  const auto& r = std::get<StatsResult>(result);
+  EXPECT_EQ(r.crystal_num_, 1u);
+  EXPECT_EQ(r.orientation_num_, 20000u);
+  EXPECT_NE(r.crystal_num_, r.orientation_num_) << "the two counts must not be wired to the same source";
+}
+
+// Regression pin for a defect this task actually shipped and then fixed:
+// server.cpp::ConsumeData rebuilds SimData field-by-field when chunking the
+// exit-seam path, and the two orientation fields were initially left out — so
+// the backend route reported orientations=0 while the legacy route (which hands
+// the whole SimData over intact) kept working, which is what hid it. Found by
+// the e2e cpu_backend arm; pinned here so it is caught in milliseconds instead.
+TEST(StatsConsumer, ChunkedDispatchCarriesBothOrientationHalves) {
+  constexpr size_t kStochasticOrientations = 4096;
+  constexpr size_t kDeterministicOrientations = 3;
+  constexpr size_t kOriginalRootRays = 512;
+  constexpr int kChunkCount = 5;
+
+  StatsConsumer stats;
+  for (int i = 0; i < kChunkCount; i++) {
+    SimData chunk;
+    if (i == 0) {
+      chunk.stochastic_orientation_sample_count_ = kStochasticOrientations;
+      chunk.root_ray_count_ = kOriginalRootRays;
+    }
+    chunk.deterministic_orientation_count_ = kDeterministicOrientations;  // every chunk, per server.cpp
+    stats.Consume(chunk);
+  }
+
+  EXPECT_EQ(OrientationNum(stats), kStochasticOrientations + kDeterministicOrientations)
+      << "a chunk copy that drops either orientation field reports a plausible-looking "
+         "low number (or 0) on the backend route only — the legacy route keeps working";
+}
+
 }  // namespace
 }  // namespace lumice

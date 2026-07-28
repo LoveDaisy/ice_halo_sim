@@ -1767,6 +1767,16 @@ struct CudaTraceBackend::Impl {
   // incremented in BuildGeomPool per shape drawn by a stochastic ci. Consumed by
   // `GetLastBatchStochasticCrystalSampleCount()`, which documents the contract.
   size_t pool_shape_count_this_batch_ = 0;
+
+  // Stochastic ORIENTATION draws this batch made, in RAYS. Unlike the shape
+  // counter above this one is NOT a function of P_ci: the K-shape pool
+  // diversifies GEOMETRY, while the orientation is redrawn per ray regardless of
+  // which pool slot that ray picked (gen_root_kernel / transit_root_kernel each
+  // call sample_lat_lon_roll per tid; the disable_device_gen_ fallback goes
+  // through InitRayFirstMs, which is per ray too). Incremented at exactly the
+  // three sites that advance gen_ray_count_ / transit_ray_count_ or run the host
+  // fallback — so, unlike the shape counter, the fallback path is NOT a gap here.
+  size_t orientation_count_this_batch_ = 0;
   bool        geom_pool_built_ = false;
   const void* pool_scene_      = nullptr;   // scene the pool was built for (rebuild guard)
   // True iff any (layer, ci) crystal param in `pool_scene_` carries a
@@ -2264,6 +2274,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     layer_ci_base_.clear(); pool_crystals_.clear();
     ci_pool_slot_base_.clear(); ci_pool_shape_count_.clear();  // K-shape pool
     pool_shape_count_this_batch_ = 0;
+    orientation_count_this_batch_ = 0;
     geom_pool_built_ = false;
     pool_scene_ = nullptr;
     // increment 4: filter descriptors + wl pool persist across the keep path;
@@ -3540,6 +3551,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // that legitimately does not run. But do not read the paragraph above as "a
     // regression test will catch you if you remove this" — none will.
     impl_->pool_shape_count_this_batch_ = 0u;
+    impl_->orientation_count_this_batch_ = 0u;
 
     // scrum-306.2 increment 4: a scene change invalidates every per-session-constant
     // cache (geometry pool, filter descriptors, wl pool). Within one scene these are
@@ -4135,6 +4147,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
                                      static_cast<uint32_t>(impl_->lat_attempts_ci_start_ + probe_win_off));
       ck_reset(cudaPeekAtLastError(), "gen_root_kernel launch");
       impl_->gen_ray_count_ += ci_n;
+      if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
+        impl_->orientation_count_this_batch_ += ci_n;
+      }
     } else if (first_ms) {
       // Host-roots fallback (LUMICE_DISABLE_DEVICE_GEN): InitRayFirstMs for ci_n
       // rays through ci_crystal, then H2D the staged root buffers [0, ci_n).
@@ -4179,6 +4194,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
       cudaMemcpyAsync(impl_->d_root_wl_idx_, impl_->pinned_root_wl_idx_, ci_n * sizeof(uint32_t),
                       cudaMemcpyHostToDevice);
       ck_reset(cudaGetLastError(), "H2D batch");
+      // Same per-ray orientation draw as the device-gen branch above, just on
+      // the host: InitRayFirstMs samples a fresh orientation for each of the
+      // ci_n rays. This branch is only taken under LUMICE_DISABLE_DEVICE_GEN,
+      // which is exactly why it is easy to leave out of a count — and why
+      // leaving it out yields a plausible-looking low number rather than an
+      // obvious zero.
+      if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
+        impl_->orientation_count_this_batch_ += ci_n;
+      }
     } else {
       // ── Continuation: transit cont[in_slot] slice [ci_start, ci_start+ci_n) ──
       // into root buf [0, ci_n) using THIS ci's crystal (orientation resample +
@@ -4222,6 +4246,9 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->d_cont_component_[in_slot] + ci_start, impl_->d_root_component_);
       ck_reset(cudaPeekAtLastError(), "transit kernel launch");
       impl_->transit_ray_count_ += ci_n;
+      if (!ms_setting.crystal_.axis_.IsAxisDeterministic()) {
+        impl_->orientation_count_this_batch_ += ci_n;
+      }
       ci_start += ci_n;
     }
 
@@ -4864,6 +4891,14 @@ size_t CudaTraceBackend::GetLastBatchStochasticCrystalSampleCount() const {
   //     that requires per-ci accounting on the fallback path; still deferred as
   //     a diagnostic-only gap (the primary device-gen path is exact).
   return impl_->pool_shape_count_this_batch_;
+}
+
+size_t CudaTraceBackend::GetLastBatchStochasticOrientationSampleCount() const {
+  // Rays whose orientation was drawn this batch. See the member's declaration
+  // for why the K-shape pool does not enter into it, and trace_backend.hpp for
+  // the cross-backend contract (comparable in KIND to the CPU arms, still not
+  // assertable as equal).
+  return impl_->orientation_count_this_batch_;
 }
 
 ColorDegradeCounts CudaTraceBackend::GetLastColorDegradeCounts() const {

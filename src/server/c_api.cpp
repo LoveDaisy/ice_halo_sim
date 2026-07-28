@@ -2728,6 +2728,7 @@ LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResul
       out[0].ray_seg_num = stats_result->ray_seg_num_;
       out[0].sim_ray_num = stats_result->sim_ray_num_;
       out[0].crystal_num = stats_result->crystal_num_;
+      out[0].orientation_num = stats_result->orientation_num_;
       count = 1;
     }
   }
@@ -2751,6 +2752,7 @@ LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult
     out->ray_seg_num = result->ray_seg_num_;
     out->sim_ray_num = result->sim_ray_num_;
     out->crystal_num = result->crystal_num_;
+    out->orientation_num = result->orientation_num_;
   } else {
     std::memset(out, 0, sizeof(LUMICE_StatsResult));
   }

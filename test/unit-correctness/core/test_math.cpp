@@ -354,4 +354,55 @@ TEST(IsAzRotationallySymmetric, GaussianAz_ReturnsFalse) {
   EXPECT_FALSE(d.IsAzRotationallySymmetric());
 }
 
+// --- AxisDistribution::IsAxisDeterministic: the orientation-side predicate ---
+// Truth table. The default-constructed axis is all-kNoRandom, so each negative
+// case flips exactly ONE of the three distributions — that is what makes each
+// EXPECT_FALSE attributable to the field it names rather than to the pair.
+
+TEST(IsAxisDeterministic, DefaultCtorAllNoRandom_ReturnsTrue) {
+  AxisDistribution d{};
+  ASSERT_EQ(d.azimuth_dist.type, DistributionType::kNoRandom);
+  ASSERT_EQ(d.latitude_dist.type, DistributionType::kNoRandom);
+  ASSERT_EQ(d.roll_dist.type, DistributionType::kNoRandom);
+  EXPECT_TRUE(d.IsAxisDeterministic());
+}
+
+TEST(IsAxisDeterministic, RandomAzimuthOnly_ReturnsFalse) {
+  AxisDistribution d{};
+  d.azimuth_dist.type = DistributionType::kUniform;
+  d.azimuth_dist.spread = 360.0f;
+  EXPECT_FALSE(d.IsAxisDeterministic());
+}
+
+TEST(IsAxisDeterministic, RandomLatitudeOnly_ReturnsFalse) {
+  AxisDistribution d{};
+  d.latitude_dist.type = DistributionType::kGaussian;
+  d.latitude_dist.spread = 5.0f;
+  EXPECT_FALSE(d.IsAxisDeterministic());
+}
+
+TEST(IsAxisDeterministic, RandomRollOnly_ReturnsFalse) {
+  // Roll is the field a shape-side predicate would never look at, and the one
+  // an "azimuth+latitude only" reading of "orientation" would drop. It still
+  // consumes the RNG and still produces a different rotation per ray.
+  AxisDistribution d{};
+  d.roll_dist.type = DistributionType::kUniform;
+  d.roll_dist.spread = 360.0f;
+  EXPECT_FALSE(d.IsAxisDeterministic());
+}
+
+TEST(IsAxisDeterministic, FullSphereUniform_ReturnsFalse) {
+  // Documents the mutual exclusion the predicate relies on instead of guarding
+  // for: a full-sphere axis is kUniform on azimuth AND latitude, so it can
+  // never read as deterministic. The RUNTIME half of this claim — that
+  // InitRay_rot's full_sphere branch really is driven by the same predicate —
+  // is pinned behaviorally by AxisDeterminismMatchesRuntimeOrientation in
+  // test_simulator.cpp; this one only fixes the static relationship.
+  AxisDistribution d{};
+  d.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  d.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  ASSERT_TRUE(d.IsFullSphereUniform());
+  EXPECT_FALSE(d.IsAxisDeterministic());
+}
+
 }  // namespace
