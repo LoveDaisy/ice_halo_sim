@@ -101,7 +101,9 @@ def _spawn_run(config_name: str, batch: int):
     #       a near-constant ≈ exits/128 and erase the ratio signal.
     env["LUMICE_DISPATCH_RAY_NUM"] = str(batch)
     env["LUMICE_COMMIT_RAY_NUM"] = str(batch)
-    env.setdefault("LUMICE_LIB", str(root / "build" / "Release" / "lib" / "liblumice.dylib"))
+    env.setdefault(
+        "LUMICE_LIB", str(root / "build" / "Release" / "shared" / "lib" / "liblumice.dylib")
+    )
     env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
     # Invoke this file by absolute path (not `-m module`): after the 270.4 reorg
     # the test lives under test/parity-cross-backend/backend/, whose hyphenated
@@ -215,7 +217,9 @@ def test_metal_exit_conservation_heavy():
     # quirk), so it SIGABRTs on @rpath load unless DYLD_LIBRARY_PATH points at the
     # dylib. Slow capi tests sidestep this via LUMICE_LIB; this CLI-driven test
     # must set DYLD explicitly to stay robust across static/shared builds.
-    env.setdefault("DYLD_LIBRARY_PATH", str(get_project_root() / "build" / "Release" / "lib"))
+    env.setdefault(
+        "DYLD_LIBRARY_PATH", str(get_project_root() / "build" / "Release" / "shared" / "lib")
+    )
     try:
         with tempfile.TemporaryDirectory() as outdir:
             proc = subprocess.run(
