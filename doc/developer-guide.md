@@ -558,12 +558,13 @@ End-to-end tests verify the complete CLI simulation pipeline, from configuration
 #### Test Structure
 
 ```
-test/e2e-correctness/
+test/e2e-correctness/           # tests (independent top-level directory)
 ├── test_smoke.py             # Smoke tests with PSNR image verification
 ├── test_cli.py                # CLI behavior
 ├── ...                         # other correctness tests — see doc/testing-architecture.md §1.4
-├── references/                 # Reference output images (*.jpg)
-test/e2e/
+└── references/                 # Reference output images (*.jpg)
+
+test/e2e/                       # shared fixtures (independent top-level directory)
 ├── configs/                     # Scenario JSON configs shared across layers
 └── runner.py, base.py, ...      # Shared fixtures — see test/e2e/README.md
 ```
@@ -580,7 +581,9 @@ pytest -v -m ''     # full set
 
 E2E smoke tests compare output images against reference images using PSNR (Peak Signal-to-Noise Ratio):
 - Reference images are stored in `test/e2e-correctness/references/*.jpg`
-- PSNR threshold: tests pass if PSNR exceeds a defined minimum (typically 40 dB)
+- PSNR threshold: calibrated per output as `min_psnr - 3 dB` from 3 reference runs, floored to
+  0.5 dB precision — see the `PSNR_THRESHOLDS` dict and its per-entry comments in
+  `test/e2e-correctness/test_smoke.py` for the current values and their calibration history
 - To update reference images: run the simulation with the test config and replace the reference file
 
 #### Adding New E2E Tests

@@ -169,11 +169,14 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
     | Before opening a PR — reproduce the CI e2e-slow shape locally | `./scripts/test.sh pr` |
     | Confirm one specific gate/test actually fails on a deliberately-broken state (not a general sweep) | run that one check directly against the broken state, then again after the fix: `ctest -R <label>`, `pytest <file>::<test> -m ''`, or `gui_test --filter <name>` |
 
-  - **Judgment discipline**: a command's exit code is the only thing that says pass/fail.
-    Running it through a pipe (`cmd | tail`, `cmd > log 2>&1`) hands back the pipeline's last
-    stage's status instead of the command's own, which is how a finished run still needs a second
-    call just to learn the outcome. Read `$?` straight off the foregrounded command, or use
-    `./scripts/test.sh`, which already does this for every layer.
+  - **Judgment discipline**: a command's exit code is the only thing that says pass/fail, and two
+    common habits obscure it in different ways. A pipe (`cmd | tail`) leaves `$?` reporting
+    `tail`'s exit code, not `cmd`'s, unless the shell has `set -o pipefail` — so a failing command
+    piped through one still reads as success. A redirect (`cmd > log 2>&1`) does not touch `$?` at
+    all, but it does move the PASS/FAIL text out of sight, so a finished run still needs a second
+    call (`grep`/`cat` on the log) just to learn the outcome it already produced. Read `$?`
+    straight off the foregrounded command, or use `./scripts/test.sh`, which already does this for
+    every layer.
 - GUI screenshot references live under `test/gui/references/`.
 - GUI tests (the C++ `gui_test` binary and the `test/gui/` e2e layer that drives it) are isolated
   from personal defaults by default: `gui_test`'s own `--user-config`/

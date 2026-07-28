@@ -558,12 +558,13 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 #### 测试结构
 
 ```
-test/e2e-correctness/
+test/e2e-correctness/            # 测试本体（独立顶层目录）
 ├── test_smoke.py             # 冒烟测试（PSNR 图像验证）
 ├── test_cli.py                # CLI 行为
 ├── ...                          # 其它正确性测试 — 见 doc/testing-architecture.md §1.4
-├── references/                  # 参考输出图片（*.jpg）
-test/e2e/
+└── references/                  # 参考输出图片（*.jpg）
+
+test/e2e/                         # 共用 fixture（独立顶层目录）
 ├── configs/                      # 各层共用的场景 JSON 配置
 └── runner.py, base.py, ...       # 共用 fixture — 见 test/e2e/README.md
 ```
@@ -580,7 +581,8 @@ pytest -v -m ''      # 全量
 
 E2E 冒烟测试使用 PSNR（峰值信噪比）将输出图像与参考图像进行比较：
 - 参考图片存放在 `test/e2e-correctness/references/*.jpg`
-- PSNR 阈值：通常为 40 dB，超过即通过
+- PSNR 阈值：按 `min_psnr - 3 dB`（3 次参考运行取最小值，向 0.5 dB 精度取整）逐个输出标定 —
+  现行数值与标定历史见 `test/e2e-correctness/test_smoke.py` 的 `PSNR_THRESHOLDS` 字典及其逐条注释
 - 更新参考图片：使用测试配置运行 CLI 模拟，替换参考文件
 
 #### 添加新的 E2E 测试
