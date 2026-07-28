@@ -921,6 +921,52 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
+    // Esc is the OTHER way out of a BeginPopupModal, and the one no button owns. AC1 is a claim
+    // about closing the panel, not about one particular control, so the exit path that has no code
+    // of its own is the one worth pinning: it must not write either.
+    //
+    // What this does NOT claim is that Esc is a well-behaved Close. The panel re-opens on the next
+    // frame (state.defaults_panel_open is still set, so RenderDefaultsPanel calls OpenPopup again)
+    // and the working copy survives with it — pre-existing behavior, unchanged by the copy model,
+    // and the entry/exit controls are 408.5's subject. The assertion below is deliberately about
+    // the file, which is what this task is responsible for.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_escape_exit_writes_nothing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_escape");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      json doc;
+      doc["bg_alpha"] = 0.42f;
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+      gui::g_state = gui::MakeNewDocumentState();
+      const auto before = ReadOverlayBytes(dir);
+      IM_CHECK(before.has_value());
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      ctx->ItemClick("**/###defaults_reset_all");
+      ctx->Yield(2);
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(4);
+
+      IM_CHECK_EQ(ReadOverlayBytes(dir), before);
+      // The measured state after Esc, asserted so this case cannot pass vacuously (a file is
+      // trivially unwritten if Esc did nothing at all) and so the pre-existing behavior is on
+      // record for 408.5, which owns the exit controls: the flag is still set and the panel is
+      // back on screen, i.e. Esc does not currently close this panel.
+      IM_CHECK(gui::g_state.defaults_panel_open);
+      IM_CHECK(ctx->ItemExists("**/###defaults_save"));
+
+      // Leave the panel closed for whatever runs next in this single-process suite, whichever
+      // state Esc left it in.
+      CloseDefaultsPanel(ctx);
+      gui::g_state.defaults_panel_open = false;
+      ctx->Yield(2);
+    };
+  }
+
+  {
     // The entry point contract for §1, matching the one already asserted for §2: "Edit My
     // Presets..." must open the panel with the preset section expanded, not merely open it.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "presets_entry_point_opens_that_section");
