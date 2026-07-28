@@ -223,7 +223,7 @@ json ReadActiveOverlayDoc() {
   return ReadOverlayJsonIfPresent(*dir);
 }
 
-bool WriteOverlayDocument(const json& doc) {
+bool WriteActiveOverlayDoc(const json& doc) {
   const auto dir = GetActiveUserConfigDir();
   if (!dir) {
     GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was saved");

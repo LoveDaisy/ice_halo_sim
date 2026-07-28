@@ -157,7 +157,7 @@ bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted)
   if (!ApplyAcceptedDefaultsToDoc(next, accepted, state)) {
     return false;
   }
-  if (!WriteOverlayDocument(next)) {
+  if (!WriteActiveOverlayDoc(next)) {
     return false;
   }
 
@@ -583,7 +583,18 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   // no teardown of its own, because nothing survives this assignment. "Close = discard" is
   // therefore a property of the state's lifetime rather than a cleanup step someone can forget on
   // one of the ways out (the button today, an X or Esc later).
+  // Belt-and-suspenders, not a fix for a live bug: ReadActiveOverlayDoc()'s current implementation
+  // (ReadOverlayJsonIfPresent) already turns a hand-edited/interrupted-write file whose top level
+  // is not an object into json::object() itself, so g_snapshot_doc is never actually non-object
+  // today. But the copy model's every mutator (ApplyAcceptedKeys/ApplyRevertToDoc/
+  // ApplyResetAllToDoc/§1 preset writes) assumes an object root, and that assumption should not
+  // depend on an implementation detail two calls away that nothing here names. Establishing the
+  // guarantee explicitly at the copy's single origin makes it true by construction of THIS
+  // function, not by a property of whichever read function it happens to call today.
   g_snapshot_doc = ReadActiveOverlayDoc();
+  if (!g_snapshot_doc.is_object()) {
+    g_snapshot_doc = nlohmann::json::object();
+  }
   g_copy_doc = g_snapshot_doc;
   g_excluded_keys.clear();
   g_search_filter.Clear();

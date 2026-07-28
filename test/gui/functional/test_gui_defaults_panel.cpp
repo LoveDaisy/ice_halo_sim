@@ -988,4 +988,31 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       CloseDefaultsPanel(ctx);
     };
   }
+
+  {
+    // Guards OpenDefaultsPanel's explicit is_object() normalization of g_snapshot_doc/g_copy_doc.
+    // ReadOverlayJsonIfPresent (what ReadActiveOverlayDoc calls) already turns a hand-edited or
+    // interrupted-write file whose top level is not an object into json::object() itself, so this
+    // scenario cannot currently reach a non-object copy through any path this repo ships — but the
+    // panel's normalization should not depend on that being true two calls away forever, so this
+    // pins the panel's OWN guarantee rather than the upstream implementation detail it happens to
+    // ride on today. §2 is checked by default, so this is the ordinary Save path with no
+    // interaction beyond Open/Save.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "copy_open_normalizes_a_non_object_override_file");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_copy_non_object");
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+      ResetTestState();
+      ResetUserDefaultsChannels();
+
+      IM_CHECK(gui::WriteUserDefaultsFile(dir, json::array()));
+
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kPendingChanges);
+      SaveDefaultsPanel(ctx);
+      CloseDefaultsPanel(ctx);
+
+      const json saved = ReadOverlayFile(dir);
+      IM_CHECK(saved.is_object());
+    };
+  }
 }

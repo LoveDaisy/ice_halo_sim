@@ -83,7 +83,7 @@ nlohmann::json ReadActiveOverlayDoc();
 // half of UpdateOverlayDocument's directory resolution without the read/mutate half. A second
 // inline GetActiveUserConfigDir() + WriteUserDefaultsFile() at the call site would be the same
 // drift risk ReadActiveOverlayDoc's comment already flags for the read side.
-bool WriteOverlayDocument(const nlohmann::json& doc);
+bool WriteActiveOverlayDoc(const nlohmann::json& doc);
 
 // The whole row set for `current`, against the currently effective defaults (factory + whatever is
 // saved in the active user-config directory). Sorted by key_path for a stable panel order.
