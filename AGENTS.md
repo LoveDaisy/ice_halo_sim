@@ -28,7 +28,7 @@ Core conventions:
 # Tests — scripts/test.sh is the recommended entry point; see the test-scope
 # table under "Testing and Platform Notes" for which one fits a given situation.
 LUMICE_SKIP_GUI_TESTS=1 ./scripts/build.sh -gtj release   # headless: build gui_test, skip running it
-./scripts/test.sh quick                   # after -tgj above: ctest + fast e2e + gui_test correctness pool
+./scripts/test.sh quick                   # after -gtj above: ctest + fast e2e + gui_test correctness pool
 ./scripts/test.sh full                    # quick + gui_test real-timing pool
 ./scripts/test.sh pr                      # full + shared-lib freshness + slow e2e (before opening a PR)
 pytest -v                                 # fast e2e only, direct — pinned by pyproject.toml addopts (matches CI)

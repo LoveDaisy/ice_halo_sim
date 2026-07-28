@@ -39,8 +39,12 @@ authoritative regardless of whether the hook is installed.
 ```bash
 ./scripts/build.sh -tj release            # Unit tests (GoogleTest via CTest)
 ./scripts/build.sh -gtj release           # GUI tests (requires display server)
-pytest -v                                 # E2E tests, fast subset (requires Pillow)
+pytest -v                                 # E2E tests, fast subset — pinned by pyproject.toml
+                                           # addopts, matches CI (requires Pillow)
 ```
+
+See `AGENTS.md`'s "Testing and Platform Notes" for the full test-scope picture
+(`scripts/test.sh`, the slow/full pytest marker, and which one to run when).
 
 ## Branch Naming
 
