@@ -17,6 +17,9 @@ add_executable(gui_test
     functional/test_gui_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
     functional/test_gui_state_reconcile.cpp
+    functional/test_gui_user_defaults.cpp
+    functional/test_gui_defaults_diff.cpp
+    functional/test_gui_defaults_panel.cpp
     functional/test_project_world_dir.cpp
     functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp
@@ -27,6 +30,7 @@ add_executable(gui_test
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
     visual/test_gui_modal_layout.cpp
+    visual/test_gui_defaults_panel.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp

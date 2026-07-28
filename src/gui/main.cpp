@@ -17,6 +17,7 @@
 
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
+#include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
 #include "gui/font_init.hpp"
@@ -25,10 +26,12 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "util/path_utils.hpp"
 
 namespace gui = lumice::gui;
 
@@ -85,6 +88,35 @@ int main(int argc, char** argv) {
     // spdlog::err = our warning level (see spdlog_levels.hpp)
     gui::GetGuiLogger().flush_on(spdlog::level::err);
     spdlog::flush_every(std::chrono::seconds(1));
+  }
+
+  // Parse --user-config / --no-user-config before the first MakeNewDocumentState() call further
+  // down — that call is the only place personal defaults enter a session. Passing neither flag
+  // keeps today's behavior (auto-detect the OS per-user config directory).
+  //
+  // The resulting state is logged unconditionally: "which defaults did this machine actually
+  // read" is the first question when a document opens with settings the user did not expect,
+  // and it is not answerable from the UI.
+  {
+    const auto parsed = gui::ParseUserConfigArg(argc, argv);
+    if (parsed.missing_value) {
+      GUI_LOG_WARNING("[GUI] User config: '--user-config' was given without a directory after it; ignoring that flag");
+    }
+    const gui::UserConfigSource source =
+        gui::ResolveUserConfigSource(parsed.presence, gui::kInteractiveAppUserConfigDefault);
+    gui::SetUserConfigSourceForProcess(source, parsed.explicit_dir);
+    switch (source) {
+      case gui::UserConfigSource::kDisabled:
+        GUI_LOG_INFO("[GUI] User config: disabled (--no-user-config); new documents use factory defaults only");
+        break;
+      case gui::UserConfigSource::kExplicitDir:
+        GUI_LOG_INFO("[GUI] User config: explicit directory '{}' (--user-config)",
+                     lumice::PathToU8(parsed.explicit_dir));
+        break;
+      case gui::UserConfigSource::kAutoDetect:
+        GUI_LOG_INFO("[GUI] User config: auto-detect (OS per-user config directory)");
+        break;
+    }
   }
 
   // Parse --skip-calibration flag early.
@@ -164,7 +196,9 @@ int main(int argc, char** argv) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  gui::g_state = gui::InitDefaultState();
+  // Personal defaults apply to a NEW document only (invariant I1) — startup shows one.
+  gui::g_state = gui::MakeNewDocumentState();
+  gui::SurfaceUserDefaultsDowngrades();
 
   // skip_calibration already parsed above (before glfwSwapInterval).
 
@@ -177,9 +211,13 @@ int main(int argc, char** argv) {
   // g_file_log_sink / g_log_file_path, and that runs in the frame loop below, so
   // publishing them this late is not observable.
   {
+    // The log file lives beside the other per-user Lumice artifacts (see GetUserConfigDir),
+    // not at $HOME — a read-only or multi-user install must not scatter files in the home
+    // directory root. Falls back to a CWD-relative path when no config directory is available,
+    // preserving the previous "degrade, never fail to start" behavior.
     std::filesystem::path log_path;
-    if (const char* home = std::getenv("HOME")) {
-      log_path = std::filesystem::path(home) / "lumice.log";
+    if (auto config_dir = gui::GetUserConfigDir()) {
+      log_path = *config_dir / "lumice.log";
     } else {
       log_path = "lumice.log";
     }
@@ -387,6 +425,7 @@ int main(int argc, char** argv) {
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     gui::RenderSaveModifiedPopup(window);
+    gui::RenderDefaultsPanel(gui::g_state);
     gui::RenderImportWarningPopup();
     gui::RenderGuiWarningPopup();
 

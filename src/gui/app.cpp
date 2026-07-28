@@ -21,6 +21,7 @@
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
+#include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "util/path_utils.hpp"
 
@@ -533,6 +534,27 @@ static bool LoadAndUploadBgImage(const std::filesystem::path& path) {
   return true;
 }
 
+// Shared background-restore + degrade step. See app.hpp for the contract; the three call
+// sites (`.lmc` open / `.json` import / New) all run it right after ResetFrontendState, which
+// has already cleared the background.
+void LoadBackgroundWithDegrade(GuiState& state) {
+  if (state.bg_path.empty()) {
+    return;
+  }
+  if (LoadAndUploadBgImage(state.bg_path)) {
+    // bg_show and bg_alpha already restored from deserialization / personal defaults.
+    return;
+  }
+  // Degradation: bg image not found — clear show, reset kMatchBg->kFree. Warn rather than
+  // fail: a personal default pointing at a since-deleted image must not block startup.
+  GUI_LOG_WARNING("[GUI] Background image '{}' could not be loaded; showing the preview without it",
+                  PathToU8(state.bg_path));
+  state.bg_show = false;
+  if (state.aspect_preset == AspectPreset::kMatchBg) {
+    state.aspect_preset = AspectPreset::kFree;
+  }
+}
+
 void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked) {
   // reason/payload consistency: baked payload is present iff and only if kOpenBaked.
   // A caller mismatch is a programming error — assert here so it fails fast in debug builds
@@ -610,7 +632,13 @@ void DoOpen(const std::filesystem::path& path) {
       return;
     }
     std::string json_str((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    GuiState new_state = InitDefaultState();
+    GuiState new_state = MakeNewDocumentState();
+    // Discarded, not reported. DeserializeFromJson opens with `state = GuiState{}`, so this
+    // path keeps NOTHING of the personal defaults — warning about a degraded default the user is
+    // not being given would be a warning about nothing. Draining the channel anyway matters:
+    // left in place, this read's counts would surface on the next New and describe THAT load.
+    TakeUserDefaultsDowngradeCount();
+    TakeUserDefaultsDowngradeNotices();
     if (DeserializeFromJson(json_str, new_state)) {
       // Data restore + command-semantic fields (path/dirty/run_intent stay in handler per
       // plan §2 — they are command intent, not frontend reset).
@@ -621,6 +649,7 @@ void DoOpen(const std::filesystem::path& path) {
       g_state.run_intent = RunIntent::kNone;
       // Frontend reset delegated to the single owner.
       ResetFrontendState(g_state, FrontendResetReason::kOpenJson);
+      LoadBackgroundWithDegrade(g_state);
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
     }
     return;
@@ -651,17 +680,7 @@ void DoOpen(const std::filesystem::path& path) {
     // Background image restore from saved path — DATA recovery (not a frontend reset). Uses
     // the deserialized alpha, not a hard-coded value. Runs after ResetFrontendState which
     // already ClearBackground()'d, so a missing bg_path leaves the preview blank (as before).
-    if (!g_state.bg_path.empty()) {
-      if (LoadAndUploadBgImage(g_state.bg_path)) {
-        // bg_show and bg_alpha already restored from deserialization
-      } else {
-        // Degradation: bg image not found — clear show, reset kMatchBg→kFree
-        g_state.bg_show = false;
-        if (g_state.aspect_preset == AspectPreset::kMatchBg) {
-          g_state.aspect_preset = AspectPreset::kFree;
-        }
-      }
-    }
+    LoadBackgroundWithDegrade(g_state);
 
     // Notify: the GUI edits uniform shape distributions only. If the file carried non-uniform
     // families (gauss/laplacian/...) they were loaded as uniform (see ParseShapeDist). This is a
@@ -675,11 +694,33 @@ void DoOpen(const std::filesystem::path& path) {
   }
 }
 
+void SurfaceUserDefaultsDowngrades() {
+  const int count = TakeUserDefaultsDowngradeCount();
+  const std::vector<std::string> notices = TakeUserDefaultsDowngradeNotices();
+  if (count == 0 && notices.empty()) {
+    return;  // the normal case — no "your defaults loaded fine" noise on every New
+  }
+
+  // The notices carry the detail (which key, which values); the count is what catches a
+  // degradation that produced no sentence — an unreadable or malformed file, where naming a key
+  // is impossible but staying silent would leave the user's saved defaults quietly not applying.
+  std::string msg = "Some of your personal defaults could not be used as saved:";
+  for (const auto& notice : notices) {
+    msg += "\n  - " + notice;
+  }
+  if (notices.empty()) {
+    msg += "\n  - your personal defaults file could not be read; this document uses the built-in values.";
+  }
+  SetImportComplexFilterWarning(msg);
+}
+
 void DoNew() {
   // Data reset (default state), then delegate every frontend reset (preview clear + poller
   // fence + mesh-hash zero + trackball) to the single owner.
-  g_state = InitDefaultState();
+  g_state = MakeNewDocumentState();
+  SurfaceUserDefaultsDowngrades();
   ResetFrontendState(g_state, FrontendResetReason::kNewDocument);
+  LoadBackgroundWithDegrade(g_state);
   GUI_LOG_INFO("[GUI] DoNew");
 }
 

@@ -40,6 +40,8 @@ For users of this project:
   - Detailed configuration options and defaults
   - Validation rules
   - Common configuration errors and solutions
+  - GUI personal defaults: the separate `user_defaults.json` file, its location per platform, and
+    the `--user-config`/`--no-user-config` switches
 
 - **[Filter Architecture](filter-architecture.md)**: Core design constraints for the filter subsystem
   - Filter ↔ crystal single-key binding model

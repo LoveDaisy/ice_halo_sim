@@ -19,6 +19,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
+#include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
@@ -28,6 +29,7 @@
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
+#include "gui/user_defaults.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -113,8 +115,9 @@ void ResetTestState() {
   // Deterministic per-test reset restores the same-invariant as g_state.
   gui::ResetColorClassSignalCacheForTest();
 
-  // Modal state (edit_modals.cpp file-scope statics)
+  // Modal state (edit_modals.cpp / defaults_panel.cpp file-scope statics)
   gui::ResetModalState();
+  gui::ResetDefaultsPanelTestState();
 
   // Test state
   g_capture.Reset();
@@ -197,6 +200,38 @@ int main(int argc, char** argv) {
   }
   g_core_log_level = core_log_level;
   g_gui_log_level = gui_log_level;
+
+  // Personal defaults: this binary's no-flag default is DISABLED (kTestHarnessUserConfigDefault),
+  // unlike LumiceGUI's auto-detect. Every scenario reaches MakeNewDocumentState() through
+  // ResetTestState() -> gui::DoNew(), so without this a reference-image comparison would depend on
+  // whichever user_defaults.json the developer running it happens to have saved — green here, red
+  // on the next machine, and only ever as a slightly-low PSNR. --user-config stays available for a
+  // test that deliberately wants a controlled override directory.
+  {
+    const auto parsed = gui::ParseUserConfigArg(argc, argv);
+    if (parsed.missing_value) {
+      fprintf(stderr, "[DIAG] User config: '--user-config' given without a directory after it; ignoring that flag\n");
+    }
+    const gui::UserConfigSource source =
+        gui::ResolveUserConfigSource(parsed.presence, gui::kTestHarnessUserConfigDefault);
+    gui::SetUserConfigSourceForProcess(source, parsed.explicit_dir);
+    // Report what was actually installed, never what the default is assumed to be. A red-state
+    // probe that flipped kTestHarnessUserConfigDefault to kAutoDetect caught an earlier version of
+    // this line still printing "disabled": the isolation was genuinely broken and the one
+    // diagnostic a reader would consult was asserting the opposite.
+    switch (source) {
+      case gui::UserConfigSource::kExplicitDir:
+        fprintf(stderr, "[DIAG] User config: explicit directory '%s' (--user-config)\n",
+                parsed.explicit_dir.string().c_str());
+        break;
+      case gui::UserConfigSource::kDisabled:
+        fprintf(stderr, "[DIAG] User config: disabled (isolated from this machine's saved defaults)\n");
+        break;
+      case gui::UserConfigSource::kAutoDetect:
+        fprintf(stderr, "[DIAG] User config: AUTO-DETECT — reference comparisons are NOT isolated\n");
+        break;
+    }
+  }
 
 #ifdef _WIN32
   // Match real app's timer resolution (main.cpp:40).
@@ -370,6 +405,10 @@ int main(int argc, char** argv) {
   RegisterStateReconcileTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
+  RegisterUserDefaultsTests(engine);
+  RegisterDefaultsDiffTests(engine);
+  RegisterDefaultsPanelTests(engine);
+  RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
@@ -466,6 +505,10 @@ int main(int argc, char** argv) {
     // any UI-driven gui_test — the existing p2_modal AC4 tests could only
     // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
     gui::RenderSaveModifiedPopup(window);
+    // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
+    // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
+    // already paid for twice.
+    gui::RenderDefaultsPanel(gui::g_state);
 
     // Field-tier effect reconcile at frame TAIL — mirrors src/gui/main.cpp M6 placement so widget
     // edits driven by ImGuiTestEngine land in state.dirty within the same frame (rather than one

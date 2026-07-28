@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 #include "gui/gui_state.hpp"
@@ -27,6 +28,148 @@ inline const char* AxisPresetLabel(AxisPreset p) {
       return "Custom";
   }
   return "Custom";
+}
+
+// Zenith-std bounds of the classifier's tolerance domain. Shared by ClassifyAxisPreset below
+// and by the user-defaults preset-override clamp (src/gui/user_defaults.cpp), so the "what
+// counts as this preset" threshold and the "what may a user store" threshold cannot drift
+// apart as two independent literals:
+//   Column / Plate / Parry require zenith.std < kColumnPlateParryZenithStdUpperBound
+//   Lowitz                 requires zenith.std > kLowitzZenithStdLowerBound
+// These are ZENITH bounds only. IsRollLocked's own `std < 10` below is a separate predicate
+// about the ROLL axis that merely shares the number; folding them together would couple two
+// unrelated thresholds.
+inline constexpr float kColumnPlateParryZenithStdUpperBound = 10.0f;
+inline constexpr float kLowitzZenithStdLowerBound = 15.0f;
+
+// AxisDistType names, in enum order, as an ImGui zero-separated combo item string. Shared by the
+// live editor (RenderAxisDist, panels.cpp) and the preset library's read-only type cells so the
+// two cannot come to spell a distribution differently. The static_assert is the reason this is a
+// named constant and not a literal at each call site: a sixth AxisDistType has to break the build
+// somewhere, and "somewhere" should be next to the string that would otherwise silently omit it.
+inline constexpr const char* kAxisDistTypeComboItems = "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0";
+static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update kAxisDistTypeComboItems when adding AxisDistType");
+
+// --------------------------------------------------------------------------------------------------
+// The built-in preset table.
+//
+// Lives in the header (rather than in edit_modals.cpp, where it started) because three consumers
+// now read it: the axis modal's preset buttons, the preset-library panel (defaults_panel.cpp) and
+// the override store (user_defaults.cpp). It is a table of `constexpr` constants with no lifetime
+// of its own, so the exposure costs nothing; an accessor function would have to name
+// AxisPresetEntry in its signature anyway, exposing the same type through one more indirection.
+// GUI-internal: nothing here belongs in the C API.
+// --------------------------------------------------------------------------------------------------
+
+struct AxisPresetEntry {
+  const char* label;
+  AxisPreset id;
+  AxisDist zenith;
+  AxisDist azimuth;
+  AxisDist roll;
+  // Whether a user may retune this preset's zenith std and have it persist. THE single source for
+  // that question — the write guard (user_defaults.cpp), the "Save as <preset>" gesture and the
+  // panel's editable-cell test all read this field rather than each restating the same four names.
+  //
+  // False for Random (defined as three uniform-360 axes: there is no narrow-distribution field to
+  // widen, so an input box for it would be one that does nothing) and for Custom (not a built-in
+  // identity at all — it is the classifier's "none of the above").
+  bool has_adjustable_zenith_std;
+  // Key this preset occupies in the override file under presets.axis.<name>. Lowercase, matching
+  // the other enum name tables (kLensTypeJsonNames et al.). nullptr for the presets that store
+  // nothing — kept in lockstep with has_adjustable_zenith_std by the static_assert below, so the
+  // two cannot drift into disagreeing about which presets are storable.
+  const char* override_json_name;
+};
+
+inline constexpr AxisDist kAzFullUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
+inline constexpr AxisDist kRollFreeUniform{ AxisDistType::kUniform, 0.0f, 360.0f };
+inline constexpr AxisDist kRollLockedGauss{ AxisDistType::kGauss, 0.0f, 1.0f };
+
+inline constexpr AxisPresetEntry kAxisPresets[] = {
+  { "Column",
+    AxisPreset::kColumn,
+    { AxisDistType::kGauss, 90.0f, 1.0f },
+    kAzFullUniform,
+    kRollFreeUniform,
+    true,
+    "column" },
+  { "Plate",
+    AxisPreset::kPlate,
+    { AxisDistType::kGauss, 0.0f, 1.0f },
+    kAzFullUniform,
+    kRollFreeUniform,
+    true,
+    "plate" },
+  { "Parry",
+    AxisPreset::kParry,
+    { AxisDistType::kGauss, 90.0f, 1.0f },
+    kAzFullUniform,
+    kRollLockedGauss,
+    true,
+    "parry" },
+  // Lowitz default zenith uses Gauss (v11 内测反馈：gauss 更符合物理直觉; classifier 仍接受 zigzag).
+  { "Lowitz",
+    AxisPreset::kLowitz,
+    { AxisDistType::kGauss, 0.0f, 40.0f },
+    kAzFullUniform,
+    kRollLockedGauss,
+    true,
+    "lowitz" },
+  { "Random", AxisPreset::kRandom, kAzFullUniform, kAzFullUniform, kRollFreeUniform, false, nullptr },
+  { "Custom",
+    AxisPreset::kCustom,
+    { AxisDistType::kGauss, 90.0f, 20.0f },
+    kAzFullUniform,
+    { AxisDistType::kGauss, 0.0f, 20.0f },
+    false,
+    nullptr },
+};
+
+namespace axis_preset_detail {
+
+// has_adjustable_zenith_std and override_json_name answer two different questions ("may the user
+// retune it" vs "what is it called on disk"), but their populations are the same set by
+// construction: a preset with nothing to adjust has nothing to store. Binding them at compile time
+// means a future preset added with only one of the two filled in is a build error rather than a
+// preset that is editable in the UI and silently discarded on save (or vice versa).
+constexpr bool AxisPresetTableIsConsistent() {
+  for (const auto& entry : kAxisPresets) {
+    if (entry.has_adjustable_zenith_std != (entry.override_json_name != nullptr)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The override store and the panel both reach an entry by casting an AxisPreset to an index, so
+// position and identity have to agree. Checked here rather than left to the reader: a reordered
+// enum or a table row inserted in the middle would otherwise retarget every lookup silently.
+constexpr bool AxisPresetTableIsInEnumOrder() {
+  for (std::size_t i = 0; i < sizeof(kAxisPresets) / sizeof(kAxisPresets[0]); ++i) {
+    if (static_cast<std::size_t>(kAxisPresets[i].id) != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace axis_preset_detail
+
+static_assert(axis_preset_detail::AxisPresetTableIsConsistent(),
+              "kAxisPresets: has_adjustable_zenith_std must be true exactly for the entries that carry an "
+              "override_json_name — the UI's editable set and the override file's key set are one population");
+
+static_assert(sizeof(kAxisPresets) / sizeof(kAxisPresets[0]) == static_cast<std::size_t>(AxisPreset::kCustom) + 1,
+              "kAxisPresets must carry one entry per AxisPreset enumerator");
+
+static_assert(axis_preset_detail::AxisPresetTableIsInEnumOrder(),
+              "kAxisPresets must be ordered so that kAxisPresets[static_cast<size_t>(p)].id == p");
+
+// Entry for a preset, by identity rather than by a hand-written index. Total over the enum (the
+// static_asserts above guarantee the cast lands on the matching row).
+inline constexpr const AxisPresetEntry& AxisPresetEntryFor(AxisPreset preset) {
+  return kAxisPresets[static_cast<std::size_t>(preset)];
 }
 
 namespace axis_preset_detail {
@@ -85,27 +228,31 @@ inline AxisPreset ClassifyAxisPreset(const AxisDist& zenith, const AxisDist& azi
 
   // Lowitz: zenith is any of {zigzag, uniform, gauss, gauss_legacy, laplacian} at
   // mean=0, std>15; roll locked; azimuth full-uniform.
-  // strict: std > 15.0f
+  // strict: std > kLowitzZenithStdLowerBound
   using axis_preset_detail::IsLowitzZenithType;
-  if (IsLowitzZenithType(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std > 15.0f && roll_locked && az_full) {
+  if (IsLowitzZenithType(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std > kLowitzZenithStdLowerBound &&
+      roll_locked && az_full) {
     return AxisPreset::kLowitz;
   }
 
   // Parry: zenith gauss-like at mean=90, std<10; roll locked; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < 10.0f && roll_locked && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      roll_locked && az_full) {
     return AxisPreset::kParry;
   }
 
   // Plate: zenith gauss-like at mean=0, std<10; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std < 10.0f && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 0.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      az_full) {
     return AxisPreset::kPlate;
   }
 
   // Column: zenith gauss-like at mean=90, std<10; azimuth full-uniform.
-  // strict: std < 10.0f
-  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < 10.0f && az_full) {
+  // strict: std < kColumnPlateParryZenithStdUpperBound
+  if (IsGaussLike(zenith.type) && FloatNear(zenith.mean, 90.0f) && zenith.std < kColumnPlateParryZenithStdUpperBound &&
+      az_full) {
     return AxisPreset::kColumn;
   }
 

@@ -412,8 +412,7 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
   int dist_type = static_cast<int>(axis.type);
   auto prev_type = axis.type;
 
-  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update combo items when adding new AxisDistType");
-  if (ImGui::Combo("##dist", &dist_type, "Gauss\0Uniform\0Zigzag\0Laplacian\0Gauss (legacy)\0")) {
+  if (ImGui::Combo("##dist", &dist_type, kAxisDistTypeComboItems)) {
     axis.type = static_cast<AxisDistType>(dist_type);
     changed = true;
   }

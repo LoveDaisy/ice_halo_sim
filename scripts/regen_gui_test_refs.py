@@ -115,6 +115,25 @@ GROUPS: dict[str, ReferenceGroup] = {
     # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
     # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
     # captured as the modal's own on-screen rectangle.
+    # Defaults-panel layout scene names — must match kScenes[] order in
+    # test/gui/visual/test_gui_defaults_panel.cpp. Each scene is one state of the "Save Current as
+    # Defaults" modal (pending changes / expanded read-only section / filtered / nothing to adopt),
+    # captured as the modal's own on-screen rectangle.
+    "defaults_panel_layout": ReferenceGroup(
+        key="defaults_panel_layout",
+        scenes=[
+            "pending_changes",
+            "other_expanded",
+            "filtered",
+            "no_changes",
+            "presets_expanded",
+            "presets_warning",
+        ],
+        modes=[None],
+        tmp_prefix="lumice_defaults_panel_",
+        ref_prefix="defaults_panel_",
+        source="test/gui/visual/test_gui_defaults_panel.cpp",
+    ),
     "modal_layout": ReferenceGroup(
         key="modal_layout",
         scenes=[
@@ -208,7 +227,10 @@ SUITE_FILTER_EXPR = (
     "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,"
     "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
 )
-SUITE_ARGS = ["--fixed-dt", "--filter", SUITE_FILTER_EXPR]
+# --no-user-config trails SUITE_FILTER_EXPR, matching scripts/build.sh. A reference image is the
+# one artifact where reading the generating machine's personal defaults would be permanent: the
+# contamination ships in the committed .jpg and every other machine inherits it as a threshold miss.
+SUITE_ARGS = ["--fixed-dt", "--filter", SUITE_FILTER_EXPR, "--no-user-config"]
 
 
 def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tuple[int, str]:

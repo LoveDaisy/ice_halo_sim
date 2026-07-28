@@ -11,6 +11,7 @@
 #include "gui/color_window.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
+#include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
@@ -259,6 +260,19 @@ void RenderTopBar(float window_width) {
       }
       if (ImGui::MenuItem("Config JSON...")) {
         DoExportConfigJson();
+      }
+      ImGui::Separator();
+      // Personal defaults live next to the other document-level "where do my settings go"
+      // commands rather than in a toolbar of their own: this writes what a NEW document starts
+      // from, which is a file-scope decision, not a view toggle.
+      if (ImGui::MenuItem("Save Current as Defaults...")) {
+        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPendingChanges);
+      }
+      // Same panel, different section expanded. A separate item rather than "open it and scroll":
+      // retuning a preset is a different errand from adopting the current document's settings, and
+      // a user who came to do the first should not have to recognise the second on the way.
+      if (ImGui::MenuItem("Edit My Presets...")) {
+        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPresets);
       }
       ImGui::Separator();
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
