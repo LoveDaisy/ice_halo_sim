@@ -1,5 +1,6 @@
 #include "gui/defaults_panel.hpp"
 
+#include <algorithm>
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
@@ -129,6 +130,26 @@ struct PresetStdBuffers {
   float slots[static_cast<std::size_t>(AxisPreset::kCustom) + 1] = {};
 };
 PresetStdBuffers g_preset_std_buffers;
+
+// How tall §1's content actually was, MEASURED at the end of the previous frame's layout pass. It
+// is the "how much room does this section want" half of the height split described at the two
+// BeginChild/BeginTable calls in RenderDefaultsPanel.
+//
+// Measured rather than estimated, and that is the whole design decision here. §1's height is a
+// function of which presets the user has unfolded (state ImGui owns, inside a TreeNode this code
+// cannot query before calling it), of a wrapped paragraph whose line count depends on the panel
+// width, and of a per-preset description whose length differs per preset. Adding up per-widget
+// height constants would reproduce all three by hand and drift from the real layout on any style,
+// font or wording change — silently, because nothing fails, the section just starts scrolling a few
+// pixels early. ImGui has already computed the exact answer by the time the child ends; reading it
+// off the cursor costs one line and cannot disagree with what was drawn.
+//
+// The price is that the answer is one frame old, so the frame in which a preset is unfolded is
+// sized for the fold BEFORE it. It self-corrects on the next frame (16ms, invisible), and every
+// test/reference capture in this repo yields several frames after an interaction before it asserts
+// or shoots. Zero on the first frame is the same thing: the section opens at its floor for one
+// frame and settles immediately.
+float g_presets_content_height = 0.0f;
 
 bool IsRowChecked(const std::string& key_path) {
   return g_checked_keys.find(key_path) != g_checked_keys.end();
@@ -301,11 +322,34 @@ void RenderListControls() {
   g_row_filter = static_cast<DefaultsRowFilter>(filter);
 }
 
+// How tall §2's table would be if nothing capped it: the frozen header row plus one row per VISIBLE
+// row, plus the table's own outer border lines.
+//
+// Computed rather than measured (the opposite of §1 above, and for a reason that does not apply
+// there): this number moves on every keystroke in the search box, and a one-frame-old answer would
+// make the table visibly resize a frame after each character. It can be computed exactly because
+// every row of this table is the same height — one checkbox, i.e. one frame — so there is no
+// per-row variation to estimate away, which is exactly what §1 has and this does not.
+float SettingsNaturalHeight(int visible_row_count) {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float cell_v = style.CellPadding.y * 2.0f;
+  const float header_h = ImGui::GetTextLineHeight() + cell_v;
+  const float row_h = ImGui::GetFrameHeight() + cell_v;
+  const float borders = 2.0f;  // ImGuiTableFlags_Borders draws one line above the header and one below the last row
+  return header_h + static_cast<float>(visible_row_count) * row_h + borders;
+}
+
 // The one settings table: every candidate default, one row each, one checkbox each.
-void RenderSettingsTable() {
+//
+// `table_height` is what makes the header row stick: ImGuiTableFlags_ScrollY only takes effect when
+// the table has a bounded outer height to scroll INSIDE, and a zero height would hand the table the
+// whole remaining region — i.e. no bound, no inner scroll, and the page scrolling back. The table is
+// its own scroll container, which is also why nothing here is wrapped in a BeginChild: a child
+// around a ScrollY table is the two-layer scroll this task exists to remove.
+void RenderSettingsTable(float table_height) {
   constexpr ImGuiTableFlags kFlags =
-      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
-  if (!ImGui::BeginTable("##defaults_settings_table", 6, kFlags)) {
+      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
+  if (!ImGui::BeginTable("##defaults_settings_table", 6, kFlags, ImVec2(0.0f, table_height))) {
     return;
   }
   ImGui::TableSetupColumn("##adopt", ImGuiTableColumnFlags_WidthFixed, 24.0f);
@@ -318,6 +362,11 @@ void RenderSettingsTable() {
   // images, so the column has to exist in the captured layout before there is anything to put in
   // it.
   ImGui::TableSetupColumn("!", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+  // AFTER every TableSetupColumn and BEFORE TableHeadersRow — ImGui's required call order. This one
+  // line is the whole of AC1: row 0 (the header) stays put while the body scrolls under it. It is a
+  // different mechanism from the section headers staying put (those are simply not inside any
+  // scrolling region any more); the two are independent and neither substitutes for the other.
+  ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableHeadersRow();
 
   for (const auto& row : g_rows) {
@@ -699,20 +748,74 @@ void RenderDefaultsPanel(GuiState& state) {
   RenderListControls();
   ImGui::Separator();
 
-  // The two sections scroll inside a child; the action row below stays pinned. Without the split,
-  // the settings list (40+ rows) pushes Save / Close off the bottom of a fixed-size modal — the
-  // user would have to scroll past every setting to reach the button that commits their decision.
+  // Each section scrolls INSIDE ITSELF; the two section headers and the action row below do not
+  // scroll at all. Without a split of some kind, the settings list (40+ rows) pushes Save / Close
+  // off the bottom of a fixed-size modal — the user would have to scroll past every setting to
+  // reach the button that commits their decision.
+  //
+  // The split used to be one shared child around BOTH sections, which pinned the action row but
+  // left everything else — including the two section headers and the settings table's own header
+  // row — riding the same scrollbar. Scrolled halfway down a 40-row list, a user could no longer
+  // see which column was which. So the scrolling region moved DOWN, from around the pair of
+  // sections to inside each section's own body, and the headers stayed behind in the fixed region.
+  //
   // The reserved footer height is constant (one status line is budgeted whether or not there is a
   // message) so the body does not resize as the panel reports what it just did.
+  const ImGuiStyle& style = ImGui::GetStyle();
   const float footer_height =
-      ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-  ImGui::BeginChild("##defaults_sections", ImVec2(0.0f, -footer_height));
+      ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() + style.ItemSpacing.y;
+
+  // HOW THE TWO SECTIONS SHARE THE HEIGHT. One decision, made in one place, because the two halves
+  // of it (§1's child, §2's table) would otherwise each pick a number and only agree by luck.
+  //
+  //   want   = how tall this section's content actually is  (§1: measured; §2: computed — see each)
+  //   cap    = what is left of the body after the pinned footer and the OTHER section's floor
+  //   height = clamp(want, floor, cap)
+  //
+  // Taking the min with `want` is what AC4's "no big empty scroll area when there is little to
+  // show" comes down to: a section only grows to the size of what it holds. Taking the max with
+  // `cap` is the other half: past that, it scrolls instead of pushing the action row off screen.
+  // A fixed constant (the shape edit_modals.cpp uses for its content pane, where the tallest case
+  // is a bounded enumeration) cannot do the first, because these two sections have no bounded
+  // tallest case — §2 is 0..42 rows depending on the search box.
+  //
+  // NOTE the clamps are written as explicit min(max(...)) rather than std::clamp: the cap is itself
+  // derived from a subtraction and can in principle come out below the floor, and std::clamp with
+  // lo > hi is undefined behavior rather than a clamp.
+  const float row_step = ImGui::GetFrameHeightWithSpacing();
+  // A section shorter than this shows nothing usable — a table's frozen header plus one row. It is
+  // also, deliberately, the amount §1 must leave behind for §2 (below), which is what guarantees §2
+  // never has to overflow the body: its floor and the room reserved for it are the same number, so
+  // "§2 got at least its floor" cannot cost more than was set aside.
+  const float min_section_h = 2.0f * row_step;
 
   // §1 — the preset library (namespace 2). Its own section because a preset is not a GuiState
   // field: it never produces a row in the list below, and it is edited in place rather than
   // checked on or off.
+  //
+  // The header is called at the popup window's own level, not inside any child: that — and nothing
+  // else — is why it stays put while the body under it scrolls (AC2).
   if (SectionHeader("Presets###defaults_presets", DefaultsPanelSection::kPresets, /*open_when_pending=*/true)) {
+    // Read AFTER the header, so what is left already excludes it. What §1 must leave behind is §2's
+    // own header row (always drawn, collapsed or not) plus §2's floor. Reserved unconditionally,
+    // including when §2 is collapsed and will not use it: knowing that a frame ahead would mean
+    // caching §2's open state and reading it one frame late, and the cost of not knowing is a strip
+    // of empty space that the pinned-footer spacer below absorbs invisibly anyway.
+    const float body_avail = ImGui::GetContentRegionAvail().y - footer_height;
+    const float presets_cap = std::max(body_avail - row_step - min_section_h, min_section_h);
+    const float presets_h = std::min(std::max(g_presets_content_height, min_section_h), presets_cap);
+
+    ImGui::BeginChild("##defaults_presets_scroll", ImVec2(0.0f, presets_h), ImGuiChildFlags_Borders);
     RenderPresetLibrary();
+    // The measurement g_presets_content_height documents. The cursor sits one ItemSpacing below the
+    // last item (ImGui advances it for the next one), and it started one WindowPadding below the
+    // child's top edge — so the height this content needs is the cursor, less that trailing
+    // spacing, plus the bottom padding and the two border lines. Taken whether or not the child is
+    // currently too short: clipping changes what is DRAWN, never what is laid out, so the cursor
+    // reports the full content height even while scrolled.
+    g_presets_content_height =
+        ImGui::GetCursorPosY() - style.ItemSpacing.y + style.WindowPadding.y + style.ChildBorderSize * 2.0f;
+    ImGui::EndChild();
   }
 
   // §2 — the settings list. The count is the number of rows CURRENTLY SHOWN against the total, so
@@ -730,14 +833,28 @@ void RenderDefaultsPanel(GuiState& state) {
     if (visible_count == 0) {
       ImGui::TextDisabled("No setting matches the search box and filter.");
     } else {
-      RenderSettingsTable();
+      // Whatever §1 actually took is already subtracted here — the cursor did that arithmetic. That
+      // is why the split needs no up-front ratio between the two sections: §1 takes what it wants
+      // up to its cap, and §2 asks the same question again against what is genuinely left.
+      const float settings_avail = ImGui::GetContentRegionAvail().y - footer_height;
+      const float settings_h = std::min(std::max(SettingsNaturalHeight(visible_count), min_section_h),
+                                        std::max(settings_avail, min_section_h));
+      RenderSettingsTable(settings_h);
     }
   }
 
-  ImGui::EndChild();
-
   // One frame of forced section state is enough; from here the user's own clicks own it.
   g_pending_initial_section.reset();
+
+  // Push the action row to the bottom edge. The sections above are sized to their content, so
+  // without this the row would float up under a short list and sit at a different height on every
+  // filter keystroke — a destructive button that moves while the user is reading is worse than one
+  // sitting in dead space. What is left between is plain empty space, NOT a scrolling void: the
+  // thing AC4 forbids is an empty scroll region, and there is no scroll region here at all.
+  const float slack = ImGui::GetContentRegionAvail().y - footer_height;
+  if (slack > 0.0f) {
+    ImGui::Dummy(ImVec2(0.0f, slack));
+  }
 
   ImGui::Separator();
   // Budgeted unconditionally (see footer_height): an empty line keeps the body height constant.
@@ -822,6 +939,10 @@ void ResetDefaultsPanelTestState() {
   g_status_message.clear();
   g_preset_warnings = PresetWarnings{};
   g_preset_std_buffers = PresetStdBuffers{};
+  // Reset HERE and not in OpenDefaultsPanel: it is a measurement of ImGui's own TreeNode fold
+  // state, which ImGui keeps across closes of this panel, so the measurement should outlive a close
+  // exactly as the thing it measures does. Test isolation is the one place that state is torn down.
+  g_presets_content_height = 0.0f;
 }
 
 }  // namespace lumice::gui
