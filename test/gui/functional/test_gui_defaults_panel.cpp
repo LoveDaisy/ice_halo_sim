@@ -1674,6 +1674,40 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       const float max_fov = LUMICE_MaxFov(static_cast<LUMICE_LensType>(gui::g_state.renderer.lens_type));
       IM_CHECK_GT(max_fov, 90.0f);  // the probe below has to be outside the domain to test anything
 
+      // ---- the domains themselves, before driving anything through them ----
+      //
+      // Not redundant with the drive-it-twice comparison below, and the reason is a real limit on
+      // what that comparison can see: the main UI calls the SAME control every frame and it clamps
+      // unconditionally, so a table cell that allowed a wider range would have its value pulled
+      // back within a frame and the two would still agree. Asserting the domain directly is what
+      // catches a bound that drifted, as opposed to a cell that ignored its input.
+      //
+      // fov is checked against the expression the main UI uses (LUMICE_MaxFov of the current lens)
+      // rather than against a number, and at two lens types, because "the bound follows the state"
+      // is the property — a registry that returned a constant would pass one of these and fail the
+      // other.
+      const gui::FieldEditorEntry* fov_entry = gui::FindFieldEditor("renderer.fov");
+      IM_CHECK(fov_entry != nullptr);
+      for (const int lens : { gui::kLensTypeLinear, gui::kLensTypeGlobe }) {
+        gui::GuiState probe_state;
+        probe_state.renderer.lens_type = lens;
+        const auto constraint = fov_entry->Constraint(probe_state);
+        IM_CHECK(constraint.has_numeric_domain);
+        IM_CHECK_EQ(constraint.min_value, 1.0);
+        IM_CHECK_EQ(static_cast<float>(constraint.max_value), LUMICE_MaxFov(static_cast<LUMICE_LensType>(lens)));
+      }
+      {
+        const gui::GuiState probe_state;
+        const auto alpha = gui::FindFieldEditor("overlay_grid_alpha")->Constraint(probe_state);
+        IM_CHECK(alpha.has_numeric_domain);
+        IM_CHECK_EQ(alpha.min_value, 0.0);
+        IM_CHECK_EQ(alpha.max_value, 1.0);
+        const auto hits = gui::FindFieldEditor("sim.max_hits")->Constraint(probe_state);
+        IM_CHECK(hits.has_numeric_domain);
+        IM_CHECK_EQ(hits.min_value, 1.0);
+        IM_CHECK_EQ(hits.max_value, 64.0);
+      }
+
       // ---- renderer.fov ----
       gui::g_state.renderer.fov = 90.0f;
       OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
@@ -1730,6 +1764,24 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_EQ(hits_from_table, hits_from_main_ui);
       IM_CHECK_EQ(hits_from_table, 64);
+
+      // ---- renderer.opacity: the same clamp, where nothing else can be doing it ----
+      //
+      // The three fields above all have a main-UI control that clamps them every frame, so their
+      // final value is evidence about the table's cell only if the table wrote it first. opacity
+      // has no control anywhere else in the app: whatever this cell leaves behind is what the
+      // field holds, indefinitely. It is therefore the one field whose clamp this suite can
+      // attribute to the table with no alternative explanation.
+      gui::g_state.renderer.opacity = 0.5f;
+      OpenPanelOn(ctx, gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "renderer.opacity");
+      ctx->ItemInputValue(ValueInputRef("renderer.opacity").c_str(), 5.0f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.renderer.opacity, 1.0f);
+      FilterTo(ctx, "");
+      CloseDefaultsPanel(ctx);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.renderer.opacity, 1.0f);  // and it stays: nothing else touches it
     };
   }
 
