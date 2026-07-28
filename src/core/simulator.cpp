@@ -482,6 +482,18 @@ size_t DeterministicCrystalCount(const SceneConfig& config) {
   return n;
 }
 
+size_t DeterministicOrientationCount(const SceneConfig& config) {
+  size_t n = 0;
+  for (const auto& ms : config.ms_) {
+    for (const auto& setting : ms.setting_) {
+      if (setting.crystal_.axis_.IsAxisDeterministic()) {
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
 
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.

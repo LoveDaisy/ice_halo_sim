@@ -104,6 +104,16 @@ bool IsDeterministic(const CrystalParam& param);
 // the worker-pool size.
 size_t DeterministicCrystalCount(const SceneConfig& config);
 
+// How many (layer, ci) slots of `config` carry a deterministic axis — the
+// config-constant half of the reported ORIENTATION count, mirroring
+// DeterministicCrystalCount's contract for the shape half (scene slots, not
+// slots a given run happened to trace; that is what buys immunity to the
+// dispatch grain and the worker count). The predicate is
+// AxisDistribution::IsAxisDeterministic, NOT IsDeterministic(CrystalParam):
+// shape and axis are independent, and the commonest halo setup is
+// deterministic on one and stochastic on the other.
+size_t DeterministicOrientationCount(const SceneConfig& config);
+
 }  // namespace lumice
 
 #endif  // CORE_TRACE_OPS_H_

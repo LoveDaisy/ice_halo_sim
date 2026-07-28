@@ -563,6 +563,17 @@ bool AxisDistribution::IsAzRotationallySymmetric() const {
 }
 
 
+bool AxisDistribution::IsAxisDeterministic() const {
+  // kNoRandom is the one type that consumes no RNG: RandomNumberGenerator::Get
+  // returns dist.Value() outright for it, and SampleSphericalPointsSph's
+  // kNoRandom latitude branch yields the single deterministic orientation. So
+  // "all three kNoRandom" is literally "zero draws, one fixed rotation", not an
+  // approximation of it.
+  return azimuth_dist.type == DistributionType::kNoRandom && latitude_dist.type == DistributionType::kNoRandom &&
+         roll_dist.type == DistributionType::kNoRandom;
+}
+
+
 // The on-disk JSON keys stay "mean" / "std": that is the published config file format (see
 // doc/configuration.md and examples/config_example.json). Only the C++ member names changed, so
 // this is the one place where the two vocabularies meet. Serialization is type-erased by nature —

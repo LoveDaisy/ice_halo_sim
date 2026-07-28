@@ -280,6 +280,22 @@ struct AxisDistribution {
   //! @details Only checks the azimuth type and its full range; latitude and roll are ignored.
   bool IsAzRotationallySymmetric() const;
 
+  //! @brief Check whether every one of azimuth/latitude/roll is kNoRandom — i.e. this axis
+  //!   never consumes the RNG and yields one fixed orientation for every ray.
+  //! @details The orientation-side counterpart of IsDeterministic(const CrystalParam&)
+  //!   (trace_ops.hpp), and deliberately NOT the same predicate: shape and axis are
+  //!   independent axes of a crystal setting, and conflating them is exactly the gap this
+  //!   predicate closes — the commonest halo setup (fixed shape + random orientation) is
+  //!   deterministic on the shape axis and stochastic on this one.
+  //! @note It needs no !IsFullSphereUniform() guard. InitRay_rot's `full_sphere` branch
+  //!   variable IS that predicate (a literal call, simulator.cpp), and the predicate requires
+  //!   both azimuth_dist and latitude_dist to be kUniform, so a full-sphere axis can never
+  //!   satisfy the all-kNoRandom test — the two are mutually exclusive by construction and an
+  //!   added guard would be a dead conjunct. That mutual exclusion is implicit, so the test
+  //!   AxisDeterminismMatchesRuntimeOrientation pins this predicate against what InitRay_rot
+  //!   actually produces; a future decoupling turns it red rather than silently misreporting.
+  bool IsAxisDeterministic() const;
+
   Distribution azimuth_dist;
   Distribution latitude_dist;
   Distribution roll_dist;
