@@ -383,6 +383,32 @@ struct AxisPresetClampResult {
 // second clamp implementation in the panel would drift from this one the first time a domain moves.
 AxisPresetClampResult ClampAxisPresetZenithStdForSave(AxisPreset preset, float raw_value);
 
+// The preset library's half of an override DOCUMENT, with no IO: read / write / erase
+// presets.axis.<preset>.zenith_std.
+//
+// One owner for that document shape, shared by the two commit timings — the axis modal's gesture
+// writes the file immediately, the defaults panel edits an in-memory copy and writes it once on
+// Save. The erase prunes the parents it empties, so a file someone opens by hand does not
+// accumulate `"presets": {"axis": {}}` skeletons. A preset with no adjustable face has no key at
+// all, so all three are no-ops (read: nullopt) for it.
+//
+// The read is deliberately RAW: it reports what the document says, not what the classifier would
+// accept. Clamping is ClampAxisPresetZenithStdForSave's job, and folding it in here would collapse
+// "what is stored" and "what is in effect" into one call — they are not the same thing, because a
+// hand-edited file can hold a value the loader clamps.
+std::optional<float> ReadAxisPresetZenithStdFromDoc(const nlohmann::json& doc, AxisPreset preset);
+void WriteAxisPresetZenithStdToDoc(nlohmann::json& doc, AxisPreset preset, float stored_value);
+void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset);
+
+// Point the in-memory preset cache at `stored_value` (nullopt = "nothing stored, use the factory
+// value") without touching any file.
+//
+// For a caller that has ALREADY committed the document itself — the defaults panel writes its
+// whole working copy in one go, so by the time it calls this the value is on disk. Nothing else
+// should: memory that leads disk is exactly how "what this session resolves" and "what the next
+// launch reads" drift apart, which is why the two write functions above do the file first.
+void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value);
+
 // Store `raw_value` as the user's zenith std for `preset`, clamped into the classifier's tolerance
 // domain. A preset with no adjustable face (Random / Custom) is REFUSED — with a warning, not an
 // assert: this is the second of two defenses (the first being that the UI draws it no input), and

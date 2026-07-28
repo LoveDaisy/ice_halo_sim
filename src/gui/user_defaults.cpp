@@ -367,6 +367,80 @@ AxisPresetClampResult ClampAxisPresetZenithStdForSave(AxisPreset preset, float r
   return result;
 }
 
+std::optional<float> ReadAxisPresetZenithStdFromDoc(const nlohmann::json& doc, AxisPreset preset) {
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr || !doc.is_object()) {
+    return std::nullopt;
+  }
+  // find() rather than the operator[] chain: the document is user-editable, and operator[] on a
+  // non-object throws a type_error that would take the caller down over a hand-edit.
+  const auto presets = doc.find("presets");
+  if (presets == doc.end() || !presets->is_object()) {
+    return std::nullopt;
+  }
+  const auto axis = presets->find("axis");
+  if (axis == presets->end() || !axis->is_object()) {
+    return std::nullopt;
+  }
+  const auto node = axis->find(entry.override_json_name);
+  if (node == axis->end() || !node->is_object()) {
+    return std::nullopt;
+  }
+  const auto value = node->find("zenith_std");
+  if (value == node->end() || !value->is_number()) {
+    return std::nullopt;
+  }
+  const float stored = value->get<float>();
+  if (!std::isfinite(stored)) {
+    return std::nullopt;
+  }
+  return stored;
+}
+
+void WriteAxisPresetZenithStdToDoc(nlohmann::json& doc, AxisPreset preset, float stored_value) {
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
+    return;
+  }
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  // Surgical: ONE key is touched. The GuiState half of the document and every other preset survive
+  // by construction rather than by each caller remembering to preserve them.
+  doc["presets"]["axis"][entry.override_json_name]["zenith_std"] = stored_value;
+}
+
+void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
+  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
+  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr || !doc.is_object()) {
+    return;
+  }
+  const auto presets_it = doc.find("presets");
+  if (presets_it == doc.end() || !presets_it->is_object()) {
+    return;
+  }
+  const auto axis_it = presets_it->find("axis");
+  if (axis_it != presets_it->end() && axis_it->is_object()) {
+    axis_it->erase(entry.override_json_name);
+    if (axis_it->empty()) {
+      presets_it->erase("axis");
+    }
+  }
+  if (presets_it->empty()) {
+    doc.erase("presets");
+  }
+}
+
+void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value) {
+  const auto slot = static_cast<std::size_t>(preset);
+  if (slot >= kAxisPresetSlotCount) {
+    return;
+  }
+  // Whole-struct assignment, never "clear the fields then refill them". This scrum has already
+  // spent three code-review rounds on partial updates to this exact global.
+  g_axis_overrides.slots[slot] = stored_value ? AxisPresetOverride{ true, *stored_value } : AxisPresetOverride{};
+}
+
 AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value) {
   AxisPresetWriteResult result;
 
@@ -377,7 +451,6 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
     result.message = clamp.message;
     return result;
   }
-  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
   const float stored = clamp.stored_value;
 
   const auto dir = GetActiveUserConfigDir();
@@ -387,12 +460,9 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
     return result;
   }
   nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
-  if (!doc.is_object()) {
-    doc = nlohmann::json::object();
-  }
-  // Surgical: read the whole document, touch ONE key, write the whole document back. A wholesale
-  // rewrite here would take the GuiState half of the file (and every other preset) with it.
-  doc["presets"]["axis"][entry.override_json_name]["zenith_std"] = stored;
+  // Read the whole document, touch ONE key, write the whole document back. A wholesale rewrite
+  // here would take the GuiState half of the file (and every other preset) with it.
+  WriteAxisPresetZenithStdToDoc(doc, preset, stored);
   if (!WriteUserDefaultsFile(*dir, doc)) {
     // In-memory state deliberately untouched on a failed write: "what this session resolves" must
     // not disagree with "what the next launch reads".
@@ -400,9 +470,7 @@ AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float r
     return result;
   }
 
-  // Whole-struct assignment, never "clear the fields then refill them". This scrum has already
-  // spent three code-review rounds on partial updates to this exact global.
-  g_axis_overrides.slots[static_cast<std::size_t>(preset)] = AxisPresetOverride{ true, stored };
+  AdoptAxisPresetZenithStdOverrideInMemory(preset, stored);
 
   result.written = true;
   result.clamped = clamp.clamped;
@@ -423,32 +491,14 @@ bool RevertOneAxisPresetOverride(AxisPreset preset) {
     return false;
   }
   nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
-  if (!doc.is_object()) {
-    doc = nlohmann::json::object();
-  }
-
-  // Prune empty parents on the way out, the same way RevertOneDefault does, so a file a user opens
-  // by hand does not accumulate `"presets": {"axis": {}}` skeletons.
-  const auto presets_it = doc.find("presets");
-  if (presets_it != doc.end() && presets_it->is_object()) {
-    const auto axis_it = presets_it->find("axis");
-    if (axis_it != presets_it->end() && axis_it->is_object()) {
-      axis_it->erase(entry.override_json_name);
-      if (axis_it->empty()) {
-        presets_it->erase("axis");
-      }
-    }
-    if (presets_it->empty()) {
-      doc.erase("presets");
-    }
-  }
+  EraseAxisPresetZenithStdFromDoc(doc, preset);
 
   if (!WriteUserDefaultsFile(*dir, doc)) {
     return false;
   }
   // Disk first, memory second (see the header): a failed write above returns with the in-memory
   // override still in place, which is what the next launch would read back anyway.
-  g_axis_overrides.slots[static_cast<std::size_t>(preset)] = AxisPresetOverride{};
+  AdoptAxisPresetZenithStdOverrideInMemory(preset, std::nullopt);
   return true;
 }
 

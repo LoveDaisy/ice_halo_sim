@@ -3,9 +3,11 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "IconsFontAwesome6.h"
@@ -31,9 +33,58 @@ namespace {
 // branch and refilled in another, and the shape below has no branch to get wrong.
 // ------------------------------------------------------------------------------------------------
 
-// Row set, read once per open (and re-read after each write). Not rebuilt per frame: the panel is
-// modal, so the document cannot change underneath it, and BuildDefaultDiffRows reads the override
-// file — a per-frame call would re-read (and re-count the degradation of) that file 60x a second.
+// ------------------------------------------------------------------------------------------------
+// The copy model. This panel is a pure EDITOR, not a live view of the file: it takes a copy of the
+// override document when it opens, every edit changes only that copy, Save writes it once, and
+// closing without saving throws it away.
+//
+// Why, and what it replaces: Revert and Reset all used to write the file the instant they were
+// clicked while Save committed later, so pressing Reset all changed the file and left the panel
+// looking identical — same rows, same checkboxes — and "will Save now include those diffs?" was
+// unanswerable from the screen. One commit point removes the question.
+//
+// DEPENDENCY, stated because it is invisible from here: the panel is a BeginPopupModal, so the
+// main UI cannot be edited while it is open and `current` cannot move underneath the copy. If this
+// panel is ever made non-modal (a docked window, say), that premise is gone and the copy would
+// need a reconciliation story with edits made behind it.
+//
+// TWO documents, not one, and the split is load-bearing:
+//   g_snapshot_doc — what was on disk when the panel opened. FROZEN for the session. It anchors the
+//                    §2/§3 partition (RowNeedsAdoption compares against the defaults this document
+//                    resolves), so rows do not jump between sections as the user edits. Anchoring
+//                    the partition on the working copy instead would move a row out of §2 the
+//                    moment the copy gained its value — with the user having pressed nothing.
+//   g_copy_doc     — what pressing Save right now would write. Revert, Reset all and every §1
+//                    preset edit mutate this and nothing else. It is also the source for each
+//                    row's has_saved_override, which is how §3's Source cell and Revert button
+//                    show an uncommitted Revert immediately (the visible feedback the old
+//                    write-through model failed to give).
+// ------------------------------------------------------------------------------------------------
+nlohmann::json g_snapshot_doc = nlohmann::json::object();
+nlohmann::json g_copy_doc = nlohmann::json::object();
+
+// §1 preset edits made in this session, so that a successful Save can push them into the
+// process-wide preset cache (g_axis_overrides, behind user_defaults.hpp) without re-parsing the
+// whole document.
+//
+// Re-parsing would be the obvious move and is wrong: ParseAxisPresetOverrides re-runs the clamp and
+// files a downgrade notice for every out-of-domain value in the document, including ones this
+// session never touched and the LOAD path already reported. The user would get a fresh "your value
+// was adjusted" notice for pressing Save on something else entirely.
+//
+// `touched` is separate from the value for the same reason: nullopt is a real edit ("Restore to
+// factory"), not the absence of one.
+struct PresetPendingEdit {
+  bool touched = false;
+  std::optional<float> stored_value;  // nullopt with touched ⇒ restore to the factory value
+};
+struct PresetPendingEdits {
+  PresetPendingEdit slots[static_cast<std::size_t>(AxisPreset::kCustom) + 1];
+};
+PresetPendingEdits g_preset_pending;
+
+// Row set, rebuilt on open and after every edit of the copy. Not rebuilt per frame: BuildDefaultDiffRows
+// re-serializes the whole GuiState twice, and a per-frame call would do that 60x a second.
 std::vector<DefaultDiffRow> g_rows;
 
 // §2 rows the user UNCHECKED. Stored as the exclusion set rather than the selection set so a row
@@ -78,7 +129,85 @@ bool IsRowChecked(const std::string& key_path) {
 }
 
 void RefreshRows(const GuiState& state) {
-  g_rows = BuildDefaultDiffRows(state);
+  // Rows are built against the FROZEN snapshot (so the §2/§3 partition holds still for the whole
+  // session), then each row's "is this key mine" is re-answered from the WORKING COPY (so an
+  // uncommitted Revert or Reset all is visible immediately). The two data sources are the whole
+  // point of the split — see the comment on g_snapshot_doc.
+  g_rows = BuildDefaultDiffRows(state, g_snapshot_doc);
+  for (auto& row : g_rows) {
+    row.has_saved_override = DocHasKeyPath(g_copy_doc, row.key_path);
+  }
+}
+
+// What §1 shows for a preset: the value in the working copy, if it holds one.
+//
+// Reads the copy rather than GetUserAxisPresetZenithStdOverride: that accessor answers from the
+// process-wide cache, which by design does not move until a Save lands, so the panel would show
+// the user their own uncommitted edit as if it had not happened.
+std::optional<float> CopyPresetZenithStd(const AxisPresetEntry& entry) {
+  return ReadAxisPresetZenithStdFromDoc(g_copy_doc, entry.id);
+}
+
+// The zenith row §1 renders: the factory row with the copy's std substituted, clamped the way the
+// loader would clamp it.
+//
+// The clamp matters for a value this session did not write — a hand-edited file can hold one
+// outside the domain, and the document keeps it verbatim until the user commits something. Showing
+// it raw would tell the user their Column button gives 25 when it actually gives 9.99999905.
+AxisDist EffectiveCopyPresetZenith(const AxisPresetEntry& entry) {
+  AxisDist zenith = entry.zenith;
+  if (const auto stored = CopyPresetZenithStd(entry)) {
+    const AxisPresetClampResult clamped = ClampAxisPresetZenithStdForSave(entry.id, *stored);
+    if (clamped.accepted) {
+      zenith.std = clamped.stored_value;
+    }
+  }
+  return zenith;
+}
+
+// The panel's ONE write. Every other action in this file edits g_copy_doc and stops there.
+//
+// `accepted` are the §2 rows still checked; they are folded into the copy here rather than when
+// the checkbox is clicked, because a checkbox is a statement about what Save should do, not an
+// edit in its own right (unchecking one must not look like a change to the document).
+bool CommitCopy(const GuiState& state, const std::vector<std::string>& accepted) {
+  // Built beside the copy and only adopted once the write succeeds. On any failure below the copy
+  // is left exactly as the user has it, so a second attempt (after fixing whatever blocked the
+  // write) still carries their edits instead of a half-applied version of them.
+  nlohmann::json next = g_copy_doc;
+  if (!ApplyAcceptedDefaultsToDoc(next, accepted, state)) {
+    return false;
+  }
+  const auto dir = GetActiveUserConfigDir();
+  if (!dir) {
+    GUI_LOG_WARNING("[GUI] Defaults panel: no user-config directory available; nothing was saved");
+    return false;
+  }
+  if (!WriteUserDefaultsFile(*dir, next)) {
+    return false;
+  }
+
+  // ORDER IS PART OF THE CONTRACT — disk first, then memory, then the anchors:
+  //  1. the write above has landed, so the process-wide preset cache may now follow it. Only the
+  //     presets this session actually edited are pushed (see g_preset_pending): re-deriving the
+  //     cache from the document would re-clamp values this session never touched and file a
+  //     duplicate downgrade notice for each, on a Save that had nothing to do with them.
+  //  2. the copy becomes the new snapshot, because "what is on disk" is now literally this
+  //     document. That re-anchors the §2/§3 partition, which is what moves the adopted rows out
+  //     of §2 — the visible confirmation that the save landed.
+  //  3. the exclusion set is dropped: it described the previous set of pending rows, and after the
+  //     re-anchor the rows it named are no longer pending.
+  for (const auto& entry : kAxisPresets) {
+    const auto slot = static_cast<std::size_t>(entry.id);
+    if (g_preset_pending.slots[slot].touched) {
+      AdoptAxisPresetZenithStdOverrideInMemory(entry.id, g_preset_pending.slots[slot].stored_value);
+    }
+  }
+  g_preset_pending = PresetPendingEdits{};
+  g_copy_doc = std::move(next);
+  g_snapshot_doc = g_copy_doc;
+  g_excluded_keys.clear();
+  return true;
 }
 
 std::vector<std::string> CheckedPendingKeys() {
@@ -224,14 +353,14 @@ void RenderOtherTable(const GuiState& state) {
   }
   ImGui::EndTable();
 
-  // Applied after the loop: RevertOneDefault rebuilds g_rows, and mutating the container being
-  // iterated would invalidate the loop's own references.
+  // Applied after the loop: RefreshRows rebuilds g_rows, and mutating the container being iterated
+  // would invalidate the loop's own references.
   if (!revert_key.empty()) {
-    if (RevertOneDefault(revert_key)) {
-      g_status_message = "Reverted '" + revert_key + "' to the factory value.";
-    } else {
-      g_status_message = "Could not write your defaults file; nothing was changed.";
-    }
+    // Copy only — no file is touched until Save. There is no failure branch left to report: a
+    // key-level erase from an in-memory document cannot fail the way a write to a directory that
+    // vanished can.
+    ApplyRevertToDoc(g_copy_doc, revert_key);
+    g_status_message = "'" + revert_key + "' will go back to the factory value when you save.";
     RefreshRows(state);
   }
 }
@@ -251,13 +380,13 @@ std::string PresetStdDisplayFormat(float value) {
   return format;
 }
 
-// Reload every §1 std input from what is actually in effect (factory value, or the user's stored
-// override). Called on open and after every write, so the boxes show the stored truth rather than
-// whatever the user last typed into them.
+// Reload every §1 std input from the working copy (factory value, or what the copy holds). Called
+// on open and after every committed edit, so the boxes show the value that would be stored rather
+// than whatever the user last typed into them.
 void RefreshPresetStdBuffers() {
   g_preset_std_buffers = PresetStdBuffers{};
   for (const auto& entry : kAxisPresets) {
-    g_preset_std_buffers.slots[static_cast<std::size_t>(entry.id)] = EffectiveAxisPresetZenith(entry).std;
+    g_preset_std_buffers.slots[static_cast<std::size_t>(entry.id)] = EffectiveCopyPresetZenith(entry).std;
   }
 }
 
@@ -303,7 +432,7 @@ void RenderReadOnlyAxisRow(const char* axis_label, const AxisDist& dist) {
 // the Std cell is live and the warning cell can fill.
 void RenderEditableZenithRow(const AxisPresetEntry& entry) {
   const auto slot = static_cast<std::size_t>(entry.id);
-  const AxisDist zenith = EffectiveAxisPresetZenith(entry);
+  const AxisDist zenith = EffectiveCopyPresetZenith(entry);
 
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
@@ -330,22 +459,30 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
   ImGui::InputFloat(std_id.c_str(), &g_preset_std_buffers.slots[slot], 0.0f, 0.0f,
                     PresetStdDisplayFormat(g_preset_std_buffers.slots[slot]).c_str());
   if (ImGui::IsItemDeactivatedAfterEdit()) {
-    const AxisPresetWriteResult result = SaveAxisPresetZenithStdOverride(entry.id, g_preset_std_buffers.slots[slot]);
-    // The message is empty on a clean write, which is also how the warning cell is cleared — one
+    // Clamp WITHOUT writing: this is a §1 edit, and §1 edits go into the working copy like every
+    // other edit in this panel. Leaving this one on the immediate-write path would only have
+    // treated half the problem — and worse than not treating it at all, because the next Save
+    // writes the copy over the whole file and would have silently undone it.
+    const AxisPresetClampResult result = ClampAxisPresetZenithStdForSave(entry.id, g_preset_std_buffers.slots[slot]);
+    // The message is empty on a clean value, which is also how the warning cell is cleared — one
     // assignment covers both directions, so a warning cannot outlive the value that caused it.
     g_preset_warnings.slots[slot] = result.message;
-    if (!result.written) {
+    if (!result.accepted) {
       g_status_message = result.message;
-    } else if (result.clamped) {
-      // Says "adjusted", not "saved". A status line reading "Saved 9.99999905" after the user typed
-      // 25 is technically true and reads as though nothing happened to their number — the icon in
-      // the warning column carries the full reason, but the line the user is already looking at has
-      // to admit the value changed.
-      g_status_message = std::string("Adjusted to ") + FormatAxisPresetStd(result.stored_value) + " and saved as the " +
-                         entry.label + " zenith std.";
     } else {
-      g_status_message =
-          std::string("Saved ") + FormatAxisPresetStd(result.stored_value) + " as the " + entry.label + " zenith std.";
+      WriteAxisPresetZenithStdToDoc(g_copy_doc, entry.id, result.stored_value);
+      g_preset_pending.slots[slot] = PresetPendingEdit{ /*touched=*/true, result.stored_value };
+      if (result.clamped) {
+        // Says "adjusted", not just the number. A status line reading "9.99999905" after the user
+        // typed 25 reads as though nothing happened to their number — the icon in the warning
+        // column carries the full reason, but the line the user is already looking at has to admit
+        // the value changed.
+        g_status_message = std::string("Adjusted to ") + FormatAxisPresetStd(result.stored_value) +
+                           "; press Save to store it as the " + entry.label + " zenith std.";
+      } else {
+        g_status_message = std::string("Press Save to store ") + FormatAxisPresetStd(result.stored_value) + " as the " +
+                           entry.label + " zenith std.";
+      }
     }
     RefreshPresetStdBuffers();
   }
@@ -370,7 +507,7 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
 // about ONE preset.
 void RenderPresetEntry(const AxisPresetEntry& entry) {
   const auto slot = static_cast<std::size_t>(entry.id);
-  const bool has_override = GetUserAxisPresetZenithStdOverride(entry.id).has_value();
+  const bool has_override = CopyPresetZenithStd(entry).has_value();
 
   // Label carries "(mine)" for a preset the user has retuned, so the collapsed view already
   // answers "which of these have I changed" without opening all six.
@@ -427,17 +564,14 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
         ICON_FA_ARROW_ROTATE_LEFT " Restore to factory###preset_restore_" + std::string(entry.override_json_name);
     ImGui::BeginDisabled(!has_override);
     if (ImGui::Button(restore_id.c_str())) {
-      if (RevertOneAxisPresetOverride(entry.id)) {
-        g_status_message = std::string(entry.label) + " was restored to its built-in value.";
-        // Cleared only on success: the value IS the factory one now, so a warning about the value
-        // that was just removed would describe something no longer there. On failure the override
-        // (and the value it produced) is untouched — "disk first, memory second" means a failed
-        // write changes nothing — so the warning explaining that still-current value must survive,
-        // or the user is left staring at a clamped number with no clue where it came from.
-        g_preset_warnings.slots[slot].clear();
-      } else {
-        g_status_message = "Could not write your defaults file; nothing was changed.";
-      }
+      // Copy only, like the std edit above. The old code had a failure branch here because it
+      // wrote the file; dropping the override from an in-memory document has none, which is also
+      // why the warning is now cleared unconditionally: the value it described is gone from the
+      // copy, so there is no state in which it still applies.
+      EraseAxisPresetZenithStdFromDoc(g_copy_doc, entry.id);
+      g_preset_pending.slots[slot] = PresetPendingEdit{ /*touched=*/true, std::nullopt };
+      g_status_message = std::string(entry.label) + " will go back to its built-in value when you save.";
+      g_preset_warnings.slots[slot].clear();
       RefreshPresetStdBuffers();
     }
     ImGui::EndDisabled();
@@ -469,6 +603,14 @@ void OpenDefaultsPanel(GuiState& state, DefaultsPanelSection initial_section) {
   // Whole-value resets, not "clear the parts that look stale": every opening of this panel is a
   // fresh decision, and a row unchecked in an earlier opening silently staying unchecked would
   // contradict the "checked by default" contract the entry button promises.
+  //
+  // This is also where the previous session's working copy is discarded — closing the panel needs
+  // no teardown of its own, because nothing survives this assignment. "Close = discard" is
+  // therefore a property of the state's lifetime rather than a cleanup step someone can forget on
+  // one of the ways out (the button today, an X or Esc later).
+  g_snapshot_doc = ReadActiveOverlayDoc();
+  g_copy_doc = g_snapshot_doc;
+  g_preset_pending = PresetPendingEdits{};
   g_excluded_keys.clear();
   g_search_filter.Clear();
   g_status_message.clear();
@@ -553,18 +695,25 @@ void RenderDefaultsPanel(GuiState& state) {
   // §3 with source "Mine", which IS the confirmation that the write landed, and the failure path
   // (no writable config directory) has somewhere to say so.
   if (ImGui::Button(ICON_FA_FLOPPY_DISK " Save as my defaults###defaults_save", ImVec2(200.0f, 0.0f))) {
+    // Save commits the WHOLE copy, not just the checked §2 rows: the Reverts, the Reset all and
+    // the §1 preset edits are already in it. `accepted` being empty therefore does NOT mean
+    // "nothing to do" — the old panel could say that only because those other edits had already
+    // written themselves to disk behind the user's back.
     const std::vector<std::string> accepted = CheckedPendingKeys();
-    if (accepted.empty()) {
-      g_status_message = "No changes were selected, so nothing was saved.";
-    } else if (SaveAcceptedDefaults(accepted, state)) {
-      g_status_message = "Saved " + std::to_string(accepted.size()) + " setting(s) as your defaults.";
-      g_excluded_keys.clear();
+    if (CommitCopy(state, accepted)) {
+      g_status_message = accepted.empty() ?
+                             "Your defaults were updated." :
+                             "Saved " + std::to_string(accepted.size()) + " setting(s) as your defaults.";
     } else {
       g_status_message = "Could not write your defaults file; nothing was saved.";
     }
     RefreshRows(state);
   }
   ImGui::SameLine();
+  // Cancel semantics: the working copy is simply not committed. Nothing is written and nothing is
+  // torn down here — the next OpenDefaultsPanel replaces every piece of session state wholesale,
+  // so any other way out of this popup (an X, Esc) discards the copy identically without needing
+  // its own path.
   if (ImGui::Button(ICON_FA_XMARK " Close###defaults_close", ImVec2(120.0f, 0.0f))) {
     state.defaults_panel_open = false;
     ImGui::CloseCurrentPopup();
@@ -579,11 +728,11 @@ void RenderDefaultsPanel(GuiState& state) {
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - reset_width - ImGui::GetStyle().WindowPadding.x);
   PushDestructiveStyle();
   if (ImGui::Button(ICON_FA_TRASH " Reset all my defaults###defaults_reset_all", ImVec2(reset_width, 0.0f))) {
-    if (ResetAllDefaults()) {
-      g_status_message = "All personal defaults were removed; new documents start from factory values.";
-    } else {
-      g_status_message = "Could not write your defaults file; nothing was changed.";
-    }
+    // Copy only, like every other edit here — this is the button whose old write-through behavior
+    // made the panel dishonest, since it emptied the file while the screen did not move.
+    ApplyResetAllToDoc(g_copy_doc);
+    g_status_message =
+        "Every personal default will be removed when you save; new documents will start from factory values.";
     RefreshRows(state);
   }
   PopDestructiveStyle();
@@ -593,6 +742,9 @@ void RenderDefaultsPanel(GuiState& state) {
 
 void ResetDefaultsPanelTestState() {
   g_rows.clear();
+  g_snapshot_doc = nlohmann::json::object();
+  g_copy_doc = nlohmann::json::object();
+  g_preset_pending = PresetPendingEdits{};
   g_excluded_keys.clear();
   g_search_filter.Clear();
   g_pending_initial_section.reset();
