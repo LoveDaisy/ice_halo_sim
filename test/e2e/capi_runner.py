@@ -240,7 +240,7 @@ def lib_candidates(root: Path, build_type: str = "Release") -> List[Path]:
         # Every candidate is under the "shared" flavor: this runner loads the
         # dylib through ctypes, which only exists in a BUILD_SHARED_LIBS=ON build.
         # A static build writes to .../static/ and is correctly not found here.
-        root / "build" / build_type / "shared" / "lib" / "libprobe_r1_not_lumice.dylib",
+        root / "build" / build_type / "shared" / "lib" / "liblumice.dylib",
         root / "build" / build_type / "shared" / "lib" / "liblumice.so",
         root / "build" / "cmake_install" / "shared" / "liblumice.dylib",
         root / "build" / "cmake_install" / "shared" / "liblumice.so",
