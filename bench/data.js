@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785289534681,
+  "lastUpdate": 1785290507677,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "51e34348e18bd1fa90c79792dd33c0adf8f4e3ba",
-          "message": "Merge pull request #133 from LoveDaisy/fix/geometry-gen-numerical-robustness\n\nfix: extreme-wedge geometry-gen — kill fake basal face (B-ring raypath/subsun anomalies)",
-          "timestamp": "2026-06-20T02:19:25+08:00",
-          "tree_id": "da51e96d4de912b9c74faa6513b39f7c72ec7720",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/51e34348e18bd1fa90c79792dd33c0adf8f4e3ba"
-        },
-        "date": 1781893504802,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 426053.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 621030.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 373584.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 334875.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4792,6 +4744,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 348070.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92cc54c6635968e5797ada9b806b5f74ab0a8e93",
+          "message": "Merge pull request #235 from LoveDaisy/fix/install-hooks-worktree\n\nfix(install-hooks): resolve the hooks dir via git rev-parse --git-path",
+          "timestamp": "2026-07-29T09:53:29+08:00",
+          "tree_id": "ef5b6fe4f9f35d8c7d6032a1ad0e8c8fbc9a64df",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/92cc54c6635968e5797ada9b806b5f74ab0a8e93"
+        },
+        "date": 1785290505950,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 483331.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 583536.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 400634.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 350614.9,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
