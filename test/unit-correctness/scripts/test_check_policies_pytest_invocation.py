@@ -258,3 +258,38 @@ def test_check_is_registered_in_checks(tree: Path) -> None:
     """A rule that exists but is not in CHECKS never runs; nothing else here
     would notice."""
     assert check_policies.check_pytest_invocation_marker in check_policies.CHECKS
+
+
+# --- line-continuation folding follows the shell, not intuition --------------
+
+
+def test_continuation_folds_the_way_a_shell_folds_it() -> None:
+    """`\\`+newline is *removed*, not turned into a space.
+
+    `echo foo\\<nl>bar` prints `foobar` — that is the language these scanners
+    read, so the fold has to match it. Joining with a space would read a
+    dialect nobody writes and would split tokens the shell keeps contiguous.
+
+    This is pinned because a reviewer proposed the space-join as a fix for the
+    MISS 4 wording, on two counterexamples that are real behaviours but not
+    real invocations (see the companion test below). Without a pin, the next
+    reader has no way to tell the current form is a decision rather than a slip.
+    """
+    folded = check_policies._join_line_continuations("pytest foo.py \\\n-m slow\n")
+    assert folded == [(1, "pytest foo.py -m slow")]
+
+    tight = check_policies._join_line_continuations("pytest foo.py\\\n-m slow\n")
+    assert tight == [(1, "pytest foo.py-m slow")]
+
+
+def test_miss_4_is_a_broken_command_not_a_missed_invocation() -> None:
+    """The MISS 4 blind spot only swallows input the shell cannot run either.
+
+    `pytest\\<nl>foo.py` folds to `pytestfoo.py`: the token regex declines it,
+    and so would the shell — there is no such executable. Pinning it keeps the
+    documented miss honest; if someone ever makes this case flag, the rule has
+    started reporting on commands that do not exist.
+    """
+    folded = check_policies._join_line_continuations("pytest\\\nfoo.py --tb=short\n")
+    assert folded == [(1, "pytestfoo.py --tb=short")]
+    assert check_policies._pytest_invocation_offenders(folded[0][1]) == []

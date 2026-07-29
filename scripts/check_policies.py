@@ -1216,6 +1216,15 @@ def check_no_bare_print() -> list[Violation]:
 #   in the repo today; accepted, not overlooked.
 #   MISS 2 — launcher forms other than the three in PYTEST_TOKEN_RE below.
 #   MISS 3 — Markdown outside a ``` fence, and `~~~` fences (see the scanner).
+#   MISS 4 — a backslash continuation with no whitespace on either side of the
+#   break. `_join_line_continuations` folds those exactly as a shell does, i.e.
+#   by concatenation with no separator (`echo foo\<nl>bar` prints `foobar` —
+#   verified, not assumed), so `pytest\<nl>foo.py` folds to `pytestfoo.py` and
+#   the token regex correctly does not match. That is not a real invocation
+#   being missed: the shell would run `pytestfoo.py`, which does not exist. The
+#   fold is faithful to the language being read, and the input it "misses" is
+#   already broken. Do NOT "fix" this by joining with a space — that would
+#   deviate from shell semantics and split genuinely contiguous tokens.
 #
 # FALSE POSITIVE surface: a legitimate bare invocation whose target is NOT
 # slow-marked. Two exist, both listed by name in
@@ -1288,6 +1297,14 @@ def _join_line_continuations(text: str) -> list[tuple[int, str]]:
     Shell scripts and fenced doc recipes both break long pytest command lines
     this way, and the `-m` regularly lands on a different physical line than the
     `.py` target — judging either line alone would be wrong in both directions.
+
+    The join is deliberately separator-free, matching the shell: a backslash
+    continuation is removed outright, so `echo foo\\<nl>bar` prints `foobar`.
+    Joining with a space instead would read a language nobody writes — it would
+    split contiguous tokens the shell keeps together. The consequence is MISS 4
+    (see the rule header): a continuation with no surrounding whitespace folds
+    into a different token, which the regexes then correctly decline to match,
+    because the command it describes is itself broken.
     """
     lines = text.splitlines()
     out: list[tuple[int, str]] = []
