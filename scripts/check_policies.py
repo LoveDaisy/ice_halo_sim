@@ -1225,6 +1225,19 @@ def check_no_bare_print() -> list[Violation]:
 #   fold is faithful to the language being read, and the input it "misses" is
 #   already broken. Do NOT "fix" this by joining with a space — that would
 #   deviate from shell semantics and split genuinely contiguous tokens.
+#   MISS 5 — that fold is bash's, and it is applied to every fenced block
+#   regardless of the fence's language tag. Fences are still SCANNED whatever
+#   the dialect (the Windows recipe in doc/gpu-remote-cuda-build-testing.md is
+#   inside a ```bat fence and is checked); only the CONTINUATION syntax is
+#   assumed to be bash's trailing `\`. cmd/bat continues a line with `^` and
+#   PowerShell with a backtick, so a recipe that folds `-m` onto a `^`- or
+#   backtick-continued line reads to this scanner as two separate lines and the
+#   `.py` line alone looks marker-less — a false positive; the mirror case, a
+#   Windows path argument ending in `\` at a line break, would be folded when
+#   the dialect would not have folded it. Neither is live: the repo's six
+#   non-bash fences (2 bat, 4 powershell) put their pytest calls on one
+#   physical line. Stated rather than left to be discovered, per the same
+#   discipline as MISS 1.
 #
 # FALSE POSITIVE surface: a legitimate bare invocation whose target is NOT
 # slow-marked. Two exist, both listed by name in
