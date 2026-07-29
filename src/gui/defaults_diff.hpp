@@ -1,8 +1,9 @@
 #ifndef LUMICE_GUI_DEFAULTS_DIFF_HPP
 #define LUMICE_GUI_DEFAULTS_DIFF_HPP
 
-// The row set behind the "save current settings as my defaults" panel, plus the three write-back
-// operations that panel commits (adopt selected / revert one / reset all).
+// The row set behind the "save current settings as my defaults" panel, plus the write-back
+// operation that panel commits (one rule for the whole row set: keep what is checked, drop what is
+// not).
 //
 // GENERATED, NEVER ENUMERATED. A row set is produced by walking two JSON trees — the CURRENT
 // GuiState and the EFFECTIVE DEFAULT (factory GuiState + the saved sparse override) — both
@@ -22,6 +23,7 @@
 // assertion below can be made without rendering a frame.
 
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -40,7 +42,17 @@ namespace lumice::gui {
 struct DefaultDiffRow {
   std::string key_path;
   nlohmann::json current_value;
+  // The EFFECTIVE default: factory value with the saved override layered over it. This is what a
+  // new document would actually start from, which is why it is the one the panel shows.
   nlohmann::json default_value;
+  // The LITERAL factory value — GuiState{} serialized, with nothing layered on top.
+  //
+  // Equal to default_value exactly while this key has no saved override, which is why the two can
+  // be confused. They must not be: once a user has saved a non-factory default for a key,
+  // default_value IS that saved value, so "does this differ from factory" asked of default_value
+  // answers "no" for every key the user has ever customised — the precise rows the question is
+  // being asked about. The panel's "Differs from factory" filter compares against THIS field.
+  nlohmann::json factory_value;
   // Whether this key path is present in the saved override document ITSELF (not whether its value
   // happens to differ from factory). The two are independent: a user may deliberately save a value
   // that equals the factory one, and that is still "my default" — an explicit intent the panel has
@@ -63,9 +75,27 @@ struct DefaultDiffRow {
 //                     A key path into it would carry a document-local index, which cannot be a
 //                     personal default.
 //   schema_version  — a format version constant, not a GuiState field at all. It is identical on
-//                     both sides so it would never produce a §2 row anyway; excluding it keeps it
-//                     out of §3, where it would only read as "is this a setting?".
+//                     both sides, so it can never differ; excluding it keeps it out of the list,
+//                     where it would only read as "is this a setting?".
 inline constexpr const char* kDiffEngineExcludedRootKeys[] = { "layers", "schema_version" };
+
+// The raw (un-merged) override document in the active user-config directory. Empty object when
+// personal defaults are disabled or unavailable, which is also what "nothing saved" looks like.
+//
+// Public so the panel takes its opening snapshot through the SAME directory resolution the diff
+// engine and MakeNewDocumentState() use. Re-deriving it there from GetActiveUserConfigDir() +
+// ReadOverlayJsonIfPresent() would put a second copy of the "no directory ⇒ empty" degradation
+// rule in the panel, and two resolution paths for one question is the drift invariant I1 exists
+// to prevent (see the note on GetActiveUserConfigDir in user_defaults.hpp).
+nlohmann::json ReadActiveOverlayDoc();
+
+// Writes `doc` verbatim to the active user-config directory's override file. Public for the same
+// reason ReadActiveOverlayDoc is: the panel's Save is a whole-document commit (it builds the next
+// document in memory, then writes it), not a read-mutate-write of one key, so it needs the write
+// half of UpdateOverlayDocument's directory resolution without the read/mutate half. A second
+// inline GetActiveUserConfigDir() + WriteUserDefaultsFile() at the call site would be the same
+// drift risk ReadActiveOverlayDoc's comment already flags for the read side.
+bool WriteActiveOverlayDoc(const nlohmann::json& doc);
 
 // The whole row set for `current`, against the currently effective defaults (factory + whatever is
 // saved in the active user-config directory). Sorted by key_path for a stable panel order.
@@ -74,32 +104,94 @@ inline constexpr const char* kDiffEngineExcludedRootKeys[] = { "layers", "schema
 // per-frame one (see defaults_panel.cpp, which caches the result for the life of the modal).
 std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current);
 
+// Same, against an EXPLICIT override document instead of whatever is on disk right now.
+//
+// This is the overload the panel uses. The panel is a pure editor: it takes one snapshot of the
+// file when it opens and compares against that frozen document for the whole session, so nothing
+// the user has not committed yet can move a row's "Source" or its opening checkbox state underneath
+// them. The single-argument version above is exactly this one applied to ReadActiveOverlayDoc().
+std::vector<DefaultDiffRow> BuildDefaultDiffRows(const GuiState& current, const nlohmann::json& overlay_doc);
+
+// Whether `key_path` is written in `doc` itself (the in-document form of
+// DefaultDiffRow::has_saved_override — see that field's comment for why presence, not value
+// equality, is the question).
+bool DocHasKeyPath(const nlohmann::json& doc, const std::string& key_path);
+
 // Display form of a JSON leaf. DISPLAY ONLY — comparison is done on the raw json values
 // (RowNeedsAdoption below), so no amount of formatting loss can make two different values look
 // (or be judged) equal.
 std::string FormatDiffValue(const nlohmann::json& value);
 
-// §2 (needs adoption) vs §3 (everything else). The two sections are exactly this predicate and its
-// negation over one row set, so they are mutually exclusive and jointly complete by construction.
+// Whether this row's current value differs from the default a new document would resolve for it.
+//
+// Was the §2/§3 partition when the panel had two sections; it is now one half of the OR that
+// decides a row's INITIAL checkbox state (the other half is has_saved_override). Still a total,
+// two-valued predicate over one row set, which is the property test_gui_defaults_diff.cpp asserts.
 bool RowNeedsAdoption(const DefaultDiffRow& row);
 
+// Whether pressing Save right now would change what the override file holds for this key, given
+// the row's current checkbox state. The panel tints such rows, so "the thing this panel is for" is
+// visible per row instead of only through a filter that hides the others.
+//
+// A DIFFERENT question from both filters, and the distinction is the whole reason it exists:
+//   "Differs from factory"  — compares the value with the built-in one. A key the user saved long
+//                             ago and has not touched since differs from factory forever, yet
+//                             saving would not move it.
+//   "Edited this session"   — compares the checkbox with its state at open. Says nothing about a
+//                             value edited in place while the checkbox stayed put.
+//   this predicate          — compares what Save would write with what is on disk. That is the
+//                             copy-vs-disk judgement the panel is built around.
+//
+// Both sides are "present with a value, or absent": checked means Save writes current_value,
+// unchecked means Save removes the key, and has_saved_override says whether the file holds one
+// today (in which case default_value IS that stored value — see the field's comment). Presence has
+// to be compared as well as value, otherwise checking a key whose value already equals the stored
+// one would read as no change when it would in fact ADD the key to the file, and vice versa.
+bool RowWouldChangeOnSave(const DefaultDiffRow& row, bool checked);
+
 // ------------------------------------------------------------------------------------------------
-// Write-back. All three are surgical key-level edits of the existing document, never a wholesale
-// replacement: the override file also carries the "presets" subtree (405.1/405.2 read it; its UI
-// comes later), and a full rewrite here would silently delete a user's preset overrides.
+// The panel's write-back rule. Surgical key-level edits of an existing document, never a wholesale
+// replacement: the override file also carries the "presets" subtree, and a full rewrite here would
+// silently delete a user's preset overrides.
+//
+// Pure — it takes a document and changes it, it does no IO. That is what lets the panel's in-memory
+// copy and the on-disk document be edited by the SAME code: the panel applies it to its working
+// copy and writes once on Save.
 // ------------------------------------------------------------------------------------------------
 
-// Copy each accepted key path's CURRENT value into the override document. A key path that is
-// absent from the current document (an optional key such as sun.custom_spectrum) is REMOVED from
-// the override instead — "adopt what I have now" reads the same either way.
+// Fold the panel's checkbox state into `doc`: every checked row gets its CURRENT value written,
+// every unchecked row is removed. ONE rule over the WHOLE row set, which is what the checkbox now
+// means — "this key is (not) in my defaults" — rather than two paths ("adopt this pending change"
+// vs "revert this stored key") whose combined effect the user had to work out for themselves.
+//
+// A checked key path that is absent from the serialized current state (an optional key such as
+// sun.custom_spectrum) is REMOVED instead — "adopt what I have now" reads the same either way.
+//
+// Keys `rows` does not mention are left alone. That is how the "presets" subtree survives (it never
+// produces a row), and it also means a key some older version wrote is not swept up by a rule that
+// never displayed it to the user.
+//
+// Returns false (leaving `doc` untouched) when `current` could not be serialized. The caller must
+// not commit in that case: writing a document that is missing the very keys it was asked to adopt,
+// while reporting a successful save, is a silent wrong answer. That failure is raised BEFORE the
+// first mutation, which is what makes the whole call all-or-nothing.
+bool ApplyCheckedRowsToDoc(nlohmann::json& doc, const std::vector<DefaultDiffRow>& rows,
+                           const std::set<std::string>& checked_key_paths, const GuiState& current);
+
+// ------------------------------------------------------------------------------------------------
+// Disk-side wrappers: read the override file, apply one surgical edit, write it back.
+//
+// The panel does NOT use these — it is a pure editor and commits once, through its own copy (see
+// defaults_panel.cpp). They are the one-shot committed-edit API, and today their only callers are
+// test_gui_defaults_diff.cpp: they are the entry point through which the surgical-write contract
+// (untouched keys survive, the "presets" subtree survives, a missing config directory reports
+// failure, a clobbered non-object path node files a downgrade notice) is exercised.
+// ------------------------------------------------------------------------------------------------
+
 bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, const GuiState& current);
 
-// Drop one key path from the override document, so it falls back to the factory value. Empty
-// parent objects left behind are pruned, keeping the file readable by hand.
 bool RevertOneDefault(const std::string& key_path);
 
-// Drop every GuiState key from the override document. "presets" survives untouched — it belongs to
-// namespace 2 and is not what this panel edits.
 bool ResetAllDefaults();
 
 }  // namespace lumice::gui

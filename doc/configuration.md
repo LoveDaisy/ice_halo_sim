@@ -1047,6 +1047,17 @@ An unparseable or non-object file, a field with the wrong JSON type, a non-numer
 
 **Personal defaults only ever apply to a brand-new document** — they never override a value already present in a file being opened, whether that file is a `.lmc` project or a CLI JSON config imported through the GUI. Loading someone else's file always reproduces what that file itself specifies (or the factory value for anything it omits), regardless of what is saved on the machine doing the loading.
 
+#### Editing: one write per Save, never a live view of the file
+
+The `Settings` panel (opened from the top-bar `Settings` button; `src/gui/defaults_panel.cpp`) is not a live view of this file. It reads the file once when it opens, every edit made in the panel — a checkbox, a value typed into a cell, "Reset all" — changes only that in-memory copy, and **the file itself is written exactly once, when Save is pressed**. Closing the panel any other way (Close, the title-bar X, Esc) discards the copy; nothing on disk moves.
+
+The panel's table names two different values of the same key, which is worth spelling out here because the two are easy to conflate:
+
+- **"Current value"** — the working copy's value for this key, i.e. what Save would write right now. It is not what the file on disk currently holds; that is a separate "Source" column ("Mine" when the key is present in the file as it was when the panel opened, "Factory" otherwise).
+- **"Origin value"** — the literal factory value, `GuiState{}` serialized with nothing layered on top. It is not "the effective default before you started editing" — a key you have saved a non-factory value for shows the same Origin value regardless of what is stored.
+
+See `doc/gui-state-governance.md` §8 for the panel's internal architecture (how a row's existence is generated from the serialized document while its editor is a separate registered table, and the full shape of the copy model above).
+
 #### `--user-config` / `--no-user-config`
 
 Two CLI switches (deliberately not environment variables — a user-facing behavior switch left to an env var causes silent per-machine drift):

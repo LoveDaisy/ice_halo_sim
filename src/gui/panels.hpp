@@ -19,8 +19,25 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 // name already lives in a dedicated table column (see RenderShapeDistTableRow). The
 // default keeps the ~25 existing panel call sites (Axis / Sun / Simulation / View /
 // Display) byte-for-byte unchanged.
+//
+// `committed` (optional out-param, defaults to nullptr so existing call sites are unaffected):
+// set to `ImGui::IsItemDeactivatedAfterEdit()` semantics OR-ed across the slider AND the input
+// sub-widget — true exactly on the frame interaction with either one ends, not on every frame a
+// drag moves the value. The field-editor registry (`field_editor_registry.cpp`) needs this to
+// gate its own commit-and-refresh at "once per edit" rather than "once per frame of a drag".
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true);
+                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true, bool* committed = nullptr);
+
+// SliderInt + InputInt + label text — SliderWithInput's integer sibling, same layout and the same
+// `trailing_label = false` table-cell mode and optional `committed` out-param. Returns true if the
+// value changed.
+//
+// Exported (it was file-static in panels.cpp) because the defaults panel's field-editor registry
+// renders integer settings with it: an integer setting has to be edited by the SAME control the
+// main UI uses, or the two disagree about what a valid value is — which is the whole point of that
+// registry.
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true,
+                        bool* committed = nullptr);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };

@@ -13,6 +13,7 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
@@ -262,19 +263,11 @@ void RenderTopBar(float window_width) {
         DoExportConfigJson();
       }
       ImGui::Separator();
-      // Personal defaults live next to the other document-level "where do my settings go"
-      // commands rather than in a toolbar of their own: this writes what a NEW document starts
-      // from, which is a file-scope decision, not a view toggle.
-      if (ImGui::MenuItem("Save Current as Defaults...")) {
-        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPendingChanges);
-      }
-      // Same panel, different section expanded. A separate item rather than "open it and scroll":
-      // retuning a preset is a different errand from adopting the current document's settings, and
-      // a user who came to do the first should not have to recognise the second on the way.
-      if (ImGui::MenuItem("Edit My Presets...")) {
-        OpenDefaultsPanel(g_state, DefaultsPanelSection::kPresets);
-      }
-      ImGui::Separator();
+      // Personal defaults are NOT in this menu. They used to be, on the reasoning that "what a new
+      // document starts from" is a file-scope decision and so belongs with the other export
+      // commands. The reasoning was sound and the placement still failed the only test that
+      // matters: a user looking for their settings does not open a Save menu to find them, and in
+      // practice did not. The entry is now a Settings button in the top bar — see RenderTopBar.
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
       ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
       ImGui::EndPopup();
@@ -421,6 +414,27 @@ void RenderTopBar(float window_width) {
             "class is currently hidden. Open the Colors window to inspect per-class details.");
       }
     }
+  }
+
+  // Personal defaults, promoted out of the Save menu. The panel it opens edits what a NEW document
+  // starts from, so by file-scope logic it belonged with the export commands — but it was reached
+  // by nobody who had not been told where it was, which is the only measure a settings entry has.
+  //
+  // Two deliberate choices, both worth knowing before this button gets tidied away again:
+  //   - It is separated from the Colors group by the same "|" the file group uses, because the two
+  //     are different kinds of control. Colors and the Colored checkbox are toggles that change
+  //     what the viewport shows; this opens a modal that edits persistent preferences. Sharing a
+  //     run of buttons with no break would let a modal launcher read as one more view toggle.
+  //   - It is NOT gated on `busy`. Reading and editing personal defaults is independent of whether
+  //     a simulation is running, same as Colors — a settings entry that disappears while the thing
+  //     the user is watching runs is a settings entry they cannot find when they think to look.
+  // The panel's preset library is one section inside it, so retuning a preset is still reachable;
+  // it no longer has a menu item of its own pointing straight at that section.
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+  if (ImGui::Button(ICON_FA_GEAR " Settings")) {
+    OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
   }
 
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
@@ -653,31 +667,10 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       for (int idx : kLensTypePresentationOrder) {
         bool selected = (r.lens_type == idx);
         if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          if (r.lens_type != idx) {
-            bool was_globe = (r.lens_type == kLensTypeGlobe);
-            bool now_globe = (idx == kLensTypeGlobe);
-            r.lens_type = idx;
-            ViewDefaults d = DefaultViewParamsFor(idx);
-            // Reset fov to the new lens' default so e.g. first-time entry to
-            // Globe uses 30° instead of inheriting Linear's 90°. .lmc loading
-            // and tests bypass this combo by writing lens_type directly, so
-            // they keep their fov.
-            r.fov = d.fov;
-            if (was_globe != now_globe) {
-              // Globe is outside-in: crossing the boundary inverts both az and el.
-              // az: add 180 (mod 360) — self-inverse, same formula both directions.
-              r.azimuth += 180.0f;
-              if (r.azimuth > 180.0f) {
-                r.azimuth -= 360.0f;
-              }
-              // el: negate — self-inverse, same formula both directions.
-              r.elevation = -r.elevation;
-              // Globe el is limited to ±89° to avoid view-matrix degeneracy.
-              if (now_globe) {
-                r.elevation = std::max(-89.0f, std::min(89.0f, r.elevation));
-              }
-            }
-          }
+          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+          // lens_type directly, so they keep their fov.
+          ApplyLensTypeSelection(r, idx);
         }
         if (selected) {
           ImGui::SetItemDefaultFocus();
@@ -685,9 +678,14 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       }
       ImGui::EndCombo();
     }
-    float max_fov = LUMICE_MaxFov(static_cast<LUMICE_LensType>(r.lens_type));
-    ImGui::BeginDisabled(full_sky);
-    SliderWithInput("FOV##view", &r.fov, 1.0f, max_fov, "%.0f");
+    // Domain, format and disabled-when all come from the field editor registry rather than being
+    // written here — same for every slider below whose field is a registered document leaf. The
+    // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
+    // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
+    const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
+    ImGui::BeginDisabled(!fov_c.enabled);
+    SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
+                    fov_c.fmt, fov_c.scale);
     ImGui::EndDisabled();
     bool is_globe = (r.lens_type == kLensTypeGlobe);
     ImGui::SeparatorText("Visibility");
@@ -723,13 +721,22 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
             "Roll is locked to 0 in this mode (slider is greyed out).");
       }
     }
-    float el_lim = is_globe ? 89.0f : 90.0f;
-    ImGui::BeginDisabled(full_sky);
-    SliderWithInput("Elevation##view", &r.elevation, -el_lim, el_lim, "%.2f");
-    SliderWithInput("Azimuth##view", &r.azimuth, -180.0f, 180.0f, "%.2f");
+    // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
+    // gate the two share, is the registry's to state. Both entries carry the SAME gate
+    // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
+    const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
+    const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
+    ImGui::BeginDisabled(!el_c.enabled);
+    SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
+                    static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
+    SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
+                    az_c.fmt, az_c.scale);
     ImGui::EndDisabled();
-    ImGui::BeginDisabled(full_sky || is_globe);
-    SliderWithInput("Roll##view", &r.roll, -180.0f, 180.0f, "%.2f");
+    // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
+    const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
+    ImGui::BeginDisabled(!roll_c.enabled);
+    SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
+                    roll_c.fmt, roll_c.scale);
     ImGui::EndDisabled();
 
     ImGui::Separator();
@@ -761,7 +768,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
     ImGui::BeginGroup();
-    SliderWithInput("EV##display", &r.exposure_offset, -6.0f, 6.0f, "%.1f");
+    const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
+    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
+                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
     ImGui::EndGroup();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Exposure value offset for display brightness");
@@ -834,8 +843,14 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::SameLine();
     ImGui::BeginDisabled(no_bg);
     ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
-    ImGui::BeginDisabled(!g_state.bg_show);
-    SliderWithInput("Alpha##display", &g_state.bg_alpha, 0.0f, 1.0f, "%.2f");
+    // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
+    // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
+    // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
+    // disabled state is idempotent.
+    const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
+    ImGui::BeginDisabled(!bg_alpha_c.enabled);
+    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
+                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
     ImGui::EndDisabled();
     ImGui::EndDisabled();
 
@@ -875,15 +890,21 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
     overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
                 "Label##horizon", &g_state.show_horizon_label);
-    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, 0.0f, 1.0f, "%.2f");
+    const FieldEditorConstraint horizon_a_c = ConstraintFor("overlay_horizon_alpha", g_state);
+    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, static_cast<float>(horizon_a_c.min_value),
+                    static_cast<float>(horizon_a_c.max_value), horizon_a_c.fmt, horizon_a_c.scale);
 
     overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
                 &g_state.show_grid_label);
-    SliderWithInput("Alpha##grid", &g_state.grid_alpha, 0.0f, 1.0f, "%.2f");
+    const FieldEditorConstraint grid_a_c = ConstraintFor("overlay_grid_alpha", g_state);
+    SliderWithInput("Alpha##grid", &g_state.grid_alpha, static_cast<float>(grid_a_c.min_value),
+                    static_cast<float>(grid_a_c.max_value), grid_a_c.fmt, grid_a_c.scale);
 
     overlay_row("Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
                 &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
-    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, 0.0f, 1.0f, "%.2f");
+    const FieldEditorConstraint sun_a_c = ConstraintFor("overlay_sun_circles_alpha", g_state);
+    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, static_cast<float>(sun_a_c.min_value),
+                    static_cast<float>(sun_a_c.max_value), sun_a_c.fmt, sun_a_c.scale);
 
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
       if (ImGui::Button("Edit Angles...##overlay")) {
@@ -963,8 +984,12 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::TextUnformatted("Zenith/Nadir");
     ImGui::SameLine(line_col_x);
     ImGui::Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
-    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, 0.0f, 1.0f, "%.2f");
-    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, 2.0f, 20.0f, "%.1f px");
+    const FieldEditorConstraint zn_a_c = ConstraintFor("overlay_zenith_nadir_alpha", g_state);
+    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, static_cast<float>(zn_a_c.min_value),
+                    static_cast<float>(zn_a_c.max_value), zn_a_c.fmt, zn_a_c.scale);
+    const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
+    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
+                    static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
 
     ImGui::PopItemWidth();
   }

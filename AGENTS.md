@@ -221,15 +221,17 @@ Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
 `test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
 scene stops comparing pixel-identical.
 
-The `defaults_panel_layout` references cover the "Save Current as Defaults" modal
+The `defaults_panel_layout` references cover the `Settings` modal
 (`src/gui/defaults_panel.cpp`) through the same on-screen sub-region capture as `modal_layout`, and
-inherit the same docking coupling. Six deterministic scenes at the 40 dB floor: four over the diff
-sections (`pending_changes` / `other_expanded` / `filtered` / `no_changes`) and two over the preset
-library (`presets_expanded` / `presets_warning`, one preset unfolded to show the nine typed cells,
-the live std input and the warning column beside it). Every scene installs an explicit, freshly
-emptied user-config directory **before** `ResetTestState()` — installed after, the capture is built
-from whatever personal defaults the running machine has saved, which is worth 20.7 dB on a scene
-that looks isolated. Regen trigger: any layout change to the panel's section headers, either diff
+inherit the same docking coupling. Six deterministic scenes at the 40 dB floor: four over the merged
+settings list (`pending_changes` / `other_expanded` / `filtered` / `no_changes` — the two-section
+diff/adopt split these names once referred to was merged into one list with an inline-edited "Current
+value" column; see `doc/gui-state-governance.md` §8.5) and two over the preset library
+(`presets_expanded` / `presets_warning`, one preset unfolded to show the nine typed cells, the live
+std input and the warning column beside it). Every scene installs an explicit, freshly emptied
+user-config directory **before** `ResetTestState()` — installed after, the capture is built from
+whatever personal defaults the running machine has saved, which is worth 20.7 dB on a scene that
+looks isolated. Regen trigger: any layout change to the panel's section headers, the settings
 table's columns, the preset table's columns, or the pinned action row. Command:
 `python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
