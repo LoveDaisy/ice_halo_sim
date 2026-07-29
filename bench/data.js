@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785289532921,
+  "lastUpdate": 1785289534681,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "44a9f65ea41f3d27b6a3312eaa0400e155dec8a4",
-          "message": "Merge pull request #131 from LoveDaisy/perf/metal-gui-optimization\n\nperf: throughput measurement honesty + benchmark scene registry",
-          "timestamp": "2026-06-19T15:01:39+08:00",
-          "tree_id": "3ad22be58f5edb9734fe8e2cc078a723777417ca",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/44a9f65ea41f3d27b6a3312eaa0400e155dec8a4"
-        },
-        "date": 1781852875808,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 66.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 91.6,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "51e34348e18bd1fa90c79792dd33c0adf8f4e3ba",
           "message": "Merge pull request #133 from LoveDaisy/fix/geometry-gen-numerical-robustness\n\nfix: extreme-wedge geometry-gen — kill fake basal face (B-ring raypath/subsun anomalies)",
           "timestamp": "2026-06-20T02:19:25+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9955084a05d75819f74dff651c10a063ef2f5b65",
+          "message": "Merge pull request #234 from LoveDaisy/feat/panel-settings-editor\n\nfeat(gui): make the defaults panel a pure editor with one source of constraint truth",
+          "timestamp": "2026-07-29T09:36:30+08:00",
+          "tree_id": "8a4a79fac35d414f9774ddd237a09eb155ad5203",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9955084a05d75819f74dff651c10a063ef2f5b65"
+        },
+        "date": 1785289534321,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 91.9,
             "unit": "%"
           }
         ]
