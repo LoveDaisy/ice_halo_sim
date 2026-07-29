@@ -1,6 +1,9 @@
 #!/bin/sh
 #
-# Install Lumice's local git hooks into .git/hooks. Currently installs the
+# Install Lumice's local git hooks into the repo's hooks directory (resolved
+# via `git rev-parse --git-path hooks`, not assumed to be .git/hooks — in a
+# git worktree, .git is a file, not a directory, and hooks live in the main
+# checkout's .git/hooks, shared across all worktrees). Currently installs the
 # pre-commit hook (policy checks + clang-format on staged files). The existing
 # git-lfs hooks (post-checkout / post-commit / post-merge / pre-push) are left
 # untouched — we only add pre-commit, which git-lfs does not use.
@@ -11,7 +14,8 @@
 set -e
 REPO_ROOT=$(git rev-parse --show-toplevel)
 HOOK_SRC="$REPO_ROOT/scripts/hooks/pre-commit"
-HOOK_DST="$REPO_ROOT/.git/hooks/pre-commit"
+HOOK_DIR=$(git -C "$REPO_ROOT" rev-parse --git-path hooks)
+HOOK_DST="$HOOK_DIR/pre-commit"
 
 chmod +x "$HOOK_SRC"
 
