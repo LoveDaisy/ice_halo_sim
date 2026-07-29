@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785287717285,
+  "lastUpdate": 1785287719097,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5d0ae08f714a1ffe04c84be055d268ac1a7cf78b",
-          "message": "Merge pull request #130 from LoveDaisy/chore/milestone-cleanup\n\nmilestone-cleanup: testing architecture + suite reorg + boundary/doc hardening (scrum-270)",
-          "timestamp": "2026-06-17T17:47:17+08:00",
-          "tree_id": "5732ebb8dd203a1d9d03c74eff462eadeab90348",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5d0ae08f714a1ffe04c84be055d268ac1a7cf78b"
-        },
-        "date": 1781690103361,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 113.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 104.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 100,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 91.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "44a9f65ea41f3d27b6a3312eaa0400e155dec8a4",
           "message": "Merge pull request #131 from LoveDaisy/perf/metal-gui-optimization\n\nperf: throughput measurement honesty + benchmark scene registry",
           "timestamp": "2026-06-19T15:01:39+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 96.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c8492857cbb930e8415baf8267aaadf2082f7b6e",
+          "message": "Merge pull request #233 from LoveDaisy/feat/local-test-scope-and-docs\n\nbuild: per-flavor build/install trees + gate bare pytest to the fast subset",
+          "timestamp": "2026-07-29T09:07:07+08:00",
+          "tree_id": "7796a30d82f61ff9812359a3848ac7bbeb8ccc0a",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c8492857cbb930e8415baf8267aaadf2082f7b6e"
+        },
+        "date": 1785287718718,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.7,
             "unit": "%"
           }
         ]
