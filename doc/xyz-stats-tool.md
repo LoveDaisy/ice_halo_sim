@@ -9,7 +9,7 @@ normalized linear-Y percentile statistics from both the `unfiltered_xyz_buffer` 
 ```bash
 # Build release shared library first
 ./scripts/build.sh -sj release
-# Library will be at build/Release/lib/liblumice.dylib
+# Library will be at build/Release/shared/lib/liblumice.dylib
 ```
 
 Python dependencies: `numpy` (standard in the project Python environment).

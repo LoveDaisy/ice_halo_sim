@@ -24,26 +24,26 @@ jobs:
             os: ubuntu-24.04
             build_gui: ON
             cache_key: ubuntu-x64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
             build_gui: OFF
             cache_key: ubuntu-arm64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: macOS ARM64
             os: macos-15
             build_gui: ON
             cache_key: macos-arm64
-            benchmark_bin: build/Release/bin/Lumice
+            benchmark_bin: build/Release/static/bin/Lumice
 
           - name: Windows MSVC x86_64
             os: windows-2025
             build_gui: ON
             cache_key: windows-msvc-x64
             msvc: true
-            benchmark_bin: build/Release/bin/Lumice.exe
+            benchmark_bin: build/Release/static/bin/Lumice.exe
 
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
@@ -141,9 +141,9 @@ jobs:
         with:
           name: gui-test-windows-msvc
           path: |
-            build/Release/bin/gui_test.exe
-            build/Release/bin/LumiceGUI.exe
-            build/Release/bin/Lumice.exe
+            build/Release/static/bin/gui_test.exe
+            build/Release/static/bin/LumiceGUI.exe
+            build/Release/static/bin/Lumice.exe
           retention-days: 7
 
   # CUDA compile-only: nvcc actually compiles the .cu translation units on every
@@ -387,6 +387,56 @@ jobs:
       - name: Build lumice_bench (compile + link only, no run)
         run: cmake --build build --target lumice_bench --parallel
 
+  # Shared + tests + GUI compile-only: the one combination no other job builds.
+  # The `build` job builds tests and the GUI but only statically; `e2e-slow` is the
+  # only shared-library job and it passes -DBUILD_TEST=OFF -DBUILD_GUI=OFF. That gap
+  # let a real link-structure defect sit undetected: gui_test reached core through
+  # lumice_gui_obj, and because a CMake OBJECT library does not forward another OBJECT
+  # library's object files, under BUILD_SHARED_LIBS=ON it resolved against the `lumice`
+  # dylib, which exports only the LUMICE_* C API — so the white-box GUI tests could not
+  # link at all. Nothing was red, because nothing ever built it.
+  #
+  # Build-only on purpose: CI runners have no display server, so running gui_test here
+  # would mostly exercise LUMICE_SKIP_GUI_TESTS=1 skips. This job's value is link-time
+  # correctness, which is exactly the defect class above. Runtime behavior under the
+  # shared flavor is verified locally, not here.
+  #
+  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
+  # triggers so both PRs and branch pushes run this gate.
+  shared-gui-test-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux GUI dependencies
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+          libgtk-3-dev
+
+      # Independent cache key: BUILD_SHARED_LIBS=ON is a distinct configure, so its
+      # dependency set may differ from the plain ubuntu-x64 build job's. Sharing a key
+      # would let one pollute the other.
+      - name: Cache CPM dependencies
+        uses: actions/cache@v6
+        with:
+          path: cpm_cache
+          key: cpm-ubuntu-x64-shared-gui-test-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: cpm-ubuntu-x64-shared-gui-test-
+
+      - name: Configure (shared + test + GUI)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TEST=ON
+          -DBUILD_GUI=ON
+          -DBUILD_SHARED_LIBS=ON
+          -DLUMICE_NATIVE_ARCH=OFF
+
+      - name: Build (compile + link only, no run)
+        run: cmake --build build --parallel
+
   e2e-test:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -406,7 +456,7 @@ jobs:
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/build/cmake_install/static
           -DBUILD_TEST=OFF
           -DBUILD_GUI=OFF
           -DLUMICE_NATIVE_ARCH=OFF
@@ -502,7 +552,7 @@ jobs:
         #
         # CLI-based Darwin slow gates (test_metal_throughput, test_metal_batch_invariance
         # exit-conservation) drive the `Lumice` CLI via runner.find_lumice_binary(), which
-        # looks for build/cmake_install/Lumice or $LUMICE_BIN. This shared-lib build does
+        # looks for build/cmake_install/static/Lumice or $LUMICE_BIN. This shared-lib build does
         # not install, so point LUMICE_BIN at the build-tree binary (its build-tree rpath
         # resolves liblumice; DYLD/LD_LIBRARY_PATH set as a belt-and-suspenders fallback).
         # No-op on legs where the binary is absent. (The parity leg uses the shared lib via

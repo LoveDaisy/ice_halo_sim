@@ -10,7 +10,7 @@ Usage:
 
 Prerequisites:
     Build release: ./scripts/build.sh -j release
-    Library:       build/Release/lib/liblumice.dylib  (override via LUMICE_LIB env)
+    Library:       build/Release/shared/lib/liblumice.dylib  (override via LUMICE_LIB env)
 """
 
 import argparse
@@ -81,7 +81,7 @@ LUMICE_SERVER_NOT_READY = 2
 # ─── Library loading ──────────────────────────────────────────────────────────
 
 def load_lib():
-    lib_path = os.environ.get("LUMICE_LIB", "build/Release/lib/liblumice.dylib")
+    lib_path = os.environ.get("LUMICE_LIB", "build/Release/shared/lib/liblumice.dylib")
     if not os.path.exists(lib_path):
         print(f"[ERROR] Library not found: {lib_path}", file=sys.stderr)
         print("[ERROR] Build first: ./scripts/build.sh -j release", file=sys.stderr)
@@ -326,7 +326,7 @@ def main():
 
     os.makedirs(args.output, exist_ok=True)
     lib = load_lib()
-    lib_path = os.environ.get("LUMICE_LIB", "build/Release/lib/liblumice.dylib")
+    lib_path = os.environ.get("LUMICE_LIB", "build/Release/shared/lib/liblumice.dylib")
     print(f"[INFO] Loaded: {lib_path}", flush=True)
     print(f"[INFO] Running {len(scene_names)} scene(s): {', '.join(scene_names)}", flush=True)
 

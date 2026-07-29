@@ -197,12 +197,19 @@ set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analyt
 # Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
 # reuse the e2e runner fixtures (CApiRunner) rather than duplicating them in a
 # new gtest binary. On Mac (LUMICE_CUDA_ENABLED=OFF) the test self-skips; it is
-# intended to run on dev49 via `pytest test_cuda_multi_ms_parity.py` or via
-# `ctest -R CudaMultiMsParity` on dev49 after LUMICE_CUDA_ENABLED=1 in env.
+# intended to run on dev49 via `pytest -m slow test_cuda_multi_ms_parity.py` or
+# via `ctest -R CudaMultiMsParity` on dev49 after LUMICE_CUDA_ENABLED=1 in env.
+#
+# `-m slow` is REQUIRED, not decorative: every test in both files below is
+# slow-marked, and `pyproject.toml`'s `addopts = ["-m", "not slow"]` pins a bare
+# `pytest` to the fast subset. Without an explicit `-m`, these two invocations
+# collect zero tests and pytest exits 5 ("no tests collected"), which ctest
+# reports as a hard FAILURE — on every platform, since both carry the `parity`
+# label that `ctest -L "unit-correctness|parity|golden-analytic"` selects.
 find_program(PYTEST_EXECUTABLE NAMES pytest pytest3 HINTS ENV PATH)
 if(PYTEST_EXECUTABLE)
   add_test(NAME "CudaMultiMsParity"
-    COMMAND ${PYTEST_EXECUTABLE} -v
+    COMMAND ${PYTEST_EXECUTABLE} -v -m slow
       "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_multi_ms_parity.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   set_tests_properties("CudaMultiMsParity" PROPERTIES
@@ -213,7 +220,7 @@ if(PYTEST_EXECUTABLE)
   # `ctest -R CudaRandomGeometryParity`; on Mac / no-CUDA hosts the body
   # self-skips at pytest collection time.
   add_test(NAME "CudaRandomGeometryParity"
-    COMMAND ${PYTEST_EXECUTABLE} -v
+    COMMAND ${PYTEST_EXECUTABLE} -v -m slow
       "${PROJ_TEST_DIR}/parity-cross-backend/backend/test_cuda_random_geometry_parity.py"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   set_tests_properties("CudaRandomGeometryParity" PROPERTIES

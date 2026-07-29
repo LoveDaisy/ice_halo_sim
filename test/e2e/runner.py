@@ -21,13 +21,13 @@ def find_lumice_binary() -> Path:
 
     Search order:
       1. $LUMICE_BIN environment variable
-      2. build/cmake_install/Lumice (release build output)
+      2. build/cmake_install/static/Lumice (release build output)
 
     Raises FileNotFoundError with actionable message if not found.
     """
     # Always return an ABSOLUTE path. LUMICE_BIN is frequently a relative path
     # (CI's shared-lib E2E build does not install, so it points LUMICE_BIN at
-    # the build-tree binary `build/Release/bin/Lumice` — see ci.yml). A caller
+    # the build-tree binary `build/Release/shared/bin/Lumice` — see ci.yml). A caller
     # that runs the binary under a different cwd (e.g. subprocess(cwd=tmp_path)
     # to isolate an image output) would otherwise resolve that relative path
     # against the wrong directory and hit FileNotFoundError. resolve() makes the
@@ -40,7 +40,11 @@ def find_lumice_binary() -> Path:
         raise FileNotFoundError(f"LUMICE_BIN={env_bin} is not a valid executable")
 
     root = get_project_root()
-    candidate = root / "build" / "cmake_install" / "Lumice"
+    # The static flavor: this runner drives the CLI as a subprocess, and the
+    # static install tree is what `./scripts/build.sh -j release` produces. A
+    # shared build installs to .../shared/ and is reached via $LUMICE_BIN
+    # instead (see the e2e-slow job in ci.yml).
+    candidate = root / "build" / "cmake_install" / "static" / "Lumice"
     if candidate.is_file() and os.access(candidate, os.X_OK):
         return candidate.resolve()
 

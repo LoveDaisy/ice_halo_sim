@@ -17,7 +17,7 @@ via the same C API path used by the bug. If the sentinel guard were removed,
 the process would SIGSEGV before the assertion on lifecycle ~31 completes.
 
 Requires shared-lib build: ./scripts/build.sh -sj release
-Run: pytest test/e2e/ -v -m slow
+Run: pytest -v -m slow
 """
 
 from __future__ import annotations

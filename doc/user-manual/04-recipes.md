@@ -62,7 +62,7 @@ The most familiar halo: a bright ring at exactly 22° from the sun, caused by li
 
 The three `uniform` distributions (`mean=0, std=360` on each Euler angle) make the orientation isotropic on the sphere — the sampler recognises this as the canonical full-sphere case (`AxisDistribution::IsFullSphereUniform` in `src/core/math.cpp`). Without `axis`, the crystal is locked to a single fixed orientation and you get arcs/spots, not a closed 22° ring. The single scattering entry with `prob: 0.0` makes every outgoing ray exit (single-scatter recipe); see Recipe 3 for the multi-scatter form.
 
-Run: `./build/cmake_install/Lumice -f recipes/22-halo.json -o /tmp/out`.
+Run: `./build/cmake_install/static/Lumice -f recipes/22-halo.json -o /tmp/out`.
 
 For the prism field semantics, see [`../configuration.md`](../configuration.md) §`crystal`.
 

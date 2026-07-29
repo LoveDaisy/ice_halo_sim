@@ -280,14 +280,14 @@ per-resolution `multi_wall`：
 ./scripts/build.sh -j release
 
 # benchmark 模式（推荐——结构化输出，不写图片）
-./build/cmake_install/Lumice --benchmark -f examples/bench_config.json -o /tmp
+./build/cmake_install/static/Lumice --benchmark -f examples/bench_config.json -o /tmp
 
 # 手动模式（info 级别——带图片输出）
-time ./build/cmake_install/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
+time ./build/cmake_install/static/Lumice -f examples/bench_config.json -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 
 # 手动模式（debug 级别——Consume 分解）
-time ./build/cmake_install/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
+time ./build/cmake_install/static/Lumice -f examples/bench_config.json -v -o /tmp 2>&1 \
   | grep -E "Consume profile|Stats:"
 ```
 
@@ -324,8 +324,8 @@ CUDA 吞吐在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。两机完整 bu
 
 ```bash
 # dev49 CUDA docker 内（先 build -DLUMICE_CUDA_ENABLED=ON -DBUILD_SHARED_LIBS=ON）
-LUMICE_BENCH_BIN=/work/build/Release/bin/Lumice \
-LUMICE_BENCH_LIBDIR=/work/build/Release/lib \
+LUMICE_BENCH_BIN=/work/build/Release/shared/bin/Lumice \
+LUMICE_BENCH_LIBDIR=/work/build/Release/shared/lib \
 LUMICE_BENCH_BACKENDS=legacy,cuda \
   python3 scripts/bench_throughput.py
 # 只跑可比轻场景（对标 25M/s）：LUMICE_BENCH_CONFIGS=bench_light_single_ms
@@ -462,12 +462,12 @@ legacy 的统计等价性由 slow-e2e parity harness 验证（`ds_corr ≥ 0.99`
 ./scripts/build.sh -gtj release
 
 # 仅运行性能测试（PERF 输出在 stderr，服务器日志在 stdout）
-./build/Release/bin/gui_test --filter perf_test \
+./build/Release/static/bin/gui_test --filter perf_test \
   > /tmp/perf_stdout.txt 2>/tmp/perf_stderr.txt
 grep "\[PERF\]" /tmp/perf_stderr.txt
 
 # debug 级别（增加 ConsumeData 每批次 + Consume 剖析）
-./build/Release/bin/gui_test --filter perf_test --log-level debug \
+./build/Release/static/bin/gui_test --filter perf_test --log-level debug \
   > /tmp/perf_stdout_debug.txt 2>/tmp/perf_stderr_debug.txt
 grep "Consume profile" /tmp/perf_stdout_debug.txt
 ```

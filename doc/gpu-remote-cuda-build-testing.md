@@ -45,7 +45,10 @@
       docker build -t lumice-cuda-test:11.6-py /tmp/lumice-img-build'
     ```
     baked 版本（首建时）：pytest 8.4.2 / numpy 2.0.2 / Pillow 11.3.0。
-- **build dir**：`build/cmake_build_cuda`（已配好，Ninja，`LUMICE_CUDA_ENABLED=ON`，86-virtual PTX）。
+- **build dir**：`build/cmake_build_cuda`（已配好，Ninja，`LUMICE_CUDA_ENABLED=ON`，86-virtual PTX，
+  `BUILD_SHARED_LIBS=ON`——产物是 `liblumice.so`）。产物路径带 flavor 段，故这台机上是
+  `build/Release/shared/{bin,lib}/`；下次 `ninja` 会因 `CMakeLists.txt` mtime 变化自动 reconfigure 并
+  落到新位置，无需手工重配。
 - **build**：
   ```bash
   ssh 49-GPU 'cd /home/work/zjj/ice-halo-sim && IMG=lumice-cuda-test:11.6-py && \
@@ -64,9 +67,9 @@
   ```bash
   docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
     export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-    export LUMICE_LIB=/work/build/Release/lib/liblumice.so
-    export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    python3 -m pytest -v test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
+    export LUMICE_LIB=/work/build/Release/shared/lib/liblumice.so
+    export LD_LIBRARY_PATH=/work/build/Release/shared/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    python3 -m pytest -v -m slow test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
   ```
   判据 = 退出码 0 且看到 `N passed`（无需再加 `-p no:faulthandler`）。
   （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
@@ -74,8 +77,8 @@
   ```bash
   docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
     export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-    export LD_LIBRARY_PATH=/work/build/Release/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    /work/build/Release/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"'
+    export LD_LIBRARY_PATH=/work/build/Release/shared/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    /work/build/Release/shared/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"'
   ```
   覆盖 `CudaRichExit`（2 个 in-test `GTEST_SKIP`）、`CudaBackendCrystalCount`、`CudaRngHiWiring`(4)、
   `CudaComponentMaskParity`(6，染色 parity)。**判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。
@@ -101,9 +104,13 @@
   MSVC 工具集 **14.39.33519**（scrum-309 定；14.51 太新 CUDA 11.7 收不了）。CUDA `v11.7`。
   cmake/ninja 不在 PATH，走 BuildTools 内置（build.ninja 已 baked 绝对路径，纯 ninja 增量即可）。
 - **配好的 CUDA build dirs**（CMakeCache+build.ninja 齐全，`LUMICE_CUDA_ENABLED=ON`）：
-  - `C:\lumice-src\build\win-cuda`（静态 CLI）
-  - `C:\lumice-src\build\win-cuda-shared`（**shared→liblumice.dll，parity 用这个**）
-  - `C:\lumice-src\build\win-gui-cuda`（GUI）
+  - `C:\lumice-src\build\win-cuda`（静态 CLI）→ 产物 `build\Release\static\bin\`
+  - `C:\lumice-src\build\win-cuda-shared`（**shared→liblumice.dll，parity 用这个**）→ 产物 `build\Release\shared\bin\`
+  - `C:\lumice-src\build\win-gui-cuda`（GUI，静态）→ 产物 `build\Release\static\bin\`
+
+  ⚠️ 产物路径带 flavor 段是**新行为**。在此之前三棵树都写同一个 `build\Release\bin\`，即静态与
+  shared 一直在互相覆盖对方的 `Lumice.exe`——parity 跑到的 CLI 取决于谁最后构建。现在两者分家，
+  各棵树 `ninja` 时会因 `CMakeLists.txt` mtime 变化自动 reconfigure，不必手工重配。
 - **build**（写 .bat scp 过去，`cmd /c` 跑——**别用 PowerShell `&` 后台化，会 AmpersandNotAllowed**；
   同步跑，我方 bash `run_in_background` 拿 notification）：
   ```bat
@@ -114,17 +121,17 @@
   %NINJA%
   echo NINJA_EXIT=%ERRORLEVEL%
   ```
-  产物 `C:\lumice-src\build\Release\bin\lumice.dll` + `Lumice.exe`（cudart64_110.dll 同目录）。
+  产物 `C:\lumice-src\build\Release\shared\bin\lumice.dll` + `Lumice.exe`（cudart64_110.dll 同目录）。
   既有噪声告警：fmt/spdlog `#27-D character out of range`、`math.hpp` C4305 truncation（无关）。
 - **parity**：embeddable python `C:\lumice-test\py311\python.exe`（**已装 pytest+numpy**）：
   ```bat
   set LUMICE_HAS_CUDA=1
   set LUMICE_CUDA_ENABLED=1
-  set LUMICE_LIB=C:\lumice-src\build\Release\bin\lumice.dll
-  set PATH=C:\lumice-src\build\Release\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin;%PATH%
+  set LUMICE_LIB=C:\lumice-src\build\Release\shared\bin\lumice.dll
+  set PATH=C:\lumice-src\build\Release\shared\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin;%PATH%
   set PYTHONUTF8=1
   cd /d C:\lumice-src
-  C:\lumice-test\py311\python.exe -m pytest -v test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
+  C:\lumice-test\py311\python.exe -m pytest -v -m slow test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
   ```
   耗时 ~7min，1070Ti/sm_61 走 compute_61 PTX JIT。
   - ⚠️ **`set PYTHONUTF8=1` 必带**：中文 Windows 控制台默认 GBK codec，parity 测试的

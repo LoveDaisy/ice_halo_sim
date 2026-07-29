@@ -4,20 +4,20 @@
 
 本章介绍如何在命令行下跑 Lumice — 适合批处理、CI、无显示器的服务器、可复现的 recipe。
 
-> **前置**：`build/cmake_install/Lumice` 已构建。如果还没有，参见 [`01-install_zh.md`](01-install_zh.md)。
+> **前置**：`build/cmake_install/static/Lumice` 已构建。如果还没有，参见 [`01-install_zh.md`](01-install_zh.md)。
 
 ## 1. 最简调用
 
 最少参数：
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json
+./build/cmake_install/static/Lumice -f examples/config_example.json
 ```
 
 这会把 JPEG 输出写到当前工作目录。指定输出目录：
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json -o /tmp/lumice-out
+./build/cmake_install/static/Lumice -f examples/config_example.json -o /tmp/lumice-out
 ```
 
 ![Lumice 启动](../figs/cli_screenshot_01.jpg)
@@ -43,18 +43,18 @@
 ## 3. Verbose 与 Debug 模式
 
 ```bash
-./build/cmake_install/Lumice -f config.json -v   # trace 级日志
-./build/cmake_install/Lumice -f config.json -d   # debug 级日志
+./build/cmake_install/static/Lumice -f config.json -v   # trace 级日志
+./build/cmake_install/static/Lumice -f config.json -d   # debug 级日志
 ```
 
 `-v` 大致是"按 batch 显示生成进度"；`-d` 额外输出 RNG seed、散射层调度等诊断信息。先用 `-v`，只在追 bug 时再上 `-d`。
 
 ## 4. 完整 flag 一览
 
-`Lumice -h` 打印的完整 flag 列表（事实锚：`./build/cmake_install/Lumice -h`）：
+`Lumice -h` 打印的完整 flag 列表（事实锚：`./build/cmake_install/static/Lumice -h`）：
 
 ```text
-Usage: ./build/cmake_install/Lumice -f <config_file> [options]
+Usage: ./build/cmake_install/static/Lumice -f <config_file> [options]
 
 Options:
   -f <file>          Specify the configuration file (required)

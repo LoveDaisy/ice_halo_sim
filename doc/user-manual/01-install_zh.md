@@ -23,7 +23,7 @@ Lumice 是一个使用 CMake 构建的 C++17 项目，环境需要：
 推荐用脚本 `scripts/build.sh` 构建：
 
 ```bash
-# Release 构建，并行，产物安装到 build/cmake_install/
+# Release 构建，并行，产物安装到 build/cmake_install/static/
 ./scripts/build.sh -j release
 ```
 
@@ -40,10 +40,11 @@ Release 构建成功后，关键产物位置如下：
 
 | 产物 | 路径 | 用途 |
 |------|------|------|
-| CLI 二进制 | `build/cmake_install/Lumice` | 命令行执行 JSON 配置 |
-| GUI 二进制 | `build/cmake_install/LumiceGUI` | 交互式 GUI（依赖 Qt）|
+| CLI 二进制 | `build/cmake_install/static/Lumice` | 命令行执行 JSON 配置 |
+| GUI 二进制 | `build/cmake_install/static/LumiceGUI` | 交互式 GUI（依赖 Qt）|
 
-> Debug 构建产物位于 `build/cmake_build/`。本手册其余章节默认使用 `build/cmake_install/` 下的 Release 产物。
+> 两棵树都按 flavor 分开：`-s`（shared）构建与静态构建永不共用目录。CMake 构建树是
+> `build/cmake_build/<flavor>/`。本手册其余章节默认使用 `build/cmake_install/static/` 下的 Release 产物。
 
 ![Lumice CLI 启动横幅](../figs/cli_screenshot_01.jpg)
 
@@ -52,7 +53,7 @@ Release 构建成功后，关键产物位置如下：
 跑一遍内置示例配置，确认端到端可用。在项目根目录执行：
 
 ```bash
-./build/cmake_install/Lumice -f examples/config_example.json -o /tmp/lumice-smoke
+./build/cmake_install/static/Lumice -f examples/config_example.json -o /tmp/lumice-smoke
 ```
 
 你应该看到：

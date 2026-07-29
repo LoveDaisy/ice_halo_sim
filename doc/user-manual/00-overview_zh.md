@@ -52,7 +52,7 @@
 
 - 所有 shell 命令默认在项目根目录（含 `CMakeLists.txt` 的目录）执行。
 - 手册内部路径用 `../` 引用 `doc/` 同级（如 `../figs/<image>.jpg`）。
-- 代码块以 `./scripts/build.sh -j release` 构建产出的 `build/cmake_install/Lumice` 为锚验证。
+- 代码块以 `./scripts/build.sh -j release` 构建产出的 `build/cmake_install/static/Lumice` 为锚验证。
 - 涉及代码事实的描述都会注明源文件行号（例如 `src/core/simulator.cpp:482-498`）。
 
 ## 延伸阅读

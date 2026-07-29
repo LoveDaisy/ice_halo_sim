@@ -453,8 +453,8 @@ def test_parity_multi_ms_prob05_filter():
 # BD raypath [4,6] configs hang on Metal at the e2e harness because the kernel
 # produces ZERO surviving rays per batch (`ConsumeData: first batch consumed (0
 # ray segments)`) while legacy emits ~1920 surviving/batch on the same config.
-# Repro: `DYLD_LIBRARY_PATH=$PWD/build/Release/lib LUMICE_TRACE_BACKEND=metal
-# ./build/cmake_install/Lumice -f test/e2e/configs/parity_single_ms_bd_filter.json`.
+# Repro: `DYLD_LIBRARY_PATH=$PWD/build/Release/shared/lib LUMICE_TRACE_BACKEND=metal
+# ./build/cmake_install/shared/Lumice -f test/e2e/configs/parity_single_ms_bd_filter.json`.
 # `MetalFilterMatchParity.RandomSequencesAcrossAxisAndCheckMode` (unit test) DOES
 # cover BD raypath [4,6] and passes 0 mismatches — so the divergence is NOT in
 # the per-call `DeviceFilterMatchRaypath` formula itself but somewhere in the

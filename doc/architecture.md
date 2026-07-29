@@ -294,7 +294,7 @@ The system uses a multi-threaded architecture:
 - Interacts with the core library through the `lumice.h` public API
 - Usage:
   ```bash
-  ./build/cmake_install/Lumice -f examples/config_example.json
+  ./build/cmake_install/static/Lumice -f examples/config_example.json
   ```
 
 **`src/gui/main.cpp` → `LumiceGUI`** (GUI, requires `-g` build flag)
@@ -302,7 +302,7 @@ The system uses a multi-threaded architecture:
 - Provides crystal 3D preview, render preview, parameter editing, and `.lmc` file management
 - Usage:
   ```bash
-  ./build/cmake_install/LumiceGUI
+  ./build/cmake_install/static/LumiceGUI
   ```
 
 Build targets:

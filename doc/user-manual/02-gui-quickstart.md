@@ -4,12 +4,12 @@
 
 This chapter walks you through your first interactive simulation in the Lumice GUI: launch the app, load the bundled example, run, and read the preview. By the end you will know which panels to click and what the floating overlays mean.
 
-> **Prerequisite**: a release build with the GUI enabled (`./scripts/build.sh -j release` produces `build/cmake_install/LumiceGUI`).
+> **Prerequisite**: a release build with the GUI enabled (`./scripts/build.sh -j release` produces `build/cmake_install/static/LumiceGUI`).
 
 ## 1. Launch
 
 ```bash
-./build/cmake_install/LumiceGUI
+./build/cmake_install/static/LumiceGUI
 ```
 
 On first launch the main window opens with no project loaded:

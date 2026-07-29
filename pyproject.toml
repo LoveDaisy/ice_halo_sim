@@ -12,6 +12,12 @@ testpaths = [
     "test/gui",
     "test/regression-sentinel",
 ]
+# Pins bare `pytest` to the fast subset so AGENTS.md's "fast e2e only (matches
+# CI)" claim is structurally true instead of a convention callers must
+# remember to apply by hand. `-m ''` on the command line still overrides this
+# back to the full suite; see doc/testing-architecture.md's "pytest markers"
+# entry for the measured rationale and the escape hatches.
+addopts = ["-m", "not slow"]
 pythonpath = ["."]
 # pytest-xdist parallelism is safe for this suite: xdist runs each test in a
 # separate worker PROCESS, so capi_runner's process-global os.environ + log

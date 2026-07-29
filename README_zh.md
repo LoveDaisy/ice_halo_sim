@@ -29,11 +29,11 @@ C++17 编写的冰晕光线追踪模拟器：通过追踪光线在冰晶中的�
 构建 CLI 并运行内置示例，多数读者 5 分钟即可上手。
 
 ~~~bash
-# 1. 构建（release，多线程）—— 安装至 build/cmake_install/
+# 1. 构建（release，多线程）—— 安装至 build/cmake_install/static/
 ./scripts/build.sh -j release
 
 # 2. 运行示例模拟
-./build/cmake_install/Lumice -f examples/config_example.json
+./build/cmake_install/static/Lumice -f examples/config_example.json
 ~~~
 
 CLI 会输出进度信息，并在工作目录写出 4 张渲染图。
@@ -70,7 +70,7 @@ Lumice 读取单个 JSON 文件，包含 **crystal**（晶体）、**filter**（
 
 ## GUI 概览
 
-GUI 前端（`./scripts/build.sh -gj release` 构建，`./build/cmake_install/LumiceGUI` 启动）
+GUI 前端（`./scripts/build.sh -gj release` 构建，`./build/cmake_install/static/LumiceGUI` 启动）
 让你在带实时 3D 预览的界面里编辑晶体 / 场景 / 渲染参数，切换镜头投影，并查看模拟产物，
 不必手工编辑 JSON。
 

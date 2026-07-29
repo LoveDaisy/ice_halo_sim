@@ -87,7 +87,7 @@ The project uses CMake for building and provides a `scripts/build.sh` script to 
 
 ```bash
 ./scripts/build.sh debug
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 (lldb) run -f examples/config_example.json
 ```
 
@@ -95,7 +95,7 @@ lldb ./build/cmake_build/Lumice
 
 ```bash
 ./scripts/build.sh debug
-gdb ./build/cmake_build/Lumice
+gdb ./build/Debug/static/bin/Lumice
 (gdb) run -f examples/config_example.json
 ```
 
@@ -106,8 +106,8 @@ Lumice uses a small number of environment variables for build scripts and test t
 | Variable | Where | Purpose |
 |----------|-------|---------|
 | `LUMICE_SKIP_GUI_TESTS` | `scripts/build.sh` | Set to `1` to skip GUI test compilation and execution. CI auto-detects headless environments via the `CI` variable. |
-| `LUMICE_BIN` | `test/e2e/runner.py` | Override the CLI binary path for E2E subprocess tests. Defaults to `build/cmake_install/Lumice`. |
-| `LUMICE_LIB` | `test/e2e/capi_runner.py` | Override the shared library path for E2E C API tests. Defaults to `build/cmake_install/liblumice.dylib` (macOS) or `.so` (Linux). |
+| `LUMICE_BIN` | `test/e2e/runner.py` | Override the CLI binary path for E2E subprocess tests. Defaults to `build/cmake_install/static/Lumice`. |
+| `LUMICE_LIB` | `test/e2e/capi_runner.py` | Override the shared library path for E2E C API tests. Defaults to the first existing shared-flavor candidate, starting with `build/Release/shared/lib/liblumice.dylib` (macOS) or `.so` (Linux). |
 
 **Design principle**: Deterministic simulation seeds are passed via the C API (`LUMICE_ServerConfig.sim_seed`) rather than environment variables, to keep program behavior explicit and reproducible. See the [C API documentation](c_api.md) for details.
 
@@ -485,7 +485,7 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 ./scripts/build.sh -t release
 
 # Or run manually
-cd build/cmake_build
+cd build/cmake_build/static
 ctest
 ```
 
@@ -552,37 +552,45 @@ End-to-end tests verify the complete CLI simulation pipeline, from configuration
 #### Framework
 
 - **Python**: pytest + Pillow (for image comparison)
-- **Location**: `test/e2e/`
+- **Location**: `test/e2e-correctness/` (tests); `test/e2e/` holds only shared fixtures the
+  layers import from — see `test/e2e/README.md`
 
 #### Test Structure
 
 ```
-test/e2e/
-├── test_smoke.py            # Smoke tests with PSNR image verification
-├── test_errors.py           # Error scenario tests (exit code verification)
-├── configs/                 # Test configuration JSON files
-└── references/              # Reference output images (*.jpg)
+test/e2e-correctness/           # tests (independent top-level directory)
+├── test_smoke.py             # Smoke tests with PSNR image verification
+├── test_cli.py                # CLI behavior
+├── ...                         # other correctness tests — see doc/testing-architecture.md §1.4
+└── references/                 # Reference output images (*.jpg)
+
+test/e2e/                       # shared fixtures (independent top-level directory)
+├── configs/                     # Scenario JSON configs shared across layers
+└── runner.py, base.py, ...      # Shared fixtures — see test/e2e/README.md
 ```
 
 #### Running E2E Tests
 
 ```bash
-# Requires a built binary at build/cmake_install/Lumice
-pytest test/e2e/ -v
+# Requires a built binary at build/cmake_install/static/Lumice
+pytest -v          # fast subset (pinned by pyproject.toml addopts; matches CI)
+pytest -v -m ''     # full set
 ```
 
 #### Image Verification
 
 E2E smoke tests compare output images against reference images using PSNR (Peak Signal-to-Noise Ratio):
-- Reference images are stored in `test/e2e/references/*.jpg`
-- PSNR threshold: tests pass if PSNR exceeds a defined minimum (typically 40 dB)
+- Reference images are stored in `test/e2e-correctness/references/*.jpg`
+- PSNR threshold: calibrated per output as `min_psnr - 3 dB` from 3 reference runs, floored to
+  0.5 dB precision — see the `PSNR_THRESHOLDS` dict and its per-entry comments in
+  `test/e2e-correctness/test_smoke.py` for the current values and their calibration history
 - To update reference images: run the simulation with the test config and replace the reference file
 
 #### Adding New E2E Tests
 
 1. Create a configuration JSON in `test/e2e/configs/`
 2. Generate the reference image by running the CLI with the new config
-3. Save the reference to `test/e2e/references/`
+3. Save the reference to `test/e2e-correctness/references/`
 4. Add a test case in `test_smoke.py` or a new test file
 
 ## Debugging Tips
@@ -648,7 +656,7 @@ lumice::GetGlobalLogger().SetLevel(lumice::LogLevel::kDebug);  // Set to debug l
 
 ```bash
 # Start debugging
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 
 # Set breakpoints
 (lldb) breakpoint set --file crystal.cpp --line 100
@@ -673,18 +681,18 @@ lldb ./build/cmake_build/Lumice
 #### Valgrind Memory Check (Linux)
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/Lumice -f examples/config_example.json
+valgrind --leak-check=full ./build/Debug/static/bin/Lumice -f examples/config_example.json
 ```
 
 #### Performance Profiling
 
 ```bash
 # Using perf (Linux)
-perf record ./build/cmake_install/Lumice -f examples/config_example.json
+perf record ./build/cmake_install/static/Lumice -f examples/config_example.json
 perf report
 
 # Using Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/Lumice -f examples/config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/static/Lumice -f examples/config_example.json
 ```
 
 ### Common Troubleshooting

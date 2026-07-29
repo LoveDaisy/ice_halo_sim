@@ -60,10 +60,21 @@ if(BUILD_SHARED_LIBS)
 endif()
 
 # Directories
+# The build flavor is a pure function of BUILD_SHARED_LIBS, never a knob of its
+# own. It is a path segment because these output directories are anchored on
+# CMAKE_SOURCE_DIR, not on the -B tree: without it, a static and a shared build
+# write the same paths and overwrite each other, so alternating between the two
+# means a full rebuild every time (and a stale-artifact hazard in between).
+# With it, the two flavors coexist and each stays warm.
+if(BUILD_SHARED_LIBS)
+  set(LUMICE_BUILD_FLAVOR "shared")
+else()
+  set(LUMICE_BUILD_FLAVOR "static")
+endif()
 set(BUILD_DIR "${CMAKE_SOURCE_DIR}/build")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/lib/${ARCH}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/lib/${ARCH}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/bin/${ARCH}")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/${LUMICE_BUILD_FLAVOR}/lib/${ARCH}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/${LUMICE_BUILD_FLAVOR}/lib/${ARCH}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BUILD_DIR}/${CMAKE_BUILD_TYPE}/${LUMICE_BUILD_FLAVOR}/bin/${ARCH}")
 
 set(PROJ_SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 set(PROJ_TEST_DIR "${CMAKE_SOURCE_DIR}/test")
@@ -517,8 +528,8 @@ if(WIN32 AND BUILD_SHARED_LIBS)
   set_target_properties(lumice PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
-# Shared builds: install the dylib next to the CLI (build/cmake_install/lib) so
-# the install tree is self-contained. The CLI's INSTALL_RPATH (@loader_path/lib,
+# Shared builds: install the dylib next to the CLI (build/cmake_install/shared/lib)
+# so the install tree is self-contained. The CLI's INSTALL_RPATH (@loader_path/lib,
 # see src/CMakeLists.txt) resolves @rpath/liblumice.dylib there. Static builds
 # archive lumice into the CLI, so there is nothing to install here.
 if(BUILD_SHARED_LIBS)

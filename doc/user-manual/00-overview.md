@@ -53,7 +53,7 @@ This manual does **not** replicate the technical references already in `doc/`. F
 
 - All shell commands assume you are at the project root (the directory containing `CMakeLists.txt`).
 - Paths inside the manual use `../` to reach `doc/` siblings (e.g. `../figs/<image>.jpg`).
-- Code blocks are tested against the build artefact at `build/cmake_install/Lumice` produced by `./scripts/build.sh -j release`.
+- Code blocks are tested against the build artefact at `build/cmake_install/static/Lumice` produced by `./scripts/build.sh -j release`.
 - Where a fact is anchored to source code, the source line is cited (e.g. `src/core/simulator.cpp:482-498`).
 
 ## Further reading

@@ -54,8 +54,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _PROJECT_ROOT = get_project_root()
-_GUI_BIN = _PROJECT_ROOT / "build" / "Release" / "bin" / "gui_test"
-_LIB_DIR = _PROJECT_ROOT / "build" / "Release" / "lib"
+_GUI_BIN = _PROJECT_ROOT / "build" / "Release" / "static" / "bin" / "gui_test"
+_LIB_DIR = _PROJECT_ROOT / "build" / "Release" / "static" / "lib"
 _CONFIGS_DIR = _PROJECT_ROOT / "test" / "e2e" / "configs"
 
 # Heavy multi-MS + filter + multi-crystal scene — the regime where legacy struggles

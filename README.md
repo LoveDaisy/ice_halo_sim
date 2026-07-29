@@ -31,11 +31,11 @@ Inspired by [HaloPoint 2.0](https://www.ursa.fi/blogi/ice-crystal-halos/author/m
 Build the CLI and run the bundled example. Most readers should be up in five minutes.
 
 ~~~bash
-# 1. Build (release, parallel) — installs into build/cmake_install/
+# 1. Build (release, parallel) — installs into build/cmake_install/static/
 ./scripts/build.sh -j release
 
 # 2. Run the example simulation
-./build/cmake_install/Lumice -f examples/config_example.json
+./build/cmake_install/static/Lumice -f examples/config_example.json
 ~~~
 
 The CLI prints progress and writes four PNG/JPG renders next to your working directory.
@@ -73,7 +73,7 @@ For the full field reference (every section, every option, every lens type) see
 ## GUI overview
 
 A graphical front-end (built with `./scripts/build.sh -gj release` and launched as
-`./build/cmake_install/LumiceGUI`) lets you edit crystal/scene/render parameters with a
+`./build/cmake_install/static/LumiceGUI`) lets you edit crystal/scene/render parameters with a
 real-time 3D preview, cycle lens projections, and inspect simulation output without
 hand-editing JSON.
 

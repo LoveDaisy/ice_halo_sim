@@ -87,7 +87,7 @@ sudo apt-get install cmake ninja-build
 
 ```bash
 ./scripts/build.sh debug
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 (lldb) run -f examples/config_example.json
 ```
 
@@ -95,7 +95,7 @@ lldb ./build/cmake_build/Lumice
 
 ```bash
 ./scripts/build.sh debug
-gdb ./build/cmake_build/Lumice
+gdb ./build/Debug/static/bin/Lumice
 (gdb) run -f examples/config_example.json
 ```
 
@@ -106,8 +106,8 @@ Lumice 仅在构建脚本和测试工具中使用少量环境变量。产品代�
 | 变量 | 位置 | 用途 |
 |------|------|------|
 | `LUMICE_SKIP_GUI_TESTS` | `scripts/build.sh` | 设为 `1` 可跳过 GUI 测试的编译和执行。CI 通过 `CI` 变量自动检测无头环境。 |
-| `LUMICE_BIN` | `test/e2e/runner.py` | 覆盖 E2E 子进程测试使用的 CLI 可执行文件路径。默认为 `build/cmake_install/Lumice`。 |
-| `LUMICE_LIB` | `test/e2e/capi_runner.py` | 覆盖 E2E C API 测试使用的共享库路径。默认为 `build/cmake_install/liblumice.dylib`（macOS）或 `.so`（Linux）。 |
+| `LUMICE_BIN` | `test/e2e/runner.py` | 覆盖 E2E 子进程测试使用的 CLI 可执行文件路径。默认为 `build/cmake_install/static/Lumice`。 |
+| `LUMICE_LIB` | `test/e2e/capi_runner.py` | 覆盖 E2E C API 测试使用的共享库路径。默认为第一个存在的 shared flavor 候选，首选 `build/Release/shared/lib/liblumice.dylib`（macOS）或 `.so`（Linux）。 |
 
 **设计原则**：确定性模拟种子通过 C API（`LUMICE_ServerConfig.sim_seed`）传递，而非环境变量，以确保程序行为显式且可复现。详见 [C 接口文档](c_api_zh.md)。
 
@@ -485,7 +485,7 @@ TEST_F(CrystalTest, GetTriangleVtx) {
 ./scripts/build.sh -t release
 
 # 或手动运行
-cd build/cmake_build
+cd build/cmake_build/static
 ctest
 ```
 
@@ -552,37 +552,44 @@ t->TestFunc = [](ImGuiTestContext* ctx) {
 #### 框架
 
 - **Python**：pytest + Pillow（图像比较）
-- **位置**：`test/e2e/`
+- **位置**：`test/e2e-correctness/`（测试本体）；`test/e2e/` 现在只存放各层共用的 fixture，
+  见 `test/e2e/README.md`
 
 #### 测试结构
 
 ```
-test/e2e/
-├── test_smoke.py            # 冒烟测试（PSNR 图像验证）
-├── test_errors.py           # 错误场景测试（退出码验证）
-├── configs/                 # 测试配置 JSON 文件
-└── references/              # 参考输出图片（*.jpg）
+test/e2e-correctness/            # 测试本体（独立顶层目录）
+├── test_smoke.py             # 冒烟测试（PSNR 图像验证）
+├── test_cli.py                # CLI 行为
+├── ...                          # 其它正确性测试 — 见 doc/testing-architecture.md §1.4
+└── references/                  # 参考输出图片（*.jpg）
+
+test/e2e/                         # 共用 fixture（独立顶层目录）
+├── configs/                      # 各层共用的场景 JSON 配置
+└── runner.py, base.py, ...       # 共用 fixture — 见 test/e2e/README.md
 ```
 
 #### 运行 E2E 测试
 
 ```bash
-# 需要已构建的二进制文件 build/cmake_install/Lumice
-pytest test/e2e/ -v
+# 需要已构建的二进制文件 build/cmake_install/static/Lumice
+pytest -v           # fast 子集（由 pyproject.toml 的 addopts 钉住；与 CI 一致）
+pytest -v -m ''      # 全量
 ```
 
 #### 图像验证
 
 E2E 冒烟测试使用 PSNR（峰值信噪比）将输出图像与参考图像进行比较：
-- 参考图片存放在 `test/e2e/references/*.jpg`
-- PSNR 阈值：通常为 40 dB，超过即通过
+- 参考图片存放在 `test/e2e-correctness/references/*.jpg`
+- PSNR 阈值：按 `min_psnr - 3 dB`（3 次参考运行取最小值，向 0.5 dB 精度取整）逐个输出标定 —
+  现行数值与标定历史见 `test/e2e-correctness/test_smoke.py` 的 `PSNR_THRESHOLDS` 字典及其逐条注释
 - 更新参考图片：使用测试配置运行 CLI 模拟，替换参考文件
 
 #### 添加新的 E2E 测试
 
 1. 在 `test/e2e/configs/` 中创建配置 JSON
 2. 使用新配置运行 CLI 生成参考图像
-3. 将参考图像保存到 `test/e2e/references/`
+3. 将参考图像保存到 `test/e2e-correctness/references/`
 4. 在 `test_smoke.py` 或新测试文件中添加测试用例
 
 ## 调试技巧
@@ -648,7 +655,7 @@ lumice::GetGlobalLogger().SetLevel(lumice::LogLevel::kDebug);  // 设置为 debu
 
 ```bash
 # 启动调试
-lldb ./build/cmake_build/Lumice
+lldb ./build/Debug/static/bin/Lumice
 
 # 设置断点
 (lldb) breakpoint set --file crystal.cpp --line 100
@@ -673,18 +680,18 @@ lldb ./build/cmake_build/Lumice
 #### Valgrind内存检查（Linux）
 
 ```bash
-valgrind --leak-check=full ./build/cmake_build/Lumice -f examples/config_example.json
+valgrind --leak-check=full ./build/Debug/static/bin/Lumice -f examples/config_example.json
 ```
 
 #### 性能分析
 
 ```bash
 # 使用 perf (Linux)
-perf record ./build/cmake_install/Lumice -f examples/config_example.json
+perf record ./build/cmake_install/static/Lumice -f examples/config_example.json
 perf report
 
 # 使用 Instruments (macOS)
-instruments -t "Time Profiler" ./build/cmake_install/Lumice -f examples/config_example.json
+instruments -t "Time Profiler" ./build/cmake_install/static/Lumice -f examples/config_example.json
 ```
 
 ### 常见问题排查

@@ -20,7 +20,8 @@ Thank you for your interest in contributing to Lumice! This guide covers the dev
 ./scripts/build.sh -k release             # Clean rebuild (preserves dependency cache)
 ```
 
-Build output: `build/cmake_install/` (Release), `build/cmake_build/` (Debug)
+Build output: `build/cmake_install/<flavor>/` (install tree), `build/cmake_build/<flavor>/` (CMake
+build tree), where `<flavor>` is `shared` with `-s` and `static` without it
 
 ### Git hooks (recommended, one-time)
 
@@ -38,8 +39,12 @@ authoritative regardless of whether the hook is installed.
 ```bash
 ./scripts/build.sh -tj release            # Unit tests (GoogleTest via CTest)
 ./scripts/build.sh -gtj release           # GUI tests (requires display server)
-pytest test/e2e/ -v               # E2E tests (requires Pillow)
+pytest -v                                 # E2E tests, fast subset — pinned by pyproject.toml
+                                           # addopts, matches CI (requires Pillow)
 ```
+
+See `AGENTS.md`'s "Testing and Platform Notes" for the full test-scope picture
+(`scripts/test.sh`, the slow/full pytest marker, and which one to run when).
 
 ## Branch Naming
 
