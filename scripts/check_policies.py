@@ -68,6 +68,20 @@ Checks:
      drift (isolated `--filter <group>` vs. the full suite) previously made
      committed references optimistic (see AGENTS.md's reference-regeneration
      section).
+  11. pytest-invocation-marker — a pytest call site (test/CMakeLists.txt's
+     add_test, scripts/*.sh, doc/**/*.md and AGENTS.md fenced recipes) that
+     names a `.py` target must pass its own `-m`. Without one it inherits
+     pyproject.toml's `addopts = ["-m", "not slow"]`, and a slow-only target
+     then collects ZERO tests — silently from a script or doc, as a ctest
+     FAILURE (pytest exit 5) from an add_test. Both have happened once each.
+     The criterion is syntactic and its misses are enumerated at the rule's
+     definition below, per AGENTS.md's "the checker is the rule, not an
+     approximation of it" discipline.
+     This rule also introduces the first WARNING-not-violation diagnostic in
+     this file (an unterminated Markdown fence writes to stderr and leaves the
+     exit code alone): "the checker cannot parse this" and "the repo violates
+     the rule" are different facts and get different exits. Rule 12's author
+     should reuse that channel rather than invent a second one.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS. Keep each check deterministic and artifact-inspecting.
@@ -1176,6 +1190,267 @@ def check_no_bare_print() -> list[Violation]:
     return out
 
 
+# --- pytest-invocation-marker ----------------------------------------------
+#
+# `pyproject.toml`'s `addopts = ["-m", "not slow"]` pins a bare `pytest` to the
+# fast subset. Any invocation that names a `.py` target but passes no `-m` of
+# its own therefore runs under "not slow" — and if every test in that file is
+# slow-marked, it collects ZERO tests. That is silent (exit 0) from a doc recipe
+# and a hard ctest FAILURE (exit 5) from an `add_test`. Both have already
+# happened once each (5164fd26 for test/CMakeLists.txt, 7fbe01d7 for the two
+# CUDA parity recipes in doc/), and both were caught by a person who happened to
+# run the thing, not by a gate.
+#
+# CHOSEN CRITERION — syntactic, not semantic. The rule is "a pytest invocation
+# that names a `.py` target must also pass its own `-m`", NOT "the named target
+# must not be fully deselected by addopts". The semantic form is closer to the
+# real failure, but it would need this checker to read arbitrary `.py` files for
+# `@pytest.mark.slow` decorators, and it degenerates on any file that mixes
+# slow and non-slow tests (whether the run collects zero then depends on which
+# tests exist, which is not statically decidable). Per AGENTS.md's discipline for
+# check_new_refs.py — *the checker is the rule, not an approximation of it* — the
+# syntactic form is written down here as the rule itself, with its misses stated:
+#
+#   MISS 1 — a target given as a DIRECTORY (or no target at all) is never
+#   flagged, even if that whole directory is slow-only. No such call site exists
+#   in the repo today; accepted, not overlooked.
+#   MISS 2 — launcher forms other than the three in PYTEST_TOKEN_RE below.
+#   MISS 3 — Markdown outside a ``` fence, and `~~~` fences (see the scanner).
+#
+# FALSE POSITIVE surface: a legitimate bare invocation whose target is NOT
+# slow-marked. Two exist, both listed by name in
+# PYTEST_INVOCATION_MARKER_ALLOWED below.
+PYTEST_INVOCATION_RULE = "pytest-invocation-marker"
+
+# The launcher spellings actually observed in this repo: bare `pytest`, CMake's
+# resolved `${PYTEST_EXECUTABLE}`, and `python -m pytest` (including the Windows
+# `C:\...\python.exe -m pytest` form used by the win-builder recipe).
+#
+# Known gap, stated rather than discovered later: this list is OBSERVED, not
+# exhaustive. A wrapper form — `poetry run pytest`, `uv run pytest`, `tox`, a
+# shell alias — is silently NOT scanned, and no amount of green from the
+# whole-tree run can surface that, because a false negative is by construction
+# indistinguishable from a clean tree. Extend the alternation when a new
+# launcher lands.
+PYTEST_TOKEN_RE = re.compile(
+    r"\bpytest\b"
+    r"|\$\{PYTEST_EXECUTABLE\}"
+    r"|\bpython[\w.]*\s+-m\s+pytest\b"
+)
+# Brace expansion (`test_cuda_{exit_seam,filter}_parity.py`) needs no expanding:
+# the literal already ends in `.py`.
+PY_PATH_RE = re.compile(r"\.py\b")
+# `\B` before the dash keeps this off long options — `--max-fail` contains `-m`
+# but has a word char after it, so the trailing `\b` rejects it anyway; the two
+# guards together mean only a standalone `-m` counts.
+MARKER_FLAG_RE = re.compile(r"\B-m\b")
+
+# Files exempt as whole files, same granularity as BARE_PRINT_ALLOWED. Both drive
+# a target that is deliberately NOT slow-marked (each target's docstring says so),
+# so their bare invocation is correct. Known cost of file-level granularity: a
+# second, non-compliant pytest call added to either script later would also be
+# waved through. Each has carried exactly one pytest call since it was written;
+# that risk is the same size as the two exemption lists already in this file.
+PYTEST_INVOCATION_MARKER_ALLOWED = frozenset(
+    {
+        REPO_ROOT / "scripts" / "verify_crash_sentinel_detection_power.sh",
+        REPO_ROOT / "scripts" / "verify_pyramid_crash_sentinel_detection_power.sh",
+    }
+)
+
+# Scan roots. Bound to names (not inlined) so the fixture net can retarget them
+# at a tmp tree. A path that does not exist is skipped silently — a rename of one
+# of these anchors would retire that third of the rule without a word, which is
+# the one gap here that a reader should know is not covered by the green run.
+PYTEST_SCAN_CMAKE = REPO_ROOT / "test" / "CMakeLists.txt"
+PYTEST_SCAN_SHELL_DIR = REPO_ROOT / "scripts"
+PYTEST_SCAN_MD_DIRS = (REPO_ROOT / "doc",)
+PYTEST_SCAN_MD_FILES = (REPO_ROOT / "AGENTS.md",)
+
+ADD_TEST_OPEN_RE = re.compile(r"\badd_test\s*\(")
+# Tolerates leading whitespace: doc/ indents its fences under list items.
+MD_FENCE_RE = re.compile(r"^\s*```")
+
+_PYTEST_INVOCATION_MESSAGE = (
+    "pytest invocation names a `.py` target but passes no `-m` of its own, so it "
+    "inherits pyproject.toml's `addopts = [\"-m\", \"not slow\"]`. If every test in "
+    "that file is slow-marked it collects ZERO tests — silently (exit 0) from a "
+    "script or doc, or as a ctest FAILURE (exit 5) from an add_test. Pass an "
+    "explicit `-m` (e.g. `-m slow`, or `-m ''` for everything). If the target is "
+    "genuinely not slow-marked, add the file to PYTEST_INVOCATION_MARKER_ALLOWED."
+)
+
+
+def _join_line_continuations(text: str) -> list[tuple[int, str]]:
+    """Fold backslash-continued physical lines into one logical line each.
+
+    Returns (1-based line number where the logical line STARTS, joined text).
+    Shell scripts and fenced doc recipes both break long pytest command lines
+    this way, and the `-m` regularly lands on a different physical line than the
+    `.py` target — judging either line alone would be wrong in both directions.
+    """
+    lines = text.splitlines()
+    out: list[tuple[int, str]] = []
+    i, n = 0, len(lines)
+    while i < n:
+        start = i + 1
+        buf: list[str] = []
+        while True:
+            stripped = lines[i].rstrip()
+            if stripped.endswith("\\") and i + 1 < n:
+                buf.append(stripped[:-1])
+                i += 1
+                continue
+            buf.append(lines[i])
+            break
+        out.append((start, "".join(buf)))
+        i += 1
+    return out
+
+
+def _pytest_invocation_offenders(span: str) -> list[str]:
+    """The offending invocation slices inside `span` (empty list == clean).
+
+    A span may hold more than one invocation (`pytest a.py && pytest -m slow
+    b.py`), so each pytest token owns the text up to the NEXT token rather than
+    the whole span — otherwise one compliant call would launder a bad one.
+
+    The `-m` search starts AFTER the token for a second reason, and this one is
+    load-bearing rather than a nicety: the `python3 -m pytest` launcher form
+    contains a literal `-m`. Searching the whole span would read that as "the
+    caller passed a marker" and wave through exactly the doc recipe that this
+    rule exists to catch (the pre-7fbe01d7 CUDA parity battery).
+    """
+    tokens = list(PYTEST_TOKEN_RE.finditer(span))
+    out: list[str] = []
+    for idx, token in enumerate(tokens):
+        end = tokens[idx + 1].start() if idx + 1 < len(tokens) else len(span)
+        args = span[token.end():end]
+        if PY_PATH_RE.search(args) and not MARKER_FLAG_RE.search(args):
+            out.append(span[token.start():end].strip())
+    return out
+
+
+def _scan_cmake_pytest_invocations() -> list[Violation]:
+    """`add_test(...)` blocks in test/CMakeLists.txt.
+
+    The command is spread over several lines inside one paren-balanced block, so
+    the block — not the line — is the unit, extracted with the same depth match
+    _paren_inner() already does for the crystal-slots check.
+    """
+    path = PYTEST_SCAN_CMAKE
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    out: list[Violation] = []
+    for m in ADD_TEST_OPEN_RE.finditer(text):
+        block = _paren_inner(text[m.end():])
+        if not PYTEST_TOKEN_RE.search(block):
+            continue
+        lineno = text.count("\n", 0, m.start()) + 1
+        for _offender in _pytest_invocation_offenders(block):
+            out.append(Violation(path, lineno, PYTEST_INVOCATION_RULE, _PYTEST_INVOCATION_MESSAGE))
+    return out
+
+
+def _scan_shell_pytest_invocations() -> list[Violation]:
+    """`scripts/*.sh`, non-recursively — which is the literal scope, and which
+    keeps scripts/hooks/ out without needing an exclusion.
+    """
+    out: list[Violation] = []
+    if not PYTEST_SCAN_SHELL_DIR.is_dir():
+        return out
+    for path in sorted(PYTEST_SCAN_SHELL_DIR.glob("*.sh")):
+        if path in PYTEST_INVOCATION_MARKER_ALLOWED:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, logical in _join_line_continuations(text):
+            for _offender in _pytest_invocation_offenders(logical):
+                out.append(
+                    Violation(path, lineno, PYTEST_INVOCATION_RULE, _PYTEST_INVOCATION_MESSAGE)
+                )
+    return out
+
+
+def _fenced_blocks(path: Path, text: str) -> list[tuple[int, str]]:
+    """(start line of the block body, body text) for each ``` fence in a
+    Markdown file.
+
+    Only fenced blocks are scanned, because prose about pytest is everywhere in
+    doc/ (testing-architecture*.md discusses this very addopts pin at length) and
+    none of it is an invocation. Restricting to fences makes those a non-issue
+    without a single exclusion pattern.
+
+    Two stated misses: `~~~` fences (none exist in doc/ or AGENTS.md), and
+    indented 4-space code blocks.
+
+    An unterminated fence gets a stderr WARNING and no Violation. That split is
+    deliberate: "the scanner did not keep up with how people write" and "the repo
+    has a violation" are different facts and must not share one exit. Reporting a
+    Violation would turn a documentation-style change into a red gate and push
+    whoever is editing prose into editing this checker; staying silent would let
+    "the scanner quietly stopped scanning" persist forever, since neither the
+    whole-tree green nor a fixture would ever show it. This is the first
+    non-blocking diagnostic in this file — reuse it rather than inventing another.
+    """
+    blocks: list[tuple[int, str]] = []
+    body: list[str] = []
+    open_line = 0
+    in_block = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if MD_FENCE_RE.match(line):
+            if in_block:
+                blocks.append((open_line + 1, "\n".join(body)))
+                body = []
+                in_block = False
+            else:
+                in_block = True
+                open_line = lineno
+            continue
+        if in_block:
+            body.append(line)
+    if in_block:
+        print(
+            f"[{PYTEST_INVOCATION_RULE}] warning: unterminated fenced block in "
+            f"{path} (opened at line {open_line}) — scan of this file may be incomplete",
+            file=sys.stderr,
+        )
+    return blocks
+
+
+def _scan_markdown_pytest_invocations() -> list[Violation]:
+    """doc/**/*.md plus AGENTS.md — fenced code blocks only."""
+    targets: list[Path] = []
+    for directory in PYTEST_SCAN_MD_DIRS:
+        if directory.is_dir():
+            targets.extend(sorted(directory.rglob("*.md")))
+    targets.extend(p for p in PYTEST_SCAN_MD_FILES if p.is_file())
+    out: list[Violation] = []
+    for path in targets:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for body_start, body in _fenced_blocks(path, text):
+            for offset, logical in _join_line_continuations(body):
+                for _offender in _pytest_invocation_offenders(logical):
+                    out.append(
+                        Violation(
+                            path,
+                            body_start + offset - 1,
+                            PYTEST_INVOCATION_RULE,
+                            _PYTEST_INVOCATION_MESSAGE,
+                        )
+                    )
+    return out
+
+
+def check_pytest_invocation_marker() -> list[Violation]:
+    """Every pytest call site naming a `.py` target must pass its own `-m`."""
+    out: list[Violation] = []
+    out.extend(_scan_cmake_pytest_invocations())
+    out.extend(_scan_shell_pytest_invocations())
+    out.extend(_scan_markdown_pytest_invocations())
+    return out
+
+
 CHECKS = [
     check_getenv_centralization,
     check_env_knob_registration,
@@ -1189,6 +1464,7 @@ CHECKS = [
     check_no_default_constructed_crystal_slots,
     check_gui_test_suite_args_sync,
     check_no_bare_print,
+    check_pytest_invocation_marker,
 ]
 
 
@@ -1212,7 +1488,8 @@ def main() -> int:
         "Policy check passed (env centralization, knob registration, GUI API boundary, "
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
-        "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print)."
+        "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print, "
+        "pytest-invocation-marker)."
     )
     return 0
 
