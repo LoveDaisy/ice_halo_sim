@@ -1271,6 +1271,12 @@ void RenderStatusBar(float window_width, float window_height) {
     // Plain text on purpose: no progress bar, no color grading, no check/cross. Neither counter has
     // a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
     // route -- so any better/worse styling here would manufacture false alarms.
+    // NOTE: this segment builds its text in a pure function (app.cpp) while "Total rays" above
+    // formats inline. The inconsistency is deliberate, not an oversight — do NOT "unify" it by
+    // inlining this one. `ImGui::Text`/`TextUnformatted` submit an item ID of 0, so a test cannot
+    // address the rendered string through the item API; extracting the text lets the string itself
+    // be asserted, with a separate pixel test proving it reaches the framebuffer. A future status
+    // bar segment that wants test coverage should follow THIS pattern rather than the inline one.
     ImGui::SameLine();
     const std::string sampling =
         FormatSamplingSegment(g_state.stats_crystal_num, g_state.stats_orientation_num, g_state.stats_sim_ray_num);

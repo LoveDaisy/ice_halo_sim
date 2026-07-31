@@ -1341,10 +1341,6 @@ std::string FormatGrouped(LUMICE_RayCount n) {
 // purpose: from the user's side the two are the same statement — this run has no density to report.
 constexpr const char* kSamplingNotAvailable = "n/a";
 
-}  // namespace
-
-namespace {
-
 // Single implementation behind both spellings — see app.hpp. `with_rays_word` only ever adds or
 // omits a trailing literal; every number is computed once, here.
 std::string FormatDensityImpl(LUMICE_RayCount draws, LUMICE_RayCount rays, bool with_rays_word) {
