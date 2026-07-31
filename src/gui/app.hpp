@@ -329,6 +329,13 @@ inline constexpr const char* kSamplingCrossBackendNote =
 // change with no signal whatsoever arriving here.
 std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays);
 
+// Same reading without the trailing " rays" ("1 per 5.4 x10^6"). The status bar is a single
+// non-wrapping SameLine run sharing one row with the Log button, and measurement put the verbose
+// form 477 px wide in its worst case against a 1024 px enforced minimum window width -- it did not
+// fit. The word is kept in the tooltip, which has the room. Both spellings come out of one
+// implementation so the numbers cannot drift apart.
+std::string FormatSamplingDensityCompact(LUMICE_RayCount draws, LUMICE_RayCount rays);
+
 // The exact status-bar segment text, and the exact hover-tooltip text. Split out as pure functions
 // so a test can pin what the status bar says without doing OCR on a screenshot, while the
 // screenshot test independently pins that this text reaches actual pixels.

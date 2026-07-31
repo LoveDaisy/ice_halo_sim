@@ -1261,6 +1261,25 @@ void RenderStatusBar(float window_width, float window_height) {
       snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^3", n / 1e3);
     }
     ImGui::Text("%s", buf);
+
+    // Sampling density. Deliberately inside the SAME `stats_sim_ray_num > 0` gate as "Total rays"
+    // above and under no additional condition of its own: whether a dimension is randomized is
+    // exactly what this readout is for, so hiding it when a dimension is fixed would suppress the
+    // answer in the case the user most needs it ("1 per 5.4 x10^6 rays" IS the explanation for an
+    // over-sharp render). The shared gate only asks "has a run happened", which is orthogonal.
+    //
+    // Plain text on purpose: no progress bar, no color grading, no check/cross. Neither counter has
+    // a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
+    // route -- so any better/worse styling here would manufacture false alarms.
+    ImGui::SameLine();
+    const std::string sampling =
+        FormatSamplingSegment(g_state.stats_crystal_num, g_state.stats_orientation_num, g_state.stats_sim_ray_num);
+    ImGui::TextUnformatted(sampling.c_str());
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
+                                                    g_state.stats_sim_ray_num)
+                                  .c_str());
+    }
   }
 
   // Sim resolution + lens info (renderer is always embedded in GuiState).

@@ -1343,8 +1343,11 @@ constexpr const char* kSamplingNotAvailable = "n/a";
 
 }  // namespace
 
-// See app.hpp for the full branch contract.
-std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays) {
+namespace {
+
+// Single implementation behind both spellings — see app.hpp. `with_rays_word` only ever adds or
+// omits a trailing literal; every number is computed once, here.
+std::string FormatDensityImpl(LUMICE_RayCount draws, LUMICE_RayCount rays, bool with_rays_word) {
   if (rays == 0 || draws == 0) {
     return kSamplingNotAvailable;
   }
@@ -1353,13 +1356,31 @@ std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays) {
     snprintf(buf, sizeof(buf), "%.2f/ray", static_cast<double>(draws) / static_cast<double>(rays));
     return buf;
   }
-  return "1 per " + FormatMagnitude(static_cast<double>(rays) / static_cast<double>(draws)) + " rays";
+  std::string out = "1 per " + FormatMagnitude(static_cast<double>(rays) / static_cast<double>(draws));
+  if (with_rays_word) {
+    out += " rays";
+  }
+  return out;
+}
+
+}  // namespace
+
+// See app.hpp for the full branch contract.
+std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays) {
+  return FormatDensityImpl(draws, rays, true);
+}
+
+std::string FormatSamplingDensityCompact(LUMICE_RayCount draws, LUMICE_RayCount rays) {
+  return FormatDensityImpl(draws, rays, false);
 }
 
 std::string FormatSamplingSegment(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays) {
+  // No "Sampling:" prefix: the two labels below already say what the numbers are, the tooltip's
+  // first line spells it out in full, and at 1024 px (the enforced minimum window width) the row
+  // has no spare space for a word that carries no information the labels do not.
   // U+00B7 MIDDLE DOT, spelled as UTF-8 bytes so the source file stays plain ASCII.
-  return "| Sampling: shape " + FormatSamplingDensity(crystals, rays) + " \xC2\xB7 orient " +
-         FormatSamplingDensity(orientations, rays);
+  return "| shape " + FormatSamplingDensityCompact(crystals, rays) + " \xC2\xB7 orient " +
+         FormatSamplingDensityCompact(orientations, rays);
 }
 
 std::string FormatSamplingTooltip(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays) {
