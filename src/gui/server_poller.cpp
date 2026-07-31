@@ -241,6 +241,8 @@ void ServerPoller::PollOnce() {
   bool have_new_stats = false;
   LUMICE_RayCount new_ray_seg = 0;
   LUMICE_RayCount new_sim_ray = 0;
+  LUMICE_RayCount new_crystal = 0;
+  LUMICE_RayCount new_orientation = 0;
   std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
   if (has_new_snapshot) {
@@ -254,6 +256,8 @@ void ServerPoller::PollOnce() {
       have_new_stats = true;
       new_ray_seg = cached_stats.ray_seg_num;
       new_sim_ray = cached_stats.sim_ray_num;
+      new_crystal = cached_stats.crystal_num;
+      new_orientation = cached_stats.orientation_num;
     }
 
     // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
@@ -340,9 +344,13 @@ void ServerPoller::PollOnce() {
     if (have_new_stats) {
       next->stats_ray_seg_num = new_ray_seg;
       next->stats_sim_ray_num = new_sim_ray;
+      next->stats_crystal_num = new_crystal;
+      next->stats_orientation_num = new_orientation;
     } else if (prev) {
       next->stats_ray_seg_num = prev->stats_ray_seg_num;
       next->stats_sim_ray_num = prev->stats_sim_ray_num;
+      next->stats_crystal_num = prev->stats_crystal_num;
+      next->stats_orientation_num = prev->stats_orientation_num;
     }
     // Texture: a freshly materialized payload gets a new monotonic serial; otherwise carry the
     // previous payload pointer + serial forward (sparse / gate-rejected / no-new-generation) so

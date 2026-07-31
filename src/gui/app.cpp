@@ -1103,6 +1103,8 @@ bool DoRun(bool user_initiated) {
     g_state.run_intent = RunIntent::kRunning;
     g_state.stats_ray_seg_num = 0;
     g_state.stats_sim_ray_num = 0;
+    g_state.stats_crystal_num = 0;
+    g_state.stats_orientation_num = 0;
     // Safety check: if GUI predicted reuse but server rebuilt consumers, the poller
     // was not stopped and may hold dangling pointers. This should never happen because
     // the GUI comparison is a superset of the server's NeedsRebuild check.
@@ -1400,6 +1402,8 @@ void SyncFromPoller() {
   if (snap->epoch == g_state.committed_epoch && snap->stats_sim_ray_num > 0) {
     g_state.stats_ray_seg_num = snap->stats_ray_seg_num;
     g_state.stats_sim_ray_num = snap->stats_sim_ray_num;
+    g_state.stats_crystal_num = snap->stats_crystal_num;
+    g_state.stats_orientation_num = snap->stats_orientation_num;
   }
 
   // Upload XYZ float texture (GL call — must be on main thread). Gate is the pure

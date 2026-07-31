@@ -1049,6 +1049,13 @@ struct GuiState {
   // Stats from last poll
   LUMICE_RayCount stats_ray_seg_num = 0;
   LUMICE_RayCount stats_sim_ray_num = 0;
+  // Sampling-density counters, mirroring LUMICE_StatsResult::crystal_num / ::orientation_num. Same
+  // snapshot and staleness semantics as the two above — they travel the identical poller path, epoch gate and
+  // DoRun reset, so "updates as the run progresses" holds by construction rather than by a second
+  // update path. NOT comparable across backends (see lumice.h: the GPU route reuses one geometry
+  // per batch by design); the status-bar tooltip carries that caveat.
+  LUMICE_RayCount stats_crystal_num = 0;
+  LUMICE_RayCount stats_orientation_num = 0;
   float snapshot_intensity = 0;                 // Per-pixel landed intensity for XYZ→RGB normalization
   int effective_pixels = 0;                     // Non-zero pixel count (for stats display)
   unsigned long long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)

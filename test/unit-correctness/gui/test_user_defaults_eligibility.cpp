@@ -37,7 +37,11 @@ namespace {
 // default by accident.
 // 64 since defaults_panel_open (the defaults panel's open flag) was registered kSession: it is
 // runtime UI state, never persisted, so it is deliberately ineligible as a personal default.
-constexpr std::size_t kExpectedGovernedFieldCount = 64;
+// 66 since stats_crystal_num / stats_orientation_num joined kDerivedFieldsExcludeList: they are
+// run-result readbacks polled off LUMICE_GetCachedStats, exactly like the stats_ray_seg_num /
+// stats_sim_ray_num pair beside them, so they are kDerivedRuntime and deliberately ineligible as
+// personal defaults — a measurement of the last run is not a preference a user can pre-set.
+constexpr std::size_t kExpectedGovernedFieldCount = 66;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
