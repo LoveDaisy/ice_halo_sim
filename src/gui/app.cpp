@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <future>
 #include <optional>
@@ -1295,6 +1296,82 @@ bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty) {
 // rendering call site from drifting away from the same read.
 bool ShouldTintColorsButton(bool raypath_color_empty) {
   return !raypath_color_empty;
+}
+
+namespace {
+
+// Magnitude notation shared with the status bar's "Total rays" segment (app_panels.cpp): a count is
+// shown as "5.4 x10^6". Keeping one notation across the whole row matters because the sampling
+// readout sits directly beside "Total rays" — two notations side by side read as two different
+// kinds of quantity. Below 1e3 the scaled form would be sillier than the plain integer ("1 per
+// 0.0 x10^3 rays"), so small ratios print bare.
+std::string FormatMagnitude(double v) {
+  char buf[64];
+  if (v >= 1e9) {
+    snprintf(buf, sizeof(buf), "%.1f x10^9", v / 1e9);
+  } else if (v >= 1e6) {
+    snprintf(buf, sizeof(buf), "%.1f x10^6", v / 1e6);
+  } else if (v >= 1e3) {
+    snprintf(buf, sizeof(buf), "%.1f x10^3", v / 1e3);
+  } else {
+    snprintf(buf, sizeof(buf), "%.0f", v);
+  }
+  return buf;
+}
+
+// Thousands-grouped raw count for the tooltip ("5,419,520"). Hand-rolled rather than via
+// std::locale: the grouping character is locale-dependent, and a reference screenshot taken on one
+// machine must not depend on the locale of the machine that runs the test.
+std::string FormatGrouped(LUMICE_RayCount n) {
+  std::string digits = std::to_string(n);
+  std::string out;
+  int count = 0;
+  for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
+    if (count > 0 && count % 3 == 0) {
+      out.push_back(',');
+    }
+    out.push_back(*it);
+    ++count;
+  }
+  std::reverse(out.begin(), out.end());
+  return out;
+}
+
+// Placeholder for both "nothing traced yet" and "no draws recorded". One shared spelling on
+// purpose: from the user's side the two are the same statement — this run has no density to report.
+constexpr const char* kSamplingNotAvailable = "n/a";
+
+}  // namespace
+
+// See app.hpp for the full branch contract.
+std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays) {
+  if (rays == 0 || draws == 0) {
+    return kSamplingNotAvailable;
+  }
+  if (draws >= rays) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.2f/ray", static_cast<double>(draws) / static_cast<double>(rays));
+    return buf;
+  }
+  return "1 per " + FormatMagnitude(static_cast<double>(rays) / static_cast<double>(draws)) + " rays";
+}
+
+std::string FormatSamplingSegment(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays) {
+  // U+00B7 MIDDLE DOT, spelled as UTF-8 bytes so the source file stays plain ASCII.
+  return "| Sampling: shape " + FormatSamplingDensity(crystals, rays) + " \xC2\xB7 orient " +
+         FormatSamplingDensity(orientations, rays);
+}
+
+std::string FormatSamplingTooltip(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays) {
+  // Raw counts alongside the densities: the density answers "is this dimension sampled?", the raw
+  // count is what a user quotes in a bug report, and neither substitutes for the other.
+  std::string out = "Sampling density -- this run\n";
+  out += "  Rays traced         " + FormatGrouped(rays) + "\n";
+  out += "  Shape draws         " + FormatGrouped(crystals) + "   " + FormatSamplingDensity(crystals, rays) + "\n";
+  out += "  Orientation draws   " + FormatGrouped(orientations) + "   " + FormatSamplingDensity(orientations, rays) +
+         "\n\n";
+  out += kSamplingCrossBackendNote;
+  return out;
 }
 
 // task-348.3 (⑤/⑥) shared writer — see app.hpp. Two-line function on purpose: the whole

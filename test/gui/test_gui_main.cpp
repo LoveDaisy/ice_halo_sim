@@ -403,6 +403,7 @@ int main(int argc, char** argv) {
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
   RegisterStateReconcileTests(engine);
+  RegisterSamplingDensityStatsTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterUserDefaultsTests(engine);

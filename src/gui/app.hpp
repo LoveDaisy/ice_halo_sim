@@ -6,6 +6,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <string>
 
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
@@ -298,6 +299,41 @@ bool ShouldDefaultEnableColorsOnOpen(bool raypath_color_empty);
 // new state source per scrum-353 GUI state governance). Pure predicate; the
 // caller in RenderTopBar wraps ImGui::Button with PushStyleColor when true.
 bool ShouldTintColorsButton(bool raypath_color_empty);
+
+// ---- Sampling-density readout (status bar) ----
+//
+// The two counters behind this readout are NOT comparable across backends: the GPU route draws one
+// geometry per batch by design, so its shape count sits orders of magnitude below the CPU route's
+// for the same scene. That difference IS the sampling-density difference, made visible — it is not
+// a regression, and it must never be turned into a cross-backend parity assertion.
+//
+// This sentence is the only thing standing between a user and a false bug report, and plain tooltip
+// prose is exactly what gets deleted by a passing refactor without any signal. Hence: a named
+// constant, asserted by test_gui_sampling_density_stats.cpp to still be present in the assembled
+// tooltip. Reword it freely; deleting it is the thing the test is there to catch.
+inline constexpr const char* kSamplingCrossBackendNote =
+    "Not comparable across backends: the GPU route reuses one\n"
+    "geometry per batch by design, so shape reads lower on GPU.";
+
+// Format one sampling counter as a density relative to the rays actually traced. Pure function;
+// the whole numeric contract of the readout lives here so the render call site cannot drift.
+//
+//   rays == 0                -> "n/a"   (cold start: nothing has been traced yet)
+//   draws == 0 && rays > 0   -> "n/a"   (would be the second division by zero, see below)
+//   draws >= rays            -> "1.00/ray"          (this dimension is resampled per ray)
+//   0 < draws < rays         -> "1 per 5.4 x10^6 rays"  (this dimension is barely sampled)
+//
+// Both zero branches are the function's own responsibility, not the caller's. The `draws == 0` one
+// in particular cannot be waved off as unreachable: reaching it needs only the two-term counter
+// convention in trace_backend.hpp to change, and that is a DIFFERENT module's invariant — it would
+// change with no signal whatsoever arriving here.
+std::string FormatSamplingDensity(LUMICE_RayCount draws, LUMICE_RayCount rays);
+
+// The exact status-bar segment text, and the exact hover-tooltip text. Split out as pure functions
+// so a test can pin what the status bar says without doing OCR on a screenshot, while the
+// screenshot test independently pins that this text reaches actual pixels.
+std::string FormatSamplingSegment(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays);
+std::string FormatSamplingTooltip(LUMICE_RayCount crystals, LUMICE_RayCount orientations, LUMICE_RayCount rays);
 
 // task-348.3 AC1/AC2 shared writer: toggle the user preference `show_composite_preview`.
 // Called from both the top-bar Colored checkbox (app_panels.cpp; icon-only Button in

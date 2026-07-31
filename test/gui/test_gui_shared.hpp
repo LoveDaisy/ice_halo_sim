@@ -208,6 +208,7 @@ void RegisterHandednessGuardTests(ImGuiTestEngine* engine);
 void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
 void RegisterStateReconcileTests(ImGuiTestEngine* engine);
+void RegisterSamplingDensityStatsTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
