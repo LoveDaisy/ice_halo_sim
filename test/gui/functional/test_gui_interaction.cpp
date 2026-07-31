@@ -6758,39 +6758,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       gui::DoRun(/*user_initiated=*/true);
       // Pump frames until the GPU produces a batch; SyncFromPoller polls the
       // async tally each Yield and fires the modal once it is populated.
-      const auto diag_t1 = std::chrono::steady_clock::now();
-      LUMICE_RayCount diag_srv1_start = 0;
-      LUMICE_GetSimRayCount(gui::g_server, &diag_srv1_start);
       const bool ran = WaitForSimRestartAtLeast(ctx, baseline_uploads, /*timeout_ms=*/8000);
-      {
-        LUMICE_RayCount diag_srv1_end = 0;
-        LUMICE_GetSimRayCount(gui::g_server, &diag_srv1_end);
-        fprintf(
-            stderr,
-            "[DIAG:p2_degrade] call=1 wall_ms=%lld ray_srv_start=%llu ray_srv_end=%llu ray_tex=%llu "
-            "upload_base=%llu upload_end=%llu ok=%d\n",
-            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - diag_t1)
-                .count(),
-            (unsigned long long)diag_srv1_start, (unsigned long long)diag_srv1_end,
-            (unsigned long long)gui::g_state.stats_sim_ray_num, (unsigned long long)baseline_uploads,
-            (unsigned long long)gui::g_state.texture_upload_count, ran ? 1 : 0);
-        auto diag_snap = gui::g_server_poller.LoadSnapshot();
-        fprintf(stderr,
-                "[DIAG:p2_gate] snap=%d valid=%d epoch=%llu lifecycle=%d serial=%llu has_new_tex=%d payload=%d "
-                "payload_epoch=%llu tex_rays=%llu intensity=%.6f is_comp=%d | committed_epoch=%llu floor=%llu "
-                "last_serial=%llu show_comp=%d last_as_comp=%d\n",
-                diag_snap ? 1 : 0, diag_snap && diag_snap->valid ? 1 : 0,
-                diag_snap ? (unsigned long long)diag_snap->epoch : 0ULL, diag_snap ? diag_snap->lifecycle : -1,
-                diag_snap ? (unsigned long long)diag_snap->texture_serial : 0ULL,
-                diag_snap && diag_snap->has_new_texture ? 1 : 0, diag_snap && diag_snap->payload ? 1 : 0,
-                diag_snap && diag_snap->payload ? (unsigned long long)diag_snap->payload->payload_epoch : 0ULL,
-                diag_snap && diag_snap->payload ? (unsigned long long)diag_snap->payload->texture_ray_count : 0ULL,
-                diag_snap && diag_snap->payload ? diag_snap->payload->snapshot_intensity : -1.0f,
-                diag_snap && diag_snap->payload && diag_snap->payload->is_composite ? 1 : 0,
-                (unsigned long long)gui::g_state.committed_epoch, (unsigned long long)gui::g_state.display_epoch_floor,
-                (unsigned long long)gui::g_state.last_uploaded_texture_serial,
-                gui::g_state.show_composite_preview ? 1 : 0, gui::g_state.last_uploaded_as_composite ? 1 : 0);
-      }
       IM_CHECK(ran);
       // Give SyncFromPoller a few extra ticks to observe the populated count.
       for (int i = 0; i < 20 && gui::PeekGuiWarning().empty(); ++i) {
@@ -6818,23 +6786,7 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       gui::g_state.raypath_color.clear();
       const unsigned long baseline_uploads2 = gui::g_state.texture_upload_count;
       gui::DoRun(/*user_initiated=*/true);
-      const auto diag_t2 = std::chrono::steady_clock::now();
-      LUMICE_RayCount diag_srv2_start = 0;
-      LUMICE_GetSimRayCount(gui::g_server, &diag_srv2_start);
       const bool ran2 = WaitForSimRestartAtLeast(ctx, baseline_uploads2, /*timeout_ms=*/8000);
-      {
-        LUMICE_RayCount diag_srv2_end = 0;
-        LUMICE_GetSimRayCount(gui::g_server, &diag_srv2_end);
-        fprintf(
-            stderr,
-            "[DIAG:p2_degrade] call=2 wall_ms=%lld ray_srv_start=%llu ray_srv_end=%llu ray_tex=%llu "
-            "upload_base=%llu upload_end=%llu ok=%d\n",
-            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - diag_t2)
-                .count(),
-            (unsigned long long)diag_srv2_start, (unsigned long long)diag_srv2_end,
-            (unsigned long long)gui::g_state.stats_sim_ray_num, (unsigned long long)baseline_uploads2,
-            (unsigned long long)gui::g_state.texture_upload_count, ran2 ? 1 : 0);
-      }
       IM_CHECK(ran2);
       for (int i = 0; i < 20; ++i) {
         ctx->Yield();
