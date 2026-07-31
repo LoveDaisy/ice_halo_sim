@@ -718,6 +718,124 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.display_epoch_floor = 0;
   };
 
+  // ---- Test 6c: I6 — a COMPLETED run below the calibrated quality gate still puts a frame on screen ----
+  // Pins blueprint invariant I6 (§9 "任何显示 gate 不得压制生命周期跃迁；终帧无条件上屏", §7 rule 2
+  // "终帧永远上屏"). The gate is a RUNNING-time anti-flicker device only: once the run has completed
+  // there is no better frame coming, so however sparse the result is, it is the result.
+  //
+  // The regression this guards: the quality gate rejected the terminal snapshot AND PollOnce's
+  // COMPLETED self-pause fired in the SAME call, after the gate — so the gate's 500ms timeout
+  // fallback could never be reached (a finite low-ray run completes in ~80ms) and the preview
+  // stayed blank forever. The real GUI calibrates the threshold to 3-4×10^4 rays at startup, so
+  // any user-configured run below that never showed a picture at all.
+  //
+  // Three phases, each ending in "the consumer got a frame". Phase A alone would pass against a
+  // WRONG fix that keys off poller-lifetime state (e.g. `texture_serial_ == 0`) instead of
+  // per-resume state — only the first low-ray completion in the process would be rescued. B and C
+  // exercise the two production wake seams that must re-arm the rescue: WakeForRestart (fresh
+  // commit) and WakeForRefresh (display-time refresh of an already-completed run — the colour /
+  // composite-EV push path, which likewise wakes the poller for exactly one more poll and would
+  // otherwise be swallowed by the same gate).
+  ImGuiTest* t6c = IM_REGISTER_TEST(engine, "gui_lifecycle", "completed_below_threshold_force_uploads");
+  t6c->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_UNUSED(ctx);
+    gui::g_server_poller.Stop();
+    gui::g_server = nullptr;
+
+    LUMICE_Server* server = LUMICE_CreateServer();
+    IM_CHECK(server != nullptr);
+
+    // Phase A ---- first low-ray completion on a never-resumed poller.
+    const bool completed_a = RunFiniteToCompletion(server);
+    IM_CHECK(completed_a);
+    if (!completed_a) {
+      LUMICE_DestroyServer(server);
+      return;
+    }
+
+    // `local` is constructed AFTER the run, not before: its last_quality_pass_time_ starts at
+    // construction, and the gate's 500ms timeout fallback is measured from there. Constructing it
+    // first would let the sim's own wall-clock spend that budget, and the fallback — not the fix
+    // under test — would be what puts the frame on screen (an "invalid mutation produces a
+    // reassuring green").
+    gui::ServerPoller local;
+
+    // Arm the gate strictly above the ray count THIS run actually achieved. Derived from the
+    // measurement rather than hard-coded: the achieved count is a core/RNG-dependent number and
+    // pinning it here would make the test platform-dependent. `+1` rejects deterministically
+    // without assuming anything about its magnitude.
+    auto arm_gate_above_achieved = [&](LUMICE_RayCount* out_rays) {
+      LUMICE_StatsResult stats{};
+      LUMICE_GetCachedStats(server, &stats);
+      *out_rays = stats.sim_ray_num;
+      local.SetCalibratedThreshold(stats.sim_ray_num + 1);
+    };
+
+    LUMICE_RayCount rays_a = 0;
+    arm_gate_above_achieved(&rays_a);
+    // A genuinely zero-ray run takes the cold-start bypass (`sim_ray_num == 0` passes the gate
+    // unconditionally) and would exercise none of the path under test.
+    IM_CHECK(rays_a > 0);
+
+    local.ResetGenerationForTest();
+    local.PollOnceForTest(server);
+
+    auto sa = local.LoadSnapshot();
+    IM_CHECK(sa != nullptr);
+    IM_CHECK_EQ(sa->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK(sa->payload != nullptr);   // the terminal frame reached the consumer despite the gate
+    IM_CHECK(sa->has_new_texture);      // ... and THIS poll is what materialized it
+    IM_CHECK(sa->texture_serial != 0);  // ... under a fresh monotonic serial (the upload key)
+    const unsigned long long serial_a = sa->texture_serial;
+
+    // Phase B ---- second low-ray completion, re-armed through the production WakeForRestart seam
+    // (what DoRun calls on a fresh commit). Drives the real kPaused→kRunning reset, not the
+    // ResetGenerationForTest() test seam, so a rescue flag that is never re-armed shows up here.
+    const bool completed_b = RunFiniteToCompletion(server);
+    IM_CHECK(completed_b);
+    if (!completed_b) {
+      local.Stop();
+      LUMICE_DestroyServer(server);
+      return;
+    }
+    LUMICE_RayCount rays_b = 0;
+    arm_gate_above_achieved(&rays_b);
+    IM_CHECK(rays_b > 0);
+
+    local.WakeForRestart(server);
+    // The wake releases `local`'s worker thread. Stop() blocks until it has left the poll loop, so
+    // the synchronous PollOnceForTest below is the only writer — no data race on the poller's
+    // per-resume state. The worker may still have landed one poll inside that window, which is why
+    // the assertions below key on "the serial advanced" (true whichever thread materialized it)
+    // rather than on has_new_texture (true only for the poll that did it).
+    local.Stop();
+    local.PollOnceForTest(server);
+
+    auto sb = local.LoadSnapshot();
+    IM_CHECK(sb != nullptr);
+    IM_CHECK_EQ(sb->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK(sb->payload != nullptr);
+    IM_CHECK(sb->texture_serial != serial_a);  // a SECOND materialization, not phase A's carried forward
+    const unsigned long long serial_b = sb->texture_serial;
+
+    // Phase C ---- display-time refresh of the SAME completed run, through WakeForRefresh (what the
+    // colour-window PushDisplayState and the composite-EV push call). No new sim: the run is over
+    // and the user only changed how it is displayed. That wake exists to buy exactly one more poll
+    // before the poller self-pauses again, so if the gate swallows it the edit silently never shows.
+    local.WakeForRefresh(server);
+    local.Stop();  // same worker-race fence as phase B
+    local.PollOnceForTest(server);
+
+    auto sc = local.LoadSnapshot();
+    IM_CHECK(sc != nullptr);
+    IM_CHECK_EQ(sc->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+    IM_CHECK(sc->payload != nullptr);
+    IM_CHECK(sc->texture_serial != serial_b);  // the refresh produced a frame of its own
+
+    local.Stop();
+    LUMICE_DestroyServer(server);
+  };
+
   // ---- Test 7: task-color-migration M4 — WakeForRefresh preserves valid across the wake edge ----
   // Pins the semantic distinction between the two poller wake seams introduced by M4:
   //   WakeForRestart publishes valid=false on the kPaused→kRunning edge (fresh commit: consumers
