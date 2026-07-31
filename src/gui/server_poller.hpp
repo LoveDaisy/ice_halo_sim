@@ -237,6 +237,21 @@ class ServerPoller {
   // Timeout fallback: force upload if quality gate has been rejecting for too long.
   // Reset in Start(), updated in PollOnce() on each quality_ok pass.
   std::chrono::steady_clock::time_point last_quality_pass_time_{ std::chrono::steady_clock::now() };
+
+  // Terminal-frame rescue (invariant I6, doc/gui-preview-lifecycle-architecture.md §7 rule 2 /
+  // §9): has a payload been materialized since the worker last resumed? Scope is per-RESUME, not
+  // per-poller-lifetime: it is reset alongside last_generation_/last_quality_pass_time_ at every
+  // kPaused→kRunning edge (Start() and TransitionToRunning(), i.e. both WakeForRestart — a fresh
+  // sim generation — and WakeForRefresh — one more poll to re-materialize a completed run under
+  // new display state). A poller-lifetime flag would rescue only the first low-ray completion in
+  // the process and silently leave every later one blank.
+  //
+  // PollOnce() consults it to let a COMPLETED generation bypass the quality gate exactly once:
+  // the gate suppresses sparse frames because a better one is still coming, and once the run is
+  // over that premise is false. `false` here is the sole guard keeping the bypass from firing on
+  // every completed poll (which would overwrite a good frame with a sparse one — the very
+  // flicker the gate exists to prevent), so it must stay in the condition.
+  bool uploaded_since_resume_{ false };
 };
 
 }  // namespace lumice::gui
