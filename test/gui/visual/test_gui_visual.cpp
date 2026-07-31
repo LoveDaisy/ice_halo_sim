@@ -643,9 +643,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       //
       // 3M rays puts the expected PSNR near 32.5 dB — over 4 dB of headroom above kPsnrThreshold —
       // and costs ~0.73s idle (the old fixed budget already bought ~2.4M, so this is not a
-      // meaningful slowdown of the idle path). The deadline is a hang bound, NOT a budget: at the
-      // worst throughput measured under heavy CPU contention (~0.64M rays/s) the target lands in
-      // ~4.7s, so 20s keeps a >4x margin. It also deliberately stays under ImGuiTestEngine's 30s
+      // meaningful slowdown of the idle path). The deadline is a hang bound, NOT a budget: the
+      // target was reached in 0.73s idle and in 1.7-1.8s under enough CPU contention to oversubscribe
+      // every core, so 20s leaves an order of magnitude. It also deliberately stays under ImGuiTestEngine's 30s
       // default ConfigWatchdogWarning (imgui_te_engine.h): this case runs WITHOUT --fixed-dt, so
       // the watchdog's simulated clock is the wall clock here, and keeping the deadline below it
       // is what lets this test skip the watchdog-widening dance that the --fixed-dt cases need.
