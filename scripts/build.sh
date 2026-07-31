@@ -42,9 +42,11 @@ build() {
         #     Holds tests whose meaning depends on real wall-clock:
         #       - perf_test: measures main-loop FPS / rays-per-sec.
         #       - save_open_visual_consistency: compares the live poller preview
-        #         (which converges over ~30 frames of real wall-clock simulation)
-        #         against the saved snapshot; fixed-dt starves that accumulation
-        #         and drops its PSNR ~7 dB below threshold.
+        #         against the saved snapshot. It now waits on accumulated rays
+        #         rather than on a frame count, so fixed-dt no longer starves it
+        #         outright; it stays here because that wait is bounded by a real
+        #         wall-clock deadline, and fixed-dt decouples the test engine's
+        #         watchdog (which counts simulated frame time) from that deadline.
         #       - revert_repushes_server_display_state, zorder_priority_persists_across_rerun
         #         (task-color-migration code-review round-1 revision): both assert on
         #         LUMICE_GetCompositeResults() right after a display-time PushDisplayState()

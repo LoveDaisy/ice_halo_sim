@@ -580,12 +580,14 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
   // Tests the actual user workflow: the reopened file should look the same as the live display.
   // Regression test for PostSnapshot using stale CommitConfig-time EV instead of current GUI EV.
   //
-  // REAL-TIMING TEST: this case compares the live poller preview (which converges over the ~30
-  // Yield()s below via real wall-clock simulation) against the saved snapshot, so it needs real
-  // frame timing. build.sh runs it in the isolated real-timing pool, NOT the --fixed-dt pool
-  // (fixed-dt skips the frame-limit sleep and starves that accumulation, dropping PSNR ~7 dB).
-  // If this test is renamed, update the --filter lists in scripts/build.sh. See
-  // scratchpad/task-gui-test-fixed-dt.
+  // REAL-TIMING TEST: this case compares the live poller preview against the saved snapshot, and
+  // the preview only converges as the background simulation accumulates rays in real wall-clock
+  // time. build.sh runs it in the isolated real-timing pool, NOT the --fixed-dt pool. The wait
+  // below is gated on accumulated rays, so fixed-dt no longer starves it outright; what keeps it
+  // here is that its bound is a real-time deadline, and --fixed-dt decouples the engine watchdog's
+  // simulated clock from that deadline (the trap documented at length in
+  // test_gui_lens_projection.cpp). If this test is renamed, update the --filter lists in
+  // scripts/build.sh.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_open_visual_consistency");
     t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
@@ -624,16 +626,45 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::DoRun(/*user_initiated=*/true);
       const auto diag_t0 = std::chrono::steady_clock::now();
 
-      // Wait for first texture upload (up to 10s)
-      auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (gui::g_state.texture_upload_count == 0) {
+      // Accumulate a fixed WORKLOAD (simulated rays), not a fixed number of frames.
+      //
+      // What Phase 6 compares is two Monte-Carlo estimates of the same image: screenshot A is the
+      // poller's last uploaded preview texture, screenshot B is the .lmc texture that
+      // RefreshCpuTextureForSave() (app.cpp) takes fresh from the server. Their difference is
+      // sampling noise, which falls as 1/sqrt(N) in the accumulated ray count N behind them.
+      // Measured on this case over a 6.5x range of N: PSNR = 10*log10(N) - 32.0 dB, +/-0.7.
+      //
+      // The predecessor of this loop was `for (i < 30) ctx->Yield();`, which fixes the WALL CLOCK
+      // rather than N: the real-timing pool keeps the ~16.7ms frame-limit sleep, so 30 Yields is a
+      // hard ~575ms budget (measured invariant under load). N is then whatever CPU the simulation
+      // threads happened to win inside that window — 2.4M rays idle, 0.37M rays under CPU
+      // contention. That is a ~7 dB PSNR swing (31.6 dB -> 24.5 dB) against a 28 dB threshold, and
+      // it is the whole reason this case went red on a busy machine. Gating on N makes the
+      // comparison's noise floor a property of the test rather than of the machine's spare
+      // capacity; the wall clock becomes an upper bound instead of the convergence condition.
+      //
+      // 3M rays puts the expected PSNR near 32.5 dB — over 4 dB of headroom above kPsnrThreshold —
+      // and costs ~0.73s idle (the old fixed budget already bought ~2.4M, so this is not a
+      // meaningful slowdown of the idle path). The deadline is a hang bound, NOT a budget: at the
+      // worst throughput measured under heavy CPU contention (~0.64M rays/s) the target lands in
+      // ~4.7s, so 20s keeps a >4x margin. It also deliberately stays under ImGuiTestEngine's 30s
+      // default ConfigWatchdogWarning (imgui_te_engine.h): this case runs WITHOUT --fixed-dt, so
+      // the watchdog's simulated clock is the wall clock here, and keeping the deadline below it
+      // is what lets this test skip the watchdog-widening dance that the --fixed-dt cases need.
+      constexpr unsigned long long kMinAccumulatedRays = 3'000'000;
+      // Zeroed here rather than trusted from ResetTestState(): a stale count carried over from the
+      // previous test would satisfy the wait on its very first frame, and the capture below would
+      // then read whatever texture happened to still be bound.
+      gui::g_state.stats_sim_ray_num = 0;
+      gui::g_state.texture_upload_count = 0;
+      const auto accumulate_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+      while (((unsigned long long)gui::g_state.stats_sim_ray_num < kMinAccumulatedRays ||
+              gui::g_state.texture_upload_count == 0) &&
+             std::chrono::steady_clock::now() < accumulate_deadline) {
         ctx->Yield();
-        IM_CHECK(std::chrono::steady_clock::now() < timeout);
       }
-      // Let a few more frames accumulate for stable data
-      for (int i = 0; i < 30; i++) {
-        ctx->Yield();
-      }
+      IM_CHECK_GE((unsigned long long)gui::g_state.stats_sim_ray_num, kMinAccumulatedRays);
+      IM_CHECK_GT((int)gui::g_state.texture_upload_count, 0);
       {
         LUMICE_RayCount diag_srv = 0;
         LUMICE_GetSimRayCount(gui::g_server, &diag_srv);
