@@ -43,18 +43,18 @@ struct AutoEvScene {
 // Each threshold = floor((mean − 4σ) · 2) / 2 over the 25 pooled full-suite PSNRs; all sit
 // below every observed run's minimum with margin. (mean / σ / min per scene shown inline.)
 static const AutoEvScene kScenes[] = {
-  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 16.5},  // mean 18.39 σ0.35 min 17.67
-  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 15.0},  // mean 16.32 σ0.21 (regen: real 2-layer scattering, task-gui-ms-prob-footguns)
-  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 18.5},  // mean 19.81 σ0.32 min 18.84
-  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 18.0},  // mean 19.10 σ0.22 min 18.37
-  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 34.0},  // mean 35.89 σ0.36 min 35.04
-  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 23.5},  // mean 25.59 σ0.49 min 24.26
-  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 23.0},  // mean 24.39 σ0.33 min 23.73
-  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 27.0},  // mean 28.80 σ0.35 min 28.07
-  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 18.0},  // mean 19.35 σ0.32 min 18.35
+  {"halo_22",    LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 18.5},  // mean 20.00 σ0.141 (N=10 recalib 2026-07-31)
+  {"multi_scat", LUMICE_E2E_CONFIG_DIR "/multi_scatter.json",                     256, 256, 16.0},  // mean 17.08 σ0.209 (N=10 recalib 2026-07-31) (regen: real 2-layer scattering)
+  {"color",      LUMICE_E2E_CONFIG_DIR "/color.json",                             256, 256, 20.0},  // mean 21.13 σ0.227 (N=10 recalib 2026-07-31)
+  {"pyramid",    LUMICE_E2E_CONFIG_DIR "/pyramid.json",                           256, 256, 19.5},  // mean 20.53 σ0.194 (N=10 recalib 2026-07-31)
+  {"cza",        LUMICE_E2E_CONFIG_DIR "/cza.json",                               256, 256, 35.5},  // mean 36.70 σ0.242 (N=10 recalib 2026-07-31)
+  {"parhelion",  LUMICE_E2E_CONFIG_DIR "/parhelion.json",                         256, 256, 26.0},  // mean 27.82 σ0.360 (N=10 recalib 2026-07-31)
+  {"filters",    LUMICE_E2E_CONFIG_DIR "/filters.json",                           256, 256, 24.5},  // mean 25.91 σ0.239 (N=10 recalib 2026-07-31)
+  {"rp46",       LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6.json",              256, 256, 27.5},  // mean 29.22 σ0.367 (N=10 recalib 2026-07-31)
+  {"rp46_nof",   LUMICE_E2E_CONFIG_DIR "/raypath_symmetry_4_6_nofilter.json",     256, 256, 19.5},  // mean 20.59 σ0.184 (N=10 recalib 2026-07-31)
   // Overlay regression scene (task-288.7): fisheye EA at elevation=45° with zenith marker +
   // coordinate grid.
-  {"overlay_ea", LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 19.0,  // mean 20.29 σ0.21 min 19.82
+  {"overlay_ea", LUMICE_E2E_CONFIG_DIR "/halo_22.json",                           256, 256, 20.0,  // mean 21.30 σ0.165 (N=10 recalib 2026-07-31)
    true, lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 45.0f, true, true},
 };
 // clang-format on
