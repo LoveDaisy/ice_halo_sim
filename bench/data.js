@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785494483111,
+  "lastUpdate": 1785494485029,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "242e72c6a0abf8e05eb6ac8e298539c4e5308fc6",
-          "message": "Merge pull request #135 from LoveDaisy/fix/polygon-face-of-tri-argmax\n\nfix(core): PolygonFaceOfTri argmax for extreme-wedge entry-face mapping",
-          "timestamp": "2026-06-20T21:20:27+08:00",
-          "tree_id": "cd3d054caf4903ec76fba4d5a0f0b044071670ce",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/242e72c6a0abf8e05eb6ac8e298539c4e5308fc6"
-        },
-        "date": 1781962001043,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 68.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 90.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "6241754934a5a559fea3faf320cca1adf7b32c55",
           "message": "Merge pull request #136 from LoveDaisy/chore/land-robustness-doc\n\ndocs: land numerical-robustness conventions doc + AGENTS index (chore 280.1)",
           "timestamp": "2026-06-20T22:57:44+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "86691677ff1522ce09436c46e138a863287d0e4c",
+          "message": "Merge pull request #237 from LoveDaisy/feat/gui-sampling-density-stats\n\nfeat(gui): show sampling density (crystal/orientation draws) in the status bar",
+          "timestamp": "2026-07-31T18:33:07+08:00",
+          "tree_id": "d0ad8ee1d04f228ef63bda3518838ad181adf014",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/86691677ff1522ce09436c46e138a863287d0e4c"
+        },
+        "date": 1785494484546,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 74.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 96.1,
             "unit": "%"
           }
         ]
