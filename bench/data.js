@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785502891523,
+  "lastUpdate": 1785502894067,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "6241754934a5a559fea3faf320cca1adf7b32c55",
-          "message": "Merge pull request #136 from LoveDaisy/chore/land-robustness-doc\n\ndocs: land numerical-robustness conventions doc + AGENTS index (chore 280.1)",
-          "timestamp": "2026-06-20T22:57:44+08:00",
-          "tree_id": "21a30aa319e31dad0cb42f69d60da88bf99f0708",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6241754934a5a559fea3faf320cca1adf7b32c55"
-        },
-        "date": 1781967802564,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 65.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 89.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "e89453be18b912a0a8d3c630f0c7e330ac2823bd",
           "message": "Merge pull request #137 from LoveDaisy/feat/geometry-numerical-hardening\n\nfix(core/gui): geometry numerical hardening (scrum-280, explore-279 follow-up)",
           "timestamp": "2026-06-21T03:03:02+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 96.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "04a9998e115ab37676bbe9d09714b1f2240f8350",
+          "message": "Merge pull request #238 from LoveDaisy/chore/regen-auto-ev-thresholds\n\nchore(gui-test): 重标定 auto_ev 组 PSNR 阈值（Phase B，N=10）",
+          "timestamp": "2026-07-31T20:52:33+08:00",
+          "tree_id": "0ea3eb7d2abfc5074d764d0f7d9048e62fa5462d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/04a9998e115ab37676bbe9d09714b1f2240f8350"
+        },
+        "date": 1785502893405,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.9,
             "unit": "%"
           }
         ]
