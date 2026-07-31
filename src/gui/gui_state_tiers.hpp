@@ -135,6 +135,8 @@ inline constexpr const char* kDerivedFieldsExcludeList[] = {
     // Stats readbacks (populated from poller snapshots)
     "stats_ray_seg_num",
     "stats_sim_ray_num",
+    "stats_crystal_num",
+    "stats_orientation_num",
     "snapshot_intensity",
     "effective_pixels",
     "texture_upload_count",

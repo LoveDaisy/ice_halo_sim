@@ -65,6 +65,9 @@ struct PreviewSnapshot {
   int lifecycle = LUMICE_LIFECYCLE_IDLE;
   LUMICE_RayCount stats_ray_seg_num = 0;
   LUMICE_RayCount stats_sim_ray_num = 0;
+  // Sampling-density counters, carried in the same coherent bundle as the two above.
+  LUMICE_RayCount stats_crystal_num = 0;
+  LUMICE_RayCount stats_orientation_num = 0;
   // Display payload: shared, immutable. Null / carried-forward on sparse / gate-rejected /
   // invalidated polls.
   std::shared_ptr<const TexturePayload> payload;
