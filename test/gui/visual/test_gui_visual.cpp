@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "include/lumice.h"
 #include "test_gui_shared.hpp"
 
 // Rebuild the crystal mesh (if changed) and render it into g_crystal_renderer's
@@ -621,6 +622,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
         r.exposure_offset = 0.0f;
       }
       gui::DoRun(/*user_initiated=*/true);
+      const auto diag_t0 = std::chrono::steady_clock::now();
 
       // Wait for first texture upload (up to 10s)
       auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -631,6 +633,16 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       // Let a few more frames accumulate for stable data
       for (int i = 0; i < 30; i++) {
         ctx->Yield();
+      }
+      {
+        LUMICE_RayCount diag_srv = 0;
+        LUMICE_GetSimRayCount(gui::g_server, &diag_srv);
+        fprintf(
+            stderr, "[DIAG:save_open] phase=1 ray_tex=%llu ray_srv=%llu wall_ms=%lld upload_cnt=%llu\n",
+            (unsigned long long)gui::g_state.stats_sim_ray_num, (unsigned long long)diag_srv,
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - diag_t0)
+                .count(),
+            (unsigned long long)gui::g_state.texture_upload_count);
       }
       IM_CHECK(gui::g_preview.HasTexture());
       IM_CHECK(gui::g_preview_vp.vp_w > 0);
@@ -649,6 +661,16 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       gui::g_state.ev_auto = 0.0f;
       ctx->Yield(1);
       const float live_snapshot_intensity = gui::g_state.snapshot_intensity;
+      {
+        LUMICE_RayCount diag_srv = 0;
+        LUMICE_GetSimRayCount(gui::g_server, &diag_srv);
+        fprintf(
+            stderr, "[DIAG:save_open] phase=2 ray_tex=%llu ray_srv=%llu wall_ms=%lld upload_cnt=%llu\n",
+            (unsigned long long)gui::g_state.stats_sim_ray_num, (unsigned long long)diag_srv,
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - diag_t0)
+                .count(),
+            (unsigned long long)gui::g_state.texture_upload_count);
+      }
       g_export_test.export_requested = true;
       ctx->Yield(2);
       IM_CHECK(g_export_test.export_done);
@@ -724,6 +746,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       double psnr = lumice::test::ComputePsnr(rgb_a.data(), rgb_b.data(), wa, ha, 3);
       fprintf(stderr, "[visual] save_open_visual_consistency: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr,
               kPsnrThreshold);
+      fprintf(stderr, "[DIAG:save_open] phase=6 psnr=%.3f\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
       // Cleanup
