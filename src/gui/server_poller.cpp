@@ -42,6 +42,10 @@ void ServerPoller::Start(LUMICE_Server* server) {
   last_generation_ = 0;
   // Reset quality gate timeout so fallback doesn't fire prematurely after restart.
   last_quality_pass_time_ = std::chrono::steady_clock::now();
+  // Re-arm the terminal-frame rescue for the resumed run (I6 — see the header). Kept next to the
+  // two resets above because all three are per-resume state; Start() does not route through
+  // TransitionToRunning(), so it carries its own copy of the same three-line reset.
+  uploaded_since_resume_ = false;
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -91,6 +95,13 @@ bool ServerPoller::TransitionToRunning(LUMICE_Server* server, bool publish_reset
     server_ = server;
     last_generation_ = 0;
     last_quality_pass_time_ = std::chrono::steady_clock::now();
+    // Re-arm the terminal-frame rescue (I6 — see the header). Both wake variants reset it, and for
+    // the same reason: each buys the worker a poll it would otherwise never get. WakeForRestart
+    // opens a new sim generation; WakeForRefresh wakes an already-completed run for exactly ONE
+    // more poll to re-materialize it under new display state (colour edits / composite EV), after
+    // which PollOnce self-pauses again. If the gate swallows that single poll, a sparse completed
+    // run's display edits would silently never appear.
+    uploaded_since_resume_ = false;
     if (publish_reset) {
       PublishValidReset();
     }
@@ -236,6 +247,22 @@ void ServerPoller::PollOnce() {
   // Check if this is genuinely new snapshot data (generation changed)
   bool has_new_snapshot = xyz_results[0].xyz_buffer != nullptr && captured_xyz_generation != last_generation_;
 
+  // Terminal-frame rescue (invariant I6, "the final frame always reaches the screen" — the
+  // blueprint's §7 rule 2 / §9; see doc/gui-preview-lifecycle-architecture.md). The quality gate below
+  // suppresses sparse snapshots on the premise that a denser one is still coming; once the run has
+  // COMPLETED that premise is false, and the sparse result IS the result. The gate's 500ms timeout
+  // fallback cannot cover this: the self-pause at the bottom of this very function fires in the
+  // SAME call, so a finite low-ray run (~80ms) is never polled again and the fallback is never
+  // reached. Startup calibration sets the threshold to ~3-4×10^4 rays in the real GUI, so without
+  // this any run configured below that showed a permanently blank preview.
+  //
+  // Deliberately evaluated OUTSIDE the has_new_snapshot branch: the lifecycle heartbeat and the
+  // snapshot generation are decoupled clocks (§6), so COMPLETED may just as well arrive on a poll
+  // that carries no new generation. Gating the rescue on has_new_snapshot would fix only the
+  // interleaving that happened to be reproduced and leave the other one live.
+  const bool force_final_upload =
+      lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED && !uploaded_since_resume_ && xyz_results[0].xyz_buffer != nullptr;
+
   // ---- Prepare candidate stats + texture payload OUTSIDE publish_mutex_ (no prev dependency).
   // The 24MB pixel memcpy happens here, never inside the publish critical section.
   bool have_new_stats = false;
@@ -245,8 +272,9 @@ void ServerPoller::PollOnce() {
   LUMICE_RayCount new_orientation = 0;
   std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
-  if (has_new_snapshot) {
-    // Always consume this generation (same generation data won't improve by waiting)
+  if (has_new_snapshot || force_final_upload) {
+    // Always consume this generation (same generation data won't improve by waiting). On the
+    // force_final_upload-only path this re-assigns the value already stored — idempotent.
     last_generation_ = captured_xyz_generation;
 
     // Get stats (used independently for status bar display)
@@ -275,6 +303,15 @@ void ServerPoller::PollOnce() {
         GUI_LOG_VERBOSE("[Poller] quality gate timeout: forcing upload after {}ms (rays={}, min={})", elapsed_ms,
                         cached_stats.sim_ray_num, min_rays);
       }
+    }
+
+    // Third and last way past the gate: the run is over and this resume has yet to put anything on
+    // screen (I6). Kept separate from the timeout above — that one rescues a RUNNING sim that will
+    // never reach the threshold; this one rescues a run that already ended below it.
+    if (!quality_ok && force_final_upload) {
+      quality_ok = true;
+      GUI_LOG_VERBOSE("[Poller] terminal frame: bypassing quality gate (rays={}, min={}) gen={}",
+                      cached_stats.sim_ray_num, min_rays, xyz_results[0].snapshot_generation);
     }
 
     if (quality_ok) {
@@ -320,6 +357,9 @@ void ServerPoller::PollOnce() {
       // (payload is default-constructed with rgb_data empty + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)
       new_payload = std::move(payload);
+      // A frame exists for this resume — disarm the terminal rescue so a later COMPLETED poll
+      // cannot overwrite it with a sparser one (see the header: this is the anti-flicker guard).
+      uploaded_since_resume_ = true;
       GUI_LOG_VERBOSE("[Poller] staged: rays={} intensity={} gen={}", cached_stats.sim_ray_num,
                       xyz_results[0].snapshot_intensity, xyz_results[0].snapshot_generation);
     } else {
