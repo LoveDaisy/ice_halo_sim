@@ -152,6 +152,35 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 
 其中 **I3、I4 正是当前 bug 违反的两条**——回归测试应直接钉住它们。
 
+> **落地补丁（2026-08-01，PR 见 git log）：I6「终帧无条件上屏」曾长期未被落实。**
+> 这不是新增不变量，而是补上实现对 **I6 后半句**（§7 规则 2）的一次合规回归——I6 本身文本不变。
+>
+> gap（四环，每环都有生产代码位置）：①`ServerPoller::SetCalibratedThreshold` 把启动标定阈值
+> （真机量级 3–4×10⁴ 光线）写进全局 poller；②`PollOnce()` 的质量闸按该阈值拒绝稀疏快照；
+> ③质量闸本有 `kQualityGateTimeoutMs`(500ms) 兜底，但 **poller 的 COMPLETED 自暂停位于同一次
+> `PollOnce()` 调用内、且在质量闸之后**——有限低采样跑约 80ms 就 COMPLETED，此后再无轮询去触发兜底；
+> ④⇒ 纹理永不上传。**用户可见症状：把总光线数配到标定阈值以下的有限仿真，跑完了预览图也永远空白。**
+> 根因形态正是本文档要治理的「显示钟 × 生命周期钟」交界——§7 规则 1 的前提（"还有更好的将来帧"）
+> 在 COMPLETED 之后不成立，而实现把规则 1 无条件套到了终局帧上。
+>
+> 修复落点：`ServerPoller` 新增 **per-resume**（非 per-poller-lifetime）状态
+> `uploaded_since_resume_`，在每个 kPaused→kRunning 边沿（`Start()` 与 `TransitionToRunning()`，
+> 即 `WakeForRestart` 与 `WakeForRefresh` 两条唤醒入口）与 `last_generation_` /
+> `last_quality_pass_time_` 一起复位；`PollOnce()` 在 `lifecycle==COMPLETED` 且本次 resume 尚未
+> 上传过任何一帧时**绕过质量闸补投一帧**。三点值得记住：
+> - 该判据**故意求值在 `has_new_snapshot` 分支之外**——§6 的生命周期心跳与快照物化是两个解耦的钟，
+>   COMPLETED 完全可能落在一次不带新 generation 的 poll 上，只堵「快照与终态同一次到达」那条
+>   交错会留下另一条同形缺陷。
+> - 500ms 超时兜底**保留不动**，两者并列不替代：兜底救的是「运行中永远够不到门槛」，本补丁救的是
+>   「已经结束且结束在门槛之下」。
+> - `!uploaded_since_resume_` 是防止补投蜕化成「每次 COMPLETED 都重物化一帧」的唯一闸门（那会用稀疏帧
+>   盖掉已有好帧，正好制造质量闸本要防的闪烁）；per-resume 而非 per-lifetime 也是必需的，否则只有进程内
+>   **第一次**低光线完成跑被救到。`WakeForRefresh` 同样复位，是因为它的全部用途就是给已完成的跑买
+>   一次额外 poll 去重新物化（改染色 / composite EV），被质量闸吞掉的话该跑的显示编辑将永远不生效。
+>
+> 回归测试：`gui_test` 的 `gui_lifecycle` 组，三阶段分别覆盖首次完成跑、经 `WakeForRestart` 的第二次
+> 完成跑、以及经 `WakeForRefresh` 的 display-time 刷新。
+
 ---
 
 ## 10. 落地边界：最小核 vs 完整版
