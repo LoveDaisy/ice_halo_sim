@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785560481350,
+  "lastUpdate": 1785560483486,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e74ee69ccb36da092f220b1f29f65b376b4e23e2",
-          "message": "Merge pull request #138 from LoveDaisy/feat/backend-availability-gui-gate\n\nfeat(gui): runtime backend-availability gate for Metal checkbox",
-          "timestamp": "2026-06-21T06:50:12+08:00",
-          "tree_id": "64b806e212752d1db31e147b0ce478a9c9c1d06d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e74ee69ccb36da092f220b1f29f65b376b4e23e2"
-        },
-        "date": 1781996187388,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 73.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 90.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.6,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "3afcb8103a166e60f969c08f771ce940e87e4834",
           "message": "Merge pull request #139 from LoveDaisy/fix/metal-backend-crash\n\nfix: Metal backend crash on macOS 26.5 — graceful degradation + build-time precompiled metallib",
           "timestamp": "2026-06-22T21:09:18+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a0fd8622615b2e6f6a5ad0546e09159238614d28",
+          "message": "Merge pull request #240 from LoveDaisy/fix/gui-completed-preview-quality-gate\n\nfix(gui): COMPLETED 代终帧绕过质量闸强制上屏（修有限低光线仿真预览永不出图）",
+          "timestamp": "2026-08-01T12:52:25+08:00",
+          "tree_id": "1c5c8c2e72f475e8aeff98efcea620a5f726d0dd",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a0fd8622615b2e6f6a5ad0546e09159238614d28"
+        },
+        "date": 1785560482990,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 83,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 93.5,
             "unit": "%"
           }
         ]
