@@ -1,8 +1,11 @@
 // PURE unit tests for the status-bar sampling-density readout. No GL, no server — peer to
 // test_gui_state_reconcile.cpp: the TestFunc calls the formatter directly and checks its output.
 //
-// Why these live in gui_test rather than the ctest unit binary: the functions under test are
-// GUI-local (declared in gui/app.hpp), and src/gui/ is not linked into unit_correctness_test.
+// Why these live in gui_test: the functions under test are GUI-local (declared in gui/app.hpp),
+// and src/gui/ is not linked into unit_correctness_test. Note that "not unit_correctness_test"
+// no longer means "gui_test by elimination" — gui_unit_test is a windowless ctest binary that
+// does link lumice_gui_obj (doc/testing-architecture.md §2), so a case like these has a second
+// home available and moving them there is a live option, not a blocked one.
 //
 // Tests:
 //  1. sampling_density/ratio_ge_one      — the resampled-per-ray branch, including draws == rays

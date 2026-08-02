@@ -134,6 +134,17 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 
 - CLI, core, and unit-test flows should remain cross-platform.
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+  That is why `gui_test` is **build-only in CI** (`.github/workflows/ci.yml`) — the runners have
+  no display. A `src/gui/` test that needs no live frame therefore should not live there: the
+  `gui_unit_test` target (`test/CMakeLists.txt`, inside `if(BUILD_GUI)`) links `lumice_gui_obj`
+  with **no window, no GL context and no ImGui test engine**, so its cases really do run in CI on
+  every platform that builds the GUI. Its sources sit in `test/unit-correctness/gui/` next to
+  `unit_correctness_test`'s and carry the same `unit-correctness` CTest LABEL — the two targets
+  are split on a *link* boundary (does the case call into `file_io.cpp` / `user_defaults.cpp`?),
+  not a layer boundary, so `ctest -L` and `./scripts/test.sh` need no per-target knowledge.
+  Rule of thumb for a new `src/gui/` test: needs a rendered frame or an `ImGuiTestContext` →
+  `gui_test`; pure logic → `gui_unit_test` (or `unit_correctness_test` if it is header-only).
+  Design reasoning and the target-naming rule: `doc/testing-architecture.md` §2 and §5.
 - E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
   - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
   - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3

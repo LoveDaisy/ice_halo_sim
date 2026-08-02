@@ -203,6 +203,14 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 > e.g. a GUI-component unit test lives at `test/unit-correctness/gui/`. It is **not** the same
 > thing as the `gui` *layer* (§1.6, physical `test/gui/`), which spans functional/visual/
 > responsiveness and is keyed by purpose, not subsystem. Tag ≠ layer despite the shared word.
+>
+> That one directory is compiled by **two** CMake targets, and the split is a LINK boundary, not
+> a layer or subsystem boundary: `unit_correctness_test` links `lumice_obj` alone and takes the
+> header-only cases; `gui_unit_test` additionally links `lumice_gui_obj` and takes the cases that
+> call into `file_io.cpp` / `user_defaults.cpp` (e.g. `test_defaults_diff.cpp`). Same directory,
+> same `unit-correctness` LABEL — only the link line differs, so `ctest -L unit-correctness`
+> selects both. `gui_unit_test` creates no window and no GL context; a case that needs a live
+> frame belongs in the `gui` layer (`test/gui/`, target `gui_test`) instead.
 
 How a tag is encoded depends on the layer's physical form (§6): a subdirectory
 (`test/<layer>/<subsystem>/`) for layers with a natural subsystem split, or a CTest
@@ -323,6 +331,14 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
   in 270.5). Whether targets are split further per subsystem (one `unit_correctness_test` vs
   `unit_correctness_core_test` + …) is **270.3's call**, but the *pattern* above is fixed here so
   the naming does not drift.
+  **Exception, stated as a rule rather than as a list of cases**: when a target exists because of
+  a *link* boundary rather than a layer/subsystem boundary, name it after the link dependency
+  instead of `<layer-snake>_test`. `gui_test` is the original instance (it is the `gui` layer's
+  target, but the name says "the one that links the GUI"); `gui_unit_test` is the second — under
+  the strict pattern it would be `unit_correctness_gui_test`, which names the layer it *shares*
+  with `unit_correctness_test` while hiding the only thing that actually differs, the
+  `lumice_gui_obj` dependency. Layer identity lives in the CTest LABEL, which is where selectors
+  read it from anyway, so the target name is free to carry the link fact instead.
 - **CTest LABELS**: target-state adds a purpose-axis label per layer:
   `unit-correctness`, `golden-analytic`, `parity` (the LABEL is the abbreviated form of the
   `parity-cross-backend` layer — the full name is verbose for CMake; this is the **only**
@@ -374,7 +390,7 @@ health items that must not be moved/deleted casually.
 
 | Layer | Target-state path | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
 |-------|-------------------|-------------------------------|----------------------|-------------|----------------------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main`, `test_defaults_diff` (in the second target, `gui_unit_test` — see below) | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. This layer's `gui` subsystem directory is shared by **two** CMake targets split on a link boundary (§2): `unit_correctness_test` (`lumice_obj` only) and `gui_unit_test` (also `lumice_gui_obj`, windowless). Both carry LABEL `unit-correctness`, so no `-L` selector changes when a case moves between them — but a file **does** have to move between the two `add_executable` source lists, and `gui_unit_test` only exists under `if(BUILD_GUI)`. |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |

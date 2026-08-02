@@ -20,7 +20,8 @@
 //
 // The split is not cosmetic. Half 1 has no dependency on file_io.cpp, so it is unit-testable
 // from unit_correctness_test (which links lumice_obj only); half 2 calls into file_io.cpp and
-// is therefore exercised from gui_test (which links lumice_gui_obj).
+// is therefore exercised from a target that links lumice_gui_obj — gui_unit_test for the cases
+// that need no frame, gui_test for the ones that do.
 
 #include <cstddef>
 #include <filesystem>

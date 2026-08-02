@@ -100,6 +100,30 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
 
+      # gui_unit_test is the first test target that only exists on some matrix entries (it is
+      # inside `if(BUILD_GUI)`), which makes "green" and "ran" separable in a way they were not
+      # before: --output-on-failure prints nothing on success, and `-L` selecting zero matching
+      # tests is not an error, so a missing target, a mistyped LABEL or a binary that registered
+      # no cases would all read as a pass. This step turns "it actually executed its 15 cases"
+      # into an assertion instead of a log line somebody has to read. It re-runs one 7 ms binary.
+      #
+      # Update the expected count here when cases are migrated into gui_unit_test — a stale count
+      # failing loudly is the intended behavior, not an accident.
+      #
+      # `shell: bash` for Windows too (the runner has Git Bash); GitHub runs bash steps with
+      # `-eo pipefail`, so the `tee` does not mask ctest's own exit code.
+      - name: Verify gui_unit_test actually ran (AC6 evidence)
+        if: matrix.build_gui == 'ON'
+        shell: bash
+        run: |
+          ctest --test-dir build -R LumiceGuiUnitTest -V | tee gui_unit_test_verify.log
+          grep -q "15 tests from 1 test suite ran" gui_unit_test_verify.log || {
+            echo "::error::gui_unit_test did not run its 15 cases — the gtest summary line is"
+            echo "::error::absent from the ctest -V output above. Causes: the target was not"
+            echo "::error::created, the ctest LABEL no longer matches, or the case count changed."
+            exit 1
+          }
+
       - name: Benchmark
         continue-on-error: true
         timeout-minutes: 5

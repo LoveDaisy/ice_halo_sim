@@ -160,6 +160,13 @@ subsystem 是**二级**轴：层*内*的 tag，绝非顶层桶（纯 subsystem �
 > **同名警示**：此处的 `gui` *tag* 仅是层内 subsystem 标签——例如 GUI 组件的单元测试落在
 > `test/unit-correctness/gui/`。它与 `gui` *层*（§1.6，物理 `test/gui/`）**不是一回事**：后者按
 > purpose 跨 功能/视觉/响应，按目的而非 subsystem 归类。词相同，但 tag ≠ 层。
+>
+> 这**一个**目录由**两个** CMake target 编译，而这条分界是**链接边界**，不是层或 subsystem 边界：
+> `unit_correctness_test` 只链 `lumice_obj`，装 header-only 的那一半；`gui_unit_test` 额外链
+> `lumice_gui_obj`，装会调用 `file_io.cpp` / `user_defaults.cpp` 的那一半（如
+> `test_defaults_diff.cpp`）。同目录、同 `unit-correctness` LABEL，只有链接行不同，所以
+> `ctest -L unit-correctness` 两个都选中。`gui_unit_test` 不开窗口、不建 GL 上下文；需要真实出帧的
+> 用例应去 `gui` 层（`test/gui/`，target `gui_test`）。
 
 tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem 划分的层用子目录
 （`test/<layer>/<subsystem>/`），对保持扁平的层用 CTest `LABELS` / pytest marker。
@@ -265,6 +272,12 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
   （270.5 由 `LumiceGUITests` 重命名而来）。是否再按 subsystem 进一步拆 target（单个
   `unit_correctness_test` vs `unit_correctness_core_test`+…）由 **270.3 裁定**，但上述*模式*在
   此固定，防命名漂移。
+  **例外——写成一般化规则，而非逐个具名的特例清单**：当一个 target 的存在理由是**链接边界**
+  而非层/subsystem 边界时，它按链接依赖命名，不套 `<layer-snake>_test`。`gui_test` 是第一个
+  实例（它是 `gui` 层的 target，但名字说的是"链 GUI 的那个"）；`gui_unit_test` 是第二个——
+  严格套模式应叫 `unit_correctness_gui_test`，那个名字说的是它与 `unit_correctness_test`
+  **共有**的层，反而藏起了唯一真正不同的东西：`lumice_gui_obj` 依赖。层身份由 CTest LABEL
+  承载（选择器本来就从那里读），所以 target 名可以腾出来表达链接事实。
 - **CTest LABELS**：目标态为每层加 purpose 轴 label：`unit-correctness`、`golden-analytic`、
   `parity`（该 LABEL 是 `parity-cross-backend` 层名的缩写——全名对 CMake 过长；这是**唯一**缩写
   label，其余层名**不可**同样截断——`unit-correctness` 不可缩成 `unit`，会与旧机制轴 label 冲突）、
@@ -308,7 +321,7 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 
 | 层 | 目标态路径 | 现状 C++（unit/integration） | 现状 e2e（pytest） | 现状 gui | 迁移约束 |
 |----|-----------|-------------------------------|---------------------|----------|----------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`、`test_geo3d`、`test_optics`†、`test_crystal`、`test_rng`、`test_queue`、`test_threading_pool`、`test_color_space`、`test_json`、`test_filter`、`test_filter_spec`、`test_config_snapshot`、`test_render_config`、`test_sim_data`、`test_simulator`、`test_cpu_info`、`test_axis_presets`、`test_slider_mapping`、`test_window_sizing`、`test_raypath_segments`、`test_reduce_raypath_audit`、`test_c_api`、`test_exit_records`、`test_ev_auto`、`test_proj`(integration)、`test_integration_main` | — | — | — |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`、`test_geo3d`、`test_optics`†、`test_crystal`、`test_rng`、`test_queue`、`test_threading_pool`、`test_color_space`、`test_json`、`test_filter`、`test_filter_spec`、`test_config_snapshot`、`test_render_config`、`test_sim_data`、`test_simulator`、`test_cpu_info`、`test_axis_presets`、`test_slider_mapping`、`test_window_sizing`、`test_raypath_segments`、`test_reduce_raypath_audit`、`test_c_api`、`test_exit_records`、`test_ev_auto`、`test_proj`(integration)、`test_integration_main`、`test_defaults_diff`（在第二个 target `gui_unit_test` 里，见右） | — | — | 本层的 `gui` subsystem 目录由**两个**按链接边界拆开的 CMake target 共用（§2）：`unit_correctness_test`（只链 `lumice_obj`）与 `gui_unit_test`（额外链 `lumice_gui_obj`，无窗口）。两者同挂 LABEL `unit-correctness`，所以用例在两者之间搬家**不需要**改任何 `-L` 选择器——但**需要**在两个 `add_executable` 的源文件列表之间搬，且 `gui_unit_test` 只在 `if(BUILD_GUI)` 门内存在。 |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†、`test_optics` 内闭式段†、`MultiMsContinuationNormalIncidence`（在 `test_metal_trace_parity.cpp`，2-MS 解析锚） | — | — | †逐文件确认"解析真值 vs unit-correctness"边界后才拆出 |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
