@@ -852,11 +852,19 @@ jobs:
       - name: Unit tests for the policy gates
         run: python3 -m pytest test/unit-correctness/scripts -q
 
-  # Diff-scoped sibling of the policy gate above: prose added by THIS PR must not
-  # cite the git-ignored per-task working notes (they are archived on close, so
-  # the reference dangles). Only added lines are read, so the pre-existing body
-  # of such references never blocks anyone. Runs on pull_request because that is
-  # where a merge-base exists; the pre-commit hook covers the local side.
+  # Diff-scoped siblings of the policy gate above: both ask what THIS PR added
+  # rather than what state the tree is in, and both need a merge-base, which is
+  # why they share one job and one fetch-depth-0 checkout. The pre-commit hook
+  # covers the local side of each.
+  #
+  #   1. Prose added by this PR must not cite the git-ignored per-task working
+  #      notes (they are archived on close, so the reference dangles).
+  #   2. A gui_test case registered by this PR must actually use its
+  #      ImGuiTestContext; one that does not belongs in gui_unit_test, which —
+  #      unlike gui_test — runs here on every platform.
+  #
+  # Neither reads pre-existing content, so the existing body of either kind never
+  # blocks anyone.
   new-refs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -869,3 +877,8 @@ jobs:
         run: |
           base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
           python3 scripts/check_new_refs.py --range "$base..HEAD"
+
+      - name: New-gui-test check (cases registered vs merge-base)
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          python3 scripts/check_new_gui_tests.py --range "$base..HEAD"
