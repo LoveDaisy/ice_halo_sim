@@ -347,26 +347,18 @@ std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
 // Custom, which is the failure this whole design exists to avoid.
 // --------------------------------------------------------------------------------------------------
 
-// What a write did, in the terms the UI has to report. `message` is a ready-to-show sentence
-// (empty when there is nothing to say) rather than a code the two call sites would each render:
-// the panel's warning cell and the modal gesture's status line must not drift into describing the
-// same clamp differently, and the wording is constrained (it must not imply the bound is physical
-// — see the note on the domain in axis_presets.hpp).
-struct AxisPresetWriteResult {
-  bool written = false;       // the value reached disk (false ⇒ nothing changed, in memory or on it)
-  bool clamped = false;       // stored_value differs from the requested one
-  float stored_value = 0.0f;  // what is now in effect; meaningful only when written
-  std::string message;
-};
-
-// What a write WOULD do, with no IO: the clamp decision on its own.
+// What storing a value WOULD do, with no IO: the clamp decision on its own.
 //
-// `accepted` is the counterpart of AxisPresetWriteResult::written for a caller that has not
-// committed anything yet — false means the value was refused outright (an unadjustable preset, a
-// non-finite number) and there is nothing to store; `message` then says why. It is a distinct
-// struct from AxisPresetWriteResult rather than a reuse of it precisely because `written` cannot
-// be answered here, and a struct whose fields are only sometimes meaningful invites reading the
-// one that is not.
+// `accepted` false means the value was refused outright (an unadjustable preset, a non-finite
+// number) and there is nothing to store; `message` then says why. `message` is a ready-to-show
+// sentence (empty when there is nothing to say) rather than a code each call site would render:
+// the panel's warning cell and any other surface reporting the same clamp must not drift into
+// describing it differently, and the wording is constrained (it must not imply the bound is
+// physical — see the note on the domain in axis_presets.hpp).
+//
+// Deliberately says nothing about whether anything reached disk: committing is the caller's own
+// step (the panel writes its whole working copy in one go), and a struct whose fields are only
+// sometimes meaningful invites reading the one that is not.
 struct AxisPresetClampResult {
   bool accepted = false;      // the value can be stored (false ⇒ refused; `message` says why)
   bool clamped = false;       // stored_value differs from the requested one
@@ -374,24 +366,24 @@ struct AxisPresetClampResult {
   std::string message;
 };
 
-// The clamp WITHOUT the write: what storing `raw_value` for `preset` would produce, in the same
-// terms AxisPresetWriteResult reports (`written` is meaningless here and stays false).
+// The clamp decision on its own: what storing `raw_value` for `preset` would produce, with no IO.
 //
-// Exists because there are now two commit timings for one rule. The axis modal's "Save as <preset>"
-// gesture writes immediately, while the defaults panel is a pure editor that keeps its edits in an
-// in-memory copy until Save. Both must clamp identically and word the clamp identically, so both go
-// through this function — SaveAxisPresetZenithStdOverride below is this function plus the IO. A
-// second clamp implementation in the panel would drift from this one the first time a domain moves.
+// The single owner of that rule and of its wording. Its caller is the defaults panel, a pure editor
+// that keeps edits in an in-memory copy until Save, and it goes through this function twice: once
+// when the user finishes typing a value (clamp, warn, then store the clamped result in the copy),
+// and once when resolving what the copy currently means for display — a hand-edited file can hold
+// an out-of-domain value the copy keeps verbatim, and showing it raw would name a number the button
+// does not actually give. A second clamp implementation next to either call site would drift from
+// this one the first time a domain moves.
 AxisPresetClampResult ClampAxisPresetZenithStdForSave(AxisPreset preset, float raw_value);
 
 // The preset library's half of an override DOCUMENT, with no IO: read / write / erase
 // presets.axis.<preset>.zenith_std.
 //
-// One owner for that document shape, shared by the two commit timings — the axis modal's gesture
-// writes the file immediately, the defaults panel edits an in-memory copy and writes it once on
-// Save. The erase prunes the parents it empties, so a file someone opens by hand does not
-// accumulate `"presets": {"axis": {}}` skeletons. A preset with no adjustable face has no key at
-// all, so all three are no-ops (read: nullopt) for it.
+// One owner for that document shape, so the panel's in-memory copy and the file it is eventually
+// written back as cannot spell the same setting two ways. The erase prunes the parents it empties,
+// so a file someone opens by hand does not accumulate `"presets": {"axis": {}}` skeletons. A preset
+// with no adjustable face has no key at all, so all three are no-ops (read: nullopt) for it.
 //
 // The read is deliberately RAW: it reports what the document says, not what the classifier would
 // accept. Clamping is ClampAxisPresetZenithStdForSave's job, and folding it in here would collapse
@@ -407,18 +399,8 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset);
 // For a caller that has ALREADY committed the document itself — the defaults panel writes its
 // whole working copy in one go, so by the time it calls this the value is on disk. Nothing else
 // should: memory that leads disk is exactly how "what this session resolves" and "what the next
-// launch reads" drift apart, which is why the two write functions above do the file first.
+// launch reads" drift apart, which is why RevertOneAxisPresetOverride below does the file first.
 void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value);
-
-// Store `raw_value` as the user's zenith std for `preset`, clamped into the classifier's tolerance
-// domain. A preset with no adjustable face (Random / Custom) is REFUSED — with a warning, not an
-// assert: this is the second of two defenses (the first being that the UI draws it no input), and
-// an assert would be compiled out of the release build, i.e. absent from exactly the build the
-// requirement is about.
-//
-// On a failed disk write the in-memory override is left untouched, so "what this session resolves"
-// never disagrees with "what the next launch will read".
-AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value);
 
 // Drop the user's override for one preset, returning it to the factory value. Disk first, memory
 // second — the reverse order would leave a failed write reporting success in this session and

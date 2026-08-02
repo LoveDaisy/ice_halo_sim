@@ -447,44 +447,6 @@ void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<f
   g_axis_overrides.slots[slot] = stored_value ? AxisPresetOverride{ true, *stored_value } : AxisPresetOverride{};
 }
 
-AxisPresetWriteResult SaveAxisPresetZenithStdOverride(AxisPreset preset, float raw_value) {
-  AxisPresetWriteResult result;
-
-  // The decision half is shared with the panel's uncommitted-edit path; only the IO below is this
-  // function's own.
-  const AxisPresetClampResult clamp = ClampAxisPresetZenithStdForSave(preset, raw_value);
-  if (!clamp.accepted) {
-    result.message = clamp.message;
-    return result;
-  }
-  const float stored = clamp.stored_value;
-
-  const auto dir = GetActiveUserConfigDir();
-  if (!dir) {
-    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was saved");
-    result.message = "Your personal defaults file could not be written, so nothing was saved.";
-    return result;
-  }
-  nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
-  // Read the whole document, touch ONE key, write the whole document back. A wholesale rewrite
-  // here would take the GuiState half of the file (and every other preset) with it.
-  WriteAxisPresetZenithStdToDoc(doc, preset, stored);
-  if (!WriteUserDefaultsFile(*dir, doc)) {
-    // In-memory state deliberately untouched on a failed write: "what this session resolves" must
-    // not disagree with "what the next launch reads".
-    result.message = "Your personal defaults file could not be written, so nothing was saved.";
-    return result;
-  }
-
-  AdoptAxisPresetZenithStdOverrideInMemory(preset, stored);
-
-  result.written = true;
-  result.clamped = clamp.clamped;
-  result.stored_value = stored;
-  result.message = clamp.message;
-  return result;
-}
-
 bool RevertOneAxisPresetOverride(AxisPreset preset) {
   const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
   if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {

@@ -96,6 +96,23 @@ json ReadOverlayDoc(const std::filesystem::path& dir) {
   }
 }
 
+// Put one preset override on disk, the way the panel's Save does: read the whole document, touch
+// the one key through its production owner, write the whole document back.
+//
+// The cases below use this to STAGE a precondition rather than to assert on it — the thing under
+// test is what happens next (a reload, a revert, a classification). It deliberately goes through
+// WriteAxisPresetZenithStdToDoc instead of spelling the JSON path by hand: a test that hardcoded
+// `doc["presets"]["axis"][...]` would keep passing after the document shape moved, staging a file
+// the production reader no longer looks at.
+//
+// No clamp: callers pass in-domain values, and routing the staging through the clamp would make a
+// case that meant to stage 0.3 quietly stage something else if a domain ever moved.
+bool SeedPresetOverrideOnDisk(const std::filesystem::path& dir, gui::AxisPreset preset, float stored_value) {
+  json doc = ReadOverlayDoc(dir);
+  gui::WriteAxisPresetZenithStdToDoc(doc, preset, stored_value);
+  return gui::WriteUserDefaultsFile(dir, doc);
+}
+
 }  // namespace
 
 void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
@@ -747,18 +764,21 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       const auto dir = FreshOverlayDir("preset_roundtrip");
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
-      const auto result = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f);
-      IM_CHECK(result.written);
-      IM_CHECK(!result.clamped);
-      IM_CHECK_EQ(result.stored_value, 0.3f);
-      IM_CHECK(result.message.empty());  // a clean write says nothing — the warning cell stays empty
+      IM_CHECK(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
 
-      // On disk under the key 405.2's reader already looks for, not merely in memory.
+      // On disk under the key 405.2's reader already looks for. Asserted through this file's own
+      // raw reader rather than the production one, so a writer bug and a reader bug cannot cancel.
       const json doc = ReadOverlayDoc(dir);
       IM_CHECK(doc.contains("presets"));
       const auto stored_column = ReadPresetStd(doc, "column");
       IM_CHECK(stored_column.has_value());
       IM_CHECK_EQ(*stored_column, 0.3f);
+
+      // The session picks it up the way startup does.
+      gui::MakeNewDocumentState(dir);
+      const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(loaded.has_value());
+      IM_CHECK_EQ(*loaded, 0.3f);
 
       // Drop the in-memory state the way a restart would, then re-resolve from the file.
       gui::ResetUserAxisPresetOverrides();
@@ -801,9 +821,10 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
 
       for (const auto& c : cases) {
         const auto& entry = gui::AxisPresetEntryFor(c.preset);
-        const auto result = gui::SaveAxisPresetZenithStdOverride(c.preset, c.tuned_std);
-        IM_CHECK(result.written);
-        IM_CHECK(!result.clamped);
+        // Staged straight into the in-memory cache: every tuned_std here sits inside its own
+        // domain, so this is the same state a committed edit would leave behind, minus the IO the
+        // claim under test does not involve.
+        gui::AdoptAxisPresetZenithStdOverrideInMemory(c.preset, c.tuned_std);
 
         // Exactly what the modal's preset button assembles into its edit buffer.
         const gui::AxisDist zenith = gui::EffectiveAxisPresetZenith(entry);
@@ -829,6 +850,10 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
     // AC3 (store half) — an out-of-domain edit is clamped AND says so, in both directions, and an
     // in-domain edit is left exactly as typed. Both states asserted: a clamp that fired on every
     // write would satisfy a one-sided test while making the feature useless.
+    //
+    // Aimed at ClampAxisPresetZenithStdForSave, the single owner of both the clamp and its wording
+    // (defaults_panel.cpp is its only production caller). This case is the whole repo's only direct
+    // check of that wording, so the message assertions below are load-bearing, not decoration.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_write_clamps_and_reports_both_states");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetUserDefaultsChannels();
@@ -836,8 +861,8 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
       // Above Column's (0, 10).
-      const auto high = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 25.0f);
-      IM_CHECK(high.written);
+      const auto high = gui::ClampAxisPresetZenithStdForSave(gui::AxisPreset::kColumn, 25.0f);
+      IM_CHECK(high.accepted);
       IM_CHECK(high.clamped);
       IM_CHECK(high.stored_value < gui::kColumnPlateParryZenithStdUpperBound);
       IM_CHECK(!high.message.empty());
@@ -846,21 +871,23 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       // The copy must not claim the bound is physical — it is where the neighbouring criterion
       // starts. Plate's [10, 15) dead zone is the case that makes the distinction matter.
       IM_CHECK(high.message.find("not a physical limit") != std::string::npos);
-      // Still Column afterwards, which is the point of clamping rather than rejecting.
+      // Still Column afterwards, which is the point of clamping rather than rejecting. Asserted on
+      // the clamped value actually taking effect, not on the clamp result alone.
+      gui::AdoptAxisPresetZenithStdOverrideInMemory(gui::AxisPreset::kColumn, high.stored_value);
       const auto& column = gui::AxisPresetEntryFor(gui::AxisPreset::kColumn);
       IM_CHECK_EQ(static_cast<int>(
                       gui::ClassifyAxisPreset(gui::EffectiveAxisPresetZenith(column), column.azimuth, column.roll)),
                   static_cast<int>(gui::AxisPreset::kColumn));
 
       // Below Lowitz's (15, inf) — the opposite side.
-      const auto low = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kLowitz, 5.0f);
-      IM_CHECK(low.written);
+      const auto low = gui::ClampAxisPresetZenithStdForSave(gui::AxisPreset::kLowitz, 5.0f);
+      IM_CHECK(low.accepted);
       IM_CHECK(low.clamped);
       IM_CHECK(low.stored_value > gui::kLowitzZenithStdLowerBound);
 
       // In domain: stored verbatim, nothing reported.
-      const auto ok = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f);
-      IM_CHECK(ok.written);
+      const auto ok = gui::ClampAxisPresetZenithStdForSave(gui::AxisPreset::kColumn, 0.3f);
+      IM_CHECK(ok.accepted);
       IM_CHECK(!ok.clamped);
       IM_CHECK_EQ(ok.stored_value, 0.3f);
       IM_CHECK(ok.message.empty());
@@ -883,10 +910,16 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       seed["bg_alpha"] = 0.42f;
       IM_CHECK(gui::WriteUserDefaultsFile(dir, seed));
 
-      IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f).written);
-      IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kPlate, 0.5f).written);
+      // Two independent read-modify-write cycles through WriteAxisPresetZenithStdToDoc, the owner
+      // of the document shape the panel's Save also goes through.
+      IM_CHECK(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
+      IM_CHECK(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kPlate, 0.5f));
+      // Load them into the session, so the memory-side assertion after the revert below is about a
+      // value that was really there rather than one that never arrived.
+      gui::MakeNewDocumentState(dir);
+      IM_CHECK(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
 
-      // Asserted after the SECOND write, before any revert: the second save must not have taken
+      // Asserted after the SECOND write, before any revert: the second write must not have taken
       // the first one with it. Without this line the whole case still passes when the write is a
       // wholesale rewrite of the presets subtree — measured with exactly that mutation, which is
       // why the assertion is here and not left implied by the revert checks below.
@@ -940,14 +973,15 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
       ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
       for (const auto preset : { gui::AxisPreset::kRandom, gui::AxisPreset::kCustom }) {
-        const auto result = gui::SaveAxisPresetZenithStdOverride(preset, 3.0f);
-        IM_CHECK(!result.written);
+        const auto result = gui::ClampAxisPresetZenithStdForSave(preset, 3.0f);
+        IM_CHECK(!result.accepted);         // refused before any caller could commit it
         IM_CHECK(!result.message.empty());  // refused out loud, not silently dropped
         IM_CHECK(!gui::GetUserAxisPresetZenithStdOverride(preset).has_value());
         IM_CHECK(!gui::RevertOneAxisPresetOverride(preset));
       }
 
-      // Nothing was created at all — not an empty `presets` skeleton either.
+      // Nothing reached the file — RevertOneAxisPresetOverride is a real writer, and it must bail
+      // out for these presets rather than leave an empty `presets` skeleton behind.
       const json doc = ReadOverlayDoc(dir);
       IM_CHECK(!doc.contains("presets"));
 
@@ -970,23 +1004,24 @@ void RegisterUserDefaultsTests(ImGuiTestEngine* engine) {
     // A failed write must leave the in-memory value alone. Otherwise this session resolves one
     // value while the next launch reads the older one off disk, and the user sees their setting
     // "come back" with no event to attribute it to.
+    //
+    // The write under test is the revert — dropping an override is a file write like any other, and
+    // this is the repo's only coverage of what it does when that write cannot happen.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "user_defaults", "preset_write_failure_leaves_memory_untouched");
     t->TestFunc = [](ImGuiTestContext*) {
       ResetUserDefaultsChannels();
       const auto dir = FreshOverlayDir("preset_write_fail");
       {
         ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-        IM_CHECK(gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 0.3f).written);
+        IM_CHECK(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
+        gui::MakeNewDocumentState(dir);
       }
+      const auto seeded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(seeded.has_value());
+      IM_CHECK_EQ(*seeded, 0.3f);
 
       // No writable directory at all — the same shape as a read-only config dir.
       ScopedUserConfigSource disabled(gui::UserConfigSource::kDisabled);
-      const auto result = gui::SaveAxisPresetZenithStdOverride(gui::AxisPreset::kColumn, 7.0f);
-      IM_CHECK(!result.written);
-      const auto still = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-      IM_CHECK(still.has_value());
-      IM_CHECK_EQ(*still, 0.3f);  // NOT 7.0 — the failed write changed nothing
-
       IM_CHECK(!gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
       const auto after_failed_revert = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
       IM_CHECK(after_failed_revert.has_value());
