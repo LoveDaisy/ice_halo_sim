@@ -126,7 +126,7 @@ std::string FormatDiffValue(const nlohmann::json& value);
 //
 // Was the §2/§3 partition when the panel had two sections; it is now one half of the OR that
 // decides a row's INITIAL checkbox state (the other half is has_saved_override). Still a total,
-// two-valued predicate over one row set, which is the property test_gui_defaults_diff.cpp asserts.
+// two-valued predicate over one row set, which is the property test_defaults_diff.cpp asserts.
 bool RowNeedsAdoption(const DefaultDiffRow& row);
 
 // Whether pressing Save right now would change what the override file holds for this key, given
@@ -183,7 +183,7 @@ bool ApplyCheckedRowsToDoc(nlohmann::json& doc, const std::vector<DefaultDiffRow
 //
 // The panel does NOT use these — it is a pure editor and commits once, through its own copy (see
 // defaults_panel.cpp). They are the one-shot committed-edit API, and today their only callers are
-// test_gui_defaults_diff.cpp: they are the entry point through which the surgical-write contract
+// test_defaults_diff.cpp: they are the entry point through which the surgical-write contract
 // (untouched keys survive, the "presets" subtree survives, a missing config directory reports
 // failure, a clobbered non-object path node files a downgrade notice) is exercised.
 // ------------------------------------------------------------------------------------------------
