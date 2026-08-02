@@ -6735,13 +6735,4 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
     };
   }
-  // TEMPORARY gate probe. Removed by the next commit.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "gui_interaction", "gate_probe_im_unused");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      const int value = 2 + 2;
-      IM_CHECK(value == 4);
-    };
-  }
 }
