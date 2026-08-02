@@ -198,6 +198,14 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   this isolation is actually in effect for the scene under test (an explicit, freshly emptied
   `--user-config` directory installed **before** `ResetTestState()`, not after — installed after,
   the capture is built from whatever personal defaults the running machine has saved).
+  `gui_unit_test` gets the same baseline, but from a different place: it shares `test_main.cpp`
+  with the non-GUI targets, which cannot call into `lumice_gui_obj`, so the install lives in a
+  gtest global environment only that target compiles
+  (`test/unit-correctness/gui/gui_unit_test_env.cpp`). Without it the process-wide source stays at
+  `kAutoDetect` — the unset value, `src/gui/user_defaults.cpp` — which resolves to the developer's
+  real OS config directory, so any case reaching the no-arg `MakeNewDocumentState()` reads
+  whatever that machine has saved. A green run is not evidence the isolation holds; point `HOME`
+  at a directory containing a `user_defaults.json` and re-run to check.
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
 
