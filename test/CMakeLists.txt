@@ -233,13 +233,20 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_import_export_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
   # path, not merely that it works when called. gui_test carries the same definition.
+  #
+  # LUMICE_E2E_CONFIG_DIR: one migrated import/export case round-trips a tracked fixture
+  # (test/e2e/configs/raypath_color_three_arcs.json) rather than an inline string literal, so it
+  # breaks when the shipped fixture and the GUI importer drift apart. gui_test defines the same
+  # path for the cases that stayed there.
   target_compile_definitions(gui_unit_test PRIVATE
-    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp")
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
   target_link_libraries(gui_unit_test
     PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
   set_target_properties(gui_unit_test PROPERTIES
