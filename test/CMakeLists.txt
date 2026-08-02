@@ -205,9 +205,19 @@ set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analyt
 # `ctest -L "unit-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
 # up with no change. See doc/testing-architecture.md §5 for why this is a second target rather
 # than a second layer, and for the naming rule that lets it keep a link-derived name.
+#
+# imgui_te_stubs.cpp is in the source list for the same reason LumiceGUI has it: lumice_gui_obj
+# compiles ImGui with IMGUI_ENABLE_TEST_ENGINE PUBLIC (src/gui/CMakeLists.txt), so every consumer
+# must supply the four ImGuiTestEngineHook_* symbols — either the real engine (gui_test compiles
+# imgui_test_engine) or these no-ops (LumiceGUI, and now this target). Omitting them links anyway
+# under Release+static, where LTO drops the never-reached ImGui rendering code before the
+# references materialize; every non-LTO configuration (any shared build, any Debug build) fails
+# to link instead. The stubs are unreachable here in practice — this target never creates an
+# ImGui context, let alone renders a frame.
 if(BUILD_GUI)
   add_executable(gui_unit_test
     "${PROJ_TEST_DIR}/test_main.cpp"
+    "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
