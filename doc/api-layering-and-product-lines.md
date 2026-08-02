@@ -98,14 +98,27 @@ owner 提出的三个扩张方向，压力点各不相同，**没有一条落在
 3. **发布形态是单一产品**。`.github/workflows/release.yml` 一次产出 CLI 与 GUI，同 tag 同签名，
    目前不存在需要独立节奏的 core 消费者。
 
-### 5.1 唯一一处边界确实没守住（可独立行动）
+### 5.1 唯一一处边界确实没守住（可独立行动）—— **一半已收紧**
 
+原始诊断（2026-08-01）：
 `test/gui/CMakeLists.txt:54`：`gui_test` 链接 `lumice_obj`（core 内部对象库）而非 `lumice`；
 `test/gui/functional/test_render_handedness_guard.cpp:41-46` 直接 include 了 6 个 `core/`、`config/` 头。
 
 产品遵守 C API，测试不遵守。后果是：**今天并不知道 GUI 侧能否只靠 C API 活下来**，
-测试替产品兜住了缺口。这一处收紧（把该 guard 移到跨后端一致性测试层，或给它一个有名字的显式豁免）
-既是独立有价值的动作，也是任何未来分层/拆分的前置条件。
+测试替产品兜住了缺口。
+
+**✅ include 违规已消解（2026-08-03，commit `1526696b`）**：该 guard 已迁至
+`test/unit-correctness/gui/`（target `gui_unit_test`），`test/gui/` 下不再有任何
+`core/`、`config/` 直连。
+
+选 `gui_unit_test` 而非 parity 层，是因为它是全仓**唯一同时链 `lumice_gui_obj` + `lumice_obj`**
+的 target——该 guard 比较的正是 backend 正向投影 vs 两条 GUI 正向投影，
+parity 层链不到 GUI 侧符号，做不了这次比较。它现在是一个**有名字的显式跨层 oracle**
+（文件头写明了这一点），即本节原先给出的两个选项中的第一个。
+
+**⏳ 剩余部分**：`gui_test`（以及新增的 `gui_unit_test`）仍链 `lumice_obj` 而非 `lumice`。
+这条**链接边**才是本节的真正剩余内容，与 include 违规是两回事，未随迁移消解——
+故「GUI 侧能否只靠 C API 活下来」目前**仍无证据**，结论不变。
 
 ---
 
