@@ -134,6 +134,43 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 
 - CLI, core, and unit-test flows should remain cross-platform.
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+  That is why `gui_test` is **build-only in CI** (`.github/workflows/ci.yml`) — the runners have
+  no display. A `src/gui/` test that needs no live frame therefore should not live there: the
+  `gui_unit_test` target (`test/CMakeLists.txt`, inside `if(BUILD_GUI)`) links `lumice_gui_obj`
+  with **no window, no GL context and no ImGui test engine**, so its cases really do run in CI on
+  every platform that builds the GUI. Its sources sit in `test/unit-correctness/gui/` next to
+  `unit_correctness_test`'s and carry the same `unit-correctness` CTest LABEL — the two targets
+  are split on a *link* boundary (does the case call into `file_io.cpp` / `user_defaults.cpp`?),
+  not a layer boundary, so `ctest -L` and `./scripts/test.sh` need no per-target knowledge.
+  Rule of thumb for a new `src/gui/` test: needs a rendered frame or an `ImGuiTestContext` →
+  `gui_test`; pure logic → `gui_unit_test` (or `unit_correctness_test` if it is header-only).
+  Design reasoning and the target-naming rule: `doc/testing-architecture.md` §2 and §5.
+  That boundary is a **gate, not a rule of thumb**, for cases you add:
+  `scripts/check_new_gui_tests.py` is a third, diff-scoped entry point alongside
+  `check_policies.py` and `check_new_refs.py` (CI `new-refs` job on PRs vs merge-base;
+  pre-commit hook on the staged diff). It rejects a `TestFunc = [](ImGuiTestContext* …)`
+  lambda under `test/gui/**.cpp` belonging to a case the change **brought into existence**
+  — its `category/name` did not exist anywhere under `test/gui/` before, or its signature
+  line was rewritten in the file it already lived in — when either:
+  (1) the parameter is anonymous, `[](ImGuiTestContext*)`, including the equivalent
+  `[](ImGuiTestContext* /*ctx*/)` with the name commented out; or
+  (2) the parameter is named and the body calls `IM_UNUSED(<name>)` while containing no
+  other mention of `<name>` anywhere — a bare `<name>` passed to a helper counts as a use,
+  so `Helper(ctx, …)` is fine and the narrower `<name>->` reading is deliberately not used.
+  Both are an explicit statement — by the compiler, or by the author's own hand — that the
+  case does not drive the GUI, which is why the rule rests on them and not on inference.
+  **What it does not reject**, all accepted deliberately: `TestFunc = SomeNamedFunction`
+  (no signature to read); a named parameter never referenced and never marked `IM_UNUSED`
+  (the build is `-Wall -Wextra` without `-Werror`, so it only warns — catching it needs an
+  inference no one stands behind); pre-existing cases of any shape, including ones a change
+  relocates between `test/gui/` files or shifts within one; and renaming an existing
+  rejected-shape case, which does read as a new registration.
+  There is **no inline exemption, by design**, and the same "checker is the rule" discipline
+  applies as for `check_new_refs.py`: if it passes, the change is compliant — do not flag in
+  review what the checker accepts. If a new case genuinely needs a frame but happens not to
+  touch `ctx`, make it drive `ctx` (`ctx->Yield()` is the frame pump); that states the
+  dependency and satisfies the gate. If some case truly cannot be written that way, the rule
+  is wrong and the rule changes — in the script, never per case.
 - E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
   - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
   - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3
@@ -187,6 +224,14 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   this isolation is actually in effect for the scene under test (an explicit, freshly emptied
   `--user-config` directory installed **before** `ResetTestState()`, not after — installed after,
   the capture is built from whatever personal defaults the running machine has saved).
+  `gui_unit_test` gets the same baseline, but from a different place: it shares `test_main.cpp`
+  with the non-GUI targets, which cannot call into `lumice_gui_obj`, so the install lives in a
+  gtest global environment only that target compiles
+  (`test/unit-correctness/gui/gui_unit_test_env.cpp`). Without it the process-wide source stays at
+  `kAutoDetect` — the unset value, `src/gui/user_defaults.cpp` — which resolves to the developer's
+  real OS config directory, so any case reaching the no-arg `MakeNewDocumentState()` reads
+  whatever that machine has saved. A green run is not evidence the isolation holds; point `HOME`
+  at a directory containing a `user_defaults.json` and re-run to check.
 - Windows physical-desktop validation uses `scripts/win_remote_test.sh` together with `scripts/win_test_watcher.ps1`.
 - Performance diagnostics and workflows are documented in `doc/performance-testing.md`.
 
@@ -330,6 +375,15 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
   - `gui-state-governance.md` — **GUI 状态治理设计蓝图**（explore-gui-state-governance 收敛，2026-07-11）：回答 owner 总纲"每个用户操作 → ①内部状态如何转换 ②所有相关显示如何更新"。诊断 = `GuiState` 数据集中但**状态转换散乱、无统一 owner**，且偏离几乎全部聚于 **display 通道 ↔ sim 通道的交界**（活 bug=display-time 操作借 EnsureRunning+PublishValidReset 污染 sim_state 闪 Simulating / commit↔display 字段割裂 / Revert 不重推 / 显示态与结构态挤同 struct）。目标模型三支柱 = field→tier 声明式分类器（拆 ColorClassConfig 结构态/显示态子结构）+ 每通道单一序列化器+重推纪律 + latch 派生态且 display-time 禁碰 re-sim 原语，外加单一 `ResetFrontendState(reason)` 文档重置 owner（= backlog #5）。含 5 条固化不变量 + T1–T6 scrum 拆解。**§8 用户默认值层**：把字段的 tier 档位复用为默认值资格判定的单一权威（四命名空间：单例文档默认 / 预设库 / app 偏好一期排除 / 集合区排除），含 I1–I5 五条不变量与 `ConfigSnapshot` 的边界（覆盖字段集不同，不可互相复用 struct）。改 GUI 状态转换 / 染色 display 通道 / 文档切换重置 / 仿真生命周期显示联动 / 用户个人默认值前先读。
   - `gui-custom-spectrum-and-raypath-color.md` — GUI 功能扩展设计（功能 1 自定义离散光谱已由 task-323 落地并将 `ray_num` 语义统一为总数）。**功能 2 per-raypath 颜色标记（2026-07-05 深化蓝图，未立项）**：一个物理机制三层角色 = 物理门 filter（1:1 不动）+ 色桶 = filter 的 summand（Fork C，不放宽绑定）+ 跨层 rule（带层键 component 的布尔组合，接跨层轨迹染色）。⭐地基窄而稳 = 产 per-ray component 掩码（复用 §5.1）+ 跨层前向累积（加宽 `is_prior_filter_failed_`）+ 交付 consumer；三硬承诺 = 携带原始掩码/带层键/uint64。⭐隔离契约 = binning + re-sim 边界 + rule + UI 全属地基之上、换之不动 seam。改光谱/光路染色相关前先读。**§4.8 合成算法重设计（2026-07-15 定案）**：dominant 噪声敏感根因 = argmax 不连续；定案 = dominant 保持 hard argmax（诊断视图）/ painter 改为亮度即 alpha 的 over 合成（`alpha=f(ey)=min(ey,1)`、纯色相、修「暗点压亮点变黑」黑洞 + 顺带连续）/ painter 设默认 / EV 解耦（alpha 用 self-anchor、display EV 后置乘）/ composite+EV 在线性 RGB。改 `component_compositor.cpp` 前先读 §4.8。
 - **C API**: `c_api.md`, `capi-lifecycle-architecture.md`
+  - `api-layering-and-product-lines.md` — **C API 层次混杂的诊断 + 产品线扩张方向的设计讨论**（讨论记录，非定稿；2026-08-01）：
+    起点"core/gui 是否拆仓"被判为问错层次（想要的解耦已成立：`src/gui/` 零 core include + 只链 C API + 有门禁），
+    真发现 = **今天的 C API 把三个高度压在一个平面**（L0 引擎无独立出口 / L1 冰晕域模型 / L2 编辑器支撑——
+    后者含四个**返回 JSON 键名**的函数）。⭐顺序约束 = **产品线决定 API 形状，正式发布则冻结 API**，
+    故"先发库再想产品线"是把顺序做反；拆仓同属提前冻结（会把 L1|L2 这道最不该固化的缝宣布为最终答案）。
+    含跨树改动实测（近 12 个月已合并代码 PR 中 37% 同时动两棵树，皆为功能纵切）、
+    唯一未守住的边界（`test/gui/CMakeLists.txt:54` 链 `lumice_obj` 而非 `lumice`⇒「GUI 能否只靠 C API 活下来」目前无证据）、
+    以及拆仓触发条件（真实外部消费者 / 不同授权策略 / 第二团队；且届时该拆的是 L0 而非 core|gui）。
+    考虑发布动态库、设计新产品线、或再次提起拆仓前先读。
 - **GPU / Metal route** (read these before touching the GPU path):
   - **🔒 设计纪律（GPU 后端实现硬约束）**：按 `seam-design.md` 蓝图走，**不要自己重新发明**。几何遍历 / 出射 seam / per-ray 旋转上传 / 单引擎大 dispatch — **复用已验证的实现**：参考当前 Metal（`gpu-single-engine-implementation.md` as-built）+ legacy `PropagateSlab`（`optics.cpp` 的 polygon-slab 遍历）。**蓝图是最终判据**：Metal/legacy 与蓝图冲突处以蓝图为准（如历史 Metal 投影焊进 trace 已被 §4.1/scrum-258 纠正，别照搬旧形态）。教训：CUDA #295 自创 Möller-Trumbore 遍历复现了 task-275~278 已解决的绝对-ε 漏面 bug（energy 0.735）；详见 `scratchpad/backlog.md`「MVP 落地后的架构发现」。
   - `seam-design.md` — **the `TraceBackend` host/device seam redesign blueprint**; §5 = single-engine, three-clock-decoupled GPU simulator (the target architecture); §3.6 "原始之罪" = why GPU must not mirror the CPU pipeline.

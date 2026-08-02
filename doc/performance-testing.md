@@ -12,6 +12,31 @@ All commands assume the working directory is the project root.
 > anchor. CUDA build + parity/correctness on the remote boxes is a separate concern — see
 > [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md).
 
+## ⚠️ Synthetic CPU-load generators: cleanup needs more than a `trap ... EXIT`
+
+Robustness/perf runs sometimes spawn a background busy-loop process (e.g. `yes > /dev/null &`)
+to synthesize CPU contention. A plain `trap cleanup EXIT` that kills the spawned PID is not
+reliable on its own — confirmed twice in one investigation, after a leaked instance of exactly
+this pattern ran unnoticed for over 20 hours and consumed most of a 12-core machine:
+
+- The `EXIT` trap does not run when the shell is torn down by `SIGKILL` (or any signal it
+  cannot catch) rather than exiting normally — e.g. when the driving process/session itself is
+  killed forcefully. The busy-loop child is then reparented to init and keeps running
+  indefinitely.
+- Once a load-generator process has leaked this way, issuing `kill` from a background job or a
+  nested subshell is not reliable — it does not always take effect. Only a **foreground** `kill`
+  on the exact PID reliably terminates it.
+
+**Correct form (all three required):**
+1. **Write spawned PIDs to a file**, not just a shell array — a file survives the shell that
+   spawned it and lets another shell find and clean up after an unclean exit.
+2. **Kill in the foreground**, never from a backgrounded or nested-shell loop.
+3. **Verify with `pgrep`** after cleanup (e.g. `pgrep -x yes`) — a cleanup step that doesn't
+   verify its own result is not a cleanup step.
+
+On a shared machine, only clean up processes your own PID file lists — never broad-kill by
+process name.
+
 ## Log Level
 
 Both CLI benchmark and GUI perf test support log level options.

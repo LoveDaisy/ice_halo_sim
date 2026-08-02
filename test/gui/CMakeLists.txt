@@ -6,7 +6,6 @@ set(IMGUI_TE_DIR ${imgui_test_engine_SOURCE_DIR}/imgui_test_engine)
 
 add_executable(gui_test
     test_gui_main.cpp
-    functional/test_gui_smoke.cpp
     functional/test_gui_interaction.cpp
     functional/test_gui_preview_animation.cpp
     functional/test_gui_export.cpp
@@ -16,17 +15,11 @@ add_executable(gui_test
     functional/test_gui_overlay_labels.cpp
     functional/test_gui_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
-    functional/test_gui_state_reconcile.cpp
     functional/test_gui_sampling_density_stats.cpp
-    functional/test_gui_user_defaults.cpp
-    functional/test_gui_defaults_diff.cpp
     functional/test_gui_defaults_panel.cpp
-    functional/test_project_world_dir.cpp
-    functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp
     visual/test_gui_render.cpp
     visual/test_gui_bg.cpp
-    visual/test_gui_crystal_renderer.cpp
     visual/test_gui_auto_ev.cpp
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
@@ -43,8 +36,12 @@ add_executable(gui_test
     ${IMGUI_TE_DIR}/imgui_te_perftool.cpp
     ${IMGUI_TE_DIR}/imgui_capture_tool.cpp)
 
+# ${PROJ_TEST_DIR} (the test/ root) is on the list so gui_test can reach the target-agnostic
+# helpers under test/support/ by their "support/..." path — the same spelling gui_unit_test uses,
+# which keeps one include line valid in both targets.
 target_include_directories(gui_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJ_TEST_DIR}
     ${IMGUI_TE_DIR})
 
 # `lumice_obj` (objects), not `lumice`: the white-box tests reference internal core

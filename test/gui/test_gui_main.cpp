@@ -374,7 +374,6 @@ int main(int argc, char** argv) {
   ImGuiTestEngine_InstallDefaultCrashHandler();
 
   // Register and queue all tests
-  RegisterSmokeTests(engine);
   RegisterP0Tests(engine);
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
@@ -385,7 +384,6 @@ int main(int argc, char** argv) {
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
   RegisterColorWindowTests(engine);
-  RegisterCalibrationTests(engine);
   RegisterPerfTests(engine);
   // task-test-gui-interaction: user action → state assertion coverage
   RegisterP1InteractionTests(engine);
@@ -395,19 +393,13 @@ int main(int argc, char** argv) {
   RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
-  RegisterCrystalRendererTests(engine);
   RegisterAutoEvRegressionTests(engine);
   RegisterLinkedEntriesTests(engine);
-  RegisterProjectWorldDirTests(engine);
-  RegisterHandednessGuardTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
-  RegisterStateReconcileTests(engine);
   RegisterSamplingDensityStatsTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
-  RegisterUserDefaultsTests(engine);
-  RegisterDefaultsDiffTests(engine);
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);

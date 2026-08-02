@@ -211,28 +211,6 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // Test 6: bg/old_lmc_compat — JSON without bg fields gets defaults
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "old_lmc_compat");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      ResetTestState();
-
-      // Empty legacy-format JSON: exercises DeserializeGuiStateJson fallback paths
-      // (crystals/renderers/filters as ID-arrays). With renderers=[], the legacy branch
-      // finds an empty vector and leaves loaded.renderer at default-constructed values;
-      // this test only asserts bg_* fields, so the renderer branch is exercised but not
-      // asserted against.
-      std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
-      gui::GuiState loaded;
-      bool ok = gui::DeserializeGuiStateJson(json, loaded);
-      IM_CHECK(ok);
-      IM_CHECK(loaded.bg_path.empty());
-      IM_CHECK_EQ(loaded.bg_show, false);
-      IM_CHECK(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
-    };
-  }
-
   // Test 7: bg/match_bg_avail — Match Background availability depends on HasBackground
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "bg", "match_bg_avail");

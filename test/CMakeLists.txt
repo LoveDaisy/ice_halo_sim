@@ -12,6 +12,7 @@ CPMAddPackage(
 # ==================================================================================================
 # Test layout (270.3 — purpose-primary, layer × subsystem):
 #   - unit_correctness_test (LABEL unit-correctness)
+#   - gui_unit_test         (LABEL unit-correctness — same layer, second target; see below)
 #   - parity_test           (LABEL parity, abbreviated; full layer name is parity-cross-backend)
 #   - golden_analytic_test  (LABEL golden-analytic)
 # See doc/testing-architecture.md §5 for the naming contract.
@@ -76,8 +77,10 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_exposure_push.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
-  # they link against lumice_obj alone; the half that calls file_io.cpp lives in gui_test
-  # (test/gui/functional/test_gui_user_defaults.cpp), which links lumice_gui_obj.
+  # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
+  # therefore lives in a different target of this same layer — gui_unit_test, defined at the
+  # bottom of this file (test/unit-correctness/gui/test_defaults_diff.cpp), or in gui_test when it
+  # also needs a window (test/gui/functional/test_gui_user_defaults.cpp).
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults_eligibility.cpp"
   # backend/: CUDA-only white-box tests for the geometry-pool rebuild gate.
   # Body is `#if LUMICE_CUDA_ENABLED`, so on non-CUDA hosts the TU is empty
@@ -190,6 +193,69 @@ add_test(NAME "LumiceGoldenAnalyticTest" COMMAND golden_analytic_test
   "${PROJ_TEST_DIR}/fixtures/v3_config.json"
   "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analytic")
+
+# --------------------------------------------------------------------------------------------------
+# gui_unit_test — unit-correctness layer, gui subsystem, second CMake target.
+#
+# Links lumice_gui_obj the way gui_test does, but with NO GLFW window, NO GL context and NO ImGui
+# test engine: a windowless home for the gui subsystem's pure-logic cases. Its sources sit in the
+# same test/unit-correctness/gui/ directory as unit_correctness_test's, and it carries the same
+# LABEL — the split is a LINK boundary (these cases call into file_io.cpp / user_defaults.cpp),
+# not a layer or subsystem boundary. Sharing the label is what lets the existing
+# `ctest -L "unit-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
+# up with no change. See doc/testing-architecture.md §5 for why this is a second target rather
+# than a second layer, and for the naming rule that lets it keep a link-derived name.
+#
+# imgui_te_stubs.cpp is in the source list for the same reason LumiceGUI has it: lumice_gui_obj
+# compiles ImGui with IMGUI_ENABLE_TEST_ENGINE PUBLIC (src/gui/CMakeLists.txt), so every consumer
+# must supply the four ImGuiTestEngineHook_* symbols — either the real engine (gui_test compiles
+# imgui_test_engine) or these no-ops (LumiceGUI, and now this target). Omitting them links anyway
+# under Release+static, where LTO drops the never-reached ImGui rendering code before the
+# references materialize; every non-LTO configuration (any shared build, any Debug build) fails
+# to link instead. The stubs are unreachable here in practice — this target never creates an
+# ImGui context, let alone renders a frame.
+if(BUILD_GUI)
+  add_executable(gui_unit_test
+    "${PROJ_TEST_DIR}/test_main.cpp"
+    "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_panel_registry.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_sampling_density_stats.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_lifecycle.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_import_export_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp")
+  target_include_directories(gui_unit_test
+    PRIVATE ${PROJ_TEST_DIR})
+  # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
+  # path, not merely that it works when called. gui_test carries the same definition.
+  #
+  # LUMICE_E2E_CONFIG_DIR: one migrated import/export case round-trips a tracked fixture
+  # (test/e2e/configs/raypath_color_three_arcs.json) rather than an inline string literal, so it
+  # breaks when the shipped fixture and the GUI importer drift apart. gui_test defines the same
+  # path for the cases that stayed there.
+  target_compile_definitions(gui_unit_test PRIVATE
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
+  target_link_libraries(gui_unit_test
+    PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
+  set_target_properties(gui_unit_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
+
+  add_test(NAME "LumiceGuiUnitTest" COMMAND gui_unit_test)
+  set_tests_properties("LumiceGuiUnitTest" PROPERTIES LABELS "unit-correctness")
+endif()
 
 # --------------------------------------------------------------------------------------------------
 # CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)

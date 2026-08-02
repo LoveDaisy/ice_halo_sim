@@ -203,6 +203,14 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 > e.g. a GUI-component unit test lives at `test/unit-correctness/gui/`. It is **not** the same
 > thing as the `gui` *layer* (§1.6, physical `test/gui/`), which spans functional/visual/
 > responsiveness and is keyed by purpose, not subsystem. Tag ≠ layer despite the shared word.
+>
+> That one directory is compiled by **two** CMake targets, and the split is a LINK boundary, not
+> a layer or subsystem boundary: `unit_correctness_test` links `lumice_obj` alone and takes the
+> header-only cases; `gui_unit_test` additionally links `lumice_gui_obj` and takes the cases that
+> call into `file_io.cpp` / `user_defaults.cpp` (e.g. `test_defaults_diff.cpp`). Same directory,
+> same `unit-correctness` LABEL — only the link line differs, so `ctest -L unit-correctness`
+> selects both. `gui_unit_test` creates no window and no GL context; a case that needs a live
+> frame belongs in the `gui` layer (`test/gui/`, target `gui_test`) instead.
 
 How a tag is encoded depends on the layer's physical form (§6): a subdirectory
 (`test/<layer>/<subsystem>/`) for layers with a natural subsystem split, or a CTest
@@ -310,6 +318,45 @@ The throughput that *does* belong to `performance` is the legacy-CPU-denominated
 committed bench harness (270.6) and `test_metal_throughput`. **"Reflects performance" is not the
 test; "oracle = ratio to legacy CPU" is.**
 
+### §4.5 Enforcement: the `gui_test` / `gui_unit_test` split is a gate, not a convention
+
+§1.6 and §5 place a `src/gui/` test by whether it needs a live frame. That placement decides
+whether the test runs in CI at all — `gui_test` needs a display and is build-only on the
+runners, `gui_unit_test` links the same object library with no window, no GL context and no
+ImGui test engine, so it runs on every platform that builds the GUI. Left as a convention the
+split does not survive: the path of least resistance runs the wrong way, because adding to
+`gui_test` is the muscle memory and it always compiles. A convention that loses to the default
+path is not a boundary, it is a preference.
+
+So the boundary is enforced on what a change adds, by `scripts/check_new_gui_tests.py` — a
+third diff-scoped entry point beside `check_policies.py` (whole-tree) and `check_new_refs.py`
+(prose). It runs in the CI `new-refs` job on PRs against the merge-base, and in the pre-commit
+hook against the staged diff. It rejects a case the change brought into existence whose
+`TestFunc` lambda states that it does not drive the GUI — either by taking an anonymous
+`ImGuiTestContext*`, or by marking the parameter `IM_UNUSED` and never mentioning it again.
+Both are explicit statements, one the compiler's and one the author's; the rule rests on those
+rather than on inferring intent from a body, which is what keeps its false-positive rate at
+zero over this repo's history.
+
+The full criterion, what it deliberately does not catch, and the no-inline-exemption rule live
+in `AGENTS.md` under "Testing and Platform Notes" — one authority, cited here rather than
+restated, so the two cannot drift apart. Two properties are worth knowing at this level:
+
+- **"Newly registered" is an identity question, not a line-number one.** A case is new when its
+  `category/name` did not exist under `test/gui/` before. Reading the line diff instead fails in
+  both directions and was measured doing so: the rejected signatures are boilerplate, so a
+  change that deletes cases and adds one lets git pair the new signature line with a deleted
+  identical one and the gate misses it; while anchoring on the `IM_REGISTER_TEST` line — the one
+  line that cannot alias, because it carries the name — bills untouched cases that merely
+  shifted when a neighbour was deleted. Identity is immune to both.
+- **The gate is diff-scoped because the existing body cannot be zeroed out.** 26 cases under
+  `test/gui/` match a rejected shape today (8 anonymous, 18 marked `IM_UNUSED`), so a whole-tree
+  gate could not start green; a frozen baseline is the alternative, and it is an asset someone
+  must keep correct forever. Same trade, for the same reason, as its prose-scanning sibling.
+  Note the shape alone does not establish those 26 are misplaced — a case can need a frame
+  without touching `ctx`, which is exactly why the gate only speaks about cases being added and
+  why its message proposes rather than asserts the move.
+
 ---
 
 ## §5 Physical-layout naming conventions
@@ -323,6 +370,14 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
   in 270.5). Whether targets are split further per subsystem (one `unit_correctness_test` vs
   `unit_correctness_core_test` + …) is **270.3's call**, but the *pattern* above is fixed here so
   the naming does not drift.
+  **Exception, stated as a rule rather than as a list of cases**: when a target exists because of
+  a *link* boundary rather than a layer/subsystem boundary, name it after the link dependency
+  instead of `<layer-snake>_test`. `gui_test` is the original instance (it is the `gui` layer's
+  target, but the name says "the one that links the GUI"); `gui_unit_test` is the second — under
+  the strict pattern it would be `unit_correctness_gui_test`, which names the layer it *shares*
+  with `unit_correctness_test` while hiding the only thing that actually differs, the
+  `lumice_gui_obj` dependency. Layer identity lives in the CTest LABEL, which is where selectors
+  read it from anyway, so the target name is free to carry the link fact instead.
 - **CTest LABELS**: target-state adds a purpose-axis label per layer:
   `unit-correctness`, `golden-analytic`, `parity` (the LABEL is the abbreviated form of the
   `parity-cross-backend` layer — the full name is verbose for CMake; this is the **only**
@@ -374,12 +429,12 @@ health items that must not be moved/deleted casually.
 
 | Layer | Target-state path | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
 |-------|-------------------|-------------------------------|----------------------|-------------|----------------------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main` | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main`; in the second target, `gui_unit_test` (see below): `test_defaults_diff`, `test_smoke`, `test_crystal_renderer`, `test_state_reconcile`, `test_project_world_dir`, `test_render_handedness_guard` (render `right=+az` cross-implementation handedness guard — absolute screen-side, pairs with the `test_projection` golden absolute-column pins; it is the one case that needs `lumice_gui_obj` and `lumice_obj` linked together, which is why `gui_unit_test` is its only possible home), `test_user_defaults`, `test_render_bg_logic`, `test_defaults_panel_registry`, `test_sampling_density_stats`, `test_lifecycle`, `test_face_number_overlay`, `test_overlay_labels`, `test_composite_preview`, `test_interaction_logic`, plus `gui_unit_test_env` (installs this target's personal-defaults isolation baseline before any case runs) | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. This layer's `gui` subsystem directory is shared by **two** CMake targets split on a link boundary (§2): `unit_correctness_test` (`lumice_obj` only) and `gui_unit_test` (also `lumice_gui_obj`, windowless). Both carry LABEL `unit-correctness`, so no `-L` selector changes when a case moves between them — but a file **does** have to move between the two `add_executable` source lists, and `gui_unit_test` only exists under `if(BUILD_GUI)`. |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_crystal_renderer`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_smoke`, `test_project_world_dir`, `test_render_handedness_guard` (321.4: render `right=+az` cross-impl handedness guard — absolute screen-side, pairs with the `test_projection` golden absolute-column pins), **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its

@@ -392,6 +392,6 @@ convention. The GUI's independent forward implementations
 round-trip tests (they close by construction under any self-consistent
 convention), this convention is pinned with **absolute screen-side** assertions:
 `test/golden-analytic/core/test_projection.cpp` (backend absolute-column pins)
-and `test/gui/functional/test_render_handedness_guard.cpp` (cross-implementation
+and `test/unit-correctness/gui/test_render_handedness_guard.cpp` (cross-implementation
 check across backend + both GUI forwards + the interaction read-back). See
 scrum-321 (azimuth-handedness-alignment) for the audit and decision record.

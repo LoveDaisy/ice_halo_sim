@@ -122,6 +122,43 @@ def test_markdown_windows_launcher_form_is_flagged(tree: Path) -> None:
     assert len(out) == 1
 
 
+def test_shell_fused_launcher_short_option_is_flagged(tree: Path) -> None:
+    r"""`python -mpytest` — no whitespace between `-m` and `pytest`.
+
+    CPython accepts the fused short option, so this launches pytest exactly like
+    `python -m pytest` does. It used to match NO alternative at all: `\bpytest\b`
+    cannot match inside `-mpytest` (the preceding `m` is a word char, so there is
+    no boundary there), and the launcher branch required whitespace. The call
+    site was therefore not scanned — a false negative that no whole-tree green
+    can surface, since a miss is indistinguishable from a clean tree.
+    """
+    out = _shell(tree, "python -mpytest test/regression-sentinel/test_x.py\n")
+    assert len(out) == 1
+    assert out[0].rule == RULE
+
+
+def test_fused_launcher_still_honours_the_callers_marker(tree: Path) -> None:
+    """The fused spelling must not become a blanket violation: carrying its own
+    `-m`, it is compliant exactly like the spaced spelling. Pins that widening
+    the launcher branch did not also swallow the caller's marker."""
+    out = _shell(tree, "python3 -mpytest -m slow test/regression-sentinel/test_x.py\n")
+    assert out == []
+
+
+@pytest.mark.parametrize("module", ["notpytest", "pytestx"])
+def test_fused_launcher_does_not_swallow_a_similar_module_name(tree: Path, module: str) -> None:
+    r"""The counter-example the widening rests on, pinned rather than reasoned.
+
+    Dropping the whitespace requirement is only safe because the branch still
+    demands the literal `pytest` bounded on the right: `-mnotpytest` fails it on
+    the left (the `-m` is not followed by `pytest`) and `-mpytestx` on the right
+    (`\b` needs a non-word char after `pytest`). Neither is a pytest run, so
+    neither may be flagged. Without this case the two tests above are both
+    pytest-POSITIVE, and an over-matching regex would keep them green.
+    """
+    assert _shell(tree, f"python -m{module} foo.py\n") == []
+
+
 def test_shell_marker_on_a_continuation_line_is_seen(tree: Path) -> None:
     """`-m` and the `.py` target routinely land on different physical lines.
     Judging either line alone is wrong in both directions; this pins the folding.

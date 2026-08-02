@@ -34,9 +34,9 @@
 #include <string>
 #include <vector>
 
-#include "functional/user_defaults_test_env.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/user_defaults.hpp"
+#include "support/user_defaults_test_env.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {

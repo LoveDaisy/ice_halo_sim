@@ -251,4 +251,4 @@ Preset 与 Case 的对应关系：
 
 **实现**：屏幕 x 手性落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`，legacy CPU / Metal / CUDA 三端共享的单一真源）的单镜头分支，故所有后端继承同一约定。GUI 的独立 forward 实现（`preview_renderer.cpp::ProjectWorldDirToScreen`、`overlay_labels.cpp::WorldDirToPixel`）本就产出相同的 `右 = +az`。
 
-**回归守卫**：手性翻转对 forward/inverse 往返测试不可见（任何自洽约定下往返都恒闭合），故用**绝对屏幕左右符号**断言钉死：`test/golden-analytic/core/test_projection.cpp`（backend 绝对列 pin）+ `test/gui/functional/test_render_handedness_guard.cpp`（backend + 两条 GUI forward + 交互读回的跨实现对拍）。审计与决策记录见 scrum-321（azimuth-handedness-alignment）。
+**回归守卫**：手性翻转对 forward/inverse 往返测试不可见（任何自洽约定下往返都恒闭合），故用**绝对屏幕左右符号**断言钉死：`test/golden-analytic/core/test_projection.cpp`（backend 绝对列 pin）+ `test/unit-correctness/gui/test_render_handedness_guard.cpp`（backend + 两条 GUI forward + 交互读回的跨实现对拍）。

@@ -48,10 +48,10 @@ struct LensProjScene {
   int render_w;
   int render_h;
   double psnr_threshold;
-  // Simulated rays to accumulate before capturing. Higher = less Monte-Carlo noise in the
+  // Ray budget for this scene's run, in millions. Higher = less Monte-Carlo noise in the
   // capture, which is what limits how small a geometric error the PSNR comparison can
   // resolve; see the note above kScenes[].
-  unsigned long long min_rays;
+  float ray_num_millions;
   LensSetup setup;
   // Consumed only when setup == kOverrideViewProj.
   int lens_type = 0;
@@ -76,23 +76,33 @@ struct LensProjScene {
 // and the equirect map spans the full ±180° x ±90° sky. A square frame would only add
 // black bands.
 //
-// Capture timing is gated on accumulated RAYS, not on a texture-upload count as the auto_ev
-// scenes are. An upload carries however much data happened to arrive, so the same upload
-// count buys different ray counts depending on machine load — measured here, 40 uploads was
-// 6.43M rays on an idle machine and 4.56M under load. That leaks load into the noise level
-// and therefore into PSNR, inflating the calibrated sigma (a contended 60-run batch measured
-// 0.63 dB against 0.22 dB for the same scene run undisturbed) and forcing a threshold too
-// loose to catch anything. Gating on rays makes the capture reproducible instead.
+// Each scene configures a finite ray budget and captures the frame its run COMPLETES on,
+// rather than watching a counter and stopping the run once it passes a threshold. Both forms
+// fix the work behind a capture, but only the completed run fixes it exactly: waiting for a
+// counter to cross a bound stops at the first poll that observed the crossing, and how far
+// past the bound that poll lands depends on how big a batch the poller happened to pick up.
+// The predecessor of both — capturing on a texture-upload count, as the auto_ev scenes did —
+// did not fix the work at all: an upload carries however much data happened to arrive, so the
+// same upload count bought 6.43M rays on an idle machine and 4.56M under load. That leaked
+// load into the noise level and therefore into PSNR, inflating the calibrated sigma (a
+// contended 60-run batch measured 0.63 dB against 0.22 dB for the same scene run undisturbed)
+// and forcing a threshold too loose to catch anything.
 //
-// min_rays differs per scene because detection power does. The comparison is one noisy
+// ray_num_millions differs per scene because detection power does. The comparison is one noisy
 // capture against a smooth 10-run mean, so per-run Monte-Carlo noise sets the PSNR floor,
 // and a projection error only moves PSNR by as much of the frame as it disturbs. The
 // single-fisheye scenes fill their frame with the halo and resolve a perturbed projection
 // easily at 0.4M rays. The two full-sky scenes spread the same structure over a much larger
 // frame, leaving most pixels empty sky: at that budget, a lens-scale error that visibly
 // stretches the halo ring into an ellipse moved PSNR only ~1.2 dB and did not even cross the
-// threshold. They accumulate 5M rays instead, which drops the noise floor far enough for the
+// threshold. They trace 5M rays instead, which drops the noise floor far enough for the
 // geometric term to dominate, and stays well inside halo_22.json's 10M ray budget.
+//
+// The budgets are unchanged from the ray counts these scenes previously waited for, so the
+// committed references and their thresholds still describe the same working point. Both reach
+// their intended integer under truncation and rounding alike (0.4f * 1e6 is 400000.006, 5.0f
+// is exact), which is what lets ExpectedSimRayNum() assert the resulting ray count exactly —
+// see its note in test_gui_shared.hpp before changing either value.
 //
 // References are pixel-averaged means of N=10 runs; thresholds come from
 // scripts/regen_gui_test_refs.py --group lens_proj (Phase B, mean − 4σ floored to 0.5 dB,
@@ -100,16 +110,16 @@ struct LensProjScene {
 // test/gui/references/_thresholds.json and repeated inline below.
 static const LensProjScene kScenes[] = {
   // mean 20.293 σ0.1742
-  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  400000ULL,
+  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
   // mean 21.1458 σ0.199
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  400000ULL,
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
   // mean 27.7147 σ0.0643
-  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5000000ULL,
+  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
    LensSetup::kDualFisheyeExport},
   // mean 26.5703 σ0.0876
-  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5000000ULL,
+  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5.0f,
    LensSetup::kEquirectExport},
 };
 // clang-format on
@@ -133,9 +143,9 @@ static bool RequestAndWaitExport(ImGuiTestContext* ctx, const gui::PreviewViewpo
 // IM_CHECK*() macros expand to `return;` on failure, so any of them firing between server
 // creation and the manual teardown below would skip Stop/Destroy and leak a running server +
 // poller thread into the next IM_REGISTER_TEST case (ResetTestState() only nulls the pointer,
-// it does not tear one down). The min_rays wait this scene relies on has an observed real
-// chance of not finishing in time under load (see the note above), which made that early-return
-// path newly reachable rather than theoretical. Ordinary `return` still unwinds the C++ stack,
+// it does not tear one down). The wait for the run to complete has an observed real chance of
+// not finishing in time under load (see the note above), which made that early-return path
+// newly reachable rather than theoretical. Ordinary `return` still unwinds the C++ stack,
 // so a scope guard here is sufficient; disarm it via server_owned once the normal path has torn
 // the server down itself, to avoid a double Stop/Destroy.
 struct ScopedServerAndWatchdogGuard {
@@ -189,15 +199,23 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       // under test (the shader resamples the source texture either way).
       gui::g_state.renderer.sim_resolution_index = 0;
 
+      // 3b. Override the config's own ray budget with this scene's. halo_22.json asks for 10M
+      // rays; the run has to be finite AND this size for step 5's wait to end on the working
+      // point the references were captured at.
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = scene.ray_num_millions;
+
       // 4. DoRun sets the intent; sim_state is reconcile-derived on the next frame.
       gui::DoRun(/*user_initiated=*/true);
       IM_CHECK_EQ((int)gui::g_state.run_intent, (int)gui::RunIntent::kRunning);
 
-      // 5. Accumulate scene.min_rays simulated rays, then stop the simulation. stats_sim_ray_num
-      // tracks the ray count behind the currently displayed texture (app.cpp:1363-1365). Both
-      // counters are zeroed here rather than trusted from ResetTestState: a stale ray count
-      // left by the previous scene satisfies the wait on the very first frame, and the capture
-      // then reads whatever texture happened to still be bound.
+      // 5. Let the run finish, then stop the simulation and capture its final frame.
+      // sim_state reaching kDone means the backend reported LUMICE_LIFECYCLE_COMPLETED for the
+      // committed epoch (ReconcileSimState, app.cpp) — every ray of the budget traced, and the
+      // final frame pushed to the texture even if it is too sparse for the preview quality gate
+      // (server_poller.cpp, force_final_upload; PR #240). Nothing needs zeroing beforehand:
+      // unlike a counter threshold, a stale value from the previous scene cannot satisfy this
+      // wait, because kDone is derived from the lifecycle of the epoch DoRun just committed.
       //
       // The wait below is bounded by real elapsed time, not iteration count: --fixed-dt injects a
       // fixed 1/60s frame dt but also skips the frame-limit sleep (runs "at full speed"), so an
@@ -226,15 +244,15 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       // every other test still gets the tight default.
       guard.engine_io->ConfigWatchdogWarning = 50000.0f;
       guard.engine_io->ConfigWatchdogKillTest = 100000.0f;
-      gui::g_state.texture_upload_count = 0;
-      gui::g_state.stats_sim_ray_num = 0;
       const auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(170);
-      while ((gui::g_state.stats_sim_ray_num < scene.min_rays || gui::g_state.texture_upload_count == 0) &&
+      while (gui::g_state.sim_state != gui::GuiState::SimState::kDone &&
              std::chrono::steady_clock::now() < wait_deadline) {
         ctx->Yield(1);
       }
-      IM_CHECK_GE((unsigned long long)gui::g_state.stats_sim_ray_num, scene.min_rays);
-      IM_CHECK_GT((int)gui::g_state.texture_upload_count, 0);
+      IM_CHECK_EQ((int)gui::g_state.sim_state, (int)gui::GuiState::SimState::kDone);
+      // A completed run traced exactly its configured budget, so this number is identical on
+      // every machine and every rerun — that is the property the capture inherits.
+      IM_CHECK_EQ((unsigned long long)gui::g_state.stats_sim_ray_num, ExpectedSimRayNum(scene.ray_num_millions));
 
       guard.server_owned = false;
       gui::g_server_poller.Stop();

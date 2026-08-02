@@ -15,6 +15,7 @@
 #include "imgui.h"
 #include "imgui_te_context.h"
 #include "imgui_te_engine.h"
+#include "include/lumice.h"
 #include "test_screenshot.hpp"
 
 namespace gui = lumice::gui;
@@ -171,6 +172,25 @@ extern bool g_keep_export_png;
 constexpr int kSynthTexW = 64;
 constexpr int kSynthTexH = 64;
 
+// ========== Shared helpers ==========
+
+// Rays a finite run will actually simulate for a given SimConfig::ray_num_millions.
+// Mirrors the one conversion the GUI performs when it hands the budget to the core
+// (src/gui/file_io.cpp, BuildScene -> LUMICE_SceneSetSimParams): float millions,
+// promoted to double, times 1e6, truncated to LUMICE_RayCount.
+//
+// A test that waits for a run to COMPLETE and then asserts the exact ray count needs this
+// number, and there is no getter to read it back from the scene. Keeping the expression in
+// one place stops the two visual-regression suites from drifting apart; it stays a mirror of
+// production rather than a shared owner, which is why callers should pin ray_num_millions to
+// a value whose product with 1e6 is exact in float (i.e. a dyadic fraction such as 0.375f or
+// 0.4375f). At those values truncation and rounding agree, so the mirror survives a change of
+// rounding policy on the production side instead of silently going red — or, worse, staying
+// green by coincidence.
+inline unsigned long long ExpectedSimRayNum(float ray_num_millions) {
+  return static_cast<unsigned long long>(static_cast<LUMICE_RayCount>(ray_num_millions * 1e6));
+}
+
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();
@@ -180,7 +200,6 @@ void StopPerfSimulation();
 
 // ========== Register function declarations ==========
 
-void RegisterSmokeTests(ImGuiTestEngine* engine);
 void RegisterP0Tests(ImGuiTestEngine* engine);
 void RegisterP1Tests(ImGuiTestEngine* engine);
 void RegisterP2Tests(ImGuiTestEngine* engine);
@@ -191,7 +210,6 @@ void RegisterVisualTests(ImGuiTestEngine* engine);
 void RegisterBgOverlayTests(ImGuiTestEngine* engine);
 void RegisterImportExportTests(ImGuiTestEngine* engine);
 void RegisterColorWindowTests(ImGuiTestEngine* engine);
-void RegisterCalibrationTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterP1InteractionTests(ImGuiTestEngine* engine);
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
@@ -200,21 +218,15 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
-void RegisterCrystalRendererTests(ImGuiTestEngine* engine);
 void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
-void RegisterProjectWorldDirTests(ImGuiTestEngine* engine);
-void RegisterHandednessGuardTests(ImGuiTestEngine* engine);
 void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
-void RegisterStateReconcileTests(ImGuiTestEngine* engine);
 void RegisterSamplingDensityStatsTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
 void RegisterModalLayoutTests(ImGuiTestEngine* engine);
-void RegisterUserDefaultsTests(ImGuiTestEngine* engine);
-void RegisterDefaultsDiffTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
 

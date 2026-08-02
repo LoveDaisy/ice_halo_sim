@@ -100,6 +100,39 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
 
+      # gui_unit_test is the first test target that only exists on some matrix entries (it is
+      # inside `if(BUILD_GUI)`), which makes "green" and "ran" separable in a way they were not
+      # before: --output-on-failure prints nothing on success, and `-L` selecting zero matching
+      # tests is not an error, so a missing target, a mistyped LABEL or a binary that registered
+      # no cases would all read as a pass. This step turns "it actually executed its 15 cases"
+      # into an assertion instead of a log line somebody has to read. It re-runs one 7 ms binary.
+      #
+      # Update the expected count here when cases are migrated into gui_unit_test — a stale count
+      # failing loudly is the intended behavior, not an accident.
+      #
+      # `shell: bash` for Windows too (the runner has Git Bash); GitHub runs bash steps with
+      # `-eo pipefail`, so the `tee` does not mask ctest's own exit code.
+      - name: Verify gui_unit_test actually ran (AC6 evidence)
+        if: matrix.build_gui == 'ON'
+        shell: bash
+        run: |
+          set -o pipefail
+          ctest --test-dir build -R LumiceGuiUnitTest -V | tee gui_unit_test_verify.log
+          # What this gate is for: proving the target really EXECUTED its cases here, rather
+          # than being silently skipped (not created, or the -R filter / ctest LABEL no longer
+          # selecting it). It deliberately does not pin a case count. It used to demand exactly
+          # "15 tests from 1 test suite", and every batch of cases migrated in from gui_test
+          # then turned this leg red for a reason that had nothing to do with a defect — which
+          # is how it came to sit stale and failing while the suite it guards was green.
+          ran=$(sed -nE 's/.*\[==========\] ([0-9]+) tests? from [0-9]+ test suites? ran.*/\1/p' \
+                gui_unit_test_verify.log | tail -1)
+          if [ -z "$ran" ] || [ "$ran" -lt 1 ]; then
+            echo "::error::gui_unit_test produced no gtest run summary — the target was not"
+            echo "::error::created, or the ctest LABEL / -R filter no longer selects it."
+            exit 1
+          fi
+          echo "gui_unit_test executed $ran case(s) on this platform."
+
       - name: Benchmark
         continue-on-error: true
         timeout-minutes: 5
@@ -819,11 +852,19 @@ jobs:
       - name: Unit tests for the policy gates
         run: python3 -m pytest test/unit-correctness/scripts -q
 
-  # Diff-scoped sibling of the policy gate above: prose added by THIS PR must not
-  # cite the git-ignored per-task working notes (they are archived on close, so
-  # the reference dangles). Only added lines are read, so the pre-existing body
-  # of such references never blocks anyone. Runs on pull_request because that is
-  # where a merge-base exists; the pre-commit hook covers the local side.
+  # Diff-scoped siblings of the policy gate above: both ask what THIS PR added
+  # rather than what state the tree is in, and both need a merge-base, which is
+  # why they share one job and one fetch-depth-0 checkout. The pre-commit hook
+  # covers the local side of each.
+  #
+  #   1. Prose added by this PR must not cite the git-ignored per-task working
+  #      notes (they are archived on close, so the reference dangles).
+  #   2. A gui_test case registered by this PR must actually use its
+  #      ImGuiTestContext; one that does not belongs in gui_unit_test, which —
+  #      unlike gui_test — runs here on every platform.
+  #
+  # Neither reads pre-existing content, so the existing body of either kind never
+  # blocks anyone.
   new-refs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -836,3 +877,8 @@ jobs:
         run: |
           base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
           python3 scripts/check_new_refs.py --range "$base..HEAD"
+
+      - name: New-gui-test check (cases registered vs merge-base)
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          python3 scripts/check_new_gui_tests.py --range "$base..HEAD"
