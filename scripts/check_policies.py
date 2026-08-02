@@ -14,13 +14,18 @@ Checks:
      documented in doc/env-var-policy.md, so the knob is discoverable.
   3. gui-api-boundary — src/gui/** must not #include "core/..." or "config/...";
      the GUI talks to core only through the C API (src/include/lumice.h).
-  4. no-using-namespace — `using namespace` is banned in src/ (AGENTS.md).
-  5. struct-layout-parity — canonical/mirror struct pairs (currently just
+  4. reconciler-widget-include — gui_state_reconcile.cpp must not #include a
+     second widget domain (only RECONCILE_ALLOWED_GUI_INCLUDES is permitted).
+     The reconciler is the single owner of effects; a reverse dependency on a
+     widget is the shape that governance is meant to prevent. Register a push
+     handler instead (doc/gui-state-governance.md §4 支柱 2).
+  5. no-using-namespace — `using namespace` is banned in src/ (AGENTS.md).
+  6. struct-layout-parity — canonical/mirror struct pairs (currently just
      `GenRootKernelParams` between pcg_shared.h and metal_trace_backend.mm) must
      have identical ordered (type, name) field lists. Catches same-size field
      reorders that sizeof-based `static_assert`s do not detect (scrum-328.2
      Step 6).
-  6. no-config-by-value-copy — ConfigScratch (the internal parse buffer in
+  7. no-config-by-value-copy — ConfigScratch (the internal parse buffer in
      server/c_api_internal.hpp, formerly the public LUMICE_Config) owns heap
      allocations via its raypath_color pointer (v4.8) AND each
      compositions[i]'s term_ids/term_counts pointers (v4.9). The check also covers LUMICE_ComplexComposition (each record is now
@@ -29,7 +34,7 @@ Checks:
      `y = x;`) aliases the same heap blocks and double-frees on double Release.
      Route through pointer or `const &`, and manage lifetime via the type's
      Create/Set / Release C API (or lumice::ConfigOwningGuard).
-  7. gui-state-field-tier-registration — every top-level field of
+  8. gui-state-field-tier-registration — every top-level field of
      `struct GuiState` (src/gui/gui_state.hpp) must be registered in EXACTLY
      one of the two tables in src/gui/gui_state_tiers.hpp: `kFieldTierTable`
      (a governed tier — struct-hard/soft, display, view, session) or
@@ -38,14 +43,14 @@ Checks:
      Closes the "unregistered field silently escapes governance" loophole
      that scrum-gui-state-reconcile T0 (reconcile-foundation) was built to
      prevent (doc/gui-state-governance.md).
-  8. no-msvc-unsafe-builtin — MSVC does not recognise the GCC/Clang
+  9. no-msvc-unsafe-builtin — MSVC does not recognise the GCC/Clang
      `__builtin_popcount*` / `__builtin_ctz*` / `__builtin_clz*` intrinsic
      families and reports C3861. src/ and test/ must route through
      `lumice::PopCount` (src/util/bit_utils.hpp) or an equivalent portable
      implementation. Scope is intentionally narrow: only the popcount/ctz/clz
      families are pinned (task-popcount-helper), extend the regex when a new
      MSVC-unsafe `__builtin_*` family surfaces.
-  9. no-default-constructed-crystal-slots — no `std::vector<Crystal>` in src/
+  10. no-default-constructed-crystal-slots — no `std::vector<Crystal>` in src/
      may be sized by `resize()`, `assign(n)`, or a count-ctor, and none may be
      grown with an argument-less `emplace_back()`. All four produce
      default-constructed `Crystal` elements: `face_cnt == 0`, no polygon faces,
@@ -59,7 +64,7 @@ Checks:
      populated prefix are the same thing by construction. The invariant is
      pinned here rather than in a comment because the failure is silent: a
      default slot reads as a valid empty crystal all the way to the GPU.
-  10. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_FILTER_EXPR
+  11. gui-test-suite-args-sync — scripts/regen_gui_test_refs.py's SUITE_FILTER_EXPR
      must match the gui_test correctness-pool `--filter` invocation in
      scripts/build.sh. The two are independent hand-maintained copies (bash vs.
      Python, so they cannot share a single literal) of the same exclusion list;
@@ -68,7 +73,16 @@ Checks:
      drift (isolated `--filter <group>` vs. the full suite) previously made
      committed references optimistic (see AGENTS.md's reference-regeneration
      section).
-  11. pytest-invocation-marker — a pytest call site (test/CMakeLists.txt's
+  12. no-bare-print — no raw printf / fprintf / std::cout / std::cerr under
+     src/; diagnostics go through the logger (ILOG_* or GUI_LOG_*). A bare
+     print bypasses the unified sinks, the level filter and the format, so it
+     is invisible exactly where a user looks. Two named exemptions, not a
+     per-line escape hatch: src/main.cpp (its stdout IS the CLI's product
+     output, two lines of which are parsed contracts) and src/util/fatal.hpp
+     (single owner of the pre-abort trap — call lumice::FatalAbort instead of
+     hand-rolling print-then-abort). Scans .cu/.metal too, so a GPU backend
+     cannot reopen the side channel; test/ is deliberately out of scope.
+  13. pytest-invocation-marker — a pytest call site (test/CMakeLists.txt's
      add_test, scripts/*.sh, doc/**/*.md and AGENTS.md fenced recipes) that
      names a `.py` target must pass its own `-m`. Without one it inherits
      pyproject.toml's `addopts = ["-m", "not slow"]`, and a slow-only target
@@ -80,11 +94,15 @@ Checks:
      This rule also introduces the first WARNING-not-violation diagnostic in
      this file (an unterminated Markdown fence writes to stderr and leaves the
      exit code alone): "the checker cannot parse this" and "the repo violates
-     the rule" are different facts and get different exits. Rule 12's author
-     should reuse that channel rather than invent a second one.
+     the rule" are different facts and get different exits. The next rule's
+     author should reuse that channel rather than invent a second one.
+     (Said by position rather than by number: this list has drifted out of sync
+     with CHECKS once already, and a number here would be the second thing to
+     rot when it happens again.)
 
 Add a new check as a function returning a list of Violation and append it to
-CHECKS. Keep each check deterministic and artifact-inspecting.
+CHECKS, and add a numbered entry above. Keep each check deterministic and
+artifact-inspecting.
 """
 from __future__ import annotations
 
@@ -1254,10 +1272,19 @@ PYTEST_INVOCATION_RULE = "pytest-invocation-marker"
 # whole-tree run can surface that, because a false negative is by construction
 # indistinguishable from a clean tree. Extend the alternation when a new
 # launcher lands.
+#
+# `\s*` (not `\s+`) after `-m`: CPython accepts the fused short option, so
+# `python -mpytest` launches pytest just like `python -m pytest`. Requiring
+# whitespace left that spelling matching NO alternative at all — `\bpytest\b`
+# cannot match inside `-mpytest` either, because the preceding `m` is a word
+# char and kills the boundary — i.e. the call site was not scanned rather than
+# scanned-and-cleared. Widening here cannot over-match: the branch still
+# demands the literal `pytest` right after `-m`, so `-mslow` and friends are
+# not launchers and fall through to the other alternatives.
 PYTEST_TOKEN_RE = re.compile(
     r"\bpytest\b"
     r"|\$\{PYTEST_EXECUTABLE\}"
-    r"|\bpython[\w.]*\s+-m\s+pytest\b"
+    r"|\bpython[\w.]*\s+-m\s*pytest\b"
 )
 # Brace expansion (`test_cuda_{exit_seam,filter}_parity.py`) needs no expanding:
 # the literal already ends in `.py`.
@@ -1265,6 +1292,16 @@ PY_PATH_RE = re.compile(r"\.py\b")
 # `\B` before the dash keeps this off long options — `--max-fail` contains `-m`
 # but has a word char after it, so the trailing `\b` rejects it anyway; the two
 # guards together mean only a standalone `-m` counts.
+#
+# Stated boundary, verified rather than assumed: the trailing `\b` also rejects
+# the FUSED marker spelling, so `pytest -mslow x.py` reads as "no marker" and is
+# flagged even though pytest itself accepts it. That is the rule as written, not
+# an oversight to fix in passing — accepting `-m<value>` would LOOSEN what the
+# gate rejects, which is a policy decision of its own rather than cleanup. It
+# costs nothing today: no call site in the repo spells it that way, and the
+# failure mode is a visible red on a compliant call, not a silent miss (contrast
+# the fused *launcher* form above, which was silent and is why that one was
+# widened).
 MARKER_FLAG_RE = re.compile(r"\B-m\b")
 
 # Files exempt as whole files, same granularity as BARE_PRINT_ALLOWED. Both drive
@@ -1361,6 +1398,21 @@ def _pytest_invocation_offenders(span: str) -> list[str]:
     return out
 
 
+def _pytest_violations(path: Path, lineno: int, span: str) -> list[Violation]:
+    """One Violation per offending invocation in `span`, all anchored at `lineno`.
+
+    The three scanners differ only in how they carve a span out of their file and
+    which line they anchor it to; from here on they are identical, so the tail is
+    written once. The offender slice is deliberately not put in the message: it
+    would make the text vary by call site, and the rule's fix is the same
+    sentence every time.
+    """
+    return [
+        Violation(path, lineno, PYTEST_INVOCATION_RULE, _PYTEST_INVOCATION_MESSAGE)
+        for _offender in _pytest_invocation_offenders(span)
+    ]
+
+
 def _scan_cmake_pytest_invocations() -> list[Violation]:
     """`add_test(...)` blocks in test/CMakeLists.txt.
 
@@ -1378,8 +1430,7 @@ def _scan_cmake_pytest_invocations() -> list[Violation]:
         if not PYTEST_TOKEN_RE.search(block):
             continue
         lineno = text.count("\n", 0, m.start()) + 1
-        for _offender in _pytest_invocation_offenders(block):
-            out.append(Violation(path, lineno, PYTEST_INVOCATION_RULE, _PYTEST_INVOCATION_MESSAGE))
+        out.extend(_pytest_violations(path, lineno, block))
     return out
 
 
@@ -1395,10 +1446,7 @@ def _scan_shell_pytest_invocations() -> list[Violation]:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for lineno, logical in _join_line_continuations(text):
-            for _offender in _pytest_invocation_offenders(logical):
-                out.append(
-                    Violation(path, lineno, PYTEST_INVOCATION_RULE, _PYTEST_INVOCATION_MESSAGE)
-                )
+            out.extend(_pytest_violations(path, lineno, logical))
     return out
 
 
@@ -1460,15 +1508,7 @@ def _scan_markdown_pytest_invocations() -> list[Violation]:
         text = path.read_text(encoding="utf-8", errors="replace")
         for body_start, body in _fenced_blocks(path, text):
             for offset, logical in _join_line_continuations(body):
-                for _offender in _pytest_invocation_offenders(logical):
-                    out.append(
-                        Violation(
-                            path,
-                            body_start + offset - 1,
-                            PYTEST_INVOCATION_RULE,
-                            _PYTEST_INVOCATION_MESSAGE,
-                        )
-                    )
+                out.extend(_pytest_violations(path, body_start + offset - 1, logical))
     return out
 
 
