@@ -538,6 +538,29 @@ def test_registration_split_across_lines_still_counts_as_pre_existing(repo: Repo
     assert repo.range_hits(base) == []
 
 
+def test_registration_call_split_across_lines_still_counts_as_pre_existing(repo: Repo) -> None:
+    """The IM_REGISTER_TEST call's own arguments wrapping is the same trap as above.
+
+    The previous test wraps the line ABOVE the call (the `ImGuiTest* t =`
+    binding). This one wraps the call itself — `IM_REGISTER_TEST(` on one line,
+    `engine, "example", "name")` on the next. `git grep` still yields only the
+    single matching physical line, and that line alone never contains a complete
+    category/name pair, so the same silent drop-from-"existed before" failure
+    applies to a shape the line-above variant does not exercise.
+    """
+    wrapped = (
+        "  ImGuiTest* t = IM_REGISTER_TEST(\n"
+        '      engine, "example", "a_case_whose_call_wraps");\n'
+        "  t->TestFunc = [](ImGuiTestContext*) {\n"
+        "    IM_CHECK(1 + 1 == 2);\n  };\n\n"
+    )
+    repo.write(GUI_TEST_FILE, HEADER + wrapped + FOOTER)
+    base = repo.commit("pre-existing call-wrapped registration")
+    repo.write(GUI_TEST_FILE, HEADER + wrapped + "  // an unrelated edit\n" + FOOTER)
+    repo.commit("touch the file")
+    assert repo.range_hits(base) == []
+
+
 def test_signature_rewritten_in_place_is_billed(repo: Repo) -> None:
     """Identity alone would miss an existing case edited into a rejected shape.
 

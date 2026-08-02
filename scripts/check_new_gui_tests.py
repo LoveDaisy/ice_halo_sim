@@ -7,7 +7,11 @@ check_new_refs.py asks "what did you just write?" over prose. This asks the same
 "what did you just write?" question, but over a different domain entirely: C++
 test structure — a lambda signature and its brace-balanced body. Folding it into
 check_new_refs.py's PATTERNS table would put a C++ structural parser behind a
-name and a docstring that promise a prose regex battery.
+name and a docstring that promise a prose regex battery. This module imports
+from both check_new_refs.py (added_lines, blob) and check_policies.py
+(REPO_ROOT, Violation, strip_comments) — a diamond, not a cycle: both routes
+resolve to check_policies.py, which is the shared infrastructure layer all
+three entry points sit on.
 
 The rule
 --------
@@ -212,7 +216,7 @@ def _identity_of(sig_line: int, receiver: str | None, regs: dict[str, list[tuple
 def registered_before(ref: str) -> dict[str, set[str]]:
     """"category/name" -> the test/gui/ paths registering it at `ref`.
 
-    One `git grep` over the whole tree rather than a walk of the diff's files,
+    A tree listing plus a per-file blob read, not a walk of the diff's files,
     because the question is whether the case existed ANYWHERE before, not whether
     it existed at this path — otherwise relocating a case to another suite file
     would read as registering a new one.
@@ -220,25 +224,33 @@ def registered_before(ref: str) -> dict[str, set[str]]:
     The paths are kept rather than flattened to a set of names, because the two
     questions is_new_case() asks need different scopes: "does this case exist" is
     tree-wide, while "was this case's signature rewritten" is only meaningful
-    against the same file. Filenames are why this grep runs without -h.
+    against the same file.
+
+    Each file is matched against its own full blob text, exactly like
+    _registrations() matches the current file's full text — not `git grep`,
+    whose output is one matched physical LINE. An IM_REGISTER_TEST call whose
+    arguments (not just the variable it binds to) happen to wrap across lines
+    would `\\s`-match fine in a whole-blob scan but never appear as one grep
+    line, silently dropping that case from `before` and making any later
+    unrelated edit to its file misread it as newly registered.
     """
     proc = subprocess.run(
-        ["git", "grep", "IM_REGISTER_TEST", ref, "--", SCOPE_PREFIX],
+        ["git", "ls-tree", "-r", "--name-only", ref, "--", SCOPE_PREFIX],
         cwd=REPO_ROOT,
         capture_output=True,
     )
-    if proc.returncode > 1:  # 1 is "no matches", anything higher is a real failure
+    if proc.returncode != 0:
         return {}
     out: dict[str, set[str]] = {}
-    prefix = f"{ref}:"
-    for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
-        if not line.startswith(prefix):
+    for rel in proc.stdout.decode("utf-8", errors="replace").splitlines():
+        if not rel.startswith(SCOPE_PREFIX) or PurePosixPath(rel).suffix != SCOPE_SUFFIX:
             continue
-        path, sep, content = line[len(prefix) :].partition(":")
-        if not sep:
+        text = blob(ref, rel)
+        if not text:
             continue
-        for m in REGISTER_CALL_RE.finditer(content):
-            out.setdefault(f"{m.group(1)}/{m.group(2)}", set()).add(path)
+        code = strip_comments(text)
+        for m in REGISTER_CALL_RE.finditer(code):
+            out.setdefault(f"{m.group(1)}/{m.group(2)}", set()).add(rel)
     return out
 
 
