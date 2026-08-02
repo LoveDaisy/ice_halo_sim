@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -137,7 +138,11 @@ TEST(ImportExport, json_file_roundtrip) {
   gui::g_state.sim.ray_num_millions = 3.0f;
   std::string json = CoreJson(gui::g_state);
 
-  const char* tmp_path = "/tmp/lumice_config_test.json";
+  // Not a hard-coded "/tmp/..." — there is no /tmp on Windows, so ExportConfigJson correctly
+  // reports a failed open and this case died on its FIRST assertion there, never reaching the
+  // round-trip it exists to check. That went unnoticed while the case lived in gui_test, which
+  // CI builds but never runs.
+  const std::filesystem::path tmp_path = std::filesystem::temp_directory_path() / "lumice_config_test.json";
   bool write_ok = gui::ExportConfigJson(tmp_path, json);
   ASSERT_TRUE(write_ok);
 
@@ -152,7 +157,7 @@ TEST(ImportExport, json_file_roundtrip) {
   ASSERT_TRUE(ok);
   ASSERT_TRUE(std::abs(loaded.sim.ray_num_millions - 3.0f) < 0.01f);
 
-  std::remove(tmp_path);
+  std::filesystem::remove(tmp_path);
 }
 
 // Test 3: Old format backward compat — ID-referenced crystals/scattering → layers/entries
