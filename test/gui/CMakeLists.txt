@@ -16,7 +16,6 @@ add_executable(gui_test
     functional/test_gui_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
     functional/test_gui_sampling_density_stats.cpp
-    functional/test_gui_user_defaults.cpp
     functional/test_gui_defaults_panel.cpp
     visual/test_gui_visual.cpp
     visual/test_gui_render.cpp

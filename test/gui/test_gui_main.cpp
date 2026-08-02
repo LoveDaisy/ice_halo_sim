@@ -401,7 +401,6 @@ int main(int argc, char** argv) {
   RegisterSamplingDensityStatsTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
-  RegisterUserDefaultsTests(engine);
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);

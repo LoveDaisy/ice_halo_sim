@@ -218,14 +218,20 @@ if(BUILD_GUI)
   add_executable(gui_unit_test
     "${PROJ_TEST_DIR}/test_main.cpp"
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
+  # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
+  # path, not merely that it works when called. gui_test carries the same definition.
+  target_compile_definitions(gui_unit_test PRIVATE
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp")
   target_link_libraries(gui_unit_test
     PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
   set_target_properties(gui_unit_test PROPERTIES
