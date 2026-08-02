@@ -219,7 +219,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/test_main.cpp"
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   target_link_libraries(gui_unit_test

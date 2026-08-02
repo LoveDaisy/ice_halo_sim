@@ -219,7 +219,6 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
-void RegisterCrystalRendererTests(ImGuiTestEngine* engine);
 void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterProjectWorldDirTests(ImGuiTestEngine* engine);

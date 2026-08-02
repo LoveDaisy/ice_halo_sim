@@ -394,7 +394,6 @@ int main(int argc, char** argv) {
   RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
-  RegisterCrystalRendererTests(engine);
   RegisterAutoEvRegressionTests(engine);
   RegisterLinkedEntriesTests(engine);
   RegisterProjectWorldDirTests(engine);
