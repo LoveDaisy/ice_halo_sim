@@ -30,8 +30,8 @@
 #include "gui/axis_presets.hpp"
 #include "gui/gui_state_tiers.hpp"
 #include "gui/user_defaults.hpp"
+#include "support/user_defaults_test_env.hpp"
 #include "test_gui_shared.hpp"
-#include "user_defaults_test_env.hpp"
 
 namespace {
 

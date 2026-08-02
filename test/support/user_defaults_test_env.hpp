@@ -1,14 +1,20 @@
-#ifndef LUMICE_TEST_GUI_USER_DEFAULTS_TEST_ENV_HPP
-#define LUMICE_TEST_GUI_USER_DEFAULTS_TEST_ENV_HPP
+#ifndef LUMICE_TEST_SUPPORT_USER_DEFAULTS_TEST_ENV_HPP
+#define LUMICE_TEST_SUPPORT_USER_DEFAULTS_TEST_ENV_HPP
 
-// Test-side environment control for the personal-defaults store, shared by every gui_test source
-// that touches it (the store tests, the diff-engine tests and the panel tests).
+// Test-side environment control for the personal-defaults store, shared by every test source that
+// touches it (the store tests, the diff-engine tests and the panel tests).
 //
 // It lives in a header rather than being copy-pasted per file because these helpers encode
 // isolation POLICY, not convenience: "each case gets a fresh directory" and "the scope guard
 // restores the harness baseline rather than what it found" are the two rules that keep one case's
-// override file from reaching the next in this single-process binary. Three divergent copies of
-// that policy would be three chances to weaken it silently.
+// override file from reaching the next in a single-process binary. Divergent copies of that policy
+// would be as many chances to weaken it silently.
+//
+// It lives in test/support/ rather than under test/gui/ because its consumers now span two CMake
+// targets — gui_test and gui_unit_test — and test/support/ is the layer-agnostic home for exactly
+// that. It deliberately does NOT include test_gui_shared.hpp (which pulls in ImGui) for the
+// `gui` namespace alias: this header uses no ImGui at all, and the windowless target has no ImGui
+// to link against.
 
 #include <cstdlib>
 #include <filesystem>
@@ -18,9 +24,11 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "gui/user_defaults.hpp"
-#include "test_gui_shared.hpp"
+
+namespace gui = lumice::gui;
 
 namespace lumice::test_user_defaults {
 

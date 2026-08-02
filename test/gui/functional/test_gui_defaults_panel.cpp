@@ -54,8 +54,8 @@
 #include "gui/user_defaults.hpp"
 #include "imgui_internal.h"
 #include "imgui_te_utils.h"
+#include "support/user_defaults_test_env.hpp"
 #include "test_gui_shared.hpp"
-#include "user_defaults_test_env.hpp"
 
 namespace {
 
