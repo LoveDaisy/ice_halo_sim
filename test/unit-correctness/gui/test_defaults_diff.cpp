@@ -179,7 +179,7 @@ TEST(DefaultsDiff, ac2_sections_partition_the_row_set) {
     }
     // Complete: every row is in exactly one section, and no key path is duplicated anywhere
     // in the row set (which is what "the same key must not appear twice" means concretely).
-    EXPECT_EQ(pending.size() + other.size(), rows.size() + 1);
+    EXPECT_EQ(pending.size() + other.size(), rows.size());
     std::set<std::string> intersection;
     std::set_intersection(pending.begin(), pending.end(), other.begin(), other.end(),
                           std::inserter(intersection, intersection.begin()));
