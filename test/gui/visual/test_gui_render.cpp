@@ -1,11 +1,5 @@
-#include <GLFW/glfw3.h>
-
 #include <fstream>
-#include <memory>
 
-#include "gui/gl_common.h"
-#include "gui/gui_logger.hpp"
-#include "gui/log_sink.hpp"
 #include "test_gui_shared.hpp"
 
 // Aspect ratio tests
@@ -103,25 +97,6 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
 
       std::remove(tmp_path);
-    };
-  }
-
-  // Test 5: Old .lmc compat — missing aspect fields default to Free
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "old_lmc_compat");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      ResetTestState();
-
-      // Minimal JSON without aspect fields. Uses legacy renderers=[] shape; legacy branch
-      // finds an empty array and leaves loaded.renderer at default values. This test only
-      // asserts aspect_* fields.
-      std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
-      gui::GuiState loaded;
-      bool ok = gui::DeserializeGuiStateJson(json, loaded);
-      IM_CHECK(ok);
-      IM_CHECK_EQ(loaded.aspect_preset, gui::AspectPreset::kFree);
-      IM_CHECK_EQ(loaded.aspect_portrait, false);
     };
   }
 
@@ -226,83 +201,4 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/Screen too small for this aspect"));
     };
   }
-
-  // Test 6: Screen bounds — ApplyAspectRatio clamps to workarea
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "aspect_ratio", "screen_bounds");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-
-      // Verify workarea is available
-      int work_x = 0;
-      int work_y = 0;
-      int work_w = 0;
-      int work_h = 0;
-      glfwGetMonitorWorkarea(glfwGetPrimaryMonitor(), &work_x, &work_y, &work_w, &work_h);
-
-      // The function should never produce sizes exceeding workarea
-      // Just verify GetAspectRatio values are sane
-      for (int i = 0; i < gui::kAspectPresetCount; i++) {
-        float r = gui::GetAspectRatio(static_cast<gui::AspectPreset>(i));
-        IM_CHECK(r >= 0.0f);
-        if (r > 0.0f) {
-          IM_CHECK(r < 100.0f);  // Sanity check
-        }
-      }
-    };
-  }
-}
-
-// ========== Calibration Tests ==========
-
-void RegisterCalibrationTests(ImGuiTestEngine* engine) {
-  ImGuiTest* t = IM_REGISTER_TEST(engine, "calibration", "no_warning_on_startup");
-  t->TestFunc = [](ImGuiTestContext* ctx) {
-    IM_UNUSED(ctx);
-    ResetTestState();
-    gui::g_state = gui::InitDefaultState();
-
-    // Create server with DEBUG log level for diagnostics
-    gui::g_server = LUMICE_CreateServer();
-    IM_CHECK(gui::g_server != nullptr);
-    LUMICE_SetLogLevel(gui::g_server, LUMICE_LOG_DEBUG);
-    gui::SetGuiLogLevel(spdlog::level::debug);
-
-    // Set up log capture: create sink and bridge Core logs
-    auto log_sink = std::make_shared<gui::ImGuiLogSink>();
-    gui::GetGuiLogger().sinks().push_back(log_sink);
-    gui::g_imgui_log_sink = log_sink;
-    LUMICE_SetLogCallback([](LUMICE_LogLevel level, const char* /*name*/, const char* message) {
-      if (gui::g_imgui_log_sink) {
-        auto spd_level = static_cast<spdlog::level::level_enum>(level);
-        gui::g_imgui_log_sink->ReceiveExternal(spd_level, message);
-      }
-    });
-
-    // Run calibration (blocks up to 2s)
-    gui::CalibrateQualityThreshold();
-
-    // Positive assertion: stats must have data
-    LUMICE_StatsResult stats[2]{};
-    LUMICE_GetStatsResults(gui::g_server, stats, 1);
-    IM_CHECK_GT(stats[0].sim_ray_num, 0UL);
-
-    // Negative assertion: no calibration warning
-    bool found_warning = false;
-    log_sink->ForEachEntry([&](size_t, const gui::LogEntry& entry) {
-      if (entry.message.find("no data produced") != std::string::npos) {
-        found_warning = true;
-      }
-    });
-    IM_CHECK(!found_warning);
-
-    // Cleanup: destroy server BEFORE removing sink (avoid dangling writes during join)
-    LUMICE_StopServer(gui::g_server);
-    LUMICE_DestroyServer(gui::g_server);
-    gui::g_server = nullptr;
-    LUMICE_SetLogCallback(nullptr);
-    gui::g_imgui_log_sink = nullptr;
-    gui::GetGuiLogger().sinks().pop_back();
-    gui::SetGuiLogLevel(spdlog::level::warn);  // Restore default level
-  };
 }

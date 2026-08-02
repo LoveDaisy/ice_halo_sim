@@ -225,7 +225,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
