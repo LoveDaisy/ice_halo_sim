@@ -196,8 +196,14 @@ def _git(args: list[str]) -> str:
     return proc.stdout.decode("utf-8", errors="replace")
 
 
-def _blob(ref: str, rel: str) -> str:
-    """Content of `rel` at `ref`; empty ref means the index."""
+def blob(ref: str, rel: str) -> str:
+    """Content of `rel` at `ref`; empty ref means the index.
+
+    Public rather than underscore-private because check_new_gui_tests.py — the
+    second diff-scoped gate, asking the same "what did you just write?" question
+    over a different domain — reads file contents the same way. Sharing the
+    mechanism is the point; importing a private name across modules would not be.
+    """
     spec = f"{ref}:{rel}" if ref else f":{rel}"
     proc = subprocess.run(["git", "show", spec], cwd=REPO_ROOT, capture_output=True)
     if proc.returncode != 0:
@@ -358,7 +364,7 @@ def check(diff_args: list[str], content_ref: str) -> tuple[list[Violation], int]
     for rel, linenos in sorted(added_lines(diff_args).items()):
         if rel in EXCLUDED_PATHS:
             continue
-        text = _blob(content_ref, rel)
+        text = blob(content_ref, rel)
         if not text:
             continue
         prose = prose_by_line(rel, text)
