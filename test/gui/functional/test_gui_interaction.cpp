@@ -6735,12 +6735,4 @@ void RegisterLinkedEntriesTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
     };
   }
-  // TEMPORARY gate probe (shape 1: anonymous parameter). Removed by the next commit.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "gui_interaction", "gate_probe_anonymous");
-    t->TestFunc = [](ImGuiTestContext*) {
-      const int value = 1 + 1;
-      IM_CHECK(value == 2);
-    };
-  }
 }
