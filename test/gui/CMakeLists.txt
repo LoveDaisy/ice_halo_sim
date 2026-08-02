@@ -18,7 +18,6 @@ add_executable(gui_test
     functional/test_gui_sampling_density_stats.cpp
     functional/test_gui_user_defaults.cpp
     functional/test_gui_defaults_panel.cpp
-    functional/test_render_handedness_guard.cpp
     visual/test_gui_visual.cpp
     visual/test_gui_render.cpp
     visual/test_gui_bg.cpp

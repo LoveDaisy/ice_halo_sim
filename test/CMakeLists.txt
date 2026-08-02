@@ -222,7 +222,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   target_link_libraries(gui_unit_test

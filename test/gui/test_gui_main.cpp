@@ -396,7 +396,6 @@ int main(int argc, char** argv) {
   RegisterFaceNumberOverlayTests(engine);
   RegisterAutoEvRegressionTests(engine);
   RegisterLinkedEntriesTests(engine);
-  RegisterHandednessGuardTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
   RegisterSamplingDensityStatsTests(engine);
