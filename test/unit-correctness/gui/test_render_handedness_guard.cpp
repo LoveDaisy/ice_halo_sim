@@ -1,6 +1,4 @@
-#include <gtest/gtest.h>
-
-#include <array>  // Render handedness regression guard.
+// Render handedness regression guard.
 //
 // Purpose: pin the RIGHT = +az screen-handedness convention across the THREE
 // independent forward-projection implementations, so a future sign flip on any
@@ -39,7 +37,9 @@
 // this comparison can be made at all. check_policies.py's GUI API-boundary gate
 // scans src/gui/ only, so a test TU is not in its scope either way.
 
+#include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 
 #include "config/render_config.hpp"

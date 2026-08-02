@@ -13,8 +13,6 @@
 #include "gui/preview_renderer.hpp"
 #include "test_gui_shared.hpp"
 
-namespace {}  // namespace
-
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine) {
   // Test F: Modal z-order regression — DrawOverlayLabels must target the current
   // window's draw list (not foreground), so modals correctly occlude labels.

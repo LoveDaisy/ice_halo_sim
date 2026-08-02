@@ -1889,8 +1889,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
-  {}
-
   {
     // AC4 — "Origin value" is the FACTORY value, not the effective (saved) default.
     //
@@ -1930,8 +1928,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       CloseDefaultsPanel(ctx);
     };
   }
-
-  {}
 
   {
     // AC5 — the two notice icons are separate, and each has a producer that can actually fire.

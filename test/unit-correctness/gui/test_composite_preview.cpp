@@ -190,9 +190,9 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
   local.PollOnceForTest(server);
 
   auto snap = local.LoadSnapshot();
-  EXPECT_TRUE(snap != nullptr);
+  ASSERT_TRUE(snap != nullptr);
   EXPECT_TRUE(snap->valid);
-  EXPECT_TRUE(snap->payload != nullptr);
+  ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(snap->payload->is_composite);
   EXPECT_TRUE(!snap->payload->rgb_data.empty());
   EXPECT_TRUE(!snap->payload->xyz_data.empty());  // XYZ still populated (auto-EV lane unchanged)
@@ -236,9 +236,9 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
   local.PollOnceForTest(server);
 
   auto snap = local.LoadSnapshot();
-  EXPECT_TRUE(snap != nullptr);
+  ASSERT_TRUE(snap != nullptr);
   EXPECT_TRUE(snap->valid);
-  EXPECT_TRUE(snap->payload != nullptr);
+  ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(!snap->payload->is_composite);
   EXPECT_TRUE(snap->payload->rgb_data.empty());
   EXPECT_TRUE(!snap->payload->xyz_data.empty());
@@ -378,9 +378,9 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   local.ResetGenerationForTest();
   local.PollOnceForTest(server);
   auto snap_before = local.LoadSnapshot();
-  EXPECT_TRUE(snap_before != nullptr);
+  ASSERT_TRUE(snap_before != nullptr);
   EXPECT_TRUE(snap_before->valid);
-  EXPECT_TRUE(snap_before->payload != nullptr);
+  ASSERT_TRUE(snap_before->payload != nullptr);
   EXPECT_TRUE(snap_before->payload->is_composite);
   std::vector<uint8_t> composite_before(snap_before->payload->rgb_data.begin(), snap_before->payload->rgb_data.end());
 
@@ -403,9 +403,9 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   // differ). And it must byte-match a same-tick direct C-API read.
   local.PollOnceForTest(server);
   auto snap_after = local.LoadSnapshot();
-  EXPECT_TRUE(snap_after != nullptr);
+  ASSERT_TRUE(snap_after != nullptr);
   EXPECT_TRUE(snap_after->valid);
-  EXPECT_TRUE(snap_after->payload != nullptr);
+  ASSERT_TRUE(snap_after->payload != nullptr);
   EXPECT_TRUE(snap_after->payload->is_composite);
   EXPECT_EQ(snap_after->payload->rgb_data.size(), composite_before.size());
   EXPECT_TRUE(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
@@ -786,9 +786,9 @@ TEST(CompositePreview, add_class_after_idle_reconverges_within_bound) {
   local.PollOnceForTest(server);
   {
     auto snap = local.LoadSnapshot();
-    EXPECT_TRUE(snap != nullptr);
+    ASSERT_TRUE(snap != nullptr);
     EXPECT_TRUE(snap->valid);
-    EXPECT_TRUE(snap->payload != nullptr);
+    ASSERT_TRUE(snap->payload != nullptr);
     EXPECT_TRUE(snap->payload->is_composite);  // baseline is a valid composite frame
   }
 
@@ -895,9 +895,9 @@ TEST(CompositePreview, mode_flip_forces_refire_at_same_serial) {
   local.ResetGenerationForTest();
   local.PollOnceForTest(server);
   auto snap = local.LoadSnapshot();
-  EXPECT_TRUE(snap != nullptr);
+  ASSERT_TRUE(snap != nullptr);
   EXPECT_TRUE(snap->valid);
-  EXPECT_TRUE(snap->payload != nullptr);
+  ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(snap->payload->is_composite);
 
   // T0: initial state before any upload — the fire gate must be TRUE (serial-dedup gate is
@@ -969,9 +969,9 @@ TEST(CompositePreview, mode_toggle_hidden_when_no_color_classes) {
   local.ResetGenerationForTest();
   local.PollOnceForTest(server);
   auto snap = local.LoadSnapshot();
-  EXPECT_TRUE(snap != nullptr);
+  ASSERT_TRUE(snap != nullptr);
   EXPECT_TRUE(snap->valid);
-  EXPECT_TRUE(snap->payload != nullptr);
+  ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(!snap->payload->is_composite);  // no raypath_color ⇒ payload not composite
 
   // Render-gate condition: the status-bar mode-toggle button is only rendered when the
@@ -1043,9 +1043,9 @@ TEST(CompositePreview, should_fire_composite_upload_fires_on_stale_staged_snapsh
   local.PollOnceForTest(server);
 
   auto snap = local.LoadSnapshot();
-  EXPECT_TRUE(snap != nullptr);
+  ASSERT_TRUE(snap != nullptr);
   EXPECT_TRUE(snap->valid);
-  EXPECT_TRUE(snap->payload != nullptr);
+  ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(snap->payload->is_composite);
   EXPECT_TRUE(snap->texture_serial > 0);
   EXPECT_TRUE(snap->payload->payload_epoch > 0);
@@ -1063,7 +1063,7 @@ TEST(CompositePreview, should_fire_composite_upload_fires_on_stale_staged_snapsh
   // mode_changed = (effective_composite=false) != (last_uploaded=false) = false.
   local.InvalidateStagedTexture();
   auto snap_after = local.LoadSnapshot();
-  EXPECT_TRUE(snap_after != nullptr);
+  ASSERT_TRUE(snap_after != nullptr);
   EXPECT_TRUE(snap_after->payload == nullptr);  // fence took effect: payload dropped, serial unchanged.
   EXPECT_EQ(snap_after->texture_serial, snap->texture_serial);
   const bool fire_after =

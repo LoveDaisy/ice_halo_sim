@@ -232,7 +232,7 @@ TEST(UserDefaults, ac3_sparse_overlay_round_trip) {
 
   // Preset-library half, read through its own query interface.
   const auto column = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(column.has_value());
+  ASSERT_TRUE(column.has_value());
   EXPECT_EQ(*column, 0.3f);
   // A preset with no entry stays "no override" rather than defaulting to something.
   EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kLowitz).has_value());
@@ -560,7 +560,7 @@ TEST(UserDefaults, d8_preset_override_clamped_with_notice) {
   gui::MakeNewDocumentState(dir);
 
   const auto column = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(column.has_value());
+  ASSERT_TRUE(column.has_value());
   // Clamped to the largest float STRICTLY below the bound: landing on 10.0 exactly would
   // fail the classifier's strict `< 10` and demote the preset to Custom.
   EXPECT_EQ(*column, std::nextafter(gui::kColumnPlateParryZenithStdUpperBound, 0.0f));
@@ -591,12 +591,12 @@ TEST(UserDefaults, d8_lowitz_clamps_on_the_lower_side) {
   gui::MakeNewDocumentState(dir);
 
   const auto lowitz = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kLowitz);
-  EXPECT_TRUE(lowitz.has_value());
+  ASSERT_TRUE(lowitz.has_value());
   EXPECT_EQ(*lowitz, std::nextafter(gui::kLowitzZenithStdLowerBound, std::numeric_limits<float>::infinity()));
   EXPECT_TRUE(*lowitz > gui::kLowitzZenithStdLowerBound);
 
   const auto plate = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kPlate);
-  EXPECT_TRUE(plate.has_value());
+  ASSERT_TRUE(plate.has_value());
   EXPECT_TRUE(*plate > 0.0f);
   EXPECT_TRUE(*plate < gui::kColumnPlateParryZenithStdUpperBound);
 
@@ -619,7 +619,7 @@ TEST(UserDefaults, d8_preset_override_does_not_leak_across_calls) {
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
   gui::MakeNewDocumentState(dir);
   const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(first.has_value());
+  ASSERT_TRUE(first.has_value());
   EXPECT_EQ(*first, 3.0f);
 
   // The user edits the file underneath the running process and removes the override —
@@ -650,7 +650,7 @@ TEST(UserDefaults, d8_preset_override_does_not_leak_when_config_dir_becomes_unav
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
   gui::MakeNewDocumentState(dir);
   const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(first.has_value());
+  ASSERT_TRUE(first.has_value());
   EXPECT_EQ(*first, 3.0f);
 
   // Same process, same override still loaded — but this call's GetUserConfigDir() now
@@ -699,13 +699,13 @@ TEST(UserDefaults, preset_write_round_trips_across_a_reload) {
   const json doc = ReadOverlayDoc(dir);
   EXPECT_TRUE(doc.contains("presets"));
   const auto stored_column = ReadPresetStd(doc, "column");
-  EXPECT_TRUE(stored_column.has_value());
+  ASSERT_TRUE(stored_column.has_value());
   EXPECT_EQ(*stored_column, 0.3f);
 
   // The session picks it up the way startup does.
   gui::MakeNewDocumentState(dir);
   const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded.has_value());
   EXPECT_EQ(*loaded, 0.3f);
 
   // Drop the in-memory state the way a restart would, then re-resolve from the file.
@@ -714,7 +714,7 @@ TEST(UserDefaults, preset_write_round_trips_across_a_reload) {
   gui::MakeNewDocumentState(dir);
 
   const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(reloaded.has_value());
+  ASSERT_TRUE(reloaded.has_value());
   EXPECT_EQ(*reloaded, 0.3f);
 
   // And that is what pressing the Column button would write into the crystal.
@@ -845,8 +845,8 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
     const json after_two_writes = ReadOverlayDoc(dir);
     const auto kept_column = ReadPresetStd(after_two_writes, "column");
     const auto kept_plate = ReadPresetStd(after_two_writes, "plate");
-    EXPECT_TRUE(kept_column.has_value());
-    EXPECT_TRUE(kept_plate.has_value());
+    ASSERT_TRUE(kept_column.has_value());
+    ASSERT_TRUE(kept_plate.has_value());
     EXPECT_EQ(*kept_column, 0.3f);
     EXPECT_EQ(*kept_plate, 0.5f);
     EXPECT_TRUE(after_two_writes.contains("bg_alpha"));
@@ -867,7 +867,7 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
   EXPECT_TRUE(!ReadPresetStd(doc, "column").has_value());
   // Untouched: the other preset and the GuiState key sharing the file.
   const auto survivor = ReadPresetStd(doc, "plate");
-  EXPECT_TRUE(survivor.has_value());
+  ASSERT_TRUE(survivor.has_value());
   EXPECT_EQ(*survivor, 0.5f);
   EXPECT_EQ(doc.value("bg_alpha", 0.0f), 0.42f);
 
@@ -929,14 +929,14 @@ TEST(UserDefaults, preset_write_failure_leaves_memory_untouched) {
     gui::MakeNewDocumentState(dir);
   }
   const auto seeded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(seeded.has_value());
+  ASSERT_TRUE(seeded.has_value());
   EXPECT_EQ(*seeded, 0.3f);
 
   // No writable directory at all — the same shape as a read-only config dir.
   ScopedUserConfigSource disabled(gui::UserConfigSource::kDisabled);
   EXPECT_TRUE(!gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
   const auto after_failed_revert = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(after_failed_revert.has_value());
+  ASSERT_TRUE(after_failed_revert.has_value());
   EXPECT_EQ(*after_failed_revert, 0.3f);  // a failed revert must not report success in memory
 }
 

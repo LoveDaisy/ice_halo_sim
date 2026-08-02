@@ -115,7 +115,7 @@ TEST(DefaultsPanel, inline_ac3_registry_covers_every_row) {
     EXPECT_TRUE(row_keys.count(expected.key_path) == 1);
     const gui::FieldEditorEntry* entry = gui::FindFieldEditor(expected.key_path);
     if (expected.registered) {
-      EXPECT_TRUE(entry != nullptr);
+      ASSERT_TRUE(entry != nullptr);
       EXPECT_TRUE(entry->kind == expected.kind);
     } else {
       EXPECT_TRUE(entry == nullptr);

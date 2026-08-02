@@ -157,7 +157,7 @@ TEST(GuiLifecycle, terminal_idle_reaches_done) {
     local.ResetGenerationForTest();
     local.PollOnceForTest(server);  // Poll A: generation G is new -> materializes stats + texture
     auto a = local.LoadSnapshot();  // non-destructive load of the published Poll A snapshot
-    EXPECT_TRUE(a != nullptr);
+    ASSERT_TRUE(a != nullptr);
     EXPECT_TRUE(a->valid);
     EXPECT_EQ(a->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
     EXPECT_EQ(a->epoch, done_epoch);
@@ -165,7 +165,7 @@ TEST(GuiLifecycle, terminal_idle_reaches_done) {
 
     local.PollOnceForTest(server);  // Poll B: same generation G -> has_new_snapshot == false
     auto b = local.LoadSnapshot();
-    EXPECT_TRUE(b != nullptr);
+    ASSERT_TRUE(b != nullptr);
     EXPECT_TRUE(b->valid);
     // I5 bundle coherence: lifecycle + epoch + stats CARRY FORWARD across a no-new-generation
     // poll instead of being torn. The terminal COMPLETED edge survives (the fix, I4).
@@ -497,7 +497,7 @@ TEST(GuiLifecycle, snapshot_bundle_coherence) {
 
   // Whole-object handoff: LoadSnapshot returns one non-null immutable object (single atomic_load).
   auto s = local.LoadSnapshot();
-  EXPECT_TRUE(s != nullptr);
+  ASSERT_TRUE(s != nullptr);
   EXPECT_TRUE(s->valid);
 
   // Bundle coherence: EVERY field of this one published value belongs to the SAME committed
@@ -507,7 +507,7 @@ TEST(GuiLifecycle, snapshot_bundle_coherence) {
   EXPECT_EQ(s->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
   EXPECT_TRUE(s->stats_sim_ray_num > 0);
   EXPECT_TRUE(s->has_new_texture);     // this poll genuinely materialized a texture
-  EXPECT_TRUE(s->payload != nullptr);  // ... so the payload is present in the SAME bundle
+  ASSERT_TRUE(s->payload != nullptr);  // ... so the payload is present in the SAME bundle
   // The payload's OWN epoch stamp matches the bundle epoch on a fresh materialization — the
   // coherence relation section A omits. (On carry-forward payload_epoch may deliberately LAG the
   // bundle epoch; here the texture is freshly materialized so they MUST agree.)
@@ -584,7 +584,7 @@ TEST(GuiLifecycle, completed_below_threshold_force_uploads) {
   local.PollOnceForTest(server);
 
   auto sa = local.LoadSnapshot();
-  EXPECT_TRUE(sa != nullptr);
+  ASSERT_TRUE(sa != nullptr);
   EXPECT_EQ(sa->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
   EXPECT_TRUE(sa->payload != nullptr);   // the terminal frame reached the consumer despite the gate
   EXPECT_TRUE(sa->has_new_texture);      // ... and THIS poll is what materialized it
@@ -615,7 +615,7 @@ TEST(GuiLifecycle, completed_below_threshold_force_uploads) {
   local.PollOnceForTest(server);
 
   auto sb = local.LoadSnapshot();
-  EXPECT_TRUE(sb != nullptr);
+  ASSERT_TRUE(sb != nullptr);
   EXPECT_EQ(sb->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
   EXPECT_TRUE(sb->payload != nullptr);
   EXPECT_TRUE(sb->texture_serial != serial_a);  // a SECOND materialization, not phase A's carried forward
@@ -630,7 +630,7 @@ TEST(GuiLifecycle, completed_below_threshold_force_uploads) {
   local.PollOnceForTest(server);
 
   auto sc = local.LoadSnapshot();
-  EXPECT_TRUE(sc != nullptr);
+  ASSERT_TRUE(sc != nullptr);
   EXPECT_EQ(sc->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
   EXPECT_TRUE(sc->payload != nullptr);
   EXPECT_TRUE(sc->texture_serial != serial_b);  // the refresh produced a frame of its own
@@ -670,7 +670,7 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
     gui::g_server_poller.ResetGenerationForTest();
     gui::g_server_poller.PollOnceForTest(server);
     auto snap = gui::g_server_poller.LoadSnapshot();
-    EXPECT_TRUE(snap != nullptr);
+    ASSERT_TRUE(snap != nullptr);
     EXPECT_TRUE(snap->valid);  // baseline invariant: seed snapshot is valid before the wake
     gui::g_server_poller.Stop();
   };
@@ -680,7 +680,7 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
   gui::g_server_poller.WakeForRestart(server);
   {
     auto snap = gui::g_server_poller.LoadSnapshot();
-    EXPECT_TRUE(snap != nullptr);
+    ASSERT_TRUE(snap != nullptr);
     EXPECT_TRUE(!snap->valid);  // WakeForRestart publishes valid=false on the wake edge
   }
 
@@ -691,7 +691,7 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
   gui::g_server_poller.WakeForRefresh(server);
   {
     auto snap = gui::g_server_poller.LoadSnapshot();
-    EXPECT_TRUE(snap != nullptr);
+    ASSERT_TRUE(snap != nullptr);
     EXPECT_TRUE(snap->valid);  // WakeForRefresh preserves valid across the wake edge
   }
 

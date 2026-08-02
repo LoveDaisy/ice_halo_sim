@@ -230,6 +230,10 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
   //
   // 四路测试分层（plan §4 Step 3-5）：
   //   - AC1 (决策层, headless): ShouldFireCompositeUpload fire 1→0（无 GL 上下文，谓词级别）。
+  //         现居 test/unit-correctness/gui/test_composite_preview.cpp 的
+  //         should_fire_composite_upload_fires_on_stale_staged_snapshot_until_invalidated ——
+  //         它零 GL 依赖，是搬去 gui_unit_test 的"无帧"用例之一，不在下面 AC2/AC3 这四个
+  //         *_fences_stale_composite 家族成员之列（该家族定义见本文件顶部注释）。
   //   - AC2 (端到端 GL, .json 路径): 主线程 SyncFromPoller 真上屏 → DoOpen(.json) → 断言不再重传，
   //         并用 RenderExportToRgba 像素级读回 fbo 证明帧缓冲本身不再显示彩色场景（plan-review
   //         round 1 Major：`HasTexture()` 不单独作为"非 proxy"证据）。
@@ -238,9 +242,10 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
   // AC2: 端到端 GL-context 回归 (.json 路径) — 主线程 SyncFromPoller + RenderExportToRgba 像素级读回。
   //
-  // 与 AC1 的区别：AC1 只证谓词，AC2 证生产路径（主线程 SyncFromPoller 会真调 UploadTexture / Render
-  // GL 调用，`HasTexture()` 前置信号 + fbo 像素级 sample 作为唯一"非 proxy"证据，覆盖
-  // 2026-07-11 同日 `fix-clear-texture-gl-stale` 教训："CPU 字段翻转 ≠ 帧缓冲真实内容"）。
+  // 与 AC1 的区别：AC1 只证谓词（现居 gui_unit_test，见上），AC2 证生产路径（主线程 SyncFromPoller
+  // 会真调 UploadTexture / Render GL 调用，`HasTexture()` 前置信号 + fbo 像素级 sample 作为唯一
+  // "非 proxy"证据，覆盖 2026-07-11 同日 `fix-clear-texture-gl-stale` 教训："CPU 字段翻转 ≠
+  // 帧缓冲真实内容"）。
   ImGuiTest* t_fence_ac2 =
       IM_REGISTER_TEST(engine, "gui_composite_preview", "open_json_fences_stale_composite_after_color_render");
   t_fence_ac2->GuiFunc = FenceExportGuiFunc;

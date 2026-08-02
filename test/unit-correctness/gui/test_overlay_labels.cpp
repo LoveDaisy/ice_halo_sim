@@ -471,7 +471,7 @@ TEST(OverlayLabels, pixel_to_world_dir_single_ortho_top_zenith) {
 // (zenith). Same load-bearing assertion as the single ortho top-zenith
 // test, but exercises DualFisheyeInv(type=3) which has no other coverage
 // (ComputeOverlayLabels' edge sampling can't reach lens=9 — see notes
-// in SingleOrthoLatTestFunc).
+// in OverlayLabels.single_orthographic_dispatch_matches_fisheye above).
 TEST(OverlayLabels, pixel_to_world_dir_dual_ortho_left_disc_center) {
   // view_matrix is unused for lens=9 (no view transform). Use identity-ish
   // value so any accidental application would surface in the assertions.
