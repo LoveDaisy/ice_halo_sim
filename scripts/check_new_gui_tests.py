@@ -28,8 +28,11 @@ cases.
 
 What is rejected
 ----------------
-A `TestFunc = [](ImGuiTestContext* ...)` lambda whose signature line is ADDED by
-this diff, in a file under test/gui/ ending in .cpp, when either:
+A `TestFunc = [](ImGuiTestContext* ...)` lambda in a file under test/gui/ ending
+in .cpp, belonging to a case this diff BROUGHT INTO EXISTENCE — its category/name
+did not exist under test/gui/ before, or its signature line was rewritten in the
+file it already lived in; see is_new_case(), where the obvious line-based reading
+is shown not to work — when either:
 
   1. the parameter is anonymous — `[](ImGuiTestContext*)`, or the equivalent
      `[](ImGuiTestContext* /*ctx*/)` where the name is commented out; or
@@ -51,10 +54,12 @@ What is NOT rejected, and why that is accepted
     parameter is a warning rather than an error. Catching this needs the "body
     mentions the name nowhere" inference, with no explicit author or compiler
     statement behind it, and inference is exactly what makes a gate misfire.
-  - Pre-existing cases of any shape. The gate reads added lines only, so it
-    starts green with no baseline to maintain — same reasoning as its
-    prose-scanning sibling, and the same reason the alternative (a whole-tree
-    gate) is not on the table: the existing body cannot be zeroed out first.
+  - Pre-existing cases of any shape, including when a change relocates one to
+    another test/gui/ file or shifts its position within one. The gate reads only
+    what a diff brought into existence, so it starts green with no baseline to
+    maintain — same reasoning as its prose-scanning sibling, and the same reason
+    the alternative (a whole-tree gate) is not on the table: the existing body
+    cannot be zeroed out first.
 
 There is no inline exemption, by design. If a new case genuinely needs a frame
 but never happens to touch ctx, the fix is to make it drive ctx (`ctx->Yield()`
@@ -82,6 +87,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -106,15 +112,33 @@ SCOPE_SUFFIX = ".cpp"
 # the pattern would only buy shapes that do not compile.
 #
 # \s matches newlines, so a signature broken across lines is still found; the
-# violation is anchored at the line the match STARTS on, i.e. the `TestFunc` line.
-# That is one deterministic anchor. Testing every line the match spans instead
-# would fire when a later reformat touched only the closing paren, which is not
-# a newly registered case.
+# violation is reported at the line the match STARTS on, i.e. the `TestFunc` line.
+#
+# The receiver is captured so the signature can be tied back to the
+# IM_REGISTER_TEST call that produced it — see is_new_case() for why that matters.
+# It is optional: a shape this pattern does not expect should still be read as a
+# signature and fall back to its own line, rather than silently not matching.
 #
 # The parameter name is a capture group rather than a hardcoded `ctx` so that
 # renaming the parameter cannot silently disable the rule.
 SIGNATURE_RE = re.compile(
+    r"(?:([A-Za-z_]\w*)\s*(?:->|\.)\s*)?"
     r"TestFunc\s*=\s*\[\s*\]\s*\(\s*ImGuiTestContext\s*\*\s*([A-Za-z_]\w*)?\s*\)\s*\{"
+)
+
+# The call that brings a case into existence, and the category/name pair that
+# identifies it. Note what this pattern does NOT require: the variable the result
+# is assigned to. Long test names push that assignment onto its own line often
+# enough that requiring it would silently drop those cases — and dropping one
+# from the "existed before" map makes an untouched case read as newly registered,
+# i.e. it fails towards blocking correct code.
+REGISTER_CALL_RE = re.compile(r'IM_REGISTER_TEST\s*\(\s*[^,()]+,\s*"([^"]*)"\s*,\s*"([^"]*)"')
+
+# The same call together with the variable it binds, which is how a TestFunc
+# assignment is traced back to its registration. Matched against whole file text
+# (where \s spans the line break), never against grep output.
+REGISTRATION_RE = re.compile(
+    r'([A-Za-z_]\w*)\s*=\s*IM_REGISTER_TEST\s*\(\s*[^,()]+,\s*"([^"]*)"\s*,\s*"([^"]*)"'
 )
 
 FIX_HINT = (
@@ -163,10 +187,121 @@ def _is_marked_unused(name: str, body: str) -> bool:
     return re.search(rf"IM_UNUSED\s*\(\s*{re.escape(name)}\s*\)", body) is not None
 
 
-def check(diff_args: list[str], content_ref: str) -> tuple[list[Violation], int]:
-    """Returns (violations, number of newly added TestFunc signatures scanned)."""
+def _registrations(code: str) -> dict[str, list[tuple[int, str]]]:
+    """Variable name -> [(line, "category/name")] for each IM_REGISTER_TEST it binds."""
+    out: dict[str, list[tuple[int, str]]] = {}
+    for m in REGISTRATION_RE.finditer(code):
+        lineno = code.count("\n", 0, m.start()) + 1
+        out.setdefault(m.group(1), []).append((lineno, f"{m.group(2)}/{m.group(3)}"))
+    return out
+
+
+def _identity_of(sig_line: int, receiver: str | None, regs: dict[str, list[tuple[int, str]]]):
+    """The "category/name" of the case whose TestFunc sits at sig_line, if findable.
+
+    The registration that produced this receiver is its nearest preceding
+    assignment: `ImGuiTest* t` is reused across sibling blocks in these files, so
+    the variable name alone does not identify one case.
+    """
+    if receiver is None:
+        return None
+    prior = [(ln, ident) for ln, ident in regs.get(receiver, ()) if ln <= sig_line]
+    return max(prior)[1] if prior else None
+
+
+def registered_before(ref: str) -> dict[str, set[str]]:
+    """"category/name" -> the test/gui/ paths registering it at `ref`.
+
+    One `git grep` over the whole tree rather than a walk of the diff's files,
+    because the question is whether the case existed ANYWHERE before, not whether
+    it existed at this path — otherwise relocating a case to another suite file
+    would read as registering a new one.
+
+    The paths are kept rather than flattened to a set of names, because the two
+    questions is_new_case() asks need different scopes: "does this case exist" is
+    tree-wide, while "was this case's signature rewritten" is only meaningful
+    against the same file. Filenames are why this grep runs without -h.
+    """
+    proc = subprocess.run(
+        ["git", "grep", "IM_REGISTER_TEST", ref, "--", SCOPE_PREFIX],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if proc.returncode > 1:  # 1 is "no matches", anything higher is a real failure
+        return {}
+    out: dict[str, set[str]] = {}
+    prefix = f"{ref}:"
+    for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith(prefix):
+            continue
+        path, sep, content = line[len(prefix) :].partition(":")
+        if not sep:
+            continue
+        for m in REGISTER_CALL_RE.finditer(content):
+            out.setdefault(f"{m.group(1)}/{m.group(2)}", set()).add(path)
+    return out
+
+
+def is_new_case(
+    rel: str,
+    sig_line: int,
+    identity: str | None,
+    before: dict[str, set[str]],
+    added: set[int],
+) -> bool:
+    """Was this case brought into existence by the diff?
+
+    The obvious predicate — "is the signature line among the added lines" — does
+    not work, and neither does the obvious repair. Both were tried against real
+    history and both failed, in opposite directions, for the same underlying
+    reason: `git diff` matches lines, and a test case is not a line.
+
+      - Anchoring on the signature line gives false NEGATIVES. The rejected
+        signatures are boilerplate; every anonymous one in the tree is the same
+        44 characters. A change that deletes some cases and adds another lets git
+        pair the newly written signature with a deleted identical one, so it
+        never appears as added. That is precisely what a migration plus one new
+        test looks like — the gate reported success on a real violating commit.
+      - Anchoring on the IM_REGISTER_TEST line gives false POSITIVES, and for the
+        mirror-image reason. It is the one line in a case that CANNOT alias,
+        because it carries the case's name. So when a neighbouring case is
+        deleted, git aligns all the surrounding boilerplate across the two bodies
+        and reports the name-bearing line as the only change — billing a case
+        that merely shifted position. Two untouched cases were billed that way on
+        this repo's own history.
+
+    So identity, not position: a case is new when its category/name did not exist
+    under test/gui/ before. That is immune to both, because it never consults the
+    line diff to decide existence.
+
+    A second anchor catches what identity cannot see: an EXISTING case edited into
+    a rejected shape, where someone deletes the parameter name from a test that
+    used to drive the GUI. That registers nothing new, so only the rewritten
+    signature line reveals it.
+
+    That anchor is restricted to a case still living in the file it lived in
+    before, and the restriction is not cosmetic. Relocating a case to another
+    suite file gives it an entirely new signature line while registering nothing,
+    so without the same-file condition every such move would be billed — and
+    moving cases between these files is most of what maintaining them consists of.
+
+    The remaining gap is renaming an existing rejected-shape case, which reads as
+    a new registration. Narrow, and the fix that clears it (drive the context, or
+    move the case to gui_unit_test) is the one the rule wants anyway.
+    """
+    if identity is None:
+        return sig_line in added  # unrecognised shape: fall back to the line
+    paths = before.get(identity)
+    if paths is None:
+        return True  # no case by this name existed anywhere before
+    return rel in paths and sig_line in added
+
+
+def check(diff_args: list[str], content_ref: str, base_ref: str) -> tuple[list[Violation], int]:
+    """Returns (violations, number of newly registered TestFunc signatures scanned)."""
     violations: list[Violation] = []
     scanned = 0
+    before = registered_before(base_ref)
     for rel, linenos in sorted(added_lines(diff_args).items()):
         p = PurePosixPath(rel)
         if not rel.startswith(SCOPE_PREFIX) or p.suffix != SCOPE_SUFFIX:
@@ -180,12 +315,14 @@ def check(diff_args: list[str], content_ref: str) -> tuple[list[Violation], int]
         # talks about ctx in a comment no longer reads as using it. Line numbers
         # survive because strip_comments keeps every newline.
         code = strip_comments(text)
+        regs = _registrations(code)
         for m in SIGNATURE_RE.finditer(code):
             lineno = code.count("\n", 0, m.start()) + 1
-            if lineno not in linenos:
+            identity = _identity_of(lineno, m.group(1), regs)
+            if not is_new_case(rel, lineno, identity, before, linenos):
                 continue  # pre-existing case; this gate only reads what you added
             scanned += 1
-            name = m.group(1)
+            name = m.group(2)
             if not name:
                 violations.append(
                     Violation(
@@ -245,12 +382,13 @@ def main() -> int:
         base, head = args.rng.split("..", 1)
         if not base or not head:
             parser.error("--range expects BASE..HEAD")
-        diff_args, content_ref = [base, head], head
+        diff_args, content_ref, base_ref = [base, head], head, base
     else:
-        # --staged, passed or defaulted to. Empty content_ref means the index.
-        diff_args, content_ref = ["--cached"], ""
+        # --staged, passed or defaulted to. Empty content_ref means the index,
+        # whose "before" picture is the commit it is staged on top of.
+        diff_args, content_ref, base_ref = ["--cached"], "", "HEAD"
 
-    violations, scanned = check(diff_args, content_ref)
+    violations, scanned = check(diff_args, content_ref, base_ref)
     if violations:
         print("New-gui-test check FAILED:\n", file=sys.stderr)
         for v in sorted(violations, key=lambda x: (str(x.path), x.line)):

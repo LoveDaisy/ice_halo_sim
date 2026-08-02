@@ -48,20 +48,27 @@ FOOTER = """}
 }  // namespace lumice::test
 """
 
-# HEADER is five lines, and `case()` puts the IM_REGISTER_TEST call before the
-# TestFunc assignment, so the first signature lands on line 7. Each case()
-# block is five lines including its trailing blank. Spelled out rather than
-# derived from the fixture text so the expectation stays an independent oracle:
-# a helper that searched for "TestFunc" would locate it the same way the checker
-# does, and agree with it even when both were wrong.
-FIRST_SIG_LINE = 7
+# HEADER is five lines and each case() opens with its own `  {`, so the first
+# signature lands on line 8. Spelled out rather than derived from the fixture
+# text so the expectation stays an independent oracle: a helper that searched for
+# "TestFunc" would locate it the same way the checker does, and agree with it
+# even when both were wrong.
+FIRST_SIG_LINE = 8
 
 
 def case(name: str, signature: str, body: str) -> str:
-    """One IM_REGISTER_TEST block, in the shape the real suites use."""
+    """One IM_REGISTER_TEST block, in the shape the real suites use.
+
+    The receiver is `t` in every case, scoped by its own braces, because that is
+    what the real files do — and it is load-bearing for the aliasing test below.
+    Naming the variable after the test would make every signature line unique,
+    which is exactly the property real code does not have and the property whose
+    absence lets a newly written signature be paired with a deleted one.
+    """
     return (
-        f'  ImGuiTest* {name} = IM_REGISTER_TEST(engine, "example", "{name}");\n'
-        f"  {name}->TestFunc = {signature} {{\n{body}  }};\n\n"
+        "  {\n"
+        f'    ImGuiTest* t = IM_REGISTER_TEST(engine, "example", "{name}");\n'
+        f"    t->TestFunc = {signature} {{\n{body}    }};\n  }}\n\n"
     )
 
 
@@ -96,10 +103,18 @@ class Repo:
     def run(self) -> tuple[list[check_policies.Violation], int]:
         """Run the gate over the staged diff, as the pre-commit hook does."""
         self.stage()
-        return check_new_gui_tests.check(["--cached"], "")
+        return check_new_gui_tests.check(["--cached"], "", "HEAD")
+
+    def run_range(self, base: str) -> tuple[list[check_policies.Violation], int]:
+        """Run the gate over a commit range, as CI does."""
+        return check_new_gui_tests.check([base, "HEAD"], "HEAD", base)
 
     def hits(self) -> list[tuple[str, int]]:
         violations, _ = self.run()
+        return sorted((str(v.path.relative_to(self.root)), v.line) for v in violations)
+
+    def range_hits(self, base: str) -> list[tuple[str, int]]:
+        violations, _ = self.run_range(base)
         return sorted((str(v.path.relative_to(self.root)), v.line) for v in violations)
 
     def scanned(self) -> int:
@@ -373,7 +388,9 @@ def test_second_case_in_the_same_file_is_reported_separately(repo: Repo) -> None
             ),
         ),
     )
-    assert repo.hits() == [(GUI_TEST_FILE, FIRST_SIG_LINE), (GUI_TEST_FILE, FIRST_SIG_LINE + 10)]
+    # Each single-statement case() block spans seven lines, so the third case's
+    # signature sits fourteen lines below the first.
+    assert repo.hits() == [(GUI_TEST_FILE, FIRST_SIG_LINE), (GUI_TEST_FILE, FIRST_SIG_LINE + 14)]
 
 
 def test_nested_braces_in_the_body_do_not_end_it_early(repo: Repo) -> None:
@@ -397,6 +414,150 @@ def test_nested_braces_in_the_body_do_not_end_it_early(repo: Repo) -> None:
         ),
     )
     assert repo.hits() == []
+
+
+# --- "new" is an identity question, not a line-number one --------------------
+#
+# Both tests below describe the same commit shape — some cases deleted, the file
+# rewritten around what remains — because that is what a migration looks like and
+# it is the shape this gate will meet most often. Read line-wise it defeats the
+# gate in both directions at once, so each direction gets its own test.
+
+
+def test_new_case_is_caught_even_when_its_signature_line_aliases_a_deleted_one(
+    repo: Repo,
+) -> None:
+    """A newly added case must be caught even if git never reports its line as added.
+
+    The rejected signatures are boilerplate: every anonymous one in the tree is
+    the same 44 characters. So when a change deletes cases carrying that exact
+    line and adds a new one, git's line matching pairs the new line with a
+    deleted one and the added-line set never mentions it. The gate then reports
+    success on a genuinely violating change — which is how it behaved against
+    real history before identity became the predicate.
+
+    This is the single most important test in the file: it is the one that fails
+    if the gate reverts to asking where a line is rather than whether a case is
+    new.
+    """
+    kept = case("t_kept", '[](ImGuiTestContext* ctx)', '      ctx->SetRef("Example");\n')
+    repo.write(
+        GUI_TEST_FILE,
+        source(
+            kept,
+            case("t_gone_a", "[](ImGuiTestContext*)", "      IM_CHECK(1 + 1 == 2);\n"),
+            case("t_gone_b", "[](ImGuiTestContext*)", "      IM_CHECK(2 + 2 == 4);\n"),
+        ),
+    )
+    base = repo.commit("existing suite")
+    # Delete the two anonymous cases and register one more, exactly as a
+    # migration-plus-one-new-test commit does.
+    repo.write(
+        GUI_TEST_FILE,
+        source(kept, case("t_new", "[](ImGuiTestContext*)", "      IM_CHECK(4 + 4 == 8);\n")),
+    )
+    repo.commit("migrate two out, add one")
+
+    added = check_new_refs.added_lines([base, "HEAD"]).get(GUI_TEST_FILE, set())
+    sig_line = FIRST_SIG_LINE + 7
+    assert sig_line not in added, (
+        "fixture no longer reproduces the aliasing it exists to pin: git now "
+        "reports the new signature line as added, so this test would pass even "
+        "with a line-based predicate"
+    )
+    assert repo.range_hits(base) == [(GUI_TEST_FILE, sig_line)]
+
+
+def test_untouched_case_is_not_billed_when_a_sibling_case_is_deleted(repo: Repo) -> None:
+    """...and the repair for the above must not bill cases that merely shifted.
+
+    The IM_REGISTER_TEST line is the one line in a case that cannot alias,
+    because it carries the case's name. That makes it the obvious anchor and the
+    wrong one: when a neighbouring case is deleted, git aligns the identical
+    boilerplate across the two bodies and reports the name-bearing line as the
+    only change, so an untouched case reads as newly registered. Two real cases
+    were billed that way before identity became the predicate.
+    """
+    kept = case(
+        "t2", "[](ImGuiTestContext* ctx)", "    IM_UNUSED(ctx);\n    ResetTestState();\n"
+    )
+    repo.write(
+        GUI_TEST_FILE,
+        source(
+            case(
+                "t1",
+                "[](ImGuiTestContext* ctx)",
+                "    IM_UNUSED(ctx);\n    ResetTestState();\n",
+            ),
+            kept,
+        ),
+    )
+    base = repo.commit("two cases sharing a body shape")
+    repo.write(GUI_TEST_FILE, source(kept))  # delete the first; the second shifts up
+    repo.commit("delete the first case")
+    assert repo.range_hits(base) == []
+
+
+def test_case_moved_between_gui_files_is_not_billed(repo: Repo) -> None:
+    """Identity is looked up across test/gui/, not per file.
+
+    A case relocated to another suite file is not a case someone registered, so
+    scoping the lookup to the file it now lives in would bill every such move —
+    and moving cases around is what maintaining this tree consists of.
+    """
+    other = "test/gui/functional/test_gui_other.cpp"
+    moved = case("t1", "[](ImGuiTestContext*)", "    IM_CHECK(1 + 1 == 2);\n")
+    repo.write(GUI_TEST_FILE, source(moved))
+    base = repo.commit("case lives here")
+    repo.write(GUI_TEST_FILE, source())
+    repo.write(other, source(moved))
+    repo.commit("move it there")
+    assert repo.range_hits(base) == []
+
+
+def test_registration_split_across_lines_still_counts_as_pre_existing(repo: Repo) -> None:
+    """A long test name pushes IM_REGISTER_TEST onto its own line; it still has identity.
+
+    The "did this exist before" lookup reads `git grep` output, which yields the
+    matching line alone — without the `ImGuiTest* t =` that sits on the line
+    above. A pattern requiring that binding silently drops these cases from the
+    "existed before" set, and a case missing from that set reads as newly
+    registered. The failure is therefore towards blocking correct code, and it is
+    invisible: nothing about the wrapped registration looks different.
+    """
+    wrapped = (
+        '  ImGuiTest* t_with_a_rather_long_descriptive_name =\n'
+        '      IM_REGISTER_TEST(engine, "example", "a_rather_long_descriptive_case_name");\n'
+        "  t_with_a_rather_long_descriptive_name->TestFunc = [](ImGuiTestContext*) {\n"
+        "    IM_CHECK(1 + 1 == 2);\n  };\n\n"
+    )
+    repo.write(GUI_TEST_FILE, HEADER + wrapped + FOOTER)
+    base = repo.commit("pre-existing wrapped registration")
+    repo.write(GUI_TEST_FILE, HEADER + wrapped + "  // an unrelated edit\n" + FOOTER)
+    repo.commit("touch the file")
+    assert repo.range_hits(base) == []
+
+
+def test_signature_rewritten_in_place_is_billed(repo: Repo) -> None:
+    """Identity alone would miss an existing case edited into a rejected shape.
+
+    Deleting the parameter name from a case that used to drive the GUI registers
+    nothing new, so the identity predicate says nothing. The added-line anchor is
+    kept for exactly this, and it is safe here in a way it is not as the primary
+    predicate: a signature line reported as added belongs to a case that was
+    either just written or just edited, and both are this diff's to answer for.
+    """
+    repo.write(
+        GUI_TEST_FILE,
+        source(case("t1", '[](ImGuiTestContext* ctx)', '    ctx->SetRef("Example");\n')),
+    )
+    base = repo.commit("a case that drives the GUI")
+    repo.write(
+        GUI_TEST_FILE,
+        source(case("t1", "[](ImGuiTestContext*)", "    IM_CHECK(1 + 1 == 2);\n")),
+    )
+    repo.commit("gut it")
+    assert repo.range_hits(base) == [(GUI_TEST_FILE, FIRST_SIG_LINE)]
 
 
 # --- the real tree, as the worst case ----------------------------------------
