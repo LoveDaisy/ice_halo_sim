@@ -218,7 +218,8 @@ if(BUILD_GUI)
   add_executable(gui_unit_test
     "${PROJ_TEST_DIR}/test_main.cpp"
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   target_link_libraries(gui_unit_test

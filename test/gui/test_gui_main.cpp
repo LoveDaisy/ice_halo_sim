@@ -374,7 +374,6 @@ int main(int argc, char** argv) {
   ImGuiTestEngine_InstallDefaultCrashHandler();
 
   // Register and queue all tests
-  RegisterSmokeTests(engine);
   RegisterP0Tests(engine);
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);

@@ -200,7 +200,6 @@ void StopPerfSimulation();
 
 // ========== Register function declarations ==========
 
-void RegisterSmokeTests(ImGuiTestEngine* engine);
 void RegisterP0Tests(ImGuiTestEngine* engine);
 void RegisterP1Tests(ImGuiTestEngine* engine);
 void RegisterP2Tests(ImGuiTestEngine* engine);

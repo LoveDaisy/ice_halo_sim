@@ -6,7 +6,6 @@ set(IMGUI_TE_DIR ${imgui_test_engine_SOURCE_DIR}/imgui_test_engine)
 
 add_executable(gui_test
     test_gui_main.cpp
-    functional/test_gui_smoke.cpp
     functional/test_gui_interaction.cpp
     functional/test_gui_preview_animation.cpp
     functional/test_gui_export.cpp
