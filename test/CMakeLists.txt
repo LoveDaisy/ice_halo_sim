@@ -230,7 +230,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_panel_registry.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_sampling_density_stats.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_lifecycle.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry
