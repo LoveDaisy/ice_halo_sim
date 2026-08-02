@@ -145,6 +145,20 @@ def test_fused_launcher_still_honours_the_callers_marker(tree: Path) -> None:
     assert out == []
 
 
+@pytest.mark.parametrize("module", ["notpytest", "pytestx"])
+def test_fused_launcher_does_not_swallow_a_similar_module_name(tree: Path, module: str) -> None:
+    r"""The counter-example the widening rests on, pinned rather than reasoned.
+
+    Dropping the whitespace requirement is only safe because the branch still
+    demands the literal `pytest` bounded on the right: `-mnotpytest` fails it on
+    the left (the `-m` is not followed by `pytest`) and `-mpytestx` on the right
+    (`\b` needs a non-word char after `pytest`). Neither is a pytest run, so
+    neither may be flagged. Without this case the two tests above are both
+    pytest-POSITIVE, and an over-matching regex would keep them green.
+    """
+    assert _shell(tree, f"python -m{module} foo.py\n") == []
+
+
 def test_shell_marker_on_a_continuation_line_is_seen(tree: Path) -> None:
     """`-m` and the `.py` target routinely land on different physical lines.
     Judging either line alone is wrong in both directions; this pins the folding.

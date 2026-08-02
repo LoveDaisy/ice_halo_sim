@@ -95,10 +95,8 @@ Checks:
      this file (an unterminated Markdown fence writes to stderr and leaves the
      exit code alone): "the checker cannot parse this" and "the repo violates
      the rule" are different facts and get different exits. The next rule's
-     author should reuse that channel rather than invent a second one.
-     (Said by position rather than by number: this list has drifted out of sync
-     with CHECKS once already, and a number here would be the second thing to
-     rot when it happens again.)
+     author should reuse that channel rather than invent a second one — said by
+     position, because a rule number written here rots the moment one is added.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS, and add a numbered entry above. Keep each check deterministic and
