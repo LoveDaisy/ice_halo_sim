@@ -38,8 +38,6 @@
 #include "gui/user_defaults.hpp"
 #include "support/user_defaults_test_env.hpp"
 
-namespace gui = lumice::gui;
-
 namespace {
 
 using lumice::test_user_defaults::FreshOverlayDir;
@@ -249,7 +247,7 @@ TEST(DefaultsDiff, ac4_array_edit_produces_exactly_one_row) {
   EXPECT_EQ(pending, baseline_pending + 1);
 
   const gui::DefaultDiffRow* row = FindRow(rows, "renderer.background");
-  EXPECT_TRUE(row != nullptr);
+  ASSERT_TRUE(row != nullptr);
   EXPECT_TRUE(gui::RowNeedsAdoption(*row));
   EXPECT_TRUE(row->current_value.is_array());
   EXPECT_EQ(row->current_value.size(), static_cast<size_t>(3));
@@ -274,7 +272,7 @@ TEST(DefaultsDiff, ac5_effective_default_layers_the_saved_override) {
   {
     const auto rows = gui::BuildDefaultDiffRows(state);
     const gui::DefaultDiffRow* row = FindRow(rows, "renderer.lens_type");
-    EXPECT_TRUE(row != nullptr);
+    ASSERT_TRUE(row != nullptr);
     EXPECT_TRUE(gui::RowNeedsAdoption(*row));
     EXPECT_STREQ(row->default_value.get<std::string>().c_str(), "linear");
     EXPECT_TRUE(!row->has_saved_override);
@@ -289,7 +287,7 @@ TEST(DefaultsDiff, ac5_effective_default_layers_the_saved_override) {
 
     const auto rows = gui::BuildDefaultDiffRows(state);
     const gui::DefaultDiffRow* row = FindRow(rows, "renderer.lens_type");
-    EXPECT_TRUE(row != nullptr);
+    ASSERT_TRUE(row != nullptr);
     EXPECT_TRUE(!gui::RowNeedsAdoption(*row));
     EXPECT_STREQ(row->default_value.get<std::string>().c_str(), "fisheye_equal_area");
     EXPECT_TRUE(row->has_saved_override);
@@ -301,7 +299,7 @@ TEST(DefaultsDiff, ac5_effective_default_layers_the_saved_override) {
     const auto rows = gui::BuildDefaultDiffRows(state);
     for (const char* key : { "renderer.lens_type", "renderer.visible", "aspect_ratio" }) {
       const gui::DefaultDiffRow* row = FindRow(rows, key);
-      EXPECT_TRUE(row != nullptr);
+      ASSERT_TRUE(row != nullptr);
       EXPECT_TRUE(row->current_value.is_string());
       EXPECT_TRUE(!gui::FormatDiffValue(row->current_value).empty());
     }
@@ -323,12 +321,12 @@ TEST(DefaultsDiff, ac5_source_tracks_the_file_not_the_value) {
 
   const auto rows = gui::BuildDefaultDiffRows(factory);
   const gui::DefaultDiffRow* saved = FindRow(rows, "bg_alpha");
-  EXPECT_TRUE(saved != nullptr);
+  ASSERT_TRUE(saved != nullptr);
   EXPECT_TRUE(!gui::RowNeedsAdoption(*saved));
   EXPECT_TRUE(saved->has_saved_override);
 
   const gui::DefaultDiffRow* untouched = FindRow(rows, "bg_show");
-  EXPECT_TRUE(untouched != nullptr);
+  ASSERT_TRUE(untouched != nullptr);
   EXPECT_TRUE(!untouched->has_saved_override);
 }
 
@@ -344,7 +342,7 @@ TEST(DefaultsDiff, format_is_decoupled_from_comparison) {
   state.renderer.fov = state.renderer.fov * (1.0f + 1e-7f);
   const auto rows = gui::BuildDefaultDiffRows(state);
   const gui::DefaultDiffRow* row = FindRow(rows, "renderer.fov");
-  EXPECT_TRUE(row != nullptr);
+  ASSERT_TRUE(row != nullptr);
   if (row->current_value != row->default_value) {
     // The float really did change (guards against the multiplication being a no-op at this
     // magnitude, which would make the assertion below vacuous).
@@ -380,7 +378,7 @@ TEST(DefaultsDiff, factory_value_is_not_the_effective_default) {
     gui::GuiState state = gui::InitDefaultState();
     const auto rows = gui::BuildDefaultDiffRows(state);
     const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
-    EXPECT_TRUE(row != nullptr);
+    ASSERT_TRUE(row != nullptr);
     EXPECT_TRUE(row->factory_value == row->default_value);
     EXPECT_EQ(row->factory_value.get<float>(), kFactoryAlpha);
   }
@@ -396,7 +394,7 @@ TEST(DefaultsDiff, factory_value_is_not_the_effective_default) {
     state.bg_alpha = kSavedAlpha;
     const auto rows = gui::BuildDefaultDiffRows(state);
     const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
-    EXPECT_TRUE(row != nullptr);
+    ASSERT_TRUE(row != nullptr);
     EXPECT_EQ(row->default_value.get<float>(), kSavedAlpha);
     EXPECT_EQ(row->factory_value.get<float>(), kFactoryAlpha);
     EXPECT_TRUE(row->factory_value != row->default_value);
