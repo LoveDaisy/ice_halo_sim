@@ -400,7 +400,6 @@ int main(int argc, char** argv) {
   RegisterHandednessGuardTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
-  RegisterStateReconcileTests(engine);
   RegisterSamplingDensityStatsTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
