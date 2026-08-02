@@ -318,6 +318,45 @@ The throughput that *does* belong to `performance` is the legacy-CPU-denominated
 committed bench harness (270.6) and `test_metal_throughput`. **"Reflects performance" is not the
 test; "oracle = ratio to legacy CPU" is.**
 
+### §4.5 Enforcement: the `gui_test` / `gui_unit_test` split is a gate, not a convention
+
+§1.6 and §5 place a `src/gui/` test by whether it needs a live frame. That placement decides
+whether the test runs in CI at all — `gui_test` needs a display and is build-only on the
+runners, `gui_unit_test` links the same object library with no window, no GL context and no
+ImGui test engine, so it runs on every platform that builds the GUI. Left as a convention the
+split does not survive: the path of least resistance runs the wrong way, because adding to
+`gui_test` is the muscle memory and it always compiles. A convention that loses to the default
+path is not a boundary, it is a preference.
+
+So the boundary is enforced on what a change adds, by `scripts/check_new_gui_tests.py` — a
+third diff-scoped entry point beside `check_policies.py` (whole-tree) and `check_new_refs.py`
+(prose). It runs in the CI `new-refs` job on PRs against the merge-base, and in the pre-commit
+hook against the staged diff. It rejects a case the change brought into existence whose
+`TestFunc` lambda states that it does not drive the GUI — either by taking an anonymous
+`ImGuiTestContext*`, or by marking the parameter `IM_UNUSED` and never mentioning it again.
+Both are explicit statements, one the compiler's and one the author's; the rule rests on those
+rather than on inferring intent from a body, which is what keeps its false-positive rate at
+zero over this repo's history.
+
+The full criterion, what it deliberately does not catch, and the no-inline-exemption rule live
+in `AGENTS.md` under "Testing and Platform Notes" — one authority, cited here rather than
+restated, so the two cannot drift apart. Two properties are worth knowing at this level:
+
+- **"Newly registered" is an identity question, not a line-number one.** A case is new when its
+  `category/name` did not exist under `test/gui/` before. Reading the line diff instead fails in
+  both directions and was measured doing so: the rejected signatures are boilerplate, so a
+  change that deletes cases and adds one lets git pair the new signature line with a deleted
+  identical one and the gate misses it; while anchoring on the `IM_REGISTER_TEST` line — the one
+  line that cannot alias, because it carries the name — bills untouched cases that merely
+  shifted when a neighbour was deleted. Identity is immune to both.
+- **The gate is diff-scoped because the existing body cannot be zeroed out.** 26 cases under
+  `test/gui/` match a rejected shape today (8 anonymous, 18 marked `IM_UNUSED`), so a whole-tree
+  gate could not start green; a frozen baseline is the alternative, and it is an asset someone
+  must keep correct forever. Same trade, for the same reason, as its prose-scanning sibling.
+  Note the shape alone does not establish those 26 are misplaced — a case can need a frame
+  without touching `ctx`, which is exactly why the gate only speaks about cases being added and
+  why its message proposes rather than asserts the move.
+
 ---
 
 ## §5 Physical-layout naming conventions

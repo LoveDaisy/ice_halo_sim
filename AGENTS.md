@@ -145,6 +145,32 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   Rule of thumb for a new `src/gui/` test: needs a rendered frame or an `ImGuiTestContext` →
   `gui_test`; pure logic → `gui_unit_test` (or `unit_correctness_test` if it is header-only).
   Design reasoning and the target-naming rule: `doc/testing-architecture.md` §2 and §5.
+  That boundary is a **gate, not a rule of thumb**, for cases you add:
+  `scripts/check_new_gui_tests.py` is a third, diff-scoped entry point alongside
+  `check_policies.py` and `check_new_refs.py` (CI `new-refs` job on PRs vs merge-base;
+  pre-commit hook on the staged diff). It rejects a `TestFunc = [](ImGuiTestContext* …)`
+  lambda under `test/gui/**.cpp` belonging to a case the change **brought into existence**
+  — its `category/name` did not exist anywhere under `test/gui/` before, or its signature
+  line was rewritten in the file it already lived in — when either:
+  (1) the parameter is anonymous, `[](ImGuiTestContext*)`, including the equivalent
+  `[](ImGuiTestContext* /*ctx*/)` with the name commented out; or
+  (2) the parameter is named and the body calls `IM_UNUSED(<name>)` while containing no
+  other mention of `<name>` anywhere — a bare `<name>` passed to a helper counts as a use,
+  so `Helper(ctx, …)` is fine and the narrower `<name>->` reading is deliberately not used.
+  Both are an explicit statement — by the compiler, or by the author's own hand — that the
+  case does not drive the GUI, which is why the rule rests on them and not on inference.
+  **What it does not reject**, all accepted deliberately: `TestFunc = SomeNamedFunction`
+  (no signature to read); a named parameter never referenced and never marked `IM_UNUSED`
+  (the build is `-Wall -Wextra` without `-Werror`, so it only warns — catching it needs an
+  inference no one stands behind); pre-existing cases of any shape, including ones a change
+  relocates between `test/gui/` files or shifts within one; and renaming an existing
+  rejected-shape case, which does read as a new registration.
+  There is **no inline exemption, by design**, and the same "checker is the rule" discipline
+  applies as for `check_new_refs.py`: if it passes, the change is compliant — do not flag in
+  review what the checker accepts. If a new case genuinely needs a frame but happens not to
+  touch `ctx`, make it drive `ctx` (`ctx->Yield()` is the frame pump); that states the
+  dependency and satisfies the gate. If some case truly cannot be written that way, the rule
+  is wrong and the rule changes — in the script, never per case.
 - E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
   - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
   - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3
