@@ -286,6 +286,35 @@ conservation double gate is a deliberate scrum-267.3 reinforcement and must not 
 This battery is also what lets a future CUDA backend distinguish "kernel is wrong" from "both
 backends agree and are both wrong".
 
+#### §4.2.1 A differential test is structurally blind to drift its two sides share
+
+The battery above guards against a *metric* that masks a bug. There is a second blind spot, and
+it belongs to the **differential shape itself** rather than to the metric: a test that compares
+two paths and asserts they agree can only see disagreement. When both paths derive from the same
+authority, a change to that authority moves both sides together and the test stays green — no
+matter how carefully the comparison is written.
+
+The worked example is `JsonParserParity`
+(`test/unit-correctness/server/test_json_parser_parity.cpp`): it runs a config corpus through
+core's parser directly, and through the C API (parse → re-encode → parse again with core), then
+asserts the two agree. Both sides read core's key table. Rename a key **in that table and in its
+consumers together** and the two sides remain perfectly self-consistent, so the differential test
+never reddens — while the JSON now emitted is silently incompatible with every config file
+already on disk. This is measured, not hypothetical: it is what a mutation did while the
+red-state criterion for PR #230 was being established.
+
+What does catch it is a pin whose expected value is a **bare string literal** and which **never
+calls the authority under test** — `CrystalSchemaKeyNames.*` in
+`test/unit-correctness/config/test_json.cpp` for the `shape` and `axis` objects, and the
+sync-group sub-map pins in `test/unit-correctness/config/test_crystal_sync_group.cpp`. Expressing
+those expectations through `ShapeScalarSyncKeyName(...)` would make the authority table and its
+own test drift together and pass forever.
+
+**Rule.** When a change gives some domain a single source of truth for names or wire format
+(the same single-source treatment is a plausible future for render, filter, and light-source
+config), a differential parity test **cannot** serve as its red-state criterion. At least one
+test must assert the literal wire format against something outside the code under test.
+
 ### §4.3 Config and reference ownership
 
 - Each reference image is **owned by exactly one layer**: `e2e-correctness` owns

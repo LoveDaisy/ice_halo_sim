@@ -234,6 +234,28 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 相关性是*烟雾信号*，不是裁决。跨 seed 自洽 + 能量守恒双门是 scrum-267.3 的刻意补强，不可删除。
 这套全套也是未来 CUDA 后端区分"kernel 错"与"两后端一致但都错"的依据。
 
+#### §4.2.1 差分测试对「两侧共享的同步漂移」存在结构性盲区
+
+上面那套全套防的是**指标**掩盖缺陷；还有第二个盲区，它属于**差分这个形态本身**而非指标：
+一个「跑两条路径、断言两者一致」的测试，只能看见**不一致**。当两条路径同出一个权威时，
+改动该权威会让两侧**一起移动**，测试照绿——无论比较写得多仔细。
+
+样例是 `JsonParserParity`（`test/unit-correctness/server/test_json_parser_parity.cpp`）：
+它把一份 config 语料分别喂给 core 的解析器直读、以及 C API（解析 → 回编码 → 再用 core 解析），
+然后断言两侧一致。**两侧读的是 core 的同一张键名表**。若把某个键名**在权威表与其消费点一起改掉**，
+两侧仍完全自洽 ⇒ 差分测试**不会变红**，尽管此时产出的 JSON 已经与磁盘上所有既有配置文件不兼容。
+这是实测而非推演：PR #230 建立红态判据时，一次突变实际就是这个结果。
+
+真正能抓住它的，是**期望值写成裸字符串字面量、且完全不调用被测权威函数**的钉子测试——
+`test/unit-correctness/config/test_json.cpp` 里的 `CrystalSchemaKeyNames.*`（覆盖 `shape` 与
+`axis` 两个对象），以及 `test/unit-correctness/config/test_crystal_sync_group.cpp` 里的
+sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyName(...)`，权威表与它自己的
+测试就会一起漂移、永远通过。
+
+**规则**：当某个域被改造成「名称 / wire format 单一权威」时（render、filter、light source
+都可能做同款改造），差分 parity 测试**不能**充当它的红态判据。至少要有一个测试，
+拿被测代码**之外**的东西来断言字面的 wire format。
+
 ### §4.3 config 与 reference 的归属
 
 - 每张参考图**恰好属于一层**：`e2e-correctness` 拥有 `test/e2e/references/*.jpg`；`gui` 拥有
