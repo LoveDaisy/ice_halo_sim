@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785799327102,
+  "lastUpdate": 1785799329099,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "c814390955ab88969cd00bf92a90d7f81c3773d5",
-          "message": "Merge pull request #141 from LoveDaisy/task/env-hardening\n\nEnv-var policy + hardening: centralize knobs, --backend CLI flag, executable gate",
-          "timestamp": "2026-06-23T11:01:11+08:00",
-          "tree_id": "fe17f04aaff9d0402650e096618af68e19f8e90f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c814390955ab88969cd00bf92a90d7f81c3773d5"
-        },
-        "date": 1782184064688,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 67.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 83.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "3e0e8e00c10b327af88d8f94b780a29afbdbf592",
           "message": "Merge pull request #142 from LoveDaisy/feat/overlay-refactor\n\nfeat(scrum-288): overlay marker-lines projection completeness + screen-space consistency",
           "timestamp": "2026-06-24T00:10:15+08:00",
@@ -13974,6 +13930,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c3b0c1508ca8975d18284ddfb9089722b087de4b",
+          "message": "Merge pull request #245 from LoveDaisy/chore/crash-sentinel-diagnostics\n\nchore: 崩溃哨兵设施补两处诊断缺口（挂起检出 + 两臂 build 日志留痕）",
+          "timestamp": "2026-08-04T07:12:15+08:00",
+          "tree_id": "7f5982b56736b84800aec2024c45b53a4d40aff5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c3b0c1508ca8975d18284ddfb9089722b087de4b"
+        },
+        "date": 1785799328693,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.6,
             "unit": "%"
           }
         ]
