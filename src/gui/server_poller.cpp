@@ -38,14 +38,7 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // the shared payload pointer) keeps the preview on screen during the gap between restart and
   // first new snapshot, preventing visible flicker during slider scrubbing.
   PublishValidReset();
-  // Reset generation tracking so the worker detects the first snapshot as new data.
-  last_generation_ = 0;
-  // Reset quality gate timeout so fallback doesn't fire prematurely after restart.
-  last_quality_pass_time_ = std::chrono::steady_clock::now();
-  // Re-arm the terminal-frame rescue for the resumed run (I6 — see the header). Kept next to the
-  // two resets above because all three are per-resume state; Start() does not route through
-  // TransitionToRunning(), so it carries its own copy of the same three-line reset.
-  uploaded_since_resume_ = false;
+  ResetPerResumeState();
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -93,15 +86,7 @@ bool ServerPoller::TransitionToRunning(LUMICE_Server* server, bool publish_reset
     }
     // kPaused → resume polling
     server_ = server;
-    last_generation_ = 0;
-    last_quality_pass_time_ = std::chrono::steady_clock::now();
-    // Re-arm the terminal-frame rescue (I6 — see the header). Both wake variants reset it, and for
-    // the same reason: each buys the worker a poll it would otherwise never get. WakeForRestart
-    // opens a new sim generation; WakeForRefresh wakes an already-completed run for exactly ONE
-    // more poll to re-materialize it under new display state (colour edits / composite EV), after
-    // which PollOnce self-pauses again. If the gate swallows that single poll, a sparse completed
-    // run's display edits would silently never appear.
-    uploaded_since_resume_ = false;
+    ResetPerResumeState();
     if (publish_reset) {
       PublishValidReset();
     }
@@ -142,6 +127,26 @@ void ServerPoller::PublishValidReset() {
   next->valid = false;
   next->has_new_texture = false;
   StorePublished(std::move(next));
+}
+
+// Single owner of the per-resume reset (see the header contract). All three fields describe "what
+// has happened since the worker last resumed", so they are re-armed together at every
+// kPaused→kRunning edge:
+//   - last_generation_        : so the worker detects the first snapshot of the resume as new data.
+//   - last_quality_pass_time_ : so the quality gate's 500ms timeout fallback doesn't fire
+//                               prematurely against time that elapsed while paused.
+//   - uploaded_since_resume_  : re-arms the terminal-frame rescue (I6 — see the header). Both wake
+//                               variants reset it, and for the same reason: each buys the worker a
+//                               poll it would otherwise never get. WakeForRestart opens a new sim
+//                               generation; WakeForRefresh wakes an already-completed run for
+//                               exactly ONE more poll to re-materialize it under new display state
+//                               (colour edits / composite EV), after which PollOnce self-pauses
+//                               again. If the gate swallows that single poll, a sparse completed
+//                               run's display edits would silently never appear.
+void ServerPoller::ResetPerResumeState() {
+  last_generation_ = 0;
+  last_quality_pass_time_ = std::chrono::steady_clock::now();
+  uploaded_since_resume_ = false;
 }
 
 void ServerPoller::InvalidateStagedTexture() {
@@ -270,6 +275,7 @@ void ServerPoller::PollOnce() {
   LUMICE_RayCount new_sim_ray = 0;
   LUMICE_RayCount new_crystal = 0;
   LUMICE_RayCount new_orientation = 0;
+  unsigned long long new_stats_epoch = 0;
   std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
   if (has_new_snapshot || force_final_upload) {
@@ -277,15 +283,30 @@ void ServerPoller::PollOnce() {
     // force_final_upload-only path this re-assigns the value already stored — idempotent.
     last_generation_ = captured_xyz_generation;
 
-    // Get stats (used independently for status bar display)
+    // Get stats (used independently for status bar display).
+    //
+    // has_valid_data is load-bearing here, not belt-and-braces: the server's cached stats are NOT
+    // cleared by a restart (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and leaves
+    // cached_stats_result_ alone — only DoSnapshot overwrites it), so between a commit and the new
+    // run's first produced batch this call returns the PREVIOUS run's numbers with a perfectly
+    // healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_, which the restart
+    // did reset, and is the only field here that tells the two apart.
+    //
+    // Ordering makes this safe in the direction that matters: LUMICE_GetRawXyzAndCompositeResults
+    // above enters through DoSnapshot(), so any dirty batch has already been folded into
+    // cached_stats_result_ by the time we read it — has_valid_data true therefore implies the cache
+    // belongs to the current generation. The reverse window (a first ConsumeData landing between
+    // the two calls) merely defers fresh stats by one poll, which the carry-forward below absorbs.
     LUMICE_StatsResult cached_stats{};
     LUMICE_GetCachedStats(server, &cached_stats);
-    if (cached_stats.sim_ray_num > 0) {
+    if (cached_stats.sim_ray_num > 0 && xyz_results[0].has_valid_data) {
       have_new_stats = true;
       new_ray_seg = cached_stats.ray_seg_num;
       new_sim_ray = cached_stats.sim_ray_num;
       new_crystal = cached_stats.crystal_num;
       new_orientation = cached_stats.orientation_num;
+      // Same read window as payload_epoch takes for the texture (see the quality_ok block below).
+      new_stats_epoch = xyz_results[0].epoch;
     }
 
     // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
@@ -379,18 +400,24 @@ void ServerPoller::PollOnce() {
     // Lifecycle level signal (clock ④ / I4): carried on every poll.
     next->lifecycle = lc.lifecycle;
     // Stats: fresh value if this generation produced one; else carry forward prev's (coherent
-    // bundle — no torn zero). The consumer applies stats only when >0, so this is behavior-
-    // equivalent to the old swap-to-0-then-skip, and is a positive I5 side effect.
+    // bundle — no torn zero). The stats' own generation stamp travels WITH them in both branches:
+    // freshly read stats are stamped with the generation that produced them, and a carry-forward
+    // keeps the stamp it already had rather than being re-stamped with lc.epoch like the bundle
+    // epoch above. That asymmetry is the whole point — it is what lets the consumer tell "this
+    // poll produced no new stats, here are the current run's last known ones" apart from "this
+    // poll produced no new stats because the run just restarted, and these belong to the old one".
     if (have_new_stats) {
       next->stats_ray_seg_num = new_ray_seg;
       next->stats_sim_ray_num = new_sim_ray;
       next->stats_crystal_num = new_crystal;
       next->stats_orientation_num = new_orientation;
+      next->stats_epoch = new_stats_epoch;
     } else if (prev) {
       next->stats_ray_seg_num = prev->stats_ray_seg_num;
       next->stats_sim_ray_num = prev->stats_sim_ray_num;
       next->stats_crystal_num = prev->stats_crystal_num;
       next->stats_orientation_num = prev->stats_orientation_num;
+      next->stats_epoch = prev->stats_epoch;
     }
     // Texture: a freshly materialized payload gets a new monotonic serial; otherwise carry the
     // previous payload pointer + serial forward (sparse / gate-rejected / no-new-generation) so

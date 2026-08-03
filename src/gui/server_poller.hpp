@@ -53,9 +53,12 @@ struct TexturePayload {
 // field-bag + data_mutex_/staged_/std::swap channel.
 struct PreviewSnapshot {
   bool valid = false;  // false until the worker's first successful poll
-  // Bundle epoch: committed lifecycle epoch at poll time (LUMICE_GetSimLifecycle). One epoch
-  // covers the whole coherent snapshot (stats + lifecycle + texture); see §6 (StatsResult.epoch
-  // deliberately NOT added — the bundle epoch suffices).
+  // Bundle epoch: committed lifecycle epoch at poll time (LUMICE_GetSimLifecycle). Re-stamped on
+  // EVERY publish, so it answers "which generation was committed when this poll ran" — NOT "which
+  // generation produced the contents". Fields that can outlive their generation via carry-forward
+  // therefore carry their own stamp beside it (payload_epoch for the texture, stats_epoch below).
+  // This used to read "StatsResult.epoch deliberately NOT added — the bundle epoch suffices"; that
+  // was wrong, and stale stats reaching the status bar after a restart is what disproved it.
   unsigned long long epoch = 0;
   // GetSimLifecycle.lifecycle (blueprint clock ④, see §6). This is the sole completion signal the
   // main thread reconciles on (ReconcileSimState: COMPLETED@matching-epoch → kDone) and the sole
@@ -68,6 +71,14 @@ struct PreviewSnapshot {
   // Sampling-density counters, carried in the same coherent bundle as the two above.
   LUMICE_RayCount stats_crystal_num = 0;
   LUMICE_RayCount stats_orientation_num = 0;
+  // The lifecycle epoch the four stats fields above were actually produced under. Symmetric to
+  // TexturePayload::payload_epoch: it may LAG the bundle epoch when the stats are carried forward
+  // across a restart, and that lag is exactly the signal the consumer needs. The server's cached
+  // stats survive a restart (ServerImpl::Stop clears the dirty/consumed flags but not
+  // cached_stats_result_) while the bundle epoch advances immediately, so without this stamp a
+  // carried-forward value is indistinguishable from a freshly produced one and the previous run's
+  // ray/crystal/sampling counts reappear on the status bar. Consumed via ShouldApplyStats.
+  unsigned long long stats_epoch = 0;
   // Display payload: shared, immutable. Null / carried-forward on sparse / gate-rejected /
   // invalidated polls.
   std::shared_ptr<const TexturePayload> payload;
@@ -194,6 +205,17 @@ class ServerPoller {
   // Publish a valid=false copy of the current snapshot (preserving payload for anti-flicker).
   // Serializes under publish_mutex_. Called from Start()/WakeForRestart() on the main thread.
   void PublishValidReset();
+
+  // Single owner of the per-RESUME state reset. The three fields it clears
+  // (last_generation_ / last_quality_pass_time_ / uploaded_since_resume_) share one scope — they
+  // describe "what has happened since the worker last resumed" — so they must be re-armed together
+  // at every kPaused→kRunning edge or the survivors silently misreport the new resume as a
+  // continuation of the old one. Start() does not route through TransitionToRunning(), so both call
+  // this; before this method existed each carried its own verbatim copy of the same three lines and
+  // the invariant was held only by a comment. Callers must already hold whatever lock their own
+  // contract requires (TransitionToRunning calls it under mutex_; Start() before taking it) — this
+  // method takes no lock of its own.
+  void ResetPerResumeState();
 
   // Shared body of WakeForRestart/WakeForRefresh: idempotently drive kPaused → kRunning with
   // `server`, resetting the generation/quality-pass tracking under mutex_ and notifying the

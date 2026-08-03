@@ -265,6 +265,22 @@ GuiState::SimState ReconcileSimState(RunIntent intent, uint64_t committed_epoch,
 bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_uploaded_texture_serial,
                          uint64_t display_epoch_floor);
 
+// Stats-apply gate. Pure predicate mirroring ShouldUploadPayload's texture-side pattern on the
+// stats side: it keys on the stats' OWN generation stamp (snap.stats_epoch), not on the bundle
+// epoch, because the bundle epoch is re-stamped on every poll while carried-forward stats are not.
+// Without that distinction a restart republishes the previous run's ray/crystal/sampling counts
+// under the newly committed epoch and the status bar shows them. The rays > 0 lower bound is
+// retained unchanged — it is what keeps a zero from overwriting a value already on screen.
+//
+// The epoch parameter is spelled uint64_t while PreviewSnapshot::stats_epoch it is compared against
+// is unsigned long long. That split is the module's existing convention, not an oversight: snapshot
+// FIELDS follow epoch/payload_epoch (unsigned long long), while predicate epoch PARAMETERS follow
+// ShouldUploadPayload's display_epoch_floor (uint64_t), because the argument sites are GuiState
+// members and those are uint64_t. Same underlying type on every supported platform, so nothing
+// narrows. Written down here because the convention is implicit enough that reviewing it twice
+// produced the wrong answer once.
+bool ShouldApplyStats(const PreviewSnapshot& snap, uint64_t committed_epoch);
+
 // Effective per-frame composite/xyz upload decision (task-345.4). Folds server-side composite
 // availability (`payload_is_composite`) with the user's display-time preference
 // (`show_composite_preview`) into a single boolean the upload branch consumes. Pure predicate,

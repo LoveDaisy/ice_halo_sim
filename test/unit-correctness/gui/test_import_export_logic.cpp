@@ -2696,3 +2696,71 @@ TEST(ImportExport, dorevert_invalidates_effects_baselines_via_owner) {
   // the kRevert branch leaves the baseline populated and this assertion fails.
   ASSERT_TRUE(!gui::g_state.last_pushed_display_state.has_value());
 }
+
+// A document switch leaves no status-bar stats behind; a Revert keeps them.
+//
+// The status bar's ray / crystal / sampling-density readout describes the run of the document on
+// screen, and its display gate is `stats_sim_ray_num > 0` (app_panels.cpp). A leftover value from
+// the previous document satisfies that gate, and no poll follows a document switch to correct it —
+// the poller-side stats-epoch gate filters INCOMING updates and never clears what is already
+// displayed. So this property cannot be inferred from the poller fix; it needs its own guard.
+//
+// It currently holds structurally rather than by an explicit reset: every document-switch path
+// replaces the whole GuiState before ResetFrontendState runs (DoNew via MakeNewDocumentState;
+// DoOpen(.json) via a local new_state; DoOpen(.lmc) via DeserializeGuiStateJson, which opens with
+// `state = GuiState{}`), and GuiState default-initializes all four counters to 0. That is exactly
+// why this test drives the real DoNew / DoOpen entry points instead of calling ResetFrontendState
+// directly: what is being pinned is the end-to-end property, not any one implementation of it. An
+// added reset inside ResetFrontendState would be unreachable dead code today — and a future change
+// that stops replacing the whole state on open is precisely what this case is here to catch.
+TEST(ImportExport, document_switch_leaves_no_stale_status_bar_stats) {
+  // Non-zero on all four, so a partial reset cannot pass by clearing only the gate field.
+  auto seed_stats = []() {
+    gui::g_state.stats_ray_seg_num = 4321;
+    gui::g_state.stats_sim_ray_num = 200000;
+    gui::g_state.stats_crystal_num = 77;
+    gui::g_state.stats_orientation_num = 88;
+  };
+  auto expect_cleared = [](const char* which) {
+    SCOPED_TRACE(which);
+    EXPECT_EQ(gui::g_state.stats_ray_seg_num, 0u);
+    EXPECT_EQ(gui::g_state.stats_sim_ray_num, 0u);
+    EXPECT_EQ(gui::g_state.stats_crystal_num, 0u);
+    EXPECT_EQ(gui::g_state.stats_orientation_num, 0u);
+  };
+
+  // (A) New document.
+  seed_stats();
+  gui::DoNew();
+  expect_cleared("DoNew");
+
+  // (B) Open a .lmc. This is the path worth spending a file on: unlike DoNew and the .json import,
+  // DoOpen(.lmc) hands the LIVE g_state to LoadLmcFile rather than building a separate one, so it
+  // is the path where a leftover field would actually survive if the deserializer stopped clearing.
+  const std::filesystem::path lmc_path = std::filesystem::temp_directory_path() / "lumice_stats_switch_test.lmc";
+  // RAII rather than a trailing remove(): the ASSERT_TRUE below returns from the TEST on failure,
+  // which would skip a trailing cleanup and leave the file behind for every later run on this host.
+  struct TempFileGuard {
+    std::filesystem::path path;
+    ~TempFileGuard() {
+      std::error_code ec;
+      std::filesystem::remove(path, ec);  // best-effort: a teardown failure must not fail the test
+    }
+  } lmc_guard{ lmc_path };
+  ASSERT_TRUE(gui::SaveLmcFile(lmc_path, gui::g_state, gui::g_preview, /*save_texture=*/false));
+  seed_stats();
+  gui::DoOpen(lmc_path);
+  expect_cleared("DoOpen(.lmc)");
+
+  // (C) Revert — the carve-out, pinned deliberately rather than for symmetry: Revert restores
+  // config into the SAME document and does not end the run whose numbers are on screen, so those
+  // numbers still describe what is displayed. Without this assertion a later "let's clear stats on
+  // every reset reason" change would silently blank a still-accurate status bar.
+  gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+  seed_stats();
+  gui::DoRevert();
+  EXPECT_EQ(gui::g_state.stats_ray_seg_num, 4321u);
+  EXPECT_EQ(gui::g_state.stats_sim_ray_num, 200000u);
+  EXPECT_EQ(gui::g_state.stats_crystal_num, 77u);
+  EXPECT_EQ(gui::g_state.stats_orientation_num, 88u);
+}
