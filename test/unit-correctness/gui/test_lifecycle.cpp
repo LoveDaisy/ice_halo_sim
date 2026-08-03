@@ -698,3 +698,151 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
   gui::g_server_poller.Stop();
   LUMICE_DestroyServer(server);
 }
+
+// ---- Tests 8a/8b: the two per-resume fields that test 6c structurally CANNOT reach ----
+// ResetPerResumeState() re-arms three fields at every kPaused->kRunning edge. Test 6c
+// (completed_below_threshold_force_uploads) pins `uploaded_since_resume_` — deleting that line
+// makes it fail. The other two are invisible to it, and NOT by accident:
+//
+// 6c resumes against a COMPLETED run, and on a COMPLETED run `force_final_upload`
+// (== COMPLETED && !uploaded_since_resume_ && buffer) is true on the first post-resume poll.
+// That single flag both (a) enters the materialize branch on its own, making `last_generation_ = 0`
+// redundant for has_new_snapshot, and (b) bypasses the quality gate outright, making
+// `last_quality_pass_time_`'s 500ms timeout unreachable. So under COMPLETED, `uploaded_since_resume_`
+// MASKS its two siblings: delete either one alone and every existing case stays green (measured, not
+// assumed — each line was deleted individually against the full suite).
+//
+// The masking lifts in exactly one state: lifecycle == IDLE with a materialized snapshot still
+// cached. LUMICE_StopServer resets has_ever_consumed_, so GetSimLifecycle reports IDLE rather than
+// COMPLETED (server.cpp GetSimLifecycle), while snapshot_generation_ deliberately survives — "NOT
+// reset on Stop (poller resets its own tracker)" (server.cpp declaration comment). That comment names
+// this exact contract: the SERVER keeps its counter, so the POLLER must clear its own on resume.
+// These two cases are that contract's red-state guard.
+//
+// Both drive the production WakeForRefresh seam (not the ResetGenerationForTest test seam), so they
+// fail if the reset is dropped from the production path only.
+
+// 8a — `last_generation_ = 0`: after a resume, a snapshot the poller has ALREADY consumed must be
+// treated as new again, so a display-time refresh re-materializes the frame it is refreshing.
+// Without the reset, has_new_snapshot stays false (the server's generation counter did not move)
+// and — with force_final_upload structurally false under IDLE — the refresh produces nothing.
+TEST(GuiLifecycle, resume_rearms_generation_tracker) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);  // consumes generation G: last_generation_ = G, uploaded = true
+  auto s0 = local.LoadSnapshot();
+  ASSERT_TRUE(s0 != nullptr);
+  ASSERT_TRUE(s0->payload != nullptr);
+  const unsigned long long serial0 = s0->texture_serial;
+  EXPECT_TRUE(serial0 != 0);
+
+  // Freeze into IDLE-with-data: this is what removes force_final_upload from the picture and
+  // leaves last_generation_ as the ONLY thing that can re-open the materialize branch.
+  LUMICE_StopServer(server);
+  {
+    LUMICE_SimLifecycleResult lc{};
+    EXPECT_EQ(LUMICE_GetSimLifecycle(server, &lc), LUMICE_OK);
+    ASSERT_EQ(lc.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_IDLE));  // NOT COMPLETED — see header
+  }
+
+  // Control: without a resume, a poll in this state materializes nothing (same generation, and no
+  // rescue). This is the "before" half of the red-state pair — it proves the assertion below is
+  // driven by the resume and not by the server handing out a fresh generation on its own.
+  local.PollOnceForTest(server);
+  {
+    auto s1 = local.LoadSnapshot();
+    ASSERT_TRUE(s1 != nullptr);
+    EXPECT_EQ(s1->texture_serial, serial0);
+  }
+
+  // Resume through the production seam: ResetPerResumeState() clears last_generation_, so the
+  // already-consumed generation G reads as new and the frame re-materializes.
+  local.WakeForRefresh(server);
+  local.Stop();  // fence the worker thread (same discipline as test 6c phases B/C)
+  local.PollOnceForTest(server);
+  {
+    auto s2 = local.LoadSnapshot();
+    ASSERT_TRUE(s2 != nullptr);
+    EXPECT_TRUE(s2->texture_serial != serial0);  // RED if `last_generation_ = 0` is dropped
+  }
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// 8b — `last_quality_pass_time_`: the gate's 500ms timeout fallback must be measured from the
+// RESUME, not from whenever the gate last passed in a previous run. Without the reset, time the
+// poller spent paused (a user reading the last result before hitting Run again — seconds, routinely)
+// is charged against the new run's budget, so its first sparse poll is force-uploaded and the
+// anti-flicker gate is silently disarmed exactly when it is supposed to engage.
+TEST(GuiLifecycle, resume_rearms_quality_gate_clock) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+  auto s0 = local.LoadSnapshot();
+  ASSERT_TRUE(s0 != nullptr);
+  ASSERT_TRUE(s0->payload != nullptr);
+  const unsigned long long serial0 = s0->texture_serial;
+
+  // Same IDLE-with-data freeze as 8a, for the same reason: force_final_upload must be off the table
+  // or it bypasses the gate before the timeout is ever consulted.
+  LUMICE_StopServer(server);
+  {
+    LUMICE_SimLifecycleResult lc{};
+    EXPECT_EQ(LUMICE_GetSimLifecycle(server, &lc), LUMICE_OK);
+    ASSERT_EQ(lc.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_IDLE));
+  }
+
+  // Arm the gate strictly above the ray count this run achieved, so the post-resume poll is one the
+  // gate MUST reject. Derived from the measurement rather than hard-coded (same rationale as 6c).
+  LUMICE_RayCount rays = 0;
+  {
+    LUMICE_StatsResult stats{};
+    LUMICE_GetCachedStats(server, &stats);
+    rays = stats.sim_ray_num;
+    local.SetCalibratedThreshold(stats.sim_ray_num + 1);
+  }
+  EXPECT_TRUE(rays > 0);  // a zero-ray run takes the cold-start bypass and tests nothing
+
+  // Spend more than the whole timeout budget while PAUSED. A correct reset makes this irrelevant;
+  // a missing one makes it decisive.
+  std::this_thread::sleep_for(std::chrono::milliseconds(gui::kQualityGateTimeoutMs + 100));
+
+  local.WakeForRefresh(server);
+  local.Stop();
+  local.PollOnceForTest(server);
+
+  // The gate rejects: the resume restarted the timeout clock, so ~0ms of the 500ms budget is spent.
+  // Drop `last_quality_pass_time_ = now()` and the paused time above is charged instead, the timeout
+  // fires, and this sparse frame is force-uploaded under a fresh serial.
+  auto s1 = local.LoadSnapshot();
+  ASSERT_TRUE(s1 != nullptr);
+  EXPECT_EQ(s1->texture_serial, serial0);  // RED if `last_quality_pass_time_ = now()` is dropped
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
