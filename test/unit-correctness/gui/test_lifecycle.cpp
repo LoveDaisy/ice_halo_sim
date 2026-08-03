@@ -32,6 +32,8 @@
 //  8b. resume_rearms_quality_gate_clock  } (see the block comment above them for why)
 //  9a. stats_apply_gate_rejects_stale_generation — PURE test of the stats-apply gate
 //  9b. restart_does_not_republish_prior_run_stats — producer end-to-end over the Run->Run edge
+//  10a. restart_does_not_republish_prior_run_pixels  } 9b's texture-channel siblings: the same
+//  10b. restart_window_does_not_republish_prior_run_composite } window, asserted on image content
 //
 // Their five frame-driven siblings stay in test/gui/functional/test_gui_lifecycle.cpp.
 
@@ -117,6 +119,41 @@ unsigned long long CurrentEpoch(LUMICE_Server* server) {
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
   return lc.epoch;
+}
+
+// Block until the server has drained to IDLE with produced data, for a config already committed by
+// the caller. RunFiniteToCompletion above is this plus a kFiniteConfig commit; cases that need a
+// different config (e.g. one carrying raypath_color) commit their own and then wait here.
+bool WaitForValidData(LUMICE_Server* server) {
+  constexpr int kMaxWaitMs = 5000;
+  for (int waited = 0; waited < kMaxWaitMs; waited += 10) {
+    LUMICE_ServerState st = LUMICE_SERVER_RUNNING;
+    LUMICE_QueryServerState(server, &st);
+    if (st == LUMICE_SERVER_IDLE) {
+      LUMICE_RawXyzResult xyz[2]{};
+      LUMICE_GetRawXyzResults(server, xyz, 1);
+      if (xyz[0].has_valid_data) {
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+// Content fingerprint of a payload's pixels. The point of the cases below is that a payload can
+// carry the PREVIOUS run's image, so they must compare the image itself — asserting only on
+// payload_epoch would pass for the wrong reason whenever the timing happened not to line up
+// (see the "assert pixel content, not just the stamp" requirement in the task's risk analysis).
+// A plain FNV-1a over the raw float bytes: no tolerance, no interpretation, just "same bytes?".
+uint64_t PixelFingerprint(const std::vector<float>& xyz) {
+  uint64_t h = 1469598103934665603ULL;
+  const auto* bytes = reinterpret_cast<const unsigned char*>(xyz.data());
+  const size_t n = xyz.size() * sizeof(float);
+  for (size_t i = 0; i < n; ++i) {
+    h = (h ^ bytes[i]) * 1099511628211ULL;
+  }
+  return h;
 }
 
 }  // namespace
@@ -975,6 +1012,234 @@ TEST(GuiLifecycle, resume_rearms_quality_gate_clock) {
   auto s1 = local.LoadSnapshot();
   ASSERT_TRUE(s1 != nullptr);
   EXPECT_EQ(s1->texture_serial, serial0);  // RED if `last_quality_pass_time_ = now()` is dropped
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// 10a — the texture-channel sibling of 9b, over the same Run -> restart edge and the same
+// deterministically-pinned window. 9b showed the server's cached STATS survive a restart; the
+// pixels survive it too, and for a different reason:
+//   - RenderConsumer::Reset() deliberately does NOT zero snapshot_xyz_ ("PrepareSnapshot will
+//     memcpy over it"), and PrepareSnapshot only runs when DoSnapshot sees snapshot_dirty_, which
+//     Stop() cleared. So in the window the buffer still holds the PREVIOUS run's image, byte for
+//     byte, and xyz_buffer is non-null because Stop() explicitly does not clear consumers_.
+//   - RawXyzResult::epoch is stamped from the LIVE committed_epoch_ on every read, which the commit
+//     already bumped. So the pair handed to the poller is "new generation number, old image".
+// Neither value is torn — each is complete and self-consistent; it is the PAIRING that is wrong,
+// which is why the "no new-epoch-with-stale-data tear can occur" reasoning at the stamp site does
+// not cover this.
+//
+// The downstream epoch floor cannot separate the two: MarkStructHardDirty raises the floor to the
+// OLD committed epoch precisely so the old generation's frames are fenced out until the new one
+// produces something — but a payload mis-stamped with the NEW epoch clears that floor exactly like
+// a genuinely fresh frame would. The floor filters by generation NUMBER; it has no way to ask
+// whether the content was really produced under it. So the gate has to be upstream, at the point
+// where a payload is allowed to be constructed at all.
+//
+// Asserts the CONTENT fingerprint, not only the stamp: a case that checked payload_epoch alone
+// would pass for the wrong reason on any run where the timing happened not to line up.
+TEST(GuiLifecycle, restart_does_not_republish_prior_run_pixels) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+
+  const unsigned long long epoch_a = CurrentEpoch(server);
+  uint64_t pixels_a = 0;
+  unsigned long long serial_a = 0;
+  {
+    auto sa = local.LoadSnapshot();
+    ASSERT_TRUE(sa != nullptr);
+    ASSERT_TRUE(sa->payload != nullptr);
+    EXPECT_EQ(sa->payload->payload_epoch, epoch_a);
+    EXPECT_TRUE(sa->payload->texture_ray_count > 0);
+    pixels_a = PixelFingerprint(sa->payload->xyz_data);
+    serial_a = sa->texture_serial;
+  }
+
+  // The Run -> Run edge mints a new generation while the consumer's snapshot buffer is untouched.
+  ASSERT_EQ(CommitJsonConfig(server, kFiniteConfig), LUMICE_OK);
+  const unsigned long long epoch_b = CurrentEpoch(server);
+  ASSERT_TRUE(epoch_b > epoch_a);
+
+  // Pin the window open deterministically rather than racing run B's first batch — same two facts
+  // 9b relies on, applied to the pixel channel: Stop() unconditionally clears has_ever_consumed_
+  // (so has_valid_data reads 0 whether or not run B got anything in first) and clears
+  // snapshot_dirty_ (so no DoSnapshot from here on can refresh snapshot_xyz_). No sleep, no
+  // "at least one hit in N tries": the window is held by construction.
+  LUMICE_StopServer(server);
+
+  local.ResetGenerationForTest();  // what a resume does to the generation tracker, minus the worker
+  local.PollOnceForTest(server);
+
+  auto sb = local.LoadSnapshot();
+  ASSERT_TRUE(sb != nullptr);
+  ASSERT_TRUE(sb->payload != nullptr);
+
+  // The image in the window IS run A's, in both worlds — this is the premise of the case, not the
+  // defect. What must not happen is that image being re-published as run B's work.
+  EXPECT_EQ(PixelFingerprint(sb->payload->xyz_data), pixels_a);
+
+  // The defect's exact shape, all four RED before the fix: the poller materializes a "fresh"
+  // payload out of run A's pixels, stamps it epoch_b, and mints a new serial for it.
+  EXPECT_EQ(sb->payload->payload_epoch, epoch_a);  // carried forward, keeping its own generation
+  EXPECT_EQ(sb->texture_serial, serial_a);         // carry-forward keeps the serial (anti-flicker)
+  EXPECT_TRUE(!sb->has_new_texture);
+  // ... and therefore the display gate keeps it off screen. Before the fix this returned true:
+  // epoch_b clears a floor raised to epoch_a, and the serial is unseen, so the fence
+  // MarkStructHardDirty put up around the old generation is defeated by the mis-stamp.
+  EXPECT_TRUE(!gui::ShouldUploadPayload(*sb, serial_a, /*display_epoch_floor=*/epoch_a));
+
+  // The suppression must be scoped to the window, not permanent: once a generation actually
+  // produces data, its frame reaches the screen normally.
+  ASSERT_EQ(CommitJsonConfig(server, kFiniteConfig), LUMICE_OK);
+  const unsigned long long epoch_c = CurrentEpoch(server);
+  ASSERT_TRUE(WaitForValidData(server));
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+  {
+    auto sc = local.LoadSnapshot();
+    ASSERT_TRUE(sc != nullptr);
+    ASSERT_TRUE(sc->payload != nullptr);
+    EXPECT_EQ(sc->payload->payload_epoch, epoch_c);
+    EXPECT_TRUE(sc->texture_serial != serial_a);
+    EXPECT_TRUE(sc->has_new_texture);
+    EXPECT_TRUE(gui::ShouldUploadPayload(*sc, serial_a, /*display_epoch_floor=*/epoch_a));
+  }
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// 10b — the composite (raypath-color) half of 10a. Not a courtesy duplicate: PopulateCompositePayload
+// runs INSIDE the very same `if (quality_ok)` block that builds the XYZ payload, so whatever gates
+// one gates the other. This pins both directions of that coupling — the window must not publish a
+// composite built from the previous run's lanes, and the window ending must not leave the composite
+// path suppressed. It also checks the composite fire-gate's mode_changed OR-branch, which reads
+// snap.payload and could otherwise fire an upload on a carried-forward frame.
+TEST(GuiLifecycle, restart_window_does_not_republish_prior_run_composite) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  // Match-all red class over a finite single-prism scene, so the RenderConsumer's ColoredMask() is
+  // non-zero and DoSnapshot Phase-2 produces a composite for the generation (the img_buffer
+  // sentinel the poller keys on). Copied from test_composite_preview.cpp's kColorConfig rather than
+  // adapted from kFiniteConfig above: a class matching `layer: 0` needs rays that TERMINATE at
+  // layer 0, so kFiniteConfig's scattering prob of 1.0 yields an empty mask and a non-composite
+  // payload — which makes the case silently stop testing the composite path at all.
+  const char* kColorConfig = R"({
+    "crystal": [{
+      "id": 1, "type": "prism",
+      "shape": {"height": 1.5},
+      "axis": {"zenith": {"type": "gauss", "mean": 90.0, "std": 10.0},
+               "azimuth": {"type": "uniform", "mean": 0.0, "std": 180.0},
+               "roll": {"type": "uniform", "mean": 0.0, "std": 180.0}}
+    }],
+    "filter": [],
+    "scene": {
+      "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
+                       "diameter": 0.5, "spectrum": "D65"},
+      "ray_num": 200000,
+      "max_hits": 8,
+      "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+    },
+    "render": [{
+      "id": 1,
+      "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
+      "resolution": [128, 64],
+      "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+      "visible": "full", "background": [0, 0, 0],
+      "opacity": 1.0, "intensity_factor": 1.0
+    }],
+    "raypath_color": {
+      "mode": "dominant",
+      "classes": [
+        {"color": [1.0, 0.0, 0.0], "match": [{"layer": 0, "crystal": 1}]}
+      ]
+    }
+  })";
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  ASSERT_EQ(CommitJsonConfig(server, kColorConfig), LUMICE_OK);
+  const bool completed = WaitForValidData(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+
+  const unsigned long long epoch_a = CurrentEpoch(server);
+  unsigned long long serial_a = 0;
+  {
+    auto sa = local.LoadSnapshot();
+    ASSERT_TRUE(sa != nullptr);
+    ASSERT_TRUE(sa->payload != nullptr);
+    // If this fails the case is not exercising the composite path at all and the rest proves nothing.
+    ASSERT_TRUE(sa->payload->is_composite);
+    ASSERT_TRUE(!sa->payload->rgb_data.empty());
+    EXPECT_EQ(sa->payload->payload_epoch, epoch_a);
+    serial_a = sa->texture_serial;
+  }
+
+  ASSERT_EQ(CommitJsonConfig(server, kColorConfig), LUMICE_OK);
+  const unsigned long long epoch_b = CurrentEpoch(server);
+  ASSERT_TRUE(epoch_b > epoch_a);
+  LUMICE_StopServer(server);
+
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+  {
+    auto sb = local.LoadSnapshot();
+    ASSERT_TRUE(sb != nullptr);
+    ASSERT_TRUE(sb->payload != nullptr);
+    // Carried forward, so it stays composite and keeps run A's stamp — the window publishes no new
+    // composite rather than one rebuilt from the previous generation's lanes.
+    EXPECT_TRUE(sb->payload->is_composite);
+    EXPECT_EQ(sb->payload->payload_epoch, epoch_a);
+    EXPECT_EQ(sb->texture_serial, serial_a);
+    // The fire gate stays quiet: the serial-dedup branch is false (same serial, floor not cleared by
+    // the carried-forward stamp) and mode_changed is false because the carried-forward payload is
+    // composite exactly as the last upload was. A payload absent from this branch is what would
+    // make mode_changed misfire, so it is asserted here rather than assumed.
+    EXPECT_TRUE(!gui::ShouldFireCompositeUpload(*sb, serial_a, /*display_epoch_floor=*/epoch_a,
+                                                /*show_composite_preview=*/true,
+                                                /*last_uploaded_as_composite=*/true));
+  }
+
+  // Window ends: the composite path recovers, it is not suppressed past the window.
+  ASSERT_EQ(CommitJsonConfig(server, kColorConfig), LUMICE_OK);
+  const unsigned long long epoch_c = CurrentEpoch(server);
+  ASSERT_TRUE(WaitForValidData(server));
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+  {
+    auto sc = local.LoadSnapshot();
+    ASSERT_TRUE(sc != nullptr);
+    ASSERT_TRUE(sc->payload != nullptr);
+    EXPECT_TRUE(sc->payload->is_composite);
+    EXPECT_TRUE(!sc->payload->rgb_data.empty());
+    EXPECT_EQ(sc->payload->payload_epoch, epoch_c);
+    EXPECT_TRUE(gui::ShouldFireCompositeUpload(*sc, serial_a, /*display_epoch_floor=*/epoch_a,
+                                               /*show_composite_preview=*/true,
+                                               /*last_uploaded_as_composite=*/true));
+  }
 
   local.Stop();
   LUMICE_DestroyServer(server);
