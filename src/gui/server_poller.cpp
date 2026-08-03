@@ -335,6 +335,66 @@ void ServerPoller::PollOnce() {
                       cached_stats.sim_ray_num, min_rays, xyz_results[0].snapshot_generation);
     }
 
+    // Content-freshness gate: does the image about to be stamped with xyz_results[0].epoch actually
+    // belong to that generation? Between a commit and the new run's first produced batch it does not
+    // — the pixel buffer still holds the PREVIOUS run's image while RawXyzResult::epoch already reads
+    // the bumped committed_epoch_, and the upload gate downstream can only compare epoch NUMBERS, so
+    // a payload wearing the new number is indistinguishable there from a genuinely fresh frame. That
+    // is why the decision has to be made here.
+    //
+    // The full mechanism (why the buffer survives a restart, why the floor cannot see it, and what
+    // this gate restores) is written up once in doc/gui-preview-lifecycle-architecture.md §9, in the
+    // "I1 的前提「世代号是诚实的」曾不成立" patch note — that section is the authority; keep the
+    // reasoning there rather than growing a second copy here.
+    //
+    // What is NOT in the doc, because it is about this code's shape rather than the invariant:
+    //
+    // has_valid_data alone is too coarse to be the answer, even though it is exactly right for the
+    // stats read above. It mirrors has_ever_consumed_, which Stop() clears, so it goes false for two
+    // very different reasons: "a new generation was committed and has produced nothing yet" (stale —
+    // suppress) and "the user pressed Stop, and the frame on hand is still this generation's"
+    // (current — a display-time edit must still be able to repaint it). Gating on it alone silently
+    // breaks the second, which is a live path, not a corner: DoStop → recolor → WakeForRefresh.
+    //
+    // So compare generations instead. While has_valid_data is false the buffer is frozen — only
+    // ConsumeData can dirty a snapshot and it sets has_ever_consumed_ in the same critical section —
+    // so the generation the pixels were produced under is the one the last materialized payload
+    // recorded, and prev->payload->payload_epoch is that record. Equal to the live epoch means no
+    // commit has happened since the pixels were made.
+    //
+    // Deliberately applied AFTER both bypasses above rather than folded into quality_ok's initial
+    // value: the timeout fallback rescues a run producing too sparsely, the terminal-frame rescue a
+    // run that ended below threshold — neither is a licence to publish another generation's pixels,
+    // so neither may override this. I6 is unaffected in substance anyway: force_final_upload requires
+    // lifecycle == COMPLETED, which the server derives from has_ever_consumed_, so a terminal frame
+    // always has valid data and takes the first disjunct.
+    //
+    // The carry-forward below is what makes suppression the right answer rather than a black screen:
+    // with no new payload the previous frame stays on screen under its OWN epoch (§5.4 anti-flicker),
+    // which is the honest rendering of "this generation has produced nothing yet".
+    //
+    // Known narrow gap, accepted: if a generation produces data and is stopped without the poller
+    // ever polling in between, no payload recorded its epoch, so its frame is suppressed and the
+    // previous one stays up. Closing it needs the SERVER to stamp the generation it filled
+    // snapshot_xyz_ under (a new C-API field) — no poller-side state can, since the poller by
+    // definition never observed that generation. Left alone deliberately: that stamp is a wider
+    // change than this defect warrants.
+    if (quality_ok && !xyz_results[0].has_valid_data) {
+      auto prev_published = LoadPublished();
+      const bool content_belongs_to_this_epoch =
+          prev_published && prev_published->payload && prev_published->payload->payload_epoch == xyz_results[0].epoch;
+      if (!content_belongs_to_this_epoch) {
+        quality_ok = false;
+        // epoch and snapshot_generation are two INDEPENDENT server counters — epoch is what this gate
+        // compares, snapshot_generation is what has_new_snapshot above compares. Spelled out in full
+        // so a log line never reads as though they were the same number.
+        GUI_LOG_VERBOSE(
+            "[Poller] stale content: nothing produced under epoch {} yet, carrying previous frame "
+            "(snapshot_generation={})",
+            xyz_results[0].epoch, xyz_results[0].snapshot_generation);
+      }
+    }
+
     if (quality_ok) {
       last_quality_pass_time_ = now;
       auto payload = std::make_shared<TexturePayload>();

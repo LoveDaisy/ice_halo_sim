@@ -181,6 +181,45 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 回归测试：`gui_test` 的 `gui_lifecycle` 组，三阶段分别覆盖首次完成跑、经 `WakeForRestart` 的第二次
 > 完成跑、以及经 `WakeForRefresh` 的 display-time 刷新。
 
+> **落地补丁（2026-08-03，PR 见 git log）：I1 的前提「世代号是诚实的」曾不成立。**
+> 同样不是新增不变量，而是补上实现对 I1 的一次合规回归——I1 文本不变。
+>
+> I1 靠**世代号**丢弃陈旧观测，`ShouldUploadPayload`（`src/gui/app.cpp`）的
+> `payload_epoch > display_epoch_floor` 是它在纹理通道的落地。但这道闸只能问「号是多少」，
+> 问不了「这份内容是不是真产自该号」——**前提是生产端不会给旧内容盖新号**。生产端曾会：
+> ①`RenderConsumer::Reset()` 显式不清 `snapshot_xyz_`（"PrepareSnapshot will memcpy over it"），
+> 而 `PrepareSnapshot()` 只在 `snapshot_dirty_` 为真时跑，`ServerImpl::Stop()` 刚把它清掉
+> ⇒ 重启后、新一代首批落地前，缓冲区**原封不动**是上一代的完整图像；
+> ②`RawXyzResult::epoch` 每次读取都无条件重取活的 `committed_epoch_`，`CommitConfig` 已 bump；
+> ③`ServerPoller::PollOnce()` 用这对值构造 payload ⇒ 旧图 + 新号。
+> 此时 `MarkStructHardDirty` 抬到**旧** `committed_epoch` 的 floor 恰好拦不住（新号 > 旧 floor），
+> 于是"新一代还没出图就先把上一代的图当本代成果推上屏"，把 floor 这道围栏原地架空。
+>
+> 注意与 `ServerImpl::GetRawXyzAndCompositeResults` 处那句「锁下序列化，不会出现 new epoch with
+> stale data 的 tear」**不是同一件事**：那句说的是同一次读取内不会读到半更新的配对。此处两个值
+> **各自完整自洽**，错的是配对本身——**无 tear ≠ 无陈旧**。
+>
+> 修复落点：`PollOnce()` 在质量闸的两条 bypass（超时兜底、终帧救援）**之后**追加一道内容世代闸，
+> 只在「内容确属当前世代」时才允许物化 payload。判据不是裸 `has_valid_data`：它镜像
+> `has_ever_consumed_`，被 `Stop()` 清除，因而为两种语义相反的原因转 false——「新一代尚未产出」
+> （须抑制）与「用户按了 Stop，手上这帧仍属本代」（display-time 编辑须能重绘，是活路径）。
+> 故改为比世代：`has_valid_data` 为 false 期间像素缓冲被冻结（只有 `ConsumeData` 能置
+> `snapshot_dirty_`，且它在同一临界区内一并置 `has_ever_consumed_`），其真实世代即上一份已物化
+> payload 的 `payload_epoch`；与活 epoch 相等 ⟺ 自像素产出以来没发生过 commit。
+> 置于两条 bypass 之后是刻意的：兜底救「产出中但太稀疏」、终帧救「结束在门槛之下」，
+> 都不构成发布别代像素的许可。I6 实质不受影响——COMPLETED 由 `has_ever_consumed_` 派生，
+> 终帧必然满足第一个析取项。染色通道自动同覆盖：`PopulateCompositePayload` 就在同一个
+> `if (quality_ok)` 块内，且 `cached_composite_results_` 同样不随 `Stop()` 清除。
+>
+> **主动接受的窄缺口**：某一代若产出了数据、又在 poller 从未 poll 过的间隙里被 Stop，则没有任何
+> payload 记录过该代 epoch，其画面会被抑制、屏幕停在上一帧。闭掉它需要**服务端**戳出
+> "`snapshot_xyz_` 是在哪一代填的"（新的 C API 字段）——poller 侧状态**结构上做不到**，因为它
+> 按定义从未观测过那一代。判定其代价大于该缺口，故留白。
+>
+> 回归测试：`gui_unit_test` 的 `GuiLifecycle.restart_does_not_republish_prior_run_pixels`
+> 与 `GuiLifecycle.restart_window_does_not_republish_prior_run_composite`，均断言**像素/合成字节的
+> 内容指纹**而非只断言世代号——只断言号会在时序恰好没撞上时以错误理由变绿。
+
 ---
 
 ## 10. 落地边界：最小核 vs 完整版
