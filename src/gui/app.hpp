@@ -271,6 +271,14 @@ bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_up
 // Without that distinction a restart republishes the previous run's ray/crystal/sampling counts
 // under the newly committed epoch and the status bar shows them. The rays > 0 lower bound is
 // retained unchanged — it is what keeps a zero from overwriting a value already on screen.
+//
+// The epoch parameter is spelled uint64_t while PreviewSnapshot::stats_epoch it is compared against
+// is unsigned long long. That split is the module's existing convention, not an oversight: snapshot
+// FIELDS follow epoch/payload_epoch (unsigned long long), while predicate epoch PARAMETERS follow
+// ShouldUploadPayload's display_epoch_floor (uint64_t), because the argument sites are GuiState
+// members and those are uint64_t. Same underlying type on every supported platform, so nothing
+// narrows. Written down here because the convention is implicit enough that reviewing it twice
+// produced the wrong answer once.
 bool ShouldApplyStats(const PreviewSnapshot& snap, uint64_t committed_epoch);
 
 // Effective per-frame composite/xyz upload decision (task-345.4). Folds server-side composite

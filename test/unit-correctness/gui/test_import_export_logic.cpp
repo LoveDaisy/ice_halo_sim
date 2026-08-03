@@ -2738,11 +2738,19 @@ TEST(ImportExport, document_switch_leaves_no_stale_status_bar_stats) {
   // DoOpen(.lmc) hands the LIVE g_state to LoadLmcFile rather than building a separate one, so it
   // is the path where a leftover field would actually survive if the deserializer stopped clearing.
   const std::filesystem::path lmc_path = std::filesystem::temp_directory_path() / "lumice_stats_switch_test.lmc";
+  // RAII rather than a trailing remove(): the ASSERT_TRUE below returns from the TEST on failure,
+  // which would skip a trailing cleanup and leave the file behind for every later run on this host.
+  struct TempFileGuard {
+    std::filesystem::path path;
+    ~TempFileGuard() {
+      std::error_code ec;
+      std::filesystem::remove(path, ec);  // best-effort: a teardown failure must not fail the test
+    }
+  } lmc_guard{ lmc_path };
   ASSERT_TRUE(gui::SaveLmcFile(lmc_path, gui::g_state, gui::g_preview, /*save_texture=*/false));
   seed_stats();
   gui::DoOpen(lmc_path);
   expect_cleared("DoOpen(.lmc)");
-  std::filesystem::remove(lmc_path);
 
   // (C) Revert — the carve-out, pinned deliberately rather than for symmetry: Revert restores
   // config into the SAME document and does not end the run whose numbers are on screen, so those
