@@ -71,6 +71,16 @@ def _run_once() -> subprocess.CompletedProcess:
     return _run_config(_CONFIG_PATH, timeout=60.0)
 
 
+# Anchor: scripts/verify_crash_sentinel_detection_power.sh greps the reverted-arm
+# log for this literal to tell "the reverted build is broken" apart from "the
+# sentinel observed no crash". It is a cross-file contract — changing a single
+# character here without updating that script's `grep -q` silently turns a real
+# infrastructure failure back into an AMBIGUOUS "could be luck" verdict.
+_INFRA_ANCHOR = "Lumice binary infrastructure check failed"
+
+_SMOKE_TIMEOUT_S = 30.0
+
+
 def _smoke_check_binary() -> None:
     """Fail fast before N runs if the binary can't even start on a stable config.
 
@@ -82,10 +92,36 @@ def _smoke_check_binary() -> None:
     fixed-face-distance config first: if the binary is broken at the
     infrastructure level, the assertion fires with a clear message before the
     parametrized loop starts.
+
+    A *hang* is the same infrastructure failure wearing a different shape (a
+    wedged GPU-backend init, a binary blocked on a device that never answers).
+    Left uncaught, `subprocess.TimeoutExpired` escapes this fixture as a raw
+    stdlib exception whose text does not contain the anchor below, so the
+    two-arm verification script sees no anchor, counts zero signal deaths, and
+    reports AMBIGUOUS — "rerun with a bigger N" — for a machine that will hang
+    again every single time. Convert it to the same anchored assertion failure
+    the non-zero-exit path produces, so both variants of "the binary cannot
+    run" are reported as what they are.
     """
-    result = _run_config(_SMOKE_CONFIG_PATH, timeout=30.0)
+    try:
+        result = _run_config(_SMOKE_CONFIG_PATH, timeout=_SMOKE_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        # `raise AssertionError` rather than a bare `assert`: the message must
+        # survive even if the suite is ever run under `python -O`, which strips
+        # assert statements and would take the anchor with them.
+        raise AssertionError(
+            f"{_INFRA_ANCHOR} (hung — no exit within {_SMOKE_TIMEOUT_S}s) — "
+            f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
+            f"config to completion. Check LUMICE_BIN, the shared-library build "
+            f"(`./scripts/build.sh -j release`), the linker, or a wedged compute backend. "
+            f"This sentinel will now skip the parametrized runs to avoid misattributing "
+            f"infrastructure failure to the random-face_distance crash it is written to "
+            f"catch.\n"
+            f"command: {exc.cmd}"
+        ) from exc
+
     assert result.returncode == 0, (
-        f"Lumice binary infrastructure check failed (returncode={result.returncode}) — "
+        f"{_INFRA_ANCHOR} (returncode={result.returncode}) — "
         f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
         f"config. Check LUMICE_BIN, the shared-library build (`./scripts/build.sh -j "
         f"release`), or the linker. This sentinel will now skip the parametrized "
