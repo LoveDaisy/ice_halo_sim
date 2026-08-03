@@ -241,9 +241,22 @@ if grep -qE '^ERROR .*\.py|[0-9]+ errors? in |subprocess\.TimeoutExpired' \
   echo "INFRASTRUCTURE ERROR: the reverted-arm pytest run reported errors (or a" >&2
   echo "timeout), not test failures — so the parametrized sentinel loop did not" >&2
   echo "complete. 0 signal deaths here does NOT mean 'no detection power'; it" >&2
-  echo "means this run produced no evidence either way. Offending lines:" >&2
-  grep -nE '^ERROR .*\.py|[0-9]+ errors? in |subprocess\.TimeoutExpired' \
-    "$WORK_PARENT/reverted_arm.log" | head -20 >&2
+  echo "means this run produced no evidence either way. First 20 offending lines:" >&2
+  # `grep -m 20` rather than `grep … | head -20`, and `|| true` on top. Under
+  # this script's `set -euo pipefail`, piping into `head` is a live trap: once
+  # head has its 20 lines it closes the read end, grep takes SIGPIPE on the
+  # next write, pipefail surfaces 141, and `set -e` kills the script *before*
+  # the `exit 4` below ever runs — landing on an exit code outside {2,4}, which
+  # sends cleanup() down the delete-everything path and destroys the worktree
+  # and build logs this very block was added to preserve. Measured here: 20
+  # matching lines exits 4 correctly, 200 (~42KB) already exits 141. That is
+  # not a hypothetical range — a high-error run is exactly what this block
+  # exists to report on, and SENTINEL_N doubling (which the AMBIGUOUS branch
+  # below recommends) walks straight into it. -m bounds the output with no
+  # second process, so there is no pipe to break; `|| true` additionally keeps
+  # a diagnostic print from ever deciding control flow.
+  grep -m 20 -nE '^ERROR .*\.py|[0-9]+ errors? in |subprocess\.TimeoutExpired' \
+    "$WORK_PARENT/reverted_arm.log" >&2 || true
   echo "Full log: $WORK_PARENT/reverted_arm.log" >&2
   echo "Inspect $REVERTED_WORKTREE/build/ before drawing any conclusion." >&2
   exit 4

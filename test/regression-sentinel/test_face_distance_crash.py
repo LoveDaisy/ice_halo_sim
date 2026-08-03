@@ -106,9 +106,18 @@ def _smoke_check_binary() -> None:
     try:
         result = _run_config(_SMOKE_CONFIG_PATH, timeout=_SMOKE_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
-        # `raise AssertionError` rather than a bare `assert`: the message must
-        # survive even if the suite is ever run under `python -O`, which strips
-        # assert statements and would take the anchor with them.
+        # Both failure branches raise AssertionError explicitly rather than
+        # using a bare `assert`. Not because a bare assert fails today: pytest
+        # rewrites asserts in the modules it collects, so under `python -O` the
+        # anchor still reaches the log from here (measured — 15/15 either way).
+        # The point is what that survival rests on. Strip the rewriting and the
+        # interpreter drops the statement whole, message included, and the
+        # downstream `grep -q` sees a silent pass instead of a broken binary —
+        # and rewriting stops applying the moment this helper moves somewhere
+        # pytest does not collect, e.g. beside find_lumice_binary() in
+        # test/e2e/runner.py, which is imported, never collected. pytest says as
+        # much on an -O run: "assertions not in test modules or plugins will be
+        # ignored". An explicit raise owes nothing to where the function lives.
         raise AssertionError(
             f"{_INFRA_ANCHOR} (hung — no exit within {_SMOKE_TIMEOUT_S}s) — "
             f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
@@ -120,15 +129,16 @@ def _smoke_check_binary() -> None:
             f"command: {exc.cmd}"
         ) from exc
 
-    assert result.returncode == 0, (
-        f"{_INFRA_ANCHOR} (returncode={result.returncode}) — "
-        f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
-        f"config. Check LUMICE_BIN, the shared-library build (`./scripts/build.sh -j "
-        f"release`), or the linker. This sentinel will now skip the parametrized "
-        f"runs to avoid misattributing infrastructure failure to the random-face_distance "
-        f"crash it is written to catch.\n"
-        f"stderr:\n{result.stderr}"
-    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"{_INFRA_ANCHOR} (returncode={result.returncode}) — "
+            f"this is not a SIGSEGV regression; the binary itself cannot run a known-good "
+            f"config. Check LUMICE_BIN, the shared-library build (`./scripts/build.sh -j "
+            f"release`), or the linker. This sentinel will now skip the parametrized "
+            f"runs to avoid misattributing infrastructure failure to the random-face_distance "
+            f"crash it is written to catch.\n"
+            f"stderr:\n{result.stderr}"
+        )
 
 
 @pytest.fixture(scope="module", autouse=True)
