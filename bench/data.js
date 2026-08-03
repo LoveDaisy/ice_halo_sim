@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785728391323,
+  "lastUpdate": 1785799324807,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "c814390955ab88969cd00bf92a90d7f81c3773d5",
-          "message": "Merge pull request #141 from LoveDaisy/task/env-hardening\n\nEnv-var policy + hardening: centralize knobs, --backend CLI flag, executable gate",
-          "timestamp": "2026-06-23T11:01:11+08:00",
-          "tree_id": "fe17f04aaff9d0402650e096618af68e19f8e90f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c814390955ab88969cd00bf92a90d7f81c3773d5"
-        },
-        "date": 1782184058648,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 428354.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 608741.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 451284.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 329821.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4794,6 +4746,48 @@ window.BENCHMARK_DATA = {
             "value": 315523.3,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c3b0c1508ca8975d18284ddfb9089722b087de4b",
+          "message": "Merge pull request #245 from LoveDaisy/chore/crash-sentinel-diagnostics\n\nchore: 崩溃哨兵设施补两处诊断缺口（挂起检出 + 两臂 build 日志留痕）",
+          "timestamp": "2026-08-04T07:12:15+08:00",
+          "tree_id": "7f5982b56736b84800aec2024c45b53a4d40aff5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/c3b0c1508ca8975d18284ddfb9089722b087de4b"
+        },
+        "date": 1785799323683,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Ubuntu ARM64",
+            "value": 587251.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 403638.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 321310.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
