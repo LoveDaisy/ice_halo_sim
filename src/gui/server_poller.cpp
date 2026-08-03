@@ -336,17 +336,18 @@ void ServerPoller::PollOnce() {
     }
 
     // Content-freshness gate: does the image about to be stamped with xyz_results[0].epoch actually
-    // belong to that generation? Nothing a restart does clears the pixels — RenderConsumer::Reset()
-    // deliberately leaves snapshot_xyz_ alone ("PrepareSnapshot will memcpy over it") and
-    // PrepareSnapshot only runs on a dirty snapshot, which Stop() just cleared — so between a commit
-    // and the new run's first produced batch the buffer still holds the PREVIOUS run's image, while
-    // RawXyzResult::epoch already reads the bumped committed_epoch_. A payload built from that pair
-    // carries the old image under the new generation's number.
+    // belong to that generation? Between a commit and the new run's first produced batch it does not
+    // — the pixel buffer still holds the PREVIOUS run's image while RawXyzResult::epoch already reads
+    // the bumped committed_epoch_, and the upload gate downstream can only compare epoch NUMBERS, so
+    // a payload wearing the new number is indistinguishable there from a genuinely fresh frame. That
+    // is why the decision has to be made here.
     //
-    // Nothing downstream can undo it, which is why the decision has to be made here. The upload gate
-    // fences the old generation by epoch NUMBER (payload_epoch > display_epoch_floor, the floor
-    // raised to the OLD committed epoch by MarkStructHardDirty), so a payload wearing the NEW number
-    // clears it exactly like a genuinely fresh frame; at that point the two are indistinguishable.
+    // The full mechanism (why the buffer survives a restart, why the floor cannot see it, and what
+    // this gate restores) is written up once in doc/gui-preview-lifecycle-architecture.md §9, in the
+    // "I1 的前提「世代号是诚实的」曾不成立" patch note — that section is the authority; keep the
+    // reasoning there rather than growing a second copy here.
+    //
+    // What is NOT in the doc, because it is about this code's shape rather than the invariant:
     //
     // has_valid_data alone is too coarse to be the answer, even though it is exactly right for the
     // stats read above. It mirrors has_ever_consumed_, which Stop() clears, so it goes false for two
@@ -379,13 +380,18 @@ void ServerPoller::PollOnce() {
     // definition never observed that generation. Left alone deliberately: that stamp is a wider
     // change than this defect warrants.
     if (quality_ok && !xyz_results[0].has_valid_data) {
-      auto prev_for_content = LoadPublished();
-      const bool content_belongs_to_this_epoch = prev_for_content && prev_for_content->payload &&
-                                                 prev_for_content->payload->payload_epoch == xyz_results[0].epoch;
+      auto prev_published = LoadPublished();
+      const bool content_belongs_to_this_epoch =
+          prev_published && prev_published->payload && prev_published->payload->payload_epoch == xyz_results[0].epoch;
       if (!content_belongs_to_this_epoch) {
         quality_ok = false;
-        GUI_LOG_VERBOSE("[Poller] stale content: nothing produced under epoch {} yet, carrying previous frame gen={}",
-                        xyz_results[0].epoch, xyz_results[0].snapshot_generation);
+        // epoch and snapshot_generation are two INDEPENDENT server counters — epoch is what this gate
+        // compares, snapshot_generation is what has_new_snapshot above compares. Spelled out in full
+        // so a log line never reads as though they were the same number.
+        GUI_LOG_VERBOSE(
+            "[Poller] stale content: nothing produced under epoch {} yet, carrying previous frame "
+            "(snapshot_generation={})",
+            xyz_results[0].epoch, xyz_results[0].snapshot_generation);
       }
     }
 
