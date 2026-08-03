@@ -62,18 +62,36 @@ REVERTED_WORKTREE="$WORK_PARENT/reverted"
 cleanup() {
   local exit_code="$1"
   echo "--- cleanup: removing worktrees ---"
-  git worktree remove --force "$FIXED_WORKTREE" 2>/dev/null || true
-  # exit 2 (INCONCLUSIVE) and exit 4 (INFRASTRUCTURE ERROR) both tell the user
-  # to inspect $REVERTED_WORKTREE/build/ — deleting it here would make that
-  # instruction unfollowable. Keep the reverted worktree (and its parent) on
-  # those two paths; every other path cleans up as before.
+  # exit 2 (INCONCLUSIVE) and exit 4 (INFRASTRUCTURE ERROR) both point the user
+  # at an arm's build tree or build log to explain the verdict — deleting them
+  # here would make that instruction unfollowable. Keep both worktrees and
+  # $WORK_PARENT (which holds {fixed,reverted}_build.log and the pytest log) on
+  # those two paths; every other path cleans up as before. Both arms are kept,
+  # not just the reverted one: a build failure can land on either arm, and the
+  # failing arm is exactly the one worth inspecting.
   if [ "$exit_code" -eq 2 ] || [ "$exit_code" -eq 4 ]; then
     git worktree prune
-    echo "cleanup: exit $exit_code — retaining reverted arm worktree for inspection:" >&2
-    echo "  $REVERTED_WORKTREE" >&2
-    echo "  (remove manually with: git worktree remove --force '$REVERTED_WORKTREE' && rm -rf '$WORK_PARENT')" >&2
+    echo "cleanup: exit $exit_code — retaining worktrees and logs for inspection:" >&2
+    echo "  $WORK_PARENT" >&2
+    # Only name worktrees that were actually created. The fixed arm can fail its
+    # build and exit 4 before `git worktree add` for the reverted arm has run at
+    # all, and telling someone to remove a path that never existed hands them a
+    # confusing error in the one message they are reading precisely because
+    # something already went wrong.
+    # `if`, not `[ -d … ] && echo`: this runs from an EXIT trap under `set -e`,
+    # where a failing `&&` list is the loop body's exit status and would abort
+    # cleanup partway through its own instructions.
+    echo "  (remove manually with:" >&2
+    local wt
+    for wt in "$FIXED_WORKTREE" "$REVERTED_WORKTREE"; do
+      if [ -d "$wt" ]; then
+        echo "     git worktree remove --force '$wt'" >&2
+      fi
+    done
+    echo "     rm -rf '$WORK_PARENT')" >&2
     return
   fi
+  git worktree remove --force "$FIXED_WORKTREE" 2>/dev/null || true
   git worktree remove --force "$REVERTED_WORKTREE" 2>/dev/null || true
   rm -rf "$WORK_PARENT"
   # Prune stale worktree registrations.
@@ -82,13 +100,40 @@ cleanup() {
 }
 trap 'cleanup $?' EXIT
 
+# Build one arm, keeping the full build log on disk.
+#
+# stdout goes to $WORK_PARENT/<arm>_build.log (a clean-rebuild log is thousands
+# of compiler lines and would bury the verdict); stderr stays on the terminal so
+# a failure is visible while it happens. The two halves are deliberately NOT
+# merged: the terminal keeps the short version, the file keeps the long one.
+#
+# On failure this exits 4 rather than letting `set -e` propagate build.sh's own
+# exit code. That is the whole point of the log: any code other than 2 or 4
+# sends cleanup() down the delete-everything path, which would remove
+# $WORK_PARENT — taking the log that was just written down with it, and the
+# worktree with it, leaving nothing to diagnose but terminal scrollback.
+build_arm() {
+  local arm="$1" worktree="$2"
+  local log="$WORK_PARENT/${arm}_build.log"
+  echo "building $arm arm — stdout → $log (stderr stays on this terminal)"
+  if ! (
+    cd "$worktree"
+    rm -rf build
+    ./scripts/build.sh -sj release >"$log"
+  ); then
+    echo "" >&2
+    echo "INFRASTRUCTURE ERROR: $arm arm failed to build." >&2
+    echo "No conclusion about sentinel detection power can be drawn from this run" >&2
+    echo "— the sentinel never ran. Retained for inspection:" >&2
+    echo "  build log: $log" >&2
+    echo "  worktree:  $worktree" >&2
+    exit 4
+  fi
+}
+
 echo "=== fixed arm (HEAD=$FIXED_HEAD) ==="
 git worktree add --detach "$FIXED_WORKTREE" "$FIXED_HEAD"
-(
-  cd "$FIXED_WORKTREE"
-  rm -rf build
-  ./scripts/build.sh -sj release >/dev/null
-)
+build_arm fixed "$FIXED_WORKTREE"
 FIXED_BIN="$FIXED_WORKTREE/build/cmake_install/shared/Lumice"
 FIXED_MD5="$(md5 -q "$FIXED_BIN" 2>/dev/null || md5sum "$FIXED_BIN" | awk '{print $1}')"
 echo "fixed arm binary: $FIXED_BIN"
@@ -96,11 +141,7 @@ echo "fixed arm md5:    $FIXED_MD5"
 
 echo "=== reverted arm (base=$REVERT_BASE) ==="
 git worktree add --detach "$REVERTED_WORKTREE" "$REVERT_BASE"
-(
-  cd "$REVERTED_WORKTREE"
-  rm -rf build
-  ./scripts/build.sh -sj release >/dev/null
-)
+build_arm reverted "$REVERTED_WORKTREE"
 REVERTED_BIN="$REVERTED_WORKTREE/build/cmake_install/shared/Lumice"
 REVERTED_MD5="$(md5 -q "$REVERTED_BIN" 2>/dev/null || md5sum "$REVERTED_BIN" | awk '{print $1}')"
 echo "reverted arm binary: $REVERTED_BIN"
@@ -141,6 +182,11 @@ set -e
 # contain neither "signal-death" nor "clean non-zero exit". Detect this first
 # so it is never miscounted as "0 signal deaths observed" (AMBIGUOUS below);
 # it means the reverted arm never got to run the parametrized loop at all.
+# Covers both shapes of "the binary cannot run": a non-zero exit and a hang.
+#
+# Anchor: this literal is the single source `_INFRA_ANCHOR` in
+# test_face_distance_crash.py, which carries a matching comment pointing back
+# here. Change one side without the other and this grep silently stops firing.
 if grep -q "Lumice binary infrastructure check failed" "$WORK_PARENT/reverted_arm.log"; then
   echo "" >&2
   echo "INFRASTRUCTURE ERROR: reverted arm's module-scope smoke check failed —" >&2
@@ -183,6 +229,56 @@ if [ "$CLEAN_NONZERO_COUNT" -ge 1 ] && [ "$SIGNAL_DEATH_COUNT" -eq 0 ]; then
   echo "build output at $REVERTED_WORKTREE/build/ before drawing conclusions" >&2
   echo "about sentinel detection power." >&2
   exit 2
+fi
+
+# Second net, for infrastructure failures that never reach the anchored
+# assertion above: a collection/import error, `find_lumice_binary()` raising,
+# an unhandled exception in the fixture, or a hang in the *parametrized* loop
+# (whose `subprocess.TimeoutExpired` surfaces as pytest FAILED, not ERROR).
+# None of those produce "signal-death" or "clean non-zero exit" either, so
+# without this they land in the AMBIGUOUS branch below and get reported as
+# "could be luck — rerun with a bigger N" when nothing ran at all.
+#
+# Deliberately placed AFTER the PASS branch: an error in one test must not
+# retract detection power that another test actually demonstrated.
+#
+# These patterns encode pytest's own report *format*, which is a contract
+# nobody promised us: a major-version bump that rewords the short-summary or
+# counts line degrades this net silently — it does not error, it just stops
+# matching, and the verdict slides back to AMBIGUOUS with nothing announcing
+# that the net tore. Re-check them against a real failing run after any pytest
+# major upgrade; the shapes below were read off actual output, not assumed.
+#
+# The patterns match pytest's own report structure, not free text — the
+# short-test-summary line (`ERROR <path>.py::<nodeid> - ...`), the final
+# counts line (`=== N errors in 1.23s ===`), and the stdlib exception name a
+# hang prints verbatim. Lumice's own log lines cannot collide: spdlog emits
+# `[timestamp] [logger] [level] msg`, so they never start with `ERROR `.
+if grep -qE '^ERROR .*\.py|[0-9]+ errors? in |subprocess\.TimeoutExpired' \
+     "$WORK_PARENT/reverted_arm.log"; then
+  echo "" >&2
+  echo "INFRASTRUCTURE ERROR: the reverted-arm pytest run reported errors (or a" >&2
+  echo "timeout), not test failures — so the parametrized sentinel loop did not" >&2
+  echo "complete. 0 signal deaths here does NOT mean 'no detection power'; it" >&2
+  echo "means this run produced no evidence either way. First 20 offending lines:" >&2
+  # `grep -m 20` rather than `grep … | head -20`, and `|| true` on top. Under
+  # this script's `set -euo pipefail`, piping into `head` is a live trap: once
+  # head has its 20 lines it closes the read end, grep takes SIGPIPE on the
+  # next write, pipefail surfaces 141, and `set -e` kills the script *before*
+  # the `exit 4` below ever runs — landing on an exit code outside {2,4}, which
+  # sends cleanup() down the delete-everything path and destroys the worktree
+  # and build logs this very block was added to preserve. Measured here: 20
+  # matching lines exits 4 correctly, 200 (~42KB) already exits 141. That is
+  # not a hypothetical range — a high-error run is exactly what this block
+  # exists to report on, and SENTINEL_N doubling (which the AMBIGUOUS branch
+  # below recommends) walks straight into it. -m bounds the output with no
+  # second process, so there is no pipe to break; `|| true` additionally keeps
+  # a diagnostic print from ever deciding control flow.
+  grep -m 20 -nE '^ERROR .*\.py|[0-9]+ errors? in |subprocess\.TimeoutExpired' \
+    "$WORK_PARENT/reverted_arm.log" >&2 || true
+  echo "Full log: $WORK_PARENT/reverted_arm.log" >&2
+  echo "Inspect $REVERTED_WORKTREE/build/ before drawing any conclusion." >&2
+  exit 4
 fi
 
 # 0/N signal deaths does not by itself mean "sentinel has lost detection
