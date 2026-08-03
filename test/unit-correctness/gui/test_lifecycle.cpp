@@ -28,6 +28,10 @@
 //  5. snapshot_bundle_coherence
 //  6. completed_below_threshold_force_uploads
 //  7. wake_for_refresh_preserves_valid
+//  8a. resume_rearms_generation_tracker  } the two per-resume fields 6c structurally cannot reach
+//  8b. resume_rearms_quality_gate_clock  } (see the block comment above them for why)
+//  9a. stats_apply_gate_rejects_stale_generation — PURE test of the stats-apply gate
+//  9b. restart_does_not_republish_prior_run_stats — producer end-to-end over the Run->Run edge
 //
 // Their five frame-driven siblings stay in test/gui/functional/test_gui_lifecycle.cpp.
 
@@ -512,6 +516,9 @@ TEST(GuiLifecycle, snapshot_bundle_coherence) {
   // coherence relation section A omits. (On carry-forward payload_epoch may deliberately LAG the
   // bundle epoch; here the texture is freshly materialized so they MUST agree.)
   EXPECT_EQ(s->payload->payload_epoch, done_epoch);
+  // Same relation for the stats' own stamp: freshly produced stats belong to the bundle's
+  // generation. (On carry-forward stats_epoch may deliberately LAG, exactly like payload_epoch.)
+  EXPECT_EQ(s->stats_epoch, done_epoch);
   EXPECT_TRUE(s->texture_serial != 0);  // a fresh monotonic serial was minted for this materialization
 
   // Two consecutive loads observe the SAME whole object (atomic pointer handoff, no partial
@@ -721,6 +728,132 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
 //
 // Both drive the production WakeForRefresh seam (not the ResetGenerationForTest test seam), so they
 // fail if the reset is dropped from the production path only.
+
+// ---- Tests 9a/9b: stats carry their OWN generation stamp, so a stale carry-forward is rejected ----
+// The bug: PollOnce() re-stamps next->epoch with the CURRENT lifecycle epoch on every publish, while
+// the four stats fields are carried forward from prev when this poll produced none. After a restart
+// those two facts combine into a snapshot whose stats belong to the PREVIOUS run but whose bundle
+// epoch says "current" — and the consumer's gate (epoch match + rays > 0) is satisfied by exactly
+// that combination, so the status bar showed the previous run's ray/crystal/sampling numbers.
+//
+// Measured server-side mechanics this rests on (probe run against a live server, not inference):
+//   after RunFiniteToCompletion then a re-commit, BEFORE the new run produces anything —
+//     epoch: 1 -> 2      (RawXyzResult.epoch_ is committed_epoch_ read LIVE in the getter,
+//                         server.cpp; it is not stored with the snapshot)
+//     cached stats: unchanged, still the previous run's 200000 rays
+//                        (ServerImpl::Stop resets snapshot_dirty_/has_ever_consumed_ but does NOT
+//                         clear cached_stats_result_, which only DoSnapshot() overwrites)
+//     has_valid_data: 1 -> 0   <-- the ONLY field that distinguishes stale cache from fresh data
+// So "stamp the stats with xyz_results[0].epoch" alone would stamp the STALE stats with the NEW
+// epoch and change nothing. Freshness must be decided by has_valid_data; the epoch stamp then
+// records which generation those stats were actually produced under and travels with them.
+//
+// 9a pins the consumer predicate; 9b pins the producer end-to-end against a real server.
+
+// 9a — the pure gate. Mirrors ShouldUploadPayload's texture-side pattern on the stats side.
+TEST(GuiLifecycle, stats_apply_gate_rejects_stale_generation) {
+  constexpr uint64_t kOldGen = 7;
+  constexpr uint64_t kNewGen = 8;
+
+  // The bug scenario: stats carried forward from the previous generation. The BUNDLE epoch would
+  // say kNewGen here (PollOnce re-stamps it every poll) — the gate must key on the stats' own stamp.
+  {
+    gui::PreviewSnapshot snap;
+    snap.valid = true;
+    snap.epoch = kNewGen;  // bundle epoch: current, and deliberately NOT what the gate reads
+    snap.stats_epoch = kOldGen;
+    snap.stats_sim_ray_num = 200000;  // a plausible non-zero leftover from the previous run
+    EXPECT_TRUE(!gui::ShouldApplyStats(snap, kNewGen));
+  }
+
+  // Fresh stats produced under the committed generation: applied.
+  {
+    gui::PreviewSnapshot snap;
+    snap.valid = true;
+    snap.epoch = kNewGen;
+    snap.stats_epoch = kNewGen;
+    snap.stats_sim_ray_num = 1234;
+    EXPECT_TRUE(gui::ShouldApplyStats(snap, kNewGen));
+  }
+
+  // The pre-existing lower bound must survive the change: zero rays never overwrite a shown value
+  // (this is what keeps a torn zero off the status bar, and it is why the carry-forward exists).
+  {
+    gui::PreviewSnapshot snap;
+    snap.valid = true;
+    snap.epoch = kNewGen;
+    snap.stats_epoch = kNewGen;
+    snap.stats_sim_ray_num = 0;
+    EXPECT_TRUE(!gui::ShouldApplyStats(snap, kNewGen));
+  }
+}
+
+// 9b — the producer, end-to-end against a real server. This is the case that reproduces the actual
+// user-visible defect: it drives the real Run -> restart edge and asserts the published bundle does
+// not present the previous run's stats as belonging to the newly committed generation.
+TEST(GuiLifecycle, restart_does_not_republish_prior_run_stats) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+
+  const unsigned long long epoch_a = CurrentEpoch(server);
+  LUMICE_RayCount rays_a = 0;
+  {
+    auto sa = local.LoadSnapshot();
+    ASSERT_TRUE(sa != nullptr);
+    ASSERT_TRUE(sa->stats_sim_ray_num > 0);
+    EXPECT_EQ(sa->stats_epoch, epoch_a);               // fresh stats are stamped with the generation that made them
+    EXPECT_TRUE(gui::ShouldApplyStats(*sa, epoch_a));  // ... and are applied
+    rays_a = sa->stats_sim_ray_num;
+  }
+
+  // The Run -> Run edge: re-commit mints a new epoch. The server's cached stats still hold run A's
+  // numbers at this instant (measured above), which is precisely the window the bug lived in.
+  ASSERT_EQ(CommitJsonConfig(server, kFiniteConfig), LUMICE_OK);
+  const unsigned long long epoch_b = CurrentEpoch(server);
+  ASSERT_TRUE(epoch_b != epoch_a);  // the restart really did mint a new generation
+
+  // Pin the bug's window open DETERMINISTICALLY instead of racing run B's first batch. Two facts
+  // make this exact rather than lucky:
+  //   - LUMICE_StopServer unconditionally clears has_ever_consumed_, so has_valid_data reads 0
+  //     whether or not run B managed to consume anything first.
+  //   - cached_stats_result_ is only ever overwritten inside DoSnapshot(), and DoSnapshot only runs
+  //     from a Get*Results call. Nothing between the commit above and this line makes one, so the
+  //     server's cached stats are still run A's — no timing assumption.
+  // An earlier draft of this case polled straight after the commit and asserted on whichever state
+  // it happened to find. That version PASSED against the un-fixed code: run B routinely produced
+  // fresh stats before the poll, so the case never entered the branch it existed to check.
+  LUMICE_StopServer(server);
+
+  local.ResetGenerationForTest();  // what a resume does to the generation tracker, minus the worker
+  local.PollOnceForTest(server);
+
+  auto sb = local.LoadSnapshot();
+  ASSERT_TRUE(sb != nullptr);
+  // The bug's exact shape: the bundle epoch is the NEW generation's...
+  EXPECT_EQ(sb->epoch, epoch_b);
+  // ... while the stats riding in that bundle are still run A's, and say so.
+  EXPECT_EQ(sb->stats_sim_ray_num, rays_a);
+  EXPECT_EQ(sb->stats_epoch, epoch_a);
+  // ... so the gate keeps them off the status bar. Before the fix this combination read as fresh
+  // (bundle epoch == committed epoch, rays > 0) and run A's counts were displayed under run B.
+  EXPECT_TRUE(!gui::ShouldApplyStats(*sb, epoch_b));
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
 
 // 8a — `last_generation_ = 0`: after a resume, a snapshot the poller has ALREADY consumed must be
 // treated as new again, so a display-time refresh re-materializes the frame it is refreshing.

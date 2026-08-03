@@ -1262,6 +1262,13 @@ bool ShouldUploadPayload(const PreviewSnapshot& snap, unsigned long long last_up
          payload->payload_epoch > display_epoch_floor;
 }
 
+// Stats-apply gate — see app.hpp. Deliberately reads snap.stats_epoch and NOT snap.epoch: the
+// bundle epoch is re-stamped on every poll, so it says nothing about which generation produced
+// the stats travelling with it.
+bool ShouldApplyStats(const PreviewSnapshot& snap, uint64_t committed_epoch) {
+  return snap.stats_epoch == committed_epoch && snap.stats_sim_ray_num > 0;
+}
+
 // task-345.4 effective composite/xyz choice — see app.hpp. Pure boolean AND: server must have
 // produced a composite (raypath_color active) AND the user preference must be "show composite".
 // When raypath_color is empty the poller leaves is_composite=false → this returns false → the
@@ -1491,9 +1498,11 @@ void SyncFromPoller() {
     return;  // No observation yet (or a valid=false restart reset). State already reconciled.
   }
 
-  // Stats: apply only when the observation matches the committed generation (I1), so a stale
-  // bundle can't backfill the status bar with a prior run's counts.
-  if (snap->epoch == g_state.committed_epoch && snap->stats_sim_ray_num > 0) {
+  // Stats: apply only when the STATS THEMSELVES were produced under the committed generation (I1),
+  // so a stale carry-forward can't backfill the status bar with a prior run's counts. Keyed on the
+  // stats' own stamp rather than the bundle epoch — see ShouldApplyStats in app.hpp for why the
+  // bundle epoch cannot answer this.
+  if (ShouldApplyStats(*snap, g_state.committed_epoch)) {
     g_state.stats_ray_seg_num = snap->stats_ray_seg_num;
     g_state.stats_sim_ray_num = snap->stats_sim_ray_num;
     g_state.stats_crystal_num = snap->stats_crystal_num;

@@ -275,6 +275,7 @@ void ServerPoller::PollOnce() {
   LUMICE_RayCount new_sim_ray = 0;
   LUMICE_RayCount new_crystal = 0;
   LUMICE_RayCount new_orientation = 0;
+  unsigned long long new_stats_epoch = 0;
   std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
   if (has_new_snapshot || force_final_upload) {
@@ -282,15 +283,30 @@ void ServerPoller::PollOnce() {
     // force_final_upload-only path this re-assigns the value already stored — idempotent.
     last_generation_ = captured_xyz_generation;
 
-    // Get stats (used independently for status bar display)
+    // Get stats (used independently for status bar display).
+    //
+    // has_valid_data is load-bearing here, not belt-and-braces: the server's cached stats are NOT
+    // cleared by a restart (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and leaves
+    // cached_stats_result_ alone — only DoSnapshot overwrites it), so between a commit and the new
+    // run's first produced batch this call returns the PREVIOUS run's numbers with a perfectly
+    // healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_, which the restart
+    // did reset, and is the only field here that tells the two apart.
+    //
+    // Ordering makes this safe in the direction that matters: LUMICE_GetRawXyzAndCompositeResults
+    // above enters through DoSnapshot(), so any dirty batch has already been folded into
+    // cached_stats_result_ by the time we read it — has_valid_data true therefore implies the cache
+    // belongs to the current generation. The reverse window (a first ConsumeData landing between
+    // the two calls) merely defers fresh stats by one poll, which the carry-forward below absorbs.
     LUMICE_StatsResult cached_stats{};
     LUMICE_GetCachedStats(server, &cached_stats);
-    if (cached_stats.sim_ray_num > 0) {
+    if (cached_stats.sim_ray_num > 0 && xyz_results[0].has_valid_data) {
       have_new_stats = true;
       new_ray_seg = cached_stats.ray_seg_num;
       new_sim_ray = cached_stats.sim_ray_num;
       new_crystal = cached_stats.crystal_num;
       new_orientation = cached_stats.orientation_num;
+      // Same read window as payload_epoch takes for the texture (see the quality_ok block below).
+      new_stats_epoch = xyz_results[0].epoch;
     }
 
     // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
@@ -384,18 +400,24 @@ void ServerPoller::PollOnce() {
     // Lifecycle level signal (clock ④ / I4): carried on every poll.
     next->lifecycle = lc.lifecycle;
     // Stats: fresh value if this generation produced one; else carry forward prev's (coherent
-    // bundle — no torn zero). The consumer applies stats only when >0, so this is behavior-
-    // equivalent to the old swap-to-0-then-skip, and is a positive I5 side effect.
+    // bundle — no torn zero). The stats' own generation stamp travels WITH them in both branches:
+    // freshly read stats are stamped with the generation that produced them, and a carry-forward
+    // keeps the stamp it already had rather than being re-stamped with lc.epoch like the bundle
+    // epoch above. That asymmetry is the whole point — it is what lets the consumer tell "this
+    // poll produced no new stats, here are the current run's last known ones" apart from "this
+    // poll produced no new stats because the run just restarted, and these belong to the old one".
     if (have_new_stats) {
       next->stats_ray_seg_num = new_ray_seg;
       next->stats_sim_ray_num = new_sim_ray;
       next->stats_crystal_num = new_crystal;
       next->stats_orientation_num = new_orientation;
+      next->stats_epoch = new_stats_epoch;
     } else if (prev) {
       next->stats_ray_seg_num = prev->stats_ray_seg_num;
       next->stats_sim_ray_num = prev->stats_sim_ray_num;
       next->stats_crystal_num = prev->stats_crystal_num;
       next->stats_orientation_num = prev->stats_orientation_num;
+      next->stats_epoch = prev->stats_epoch;
     }
     // Texture: a freshly materialized payload gets a new monotonic serial; otherwise carry the
     // previous payload pointer + serial forward (sparse / gate-rejected / no-new-generation) so
