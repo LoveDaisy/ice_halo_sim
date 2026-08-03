@@ -38,14 +38,7 @@ void ServerPoller::Start(LUMICE_Server* server) {
   // the shared payload pointer) keeps the preview on screen during the gap between restart and
   // first new snapshot, preventing visible flicker during slider scrubbing.
   PublishValidReset();
-  // Reset generation tracking so the worker detects the first snapshot as new data.
-  last_generation_ = 0;
-  // Reset quality gate timeout so fallback doesn't fire prematurely after restart.
-  last_quality_pass_time_ = std::chrono::steady_clock::now();
-  // Re-arm the terminal-frame rescue for the resumed run (I6 — see the header). Kept next to the
-  // two resets above because all three are per-resume state; Start() does not route through
-  // TransitionToRunning(), so it carries its own copy of the same three-line reset.
-  uploaded_since_resume_ = false;
+  ResetPerResumeState();
 
   {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -93,15 +86,7 @@ bool ServerPoller::TransitionToRunning(LUMICE_Server* server, bool publish_reset
     }
     // kPaused → resume polling
     server_ = server;
-    last_generation_ = 0;
-    last_quality_pass_time_ = std::chrono::steady_clock::now();
-    // Re-arm the terminal-frame rescue (I6 — see the header). Both wake variants reset it, and for
-    // the same reason: each buys the worker a poll it would otherwise never get. WakeForRestart
-    // opens a new sim generation; WakeForRefresh wakes an already-completed run for exactly ONE
-    // more poll to re-materialize it under new display state (colour edits / composite EV), after
-    // which PollOnce self-pauses again. If the gate swallows that single poll, a sparse completed
-    // run's display edits would silently never appear.
-    uploaded_since_resume_ = false;
+    ResetPerResumeState();
     if (publish_reset) {
       PublishValidReset();
     }
@@ -142,6 +127,26 @@ void ServerPoller::PublishValidReset() {
   next->valid = false;
   next->has_new_texture = false;
   StorePublished(std::move(next));
+}
+
+// Single owner of the per-resume reset (see the header contract). All three fields describe "what
+// has happened since the worker last resumed", so they are re-armed together at every
+// kPaused→kRunning edge:
+//   - last_generation_        : so the worker detects the first snapshot of the resume as new data.
+//   - last_quality_pass_time_ : so the quality gate's 500ms timeout fallback doesn't fire
+//                               prematurely against time that elapsed while paused.
+//   - uploaded_since_resume_  : re-arms the terminal-frame rescue (I6 — see the header). Both wake
+//                               variants reset it, and for the same reason: each buys the worker a
+//                               poll it would otherwise never get. WakeForRestart opens a new sim
+//                               generation; WakeForRefresh wakes an already-completed run for
+//                               exactly ONE more poll to re-materialize it under new display state
+//                               (colour edits / composite EV), after which PollOnce self-pauses
+//                               again. If the gate swallows that single poll, a sparse completed
+//                               run's display edits would silently never appear.
+void ServerPoller::ResetPerResumeState() {
+  last_generation_ = 0;
+  last_quality_pass_time_ = std::chrono::steady_clock::now();
+  uploaded_since_resume_ = false;
 }
 
 void ServerPoller::InvalidateStagedTexture() {

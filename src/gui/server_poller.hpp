@@ -195,6 +195,17 @@ class ServerPoller {
   // Serializes under publish_mutex_. Called from Start()/WakeForRestart() on the main thread.
   void PublishValidReset();
 
+  // Single owner of the per-RESUME state reset. The three fields it clears
+  // (last_generation_ / last_quality_pass_time_ / uploaded_since_resume_) share one scope — they
+  // describe "what has happened since the worker last resumed" — so they must be re-armed together
+  // at every kPaused→kRunning edge or the survivors silently misreport the new resume as a
+  // continuation of the old one. Start() does not route through TransitionToRunning(), so both call
+  // this; before this method existed each carried its own verbatim copy of the same three lines and
+  // the invariant was held only by a comment. Callers must already hold whatever lock their own
+  // contract requires (TransitionToRunning calls it under mutex_; Start() before taking it) — this
+  // method takes no lock of its own.
+  void ResetPerResumeState();
+
   // Shared body of WakeForRestart/WakeForRefresh: idempotently drive kPaused → kRunning with
   // `server`, resetting the generation/quality-pass tracking under mutex_ and notifying the
   // worker. The ONLY behavioral difference between the two public callers is whether a
