@@ -73,9 +73,21 @@ cleanup() {
     git worktree prune
     echo "cleanup: exit $exit_code — retaining worktrees and logs for inspection:" >&2
     echo "  $WORK_PARENT" >&2
+    # Only name worktrees that were actually created. The fixed arm can fail its
+    # build and exit 4 before `git worktree add` for the reverted arm has run at
+    # all, and telling someone to remove a path that never existed hands them a
+    # confusing error in the one message they are reading precisely because
+    # something already went wrong.
+    # `if`, not `[ -d … ] && echo`: this runs from an EXIT trap under `set -e`,
+    # where a failing `&&` list is the loop body's exit status and would abort
+    # cleanup partway through its own instructions.
     echo "  (remove manually with:" >&2
-    echo "     git worktree remove --force '$FIXED_WORKTREE' 2>/dev/null" >&2
-    echo "     git worktree remove --force '$REVERTED_WORKTREE' 2>/dev/null" >&2
+    local wt
+    for wt in "$FIXED_WORKTREE" "$REVERTED_WORKTREE"; do
+      if [ -d "$wt" ]; then
+        echo "     git worktree remove --force '$wt'" >&2
+      fi
+    done
     echo "     rm -rf '$WORK_PARENT')" >&2
     return
   fi
@@ -229,6 +241,13 @@ fi
 #
 # Deliberately placed AFTER the PASS branch: an error in one test must not
 # retract detection power that another test actually demonstrated.
+#
+# These patterns encode pytest's own report *format*, which is a contract
+# nobody promised us: a major-version bump that rewords the short-summary or
+# counts line degrades this net silently — it does not error, it just stops
+# matching, and the verdict slides back to AMBIGUOUS with nothing announcing
+# that the net tore. Re-check them against a real failing run after any pytest
+# major upgrade; the shapes below were read off actual output, not assumed.
 #
 # The patterns match pytest's own report structure, not free text — the
 # short-test-summary line (`ERROR <path>.py::<nodeid> - ...`), the final
