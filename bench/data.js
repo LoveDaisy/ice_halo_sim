@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785728389098,
+  "lastUpdate": 1785728391323,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9608,50 +9608,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "855e6467599128d7249358a9e7fddd24a1ae9d9d",
-          "message": "Merge pull request #140 from LoveDaisy/fix/max-hits-overflow-crash\n\nfix(task-284): max_hits>15 CPU crash (EmplaceBack arena dup) + no-truncation exit-seam",
-          "timestamp": "2026-06-23T00:04:58+08:00",
-          "tree_id": "e8c0acda0c5c32dd47294ac7226ee4de751f408d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/855e6467599128d7249358a9e7fddd24a1ae9d9d"
-        },
-        "date": 1782144663852,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 66.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 92.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 88.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c814390955ab88969cd00bf92a90d7f81c3773d5",
           "message": "Merge pull request #141 from LoveDaisy/task/env-hardening\n\nEnv-var policy + hardening: centralize knobs, --backend CLI flag, executable gate",
           "timestamp": "2026-06-23T11:01:11+08:00",
@@ -13986,6 +13942,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b8ca898ed0048b18607fdeb7c2c54890cdba249",
+          "message": "Merge pull request #244 from LoveDaisy/fix/server-poller-state-reset-ownership\n\nfix(gui): ServerPoller 状态复位收敛为单一 owner + 修重启后状态栏上屏陈旧统计",
+          "timestamp": "2026-08-03T11:30:30+08:00",
+          "tree_id": "f9d0de83308607c4a960a1b83fe8e645030f244d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7b8ca898ed0048b18607fdeb7c2c54890cdba249"
+        },
+        "date": 1785728390590,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 86.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.7,
             "unit": "%"
           }
         ]
