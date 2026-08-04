@@ -1319,6 +1319,167 @@ TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
 }
 
 
+// ---------------------------------------------------------------------------------------
+// Result frame (opaque handle). The lifetime property itself — a frame held across a later
+// snapshot keeps its own data — lives in test_result_frame_lifetime.cpp; what is checked
+// here is that the frame reads agree field-for-field with the server-taking getters they
+// replace, plus the handle's own contract.
+// ---------------------------------------------------------------------------------------
+
+TEST_F(ServerLifecycleApi, ResultFrameAgreesWithLegacyGetters) {
+  CommitAndWaitForIdle();
+
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_NE(frame, nullptr);
+
+  LUMICE_RenderResult frame_render[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RawXyzResult frame_xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_StatsResult frame_stats{};
+  ASSERT_EQ(LUMICE_FrameGetRender(frame, frame_render, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, frame_xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &frame_stats), LUMICE_OK);
+
+  // The legacy getters are read AFTER the frame reads on purpose: the sim has finished, so
+  // no new snapshot can be materialized, and the values must therefore be identical rather
+  // than merely similar.
+  LUMICE_RenderResult legacy_render[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RawXyzResult legacy_xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_StatsResult legacy_stats[LUMICE_MAX_STATS_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_GetRenderResults(server_, legacy_render, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetRawXyzResults(server_, legacy_xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_GetStatsResults(server_, legacy_stats, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
+
+  ASSERT_NE(frame_render[0].img_buffer, nullptr);
+  EXPECT_EQ(frame_render[0].renderer_id, legacy_render[0].renderer_id);
+  EXPECT_EQ(frame_render[0].img_width, legacy_render[0].img_width);
+  EXPECT_EQ(frame_render[0].img_height, legacy_render[0].img_height);
+  EXPECT_EQ(frame_render[1].img_buffer, nullptr) << "sentinel not written";
+
+  ASSERT_NE(frame_xyz[0].xyz_buffer, nullptr);
+  EXPECT_EQ(frame_xyz[0].renderer_id, legacy_xyz[0].renderer_id);
+  EXPECT_EQ(frame_xyz[0].img_width, legacy_xyz[0].img_width);
+  EXPECT_EQ(frame_xyz[0].img_height, legacy_xyz[0].img_height);
+  EXPECT_EQ(frame_xyz[0].snapshot_intensity, legacy_xyz[0].snapshot_intensity);
+  EXPECT_EQ(frame_xyz[0].intensity_factor, legacy_xyz[0].intensity_factor);
+  EXPECT_EQ(frame_xyz[0].has_valid_data, legacy_xyz[0].has_valid_data);
+  EXPECT_EQ(frame_xyz[0].snapshot_generation, legacy_xyz[0].snapshot_generation);
+  EXPECT_EQ(frame_xyz[0].effective_pixels, legacy_xyz[0].effective_pixels);
+  EXPECT_EQ(frame_xyz[0].epoch, legacy_xyz[0].epoch);
+  EXPECT_EQ(frame_xyz[1].xyz_buffer, nullptr) << "sentinel not written";
+
+  EXPECT_EQ(frame_stats.sim_ray_num, legacy_stats[0].sim_ray_num);
+  EXPECT_EQ(frame_stats.ray_seg_num, legacy_stats[0].ray_seg_num);
+  EXPECT_EQ(frame_stats.crystal_num, legacy_stats[0].crystal_num);
+  EXPECT_EQ(frame_stats.orientation_num, legacy_stats[0].orientation_num);
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+
+// Every kind of result read off ONE frame belongs to ONE snapshot. This is what retires the
+// combined xyz+composite getter: pairing is not something a caller has to ask for.
+TEST_F(ServerLifecycleApi, ResultFrameReadsShareOneGeneration) {
+  CommitAndWaitForIdle();
+
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+
+  LUMICE_RawXyzResult xyz_a[2]{};
+  LUMICE_RawXyzResult xyz_b[2]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz_a, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz_b, 1), LUMICE_OK);
+  EXPECT_EQ(xyz_a[0].snapshot_generation, xyz_b[0].snapshot_generation);
+  EXPECT_EQ(xyz_a[0].xyz_buffer, xyz_b[0].xyz_buffer) << "two reads of one frame disagree";
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+
+// Release really does give the share back, and taking another frame afterwards works.
+TEST_F(ServerLifecycleApi, ResultFrameAcquireReleaseAcquire) {
+  CommitAndWaitForIdle();
+
+  LUMICE_ResultFrame* first = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &first), LUMICE_OK);
+  LUMICE_ReleaseResultFrame(first);
+
+  LUMICE_ResultFrame* second = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &second), LUMICE_OK);
+  ASSERT_NE(second, nullptr);
+  LUMICE_RenderResult out[2]{};
+  EXPECT_EQ(LUMICE_FrameGetRender(second, out, 1), LUMICE_OK);
+  EXPECT_NE(out[0].img_buffer, nullptr);
+  LUMICE_ReleaseResultFrame(second);
+}
+
+
+// A frame acquired before anything has run is empty, not invalid: every read succeeds and
+// writes its sentinel / all-zero struct. Nothing here may crash.
+TEST_F(ServerLifecycleApi, ResultFrameBeforeAnySnapshotIsEmpty) {
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_NE(frame, nullptr);
+
+  LUMICE_RenderResult render[2]{};
+  LUMICE_RenderResult composite[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  LUMICE_StatsResult stats{ 1, 1, 1, 1 };  // pre-dirtied: an untouched out param would pass
+  EXPECT_EQ(LUMICE_FrameGetRender(frame, render, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame, composite, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(render[0].img_buffer, nullptr);
+  EXPECT_EQ(composite[0].img_buffer, nullptr);
+  EXPECT_EQ(xyz[0].xyz_buffer, nullptr);
+  EXPECT_EQ(stats.sim_ray_num, 0u);
+  EXPECT_EQ(stats.ray_seg_num, 0u);
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+
+// The cached-stats read is the one result path that must answer BEFORE any snapshot exists,
+// and lumice.h promises all-zero there. Existing coverage commits and waits first, so this
+// initial state was untested.
+TEST_F(ServerLifecycleApi, CachedStatsAllZeroBeforeAnySnapshot) {
+  LUMICE_StatsResult stats{ 1, 1, 1, 1 };
+  ASSERT_EQ(LUMICE_GetCachedStats(server_, &stats), LUMICE_OK);
+  EXPECT_EQ(stats.sim_ray_num, 0u);
+  EXPECT_EQ(stats.ray_seg_num, 0u);
+  EXPECT_EQ(stats.crystal_num, 0u);
+  EXPECT_EQ(stats.orientation_num, 0u);
+}
+
+
+TEST_F(ServerLifecycleApi, ResultFrameNullArgs) {
+  LUMICE_ResultFrame* frame = nullptr;
+  EXPECT_EQ(LUMICE_AcquireResultFrame(nullptr, &frame), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_AcquireResultFrame(server_, nullptr), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_RenderResult render[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  LUMICE_StatsResult stats{};
+  EXPECT_EQ(LUMICE_FrameGetRender(nullptr, render, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetComposite(nullptr, render, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(nullptr, xyz, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetStats(nullptr, &stats), LUMICE_ERR_NULL_ARG);
+
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRender(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetStats(frame, nullptr), LUMICE_ERR_NULL_ARG);
+  LUMICE_ReleaseResultFrame(frame);
+
+  // NULL-safe no-op, same contract as LUMICE_DestroyServer / LUMICE_SceneDestroy.
+  // Double-release is deliberately NOT tested: the contract says it is undefined behavior
+  // and there is no double-free sentinel, which is the same answer every other handle in
+  // this API gives.
+  LUMICE_ReleaseResultFrame(nullptr);
+}
+
+
 // Regression for ServerImpl::Stop() lost-wakeup deadlock: drives CommitConfig→Stop in
 // a tight loop to hit the narrow race window. Each Stop runs on a worker thread with a
 // per-iteration timeout — a hang surfaces as a FAIL() rather than wedging the whole

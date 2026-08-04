@@ -2574,6 +2574,138 @@ LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* s
 
 
 // =============== Results ===============
+// LUMICE_ResultFrame_ wraps a share of one published, immutable server-side snapshot.
+// Lifecycle mirrors LUMICE_Scene_ (new/delete); the shared_ptr inside is what makes the
+// borrow safe — the buffers a caller reads out of the frame cannot be freed or rewritten
+// while it holds one.
+struct LUMICE_ResultFrame_ {
+  std::shared_ptr<const ns::ResultFrame> frame_;
+};
+
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame) {
+  if (!server || !out_frame) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  *out_frame = new LUMICE_ResultFrame_{ server->server_->AcquireResultFrame() };
+  return LUMICE_OK;
+}
+
+
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame) {
+  delete frame;  // delete nullptr is a no-op (NULL-safe, same as LUMICE_DestroyServer)
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  const auto& results = frame->frame_->xyz_results_;
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].img_width_;
+    out[i].img_height = results[i].img_height_;
+    out[i].xyz_buffer = results[i].xyz_buffer_;
+    out[i].snapshot_intensity = results[i].snapshot_intensity_;
+    out[i].intensity_factor = results[i].intensity_factor_;
+    out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
+    out[i].snapshot_generation = results[i].snapshot_generation_;
+    out[i].effective_pixels = results[i].effective_pixels_;
+    out[i].epoch = results[i].epoch_;
+  }
+
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RawXyzResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  const auto& results = frame->frame_->composite_results_;
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].w_;
+    out[i].img_height = results[i].h_;
+    out[i].img_buffer = results[i].rgb_ ? results[i].rgb_->data() : nullptr;
+    // Composite path — participating-classes union P99 (auto-EV anchor).
+    out[i].composite_p99_y = results[i].p99_y_;
+  }
+
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  const auto& results = frame->frame_->render_results_;
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].img_width_;
+    out[i].img_height = results[i].img_height_;
+    out[i].img_buffer = results[i].img_buffer_;
+    // Mono path — composite_p99_y is composite-only; leave at 0.
+    out[i].composite_p99_y = 0.0f;
+  }
+
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  const auto& stats = frame->frame_->stats_result_;
+  if (stats.has_value()) {
+    out->ray_seg_num = stats->ray_seg_num_;
+    out->sim_ray_num = stats->sim_ray_num_;
+    out->crystal_num = stats->crystal_num_;
+    out->orientation_num = stats->orientation_num_;
+  } else {
+    std::memset(out, 0, sizeof(LUMICE_StatsResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
 LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;

@@ -55,6 +55,12 @@ typedef struct LUMICE_Server_ LUMICE_Server;
 // down for its lifecycle + Add*/Set* build API. Declared here alongside the other opaque handle
 // types; the build functions live below the leaf POD structs they consume.
 typedef struct LUMICE_Scene_ LUMICE_Scene;
+// Opaque, immutable, reference-counted snapshot of ALL results (mono render, composite,
+// raw XYZ, stats) as of one server-side snapshot. Acquiring one gives the caller a real
+// share of the data's lifetime: every buffer reachable through it stays valid until the
+// caller releases the frame, no matter what the server does meanwhile. See the "Results"
+// section below for the acquire/release + read functions.
+typedef struct LUMICE_ResultFrame_ LUMICE_ResultFrame;
 
 // =============== Error Codes ===============
 typedef enum LUMICE_ErrorCode_ {
@@ -947,6 +953,68 @@ LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flag
 // callers relying on sentinel iteration must value-initialize the array
 // (e.g., Type arr[N + 1]{}) and pass max_count = N. Minimum array size:
 // max_count + 1 for sentinel iteration, max_count for direct index access.
+
+// ---------- Result frame (opaque handle) ----------
+// Every result read goes through a frame. Acquire one, read whatever kinds of result you
+// need out of it, release it:
+//
+//     LUMICE_ResultFrame* frame = NULL;
+//     if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+//       LUMICE_RawXyzResult xyz[2] = {0};
+//       LUMICE_FrameGetRawXyz(frame, xyz, 1);
+//       /* xyz[0].xyz_buffer stays valid until the Release below */
+//       LUMICE_ReleaseResultFrame(frame);
+//     }
+//
+// WHY a handle rather than plain getters: the buffers these results point at are owned by
+// the server, and the server keeps producing new snapshots. Without a handle a reader holds
+// a pointer with no share of its lifetime — the next snapshot frees or rewrites the memory
+// under it, which is a use-after-free, not merely a stale read. Holding a frame is what
+// makes the borrow safe, and it is why the read functions below take a frame instead of a
+// server.
+//
+// Two frames are independent: acquiring a second one does not affect the first, and a
+// caller may hold as many as it likes.
+//
+// Materializes a pending snapshot (like the getters it replaces), then writes a new frame
+// handle to *out_frame. The caller owns that handle and MUST eventually pass it to
+// LUMICE_ReleaseResultFrame. Returns LUMICE_ERR_NULL_ARG if `server` or `out_frame` is NULL.
+// On success *out_frame is never NULL, even before the first snapshot — such a frame simply
+// reads as "no results" (every FrameGet* writes its sentinel / all-zero struct).
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
+
+// Release a frame handle. NULL-safe no-op (same contract as LUMICE_DestroyServer). Each
+// handle must be Released exactly once; releasing the same handle twice is undefined
+// behavior (this mirrors LUMICE_DestroyServer and every other handle in this API — there is
+// no double-free sentinel).
+//
+// Failure mode if you forget: the frame — and only that frame — leaks. It cannot corrupt
+// memory or affect any other reader, because a frame is immutable and separately
+// reference-counted; and a leak is what ASan/LSan/valgrind already report, so no
+// project-specific machinery is needed to find one. After the Release, every pointer read
+// out of that frame is dangling; copy what you still need first.
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
+
+// Read functions. Same (out, max_count) array shape and same sentinel contract as the
+// server-taking getters, so only the first argument differs. Any two reads from the SAME
+// frame describe the same snapshot generation by construction — no separate "combined"
+// getter is needed to pair them. All return LUMICE_ERR_NULL_ARG on a NULL frame/out.
+
+// Raw XYZ float data + intensity scalars (xyz_buffer == NULL sentinel).
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count);
+
+// Per-raypath composite sRGB images, one per colored renderer (img_buffer == NULL sentinel).
+// Empty (out[0] sentinel) when no `raypath_color` is configured — the mono path below is
+// unaffected. composite_p99_y is meaningful here (see its field docs).
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+
+// Mono / full-spectrum sRGB uint8 images (img_buffer == NULL sentinel). composite_p99_y is
+// left at 0 on this path and must be ignored.
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+
+// Simulation statistics. Single value, so no max_count: writes an all-zero struct when the
+// frame carries no stats (e.g. acquired before the first snapshot).
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
 
 // Fill render results into out array (img_buffer == NULL sentinel when count < max_count).
 // Returns sRGB uint8 image data (CPU-converted from XYZ).
