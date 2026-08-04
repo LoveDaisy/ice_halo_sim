@@ -400,6 +400,15 @@ re-run". Once that is the default response, **a true positive is disposed of by 
 same motion as a false one**, and the first factor stops buying anything. Lowering the noise
 floor cannot fix a second factor that is zero.
 
+That disposal habit sits on top of a more basic question: has this layer ever caught anything,
+across its whole history? Two independent searches — every commit message in this repository's
+history, and the bodies of the 29 merged PRs whose description mentions a GUI visual-regression
+result — turned up no record of a product defect discovered because this layer went red. Read
+that as **not found**, not as **never happened**: both search surfaces are prose written by
+whoever merged the change, and a catch that was never described in text would be invisible to
+either. The distinction is not a hedge — it is the same honesty the rest of this section argues
+for.
+
 This section is what replaced that default. It has three parts: what actually executes in CI,
 what a red obliges you to do, and — stated rather than left implicit — which parts of this
 layer are still nobody's gate but yours.
@@ -560,6 +569,34 @@ the ones the routes assumed.
 The one thing rejected outright is the fifth option nobody proposed but everything drifts toward:
 loosening a threshold so the layer stops going red. That converts "not believed" into "does not
 report", which is the same zero detection power with the evidence removed.
+
+### §4.7 Why `auto_ev` was retired, and `lens_proj` was not
+
+Both were once a set of reference images from stochastic renders, but they varied opposite axes.
+`lens_proj`'s scenes hold the simulation fixed — all six share `halo_22.json` — and vary the
+display axis, one scene per inverse-projection branch. The retired `auto_ev` group did the
+reverse: all ten scenes held the display axis constant (`fisheye_equal_area` at elevation 20) and
+varied the simulation axis instead (spectrum, crystal type, zenith distribution, filter, MS layer
+count).
+
+That is the wrong axis for a display-regression layer to spend scenes on, and it already had an
+owner elsewhere. Seven of `auto_ev`'s ten configs (`halo_22`, `color`, `cza`, `filters`,
+`multi_scatter`, `parhelion`, `pyramid`) are also `test/e2e-correctness/test_smoke.py` configs,
+asserted there at thresholds averaging 8.7 dB stricter — and `test_smoke.py` runs through the CLI
+on every PR, where `gui_test`'s `auto_ev` group was build-only. The two are not on identical
+footing (the CLI configs also use a higher ray budget than the GUI's), but the axis `auto_ev`
+spent nine-tenths of its scenes varying was one this repository already tested harder, on every
+push, somewhere else.
+
+The axis `auto_ev` *did* hold exclusively — the display path — turned out not to be exclusive to
+it either. `test_gui_lens_projection.cpp` reads the same `snapshot_intensity` / `ev_auto` state
+and sets exposure through the identical code path the retired `test_gui_auto_ev.cpp` did, and
+`test/unit-correctness/gui/test_ev_auto.cpp` exercises the auto-EV computation itself with four
+deterministic assertions that still run in CI on all three platforms. Once the simulation-axis
+scenes are attributed to `test_smoke.py` and the auto-EV-pipeline scenes to `test_ev_auto.cpp`,
+the only territory `auto_ev` held alone was the zenith/nadir markers and coordinate grid drawn by
+`overlayAuxLines()` — one scene's worth. That scene, `overlay_ea`, was kept and migrated into
+`lens_proj` rather than retired with the rest.
 
 ---
 

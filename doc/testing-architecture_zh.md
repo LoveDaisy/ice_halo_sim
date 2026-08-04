@@ -321,6 +321,12 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 成为默认响应，**一次真命中就会以与假警报完全相同的方式被处理掉**，第一项也就什么都买不到了。压低噪声
 地板修不好一个等于零的第二项。
 
+这份处置习惯之上还有一个更基础的问题：这一层在它的全部历史里，真的抓到过什么吗？两条独立检索——
+本仓库全部历史的 commit message，以及 29 个描述里提到 GUI 视觉回归结果的已合入 PR 正文——均未找到
+任何"因这一层变红而发现产品缺陷"的记录。这里的措辞是**未找到**，不是**从未发生过**：两个检索面
+都是合入者留下的文字，一次从未被写进文字的命中，对两者都是不可见的。这不是留退路的模糊说法——它与
+本节其余部分依赖的诚实态度是同一件事。
+
 本节是取代那个默认动作的东西。三部分：CI 里真跑了什么，红了之后你有什么义务，以及——写出来而不是留在
 沉默里——这一层还有哪些部分除了你没有任何闸门。
 
@@ -439,6 +445,27 @@ required check 会人为制造约 60% 的假红率——那等于用手把本节
 
 被直接否决的是第五个选项——没人提议、但一切都会朝它漂移的那个：把阈值放松到这一层不再变红。那是把
 "不被相信"换成"不再报告"，检出力同样是零，只是连证据一起抹掉了。
+
+### §4.7 为什么 `auto_ev` 被退役了，而 `lens_proj` 没有
+
+两者都曾是一组来自随机渲染的参考图，但它们变的是相反的轴。`lens_proj` 的场景钉死仿真——六景全共用
+`halo_22.json`——变的是显示轴，每个逆投影分支一景。已退役的 `auto_ev` 组反过来：全部十景钉死显示轴
+（`fisheye_equal_area`、elevation 20），变的是仿真轴（光谱、晶体 type、天顶分布、filter、多散射层数）。
+
+这对一个显示回归层来说是选错了要变的轴，而且这条轴早已别处有主。`auto_ev` 十个 config 里有七个
+（`halo_22`、`color`、`cza`、`filters`、`multi_scatter`、`parhelion`、`pyramid`）同时也是
+`test/e2e-correctness/test_smoke.py` 的 config，在那里断言的阈值平均严 8.7 dB——而且 `test_smoke.py`
+经 CLI 在每个 PR 上真跑，`gui_test` 的 `auto_ev` 组当时却只编译不跑。两者不是同一起跑线（CLI 那组
+config 的光线预算也比 GUI 这边高），但 `auto_ev` 把十分之九的场景花在变一条本仓库早已在别处、每次
+push 都测得更严的轴上。
+
+`auto_ev` 唯一独占的那条轴——显示路径——结果也不是它独占的。`test_gui_lens_projection.cpp` 读的是
+同一份 `snapshot_intensity` / `ev_auto` 状态，走的是已退役的 `test_gui_auto_ev.cpp` 当年那条一模一样
+的代码路径来设 exposure，而 `test/unit-correctness/gui/test_ev_auto.cpp` 用四条确定性断言直接验证
+auto-EV 的计算本身，且仍在三平台 CI 上跑。把仿真轴场景记到 `test_smoke.py` 名下、把 auto-EV 管线场景
+记到 `test_ev_auto.cpp` 名下之后，`auto_ev` 唯一独占的领地只剩 `overlayAuxLines()` 画的 zenith/nadir
+标记与坐标网格——一景的量。那一景，`overlay_ea`，被保留下来并迁入了 `lens_proj`，没有跟着其余场景
+一起退役。
 
 ---
 
