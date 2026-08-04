@@ -72,8 +72,9 @@ void StartPerfSimulation() {
 
   // Retained test capability (introduced by explore-265, concern #2 stress test):
   // if LUMICE_PERF_CONFIG points to a config JSON, load it via the same
-  // DeserializeFromJson path auto_ev uses, so the steady_state / slider_drag
-  // scenarios run on an arbitrary (e.g. heavy multi-MS/multi-crystal) scene instead
+  // DeserializeFromJson path the lens_proj and sim_e2e_smoke suites use, so the
+  // steady_state / slider_drag scenarios run on an arbitrary (e.g. heavy
+  // multi-MS/multi-crystal) scene instead
   // of the hardcoded single prism. Faithful resolution kept (no downscale). This is
   // intentionally kept for reuse by future GUI perf / regime benchmarks (e.g. the
   // commit<->batch decoupling work); do NOT treat as throwaway instrumentation.
