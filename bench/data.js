@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785863087594,
+  "lastUpdate": 1785863089736,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2",
-          "message": "Merge pull request #145 from LoveDaisy/chore/cleanup-metal-compile-review-minors\n\nchore: clean up Metal compile-path review minors (task-282/283 衍生, #293)",
-          "timestamp": "2026-06-24T10:28:16+08:00",
-          "tree_id": "c31eea8c0d7df06b3064a38d766c0960feaa9fde",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2"
-        },
-        "date": 1782268468568,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 77.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 85.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 96.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "2f8eb7bbab1521ea2da2b78755c8afe7e394a804",
           "message": "Merge pull request #146 from LoveDaisy/chore/release-prep\n\nchore: release prep v4.3.1 (perf-doc baseline + TraceCrystalBatch cleanup)",
           "timestamp": "2026-06-24T11:39:57+08:00",
@@ -13969,6 +13925,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e95f5c4505cac81d3efb2fbfec80b26926ff77c",
+          "message": "Merge pull request #249 from LoveDaisy/explore/gui-test-suite-from-scratch\n\ndocs(testing-architecture): 新增 §4.8 —— GUI 套件形状的机制层诊断与工作规则",
+          "timestamp": "2026-08-05T00:54:42+08:00",
+          "tree_id": "d211f764eb7e4218ae46f8a34134e89f34aa0e31",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6e95f5c4505cac81d3efb2fbfec80b26926ff77c"
+        },
+        "date": 1785863089218,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 101.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.6,
             "unit": "%"
           }
         ]
