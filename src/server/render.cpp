@@ -39,7 +39,6 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       comp_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       class_table_(std::move(class_table)),
       lane_pixel_count_(static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1])) {
   // Borrow the first pair up front so the two snapshot getters never see a null
@@ -517,11 +516,6 @@ void RenderConsumer::PostSnapshot() {
     return;
   }
 
-  // Copy to work buffer — preserve snapshot_xyz_ for GetRawXyzResult().
-  auto buf_size = static_cast<size_t>(total_pix) * 3;
-  std::memcpy(snapshot_work_.get(), snapshot_xyz_.get(), buf_size * sizeof(float));
-  float* float_data = snapshot_work_.get();
-
   // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
   // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
   // task-336.3: the scale expression now lives in ExposureScale() (single source
@@ -529,15 +523,27 @@ void RenderConsumer::PostSnapshot() {
   // guard above, so ExposureScale() returns the same non-zero value the inline
   // expression used to compute — bit-identical.
   float scale = ExposureScale();
-  for (size_t i = 0; i < buf_size; i++) {
-    float_data[i] *= scale;
-  }
 
   bool use_real_color = config_.ray_color_[0] < 0;
-  for (int i = 0; i < total_pix; i++) {
-    float* xyz = float_data + i * 3;
-    float rgb[3];
 
+  // One pass per pixel, intermediates kept in registers. This used to be four
+  // full-buffer passes (memcpy into a work buffer → scale → color transform →
+  // LinearToSrgbBatch → narrow), which existed only because each pass needed a
+  // mutable place to leave its output for the next one; snapshot_xyz_ itself
+  // must survive untouched for GetRawXyzResult(). Every one of those passes was
+  // element-wise, so fusing them reorders no floating-point operation and the
+  // bytes produced here are identical to what the four-pass version produced —
+  // the property test_render_consumer_post_snapshot_fusion.cpp holds this code
+  // to, byte for byte and without tolerance. Keep it that way: each step below
+  // must stay a per-element operation on a value that never round-trips through
+  // a different precision.
+  for (int i = 0; i < total_pix; i++) {
+    float xyz[3];
+    for (int j = 0; j < 3; j++) {
+      xyz[j] = snapshot_xyz_[i * 3 + j] * scale;
+    }
+
+    float rgb[3];
     if (use_real_color) {
       // Gamut clip → matrix multiply
       float clipped[3];
@@ -559,18 +565,15 @@ void RenderConsumer::PostSnapshot() {
       }
     }
 
-    // Background blending + clamp
+    // Background blending + clamp, then sRGB gamma and the narrowing write. The
+    // gamma call is the scalar LinearToSrgb the old LinearToSrgbBatch looped
+    // over element by element (color_space.cpp), not a different formula.
     for (int j = 0; j < 3; j++) {
       rgb[j] += config_.background_[j];
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
+      rgb[j] = LinearToSrgb(rgb[j]);
+      snapshot_image_buffer_[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
     }
-    std::memcpy(float_data + i * 3, rgb, 3 * sizeof(float));
-  }
-
-  LinearToSrgbBatch(float_data, 3 * total_pix);
-
-  for (int i = 0; i < total_pix * 3; i++) {
-    snapshot_image_buffer_[i] = static_cast<uint8_t>(float_data[i] * 255);
   }
 }
 

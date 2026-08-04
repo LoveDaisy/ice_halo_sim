@@ -199,7 +199,6 @@ class RenderConsumer : public IConsume {
   // being assembled — NOT rewritten in place, which is what used to tear a reader's
   // data under it. shared_ptr, not unique_ptr, because the frame co-owns them.
   std::shared_ptr<float[]> snapshot_xyz_;
-  std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
   std::shared_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
   std::shared_ptr<FrameBufferPool<float>> xyz_pool_ = std::make_shared<FrameBufferPool<float>>();
   std::shared_ptr<FrameBufferPool<uint8_t>> image_pool_ = std::make_shared<FrameBufferPool<uint8_t>>();
