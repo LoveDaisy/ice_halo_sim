@@ -550,6 +550,49 @@ TEST(OverlayLabels, pixel_to_world_dir_dual_fisheye_upper_above_center) {
   EXPECT_LT(wz, 0.0f);  // upper hemisphere (up)
 }
 
+// Dual fisheye, equidistant and stereographic: the two types of the family with no other
+// coverage anywhere — equal-area is reached by the lens_proj pixel references and
+// orthographic by the two disc-center tests above, but nothing before these two cases ran
+// DualFisheyeInv's type==1 / type==2 branches at all.
+//
+// A disc-center probe (use_r=0) cannot see them: theta comes out 0 for every type. So both
+// cases probe at HALF the disc radius, where each type's radial law gives a different, exactly
+// derivable polar angle — which is what turns a changed formula red rather than letting it
+// agree with itself:
+//   equidistant:   theta = use_r * 90°       = 45°       -> (sin, cos) = (0.70711, 0.70711)
+//   stereographic: theta = 2*atan(use_r * 1) = 53.1301°  -> (sin, cos) = (0.8, 0.6)
+// Both viewports are 200x200 ⇒ short_res = min(100, 200) = 100, circle_radius = 50, so the
+// left (upper-hemisphere) disc is centred at px=-50 and the probe sits at px=-25, py=0.
+// py=0 keeps the probe on the disc's horizontal axis, where phi=0 and the recovered direction
+// is (0, sin theta, -cos theta): no x tilt, +y side, upper hemisphere.
+TEST(OverlayLabels, pixel_to_world_dir_dual_equidist_half_radius) {
+  float view[9];
+  lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);  // unused for dual fisheye
+  float wx = 0, wy = 0, wz = 0;
+  bool valid = false;
+  lumice::gui::detail::PixelToWorldDirForTesting(-25.0f, 0.0f, 200.0f, 200.0f,
+                                                 lumice::gui::kLensTypeDualFisheyeEquidist,
+                                                 /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+  EXPECT_TRUE(valid);
+  EXPECT_NEAR(wx, 0.0f, 1e-3f);
+  EXPECT_NEAR(wy, 0.70711f, 1e-3f);   // sin(45°)
+  EXPECT_NEAR(wz, -0.70711f, 1e-3f);  // -cos(45°), upper hemisphere
+}
+
+TEST(OverlayLabels, pixel_to_world_dir_dual_stereographic_half_radius) {
+  float view[9];
+  lumice::gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);  // unused for dual fisheye
+  float wx = 0, wy = 0, wz = 0;
+  bool valid = false;
+  lumice::gui::detail::PixelToWorldDirForTesting(-25.0f, 0.0f, 200.0f, 200.0f,
+                                                 lumice::gui::kLensTypeDualFisheyeStereographic,
+                                                 /*fov*/ 180.0f, view, &wx, &wy, &wz, &valid);
+  EXPECT_TRUE(valid);
+  EXPECT_NEAR(wx, 0.0f, 1e-3f);
+  EXPECT_NEAR(wy, 0.8f, 1e-3f);   // sin(2*atan(0.5))
+  EXPECT_NEAR(wz, -0.6f, 1e-3f);  // -cos(2*atan(0.5)), upper hemisphere
+}
+
 // detail::ClampLabelPosToViewport contract — pure function tests for the
 // viewport-inset behaviour.
 // Pin all four edges and the "no-op when label fits centred" path.
