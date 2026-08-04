@@ -181,7 +181,7 @@ struct CompositeResult {
   std::shared_ptr<const std::vector<uint8_t>> rgb_;  ///< W*H*3 sRGB, owned by the frame
   // P99 over the union of NON-ZERO UNEXPOSED (raw lane) Y values across
   // every participating class. The composite-path auto-EV anchor consumed by the GUI
-  // (mono path keeps its xyz_data-derived P99). 0 when no participating class carries
+  // (mono path keeps its xyz-derived P99). 0 when no participating class carries
   // any positive Y.
   float p99_y_ = 0.0f;
 };

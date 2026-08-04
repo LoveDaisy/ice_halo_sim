@@ -1544,12 +1544,14 @@ void SyncFromPoller() {
                     payload->intensity_factor);
     // task-342.4 Step 3 + task-345.4: choose sRGB uint8 vs XYZ float upload path. Server produces
     // composite iff raypath_color is active; user can toggle back to full-spectrum via the status
-    // bar (`show_composite_preview`). Auto-EV / stats / serial-dedup still consume xyz_data-derived
+    // bar (`show_composite_preview`). Auto-EV / stats / serial-dedup still consume xyz-derived
     // fields below — those are populated in both branches (plan §3 keypoint 3).
+    // Both buffers are views into the result frame the payload holds, so `payload` staying alive
+    // for this whole block is what keeps them readable.
     if (effective_composite) {
-      g_preview.UploadTexture(payload->rgb_data.data(), payload->width, payload->height);
+      g_preview.UploadTexture(payload->rgb_buffer, payload->width, payload->height);
     } else {
-      g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+      g_preview.UploadXyzTexture(payload->xyz_buffer, payload->width, payload->height);
     }
     g_state.last_uploaded_as_composite = effective_composite;
     g_state.snapshot_intensity = payload->snapshot_intensity;

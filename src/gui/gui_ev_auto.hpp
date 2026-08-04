@@ -24,7 +24,11 @@ constexpr int kEvAutoDownsampleFactor = 8;
 // Python reference `e6_gold_downsample.py`).  Returns an empty vector if the
 // coarse dimensions collapse to zero so callers can fall back to the fine
 // path.  Channel index 1 (Y), stride 3 (XYZ).
-inline std::vector<float> DownsampleBoxSumY(const std::vector<float>& xyz_data, int img_width, int img_height, int f) {
+//
+// PRECONDITION: `xyz_data` is a borrowed view of at least img_width*img_height*3 floats. A raw
+// pointer carries no length, so the caller's dimensions are the only bound this function has —
+// exactly as before, since the vector overload this replaced never consulted `.size()` either.
+inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width, int img_height, int f) {
   if (f <= 0 || img_width <= 0 || img_height <= 0) {
     return {};
   }
@@ -81,8 +85,11 @@ inline std::vector<float> DownsampleBoxSumY(const std::vector<float>& xyz_data, 
 //      fine path's empty case).
 //
 // Returns 0 if no positive Y entries exist (fine or coarse, by path).
-inline float ComputeP99Y(const std::vector<float>& xyz_data, int img_width = 0, int img_height = 0,
-                         int downsample_factor = 1) {
+//
+// PRECONDITION (same as DownsampleBoxSumY): `xyz_data` views at least img_width*img_height*3
+// floats. img_width/img_height are required rather than defaulted — a raw pointer carries no
+// length, so there is no buffer to fall back to measuring.
+inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor = 1) {
   if (downsample_factor > 1) {
     std::vector<float> coarse = DownsampleBoxSumY(xyz_data, img_width, img_height, downsample_factor);
     if (!coarse.empty()) {
@@ -107,9 +114,14 @@ inline float ComputeP99Y(const std::vector<float>& xyz_data, int img_width = 0, 
     }
     // Fall through to fine path on empty coarse buffer.
   }
+  // Non-positive dims yield an empty range, matching what the retired `xyz_data.size()` bound did
+  // for an empty buffer. The explicit test is not decoration: unlike a vector's size(), a negative
+  // int silently becomes an enormous size_t, and this loop has no other bound.
+  const size_t float_count =
+      (img_width > 0 && img_height > 0) ? static_cast<size_t>(img_width) * static_cast<size_t>(img_height) * 3 : 0;
   std::vector<float> y_vals;
-  y_vals.reserve(xyz_data.size() / 3);
-  for (size_t i = 1; i < xyz_data.size(); i += 3) {
+  y_vals.reserve(float_count / 3);
+  for (size_t i = 1; i < float_count; i += 3) {
     if (xyz_data[i] > 0.0f) {
       y_vals.push_back(xyz_data[i]);
     }

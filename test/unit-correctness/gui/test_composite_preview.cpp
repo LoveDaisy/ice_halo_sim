@@ -174,7 +174,7 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
 }  // namespace
 
 // AC1 anchor (headless): raypath_color active → payload->is_composite == true,
-// payload->rgb_data is populated and byte-identical to what LUMICE_FrameGetComposite
+// payload->rgb_buffer is populated and byte-identical to what LUMICE_FrameGetComposite
 // returns directly. This is the headless mechanistic proof that the poller wires
 // the composite surface through the payload; the on-screen visual is AC4 owner.
 TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
@@ -196,8 +196,11 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
   EXPECT_TRUE(snap->valid);
   ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(snap->payload->is_composite);
-  EXPECT_TRUE(!snap->payload->rgb_data.empty());
-  EXPECT_TRUE(!snap->payload->xyz_data.empty());  // XYZ still populated (auto-EV lane unchanged)
+  EXPECT_TRUE(snap->payload->rgb_buffer != nullptr);
+  EXPECT_TRUE(snap->payload->xyz_buffer != nullptr);  // XYZ still populated (auto-EV lane unchanged)
+  // The payload views the frame's pixels rather than owning a copy, so the frame share is what
+  // makes the reads below defined at all.
+  ASSERT_TRUE(snap->payload->frame != nullptr);
 
   // Byte-identity with a direct C-API composite read.
   LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
@@ -207,13 +210,12 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
   EXPECT_EQ(comp[0].img_width, snap->payload->width);
   EXPECT_EQ(comp[0].img_height, snap->payload->height);
   const size_t nbytes = static_cast<size_t>(snap->payload->width) * static_cast<size_t>(snap->payload->height) * 3;
-  EXPECT_EQ(snap->payload->rgb_data.size(), nbytes);
-  EXPECT_EQ(std::memcmp(snap->payload->rgb_data.data(), comp[0].img_buffer, nbytes), 0);
+  EXPECT_EQ(std::memcmp(snap->payload->rgb_buffer, comp[0].img_buffer, nbytes), 0);
 
   // Composite is non-trivial (class0 is match-all red).
   unsigned long long sum = 0;
-  for (unsigned char v : snap->payload->rgb_data) {
-    sum += v;
+  for (size_t i = 0; i < nbytes; ++i) {
+    sum += snap->payload->rgb_buffer[i];
   }
   EXPECT_TRUE(sum > 0u);
 
@@ -221,8 +223,8 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
   LUMICE_DestroyServer(server);
 }
 
-// AC2 anchor (headless): no raypath_color → payload->is_composite == false, rgb_data
-// stays empty, xyz_data is byte-identical to LUMICE_FrameGetRawXyz. This is the
+// AC2 anchor (headless): no raypath_color → payload->is_composite == false, rgb_buffer
+// stays null, xyz_buffer is byte-identical to LUMICE_FrameGetRawXyz. This is the
 // per-byte "zero regression" gate for scenes that never touch the color surface.
 TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
   LUMICE_Server* server = LUMICE_CreateServer();
@@ -243,8 +245,9 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
   EXPECT_TRUE(snap->valid);
   ASSERT_TRUE(snap->payload != nullptr);
   EXPECT_TRUE(!snap->payload->is_composite);
-  EXPECT_TRUE(snap->payload->rgb_data.empty());
-  EXPECT_TRUE(!snap->payload->xyz_data.empty());
+  EXPECT_TRUE(snap->payload->rgb_buffer == nullptr);
+  EXPECT_TRUE(snap->payload->xyz_buffer != nullptr);
+  ASSERT_TRUE(snap->payload->frame != nullptr);
 
   // XYZ byte-identity with the direct C-API read (AC2 zero-regression).
   LUMICE_RawXyzResult xyz[2]{};
@@ -254,8 +257,7 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
   EXPECT_EQ(xyz[0].img_width, snap->payload->width);
   EXPECT_EQ(xyz[0].img_height, snap->payload->height);
   const size_t nfloats = static_cast<size_t>(snap->payload->width) * static_cast<size_t>(snap->payload->height) * 3;
-  EXPECT_EQ(snap->payload->xyz_data.size(), nfloats);
-  EXPECT_EQ(std::memcmp(snap->payload->xyz_data.data(), xyz[0].xyz_buffer, nfloats * sizeof(float)), 0);
+  EXPECT_EQ(std::memcmp(snap->payload->xyz_buffer, xyz[0].xyz_buffer, nfloats * sizeof(float)), 0);
 
   // Composite surface reports the sentinel: img_buffer null → poller left is_composite false.
   LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
@@ -278,8 +280,8 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
 // The invariant AC3 demanded ("composite与其渲染源xyz不跨代混装的保护仍在") is unchanged and
 // still asserted here — only its mechanism moved. Every churn round must yield (a) a strictly
 // advanced generation, (b) composite bytes byte-identical to what a same-tick second frame
-// reports, and (c) PopulateCompositePayloadForTest building is_composite=true + rgb_data from
-// that composite. Same fixture and deterministic dirty-arming technique as before.
+// reports, and (c) a real PollOnce building is_composite=true + an rgb_buffer over that same
+// composite. Same fixture and deterministic dirty-arming technique as before.
 TEST(CompositePreview, same_generation_invariant_under_churn) {
   LUMICE_Server* server = LUMICE_CreateServer();
   EXPECT_TRUE(server != nullptr);
@@ -301,9 +303,11 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
   //   3. Byte-match a same-tick second frame (proving the composite read off this frame is the
   //      one that pairs with this frame's xyz, not a cross-generation mix — the "真不变量"
   //      AC3 requires).
-  //   4. Populate the poller payload as a composite (proving PopulateCompositePayload still
-  //      writes rgb_data + sets is_composite, the same behavior the retired drop-recover
-  //      test's "recovery" branch pinned).
+  //   4. Have the poller publish that round's composite as a composite payload (proving PollOnce
+  //      still points rgb_buffer at it and sets is_composite, the same behavior the retired
+  //      drop-recover test's "recovery" branch pinned). This drives the PRODUCTION path rather
+  //      than a direct-call seam: the copy-free payload has no populate helper left to call, and
+  //      exercising PollOnce itself is the stronger assertion anyway.
   for (int round = 0; round < 4; ++round) {
     LUMICE_ColorClassDisplay disp[1]{};
     disp[0].color[2] = static_cast<float>(round % 3) / 2.0f;
@@ -331,12 +335,16 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
     EXPECT_TRUE(direct[0].img_buffer != nullptr);
     EXPECT_EQ(std::memcmp(comp[0].img_buffer, direct[0].img_buffer, nbytes), 0);
 
-    // (4) PopulateCompositePayload builds the composite payload from those bytes.
-    gui::TexturePayload payload;
-    local.PopulateCompositePayloadForTest(direct[0], &payload);
-    EXPECT_TRUE(payload.is_composite);
-    EXPECT_EQ(payload.rgb_data.size(), nbytes);
-    EXPECT_EQ(std::memcmp(payload.rgb_data.data(), direct[0].img_buffer, nbytes), 0);
+    // (4) One real poll builds the composite payload out of this round's frame. Nothing armed a
+    // new dirty since the two acquires above, so the poll lands on the same frozen snapshot and
+    // its rgb_buffer must agree byte-for-byte with `direct`.
+    local.PollOnceForTest(server);
+    auto snap = local.LoadSnapshot();
+    ASSERT_TRUE(snap != nullptr);
+    ASSERT_TRUE(snap->payload != nullptr);
+    EXPECT_TRUE(snap->payload->is_composite);
+    ASSERT_TRUE(snap->payload->rgb_buffer != nullptr);
+    EXPECT_EQ(std::memcmp(snap->payload->rgb_buffer, direct[0].img_buffer, nbytes), 0);
   }
 
   local.Stop();
@@ -348,7 +356,7 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
 // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
 // COMPLETED). Pins the two coupled invariants:
 //   (a) MECHANISM: the poll after SetRaypathColors + WakeForRefresh yields a payload whose
-//       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_FrameGetComposite
+//       rgb_buffer reflects the new colors and is byte-identical to a direct LUMICE_FrameGetComposite
 //       (proving the display-time dirty flag was consumed, not lost).
 //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
 //       observed before the edit (322 clock decoupling: display-time edit does NOT bump
@@ -385,7 +393,14 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   EXPECT_TRUE(snap_before->valid);
   ASSERT_TRUE(snap_before->payload != nullptr);
   EXPECT_TRUE(snap_before->payload->is_composite);
-  std::vector<uint8_t> composite_before(snap_before->payload->rgb_data.begin(), snap_before->payload->rgb_data.end());
+  // A real copy, deliberately: this is the one place the case NEEDS pixels detached from the
+  // frame, because the whole point is to diff them against a later poll's. The poller no longer
+  // copies, so the test owns this snapshot of the bytes itself.
+  const size_t nbytes_before =
+      static_cast<size_t>(snap_before->payload->width) * static_cast<size_t>(snap_before->payload->height) * 3;
+  ASSERT_TRUE(snap_before->payload->rgb_buffer != nullptr);
+  const std::vector<uint8_t> composite_before(snap_before->payload->rgb_buffer,
+                                              snap_before->payload->rgb_buffer + nbytes_before);
   // Kept so the post-edit poll can be shown to have MATERIALIZED a payload rather than carried the
   // previous one forward — see the serial assertion below.
   const unsigned long long serial_before = snap_before->texture_serial;
@@ -451,15 +466,17 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   // the serial separately keeps a future failure self-diagnosing instead of collapsing both into
   // one "bytes are stale" symptom.
   EXPECT_TRUE(snap_after->texture_serial != serial_before);
-  EXPECT_EQ(snap_after->payload->rgb_data.size(), composite_before.size());
-  EXPECT_TRUE(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
+  ASSERT_TRUE(snap_after->payload->rgb_buffer != nullptr);
+  const size_t nbytes_after =
+      static_cast<size_t>(snap_after->payload->width) * static_cast<size_t>(snap_after->payload->height) * 3;
+  ASSERT_EQ(nbytes_after, composite_before.size());
+  EXPECT_TRUE(std::memcmp(snap_after->payload->rgb_buffer, composite_before.data(), composite_before.size()) != 0);
 
   LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
   lumice::test::ScopedResultFrame frame_direct(server);
   EXPECT_EQ(LUMICE_FrameGetComposite(frame_direct.get(), direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(direct[0].img_buffer != nullptr);
-  EXPECT_EQ(
-      std::memcmp(snap_after->payload->rgb_data.data(), direct[0].img_buffer, snap_after->payload->rgb_data.size()), 0);
+  EXPECT_EQ(std::memcmp(snap_after->payload->rgb_buffer, direct[0].img_buffer, nbytes_after), 0);
 
   // (b) NON-RESTART: lifecycle stays COMPLETED with the SAME epoch. This is the 322 clock-
   // decoupling guarantee — a display-time edit re-materializes but does NOT reset the
@@ -864,7 +881,7 @@ TEST(CompositePreview, add_class_after_idle_reconverges_within_bound) {
     local.PollOnceForTest(server);
     auto snap = local.LoadSnapshot();
     if (snap != nullptr && snap->valid && snap->payload != nullptr && snap->payload->is_composite &&
-        snap->payload->payload_epoch > epoch_before && !snap->payload->rgb_data.empty()) {
+        snap->payload->payload_epoch > epoch_before && snap->payload->rgb_buffer != nullptr) {
       converged = true;
       break;
     }

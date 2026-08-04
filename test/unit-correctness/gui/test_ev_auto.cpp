@@ -17,17 +17,11 @@ std::vector<float> MakeXyz(int w, int h, const std::vector<float>& y_values) {
   return data;
 }
 
-// T1 — f=1 regression: passing downsample_factor=1 with sizes must match the
-// no-sizes overload (the legacy fine path).
-TEST(EvAuto, ComputeP99YFineRegressionWithDefaultFactor) {
-  // 3x3 image with varied positive Y and one zero — small enough to enumerate.
-  std::vector<float> y = { 0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f };
-  std::vector<float> xyz = MakeXyz(3, 3, y);
-
-  float legacy = ComputeP99Y(xyz);
-  float with_factor_one = ComputeP99Y(xyz, 3, 3, 1);
-  EXPECT_FLOAT_EQ(legacy, with_factor_one);
-}
+// (The former T1 pinned the f=1 fine path against a no-sizes overload of ComputeP99Y. That
+// overload is gone: the function now takes a borrowed `const float*`, which carries no length to
+// fall back on, so img_width/img_height became required. With only one call shape left the case
+// reduced to asserting a value equals itself, so it was deleted rather than kept as a tautology.
+// T2-T4 below still cover the box-sum exact values, the all-zero fallback and the wc=0 guard.)
 
 // T2 — f=2 correctness on a 4x4 image: hand-verify the box-sum + P99 + /f^2.
 //
@@ -52,11 +46,11 @@ TEST(EvAuto, ComputeP99YBoxSumExact4x4Factor2) {
                            9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f };
   std::vector<float> xyz = MakeXyz(4, 4, y);
 
-  float p99 = ComputeP99Y(xyz, 4, 4, 2);
+  float p99 = ComputeP99Y(xyz.data(), 4, 4, 2);
   EXPECT_FLOAT_EQ(p99, 13.5f);
 
   // Sanity: the helper itself returns the raw coarse sums.
-  std::vector<float> coarse = DownsampleBoxSumY(xyz, 4, 4, 2);
+  std::vector<float> coarse = DownsampleBoxSumY(xyz.data(), 4, 4, 2);
   ASSERT_EQ(coarse.size(), 4u);
   EXPECT_FLOAT_EQ(coarse[0], 14.0f);  // top-left
   EXPECT_FLOAT_EQ(coarse[1], 22.0f);  // top-right
@@ -69,7 +63,7 @@ TEST(EvAuto, ComputeP99YAllZeroCoarseReturnsZero) {
   std::vector<float> y(8 * 8, 0.0f);
   std::vector<float> xyz = MakeXyz(8, 8, y);
 
-  EXPECT_FLOAT_EQ(ComputeP99Y(xyz, 8, 8, 8), 0.0f);
+  EXPECT_FLOAT_EQ(ComputeP99Y(xyz.data(), 8, 8, 8), 0.0f);
 }
 
 // T4 — wc=0 guard: when f exceeds dimensions, DownsampleBoxSumY collapses to
@@ -78,12 +72,12 @@ TEST(EvAuto, ComputeP99YWcZeroGuardFallsBackToFine) {
   std::vector<float> xyz = MakeXyz(1, 1, { 7.5f });
 
   // f=8 with 1x1 image -> wc = hc = 0 -> empty coarse -> fine fallback.
-  float p99 = ComputeP99Y(xyz, 1, 1, 8);
+  float p99 = ComputeP99Y(xyz.data(), 1, 1, 8);
   // Fine path on a single positive Y returns that value.
   EXPECT_FLOAT_EQ(p99, 7.5f);
 
   // Helper must report empty so the fallback branch in ComputeP99Y is exercised.
-  EXPECT_TRUE(DownsampleBoxSumY(xyz, 1, 1, 8).empty());
+  EXPECT_TRUE(DownsampleBoxSumY(xyz.data(), 1, 1, 8).empty());
 }
 
 }  // namespace

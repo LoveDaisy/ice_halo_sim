@@ -1,7 +1,6 @@
 #include "gui/server_poller.hpp"
 
 #include <chrono>
-#include <cstring>
 #include <memory>
 
 #include "gui/gui_constants.hpp"
@@ -199,30 +198,14 @@ void ServerPoller::WorkerLoop() {
   }
 }
 
-// Composite width/height come from composite_result itself (not xyz's) — they must match by
-// construction (same RenderConsumer), but taking the source's own dims makes the memcpy bounds
-// self-consistent.
-//
-// There is no drift-guard (regen_check + drop-and-clear path): the caller reads xyz and composite
-// out of ONE result frame, so composite belongs to the same snapshot_generation as its paired xyz
-// by construction. Cross-generation pairing is not a window that can be missed; it is impossible
-// upstream. That is what eliminated the entire "recheck → mismatch → drop" branch and the
-// `GUI_LOG_VERBOSE("[Poller] composite generation drift ...")` log line it printed.
-void ServerPoller::PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
-  const size_t rgb_bytes =
-      static_cast<size_t>(composite_result.img_width) * static_cast<size_t>(composite_result.img_height) * 3;
-  payload->rgb_data.resize(rgb_bytes);
-  std::memcpy(payload->rgb_data.data(), composite_result.img_buffer, rgb_bytes);
-  payload->is_composite = true;
-}
-
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
 //
 // Reads the two server clocks (lifecycle heartbeat, raw XYZ) then builds ONE coherent immutable
-// PreviewSnapshot and atomically publishes it (invariant I5). The expensive candidate texture
-// memcpy is prepared OUTSIDE publish_mutex_; only the pointer-level RMW (load prev → decide
-// carry-forward → store) runs inside the lock (no TOCTOU, no 24MB copy under lock). Replaces the
-// old data_mutex_/staged_/std::swap incremental-write + torn-read channel.
+// PreviewSnapshot and atomically publishes it (invariant I5). Building the candidate payload moves
+// no pixels at all (it hands the payload a share of the frame), and it happens OUTSIDE
+// publish_mutex_ anyway; only the pointer-level RMW (load prev → decide carry-forward → store) runs
+// inside the lock (no TOCTOU). Replaces the old data_mutex_/staged_/std::swap incremental-write +
+// torn-read channel.
 void ServerPoller::PollOnce() {
   auto* server = server_;
   if (!server) {
@@ -236,20 +219,24 @@ void ServerPoller::PollOnce() {
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
 
-  // One frame per poll, held to the end of this function. Everything read out of it — xyz,
-  // composite, stats — belongs to the same snapshot generation by construction, which is
+  // One frame per poll, held at least to the end of this function. Everything read out of it —
+  // xyz, composite, stats — belongs to the same snapshot generation by construction, which is
   // what retired the earlier three-call sequence (GetRawXyz → GetComposite → GetRawXyz
   // recheck) and its drift-guard: the ~ms window between calls 1 and 3 was near-guaranteed
   // to be crossed by ConsumeData batch churn under an active sim, dropping composites every
   // poll until the sim stopped.
   //
   // The frame is also what makes the pointers below safe to read: they stay valid until this
-  // frame is released, no matter how many snapshots the server publishes meanwhile.
+  // frame is released, no matter how many snapshots the server publishes meanwhile. That is why
+  // it is a shared_ptr rather than a unique_ptr — when this poll materializes a texture, the
+  // payload takes a share of it and the frame outlives this call for as long as the payload is
+  // on screen, which is what lets the payload point straight at these buffers instead of copying
+  // them. On every other path the local share is the only one and the frame is released here.
   LUMICE_ResultFrame* raw_frame = nullptr;
   if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
     return;
   }
-  std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+  std::shared_ptr<LUMICE_ResultFrame> frame(raw_frame, &LUMICE_ReleaseResultFrame);
 
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_RenderResult composite_results[2]{};
@@ -277,7 +264,6 @@ void ServerPoller::PollOnce() {
       lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED && !uploaded_since_resume_ && xyz_results[0].xyz_buffer != nullptr;
 
   // ---- Prepare candidate stats + texture payload OUTSIDE publish_mutex_ (no prev dependency).
-  // The 24MB pixel memcpy happens here, never inside the publish critical section.
   bool have_new_stats = false;
   LUMICE_RayCount new_ray_seg = 0;
   LUMICE_RayCount new_sim_ray = 0;
@@ -404,14 +390,8 @@ void ServerPoller::PollOnce() {
     if (quality_ok) {
       last_quality_pass_time_ = now;
       auto payload = std::make_shared<TexturePayload>();
-      size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
-      payload->xyz_data.resize(float_count);
-      // This copy is no longer load-bearing for correctness: the frame held above owns
-      // xyz_buffer, so no snapshot can rewrite it while this payload is being built (its
-      // original reason — snapshot_xyz_ being a per-consumer buffer that PrepareSnapshot
-      // overwrote in place — no longer holds). It stays because the payload currently owns
-      // its pixels by value; handing the payload the frame instead is a separate change.
-      std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
+      payload->frame = frame;  // share the frame's lifetime — no pixel copy
+      payload->xyz_buffer = xyz_results[0].xyz_buffer;
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
       payload->snapshot_intensity = xyz_results[0].snapshot_intensity;
@@ -425,21 +405,27 @@ void ServerPoller::PollOnce() {
       // at least one colored consumer with a composite this generation) IS the raypath-color-
       // active detector — no cross-thread state needs to be threaded through from the GUI.
       if (composite_results[0].img_buffer != nullptr) {
-        // Same-generation guarantee is structural (both read from one frame); no host-side
-        // drift-check needed. See PopulateCompositePayload's doc comment.
-        PopulateCompositePayload(composite_results[0], payload.get());
+        // Same-generation guarantee is structural: this composite came out of the same frame as
+        // the xyz above, so it belongs to the same snapshot_generation by construction. Cross-
+        // generation pairing is not a window that can be missed, it is impossible upstream —
+        // which is what eliminated the old "recheck → mismatch → drop" drift-guard branch and
+        // the `GUI_LOG_VERBOSE("[Poller] composite generation drift ...")` line it printed.
+        // payload->frame is already this frame (assigned with xyz_buffer above); the two views
+        // share that one share rather than taking a second.
+        payload->rgb_buffer = composite_results[0].img_buffer;
+        payload->is_composite = true;
       }
       // task-345.3: composite P99 anchor comes from the server (union of participating
       // classes' unexposed lanes — see doc/ev-pipeline-architecture.md §2.4 for the
       // "P99 is composite-only C API field" carve-out). Mono/non-composite path stays on
-      // the client-side xyz_data statistic; the two paths do NOT converge — mixing full-
+      // the client-side xyz statistic; the two paths do NOT converge — mixing full-
       // spectrum pixels back in was the "composite too dim" root cause this task fixes.
       if (payload->is_composite) {
         payload->p99_y = composite_results[0].composite_p99_y;
       } else {
-        payload->p99_y = ComputeP99Y(payload->xyz_data, payload->width, payload->height, kEvAutoDownsampleFactor);
+        payload->p99_y = ComputeP99Y(payload->xyz_buffer, payload->width, payload->height, kEvAutoDownsampleFactor);
       }
-      // (payload is default-constructed with rgb_data empty + is_composite=false,
+      // (payload is default-constructed with rgb_buffer null + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)
       new_payload = std::move(payload);
       // A frame exists for this resume — disarm the terminal rescue so a later COMPLETED poll
@@ -454,7 +440,7 @@ void ServerPoller::PollOnce() {
   }
 
   // ---- Publish: whole RMW (load prev → decide carry-forward → store) inside publish_mutex_.
-  // Critical section is pointer/refcount-level only (the pixel memcpy already happened above).
+  // Critical section is pointer/refcount-level only.
   {
     std::lock_guard<std::mutex> lk(publish_mutex_);
     auto prev = LoadPublished();
