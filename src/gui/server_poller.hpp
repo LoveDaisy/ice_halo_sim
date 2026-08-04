@@ -20,8 +20,13 @@ namespace lumice::gui {
 //
 // INVARIANT: a TexturePayload is only ever shared whole, via shared_ptr<const TexturePayload>.
 // It is never copied or sliced by value — the buffer pointers below and the `frame` that keeps
-// them alive must not be separable.
+// them alive must not be separable. Copy is deleted below to make that a compile-time gate
+// rather than a comment-only convention.
 struct TexturePayload {
+  TexturePayload() = default;
+  TexturePayload(const TexturePayload&) = delete;
+  TexturePayload& operator=(const TexturePayload&) = delete;
+
   // The sole reason xyz_buffer / rgb_buffer below are safe to dereference: a result frame keeps
   // its pixel storage alive for exactly as long as it is held, no matter how many further
   // snapshots the server publishes. As long as this TexturePayload lives, so does the frame,
