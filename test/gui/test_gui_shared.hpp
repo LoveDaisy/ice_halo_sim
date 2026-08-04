@@ -194,6 +194,15 @@ inline unsigned long long ExpectedSimRayNum(float ray_num_millions) {
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();
+// Drive the main loop's off-screen preview-export hook (g_auto_ev_export, serviced in
+// test_gui_main.cpp) with a caller-built viewport and wait for the FBO readback to land at
+// `path`. Returns false if the readback did not complete within the poll budget or the
+// export itself failed.
+//
+// Shared rather than copied: it started as a local static in the auto_ev suite, was copied
+// once into the lens-projection suite with a note to promote it when a third caller
+// appeared, and the sim-smoke suite is that third caller.
+bool RequestAndWaitPreviewExport(ImGuiTestContext* ctx, const gui::PreviewViewport& vp, const std::string& path);
 void InitSynthTexture();
 void StartPerfSimulation();
 void StopPerfSimulation();
@@ -218,7 +227,6 @@ void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
-void RegisterAutoEvRegressionTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);

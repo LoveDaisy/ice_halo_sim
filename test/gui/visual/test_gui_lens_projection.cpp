@@ -1,6 +1,7 @@
 // Lens-projection pixel regression — a disk-reference baseline for the projection math in
-// the preview fragment shader (src/gui/preview_renderer.cpp: fisheyeInverse /
-// dualFisheyeInverse / rectangularInverse).
+// the preview fragment shader (src/gui/preview_renderer.cpp: linearInverse / fisheyeInverse /
+// dualFisheyeInverse / rectangularInverse), plus the marker/grid overlay drawn on top of it
+// (overlayAuxLines in the same shader) via the one scene that enables it.
 //
 // Why this exists: before this suite, lens projections were covered only by source review,
 // behavioral tests (switching lens clamps FOV), E2E smoke, and buffer-vs-buffer PSNR. None
@@ -57,17 +58,32 @@ struct LensProjScene {
   int lens_type = 0;
   float fov = 0.f;
   float elevation = 0.f;
+  // Controlled exception to this group's "one scene per projection branch" invariant:
+  // these three fields serve the single overlay_ea scene, which reuses an already-covered
+  // projection branch (fisheye equal-area) to cover a DIFFERENT shader stage — the
+  // zenith/nadir markers and coordinate grid overlayAuxLines() draws on top of the
+  // projected frame. Adding a projection-branch scene needs none of them; leave them at
+  // their defaults, which bypass the overlay block in TestFunc entirely.
+  bool enable_overlay = false;
+  bool overlay_zenith_nadir = false;
+  bool overlay_grid = false;
 };
 
 // clang-format off
 // All scenes share one simulated frame source (halo_22.json: prism crystals, sun at 20°
 // altitude) and differ only in how that frame is projected — so a PSNR drop localizes to
-// the projection branch, not to the scene.
+// the projection branch, not to the scene. One scene per projection branch of the preview
+// fragment shader; the last row (overlay_ea) is the deliberate exception, reusing the
+// equal-area branch to cover the marker/grid overlay stage instead (see the overlay fields
+// on LensProjScene).
 //
 // lens_type/fov/elevation are pinned explicitly rather than inherited from the config's
 // render block: this suite must keep testing the equal-area branch even if halo_22.json's
 // own lens is later edited for unrelated reasons. elevation=20 matches the sun altitude so
-// the 22° halo ring lands near the image center in both single-fisheye scenes.
+// the 22° halo ring lands near the image center in the view-transformed single-lens scenes.
+// overlay_ea is the one exception at elevation=45: it inherits the working point the retired
+// auto_ev group captured its overlay reference at, where tilting the camera off the sun puts
+// the zenith marker and a useful spread of grid lines inside the frame at the same time.
 //
 // Output sizes: the single-fisheye scenes use a square frame (the projection inscribes a
 // circle in the short edge). The dual-fisheye and equirect scenes use strict 2:1, matching
@@ -98,11 +114,14 @@ struct LensProjScene {
 // threshold. They trace 5M rays instead, which drops the noise floor far enough for the
 // geometric term to dominate, and stays well inside halo_22.json's 10M ray budget.
 //
-// The budgets are unchanged from the ray counts these scenes previously waited for, so the
-// committed references and their thresholds still describe the same working point. Both reach
-// their intended integer under truncation and rounding alike (0.4f * 1e6 is 400000.006, 5.0f
-// is exact), which is what lets ExpectedSimRayNum() assert the resulting ray count exactly —
-// see its note in test_gui_shared.hpp before changing either value.
+// The budgets of the four original scenes are unchanged from the ray counts they previously
+// waited for. The two scenes added when the auto_ev group was retired follow the same rule:
+// linear is a single-lens scene like its two neighbours and gets their 0.4M; overlay_ea keeps
+// the 0.375M its capture was taken at in the retired group, so its reference describes the
+// same working point it always did. Every value reaches its intended integer under truncation
+// and rounding alike (0.4f * 1e6 is 400000.006; 0.375f and 5.0f are exact dyadic fractions),
+// which is what lets ExpectedSimRayNum() assert the resulting ray count exactly — see its note
+// in test_gui_shared.hpp before changing any of them.
 //
 // References are pixel-averaged means of N=10 runs; thresholds come from
 // scripts/regen_gui_test_refs.py --group lens_proj (Phase B, mean − 4σ floored to 0.5 dB,
@@ -115,30 +134,29 @@ static const LensProjScene kScenes[] = {
   // mean 21.1458 σ0.199
   {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
+  // mean TBD σTBD (backfilled by regen Phase B)
+  // fov=90 matches the Linear entry in kSingleLens[] (test_render_handedness_guard.cpp), so a
+  // suspected linearInverse regression can be cross-read against that deterministic sign pin
+  // at the same focal length.
+  {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
+   LensSetup::kOverrideViewProj, lumice::gui::kLensTypeLinear,              90.0f, 20.0f},
   // mean 27.7147 σ0.0643
   {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
    LensSetup::kDualFisheyeExport},
   // mean 26.5703 σ0.0876
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5.0f,
    LensSetup::kEquirectExport},
+  // mean TBD σTBD (backfilled by regen Phase B)
+  // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
+  // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
+  // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
+  // been its sole owner.
+  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.375f,
+   LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
+   /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
 };
 // clang-format on
 static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
-
-// Drive the main loop's export hook (test_gui_main.cpp) and wait for the FBO readback.
-// Structurally identical to the helper in test_gui_auto_ev.cpp; kept local rather than
-// hoisted into test_screenshot.hpp because two 10-line copies are cheaper than an
-// abstraction shared by exactly two callers. Promote it when a third one appears.
-static bool RequestAndWaitExport(ImGuiTestContext* ctx, const gui::PreviewViewport& vp, const std::string& path) {
-  g_auto_ev_export.export_path = path;
-  g_auto_ev_export.custom_vp = vp;
-  g_auto_ev_export.done.store(false);
-  g_auto_ev_export.requested.store(true);
-  for (int i = 0; i < 10 && !g_auto_ev_export.done.load(); ++i) {
-    ctx->Yield(1);
-  }
-  return g_auto_ev_export.done.load() && g_auto_ev_export.result;
-}
 
 // IM_CHECK*() macros expand to `return;` on failure, so any of them firing between server
 // creation and the manual teardown below would skip Stop/Destroy and leak a running server +
@@ -295,11 +313,34 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           break;
       }
 
+      // 7b. Overlay scenes only (overlay_ea): precompute the zenith/nadir marker positions
+      // and turn the grid on. Mirrors the runtime path in app_panels.cpp — the markers are
+      // positioned on the CPU by ProjectWorldDirToScreen and handed to the shader as
+      // uniforms, so this block is part of what the reference covers, not test scaffolding.
+      // Must run after the switch above: it reads the view_proj the scene just installed.
+      if (scene.enable_overlay) {
+        if (scene.overlay_zenith_nadir) {
+          constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
+          constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
+          auto zpos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kZenithWorldDir, vp.vp_w, vp.vp_h);
+          auto npos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kNadirWorldDir, vp.vp_w, vp.vp_h);
+          vp.params.overlay.show_zenith_nadir = true;
+          vp.params.overlay.zenith_screen_pos[0] = zpos[0];
+          vp.params.overlay.zenith_screen_pos[1] = zpos[1];
+          vp.params.overlay.nadir_screen_pos[0] = npos[0];
+          vp.params.overlay.nadir_screen_pos[1] = npos[1];
+        }
+        if (scene.overlay_grid) {
+          vp.params.overlay.show_grid = true;
+          vp.params.overlay.grid_step = 10.f;
+        }
+      }
+
       // 8. Off-screen FBO capture, then compare against the committed reference.
       // The tmp filename must match ReferenceGroup.tmp_prefix in scripts/regen_gui_test_refs.py.
       const std::string tmp_path = std::string("/tmp/lumice_lens_proj_") + scene.name + ".png";
       const std::string ref_path = std::string(LUMICE_TEST_REF_DIR) + "/lens_proj_" + scene.name + ".jpg";
-      IM_CHECK(RequestAndWaitExport(ctx, vp, tmp_path));
+      IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, tmp_path));
 
       IM_CHECK(lumice::test::CheckAgainstReference("lens_proj", scene.name, tmp_path, ref_path, scene.psnr_threshold,
                                                    g_keep_export_png));

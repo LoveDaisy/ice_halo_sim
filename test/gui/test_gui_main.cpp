@@ -125,6 +125,19 @@ void ResetTestState() {
   g_bg_test.Reset();
 }
 
+// See the contract note in test_gui_shared.hpp. Lives here because this TU owns
+// g_auto_ev_export and the main-loop hook that services it.
+bool RequestAndWaitPreviewExport(ImGuiTestContext* ctx, const gui::PreviewViewport& vp, const std::string& path) {
+  g_auto_ev_export.export_path = path;
+  g_auto_ev_export.custom_vp = vp;
+  g_auto_ev_export.done.store(false);
+  g_auto_ev_export.requested.store(true);
+  for (int i = 0; i < 10 && !g_auto_ev_export.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  return g_auto_ev_export.done.load() && g_auto_ev_export.result;
+}
+
 void InitSynthTexture() {
   if (g_synth_tex.empty()) {
     g_synth_tex.resize(kSynthTexW * kSynthTexH * 3);
@@ -393,7 +406,6 @@ int main(int argc, char** argv) {
   RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
-  RegisterAutoEvRegressionTests(engine);
   RegisterLinkedEntriesTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
