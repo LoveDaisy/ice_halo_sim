@@ -171,6 +171,12 @@ jobs:
       - name: GUI visual regression (Xvfb + Mesa llvmpipe)
         if: matrix.run_gui_visual == 'ON'
         shell: bash
+        # The spike that qualified this step's two groups also found a timing-sensitive defect
+        # in a third group under software rasterization (doc/testing-architecture.md §4.6,
+        # "Why lens_proj is not in CI") — evidence that this layer can behave non-deterministically
+        # under llvmpipe. A bounded timeout keeps a similar stall in a covered group from hanging
+        # this required check indefinitely instead of failing loudly.
+        timeout-minutes: 10
         run: |
           set -o pipefail
           rc=0

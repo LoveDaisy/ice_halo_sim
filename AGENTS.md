@@ -140,7 +140,9 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   macOS and Windows legs still only compile it. Which groups may run under a software rasterizer
   is a measured fact, not a preference — the per-scene numbers, the reason `lens_proj` is
   excluded despite its pixels being portable, and **the checklist a red in this layer obliges you
-  to follow instead of calling it a known flake** are all in `doc/testing-architecture.md` §4.6.
+  to follow instead of calling it a known flake** are all in `doc/testing-architecture.md` §4.6
+  (whose numbers, as that section itself flags, were measured on an arm64 proxy for the amd64
+  runner this step actually runs on — read the caveat, not just the table).
   Read that before widening the CI filter, and before dispositioning a visual-regression failure.
   A `src/gui/` test that needs no live frame still should not live there: the
   `gui_unit_test` target (`test/CMakeLists.txt`, inside `if(BUILD_GUI)`) links `lumice_gui_obj`

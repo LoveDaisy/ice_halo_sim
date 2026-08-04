@@ -418,6 +418,23 @@ so this needs no new branch-protection context: those ten scenes now block a mer
 | `screenshot`/`visual` crystal scenes (3) | 34.78–35.94 dB vs. a 40 dB floor | no — not portable |
 | `capture_harness` `fullframe` | 21.92 dB vs. a 40 dB floor | no — not portable |
 
+**A caveat the table cannot carry silently.** Every number above was measured on an **arm64**
+Docker container (`ubuntu:24.04` + Xvfb + Mesa llvmpipe, run on an Apple Silicon host) standing in
+for the **amd64** `ubuntu-24.04` GitHub Actions runner this step actually runs on — the two differ
+in CPU architecture, not just in "a Linux box with a software rasterizer". That substitution was a
+deliberate, bounded choice (no x86_64 machine was reachable for this work), not an oversight, and
+it answers the architecture-independent questions this section leans on — does a GL 3.3 core
+context come up under Xvfb+llvmpipe, does `gui_test` run to completion, is the PSNR the right order
+of magnitude — soundly. What it does not give is confirmed amd64 margins: the dB figures above could
+shift once run on the real runner. The mitigating fact is that the CI step now actually executing
+closes this gap continuously rather than requiring a one-off confirmation — every push that touches
+the `Ubuntu x86_64` leg reports real amd64 numbers in the step's own log, kept for 30 days by the
+`Upload GUI visual-regression log` step in `ci.yml`, so the first real run after merge is itself
+the confirmation this table is missing today. Until a
+push has actually happened, treat "10/10 above the deterministic floor" as arm64-proxy evidence, not
+amd64-target evidence — the distinction matters exactly because this section exists to stop numbers
+from being taken on faith.
+
 The first surprise is how well the references travel. Every reference in this repo was captured
 on macOS against a Metal-backed GL stack; compared on Linux against a software rasterizer on a
 different CPU architecture, the statistically-thresholded `lens_proj` group still clears
