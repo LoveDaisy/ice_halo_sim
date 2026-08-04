@@ -47,6 +47,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/server_poller.hpp"
 #include "lumice.h"
+#include "support/scoped_result_frame.hpp"
 
 namespace gui = lumice::gui;
 
@@ -104,7 +105,8 @@ bool RunFiniteToCompletion(LUMICE_Server* server) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -131,7 +133,8 @@ bool WaitForValidData(LUMICE_Server* server) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -613,7 +616,8 @@ TEST(GuiLifecycle, completed_below_threshold_force_uploads) {
   // without assuming anything about its magnitude.
   auto arm_gate_above_achieved = [&](LUMICE_RayCount* out_rays) {
     LUMICE_StatsResult stats{};
-    LUMICE_GetCachedStats(server, &stats);
+    lumice::test::ScopedResultFrame frame(server);
+    LUMICE_FrameGetStats(frame.get(), &stats);
     *out_rays = stats.sim_ray_num;
     local.SetCalibratedThreshold(stats.sim_ray_num + 1);
   };
@@ -992,7 +996,8 @@ TEST(GuiLifecycle, resume_rearms_quality_gate_clock) {
   LUMICE_RayCount rays = 0;
   {
     LUMICE_StatsResult stats{};
-    LUMICE_GetCachedStats(server, &stats);
+    lumice::test::ScopedResultFrame frame(server);
+    LUMICE_FrameGetStats(frame.get(), &stats);
     rays = stats.sim_ray_num;
     local.SetCalibratedThreshold(stats.sim_ray_num + 1);
   }

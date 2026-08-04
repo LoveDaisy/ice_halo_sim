@@ -28,6 +28,7 @@
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/server_poller.hpp"
 #include "lumice.h"
+#include "support/scoped_result_frame.hpp"
 
 namespace gui = lumice::gui;
 
@@ -159,7 +160,8 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -199,7 +201,8 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
 
   // Byte-identity with a direct C-API composite read.
   LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_comp(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_comp.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(comp[0].img_buffer != nullptr);
   EXPECT_EQ(comp[0].img_width, snap->payload->width);
   EXPECT_EQ(comp[0].img_height, snap->payload->height);
@@ -245,7 +248,8 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
 
   // XYZ byte-identity with the direct C-API read (AC2 zero-regression).
   LUMICE_RawXyzResult xyz[2]{};
-  EXPECT_EQ(LUMICE_GetRawXyzResults(server, xyz, 1), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_xyz(server);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1), LUMICE_OK);
   EXPECT_TRUE(xyz[0].xyz_buffer != nullptr);
   EXPECT_EQ(xyz[0].img_width, snap->payload->width);
   EXPECT_EQ(xyz[0].img_height, snap->payload->height);
@@ -255,7 +259,8 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
 
   // Composite surface reports the sentinel: img_buffer null → poller left is_composite false.
   LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_comp(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_comp.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(comp[0].img_buffer == nullptr);
 
   local.Stop();
@@ -266,17 +271,15 @@ TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
 // Pre-345.2 the poller pulled xyz + composite via three independent C-API calls (xyz →
 // composite → xyz recheck) whose cross-call window was near-guaranteed to be crossed by
 // ConsumeData batch churn under an active sim — the old test forced that mismatch and
-// asserted the drop branch fired. Post-345.2 the poller uses the atomic
-// LUMICE_GetRawXyzAndCompositeResults which fuses both reads into a single server-side
-// DoSnapshot() call; cross-generation pairing is structurally impossible upstream. There is
-// no drop branch left to force, so the test is refocused on the surviving invariant AC3
-// demanded ("composite与其渲染源xyz不跨代混装的保护仍在"): repeatedly arm dirty via
-// LUMICE_SetRaypathColors between combined calls (churn simulator) and assert that every
-// call yields (a) composite bytes byte-identical to what a same-tick direct
-// LUMICE_GetCompositeResults returns (paired-with-just-fetched-xyz proof), and
-// (b) PopulateCompositePayloadForTest builds is_composite=true + rgb_data populated from
-// that composite. Same fixture and deterministic dirty-arming technique as the retired
-// drop-branch test.
+// asserted the drop branch fired. 345.2 fused both reads into one combined getter, which
+// closed the window for the pair but left it open for every other reader. The result frame
+// closes it for all of them: xyz and composite are read off ONE immutable frame, so a
+// cross-generation mix has nowhere left to come from.
+// The invariant AC3 demanded ("composite与其渲染源xyz不跨代混装的保护仍在") is unchanged and
+// still asserted here — only its mechanism moved. Every churn round must yield (a) a strictly
+// advanced generation, (b) composite bytes byte-identical to what a same-tick second frame
+// reports, and (c) PopulateCompositePayloadForTest building is_composite=true + rgb_data from
+// that composite. Same fixture and deterministic dirty-arming technique as before.
 TEST(CompositePreview, same_generation_invariant_under_churn) {
   LUMICE_Server* server = LUMICE_CreateServer();
   EXPECT_TRUE(server != nullptr);
@@ -295,9 +298,9 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
   // exercises the atomic combined getter the poller now uses. Every round MUST:
   //   1. See the generation strictly advance (proving the churn armed a real snapshot).
   //   2. Get a non-null composite (raypath_color is active, so DoSnapshot Phase-2 produced one).
-  //   3. Byte-match a same-tick direct LUMICE_GetCompositeResults read (proving the composite
-  //      returned by the combined call is the one that pairs with this call's xyz, not a
-  //      cross-generation mix — the "真不变量" AC3 requires).
+  //   3. Byte-match a same-tick second frame (proving the composite read off this frame is the
+  //      one that pairs with this frame's xyz, not a cross-generation mix — the "真不变量"
+  //      AC3 requires).
   //   4. Populate the poller payload as a composite (proving PopulateCompositePayload still
   //      writes rgb_data + sets is_composite, the same behavior the retired drop-recover
   //      test's "recovery" branch pinned).
@@ -309,26 +312,26 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
 
     LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
     LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    EXPECT_EQ(
-        LUMICE_GetRawXyzAndCompositeResults(server, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
-        LUMICE_OK);
+    lumice::test::ScopedResultFrame frame(server);
+    EXPECT_EQ(LUMICE_FrameGetRawXyz(frame.get(), xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    EXPECT_EQ(LUMICE_FrameGetComposite(frame.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_TRUE(xyz[0].xyz_buffer != nullptr);
     EXPECT_TRUE(comp[0].img_buffer != nullptr);
     EXPECT_TRUE(xyz[0].snapshot_generation > prev_gen);
     prev_gen = xyz[0].snapshot_generation;
 
-    // (3) Same-generation guarantee: a same-tick direct composite read must land on the same
-    // frozen snapshot (nothing else armed dirty between these two calls). Copy first — bytes
-    // pointed to by combined-call composite alias the same server-side buffer that
-    // LUMICE_Get*Results contract may invalidate.
+    // (3) Same-generation guarantee: a same-tick second frame must land on the same frozen
+    // snapshot (nothing else armed dirty between the two acquires). No defensive copy is taken
+    // first: `comp` reads into the frame this scope holds, and holding it is what keeps those
+    // bytes valid — which is the property the frame handle exists to provide.
     const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
-    std::vector<uint8_t> combined_composite(comp[0].img_buffer, comp[0].img_buffer + nbytes);
     LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    EXPECT_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    lumice::test::ScopedResultFrame frame_direct(server);
+    EXPECT_EQ(LUMICE_FrameGetComposite(frame_direct.get(), direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_TRUE(direct[0].img_buffer != nullptr);
-    EXPECT_EQ(std::memcmp(combined_composite.data(), direct[0].img_buffer, nbytes), 0);
+    EXPECT_EQ(std::memcmp(comp[0].img_buffer, direct[0].img_buffer, nbytes), 0);
 
-    // (4) PopulateCompositePayload builds the composite payload from the combined-call bytes.
+    // (4) PopulateCompositePayload builds the composite payload from those bytes.
     gui::TexturePayload payload;
     local.PopulateCompositePayloadForTest(direct[0], &payload);
     EXPECT_TRUE(payload.is_composite);
@@ -452,7 +455,8 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   EXPECT_TRUE(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
 
   LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_direct(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_direct.get(), direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(direct[0].img_buffer != nullptr);
   EXPECT_EQ(
       std::memcmp(snap_after->payload->rgb_data.data(), direct[0].img_buffer, snap_after->payload->rgb_data.size()), 0);
@@ -504,7 +508,8 @@ TEST(CompositePreview, display_time_composite_exposure_reaches_compositor) {
 
   // Baseline composite (EV=0 → scale 1.0 → default behavior) via direct C-API read.
   LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_baseline(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_baseline.get(), baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(baseline[0].img_buffer != nullptr);
   const size_t rgb_bytes = static_cast<size_t>(baseline[0].img_width) * static_cast<size_t>(baseline[0].img_height) * 3;
   std::vector<uint8_t> baseline_rgb(baseline[0].img_buffer, baseline[0].img_buffer + rgb_bytes);
@@ -513,14 +518,16 @@ TEST(CompositePreview, display_time_composite_exposure_reaches_compositor) {
 
   // Mono getter must NOT populate the composite-only anchor field.
   LUMICE_RenderResult mono_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRenderResults(server, mono_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_mono_out(server);
+  EXPECT_EQ(LUMICE_FrameGetRender(frame_mono_out.get(), mono_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(mono_out[0].img_buffer != nullptr);
   EXPECT_EQ(mono_out[0].composite_p99_y, 0.0f);
 
   // Push a positive EV → next Get*Results triggers a rebake with 2^ev > 1 → bytes change.
   EXPECT_EQ(LUMICE_SetCompositeExposure(server, 2.0f), LUMICE_OK);
   LUMICE_RenderResult brighter[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, brighter, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_brighter(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_brighter.get(), brighter, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(brighter[0].img_buffer != nullptr);
   EXPECT_EQ(brighter[0].img_width, baseline[0].img_width);
   EXPECT_EQ(brighter[0].img_height, baseline[0].img_height);
@@ -531,7 +538,8 @@ TEST(CompositePreview, display_time_composite_exposure_reaches_compositor) {
   // Push a negative EV → different bytes from both the baseline and the brighter output.
   EXPECT_EQ(LUMICE_SetCompositeExposure(server, -2.0f), LUMICE_OK);
   LUMICE_RenderResult dimmer[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, dimmer, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_dimmer(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_dimmer.get(), dimmer, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(dimmer[0].img_buffer != nullptr);
   EXPECT_TRUE(std::memcmp(dimmer[0].img_buffer, baseline_rgb.data(), rgb_bytes) != 0);
   EXPECT_TRUE(std::memcmp(dimmer[0].img_buffer, brighter[0].img_buffer, rgb_bytes) != 0);
@@ -577,7 +585,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99) {
   disp_both[1].solo = 0;
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
   LUMICE_RenderResult baseline[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_baseline(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_baseline.get(), baseline, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(baseline[0].img_buffer != nullptr);
   const int w = baseline[0].img_width;
   const int h = baseline[0].img_height;
@@ -622,7 +631,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99) {
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_hide_bright, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
 
   LUMICE_RenderResult dim_only[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, dim_only, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_dim_only(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_dim_only.get(), dim_only, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(dim_only[0].img_buffer != nullptr);
   const float p99_dim_only = dim_only[0].composite_p99_y;
   EXPECT_TRUE(p99_dim_only > 0.0f);
@@ -656,7 +666,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99) {
   disp_restore[1].solo = 0;
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_restore, 2, nullptr, LUMICE_COLOR_MODE_ADDITIVE), LUMICE_OK);
   LUMICE_RenderResult restored[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, restored, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_restored(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_restored.get(), restored, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(restored[0].img_buffer != nullptr);
   EXPECT_EQ(restored[0].composite_p99_y, p99_both);
   for (size_t off : probe_pixels) {
@@ -697,7 +708,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99_domin
   disp_solo_c1[1].solo = 1;
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_solo_c1, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
   LUMICE_RenderResult solo1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, solo1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_solo1(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_solo1.get(), solo1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(solo1[0].img_buffer != nullptr);
   const int w = solo1[0].img_width;
   const int h = solo1[0].img_height;
@@ -725,7 +737,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99_domin
   disp_both[1].solo = 0;
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_both, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
   LUMICE_RenderResult both[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, both, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_both(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_both.get(), both, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(both[0].img_buffer != nullptr);
   const size_t probe_off = (static_cast<size_t>(probe_y) * w + probe_x) * 3;
   const uint8_t r_both = both[0].img_buffer[probe_off + 0];
@@ -745,7 +758,8 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99_domin
   disp_hide_c0[1].solo = 0;
   EXPECT_EQ(LUMICE_SetRaypathColors(server, disp_hide_c0, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
   LUMICE_RenderResult c1_visible[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, c1_visible, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_c1_visible(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_c1_visible.get(), c1_visible, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(c1_visible[0].img_buffer != nullptr);
   const uint8_t r_after = c1_visible[0].img_buffer[probe_off + 0];
   const uint8_t b_after = c1_visible[0].img_buffer[probe_off + 2];
@@ -767,7 +781,8 @@ TEST(CompositePreview, rerun_with_same_ev_produces_identical_composite) {
   EXPECT_TRUE(RunToIdleWithData(server, kColorConfig));
   EXPECT_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
   LUMICE_RenderResult first[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, first, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_first(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_first.get(), first, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(first[0].img_buffer != nullptr);
   const size_t rgb_bytes = static_cast<size_t>(first[0].img_width) * static_cast<size_t>(first[0].img_height) * 3;
   std::vector<uint8_t> first_rgb(first[0].img_buffer, first[0].img_buffer + rgb_bytes);
@@ -779,7 +794,8 @@ TEST(CompositePreview, rerun_with_same_ev_produces_identical_composite) {
   EXPECT_TRUE(RunToIdleWithData(server, kColorConfig));
   EXPECT_EQ(LUMICE_SetCompositeExposure(server, kUserEv), LUMICE_OK);
   LUMICE_RenderResult rerun[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetCompositeResults(server, rerun, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  lumice::test::ScopedResultFrame frame_rerun(server);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame_rerun.get(), rerun, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_TRUE(rerun[0].img_buffer != nullptr);
   EXPECT_EQ(rerun[0].img_width, first[0].img_width);
   EXPECT_EQ(rerun[0].img_height, first[0].img_height);
@@ -1192,7 +1208,8 @@ TEST(CompositePreview, reconciler_display_push_matches_direct_push_byte_identica
   auto ReadComposite = [&](std::vector<uint8_t>& out) {
     gui::g_server_poller.Stop();
     LUMICE_RenderResult r[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    EXPECT_EQ(LUMICE_GetCompositeResults(server, r, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    lumice::test::ScopedResultFrame frame_r(server);
+    EXPECT_EQ(LUMICE_FrameGetComposite(frame_r.get(), r, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_TRUE(r[0].img_buffer != nullptr);
     const size_t nbytes = static_cast<size_t>(r[0].img_width) * static_cast<size_t>(r[0].img_height) * 3;
     out.assign(r[0].img_buffer, r[0].img_buffer + nbytes);
