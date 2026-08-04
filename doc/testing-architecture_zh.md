@@ -452,7 +452,8 @@ required check 会人为制造约 60% 的假红率——那等于用手把本节
 `halo_22.json`——变的是显示轴，每个逆投影分支一景。已退役的 `auto_ev` 组反过来：全部十景钉死显示轴
 （`fisheye_equal_area`、elevation 20），变的是仿真轴（光谱、晶体 type、天顶分布、filter、多散射层数）。
 
-这对一个显示回归层来说是选错了要变的轴，而且这条轴早已别处有主。`auto_ev` 十个 config 里有七个
+这对一个显示回归层来说是选错了要变的轴，而且这条轴早已别处有主。`auto_ev` 十个场景背后是九个不同
+config（`overlay_ea` 复用 `halo_22.json`），其中七个
 （`halo_22`、`color`、`cza`、`filters`、`multi_scatter`、`parhelion`、`pyramid`）同时也是
 `test/e2e-correctness/test_smoke.py` 的 config，在那里断言的阈值平均严 8.7 dB——而且 `test_smoke.py`
 经 CLI 在每个 PR 上真跑，`gui_test` 的 `auto_ev` 组当时却只编译不跑。两者不是同一起跑线（CLI 那组

@@ -580,7 +580,8 @@ varied the simulation axis instead (spectrum, crystal type, zenith distribution,
 count).
 
 That is the wrong axis for a display-regression layer to spend scenes on, and it already had an
-owner elsewhere. Seven of `auto_ev`'s ten configs (`halo_22`, `color`, `cza`, `filters`,
+owner elsewhere. `auto_ev`'s ten scenes drew on nine distinct configs (`overlay_ea` reused
+`halo_22.json`), and seven of those nine (`halo_22`, `color`, `cza`, `filters`,
 `multi_scatter`, `parhelion`, `pyramid`) are also `test/e2e-correctness/test_smoke.py` configs,
 asserted there at thresholds averaging 8.7 dB stricter — and `test_smoke.py` runs through the CLI
 on every PR, where `gui_test`'s `auto_ev` group was build-only. The two are not on identical
