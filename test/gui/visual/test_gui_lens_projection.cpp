@@ -124,29 +124,32 @@ struct LensProjScene {
 // in test_gui_shared.hpp before changing any of them.
 //
 // References are pixel-averaged means of N=10 runs; thresholds come from
-// scripts/regen_gui_test_refs.py --group lens_proj (Phase B, mean − 4σ floored to 0.5 dB,
-// pooled over 60 runs), with the sampled mean/σ recorded per scene in
-// test/gui/references/_thresholds.json and repeated inline below.
+// scripts/regen_gui_test_refs.py --group lens_proj (Phase B over 30 full-suite runs), with the
+// sampled mean/σ recorded per scene in test/gui/references/_thresholds.json and repeated inline
+// below. The driver's rule is mean − max(4σ, 1.0 dB) floored to 0.5 dB, and on every scene here
+// the 1.0 dB floor is what binds: the largest σ measured is ~0.11 dB, so 4σ never reaches it and
+// each threshold sits 10σ or more below its mean. Read a red result accordingly — at that
+// distance it is not run-to-run noise.
 static const LensProjScene kScenes[] = {
-  // mean 20.293 σ0.1742
+  // mean 20.030 σ0.1040
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 21.1458 σ0.199
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.4f,
+  // mean 20.841 σ0.0765
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean TBD σTBD (backfilled by regen Phase B)
+  // mean 19.473 σ0.1138
   // fov=90 matches the Linear entry in kSingleLens[] (test_render_handedness_guard.cpp), so a
   // suspected linearInverse regression can be cross-read against that deterministic sign pin
   // at the same focal length.
-  {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
+  {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeLinear,              90.0f, 20.0f},
-  // mean 27.7147 σ0.0643
+  // mean 27.666 σ0.0827
   {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
    LensSetup::kDualFisheyeExport},
-  // mean 26.5703 σ0.0876
+  // mean 26.540 σ0.0487
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5.0f,
    LensSetup::kEquirectExport},
-  // mean TBD σTBD (backfilled by regen Phase B)
+  // mean 21.333 σ0.0939
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had

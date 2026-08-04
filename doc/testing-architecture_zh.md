@@ -122,7 +122,7 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
   （见 §4.4）。
 - **oracle**：imgui test engine 驱动 app；**视觉**对 tracked 参考图断言（PSNR，每场景阈值在
   `_thresholds.json`）；**响应**对绝对帧延迟预算断言；**功能**断言控件/状态结果。
-- **阈值约定**：视觉 = 每场景 PSNR（N 次随机渲染的 mean−3σ，见 AGENTS.md auto_ev 再生）；响应 =
+- **阈值约定**：视觉 = 每场景 PSNR（N 次随机渲染的 mean−4σ，见 AGENTS.md lens_proj 再生）；响应 =
   绝对延迟预算；功能 = 精确。
 - **节奏**：`PR`。需要显示服务器，除非用 `LUMICE_SKIP_GUI_TESTS=1` 跳过。
 - **命名**：`test_gui_<aspect>.cpp`；参考图在 `test/gui/references/`。
@@ -262,7 +262,7 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
   `test/gui/references/*.jpg` + `_thresholds.json`。
 - 参考图在 `.gitignore` 中显式 un-ignore 并正常 tracked；config 与多数生成产物 git-ignored。移动
   参考图路径需同步更新 un-ignore 规则、读取它的测试、以及任何 CI 路径假设——三者一起。
-- 随机参考图的再生遵循文档化流程（GUI `auto_ev`：`scripts/regen_gui_test_refs.py`，见 AGENTS.md）。
+- 随机参考图的再生遵循文档化流程（GUI `lens_proj`：`scripts/regen_gui_test_refs.py`，见 AGENTS.md）。
   参考图永不手工编辑。
 
 ### §4.4 `performance` 与 `gui`-响应性的边界
@@ -376,7 +376,7 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `--benchmark`） | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `test_gui_auto_ev`、`test_gui_visual`、`test_gui_render`、`test_gui_bg`、`test_gui_export`、`test_gui_import_export`、`test_gui_interaction`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_composite_preview`、`test_gui_lifecycle`、`test_gui_sampling_density_stats`、`test_gui_defaults_panel`、**`test_gui_perf`（响应 tag）**、`test_gui_main`/`test_screenshot`/`test_gui_shared`（harness） | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。 |
+| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `test_gui_lens_projection`、`test_gui_sim_smoke`、`test_gui_visual`、`test_gui_render`、`test_gui_bg`、`test_gui_export`、`test_gui_import_export`、`test_gui_interaction`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_composite_preview`、`test_gui_lifecycle`、`test_gui_sampling_density_stats`、`test_gui_defaults_panel`、**`test_gui_perf`（响应 tag）**、`test_gui_main`/`test_screenshot`/`test_gui_shared`（harness） | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。 |
 | **regression-sentinel** | `test/regression-sentinel/`（平铺） | — | `test_capi_sentinel_overflow`、`test_ms_filter_leak`、`test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` 用 issue 复现守真 bug——**勿改场景**。`test_ms_filter_leak` 也与 parity 相关；其**主** purpose 是 sentinel（多 purpose → 按主 purpose 归类）。 |
 
 **多 purpose 裁决规则**：一个测试服务多个 purpose 时，按其**主** purpose 归类（最直接守护其回归的

@@ -237,22 +237,29 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 
 ### GUI Test Reference Regeneration (reference groups)
 
-The `auto_ev` reference images are pixel-averaged means of N=10 stochastic renders to suppress
-per-run noise. Per-scene PSNR thresholds are `mean − 4σ` (floored to 0.5 dB precision) — the
-margin every threshold in the repo is actually set with, and the one `SIGMA_MARGIN` in the
-driver emits. Both phases sample **full-suite** runs under `scripts/build.sh`'s correctness-pool
-invocation, never a single group in isolation: isolated runs measured 0.34–0.62 dB optimistic,
-which is how the `auto_ev` references once ended up flaking. The driver has no switch for this.
-
-Each scene has a single reference: the auto-EV-applied capture (`auto_ev_<scene>_on.jpg`). The
-legacy `_off` (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the
-GUI has no auto-EV toggle, so off was a degenerate non-default state exercising no unique code path.
+Reference images for a group whose scenes render a simulated (i.e. stochastic) frame are
+pixel-averaged means of N=10 renders, which suppresses per-run noise; per-scene PSNR thresholds
+are then `mean − max(4σ, 1.0 dB)`, floored to 0.5 dB precision. Which of the two terms binds is
+worth knowing before reading a threshold: every scene shipping today calibrates at 4σ well under
+1 dB, so in practice all of them are `mean − 1.0 dB` and the sigma margin is dormant (see
+`MIN_MARGIN_DB` in the driver for why the floor exists at all). Both phases sample
+**full-suite** runs under `scripts/build.sh`'s correctness-pool invocation, never a single group
+in isolation: isolated runs measured 0.34–0.62 dB optimistic, which is how the since-retired
+`auto_ev` references once ended up flaking. The driver has no switch for this. `lens_proj` is
+currently the only stochastic group; the other three are deterministic and take the 40 dB floor
+described further down.
 
 The `lens_proj` references cover the preview fragment shader's projection math
-(`src/gui/preview_renderer.cpp`: `fisheyeInverse` / `dualFisheyeInverse` / `rectangularInverse`) via
-an off-screen FBO export, independent of window size or layout — see the docking-coupling note
-below. Regen trigger: any change to that projection math or to `export_fbo_renderer.cpp`'s render
-path. Command: `python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
+(`src/gui/preview_renderer.cpp`: `linearInverse` / `fisheyeInverse` / `dualFisheyeInverse` /
+`rectangularInverse`) via an off-screen FBO export, independent of window size or layout — see the
+docking-coupling note below. Six scenes: one per projection branch (`linear`,
+`fisheye_equal_area_120`, `fisheye_orthographic_180`, `dual_fisheye_equal_area_full`,
+`rectangular`), plus `overlay_ea`, which reuses the equal-area branch at elevation 45° with the
+zenith/nadir markers and coordinate grid enabled — it is this repo's only committed pixel coverage
+of the `overlayAuxLines()` stage, and the one scene kept when the `auto_ev` group was retired.
+Regen trigger: any change to that projection math, to the overlay drawing, or to
+`export_fbo_renderer.cpp`'s render path. Command:
+`python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_lens_projection.cpp`.
 
 The `modal_layout` references cover the edit-modal's internal control layout
@@ -282,12 +289,12 @@ table's columns, the preset table's columns, or the pinned action row. Command:
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
 
 **`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
-`std::remove` so the per-run export PNGs at `/tmp/lumice_auto_ev_*.png` are preserved for
-collection by the driver script.
+`std::remove` so the per-run export PNGs at `/tmp/<group tmp_prefix><scene>.png` are preserved
+for collection by the driver script.
 
-**Reference groups** — `auto_ev` is one entry in the `GROUPS` registry at the top of
-`scripts/regen_gui_test_refs.py`; `capture_harness`, `lens_proj`, `modal_layout` and
-`defaults_panel_layout` are the others. A
+**Reference groups** — the registry is `GROUPS` at the top of
+`scripts/regen_gui_test_refs.py`, currently holding `capture_harness`, `lens_proj`,
+`modal_layout` and `defaults_panel_layout`. A
 group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
 print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
@@ -307,27 +314,27 @@ demandable of a committed reference compared on other machines.
 python scripts/regen_gui_test_refs.py
 
 # One group only (recommended — regen what you changed, leave other groups' refs alone):
-python scripts/regen_gui_test_refs.py --group auto_ev
+python scripts/regen_gui_test_refs.py --group lens_proj
 
 # Phase A only (generate mean-ref images, then manually update thresholds):
-python scripts/regen_gui_test_refs.py --group auto_ev --phase-a-only
+python scripts/regen_gui_test_refs.py --group lens_proj --phase-a-only
 
 # Phase B only (recalibrate thresholds against existing mean-refs):
-python scripts/regen_gui_test_refs.py --group auto_ev --phase-b-only
+python scripts/regen_gui_test_refs.py --group lens_proj --phase-b-only
 
 # Single scene (--scene requires --group; scene names are only unique within a group):
-python scripts/regen_gui_test_refs.py --group auto_ev --scene halo_22
+python scripts/regen_gui_test_refs.py --group lens_proj --scene overlay_ea
 
 # Quick smoke test (2 runs each phase):
-python scripts/regen_gui_test_refs.py --group auto_ev --n 2 --n-calib 2
+python scripts/regen_gui_test_refs.py --group lens_proj --n 2 --n-calib 2
 ```
 
 Phase B merges per group and per scene: groups and scenes not covered by the run keep their
 existing entries, including their own `generated_at`. Thresholds live under
 `groups.<key>.scenes` in `test/gui/references/_thresholds.json`.
 
-After Phase B, copy the `threshold` values into the group's test source — for `auto_ev` that is
-`kScenes[]` in `test/gui/visual/test_gui_auto_ev.cpp` (one `<scene>_on` threshold per scene); the
+After Phase B, copy the `threshold` values into the group's test source — for `lens_proj` that is
+`kScenes[]` in `test/gui/visual/test_gui_lens_projection.cpp` (one threshold per scene); the
 script prints the path for whichever group it ran.
 
 **Docking coupling boundary** — relevant to a planned migration of the GUI's fixed-layout panels

@@ -92,9 +92,6 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="lens_proj_",
         source="test/gui/visual/test_gui_lens_projection.cpp",
     ),
-    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
-    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
-    # captured as the modal's own on-screen rectangle.
     # Defaults-panel layout scene names — must match kScenes[] order in
     # test/gui/visual/test_gui_defaults_panel.cpp. Each scene is one state of the "Save Current as
     # Defaults" modal (pending changes / expanded read-only section / filtered / nothing to adopt),
@@ -114,6 +111,9 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="defaults_panel_",
         source="test/gui/visual/test_gui_defaults_panel.cpp",
     ),
+    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
+    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
+    # captured as the modal's own on-screen rectangle.
     "modal_layout": ReferenceGroup(
         key="modal_layout",
         scenes=[
@@ -163,9 +163,12 @@ SIGMA_MARGIN = 4.0
 # own. The size comes from this repo's own history: regenerating auto_ev against a changed
 # orientation sampler moved its PSNRs 0.3-0.8 dB, so a margin under 1 dB does not survive
 # legitimate upstream change. This is the same reasoning as DETERMINISTIC_FLOOR_DB above,
-# applied to scenes that are merely quiet rather than pixel-identical. It binds only there:
-# every simulated scene measured so far has 4σ ≥ 0.84 dB, so their shipped thresholds are
-# unaffected.
+# applied to scenes that are merely quiet rather than pixel-identical. Since the auto_ev group
+# (whose 4σ ran 0.84 dB and up) was retired, it is no longer the tie-breaker it was: every
+# remaining stochastic scene calibrates at 4σ well under 1 dB, so this floor — not the sigma
+# margin — is what actually sets all six lens_proj thresholds. Read a shipped threshold as
+# "mean − 1.0 dB, rounded down to 0.5 dB" and check SIGMA_MARGIN only if a sigma ever exceeds
+# 0.25 dB.
 MIN_MARGIN_DB = 1.0
 
 

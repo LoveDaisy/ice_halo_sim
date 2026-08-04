@@ -161,8 +161,8 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 - **Oracle**: the imgui test engine drives the app; **visual** asserts against tracked
   reference images (PSNR, per-scene thresholds in `_thresholds.json`); **responsiveness**
   asserts against absolute frame-latency budgets; **functional** asserts widget/state outcomes.
-- **Threshold convention**: visual = per-scene PSNR (mean−3σ over N stochastic renders, see
-  AGENTS.md auto_ev regen); responsiveness = absolute latency budgets; functional = exact.
+- **Threshold convention**: visual = per-scene PSNR (mean−4σ over N stochastic renders, see
+  AGENTS.md lens_proj regen); responsiveness = absolute latency budgets; functional = exact.
 - **Cadence**: `PR`. Requires a display server unless skipped with `LUMICE_SKIP_GUI_TESTS=1`.
 - **Naming**: `test_gui_<aspect>.cpp`; references under `test/gui/references/`.
 - **Physical location**: target-state `test/gui/<tag>/`; current `test/gui/` (+ the
@@ -322,7 +322,7 @@ test must assert the literal wire format against something outside the code unde
 - Reference images are explicitly un-ignored in `.gitignore` and tracked normally; configs and
   most generated artifacts are git-ignored. Moving a reference path requires updating the
   un-ignore rule, the test that reads it, and any CI path assumption — together.
-- Regeneration of stochastic references follows a documented procedure (GUI `auto_ev`:
+- Regeneration of stochastic references follows a documented procedure (GUI `lens_proj`:
   `scripts/regen_gui_test_refs.py`, see AGENTS.md). A reference is never hand-edited.
 
 ### §4.4 `performance` vs `gui`-responsiveness boundary
@@ -463,7 +463,7 @@ health items that must not be moved/deleted casually.
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_lens_projection`, `test_gui_sim_smoke`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its
