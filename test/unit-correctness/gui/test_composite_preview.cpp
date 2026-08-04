@@ -174,7 +174,7 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
 }  // namespace
 
 // AC1 anchor (headless): raypath_color active → payload->is_composite == true,
-// payload->rgb_data is populated and byte-identical to what LUMICE_GetCompositeResults
+// payload->rgb_data is populated and byte-identical to what LUMICE_FrameGetComposite
 // returns directly. This is the headless mechanistic proof that the poller wires
 // the composite surface through the payload; the on-screen visual is AC4 owner.
 TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
@@ -222,7 +222,7 @@ TEST(CompositePreview, raypath_color_active_populates_rgb_payload) {
 }
 
 // AC2 anchor (headless): no raypath_color → payload->is_composite == false, rgb_data
-// stays empty, xyz_data is byte-identical to LUMICE_GetRawXyzResults. This is the
+// stays empty, xyz_data is byte-identical to LUMICE_FrameGetRawXyz. This is the
 // per-byte "zero regression" gate for scenes that never touch the color surface.
 TEST(CompositePreview, no_raypath_color_stays_on_xyz_path) {
   LUMICE_Server* server = LUMICE_CreateServer();
@@ -348,7 +348,7 @@ TEST(CompositePreview, same_generation_invariant_under_churn) {
 // fresh composite materialization without restarting the sim (epoch unchanged, lifecycle stays
 // COMPLETED). Pins the two coupled invariants:
 //   (a) MECHANISM: the poll after SetRaypathColors + WakeForRefresh yields a payload whose
-//       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_GetCompositeResults
+//       rgb_data reflects the new colors and is byte-identical to a direct LUMICE_FrameGetComposite
 //       (proving the display-time dirty flag was consumed, not lost).
 //   (b) NON-RESTART: LUMICE_GetSimLifecycle still reports COMPLETED with the SAME epoch
 //       observed before the edit (322 clock decoupling: display-time edit does NOT bump
@@ -617,7 +617,7 @@ TEST(CompositePreview, display_time_visibility_reanchors_participating_p99) {
   }
   const double blue_before = static_cast<double>(blue_sum_before) / probe_pixels.size();
 
-  // Hide class 0 (bright, match-all). The next GetCompositeResults consumes snapshot_dirty_
+  // Hide class 0 (bright, match-all). The next composite read consumes snapshot_dirty_
   // → Phase-2 rebuild. Fix B: same call recomputes participating-P99 over {class 1 only},
   // recomputes s = ParticipatingExposureScale(smaller_p99), and re-lands the pixel bytes
   // with the LARGER scalar → the blue byte at (probe_x, probe_y) MUST strictly increase.
@@ -1181,12 +1181,12 @@ TEST(CompositePreview, reconciler_display_push_matches_direct_push_byte_identica
   };
 
   // Pause the global poller so its background
-  // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below. Each
+  // DoSnapshot() cannot race the synchronous composite read below. Each
   // preceding PushDisplayState() calls g_server_poller.WakeForRefresh(server) — that starts
   // the worker's PollOnce() → DoSnapshot() on another thread. Without this Stop(), the poller
   // can (a) Phase-1 the just-pushed display state (clearing snapshot_dirty_) BEFORE T's
-  // GetCompositeResults sees it, then be still inside Phase-2 when T reads cached_composite_
-  // results_ — so T returns a stale composite from a prior iteration, and the reset_check
+  // composite read sees it, then be still inside Phase-2 when T reads the published frame
+  // — so T returns a stale composite from a prior iteration, and the reset_check
   // memcmp below fires with ~40% probability under real timing (0% under --fixed-dt, whose
   // frame-scheduling coincidence keeps T ahead of the poller). The C API is contractually
   // single-caller; this test happens to have two (T + the process-global poller), which is
@@ -1200,7 +1200,7 @@ TEST(CompositePreview, reconciler_display_push_matches_direct_push_byte_identica
   // This Stop() only serializes ServerImpl::DoSnapshot()/cached_composite_results_ — a
   // separate data path from g_server_poller's published_/staged-snapshot pipeline
   // (StorePublished/LoadSnapshot, consumed by SyncFromPoller/g_preview). This test reads
-  // composites via the C API (LUMICE_GetCompositeResults) directly, never through
+  // composites via the C API (LUMICE_FrameGetComposite) directly, never through
   // LoadSnapshot(), so a stale published_ snapshot cannot leak through this path. Leaving the
   // poller paused at test end until the next PushDisplayState wakes it is also the same
   // convention already used at every other test's teardown in this file (see the sibling

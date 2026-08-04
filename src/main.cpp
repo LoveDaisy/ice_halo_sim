@@ -283,7 +283,7 @@ void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& outpu
 }
 
 // task-336.4: additive per-raypath composite output. When `raypath_color` is
-// configured, LUMICE_GetCompositeResults yields one colored image per renderer
+// configured, LUMICE_FrameGetComposite yields one colored image per renderer
 // (written as img_XX_components.<fmt>); otherwise it returns an empty set
 // (out[0] sentinel) and nothing is written — the mono img_XX.<fmt> path above is
 // byte-for-byte unchanged (zero-regression).
@@ -425,8 +425,8 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
     if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
       continue;
     }
-    // task-317: read sim_ray_num via the cheap O(1) live counter, NOT
-    // LUMICE_GetStatsResults — the latter triggers a full DoSnapshot +
+    // Read sim_ray_num via the cheap O(1) live counter, NOT by acquiring a result
+    // frame — the latter triggers a full DoSnapshot +
     // RenderConsumer sRGB (powf/pixel) on EVERY poll. For the drain-count path
     // (many polls) that render tax dominated wall-time, starved drain-window
     // closure, and (on CUDA) let the unbounded session run long enough to trip

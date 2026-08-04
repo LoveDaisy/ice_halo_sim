@@ -743,15 +743,15 @@ def run_scene_capi_buffered(
                     .astype(np.float64)
                 )
 
-                # Render buffer already populated by the last GetRenderResults
-                # call inside the polling loop (same snapshot as raw XYZ).
+                # Render buffer already populated by the last frame read inside
+                # the polling loop (same snapshot as raw XYZ).
                 rr = renders[0]
                 rr_w = int(rr.img_width)
                 rr_h = int(rr.img_height)
                 rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
                 if rr_addr is None or rr_w == 0 or rr_h == 0:
                     raise RuntimeError(
-                        f"{config_path}: GetRenderResults returned empty buffer"
+                        f"{config_path}: LUMICE_FrameGetRender returned empty buffer"
                     )
                 # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
                 n_rgb = rr_w * rr_h * 3

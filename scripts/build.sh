@@ -49,7 +49,7 @@ build() {
         #         watchdog (which counts simulated frame time) from that deadline.
         #       - revert_repushes_server_display_state, zorder_priority_persists_across_rerun
         #         (task-color-migration code-review round-1 revision): both assert on
-        #         LUMICE_GetCompositeResults() right after a display-time PushDisplayState()
+        #         LUMICE_FrameGetComposite() right after a display-time PushDisplayState()
         #         edit (color edit / z_order swap); the edit only materializes in the
         #         composite once the background ServerPoller's WakeForRefresh-triggered
         #         PollOnce() actually runs, which needs real wall-clock time between

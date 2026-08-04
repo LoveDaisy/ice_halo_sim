@@ -69,20 +69,6 @@ class ServerImpl {
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
-  std::vector<RenderResult> GetRenderResults();
-  // Composite results getter, mirroring GetRenderResults so the C-API can
-  // export it via the existing RenderResult surface. Returns RenderResult views whose
-  // img_buffer_ points into the frame's composite storage. Empty when no raypath_color
-  // is configured (no colored consumer → no composite).
-  std::vector<RenderResult> GetCompositeResults();
-  std::vector<RawXyzResult> GetRawXyzResults();
-  // task-345.2: atomic combined getter — one DoSnapshot() call, so xyz and
-  // composite are guaranteed to belong to the same snapshot_generation_ by
-  // construction (kills the poller's drift-guard, ④). See
-  // Server::GetRawXyzAndCompositeResults docstring for rationale.
-  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
-  std::optional<StatsResult> GetStatsResult();
-  std::optional<StatsResult> GetCachedStatsResult();
   size_t GetLiveSimRayCount();
 
   // THE result entry point. Materializes a snapshot if one is pending, then
@@ -115,8 +101,8 @@ class ServerImpl {
   Error SetCompositeExposure(float ev_total);
 
   // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
-  // lanes (no DoSnapshot trigger — GUI polling loop is expected to already query
-  // GetCompositeResults / GetRawXyzResults). Writes 1 into out_flags[i] when
+  // lanes (no DoSnapshot trigger — the GUI polling loop is expected to have already
+  // acquired a result frame). Writes 1 into out_flags[i] when
   // any RenderConsumer has a non-zero pixel in class i's snapshot Y-lane; 0
   // otherwise. class_count must equal the active color-class count.
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
@@ -168,9 +154,8 @@ class ServerImpl {
   // task-342.4 Step 1: unified snapshot consumer. Returns true iff this call
   // actually consumed a dirty snapshot (Phase 1..2 executed); false if
   // snapshot_dirty_ was clear on entry (nothing to do). Merges the previously
-  // duplicate Phase-1 in GetRawXyzResults into a single dirty-flag owner so
-  // any pair of Get*Results calls in the same poll tick see coherent state
-  // (see plan §3 keypoint 1).
+  // duplicate Phase-1 in the raw-xyz getter into a single dirty-flag owner, so every
+  // kind of result materialized in one pass is coherent with the others.
   bool DoSnapshot();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
@@ -258,16 +243,6 @@ class ServerImpl {
   void StorePublished(std::shared_ptr<const ResultFrame> next) {
     std::atomic_store(&published_frame_, std::move(next));
   }
-
-  // TRANSITIONAL (deleted with the six legacy getters in this task's final step): the
-  // legacy C++ getters return VIEWS (raw pointers) rather than a frame share, so something
-  // has to keep the frame those views point into alive after the getter returns. Holding
-  // the most recent one here reproduces the old contract exactly — "valid until the next
-  // Get*Results call or CommitConfig" — including its old weakness that a concurrent
-  // caller's getter invalidates yours. New code takes AcquireResultFrame() instead and
-  // owns its data outright.
-  std::shared_ptr<const ResultFrame> legacy_frame_;
-  void RetainLegacyFrame(std::shared_ptr<const ResultFrame> frame) { std::atomic_store(&legacy_frame_, frame); }
 
   // Serializes the whole two-phase snapshot pass. Phase 1 (consumer_mutex_) and Phase 2
   // (snapshot_mutex_) take different locks, so two DoSnapshot calls could previously
@@ -746,8 +721,8 @@ bool ServerImpl::DoSnapshot() {
     snap_display_ev_total = display_ev_total_;
     valid_data = has_ever_consumed_;
     snapshot_dirty_ = false;
-    // task-342.4 Step 1: bumping the generation is now the shared owner's
-    // responsibility (previously lived only in GetRawXyzResults's Phase-1).
+    // Bumping the generation is the shared owner's responsibility (it once lived only
+    // in the raw-xyz getter's Phase-1).
     // The counter is the single mechanism by which poller detects new
     // snapshots, so it must be tied to the dirty-consume event itself, not
     // to any one consumer accessor.
@@ -878,86 +853,15 @@ std::shared_ptr<const ResultFrame> ServerImpl::AcquireResultFrame() {
   return restamped;
 }
 
-// ---------------------------------------------------------------------------------------
-// TRANSITIONAL adapters (deleted together with the six legacy C-API functions in this
-// task's final step). Each hands back the old view-shaped result read off a frame, and
-// retains that frame so the views survive the return — see legacy_frame_.
-// ---------------------------------------------------------------------------------------
-
-std::vector<RenderResult> ServerImpl::GetRenderResults() {
-  auto frame = AcquireResultFrame();
-  RetainLegacyFrame(frame);
-  return frame->render_results_;
-}
-
-std::vector<RenderResult> ServerImpl::GetCompositeResults() {
-  auto frame = AcquireResultFrame();
-  RetainLegacyFrame(frame);
-  std::vector<RenderResult> out;
-  out.reserve(frame->composite_results_.size());
-  for (const auto& cr : frame->composite_results_) {
-    RenderResult r;
-    r.renderer_id_ = cr.renderer_id_;
-    r.img_width_ = cr.w_;
-    r.img_height_ = cr.h_;
-    r.img_buffer_ = cr.rgb_ ? cr.rgb_->data() : nullptr;
-    r.composite_p99_y_ = cr.p99_y_;
-    out.push_back(r);
-  }
-  return out;
-}
-
-std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
-  auto frame = AcquireResultFrame();
-  RetainLegacyFrame(frame);
-  return frame->xyz_results_;
-}
-
-// Atomic combined read. Both halves now come from ONE frame, so the
-// same-generation guarantee this function was created for is no longer something the
-// function arranges — it is a property of the frame it reads (which is why the C-API
-// twin of this getter goes away with the rest of them: any two FrameGet* calls on one
-// frame are same-generation by construction).
-void ServerImpl::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
-                                              std::vector<RenderResult>& composite_out) {
-  auto frame = AcquireResultFrame();
-  RetainLegacyFrame(frame);
-  xyz_out = frame->xyz_results_;
-  composite_out.clear();
-  composite_out.reserve(frame->composite_results_.size());
-  for (const auto& cr : frame->composite_results_) {
-    RenderResult r;
-    r.renderer_id_ = cr.renderer_id_;
-    r.img_width_ = cr.w_;
-    r.img_height_ = cr.h_;
-    r.img_buffer_ = cr.rgb_ ? cr.rgb_->data() : nullptr;
-    r.composite_p99_y_ = cr.p99_y_;
-    composite_out.push_back(r);
-  }
-}
-
-std::optional<StatsResult> ServerImpl::GetStatsResult() {
-  return AcquireResultFrame()->stats_result_;
-}
-
-// Deliberately NOT routed through AcquireResultFrame(): this getter's whole contract
-// (lumice.h, LUMICE_GetCachedStats) is "reads a cache, does not force a refresh, may be
-// stale or zero". Reading the published frame directly is that contract, unchanged —
-// including "all-zero before the first snapshot", which the constructor's zero frame makes
-// structural. The contract itself disappears when this getter does.
-std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
-  return LoadPublished()->stats_result_;
-}
-
 // task-317: cheap O(1) live sim-ray-count read for the --benchmark drain-count
-// poll loop. Unlike GetStatsResult() (which calls DoSnapshot -> RenderConsumer
+// poll loop. Unlike acquiring a result frame (which calls DoSnapshot -> RenderConsumer
 // sRGB every poll — the render-per-poll root cause), this only reads the running
 // StatsConsumer counter under consumer_mutex_. No snapshot, no render, no XYZ
 // copy — so the poll thread does not perturb the throughput measurement nor
 // starve drain-window closure.
 // Sentinel note (inherited ambiguity, not new): 0 means BOTH "no StatsConsumer
 // registered" AND "StatsConsumer present but no rays yet" — the same conflation
-// the old have_stats?…:0 GetStatsResults path had. Fine for the benchmark's
+// the old have_stats?…:0 stats-getter path had. Fine for the benchmark's
 // monotonic-progress read; a caller needing to distinguish a lifecycle error
 // from a cold start should switch to std::optional<size_t>.
 size_t ServerImpl::GetLiveSimRayCount() {
@@ -1322,7 +1226,7 @@ void ServerImpl::ConsumeData() {
           // not bias the image. BUT a batch that ran to completion with a
           // legitimately all-black result is still *valid data*: the simulation
           // converged, the answer is just zero intensity. We therefore flip
-          // has_ever_consumed_ so GetRawXyzResults reports has_valid_data=true,
+          // has_ever_consumed_ so the frame's xyz results report has_valid_data=true,
           // and dirty the snapshot so PrepareSnapshot produces a clean zero
           // frame (without this, an all-black simulation — e.g. an impossible
           // raypath filter — never sets has_valid_data, so the buffered poller
@@ -1641,56 +1545,6 @@ Error Server::CommitConfig(const std::string& config_str) {
     ILOG_ERROR(impl_->GetLogger(), "CommitConfig: Unknown error");
     return Error::InvalidJson("Unknown JSON parsing error");
   }
-}
-
-std::vector<RenderResult> Server::GetRenderResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetRenderResults();
-}
-
-std::vector<RenderResult> Server::GetCompositeResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetCompositeResults();
-}
-
-std::vector<RawXyzResult> Server::GetRawXyzResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetRawXyzResults();
-}
-
-void Server::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
-                                          std::vector<RenderResult>& composite_out) {
-  xyz_out.clear();
-  composite_out.clear();
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
-  }
-  impl_->GetRawXyzAndCompositeResults(xyz_out, composite_out);
-}
-
-std::optional<StatsResult> Server::GetStatsResult() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return std::nullopt;
-  }
-  return impl_->GetStatsResult();
-}
-
-std::optional<StatsResult> Server::GetCachedStatsResult() {
-  if (!impl_) {
-    return std::nullopt;
-  }
-  return impl_->GetCachedStatsResult();
 }
 
 size_t Server::GetLiveSimRayCount() {

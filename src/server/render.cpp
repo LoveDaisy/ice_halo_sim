@@ -608,7 +608,7 @@ void RenderConsumer::Reset() {
     std::memset(lane.get(), 0, lane_pixel_count_ * sizeof(float));
   }
   // snapshot_xyz_ not zeroed: PrepareSnapshot will memcpy over it.
-  // has_ever_consumed_ = false (set in Stop) ensures GetRawXyzResults returns has_valid_data_=false
+  // has_ever_consumed_ = false (set in Stop) ensures the frame's xyz results report has_valid_data_=false
   // until new data arrives, preventing stale snapshot reads.
 }
 

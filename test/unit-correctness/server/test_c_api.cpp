@@ -43,7 +43,7 @@ static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must b
 // ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
 // task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes
 // in task-345.3 when composite_p99_y was appended (float@24 + 4 pad, 8-aligned),
-// but the ctypes mirror was not updated. Result: LUMICE_GetRenderResults wrote
+// but the ctypes mirror was not updated. Result: the render getter wrote
 // 8 bytes past the Python-allocated (LUMICE_RenderResult * 1)() buffer on every
 // poll, corrupting the Python heap and aborting under _ctypes teardown or the
 // next glibc malloc/free check. LUMICE_ServerConfig has the same failure mode
@@ -1305,60 +1305,8 @@ TEST_F(ServerLifecycleApi, FrameGetStats) {
 // ---------------------------------------------------------------------------------------
 // Result frame (opaque handle). The lifetime property itself — a frame held across a later
 // snapshot keeps its own data — lives in test_result_frame_lifetime.cpp; what is checked
-// here is that the frame reads agree field-for-field with the server-taking getters they
-// replace, plus the handle's own contract.
+// here is the frame reads themselves and the handle's own contract.
 // ---------------------------------------------------------------------------------------
-
-TEST_F(ServerLifecycleApi, ResultFrameAgreesWithLegacyGetters) {
-  CommitAndWaitForIdle();
-
-  LUMICE_ResultFrame* frame = nullptr;
-  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
-  ASSERT_NE(frame, nullptr);
-
-  LUMICE_RenderResult frame_render[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_RawXyzResult frame_xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_StatsResult frame_stats{};
-  ASSERT_EQ(LUMICE_FrameGetRender(frame, frame_render, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, frame_xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_EQ(LUMICE_FrameGetStats(frame, &frame_stats), LUMICE_OK);
-
-  // The legacy getters are read AFTER the frame reads on purpose: the sim has finished, so
-  // no new snapshot can be materialized, and the values must therefore be identical rather
-  // than merely similar.
-  LUMICE_RenderResult legacy_render[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_RawXyzResult legacy_xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_StatsResult legacy_stats[LUMICE_MAX_STATS_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRenderResults(server_, legacy_render, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_EQ(LUMICE_GetRawXyzResults(server_, legacy_xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_EQ(LUMICE_GetStatsResults(server_, legacy_stats, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
-
-  ASSERT_NE(frame_render[0].img_buffer, nullptr);
-  EXPECT_EQ(frame_render[0].renderer_id, legacy_render[0].renderer_id);
-  EXPECT_EQ(frame_render[0].img_width, legacy_render[0].img_width);
-  EXPECT_EQ(frame_render[0].img_height, legacy_render[0].img_height);
-  EXPECT_EQ(frame_render[1].img_buffer, nullptr) << "sentinel not written";
-
-  ASSERT_NE(frame_xyz[0].xyz_buffer, nullptr);
-  EXPECT_EQ(frame_xyz[0].renderer_id, legacy_xyz[0].renderer_id);
-  EXPECT_EQ(frame_xyz[0].img_width, legacy_xyz[0].img_width);
-  EXPECT_EQ(frame_xyz[0].img_height, legacy_xyz[0].img_height);
-  EXPECT_EQ(frame_xyz[0].snapshot_intensity, legacy_xyz[0].snapshot_intensity);
-  EXPECT_EQ(frame_xyz[0].intensity_factor, legacy_xyz[0].intensity_factor);
-  EXPECT_EQ(frame_xyz[0].has_valid_data, legacy_xyz[0].has_valid_data);
-  EXPECT_EQ(frame_xyz[0].snapshot_generation, legacy_xyz[0].snapshot_generation);
-  EXPECT_EQ(frame_xyz[0].effective_pixels, legacy_xyz[0].effective_pixels);
-  EXPECT_EQ(frame_xyz[0].epoch, legacy_xyz[0].epoch);
-  EXPECT_EQ(frame_xyz[1].xyz_buffer, nullptr) << "sentinel not written";
-
-  EXPECT_EQ(frame_stats.sim_ray_num, legacy_stats[0].sim_ray_num);
-  EXPECT_EQ(frame_stats.ray_seg_num, legacy_stats[0].ray_seg_num);
-  EXPECT_EQ(frame_stats.crystal_num, legacy_stats[0].crystal_num);
-  EXPECT_EQ(frame_stats.orientation_num, legacy_stats[0].orientation_num);
-
-  LUMICE_ReleaseResultFrame(frame);
-}
-
 
 // Every kind of result read off ONE frame belongs to ONE snapshot. This is what retires the
 // combined xyz+composite getter: pairing is not something a caller has to ask for.
@@ -1533,32 +1481,6 @@ TEST_F(ServerLifecycleApi, ZeroExitBatchNoHang) {
   ASSERT_EQ(CommitJsonConfig(server_, json.c_str()), LUMICE_OK);
   ASSERT_TRUE(WaitForIdle(server_, 60000))
       << "Server did not reach IDLE within 60s — sim_scene_cnt_ leak on 0-exit batch regressed";
-}
-
-
-// NULL-arg checks for the four Get* result functions.
-TEST(ResultsApi, NullArgsGetters) {
-  auto* server = LUMICE_CreateServer();
-  ASSERT_NE(server, nullptr);
-
-  LUMICE_RenderResult render_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRenderResults(nullptr, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRenderResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_RawXyzResult xyz_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRawXyzResults(nullptr, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRawXyzResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StatsResult stats_out[LUMICE_MAX_STATS_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetStatsResults(nullptr, stats_out, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetStatsResults(server, nullptr, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StatsResult cached{};
-  EXPECT_EQ(LUMICE_GetCachedStats(nullptr, &cached), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetCachedStats(server, nullptr), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StopServer(server);
-  LUMICE_DestroyServer(server);
 }
 
 

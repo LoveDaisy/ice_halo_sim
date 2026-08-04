@@ -536,7 +536,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // `return;`, which cannot coexist with a non-void lambda return type.
     auto ReadRedBlueSums = [&](unsigned long long& sum_r, unsigned long long& sum_b) {
       // task-composite-preview-sibling-race: Stop() the global poller so its background
-      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // DoSnapshot() cannot race the synchronous composite read below.
       // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
       // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
       // — this test has 3 direct composite reads (below at L1726/L1737/L1746) all funneled
@@ -644,7 +644,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     auto ReadRedGreenSums = [&](unsigned long long& sum_r, unsigned long long& sum_g) {
       // task-composite-preview-sibling-race: Stop() the global poller so its background
-      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // DoSnapshot() cannot race the synchronous composite read below.
       // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
       // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
       // — this test has 3 direct composite reads (below at L1826/L1835/L1846) all funneled

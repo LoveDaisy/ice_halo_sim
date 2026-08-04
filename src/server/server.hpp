@@ -113,7 +113,7 @@ struct RenderResult {
    * - Format: RGB, 3 bytes per pixel, row-major order
    * - Size: img_width_ * img_height_ * 3 bytes
    * - Ownership: Managed internally by Server, user should not free
-   * - Lifetime: Valid until next call to GetRenderResults() or CommitConfig()
+   * - Lifetime: Valid for as long as the ResultFrame this view came from is held
    * - Usage: For long-term storage, use CopyBuffer() to copy the data
    *
    * @warning Do not access this pointer outside its lifetime, undefined behavior may occur
@@ -122,7 +122,7 @@ struct RenderResult {
 
   // task-345.3: composite path's auto-EV anchor — P99 over the union of
   // NON-ZERO UNEXPOSED (raw lane) Y values across every participating class.
-  // ONLY populated by the composite Get*Results paths; mono paths leave this
+  // ONLY populated by the composite path; mono paths leave this
   // at 0 and consumers ignore it (see doc/ev-pipeline-architecture.md §2.4
   // for why this is a composite-only field).
   float composite_p99_y_ = 0.0f;
@@ -151,8 +151,8 @@ struct RawXyzResult {
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
   int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
-  // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped by
-  // GetRawXyzResults; consumed by the GUI display-keying in 1.5. See
+  // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped when the frame is
+  // acquired; consumed by the GUI display-keying in 1.5. See
   // doc/gui-preview-lifecycle-architecture.md §4/§5.
   uint64_t epoch_ = 0;
 };
@@ -317,65 +317,6 @@ class Server {
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
 
   /**
-   * @brief Get all render results
-   * @return Vector of RenderResult objects. Returns empty vector if no render results available.
-   * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
-   * @note Only returns RenderResult entries, filters out other result types
-   */
-  std::vector<RenderResult> GetRenderResults();
-
-  /**
-   * @brief Get composited per-raypath colored results (task-336.4)
-   * @return Vector of RenderResult objects, one per colored renderer. Empty when
-   *         no `raypath_color` is configured (mono-only path). Reuses RenderResult
-   *         since a composite is just an RGB uint8 W*H*3 image; img_buffer_ points
-   *         into server-owned storage with the same lifetime contract as
-   *         GetRenderResults (valid until the next GetCompositeResults/CommitConfig).
-   */
-  std::vector<RenderResult> GetCompositeResults();
-
-  /**
-   * @brief Get raw XYZ results (unconverted float data for GPU-side processing)
-   * @return Vector of RawXyzResult. Empty if no render consumers.
-   */
-  std::vector<RawXyzResult> GetRawXyzResults();
-
-  /**
-   * @brief Atomically get raw XYZ + composite results from a single DoSnapshot().
-   * @details task-345.2: kills the poller drift-guard (④). Because only ONE
-   *          DoSnapshot() is triggered here, no concurrent ConsumeData bump
-   *          can insert a second Phase-2 rebuild between reading xyz and
-   *          composite — so the paired results are guaranteed to share the
-   *          same snapshot_generation_ by construction (structural, not
-   *          probabilistic). Prefer this over calling
-   *          GetRawXyzResults() + GetCompositeResults() separately when the
-   *          caller needs both in one coherent view (e.g. the GUI poller).
-   * @param xyz_out Raw XYZ results (one per RenderConsumer).
-   * @param composite_out Composite RGB results (one per colored consumer;
-   *        empty when no raypath_color is configured).
-   * @note Lifetime: same as the individual getters — img_buffer_/xyz_buffer_
-   *       pointers stay valid until the NEXT DoSnapshot() rebuild or
-   *       CommitConfig.
-   */
-  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
-
-  /**
-   * @brief Get statistics result
-   * @return Optional StatsResult. Returns std::nullopt if no statistics result available.
-   * @note This is a non-blocking call. It returns immediately even if processing is ongoing.
-   * @note Only returns StatsResult if available, otherwise returns std::nullopt
-   */
-  std::optional<StatsResult> GetStatsResult();
-
-  /**
-   * @brief Get cached statistics without triggering DoSnapshot
-   * @return Optional StatsResult from the most recent snapshot. Returns std::nullopt if no data yet.
-   * @note Unlike GetStatsResult(), this does NOT call DoSnapshot/PostSnapshot.
-   *       The cache is updated by GetRawXyzResults() when snapshot_dirty_ is true.
-   */
-  std::optional<StatsResult> GetCachedStatsResult();
-
-  /**
    * @brief Acquire a share of the most recent result frame.
    * @return Never null. Materializes a pending snapshot first, so the frame is as fresh
    *         as the getters it replaces; an empty frame before the first snapshot (or on a
@@ -474,8 +415,8 @@ class Server {
    * @param class_count Must equal the currently active color-class count; mismatch =
    *                    Error::InvalidConfig.
    * @return Error::Success on success. Reads the frozen snapshot (no DoSnapshot trigger);
-   *         callers relying on freshness should poll GetCompositeResults / GetRawXyzResults
-   *         first. O(W*H * class_count * consumers) scan; intended for infrequent GUI polls
+   *         callers relying on freshness should acquire a result frame first.
+   *         O(W*H * class_count * consumers) scan; intended for infrequent GUI polls
    *         (commit-debounce cadence), not per-render-frame.
    */
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
