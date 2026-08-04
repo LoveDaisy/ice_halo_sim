@@ -421,13 +421,29 @@ so this needs no new branch-protection context: those ten scenes now block a mer
 
 | Reference group | Linux + llvmpipe vs. the macOS-captured reference | In CI? |
 |---|---|---|
-| `defaults_panel_layout` (6 scenes) | 60.56–61.99 dB vs. a 40 dB floor; **bit-identical across 5 runs** | yes |
-| `modal_layout` (4 scenes) | 47.12–48.23 dB vs. a 40 dB floor; **bit-identical across 5 runs** | yes |
+| `defaults_panel_layout` (6 scenes) | **60.56–61.99 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
+| `modal_layout` (4 scenes) | **46.88–47.96 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
 | `lens_proj` (6 scenes) | 19.49–27.72 dB — every scene **above** its macOS-calibrated threshold, by 0.88–1.49 dB | no, see below |
 | `screenshot`/`visual` crystal scenes (3) | 34.78–35.94 dB vs. a 40 dB floor | no — not portable |
 | `capture_harness` `fullframe` | 21.92 dB vs. a 40 dB floor | no — not portable |
 
-**A caveat the table cannot carry silently.** Every number above was measured on an **arm64**
+**The amd64 confirmation, and what it changed.** The two in-CI rows above now carry numbers from
+the real `ubuntu-24.04` runner (the CI step's own log, 12/12 scenes passed). The comparison against
+the arm64 figures they replaced is worth keeping, because it is the only measurement of how far
+that substitution actually travelled:
+
+| Group | arm64 container (proxy) | amd64 runner (real) | Delta |
+|---|---|---|---|
+| `defaults_panel_layout` | 60.56–61.99 dB | 60.56–61.99 dB | none — identical |
+| `modal_layout` | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
+
+So the proxy was exact for one group and off by about a quarter of a dB for the other. Neither
+outcome threatens the conclusion — the tightest real margin is 46.88 dB against a 40 dB floor,
+6.88 dB of headroom — but the second row is why the caveat below was worth writing rather than
+assuming portability. The remaining rows are still arm64-only: nothing runs them on amd64.
+
+**A caveat the table cannot carry silently.** Every number below, and every arm64 figure above,
+was measured on an **arm64**
 Docker container (`ubuntu:24.04` + Xvfb + Mesa llvmpipe, run on an Apple Silicon host) standing in
 for the **amd64** `ubuntu-24.04` GitHub Actions runner this step actually runs on — the two differ
 in CPU architecture, not just in "a Linux box with a software rasterizer". That substitution was a
