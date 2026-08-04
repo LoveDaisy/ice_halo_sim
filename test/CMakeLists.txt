@@ -62,6 +62,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   # Result-frame lifetime guard + the buffer pool underneath it. Physically here rather
   # than under test/regression-sentinel/ because that layer has no C++ target — it is
