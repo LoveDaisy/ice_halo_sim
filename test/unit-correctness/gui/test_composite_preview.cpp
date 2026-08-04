@@ -383,6 +383,9 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   ASSERT_TRUE(snap_before->payload != nullptr);
   EXPECT_TRUE(snap_before->payload->is_composite);
   std::vector<uint8_t> composite_before(snap_before->payload->rgb_data.begin(), snap_before->payload->rgb_data.end());
+  // Kept so the post-edit poll can be shown to have MATERIALIZED a payload rather than carried the
+  // previous one forward — see the serial assertion below.
+  const unsigned long long serial_before = snap_before->texture_serial;
 
   // Display-time edit: swap the class-0 color from red → blue. kColorConfig commits exactly
   // one raypath_color class, so class_count == 1 matches.
@@ -398,6 +401,37 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   // "worker wakes up and runs one PollOnce, then self-pauses at COMPLETED".
   gui::g_server_poller.WakeForRefresh(server);
 
+  // The wake above starts a REAL background thread that polls this same server, so from here to
+  // the read below there are two consumers driving ServerImpl::DoSnapshot() concurrently — and
+  // that getter family is not safe for two. DoSnapshot's three segments are not jointly atomic:
+  // Phase 1 consumes snapshot_dirty_ and bumps snapshot_generation_ under consumer_mutex_,
+  // Phase 1.5 counts effective pixels under NO lock, and only Phase 2 rebuilds
+  // cached_composite_results_ under snapshot_mutex_ (server.cpp:702-799). A second caller arriving
+  // while the first is in Phase 1.5 finds snapshot_dirty_ already false, returns early WITHOUT
+  // waiting for that Phase 2, and then reports the already-bumped generation beside the PREVIOUS
+  // generation's pixels. That is exactly the failure this case hit on CI: the payload came back
+  // byte-identical to composite_before while a direct read a few lines later was already the new
+  // image. Worse, img_buffer is a borrowed pointer that Phase 2's cache swap frees, so the loser
+  // is also reading memory that may have been released.
+  //
+  // Stop() drains the worker synchronously (it returns only once the worker has left the poll
+  // loop), collapsing the two consumers back to one. That removes the window structurally rather
+  // than narrowing it — no sleep, no retry, no tolerance. It is the same serialization the sibling
+  // cases in this file and in test/gui/functional/test_gui_composite_preview.cpp already apply
+  // before every composite read; this case woke the poller without it.
+  //
+  // The yield is the nail rather than an incidental detail: without it the woken worker usually
+  // never gets scheduled before Stop() lands, so the two-consumer interleaving this case is
+  // supposed to survive is barely exercised and deleting the Stop() would mostly go unnoticed —
+  // that is precisely how the CI flake survived here. A --gtest_repeat sweep measured the yield to
+  // raise detection of a missing Stop() by roughly two orders of magnitude (per-run rates and the
+  // exact arms are in commit e5cbb170; they are one machine's one-off sample, not an invariant, and
+  // will drift with hardware, pixel count and scheduler). What does NOT drift, and is the reason
+  // the yield stays: it cannot produce a false red — it only hands the CPU to a worker that a
+  // correct sequence has already serialized away, so a green run never depends on the sample above.
+  std::this_thread::yield();
+  gui::g_server_poller.Stop();
+
   // (a) MECHANISM: the poll after the edit must produce a composite reflecting the new colors —
   // i.e., not byte-identical to composite_before (the color changed, so the rendered image must
   // differ). And it must byte-match a same-tick direct C-API read.
@@ -407,6 +441,13 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   EXPECT_TRUE(snap_after->valid);
   ASSERT_TRUE(snap_after->payload != nullptr);
   EXPECT_TRUE(snap_after->payload->is_composite);
+  // This poll must have materialized a payload of its own, not carried snap_before's forward. The
+  // two ways this case can go stale look identical at the byte level but differ here: a torn read
+  // publishes a NEW payload (serial advances) holding the old pixels, whereas a quality-gate or
+  // content-freshness rejection republishes the OLD payload pointer (serial unchanged). Asserting
+  // the serial separately keeps a future failure self-diagnosing instead of collapsing both into
+  // one "bytes are stale" symptom.
+  EXPECT_TRUE(snap_after->texture_serial != serial_before);
   EXPECT_EQ(snap_after->payload->rgb_data.size(), composite_before.size());
   EXPECT_TRUE(std::memcmp(snap_after->payload->rgb_data.data(), composite_before.data(), composite_before.size()) != 0);
 
