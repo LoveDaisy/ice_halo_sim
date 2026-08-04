@@ -168,6 +168,60 @@ struct StatsResult {
 
 using Result = std::variant<NoneResult, RenderResult, StatsResult>;
 
+/**
+ * @brief One composited per-raypath colored image.
+ * @details Produced by DoSnapshot Phase 2 for every RenderConsumer with a non-zero
+ *          ColoredMask(). The pixels are held through a shared_ptr so that copying a
+ *          ResultFrame (see below) never copies image data.
+ */
+struct CompositeResult {
+  int renderer_id_ = 0;
+  int w_ = 0;
+  int h_ = 0;
+  std::shared_ptr<const std::vector<uint8_t>> rgb_;  ///< W*H*3 sRGB, owned by the frame
+  // P99 over the union of NON-ZERO UNEXPOSED (raw lane) Y values across
+  // every participating class. The composite-path auto-EV anchor consumed by the GUI
+  // (mono path keeps its xyz_data-derived P99). 0 when no participating class carries
+  // any positive Y.
+  float p99_y_ = 0.0f;
+};
+
+/**
+ * @brief Immutable, reference-counted publication unit of one snapshot.
+ * @details THE ownership answer of this API: a reader holding a
+ *          `shared_ptr<const ResultFrame>` holds a real share of the data's lifetime,
+ *          so the view pointers inside RenderResult/RawXyzResult/CompositeResult stay
+ *          valid for exactly as long as the frame does — no matter how many further
+ *          snapshots the server publishes meanwhile. DoSnapshot() PUBLISHES a new frame
+ *          rather than overwriting a mutable cache; the old frame dies when its last
+ *          holder drops it.
+ *
+ *          The two `*_storage_` vectors are the lifetime anchors for the mono image /
+ *          raw XYZ buffers that RenderConsumer hands over per snapshot (see
+ *          FrameBufferPool in render.hpp). The view structs keep their non-owning raw
+ *          pointer fields unchanged — `render_results_[i].img_buffer_` is
+ *          `render_storage_[i].get()`, `xyz_results_[i].xyz_buffer_` is
+ *          `xyz_storage_[i].get()`.
+ *
+ *          Copying a ResultFrame is cheap by construction (every pixel payload sits
+ *          behind a shared_ptr) — relied upon by ServerImpl::AcquireResultFrame, which
+ *          re-stamps the read-time lifecycle fields onto a shallow copy.
+ */
+struct ResultFrame {
+  std::vector<RenderResult> render_results_;
+  std::vector<RawXyzResult> xyz_results_;
+  std::vector<CompositeResult> composite_results_;
+  std::optional<StatsResult> stats_result_;
+
+  // Lifetime anchors, parallel to render_results_ / xyz_results_.
+  std::vector<std::shared_ptr<const uint8_t[]>> render_storage_;
+  std::vector<std::shared_ptr<const float[]>> xyz_storage_;
+
+  uint64_t snapshot_generation_ = 0;  ///< snapshot_generation_ this frame was built under
+  uint64_t epoch_ = 0;                ///< committed_epoch_ as seen by the reader (see AcquireResultFrame)
+  bool has_valid_data_ = false;       ///< has_ever_consumed_ as seen by the reader
+};
+
 
 // =============== GPU route query ===============
 /**
@@ -320,6 +374,18 @@ class Server {
    *       The cache is updated by GetRawXyzResults() when snapshot_dirty_ is true.
    */
   std::optional<StatsResult> GetCachedStatsResult();
+
+  /**
+   * @brief Acquire a share of the most recent result frame.
+   * @return Never null. Materializes a pending snapshot first, so the frame is as fresh
+   *         as the getters it replaces; an empty frame before the first snapshot (or on a
+   *         terminated server) reads as "no results".
+   * @note This is THE result entry point: every kind of result (mono render, composite,
+   *       raw XYZ, stats) comes off one frame, so any two of them are same-generation by
+   *       construction. The returned pointers stay valid for as long as the caller keeps
+   *       its share — later snapshots cannot disturb them.
+   */
+  std::shared_ptr<const ResultFrame> AcquireResultFrame();
 
   /**
    * @brief Cheap O(1) live accumulated sim ray count (no snapshot / no render).

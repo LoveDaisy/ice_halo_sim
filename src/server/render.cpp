@@ -39,11 +39,16 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
       short_pix_(static_cast<float>(std::min(config_.resolution_[0], config_.resolution_[1]))),
       internal_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       comp_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      snapshot_xyz_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       snapshot_work_(std::make_unique<float[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
-      snapshot_image_buffer_(std::make_unique<uint8_t[]>(config_.resolution_[0] * config_.resolution_[1] * 3)),
       class_table_(std::move(class_table)),
       lane_pixel_count_(static_cast<size_t>(config_.resolution_[0]) * static_cast<size_t>(config_.resolution_[1])) {
+  // Borrow the first pair up front so the two snapshot getters never see a null
+  // buffer before the first PrepareSnapshot/PostSnapshot — the pool zero-fills fresh
+  // allocations, matching what the make_unique members these replaced guaranteed.
+  const size_t buf_elems = lane_pixel_count_ * 3u;
+  snapshot_xyz_ = xyz_pool_->Acquire(buf_elems);
+  snapshot_image_buffer_ = image_pool_->Acquire(buf_elems);
+
   float ax_z[3]{ 0, 0, 1 };
   float ax_y[3]{ 0, 1, 0 };
   rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
@@ -460,6 +465,12 @@ void RenderConsumer::LogConsumeProfile() const {
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol, Phase 1).
 void RenderConsumer::PrepareSnapshot() {
   size_t total = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3u;
+  // Borrow a FRESH buffer for this snapshot instead of rewriting the previous one:
+  // whoever holds the previous snapshot (a published ResultFrame, and through it any
+  // C-API reader) co-owns that buffer, so writing into it here is precisely the
+  // tearing this task removes. The loop below writes every element, so the borrowed
+  // buffer's prior contents are irrelevant.
+  snapshot_xyz_ = xyz_pool_->Acquire(total);
   // True running sum = internal_xyz_ + comp_xyz_ (Neumaier residual). The
   // device-fused path (ConsumeDeviceFused) accumulates the compensation in
   // comp_xyz_; folding it here is what realizes the precision gain — without
@@ -497,6 +508,10 @@ void RenderConsumer::CountEffectivePixels() {
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void RenderConsumer::PostSnapshot() {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
+  // Fresh borrow for the same reason PrepareSnapshot takes one (the previous mono
+  // image belongs to the previously published frame). Taken before the early-out below
+  // so BOTH exits hand the frame a buffer this snapshot owns.
+  snapshot_image_buffer_ = image_pool_->Acquire(static_cast<size_t>(std::max(total_pix, 0)) * 3u);
   if (total_pix <= 0 || snapshot_intensity_ <= 0) {
     std::memset(snapshot_image_buffer_.get(), 0, total_pix * 3);
     return;

@@ -1,8 +1,11 @@
 #ifndef CONSUMER_RENDER_H_
 #define CONSUMER_RENDER_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <utility>
 #include <vector>
 
 #include "config/color_class_table.hpp"
@@ -14,6 +17,80 @@ namespace lumice {
 
 constexpr int kMinWavelength = 360;
 constexpr int kMaxWavelength = 830;
+
+/**
+ * @brief Recycles the fixed-size snapshot buffers a RenderConsumer hands over to each
+ *        published ResultFrame.
+ * @details Since a frame OWNS the buffer it was built from (see ResultFrame in
+ *          server.hpp), a consumer can no longer write its next snapshot into the same
+ *          fixed member — it borrows a fresh buffer per snapshot instead. Without
+ *          recycling that would mean one W*H*3 allocation per snapshot per consumer;
+ *          the pool makes the steady state "hand the just-released buffer straight
+ *          back", since the number of simultaneously live frames is small (published +
+ *          in-flight + whatever a reader holds).
+ *
+ *          A buffer is returned by the deleter of the shared_ptr handed out, so it
+ *          comes back at the exact moment its last holder drops it — on whichever
+ *          thread that happens, hence the mutex. The deleter keeps a shared_ptr to the
+ *          pool itself: a frame may outlive the RenderConsumer that produced it (a
+ *          CommitConfig rebuild drops consumers while a poller still holds a frame), and
+ *          a deleter reaching into a destroyed pool would be exactly the kind of
+ *          lifetime defect this task exists to remove.
+ *
+ *          A pool serves ONE element count (a consumer's resolution is fixed for its
+ *          lifetime — ResetWith is gated on NeedsRebuild); a request for a different
+ *          count drops the free list rather than growing a size-indexed structure.
+ */
+template <typename T>
+class FrameBufferPool : public std::enable_shared_from_this<FrameBufferPool<T>> {
+ public:
+  // Hands out `count` value-initialized elements (fresh allocations are zeroed;
+  // recycled ones carry the previous frame's bytes and MUST be fully overwritten by
+  // the caller, which is what PrepareSnapshot/PostSnapshot do).
+  std::shared_ptr<T[]> Acquire(size_t count) {
+    std::shared_ptr<T[]> buf;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (element_count_ != count) {
+        free_list_.clear();
+        element_count_ = count;
+      } else if (!free_list_.empty()) {
+        buf = std::move(free_list_.back());
+        free_list_.pop_back();
+      }
+    }
+    if (!buf) {
+      buf = std::shared_ptr<T[]>(std::make_unique<T[]>(count));
+    }
+    T* raw = buf.get();
+    auto self = this->shared_from_this();
+    return std::shared_ptr<T[]>(
+        raw, [self, count, inner = std::move(buf)](T*) mutable { self->Recycle(std::move(inner), count); });
+  }
+
+  // Free-list depth, for the pool's own white-box test.
+  size_t FreeCountForTest() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return free_list_.size();
+  }
+
+ private:
+  // Bounds the idle memory a burst of concurrently-held frames can leave behind;
+  // beyond it a returned buffer is simply freed.
+  static constexpr size_t kMaxFreeBuffers = 8;
+
+  void Recycle(std::shared_ptr<T[]> buf, size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (count != element_count_ || free_list_.size() >= kMaxFreeBuffers) {
+      return;  // wrong size or pool full — let it die with this shared_ptr
+    }
+    free_list_.push_back(std::move(buf));
+  }
+
+  mutable std::mutex mutex_;
+  std::vector<std::shared_ptr<T[]>> free_list_;
+  size_t element_count_ = 0;
+};
 
 // See doc/accumulator-consumer-architecture.md §3 (state machine), §4 (thread safety), §6 (invariants).
 class RenderConsumer : public IConsume {
@@ -35,6 +112,15 @@ class RenderConsumer : public IConsume {
   void PostSnapshot() override;
   Result GetResult() const override;
   RawXyzResult GetRawXyzResult() const;
+
+  // Lifetime share of the buffers the two getters above return VIEWS into. The
+  // assembling ResultFrame anchors these next to the views, which is what makes a
+  // published frame outlive every later snapshot (see ResultFrame in server.hpp).
+  // Both are re-pointed at a fresh pool buffer by PrepareSnapshot / PostSnapshot, so a
+  // caller must take the storage from the same snapshot pass as the view it pairs it
+  // with — DoSnapshot does exactly that, under the serialization its Phase 1..2 holds.
+  std::shared_ptr<const float[]> SnapshotXyzStorage() const { return snapshot_xyz_; }
+  std::shared_ptr<const uint8_t[]> SnapshotImageStorage() const { return snapshot_image_buffer_; }
   void Reset() override;
   void ResetWith(const RenderConfig& new_config);
   void LogConsumeProfile() const;  // Dump accumulated profiling stats
@@ -109,9 +195,14 @@ class RenderConsumer : public IConsume {
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> comp_xyz_;  // Neumaier compensation buffer (S1 device-fused)
-  std::unique_ptr<float[]> snapshot_xyz_;
+  // Borrowed fresh from the pools below on every snapshot, then handed to the frame
+  // being assembled — NOT rewritten in place, which is what used to tear a reader's
+  // data under it. shared_ptr, not unique_ptr, because the frame co-owns them.
+  std::shared_ptr<float[]> snapshot_xyz_;
   std::unique_ptr<float[]> snapshot_work_;            // PostSnapshot work buffer (preserves snapshot_xyz_)
-  std::unique_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
+  std::shared_ptr<uint8_t[]> snapshot_image_buffer_;  // produced by PostSnapshot()
+  std::shared_ptr<FrameBufferPool<float>> xyz_pool_ = std::make_shared<FrameBufferPool<float>>();
+  std::shared_ptr<FrameBufferPool<uint8_t>> image_pool_ = std::make_shared<FrameBufferPool<uint8_t>>();
 
   // Pre-allocated Consume() buffers (grow-only)
   std::unique_ptr<float[]> d_buf_;
