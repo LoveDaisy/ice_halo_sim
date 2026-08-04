@@ -423,11 +423,12 @@ TEST(CompositePreview, display_time_color_edit_repaints_without_restart) {
   // The yield is the nail rather than an incidental detail: without it the woken worker usually
   // never gets scheduled before Stop() lands, so the two-consumer interleaving this case is
   // supposed to survive is barely exercised and deleting the Stop() would mostly go unnoticed —
-  // that is precisely how the CI flake survived here. Measured on this case with --gtest_repeat,
-  // macOS ARM64 release: no yield + no Stop() (the shape that flaked) 1/200 red; yield + no Stop()
-  // 14/50 red; yield + Stop() 0/200 red. So the yield buys ~56x detection power against a missing
-  // Stop(), and it cannot produce a false red — it only hands the CPU to a worker that a correct
-  // sequence has already serialized away.
+  // that is precisely how the CI flake survived here. A --gtest_repeat sweep measured the yield to
+  // raise detection of a missing Stop() by roughly two orders of magnitude (per-run rates and the
+  // exact arms are in commit e5cbb170; they are one machine's one-off sample, not an invariant, and
+  // will drift with hardware, pixel count and scheduler). What does NOT drift, and is the reason
+  // the yield stays: it cannot produce a false red — it only hands the CPU to a worker that a
+  // correct sequence has already serialized away, so a green run never depends on the sample above.
   std::this_thread::yield();
   gui::g_server_poller.Stop();
 
