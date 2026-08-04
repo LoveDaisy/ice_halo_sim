@@ -1353,5 +1353,53 @@ TEST(ComponentCompositor, EarlyReturnPublishesParticipatingP99) {
   EXPECT_FLOAT_EQ(p99_early, 0.0f);
 }
 
+// DoSnapshot's composite pass hands the SAME out_linear_rgb buffer to every
+// colored consumer of every snapshot (ServerImpl::linear_rgb_scratch_), instead
+// of allocating a fresh std::vector per consumer per snapshot. That reuse is
+// only sound because this function resets the buffer on entry — so pin the
+// property rather than the reader's belief about it: a reused buffer, dirtied
+// and left at the wrong size by a previous consumer, must produce byte-for-byte
+// what a fresh buffer produces. Both directions of the size change are covered
+// (grow and shrink), since only a shrink can leave stale trailing elements.
+TEST(ComponentCompositor, ReusedOutputBufferMatchesFreshBuffer) {
+  auto table = MakeSingletonClassTable(0b11, { kRed, kGreen });
+
+  // Two consumers at different resolutions, each with its own signal.
+  RenderConfig cfg_big = MakeRenderConfig(5);
+  RenderConsumer rc_big(cfg_big, table);
+  rc_big.Consume(MakeBatch({ 0b01, 0b10 }, { 0.9f, 0.3f }));
+  rc_big.PrepareSnapshot();
+
+  RenderConfig cfg_small = MakeRenderConfig(3);
+  RenderConsumer rc_small(cfg_small, table);
+  rc_small.Consume(MakeBatch({ 0b01, 0b10 }, { 0.2f, 0.7f }));
+  rc_small.PrepareSnapshot();
+
+  const auto composite = [&table](const RenderConsumer& rc, std::vector<float>& out) {
+    float p99 = 0.0f;
+    return CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, 1.0f, out, &p99);
+  };
+
+  // Reference: each consumer composited into its own never-touched buffer.
+  std::vector<float> fresh_big;
+  std::vector<float> fresh_small;
+  ASSERT_TRUE(composite(rc_big, fresh_big));
+  ASSERT_TRUE(composite(rc_small, fresh_small));
+  ASSERT_FALSE(fresh_big.empty());
+  ASSERT_FALSE(fresh_small.empty());
+
+  // Reuse: one buffer through big → small → big, i.e. a shrink then a grow,
+  // exactly the cross-consumer / cross-snapshot sequence DoSnapshot produces.
+  std::vector<float> reused;
+  ASSERT_TRUE(composite(rc_big, reused));
+  EXPECT_EQ(reused, fresh_big);
+
+  ASSERT_TRUE(composite(rc_small, reused));
+  EXPECT_EQ(reused, fresh_small) << "shrinking reuse leaked the previous consumer's trailing pixels";
+
+  ASSERT_TRUE(composite(rc_big, reused));
+  EXPECT_EQ(reused, fresh_big) << "growing reuse did not fully reset the buffer";
+}
+
 }  // namespace
 }  // namespace lumice

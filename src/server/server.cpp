@@ -253,6 +253,18 @@ class ServerImpl {
   // three — always taken BEFORE consumer_mutex_/snapshot_mutex_, never while holding either.
   std::mutex do_snapshot_mutex_;
 
+  // Scratch for DoSnapshot Phase 2's composite pass, and used nowhere else. It was a
+  // local std::vector inside the per-consumer loop, i.e. one W*H*3 float allocation and
+  // free per colored consumer per snapshot, for a buffer that is filled and consumed
+  // within a single loop iteration and never published.
+  //
+  // Reuse is safe for two reasons, both of which must hold if this ever moves:
+  // do_snapshot_mutex_ above serializes whole snapshot passes, so no two writers exist
+  // at once; and CompositeColorClassesLinear assign()s the full size on entry, so no
+  // iteration can read what a previous one left behind. Nothing holds a pointer,
+  // reference or iterator into it past its loop iteration — keep it that way.
+  std::vector<float> linear_rgb_scratch_;
+
 
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
@@ -786,15 +798,14 @@ bool ServerImpl::DoSnapshot() {
       if (rc == nullptr || rc->ColoredMask() == 0) {
         continue;
       }
-      std::vector<float> linear_rgb;
       // task-345.3: display-time EV multiplier + participating-P99 anchor
       // both flow through the compositor in one pass. `display_exposure_scale
       // = 2^snap_display_ev_total`; CLI paths never call SetCompositeExposure
       // so snap_display_ev_total stays at 0 → 2^0 = 1.0 → no behavior change.
       const float display_exposure_scale = std::pow(2.0f, snap_display_ev_total);
       float participating_p99 = 0.0f;
-      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, display_exposure_scale, linear_rgb,
-                                       &participating_p99)) {
+      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, display_exposure_scale,
+                                       linear_rgb_scratch_, &participating_p99)) {
         continue;
       }
       CompositeResult cr;
@@ -807,7 +818,7 @@ bool ServerImpl::DoSnapshot() {
       cr.w_ = rc->ImageWidth();
       cr.h_ = rc->ImageHeight();
       auto rgb = std::make_shared<std::vector<uint8_t>>();
-      LinearRgbToSrgbU8(linear_rgb, *rgb);
+      LinearRgbToSrgbU8(linear_rgb_scratch_, *rgb);
       cr.rgb_ = std::move(rgb);
       cr.p99_y_ = participating_p99;
       frame->composite_results_.push_back(std::move(cr));
