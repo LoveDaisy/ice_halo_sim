@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785849361220,
+  "lastUpdate": 1785863084784,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2",
-          "message": "Merge pull request #145 from LoveDaisy/chore/cleanup-metal-compile-review-minors\n\nchore: clean up Metal compile-path review minors (task-282/283 衍生, #293)",
-          "timestamp": "2026-06-24T10:28:16+08:00",
-          "tree_id": "c31eea8c0d7df06b3064a38d766c0960feaa9fde",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7fb0d1f4478fc0f63a7a5e2c5fbde2d6a7e073d2"
-        },
-        "date": 1782268464538,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 391346.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 617801.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 393791.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 326091.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4788,6 +4740,54 @@ window.BENCHMARK_DATA = {
             "value": 313265.2,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e95f5c4505cac81d3efb2fbfec80b26926ff77c",
+          "message": "Merge pull request #249 from LoveDaisy/explore/gui-test-suite-from-scratch\n\ndocs(testing-architecture): 新增 §4.8 —— GUI 套件形状的机制层诊断与工作规则",
+          "timestamp": "2026-08-05T00:54:42+08:00",
+          "tree_id": "d211f764eb7e4218ae46f8a34134e89f34aa0e31",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6e95f5c4505cac81d3efb2fbfec80b26926ff77c"
+        },
+        "date": 1785863083252,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 462892,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 583899.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 400422.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 342602,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
