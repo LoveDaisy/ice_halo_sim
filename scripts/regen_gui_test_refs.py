@@ -64,30 +64,7 @@ class ReferenceGroup:
     source: str
 
 
-# Auto-EV scene names — must match kScenes[] order in test_gui_auto_ev.cpp.
-# Only the auto-EV-applied ("on") capture is exported/compared. The legacy "off"
-# (intensity_factor=1.0) mode was dropped in chore-auto-ev-regression-drop-off — the GUI
-# has no auto-EV toggle, so off was a degenerate non-default state with no unique coverage.
 GROUPS: dict[str, ReferenceGroup] = {
-    "auto_ev": ReferenceGroup(
-        key="auto_ev",
-        scenes=[
-            "halo_22",
-            "multi_scat",
-            "color",
-            "pyramid",
-            "cza",
-            "parhelion",
-            "filters",
-            "rp46",
-            "rp46_nof",
-            "overlay_ea",
-        ],
-        modes=["on"],
-        tmp_prefix="lumice_auto_ev_",
-        ref_prefix="auto_ev_",
-        source="test/gui/visual/test_gui_auto_ev.cpp",
-    ),
     "capture_harness": ReferenceGroup(
         key="capture_harness",
         scenes=["fullframe"],
@@ -97,24 +74,24 @@ GROUPS: dict[str, ReferenceGroup] = {
         source="test/gui/visual/test_gui_capture_smoke.cpp",
     ),
     # Lens-projection scene names — must match kScenes[] order in test_gui_lens_projection.cpp.
-    # One scene per projection branch of the preview fragment shader; all four share the same
-    # simulated frame, so a PSNR drop localizes to the projection math.
+    # One scene per projection branch of the preview fragment shader, plus overlay_ea, which
+    # reuses the equal-area branch to cover the marker/grid overlay stage instead. All share
+    # the same simulated frame, so a PSNR drop localizes to the projection math.
     "lens_proj": ReferenceGroup(
         key="lens_proj",
         scenes=[
             "fisheye_equal_area_120",
             "fisheye_orthographic_180",
+            "linear",
             "dual_fisheye_equal_area_full",
             "rectangular",
+            "overlay_ea",
         ],
         modes=[None],
         tmp_prefix="lumice_lens_proj_",
         ref_prefix="lens_proj_",
         source="test/gui/visual/test_gui_lens_projection.cpp",
     ),
-    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
-    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
-    # captured as the modal's own on-screen rectangle.
     # Defaults-panel layout scene names — must match kScenes[] order in
     # test/gui/visual/test_gui_defaults_panel.cpp. Each scene is one state of the "Save Current as
     # Defaults" modal (pending changes / expanded read-only section / filtered / nothing to adopt),
@@ -134,6 +111,9 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="defaults_panel_",
         source="test/gui/visual/test_gui_defaults_panel.cpp",
     ),
+    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
+    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
+    # captured as the modal's own on-screen rectangle.
     "modal_layout": ReferenceGroup(
         key="modal_layout",
         scenes=[
@@ -169,10 +149,11 @@ DETERMINISTIC_FLOOR_DB = 40.0
 
 # Sigma margin behind each recommended threshold. 4, not 3: every threshold this repo
 # actually ships is mean − 4σ (reproduce it from the psnr_mean/psnr_std recorded in
-# _thresholds.json — six of the ten auto_ev scenes discriminate between 3σ and 4σ, and
-# all six match 4σ), so 3σ here would have been a recommendation nobody adopted. It is
-# also the margin the observed tails need: three sigma left the lens_proj dual-fisheye
-# threshold 0.08 dB under the lowest sample of an independent 20-run batch.
+# _thresholds.json — six of the ten scenes in the since-retired auto_ev group discriminated
+# between 3σ and 4σ, and all six matched 4σ), so 3σ here would have been a recommendation
+# nobody adopted. It is also the margin the observed tails need: three sigma left the
+# lens_proj dual-fisheye threshold 0.08 dB under the lowest sample of an independent 20-run
+# batch.
 SIGMA_MARGIN = 4.0
 
 # Floor on how tight a threshold may get, in dB below the sampled mean. Four sigma alone is
@@ -182,8 +163,12 @@ SIGMA_MARGIN = 4.0
 # own. The size comes from this repo's own history: regenerating auto_ev against a changed
 # orientation sampler moved its PSNRs 0.3-0.8 dB, so a margin under 1 dB does not survive
 # legitimate upstream change. This is the same reasoning as DETERMINISTIC_FLOOR_DB above,
-# applied to scenes that are merely quiet rather than pixel-identical. It binds only there:
-# every auto_ev scene has 4σ ≥ 0.84 dB, so their shipped thresholds are unaffected.
+# applied to scenes that are merely quiet rather than pixel-identical. Since the auto_ev group
+# (whose 4σ ran 0.84 dB and up) was retired, it is no longer the tie-breaker it was: every
+# remaining stochastic scene calibrates at 4σ well under 1 dB, so this floor — not the sigma
+# margin — is what actually sets all six lens_proj thresholds. Read a shipped threshold as
+# "mean − 1.0 dB, rounded down to 0.5 dB" and check SIGMA_MARGIN only if a sigma ever exceeds
+# 0.25 dB.
 MIN_MARGIN_DB = 1.0
 
 
@@ -297,7 +282,8 @@ def _read_thresholds(json_path: str) -> dict:
     if "scenes" in data and "groups" not in data:
         print(
             f"ERROR: {json_path} uses the pre-group flat schema (top-level 'scenes'). "
-            "Nest it under groups.auto_ev before running this script, or its thresholds "
+            "Nest it under groups.<key> for the group it belonged to before running this "
+            "script, or its thresholds "
             "would be dropped by the next write.",
             file=sys.stderr,
         )
@@ -499,10 +485,10 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
         }
 
     # Merge into existing thresholds.json at two levels: scenes this run did not touch keep
-    # their audit history (e.g. --scene overlay_ea must not wipe the 9 other auto_ev scenes),
+    # their audit history (e.g. --scene overlay_ea must not wipe the other lens_proj scenes),
     # and groups this run did not touch are left untouched entirely — including their
     # generated_at, which is per group precisely so a capture_harness run cannot restamp
-    # auto_ev's calibration date.
+    # lens_proj's calibration date.
     json_path = _thresholds_path(refs_dir)
     merged = _read_thresholds(json_path)
     groups_out = merged.get("groups") if isinstance(merged.get("groups"), dict) else {}

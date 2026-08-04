@@ -32,7 +32,7 @@ use_metal_backend so DoRun reconstructs into the single-engine Metal topology
 N-worker server. Baseline is legacy CPU (the GUI's real path); NEVER cpu_backend.
 
 Correctness is NOT re-tested here — it is already gated by the raw-XYZ parity
-matrix (test_metal_exit_seam_parity, 10/10) and the auto_ev PSNR references. G4
+matrix (test_metal_exit_seam_parity, 10/10) and the lens_proj PSNR references. G4
 owns the GUI-regime throughput + responsiveness legs.
 
 @pytest.mark.slow — needs the GUI test binary + a display/GL context; Darwin-only

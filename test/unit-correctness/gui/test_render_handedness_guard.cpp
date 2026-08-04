@@ -14,6 +14,10 @@
 // Plus an interaction read-back (detail::PixelToWorldDirForTesting) fed the
 // cross-validated gui_shader pixel to pin the GUI inverse convention.
 //
+// The single-lens and globe cases below are the original scope. Surface 2b adds the
+// dual-fisheye family, which has no backend/label counterpart to cross-check against here
+// and is therefore pinned against its own closed form instead — see the kDualLens comment.
+//
 // These are genuinely independent implementations (different rotation builders —
 // MakeCameraRotation vs BuildViewMatrix — different per-lens forward math, and
 // the backend's explicit `xy.x = -xy.x` flip has NO counterpart in either GUI
@@ -183,6 +187,79 @@ constexpr float kSingleLensViewAz = 180.0f;  // camera faces world +x sun
 constexpr float kGlobeViewAz = 0.0f;         // globe DOC-TEST view
 constexpr float kGlobeFov = 60.0f;
 
+// --- Dual-fisheye family (4 types) -------------------------------------------------
+//
+// These lenses are full-sky, so none of the single-lens framing above transfers: no view
+// transform is applied, the frame carries TWO discs (upper hemisphere left, lower right),
+// and each disc spans a fixed 90° from its own pole regardless of fov. "Which side of image
+// center" is therefore meaningless here — the load-bearing statements are (a) which side of
+// ITS OWN disc center a probe lands on, (b) how far from that center it lands, and (c) that
+// the two discs mirror each other. (c) is a real convention, not an artifact: the shader's
+// dualFisheyeInverse solves phi_pixel = PI/2 + az on the left disc and PI/2 - az on the
+// right (preview_renderer.cpp), and the CPU forward mirrors it by flipping the sign of
+// world y between hemispheres. Delete that flip and both discs become copies of one another
+// — which only case (c) below can see.
+//
+// r_norm is written as a literal per type rather than computed by calling the same
+// expression the implementation uses. That expression IS the type dispatch, so re-calling it
+// would make the test agree with any future edit to it; a literal makes the edit fail here
+// and have to be re-derived deliberately. Each row records its derivation.
+struct DualLensCase {
+  int lens_type;
+  float r_norm;  // DualFisheyeRNorm(kDualProbeThetaDeg, type), normalized to circle_radius
+};
+
+// Probe polar angle, measured from the disc's pole (zenith on the left disc, nadir on the
+// right). 45° sits mid-disc: far enough from the center that the four types separate
+// (r_norm spans 0.41..0.71 here), far enough from the rim that no clipping guard is in play.
+constexpr float kDualProbeThetaDeg = 45.0f;
+
+constexpr DualLensCase kDualLens[] = {
+  // equal area:    sin(θ/2) / sin(45°)  = sin(22.5°) / sin(45°)
+  { lumice::gui::kLensTypeDualFisheyeEqualArea, 0.5411961f },
+  // equidistant:   θ / 90°              = 0.5
+  { lumice::gui::kLensTypeDualFisheyeEquidist, 0.5f },
+  // stereographic: tan(θ/2) / tan(45°)  = tan(22.5°)
+  { lumice::gui::kLensTypeDualFisheyeStereographic, 0.4142136f },
+  // orthographic:  sin(θ)               = sin(45°)
+  { lumice::gui::kLensTypeDualFisheyeOrthographic, 0.7071068f },
+};
+
+// Geometry of the dual-fisheye frame at kW x kH, mirroring the shader:
+// short_res = min(W/2, H) = min(320, 320) = 320, circle_radius = short_res/2.
+constexpr float kDualCircleRadius = 160.0f;
+
+// Project a probe onto one dual-fisheye disc and report its offset from THAT disc's center.
+// hemi_up selects the hemisphere (true = upper, which the projection puts on the left disc);
+// y_positive selects the sign of world y, the az-axis probe used throughout this file.
+// The probe has no x component, so its whole in-disc displacement is horizontal and the
+// expected offset is exactly +/- r_norm * circle_radius.
+bool DualDiscOffset(int lens_type, bool hemi_up, bool y_positive, float* dx_out, float* py_out) {
+  const float theta = kDualProbeThetaDeg * lumice::math::kDegreeToRad;
+  const float st = std::sin(theta);
+  const float ct = std::cos(theta);
+  // World convention: zenith is -z (see overlay_labels.cpp / the shader's -world_dir.z
+  // altitude), so the upper hemisphere is the one with negative z.
+  const float dir[3] = { 0.0f, y_positive ? st : -st, hemi_up ? -ct : ct };
+
+  lumice::gui::ViewProjection vp;
+  vp.lens_type = lens_type;
+  vp.fov = 180.0f;  // ignored by the dual family (fixed 90° per hemisphere)
+  vp.elevation = 0.0f;
+  vp.azimuth = 0.0f;
+  vp.roll = 0.0f;
+  vp.visible = lumice::gui::kVisibleFull;
+  vp.front = false;
+  auto p = lumice::gui::ProjectWorldDirToScreen(vp, dir, kW, kH);
+  if (p[0] <= kSentinel && p[1] <= kSentinel) {
+    return false;
+  }
+  const float disc_center_x = hemi_up ? -kDualCircleRadius : kDualCircleRadius;
+  *dx_out = p[0] - disc_center_x;
+  *py_out = p[1];
+  return true;
+}
+
 }  // namespace
 
 // Surface 1: backend lm_proj::ProjectExitToPixel. Pins the
@@ -224,6 +301,38 @@ TEST(RenderHandednessGuard, single_lens_gui_label) {
     float pxn = 0.0f;
     EXPECT_TRUE(GuiLabelPx(lt, c.fov, kSingleLensViewAz, -kAzOffDeg, &pxn));
     EXPECT_TRUE(pxn < 0.0f);  // -az → LEFT
+  }
+}
+
+// Surface 2b: GUI shader mirror ProjectWorldDirToScreen, dual-fisheye family. Until this
+// case existed, three of the four types (equidistant / stereographic / orthographic) had no
+// test on this surface at all: ProjectDualFisheye and DualFisheyeRNorm were reachable only
+// through the equal-area path that the lens_proj pixel references happen to render.
+TEST(RenderHandednessGuard, dual_lens_gui_shader) {
+  for (const auto& c : kDualLens) {
+    const float expected = c.r_norm * kDualCircleRadius;
+    // Upper (left) disc: +y lands RIGHT of the disc center, -y lands LEFT, both at the
+    // type's own radius. A wrong r_norm formula moves the magnitude; a flipped az
+    // convention moves the side; a flipped hemisphere test moves the probe to the other
+    // disc entirely (an offset of +/-2*circle_radius, far outside the tolerance).
+    float dx = 0.0f;
+    float py = 0.0f;
+    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/true, /*y_positive=*/true, &dx, &py));
+    EXPECT_NEAR(dx, expected, 1e-3f);
+    EXPECT_NEAR(py, 0.0f, 1e-3f);
+    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/true, /*y_positive=*/false, &dx, &py));
+    EXPECT_NEAR(dx, -expected, 1e-3f);
+    EXPECT_NEAR(py, 0.0f, 1e-3f);
+
+    // Lower (right) disc: the MIRROR of the above — same radius, opposite side. This pair
+    // is what pins the hemisphere sign split; equalizing the two discs passes every
+    // assertion above and fails both of these.
+    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/false, /*y_positive=*/true, &dx, &py));
+    EXPECT_NEAR(dx, -expected, 1e-3f);
+    EXPECT_NEAR(py, 0.0f, 1e-3f);
+    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/false, /*y_positive=*/false, &dx, &py));
+    EXPECT_NEAR(dx, expected, 1e-3f);
+    EXPECT_NEAR(py, 0.0f, 1e-3f);
   }
 }
 

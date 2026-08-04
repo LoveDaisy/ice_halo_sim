@@ -161,9 +161,10 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 - **Oracle**: the imgui test engine drives the app; **visual** asserts against tracked
   reference images (PSNR, per-scene thresholds in `_thresholds.json`); **responsiveness**
   asserts against absolute frame-latency budgets; **functional** asserts widget/state outcomes.
-- **Threshold convention**: visual = per-scene PSNR (mean−3σ over N stochastic renders, see
-  AGENTS.md auto_ev regen); responsiveness = absolute latency budgets; functional = exact.
-- **Cadence**: `PR`. Requires a display server unless skipped with `LUMICE_SKIP_GUI_TESTS=1`.
+- **Threshold convention**: visual = per-scene PSNR (mean−4σ over N stochastic renders, see
+  AGENTS.md lens_proj regen); responsiveness = absolute latency budgets; functional = exact.
+- **Cadence**: `PR`, plus the two reference groups CI runs on every push under `xvfb-run` +
+  llvmpipe (§4.6). Requires a display server unless skipped with `LUMICE_SKIP_GUI_TESTS=1`.
 - **Naming**: `test_gui_<aspect>.cpp`; references under `test/gui/references/`.
 - **Physical location**: target-state `test/gui/<tag>/`; current `test/gui/` (+ the
   pytest-driven `test_metal_gui_acceptance.py`, a gui-layer test that happens to run through
@@ -322,7 +323,7 @@ test must assert the literal wire format against something outside the code unde
 - Reference images are explicitly un-ignored in `.gitignore` and tracked normally; configs and
   most generated artifacts are git-ignored. Moving a reference path requires updating the
   un-ignore rule, the test that reads it, and any CI path assumption — together.
-- Regeneration of stochastic references follows a documented procedure (GUI `auto_ev`:
+- Regeneration of stochastic references follows a documented procedure (GUI `lens_proj`:
   `scripts/regen_gui_test_refs.py`, see AGENTS.md). A reference is never hand-edited.
 
 ### §4.4 `performance` vs `gui`-responsiveness boundary
@@ -350,9 +351,10 @@ test; "oracle = ratio to legacy CPU" is.**
 ### §4.5 Enforcement: the `gui_test` / `gui_unit_test` split is a gate, not a convention
 
 §1.6 and §5 place a `src/gui/` test by whether it needs a live frame. That placement decides
-whether the test runs in CI at all — `gui_test` needs a display and is build-only on the
-runners, `gui_unit_test` links the same object library with no window, no GL context and no
-ImGui test engine, so it runs on every platform that builds the GUI. Left as a convention the
+whether the test runs in CI at all — `gui_test` needs a display, which only one runner leg
+supplies and only for the reference groups named in §4.6, while `gui_unit_test` links the same
+object library with no window, no GL context and no ImGui test engine, so it runs on every
+platform that builds the GUI. Left as a convention the
 split does not survive: the path of least resistance runs the wrong way, because adding to
 `gui_test` is the muscle memory and it always compiles. A convention that loses to the default
 path is not a boundary, it is a preference.
@@ -385,6 +387,233 @@ restated, so the two cannot drift apart. Two properties are worth knowing at thi
   Note the shape alone does not establish those 26 are misplaced — a case can need a frame
   without touching `ctx`, which is exactly why the gate only speaks about cases being added and
   why its message proposes rather than asserts the move.
+
+### §4.6 A red in the GUI visual-regression layer: what it means and what to do
+
+Detection power for this layer is a product of two factors — P(a break turns it red) ×
+P(a red is taken seriously) — and only the first has ever been engineered. The second was
+measured directly: across the five merged PRs whose descriptions mention a GUI visual failure
+(#90, #119, #129, #168, #180), **every one was released on the same move** — re-run once,
+compare against the base commit, declare a known stochastic flake, merge. #180's wording is
+representative: "the one miss is the known `overlay_ea` stochastic flake, 3/3 on standalone
+re-run". Once that is the default response, **a true positive is disposed of by exactly the
+same motion as a false one**, and the first factor stops buying anything. Lowering the noise
+floor cannot fix a second factor that is zero.
+
+That disposal habit sits on top of a more basic question: has this layer ever caught anything,
+across its whole history? Two independent searches — every commit message in this repository's
+history, and the bodies of the 29 merged PRs whose description mentions a GUI visual-regression
+result — turned up no record of a product defect discovered because this layer went red. Read
+that as **not found**, not as **never happened**: both search surfaces are prose written by
+whoever merged the change, and a catch that was never described in text would be invisible to
+either. The distinction is not a hedge — it is the same honesty the rest of this section argues
+for.
+
+This section is what replaced that default. It has three parts: what actually executes in CI,
+what a red obliges you to do, and — stated rather than left implicit — which parts of this
+layer are still nobody's gate but yours.
+
+**What executes in CI, and what does not.** The `Ubuntu x86_64` leg of the `build` job installs
+Xvfb + Mesa's llvmpipe software rasterizer and runs `gui_test`'s `modal_layout` and
+`defaults_panel_layout` reference groups under it. That leg is already a required status check,
+so this needs no new branch-protection context: those ten scenes now block a merge the same way
+`ctest` does. Coverage was chosen on measurement, not on convenience:
+
+| Reference group | Linux + llvmpipe vs. the macOS-captured reference | In CI? |
+|---|---|---|
+| `defaults_panel_layout` (6 scenes) | **60.56–61.99 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
+| `modal_layout` (4 scenes) | **46.88–47.96 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
+| `lens_proj` (6 scenes) | 19.49–27.72 dB — every scene **above** its macOS-calibrated threshold, by 0.88–1.49 dB | no, see below |
+| `screenshot`/`visual` crystal scenes (3) | 34.78–35.94 dB vs. a 40 dB floor | no — not portable |
+| `capture_harness` `fullframe` | 21.92 dB vs. a 40 dB floor | no — not portable |
+
+**The amd64 confirmation, and what it changed.** The two in-CI rows above now carry numbers from
+the real `ubuntu-24.04` runner (the CI step's own log, 12/12 scenes passed). The comparison against
+the arm64 figures they replaced is worth keeping, because it is the only measurement of how far
+that substitution actually travelled:
+
+| Group | arm64 container (proxy) | amd64 runner (real) | Delta |
+|---|---|---|---|
+| `defaults_panel_layout` | 60.56–61.99 dB | 60.56–61.99 dB | none — identical |
+| `modal_layout` | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
+
+So the proxy was exact for one group and off by about a quarter of a dB for the other. Neither
+outcome threatens the conclusion — the tightest real margin is 46.88 dB against a 40 dB floor,
+6.88 dB of headroom — but the second row is why the caveat below was worth writing rather than
+assuming portability. The remaining rows are still arm64-only: nothing runs them on amd64.
+
+**A caveat the table cannot carry silently.** Every number below, and every arm64 figure above,
+was measured on an **arm64**
+Docker container (`ubuntu:24.04` + Xvfb + Mesa llvmpipe, run on an Apple Silicon host) standing in
+for the **amd64** `ubuntu-24.04` GitHub Actions runner this step actually runs on — the two differ
+in CPU architecture, not just in "a Linux box with a software rasterizer". That substitution was a
+deliberate, bounded choice (no x86_64 machine was reachable for this work), not an oversight, and
+it answers the architecture-independent questions this section leans on — does a GL 3.3 core
+context come up under Xvfb+llvmpipe, does `gui_test` run to completion, is the PSNR the right order
+of magnitude — soundly. What it does not give is confirmed amd64 margins: the dB figures above could
+shift once run on the real runner. The mitigating fact is that the CI step now actually executing
+closes this gap continuously rather than requiring a one-off confirmation — every push that touches
+the `Ubuntu x86_64` leg reports real amd64 numbers in the step's own log, kept for 30 days by the
+`Upload GUI visual-regression log` step in `ci.yml`, so the first real run after merge is itself
+the confirmation this table is missing today. Until a
+push has actually happened, treat "10/10 above the deterministic floor" as arm64-proxy evidence, not
+amd64-target evidence — the distinction matters exactly because this section exists to stop numbers
+from being taken on faith.
+
+The first surprise is how well the references travel. Every reference in this repo was captured
+on macOS against a Metal-backed GL stack; compared on Linux against a software rasterizer on a
+different CPU architecture, the statistically-thresholded `lens_proj` group still clears
+thresholds calibrated on the capture machine. "A distribution-based comparison does not depend
+on the random stream, which is where cross-platform portability comes from" had been a design
+intention up to that point; it now has evidence.
+
+The second is where portability stops. The crystal-preview scenes go through
+`crystal_renderer.cpp`'s shaded and wireframe rasterization, and `fullframe` reads the whole
+default framebuffer with that preview inside it. Rasterization and anti-aliasing differ enough
+between a GPU driver and llvmpipe to cost 4–18 dB — far past a 40 dB floor that exists to assert
+near-bit-exactness. Those scenes are **meaningful only on the class of renderer that captured
+them**; excluding them from CI is not a threshold being loosened to dodge a red.
+
+**Why `lens_proj` is not in CI, and what would put it there.** Not for a rendering reason — its
+pixels are portable, per the table. It is blocked on
+`test/gui/visual/test_gui_lens_projection.cpp:276`, an exact equality on the ray count a
+completed run reports, whose own comment asserts the number "is identical on every machine and
+every rerun". Under software rendering that premise is false:
+
+| Environment | Runs | Failures | Shortfall |
+|---|---|---|---|
+| macOS, GPU | 5 | 0 | — |
+| Linux + llvmpipe, 12 cores | 5 | 2 | 128 rays |
+| Linux + llvmpipe, 4 cores (runner-like) | 5 | 3 | 128 / 896 / 1024 rays |
+
+The shortfall is always a whole number of 128-ray batches, and the mechanism is visible in
+`server_poller.cpp`: a poll re-reads statistics only when it carries a new snapshot generation
+or takes the terminal-upload rescue (:269, :281), and the poll that observes
+`LUMICE_LIFECYCLE_COMPLETED` self-pauses the poller at its own end (:501-504). The
+"stats deferred by one poll are absorbed by the carry-forward" reasoning at :299 has no next
+poll to be absorbed by when the deferral lands on the last one. Software rendering makes each
+`ctx->Yield()` rasterize a whole frame, so the same scene completes in ~169 frames instead of
+~1200–2000, which compresses the poll sequence until that window is hit routinely — worse with
+fewer cores, hence worse on a CI runner than on a workstation.
+
+That is a real defect in what the GUI reports at the end of a run, not a flaky test, and fixing
+it belongs where the lifecycle invariants live (`doc/gui-preview-lifecycle-architecture.md`), not
+here. Until it is fixed, wiring `lens_proj` into a required check would manufacture a ~60%
+false-red rate — which is to say it would rebuild, by hand, the exact habit this section exists
+to end. **When that defect is fixed, adding `lens_proj` to the CI step's `--filter` is the whole
+change**; the harness, the LFS fetch and the "it actually ran" assertion are already in place.
+
+**Does the gate actually stop you?** Partly, and the honest shape of it matters more than the
+reassuring version. The step runs inside `Ubuntu x86_64`, which *is* in
+`required_status_checks.contexts`, so a red blocks the merge button. But this repository has
+`enforce_admins: false` and `required_approving_review_count: 0`, and its owner is an
+administrator — so the owner can merge past any red check here, including this one. That is not
+a weakness this step introduces: it is the standing property of **every** required check in this
+repository, and the `policy` and `new-refs` jobs are weaker still, being not required at all
+despite prose elsewhere describing them as enforced. What the step buys is therefore bounded and
+worth naming exactly: it moves this layer from *never executed, no signal at all* to *executed
+every push, red is visible, and passing it takes a deliberate act*. That is the whole claim.
+Everything below the CI line is the part no machine will catch, which is why it is written down.
+
+**Disposition checklist — what a red obliges you to do.** Applies to every red in this layer, on
+CI or on a developer's machine. "Known flake" is not a disposition; the record it leaves behind
+is what the audit above found and could not act on.
+
+1. **Does the diff touch a rendering path?** `src/gui/preview_renderer.cpp`,
+   `export_fbo_renderer.cpp`, `crystal_renderer.cpp`, `edit_modals.cpp`, `defaults_panel.cpp`,
+   any shader, or the reference-capture harness. If yes, the red is a regression until proven
+   otherwise — the burden is on the change, not on the test.
+2. **Reproduce it on the same base commit, in the same run mode.** Not "re-run and see": run it
+   on the base with the same filter and the same pool (`--fixed-dt` or not) as the run that went
+   red. A red that survives on the base is a pre-existing condition; a red that does not is yours.
+3. **Record the numbers, not the verdict.** The PSNR of the failing scene, its threshold, and how
+   many of how many repeats failed. `[<group>] <scene>: PSNR=... (threshold=...)` is printed on
+   stderr by every comparison; paste it. A disposition with no number in it is not reviewable.
+4. **Name the mechanism before calling it environmental.** A red that is genuinely not a
+   rendering regression still has a cause, and it is nearly always locatable —
+   `test_gui_lens_projection.cpp:276` above read as "stochastic flake" for as long as nobody
+   looked, and turned out to be a terminal-edge race in the poller. If the mechanism cannot be
+   named, the red stands.
+5. **Regenerated references are a separate claim.** If the red is explained by a reference regen
+   in the same PR, say which group was regenerated, with which command, and what its PSNR margins
+   were afterwards. A regen inside the PR that a red is being blamed on breaks the very audit
+   trail that would let a later reader distinguish leftover regen drift from a new defect — this
+   was self-reported at the time in PR #93 and is the reason this rule is here.
+
+**Explicit degradation — the platforms and groups no gate covers.** Stated so that it is a
+choice rather than a silence:
+
+- **macOS ARM64 and Windows MSVC x86_64** build `gui_test` and never run it. macOS has no Xvfb
+  equivalent, and the Windows software-GL path is unverified — neither was researched here, and
+  neither should be assumed easy. On those platforms this layer is a **local gate**: a red is not
+  blocked by anything, and the checklist above is the whole of the enforcement.
+- **`lens_proj`** is a local gate everywhere until the poller defect above is fixed — including on
+  Linux, where the pixels demonstrably work.
+- **The crystal-preview and full-frame scenes** are a local gate on the machine class that
+  captured them, permanently. There is no plan to make them portable, and a red in them on a
+  software rasterizer means nothing at all.
+
+**Why this shape, and not one of the four single answers.** Four routes were on the table, and
+the reason none of them is the answer alone is that they turned out not to be alternatives:
+each covers a different slice of this layer, and the slices are the ones measurement drew, not
+the ones the routes assumed.
+
+- *Put `gui_test` in CI.* Taken, for the slice where it was demonstrated to work — ten scenes,
+  bit-identical over repeats on a runner-like configuration. It was recorded as build-only
+  because CI runners have no display server, and that premise held right up to the point someone
+  tried Xvfb; it had been identified as a possibility years earlier and deferred, never tested.
+  It is **not** taken for the other three slices, and in each case for a measured reason rather
+  than a cautious one: a poller race for `lens_proj`, renderer non-portability for the crystal
+  and full-frame scenes.
+- *Make it a gate.* Taken where a gate can exist, which is narrower than it sounds. A gate acts
+  on the shape of code; the failure being fixed here is a **disposition** — what a person does
+  after seeing red. No checker can read that. Attempts to approximate it (rejecting the phrase
+  "known flake" in a PR description, say) gate the wording rather than the act, and are evaded by
+  rewording. So the mechanical part is exactly the part that is mechanizable — the check runs and
+  is required — and the rest is stated as discipline instead of dressed up as enforcement.
+- *Write the discipline down and make a red attributable.* Taken, and it is the load-bearing
+  piece for everything CI does not reach: the checklist above, which replaces "re-run once,
+  compare with base, merge" with something that leaves a reviewable record. It is a soft
+  constraint and will fail the way soft constraints fail. It is still worth writing, because the
+  alternative on those platforms is not a stronger rule — it is no rule.
+- *Accept the status quo and downgrade the layer.* Taken **only** as an explicit declaration,
+  never as the default. What made the old state indefensible was not that some scenes were
+  unenforced; it was that the repo paid the calibration and maintenance cost of a signal it did
+  not act on, without ever having decided to. The degradation list above is that decision, made
+  out loud, per platform and per group.
+
+The one thing rejected outright is the fifth option nobody proposed but everything drifts toward:
+loosening a threshold so the layer stops going red. That converts "not believed" into "does not
+report", which is the same zero detection power with the evidence removed.
+
+### §4.7 Why `auto_ev` was retired, and `lens_proj` was not
+
+Both were once a set of reference images from stochastic renders, but they varied opposite axes.
+`lens_proj`'s scenes hold the simulation fixed — all six share `halo_22.json` — and vary the
+display axis, one scene per inverse-projection branch. The retired `auto_ev` group did the
+reverse: all ten scenes held the display axis constant (`fisheye_equal_area` at elevation 20) and
+varied the simulation axis instead (spectrum, crystal type, zenith distribution, filter, MS layer
+count).
+
+That is the wrong axis for a display-regression layer to spend scenes on, and it already had an
+owner elsewhere. `auto_ev`'s ten scenes drew on nine distinct configs (`overlay_ea` reused
+`halo_22.json`), and seven of those nine (`halo_22`, `color`, `cza`, `filters`,
+`multi_scatter`, `parhelion`, `pyramid`) are also `test/e2e-correctness/test_smoke.py` configs,
+asserted there at thresholds averaging 8.7 dB stricter — and `test_smoke.py` runs through the CLI
+on every PR, where `gui_test`'s `auto_ev` group was build-only. The two are not on identical
+footing (the CLI configs also use a higher ray budget than the GUI's), but the axis `auto_ev`
+spent nine-tenths of its scenes varying was one this repository already tested harder, on every
+push, somewhere else.
+
+The axis `auto_ev` *did* hold exclusively — the display path — turned out not to be exclusive to
+it either. `test_gui_lens_projection.cpp` reads the same `snapshot_intensity` / `ev_auto` state
+and sets exposure through the identical code path the retired `test_gui_auto_ev.cpp` did, and
+`test/unit-correctness/gui/test_ev_auto.cpp` exercises the auto-EV computation itself with four
+deterministic assertions that still run in CI on all three platforms. Once the simulation-axis
+scenes are attributed to `test_smoke.py` and the auto-EV-pipeline scenes to `test_ev_auto.cpp`,
+the only territory `auto_ev` held alone was the zenith/nadir markers and coordinate grid drawn by
+`overlayAuxLines()` — one scene's worth. That scene, `overlay_ea`, was kept and migrated into
+`lens_proj` rather than retired with the rest.
 
 ---
 
@@ -463,7 +692,7 @@ health items that must not be moved/deleted casually.
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_auto_ev`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_lens_projection`, `test_gui_sim_smoke`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its

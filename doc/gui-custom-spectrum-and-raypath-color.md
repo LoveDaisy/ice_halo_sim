@@ -387,7 +387,7 @@ out     = clamp( display_exposure_scale · rgb , 0, 1 )    # display EV = 纯后
 | **dominant** | 每像素哪个类赢(硬标签图) | 不连续、会抖,但那是"谁赢"的固有属性,作诊断 |
 | **additive** | 总能量叠加 | 诚实求和,会混色/过曝,作诊断 |
 
-- **默认从 `dominant` 切到 `painter`**:改变现有所有染色 config 的默认渲染 → **须重跑相关参考图**(染色 e2e/parity 断言,非 mono auto_ev 参考)。
+- **默认从 `dominant` 切到 `painter`**:改变现有所有染色 config 的默认渲染 → **须重跑相关参考图**(染色 e2e/parity 断言,非 mono 视觉参考图)。
 - **z-order 重新抬为一等视觉控制**:§4.3 point 5 当初因"共享曝光后重叠区物理强度自然定色"把 z-order 降级为小 tiebreaker;painter over 里**谁在上层决定谁遮谁**,z-order 重要性回归。GUI 已有上/下箭头调 `z_order_`,UI 现成。**这是对 §4.3 point 5 的有意反转,不是 regression。**
 - **回归锚点须更新**:`test_component_compositor.cpp::PainterVsDominantDivergeWhenTopClassDimmer` / `OverlapDominantPicksBrighterAdditiveMixes` 断言的是**旧二值 painter** 语义,重设计后 painter 不再二值 → 这两个测试要随之更新 + 补 alpha-over 专项(暗顶点透出亮底点、EV 拉动不改遮挡结构、纯色相亮度不双计)。
 - **纯 server-side / display-time / 后端无关**:compositor 作用于**已累积、已 parity 核验**的 per-class Y lane,**不碰 trace kernel**(无 CUDA/Metal 改动)——故单个 task 即可完成。

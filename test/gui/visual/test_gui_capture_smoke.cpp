@@ -1,6 +1,7 @@
 // Capture-harness smoke test — the end-to-end proof that the visual-regression harness
 // (FullFrameCaptureState + lumice::test::CheckAgainstReference + the reference-group
-// registry in scripts/regen_gui_test_refs.py) accepts a reference group other than auto_ev.
+// registry in scripts/regen_gui_test_refs.py) accepts a reference group whose capture does not
+// come from the preview-export path — this one reads the default framebuffer instead.
 //
 // Scene: the default GUI frame right after ResetTestState() — no simulation, no random
 // source — so it doubles as the coverage for FullFrameCaptureState itself.

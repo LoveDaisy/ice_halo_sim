@@ -25,6 +25,11 @@ jobs:
             build_gui: ON
             cache_key: ubuntu-x64
             benchmark_bin: build/Release/static/bin/Lumice
+            # The one leg that both builds the GUI and has a headless GL stack available
+            # (Xvfb + Mesa llvmpipe), so it is where the visual-regression layer actually
+            # runs. Which reference groups it may run, and why not the others, is measured
+            # and argued in doc/testing-architecture.md §4.6 — read that before widening it.
+            run_gui_visual: ON
 
           - name: Ubuntu ARM64
             os: ubuntu-24.04-arm
@@ -57,6 +62,14 @@ jobs:
         if: matrix.build_gui == 'ON'
         run: git lfs pull --include="resources/*"
 
+      # The one leg that compares against reference images needs them materialized: without
+      # this pull the working tree holds LFS pointer text, and CheckAgainstReference reports
+      # "reference not found" — a red that looks like a missing file rather than a missing
+      # fetch. Still selective: this is ~3MB, not the full ~16MB the icon step avoids.
+      - name: Fetch LFS GUI reference images
+        if: matrix.run_gui_visual == 'ON'
+        run: git lfs pull --include="test/gui/references/*"
+
       # MSVC: set up Visual Studio environment before configure/build
       - name: Set up MSVC
         if: matrix.msvc
@@ -71,12 +84,17 @@ jobs:
           $pythonDir = Split-Path (Get-Command python).Source
           echo "LUMICE_PYTHON_ARGS=-DPython_EXECUTABLE=$(Get-Command python | Select-Object -ExpandProperty Source)" >> $env:GITHUB_ENV
 
+      # xvfb + the Mesa software rasterizer are here rather than in a step of their own so the
+      # leg does a single apt-get update. They are what turns "gui_test needs a display" from a
+      # blocker into a dependency: llvmpipe advertises a core profile well past the 3.3 core
+      # context test_gui_main.cpp asks for, and no scene in the CI set needs a real GPU.
       - name: Install Linux GUI dependencies
         if: runner.os == 'Linux' && matrix.build_gui == 'ON'
         run: >
           sudo apt-get update && sudo apt-get install -y
           libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
           libgtk-3-dev
+          xvfb libgl1-mesa-dri libglx-mesa0
 
       - name: Cache CPM dependencies
         uses: actions/cache@v6
@@ -132,6 +150,60 @@ jobs:
             exit 1
           fi
           echo "gui_unit_test executed $ran case(s) on this platform."
+
+      # The GUI visual-regression layer, actually executed. Until this step existed, gui_test was
+      # built on three platforms and run on none, so a reference-image regression could only be
+      # caught by whoever happened to run it locally — and the five merged PRs that did go red
+      # this way were all released as "known flake" (doc/testing-architecture.md §4.6 has the
+      # audit, the per-scene cross-platform PSNR measurements, and the disposition checklist a red
+      # here obliges you to follow).
+      #
+      # Three deliberate choices, all argued in that section rather than restated here:
+      #   - It runs inside the already-required `Ubuntu x86_64` leg, so it needs no new
+      #     branch-protection context to block a merge.
+      #   - It names its own filter instead of reusing scripts/build.sh's correctness pool. That
+      #     pool is an EXCLUSION list for a machine with a real GPU; this is a POSITIVE list of
+      #     the groups measured to survive a software rasterizer, so it is a different fact, not
+      #     a second copy of one. Widening it is a measurement, not an edit.
+      #   - It calls the binary rather than scripts/test.sh, whose gui layers deliberately
+      #     self-skip when CI is set. Bending that would change behaviour for every other caller
+      #     of the shared scripts to serve this one step.
+      - name: GUI visual regression (Xvfb + Mesa llvmpipe)
+        if: matrix.run_gui_visual == 'ON'
+        shell: bash
+        # The spike that qualified this step's two groups also found a timing-sensitive defect
+        # in a third group under software rasterization (doc/testing-architecture.md §4.6,
+        # "Why lens_proj is not in CI") — evidence that this layer can behave non-deterministically
+        # under llvmpipe. A bounded timeout keeps a similar stall in a covered group from hanging
+        # this required check indefinitely instead of failing loudly.
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          rc=0
+          xvfb-run -a build/Release/static/bin/gui_test \
+            --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config \
+            2>&1 | tee gui_visual.log || rc=$?
+          # Same hazard, and the same answer, as the gui_unit_test verification above: a filter
+          # that stops matching, a renamed category or a binary that registered no cases would
+          # all exit 0 with nothing compared, and "green" would mean "never ran". Assert that
+          # cases were executed, without pinning how many — a pinned count is a second thing to
+          # keep correct, and it goes stale loudly for reasons unrelated to any defect.
+          ran=$(sed -nE 's/.*\[GUI Tests\] [0-9]+\/([0-9]+) tests passed.*/\1/p' gui_visual.log | tail -1)
+          if [ -z "$ran" ] || [ "$ran" -lt 1 ]; then
+            echo "::error::gui_test compared no visual-regression scenes — the --filter no longer"
+            echo "::error::selects any registered case, or the binary produced no run summary."
+            exit 1
+          fi
+          echo "gui_test compared $ran visual-regression scene(s) against tracked references."
+          exit $rc
+
+      - name: Upload GUI visual-regression log
+        if: always() && matrix.run_gui_visual == 'ON'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-visual-regression-log
+          path: gui_visual.log
+          retention-days: 30
 
       - name: Benchmark
         continue-on-error: true

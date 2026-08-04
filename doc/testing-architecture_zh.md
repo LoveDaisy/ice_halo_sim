@@ -122,9 +122,10 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
   （见 §4.4）。
 - **oracle**：imgui test engine 驱动 app；**视觉**对 tracked 参考图断言（PSNR，每场景阈值在
   `_thresholds.json`）；**响应**对绝对帧延迟预算断言；**功能**断言控件/状态结果。
-- **阈值约定**：视觉 = 每场景 PSNR（N 次随机渲染的 mean−3σ，见 AGENTS.md auto_ev 再生）；响应 =
+- **阈值约定**：视觉 = 每场景 PSNR（N 次随机渲染的 mean−4σ，见 AGENTS.md lens_proj 再生）；响应 =
   绝对延迟预算；功能 = 精确。
-- **节奏**：`PR`。需要显示服务器，除非用 `LUMICE_SKIP_GUI_TESTS=1` 跳过。
+- **节奏**：`PR`，外加 CI 每次 push 在 `xvfb-run` + llvmpipe 下跑的那两个参考图组（§4.6）。
+  需要显示服务器，除非用 `LUMICE_SKIP_GUI_TESTS=1` 跳过。
 - **命名**：`test_gui_<aspect>.cpp`；参考图在 `test/gui/references/`。
 - **物理位置**：目标态 `test/gui/<tag>/`；现状 `test/gui/`（+ 由 pytest 驱动的
   `test_metal_gui_acceptance.py`，一个恰好走 e2e harness 的 gui 层测试——正是 purpose 主轴要处理的
@@ -262,7 +263,7 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
   `test/gui/references/*.jpg` + `_thresholds.json`。
 - 参考图在 `.gitignore` 中显式 un-ignore 并正常 tracked；config 与多数生成产物 git-ignored。移动
   参考图路径需同步更新 un-ignore 规则、读取它的测试、以及任何 CI 路径假设——三者一起。
-- 随机参考图的再生遵循文档化流程（GUI `auto_ev`：`scripts/regen_gui_test_refs.py`，见 AGENTS.md）。
+- 随机参考图的再生遵循文档化流程（GUI `lens_proj`：`scripts/regen_gui_test_refs.py`，见 AGENTS.md）。
   参考图永不手工编辑。
 
 ### §4.4 `performance` 与 `gui`-响应性的边界
@@ -285,7 +286,8 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 ### §4.5 门禁化：`gui_test` / `gui_unit_test` 的分层是闸门，不是约定
 
 §1.6 与 §5 按"是否需要活的帧"来放置一个 `src/gui/` 测试。这个放置决定了该测试**在 CI 里跑不跑**：
-`gui_test` 需要显示器，在 runner 上只 build 不跑；`gui_unit_test` 链接同一个对象库，但无窗口、
+`gui_test` 需要显示器，只有一条 runner 腿供得上，且只跑 §4.6 点名的那几个参考图组；
+`gui_unit_test` 链接同一个对象库，但无窗口、
 无 GL context、无 ImGui 测试引擎，因而在每个能构建 GUI 的平台上都真跑。仅作为约定，这条分层活不下来——
 阻力最小的路径指向错误方向：往 `gui_test` 里加是肌肉记忆，而且它一直能编译过。**一条打不过默认路径的
 约定不是边界，只是偏好。**
@@ -309,6 +311,176 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
   （8 个匿名、18 个标了 `IM_UNUSED`），全树门禁无法开局即绿；替代方案是冻结基线，而那是一份需要永远
   维护正确的资产。与其散文侧的姊妹门禁同一取舍、同一理由。注意：**形态本身不足以断定这 26 个放错了
   地方**——一个用例可以既需要帧又不碰 `ctx`，这正是门禁只对"新增"发言、且提示语是建议而非断言的原因。
+
+### §4.6 GUI 视觉回归层红了：它意味着什么、你必须做什么
+
+这一层的检出力是两个因子的乘积——P(破坏发生时它变红) × P(变红时它被当真)——而历来只有第一项被
+工程化过。第二项被直接量过：描述里提到 GUI 视觉失败的 5 个已合入 PR（#90、#119、#129、#168、#180），
+**无一例外走了同一个动作**——重跑一次、和 base commit 对比、判为已知的随机 flake、合入。#180 的原话有
+代表性：「the one miss is the known `overlay_ea` stochastic flake, 3/3 on standalone re-run」。一旦这
+成为默认响应，**一次真命中就会以与假警报完全相同的方式被处理掉**，第一项也就什么都买不到了。压低噪声
+地板修不好一个等于零的第二项。
+
+这份处置习惯之上还有一个更基础的问题：这一层在它的全部历史里，真的抓到过什么吗？两条独立检索——
+本仓库全部历史的 commit message，以及 29 个描述里提到 GUI 视觉回归结果的已合入 PR 正文——均未找到
+任何"因这一层变红而发现产品缺陷"的记录。这里的措辞是**未找到**，不是**从未发生过**：两个检索面
+都是合入者留下的文字，一次从未被写进文字的命中，对两者都是不可见的。这不是留退路的模糊说法——它与
+本节其余部分依赖的诚实态度是同一件事。
+
+本节是取代那个默认动作的东西。三部分：CI 里真跑了什么，红了之后你有什么义务，以及——写出来而不是留在
+沉默里——这一层还有哪些部分除了你没有任何闸门。
+
+**CI 里真跑什么、不跑什么。** `build` job 的 `Ubuntu x86_64` 腿装 Xvfb + Mesa llvmpipe 软件光栅化器，
+在其下跑 `gui_test` 的 `modal_layout` 与 `defaults_panel_layout` 两个参考图组。这条腿本来就是 required
+status check，所以不需要新增 branch-protection context：这十个场景现在与 `ctest` 一样能挡住合入。
+覆盖面是按实测选的，不是按方便选的：
+
+| 参考图组 | Linux + llvmpipe 对 macOS 拍摄的参考图 | 进 CI？ |
+|---|---|---|
+| `defaults_panel_layout`（6 景） | **60.56–61.99 dB**（真实 amd64 runner），地板 40 dB；arm64 下 5 次重复逐位相同 | 是 |
+| `modal_layout`（4 景） | **46.88–47.96 dB**（真实 amd64 runner），地板 40 dB；arm64 下 5 次重复逐位相同 | 是 |
+| `lens_proj`（6 景） | 19.49–27.72 dB——每一景都**高于**按 macOS 标定的阈值 0.88–1.49 dB | 否，见下 |
+| `screenshot`/`visual` 的晶体场景（3 景） | 34.78–35.94 dB，地板 40 dB | 否——不可移植 |
+| `capture_harness` 的 `fullframe` | 21.92 dB，地板 40 dB | 否——不可移植 |
+
+**amd64 确认，以及它改变了什么。** 上表两个进 CI 的组现在填的是真实 `ubuntu-24.04` runner 的数字
+（取自 CI 步骤自身日志，12/12 景通过）。与它们替换掉的 arm64 数字的对照值得留下，因为这是**唯一一次
+实测那个代理环境到底外推了多远**：
+
+| 组 | arm64 容器（代理） | amd64 runner（真实） | 差 |
+|---|---|---|---|
+| `defaults_panel_layout` | 60.56–61.99 dB | 60.56–61.99 dB | 无——完全相同 |
+| `modal_layout` | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
+
+即：代理对一个组精确命中，对另一个组差约四分之一 dB。两个结果都不动摇结论——最紧的真实余量是
+46.88 dB 对 40 dB 地板，余 6.88 dB——但第二行正说明下面那条告诫值得写，而不是想当然地假定可移植。
+其余各行仍然只有 arm64 数字：没有任何东西在 amd64 上跑它们。
+
+**这张表没法沉默带过的一条告诫。** 下面每个数字、以及上表里的 arm64 数字，都测自一个 **arm64**
+Docker 容器（`ubuntu:24.04` +
+Xvfb + Mesa llvmpipe，跑在 Apple Silicon 宿主机上），用来代替这个步骤实际跑在其上的 **amd64**
+`ubuntu-24.04` GitHub Actions runner——两者差的不只是"一台带软件光栅化器的 Linux 机器"，是 CPU 架构
+本身。这个替代是一次有意的、有界的选择（当时没有可用的 x86_64 机器），不是疏漏，它稳妥地回答了本节
+依赖的那些架构无关的问题——Xvfb+llvmpipe 下能否建立 GL 3.3 core 上下文、`gui_test` 能否跑完、PSNR
+量级是否对——但给不出**已确认的 amd64 余量**：上表的 dB 数字换到真 runner 上跑，可能会变。缓解这一点
+的是：这个 CI 步骤已经真的在跑，所以这个缺口会被持续闭合而不需要一次性确认——每次触及 `Ubuntu x86_64`
+腿的 push，都会在这一步自己的日志里报出真实的 amd64 数字（`ci.yml` 里 `Upload GUI visual-regression
+log` 步骤会把它保留 30 天），也就是说合入后的第一次真实运行本身就是这张表目前缺的那份确认。在真正跑过
+一次 push 之前，"10/10 高于确定性地板"应读作 arm64 代理证据，不是 amd64 目标证据——这个区分很重要，
+本节存在的意义正是不让数字被凭空采信。
+
+第一个意外是参考图有多能跨平台。本仓所有参考图都拍摄于 macOS 的 Metal GL 栈；拿到 Linux 上用软件光栅
+化器、在不同 CPU 架构上比对，按统计式阈值判定的 `lens_proj` 组仍然全部越过在拍摄机上标定的阈值。
+「分布式比较不依赖随机流，这正是跨平台可移植性的来源」在此之前只是设计意图，现在有了证据。
+
+第二个意外是可移植性到哪里为止。晶体预览场景走 `crystal_renderer.cpp` 的着色与线框光栅化，`fullframe`
+则整帧读回默认帧缓冲、里面就含着那个预览。GPU 驱动与 llvmpipe 在光栅化与抗锯齿上的差异值 4–18 dB——
+远远越过一个本就为断言"近乎逐位相同"而存在的 40 dB 地板。这些场景**只在拍摄它们的那一类渲染器上有
+意义**；把它们排除在 CI 之外不是为了躲红而放松阈值。
+
+**为什么 `lens_proj` 不在 CI 里，以及什么能把它放进去。** 不是渲染原因——它的像素是可移植的，见上表。
+挡路的是 `test/gui/visual/test_gui_lens_projection.cpp:276`：一条对"跑完的仿真报告了多少光线"的精确
+相等断言，其自身注释宣称这个数字「is identical on every machine and every rerun」。在软件渲染下这条
+前提是假的：
+
+| 环境 | 重复 | 失败 | 亏空 |
+|---|---|---|---|
+| macOS，GPU | 5 | 0 | — |
+| Linux + llvmpipe，12 核 | 5 | 2 | 128 条光线 |
+| Linux + llvmpipe，4 核（贴近 runner） | 5 | 3 | 128 / 896 / 1024 条光线 |
+
+亏空恒为 128 条光线一批的整数倍，机制在 `server_poller.cpp` 里看得见：只有当这一轮 poll 携带了新的
+snapshot generation、或者走了终帧救援分支时才会重读统计（:269、:281），而观察到
+`LUMICE_LIFECYCLE_COMPLETED` 的那一轮 poll 会在自己末尾把 poller 自暂停（:501-504）。:299 处
+「统计推迟一轮由 carry-forward 吸收」的推理，在推迟恰好落在最后一轮时没有下一轮可供吸收。软件渲染让
+每次 `ctx->Yield()` 都要光栅化一整帧，于是同一场景用约 169 帧而不是约 1200–2000 帧跑完，poll 序列被
+压缩到那个窗口被例行命中——核越少越糟，所以在 CI runner 上比在工作站上更糟。
+
+这是 GUI 在一次运行结束时**报告的数字**里的真缺陷，不是测试 flake；修它属于生命周期不变量所在之处
+（`doc/gui-preview-lifecycle-architecture.md`），不属于这里。在它被修好之前，把 `lens_proj` 接进
+required check 会人为制造约 60% 的假红率——那等于用手把本节存在的目的（终结那个习惯）重新造一遍。
+**那个缺陷修好之后，把 `lens_proj` 加进 CI 步骤的 `--filter` 就是全部改动**：harness、LFS 拉取、
+"它真的跑了"断言都已就位。
+
+**这个闸真拦得住吗？** 部分拦得住，而诚实的形状比让人安心的版本更重要。该步骤跑在 `Ubuntu x86_64` 里，
+它**确实**在 `required_status_checks.contexts` 中，所以红了会挡住合入按钮。但本仓
+`enforce_admins: false`、`required_approving_review_count: 0`，而 owner 是管理员——所以 owner 本人
+可以越过这里的任何红，包括这一条。这不是本步骤引入的弱点：它是本仓**每一条** required check 的既有
+性质，而 `policy` 与 `new-refs` 两个 job 更弱——它们压根不在 required 列表里，尽管别处的散文把它们
+描述为"已门禁"。因此这一步买到的东西是有界的，值得精确命名：它把这一层从**从未执行、零信号**，
+搬到了**每次 push 都执行、红是可见的、越过它需要一个主动动作**。这就是全部主张。CI 线以下的部分是
+没有任何机器会替你抓的部分——这正是它被写下来的原因。
+
+**处置判据清单——红了之后你有什么义务。** 适用于这一层的每一次红，无论在 CI 还是在开发者本机。
+「已知 flake」不是一种处置；它留下的记录正是上面那次审计所发现、且无从据以行动的东西。
+
+1. **diff 碰没碰渲染路径？** `src/gui/preview_renderer.cpp`、`export_fbo_renderer.cpp`、
+   `crystal_renderer.cpp`、`edit_modals.cpp`、`defaults_panel.cpp`、任何 shader，或参考图捕获 harness。
+   若碰了，在被证否之前这次红就是回归——举证责任在改动一方，不在测试一方。
+2. **在同一个 base commit 上、用同一种运行模式复现它。** 不是"重跑看看"：在 base 上用与变红那次相同的
+   filter 和相同的池（`--fixed-dt` 与否）跑。红在 base 上依然存在 = 既有状况；不存在 = 是你的。
+3. **记数字，不是记结论。** 失败场景的 PSNR、它的阈值、重复几次中失败几次。每一次比较都会往 stderr 打
+   `[<group>] <scene>: PSNR=... (threshold=...)`，把它贴上。一份不含数字的处置记录不可复核。
+4. **在说"环境问题"之前先把机制说出来。** 一次确实不是渲染回归的红也仍然有成因，而且几乎总能定位——
+   上面那条 `test_gui_lens_projection.cpp:276` 在没人去看的岁月里一直读作"随机 flake"，结果是 poller
+   终态边沿的一条竞态。机制说不出来，红就成立。
+5. **重生成参考图是另一个主张。** 若这次红是被同一个 PR 里的参考图重生成解释掉的，就写明重生成了哪个
+   组、用的什么命令、之后的 PSNR 余量是多少。在一个"红被归咎于它"的 PR 里做重生成，会切断后来者据以
+   区分"重生成残留漂移"与"新缺陷"的那条审计链——这一点当时由实施方自陈于 PR #93，也是本条规则存在的
+   原因。
+
+**显式降级——哪些平台与哪些组没有任何闸门覆盖。** 写出来，使它成为一个选择而不是一段沉默：
+
+- **macOS ARM64 与 Windows MSVC x86_64** 构建 `gui_test` 但从不运行它。macOS 没有 Xvfb 的等价物，
+  Windows 的软件 GL 路径未经验证——两者都未在此研究过，也都不应假定容易。在这两个平台上这一层是
+  **本机 gate**：红不会被任何东西挡住，上面那份清单就是执行力的全部。
+- **`lens_proj`** 在上述 poller 缺陷修好之前，在所有平台上都是本机 gate——包括在 Linux 上，尽管它的
+  像素被实测证明是可行的。
+- **晶体预览与整帧场景**永久性地只是"拍摄它们的那类机器"上的本机 gate。没有让它们可移植的计划，
+  它们在软件光栅化器上的红完全不说明任何问题。
+
+**为什么是这个形状，而不是四个单选答案之一。** 桌面上原有四条路线，而没有一条能单独作答的原因是：
+它们其实不是互斥项——每条覆盖这一层的不同切片，而切片是由实测划出来的，不是由路线自己假设的。
+
+- *把 `gui_test` 接进 CI。* 采纳，但只在被证明可行的那个切片上——十个场景，在贴近 runner 的配置下重复
+  逐位一致。它当初被记为 build-only 的理由是"CI runner 没有显示服务器"，这条前提一直成立到有人真去试
+  Xvfb 为止；这个方向多年前就被识别过并被主动推迟，从未被验证过。它**不**被采纳于另外三个切片，而且
+  每次都是因为实测理由而非谨慎：`lens_proj` 是 poller 竞态，晶体与整帧场景是渲染器不可移植。
+- *做成门禁。* 在门禁能存在的地方采纳，而那个范围比听上去窄。门禁作用于**代码形态**；这里要修的失败
+  是一种**处置行为**——人看到红之后做了什么。没有任何检查器能读它。近似它的尝试（比如禁止 PR 描述里
+  出现"known flake"字样）门禁的是措辞而不是行为，换个说法即可绕过。所以机械的那部分恰好是可机械化的
+  那部分——检查真跑、且是 required——其余部分作为纪律陈述，而不是打扮成执行力。
+- *把纪律写明、并让红可归因。* 采纳，而且它是 CI 够不着的所有部分的承重件：上面那份清单，用一份可复核
+  的记录取代了「重跑一次、对比 base、合入」。它是软约束，也会以软约束的方式失效。它依然值得写，因为
+  在那些平台上，替代方案不是一条更强的规则——而是没有规则。
+- *接受现状、降级这一层。* **只**作为显式声明采纳，绝不作为默认态。旧状态站不住脚的地方不是"有些场景
+  没人管"，而是这个仓库为一个它并不据以行动的信号支付了标定与维护成本，却从未就此做过决定。上面那份
+  降级清单就是这个决定，按平台、按组，出声地做出来。
+
+被直接否决的是第五个选项——没人提议、但一切都会朝它漂移的那个：把阈值放松到这一层不再变红。那是把
+"不被相信"换成"不再报告"，检出力同样是零，只是连证据一起抹掉了。
+
+### §4.7 为什么 `auto_ev` 被退役了，而 `lens_proj` 没有
+
+两者都曾是一组来自随机渲染的参考图，但它们变的是相反的轴。`lens_proj` 的场景钉死仿真——六景全共用
+`halo_22.json`——变的是显示轴，每个逆投影分支一景。已退役的 `auto_ev` 组反过来：全部十景钉死显示轴
+（`fisheye_equal_area`、elevation 20），变的是仿真轴（光谱、晶体 type、天顶分布、filter、多散射层数）。
+
+这对一个显示回归层来说是选错了要变的轴，而且这条轴早已别处有主。`auto_ev` 十个场景背后是九个不同
+config（`overlay_ea` 复用 `halo_22.json`），其中七个
+（`halo_22`、`color`、`cza`、`filters`、`multi_scatter`、`parhelion`、`pyramid`）同时也是
+`test/e2e-correctness/test_smoke.py` 的 config，在那里断言的阈值平均严 8.7 dB——而且 `test_smoke.py`
+经 CLI 在每个 PR 上真跑，`gui_test` 的 `auto_ev` 组当时却只编译不跑。两者不是同一起跑线（CLI 那组
+config 的光线预算也比 GUI 这边高），但 `auto_ev` 把十分之九的场景花在变一条本仓库早已在别处、每次
+push 都测得更严的轴上。
+
+`auto_ev` 唯一独占的那条轴——显示路径——结果也不是它独占的。`test_gui_lens_projection.cpp` 读的是
+同一份 `snapshot_intensity` / `ev_auto` 状态，走的是已退役的 `test_gui_auto_ev.cpp` 当年那条一模一样
+的代码路径来设 exposure，而 `test/unit-correctness/gui/test_ev_auto.cpp` 用四条确定性断言直接验证
+auto-EV 的计算本身，且仍在三平台 CI 上跑。把仿真轴场景记到 `test_smoke.py` 名下、把 auto-EV 管线场景
+记到 `test_ev_auto.cpp` 名下之后，`auto_ev` 唯一独占的领地只剩 `overlayAuxLines()` 画的 zenith/nadir
+标记与坐标网格——一景的量。那一景，`overlay_ea`，被保留下来并迁入了 `lens_proj`，没有跟着其余场景
+一起退役。
 
 ---
 
@@ -376,7 +548,7 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `--benchmark`） | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `test_gui_auto_ev`、`test_gui_visual`、`test_gui_render`、`test_gui_bg`、`test_gui_export`、`test_gui_import_export`、`test_gui_interaction`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_composite_preview`、`test_gui_lifecycle`、`test_gui_sampling_density_stats`、`test_gui_defaults_panel`、**`test_gui_perf`（响应 tag）**、`test_gui_main`/`test_screenshot`/`test_gui_shared`（harness） | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。 |
+| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `test_gui_lens_projection`、`test_gui_sim_smoke`、`test_gui_visual`、`test_gui_render`、`test_gui_bg`、`test_gui_export`、`test_gui_import_export`、`test_gui_interaction`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_composite_preview`、`test_gui_lifecycle`、`test_gui_sampling_density_stats`、`test_gui_defaults_panel`、**`test_gui_perf`（响应 tag）**、`test_gui_main`/`test_screenshot`/`test_gui_shared`（harness） | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。 |
 | **regression-sentinel** | `test/regression-sentinel/`（平铺） | — | `test_capi_sentinel_overflow`、`test_ms_filter_leak`、`test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` 用 issue 复现守真 bug——**勿改场景**。`test_ms_filter_leak` 也与 parity 相关；其**主** purpose 是 sentinel（多 purpose → 按主 purpose 归类）。 |
 
 **多 purpose 裁决规则**：一个测试服务多个 purpose 时，按其**主** purpose 归类（最直接守护其回归的
