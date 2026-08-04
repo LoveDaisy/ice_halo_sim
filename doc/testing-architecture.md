@@ -617,6 +617,84 @@ the only territory `auto_ev` held alone was the zenith/nadir markers and coordin
 
 ---
 
+### §4.8 Why the GUI suite is shaped the way it is: a rule that is not data forces instance tests
+
+Of the 721 registered cases across `gui_test` and `gui_unit_test`, **23 assert a proposition
+quantified over a set derived from production code** — a field registry, an enum, a capability
+table — so that adding a field or a lens type extends their reach without touching them. The other
+698 each assert one concrete case. That ratio, roughly 3% against 97%, is the most load-bearing
+fact about this suite's shape, and the cause of it is not in the tests.
+
+**The same file carries both patterns fifteen lines apart.** In `src/gui/app_panels.cpp`, the FOV
+slider's disabled-state is read out of the field editor registry —
+`ConstraintFor("renderer.fov", g_state)`, whose comment states that domain, format and
+disabled-when "all come from the field editor registry rather than being written here". A test can
+call the same accessor and compare against it, and four cases in `test_gui_interaction.cpp` do
+exactly that. The visibility radio buttons a few lines below decide the same kind of question
+inline: `if (full_sky) { ImGui::BeginDisabled(); } … ImGui::BeginDisabled(is_globe);`. There is no
+`IsVisibilityWidgetEnabled(lens, widget)` to call, so a test cannot compare against the rule at
+all — it can only set one lens type and inspect one widget. Nine near-identical cases result, one
+per cell of the (lens × widget) grid; two of them are byte-identical once their lens constants and
+expected values are normalized away.
+
+That correspondence holds tree-wide: every invariant-shaped case in the GUI targets sits over a
+registry- or table-driven subsystem (the field-tier table, the user-defaults eligibility resolver,
+the defaults-diff key set, the field editor registry). Where a rule became data, the tests became
+invariants; where it stayed control flow, they stayed instances.
+
+**Instance-shaped coverage costs twice.**
+
+*Volume.* Normalizing string, numeric and `k…` constants out of each case body and comparing bodies
+by TF-IDF-weighted cosine — calibrated so that hand-verified same-grid pairs score 0.66–1.00 and
+hand-verified different-mechanism pairs score 0.01–0.18 — **54% of cases sit in a clique whose
+members are pairwise near-copies, and 37% are members beyond the first**. The figure is
+threshold-sensitive (roughly 30–50% over a defensible range) and "compressible" is not
+"deletable": collapsing a grid requires the invariant form to be expressible, which is the
+production-side question above. Every one of the largest cliques is a two-parameter grid written
+out one cell per case — boundary value × preset type, lens × trackball gesture, document-entry
+path × blanking, projection × lens type.
+
+*Holes that look covered.* `src/gui/file_io.cpp` has 99 `.value(key, default)` fallbacks. Twelve
+derive the default from the owning struct (`RenderConfig{}.azimuth` and the like); **87 hardcode a
+literal**, of which 44 are non-trivial values (`altitude` 20.0f, `diameter` 0.5f, `max_hits` 8,
+`sim_resolution` 1024, `lens_type` "linear"). Commit `00fb12fc` fixed exactly one of those literals
+— a `ray_num_millions` fallback that had drifted from the real default — and the remaining
+same-shaped sites were not swept. Both test shapes in this area structurally miss them: a full
+round-trip always writes the key, so `js.value(key, fallback)` always finds it and the fallback
+never evaluates; a hand-written legacy-document test omits some keys and therefore *does* execute
+some fallbacks, but asserts only the two or three fields its author had in mind.
+**A line-coverage tool marks those fallbacks covered.** Re-injecting the `00fb12fc` defect turns no
+case in either GUI target red.
+
+**Working rules that follow.** These are expensive to rediscover; each was paid for at least once.
+
+1. **A cheap signal narrows candidates; it never adjudicates.** Name similarity, lexical
+   classifiers, shared-symbol intersection and orphaned JSON keys have each produced confident
+   candidate sets here whose members turned out, on reading the code, to be non-redundant. The
+   failure is structural, not tunable: redundancy is a semantic property ("no break exists that
+   only one of them catches") and every cheap signal measures surface co-occurrence. Two tests
+   sharing 61% of their production symbols can have zero assertion overlap — throughput-positive
+   and pixels-lit are different questions about the same pipeline.
+2. **Before trusting a "nothing found", calibrate the method on a known positive.** A whole-tree
+   audit that reports a clean bill is only as good as its demonstrated sensitivity; the retired
+   `auto_ev` group (§4.7) is this repository's calibration sample for suite-shape work, recoverable
+   from history. A classifier that files it under "clean" is not measuring what it claims to.
+3. **Judge shape by reading the body, never the name.** A case name records the author's intent;
+   the property under discussion is a property of the code. There is no reliable mapping.
+4. **Separate redundancy from triangulation before proposing any deletion.** Two cases that go red
+   under the same break are redundant only if neither carries attribution information the other
+   lacks — i.e. only if *no* break exists that just one of them catches. Where such a break does
+   exist they are triangulation and must both stay; §4.2's metric-masks-bugs battery is the
+   standing example, and correlation alone has twice masked a real bug here. Establish which one
+   you are looking at with a red probe against the actual code, not by inspection.
+
+**A red probe's baseline must be established under the same conditions, more than once.** A single
+green full-suite run is not a baseline: the real-timing cases are load-sensitive, and a concurrent
+build elsewhere on the machine is enough to turn one red. Load produces false reds, never false
+greens — so "nothing caught it" survives a noisy machine, while "this suite is flaky" does not.
+
+---
+
 ## §5 Physical-layout naming conventions
 
 Three naming systems must stay aligned across a migration (270.3–270.5):
