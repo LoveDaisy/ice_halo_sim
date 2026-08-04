@@ -173,9 +173,9 @@ class ServerPoller {
   // Test-only: drives PopulateCompositePayload() directly with caller-supplied
   // composite_result so a regression test can pin the "composite bytes are
   // copied and is_composite becomes true" invariant against the same code path
-  // PollOnce() drives. Post-345.2 there is no drift-guard branch to exercise
-  // separately — the atomic combined C-API (LUMICE_GetRawXyzAndCompositeResults)
-  // makes cross-generation pairing structurally impossible upstream. See
+  // PollOnce() drives. There is no drift-guard branch to exercise separately —
+  // reading xyz and composite out of one result frame makes cross-generation
+  // pairing structurally impossible upstream. See
   // test/gui/functional/test_gui_composite_preview.cpp.
   void PopulateCompositePayloadForTest(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
     PopulateCompositePayload(composite_result, payload);
@@ -189,9 +189,9 @@ class ServerPoller {
 
   // Copies composite_results[0]'s RGB bytes into payload->rgb_data and sets
   // is_composite=true. Split out of PollOnce() to keep its cognitive
-  // complexity down. Post-345.2: no drift-guard — the caller already sourced
-  // xyz + composite from a single LUMICE_GetRawXyzAndCompositeResults() call,
-  // so they belong to the same server snapshot_generation by construction.
+  // complexity down. No drift-guard — the caller sourced xyz + composite from
+  // one result frame, so they belong to the same server snapshot_generation by
+  // construction.
   void PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload);
 
   // Published-snapshot access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use

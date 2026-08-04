@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <memory>
 
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
@@ -202,13 +203,11 @@ void ServerPoller::WorkerLoop() {
 // construction (same RenderConsumer), but taking the source's own dims makes the memcpy bounds
 // self-consistent.
 //
-// Post-345.2: the drift-guard (regen_check + drop-and-clear path) is GONE. The caller now sources
-// xyz + composite from a single LUMICE_GetRawXyzAndCompositeResults() call — one server-side
-// DoSnapshot() with a Phase-2 rebuild inside — so composite is structurally guaranteed to belong
-// to the same snapshot_generation as its paired xyz. Cross-generation pairing is no longer a
-// window that can be missed; it is impossible upstream. That eliminates the entire "recheck →
-// mismatch → drop" branch and the `GUI_LOG_VERBOSE("[Poller] composite generation drift ...")` log
-// line the plan's AC5 tracked. See scratchpad/scrum-raypath-color-gui-polish/task-fix-live-color-refresh/plan.md §3.
+// There is no drift-guard (regen_check + drop-and-clear path): the caller reads xyz and composite
+// out of ONE result frame, so composite belongs to the same snapshot_generation as its paired xyz
+// by construction. Cross-generation pairing is not a window that can be missed; it is impossible
+// upstream. That is what eliminated the entire "recheck → mismatch → drop" branch and the
+// `GUI_LOG_VERBOSE("[Poller] composite generation drift ...")` log line it printed.
 void ServerPoller::PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
   const size_t rgb_bytes =
       static_cast<size_t>(composite_result.img_width) * static_cast<size_t>(composite_result.img_height) * 3;
@@ -237,16 +236,25 @@ void ServerPoller::PollOnce() {
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
 
-  // task-345.2: atomic combined C-API — single server-side DoSnapshot() plus one snapshot_mutex_
-  // critical section produces xyz + composite that share the same snapshot_generation by
-  // construction (④ drift-guard root cause fix). Replaces the pre-345.2 three-call sequence
-  // (LUMICE_GetRawXyzResults → LUMICE_GetCompositeResults → LUMICE_GetRawXyzResults recheck)
-  // whose ~ms window between call#1 and call#3 was near-guaranteed to be crossed by
-  // ConsumeData batch churn under an active sim, dropping composites every poll until sim
-  // stopped. See scratchpad/scrum-raypath-color-gui-polish/task-fix-live-color-refresh/plan.md §3.
+  // One frame per poll, held to the end of this function. Everything read out of it — xyz,
+  // composite, stats — belongs to the same snapshot generation by construction, which is
+  // what retired the earlier three-call sequence (GetRawXyz → GetComposite → GetRawXyz
+  // recheck) and its drift-guard: the ~ms window between calls 1 and 3 was near-guaranteed
+  // to be crossed by ConsumeData batch churn under an active sim, dropping composites every
+  // poll until the sim stopped.
+  //
+  // The frame is also what makes the pointers below safe to read: they stay valid until this
+  // frame is released, no matter how many snapshots the server publishes meanwhile.
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
+    return;
+  }
+  std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_RenderResult composite_results[2]{};
-  LUMICE_GetRawXyzAndCompositeResults(server, xyz_results, 1, composite_results, 1);
+  LUMICE_FrameGetRawXyz(frame.get(), xyz_results, 1);
+  LUMICE_FrameGetComposite(frame.get(), composite_results, 1);
   const unsigned long long captured_xyz_generation = xyz_results[0].snapshot_generation;
 
   // Check if this is genuinely new snapshot data (generation changed)
@@ -285,20 +293,18 @@ void ServerPoller::PollOnce() {
 
     // Get stats (used independently for status bar display).
     //
-    // has_valid_data is load-bearing here, not belt-and-braces: the server's cached stats are NOT
-    // cleared by a restart (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and leaves
-    // cached_stats_result_ alone — only DoSnapshot overwrites it), so between a commit and the new
-    // run's first produced batch this call returns the PREVIOUS run's numbers with a perfectly
-    // healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_, which the restart
-    // did reset, and is the only field here that tells the two apart.
+    // has_valid_data is load-bearing here, not belt-and-braces: a restart does NOT clear the
+    // stats a frame carries (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and
+    // leaves the published frame alone — only a new snapshot replaces it), so between a commit
+    // and the new run's first produced batch these are the PREVIOUS run's numbers with a
+    // perfectly healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_,
+    // which the restart did reset, and is the only field here that tells the two apart.
     //
-    // Ordering makes this safe in the direction that matters: LUMICE_GetRawXyzAndCompositeResults
-    // above enters through DoSnapshot(), so any dirty batch has already been folded into
-    // cached_stats_result_ by the time we read it — has_valid_data true therefore implies the cache
-    // belongs to the current generation. The reverse window (a first ConsumeData landing between
-    // the two calls) merely defers fresh stats by one poll, which the carry-forward below absorbs.
+    // Reading the stats off the SAME frame as the xyz above removes what used to be a window:
+    // these two reads can no longer straddle a snapshot, so "has_valid_data true" and "these
+    // stats belong to that generation" are now one statement rather than an ordering argument.
     LUMICE_StatsResult cached_stats{};
-    LUMICE_GetCachedStats(server, &cached_stats);
+    LUMICE_FrameGetStats(frame.get(), &cached_stats);
     if (cached_stats.sim_ray_num > 0 && xyz_results[0].has_valid_data) {
       have_new_stats = true;
       new_ray_seg = cached_stats.ray_seg_num;
@@ -400,13 +406,11 @@ void ServerPoller::PollOnce() {
       auto payload = std::make_shared<TexturePayload>();
       size_t float_count = static_cast<size_t>(xyz_results[0].img_width) * xyz_results[0].img_height * 3;
       payload->xyz_data.resize(float_count);
-      // Copy xyz bytes BEFORE any further Get*Results call (see GetCompositeResults()
-      // call below): snapshot_xyz_ is a persistent per-RenderConsumer buffer that
-      // PrepareSnapshot() overwrites IN PLACE (not reallocated) — xyz_results[0].xyz_buffer
-      // aliases it, so a Get*Results call made after capturing this pointer but before this
-      // memcpy could silently rewrite the memory out from under us if it consumes a
-      // newly-landed dirty event. Copying first eliminates that window entirely rather than
-      // trying to detect it after the fact.
+      // This copy is no longer load-bearing for correctness: the frame held above owns
+      // xyz_buffer, so no snapshot can rewrite it while this payload is being built (its
+      // original reason — snapshot_xyz_ being a per-consumer buffer that PrepareSnapshot
+      // overwrote in place — no longer holds). It stays because the payload currently owns
+      // its pixels by value; handing the payload the frame instead is a separate change.
       std::memcpy(payload->xyz_data.data(), xyz_results[0].xyz_buffer, float_count * sizeof(float));
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
@@ -421,8 +425,8 @@ void ServerPoller::PollOnce() {
       // at least one colored consumer with a composite this generation) IS the raypath-color-
       // active detector — no cross-thread state needs to be threaded through from the GUI.
       if (composite_results[0].img_buffer != nullptr) {
-        // Same-generation guarantee is structural (from LUMICE_GetRawXyzAndCompositeResults);
-        // no host-side drift-check needed anymore. See PopulateCompositePayload's doc comment.
+        // Same-generation guarantee is structural (both read from one frame); no host-side
+        // drift-check needed. See PopulateCompositePayload's doc comment.
         PopulateCompositePayload(composite_results[0], payload.get());
       }
       // task-345.3: composite P99 anchor comes from the server (union of participating
