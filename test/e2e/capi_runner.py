@@ -720,49 +720,59 @@ def run_scene_capi_buffered(
 
                     time.sleep(0.2)
 
-                r = results[0]
-                r_w = int(r.img_width)
-                r_h = int(r.img_height)
-                r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
-                r_snap = float(r.snapshot_intensity)
-                r_valid = bool(r.has_valid_data)
-                r_eff = int(r.effective_pixels)
-                if r_xyz_addr is None:
-                    raise RuntimeError(
-                        f"{config_path}: race — xyz pointer became NULL after IDLE check"
+                # Re-read under a freshly held frame: the poll loop released each
+                # frame as it went (the `with _result_frame` block above exits every
+                # iteration), so `results`/`renders` are stale by the time the loop
+                # breaks — same fix as scripts/dump_xyz_stats.py::run_scene.
+                with _result_frame(lib, server) as frame:
+                    err = lib.LUMICE_FrameGetRender(frame, renders, 1)
+                    if err != 0:
+                        raise RuntimeError(f"FrameGetRender failed err={err}")
+                    err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
+                    if err != 0:
+                        raise RuntimeError(f"FrameGetRawXyz failed err={err}")
+
+                    r = results[0]
+                    r_w = int(r.img_width)
+                    r_h = int(r.img_height)
+                    r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
+                    r_snap = float(r.snapshot_intensity)
+                    r_valid = bool(r.has_valid_data)
+                    r_eff = int(r.effective_pixels)
+                    if r_xyz_addr is None:
+                        raise RuntimeError(
+                            f"{config_path}: race — xyz pointer became NULL after IDLE check"
+                        )
+
+                    n_xyz = r_w * r_h * 3
+                    flt_buf = (
+                        np.frombuffer(
+                            (ctypes.c_float * n_xyz).from_address(r_xyz_addr),
+                            dtype=np.float32,
+                        )
+                        .copy()
+                        .reshape(r_h, r_w, 3)
+                        .astype(np.float64)
                     )
 
-                n_xyz = r_w * r_h * 3
-                flt_buf = (
-                    np.frombuffer(
-                        (ctypes.c_float * n_xyz).from_address(r_xyz_addr),
-                        dtype=np.float32,
+                    rr = renders[0]
+                    rr_w = int(rr.img_width)
+                    rr_h = int(rr.img_height)
+                    rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
+                    if rr_addr is None or rr_w == 0 or rr_h == 0:
+                        raise RuntimeError(
+                            f"{config_path}: LUMICE_FrameGetRender returned empty buffer"
+                        )
+                    # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
+                    n_rgb = rr_w * rr_h * 3
+                    rgb_buf = (
+                        np.frombuffer(
+                            (ctypes.c_ubyte * n_rgb).from_address(rr_addr),
+                            dtype=np.uint8,
+                        )
+                        .copy()
+                        .reshape(rr_h, rr_w, 3)
                     )
-                    .copy()
-                    .reshape(r_h, r_w, 3)
-                    .astype(np.float64)
-                )
-
-                # Render buffer already populated by the last frame read inside
-                # the polling loop (same snapshot as raw XYZ).
-                rr = renders[0]
-                rr_w = int(rr.img_width)
-                rr_h = int(rr.img_height)
-                rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
-                if rr_addr is None or rr_w == 0 or rr_h == 0:
-                    raise RuntimeError(
-                        f"{config_path}: LUMICE_FrameGetRender returned empty buffer"
-                    )
-                # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
-                n_rgb = rr_w * rr_h * 3
-                rgb_buf = (
-                    np.frombuffer(
-                        (ctypes.c_ubyte * n_rgb).from_address(rr_addr),
-                        dtype=np.uint8,
-                    )
-                    .copy()
-                    .reshape(rr_h, rr_w, 3)
-                )
 
                 crystal_num, orientation_num = _read_sample_counts(lib, server)
 
