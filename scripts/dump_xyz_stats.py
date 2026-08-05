@@ -14,6 +14,7 @@ Prerequisites:
 """
 
 import argparse
+import contextlib
 import ctypes
 import datetime
 import json
@@ -111,14 +112,38 @@ def load_lib():
     lib.LUMICE_QueryServerState.restype  = ctypes.c_int
     lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 
-    lib.LUMICE_GetRawXyzResults.restype  = ctypes.c_int
-    lib.LUMICE_GetRawXyzResults.argtypes = [
+    lib.LUMICE_AcquireResultFrame.restype  = ctypes.c_int
+    lib.LUMICE_AcquireResultFrame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+
+    lib.LUMICE_ReleaseResultFrame.restype  = None
+    lib.LUMICE_ReleaseResultFrame.argtypes = [ctypes.c_void_p]
+
+    lib.LUMICE_FrameGetRawXyz.restype  = ctypes.c_int
+    lib.LUMICE_FrameGetRawXyz.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(LUMICE_RawXyzResult),
         ctypes.c_int,
     ]
 
     return lib
+
+
+@contextlib.contextmanager
+def _result_frame(lib, server):
+    """Acquire a result frame, yield the handle, release it on the way out.
+
+    Everything LUMICE_FrameGetRawXyz writes points INTO the frame, so any use of those
+    pointers — compute_stats() reading xyz_buffer, for one — has to happen inside the
+    `with`, not after it.
+    """
+    frame = ctypes.c_void_p()
+    err = lib.LUMICE_AcquireResultFrame(server, ctypes.byref(frame))
+    if err != 0:
+        raise RuntimeError(f"AcquireResultFrame failed: err={err}")
+    try:
+        yield frame
+    finally:
+        lib.LUMICE_ReleaseResultFrame(frame)
 
 
 def _commit_via_scene_handle(lib, server, config_path):
@@ -214,16 +239,19 @@ def run_scene(lib, scene_name, config_path, timeout_s):
             elapsed = time.time() - t_start
 
             if elapsed > timeout_s:
-                err = lib.LUMICE_GetRawXyzResults(server, results, 1)
-                if err == 0 and results[0].has_valid_data and results[0].xyz_buffer:
+                with _result_frame(lib, server) as frame:
+                    err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
+                    usable = err == 0 and results[0].has_valid_data and results[0].xyz_buffer
+                if usable:
                     print(f"  [{scene_name}] Timeout ({elapsed:.1f}s) — using current data (truncated)", flush=True)
                     truncated = True
                     break
                 raise RuntimeError(f"Timeout after {elapsed:.1f}s with no valid data")
 
-            err = lib.LUMICE_GetRawXyzResults(server, results, 1)
+            with _result_frame(lib, server) as frame:
+                err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
             if err != 0:
-                raise RuntimeError(f"GetRawXyzResults failed: err={err}")
+                raise RuntimeError(f"FrameGetRawXyz failed: err={err}")
 
             err2 = lib.LUMICE_QueryServerState(server, ctypes.byref(state_out))
             if err2 != 0:
@@ -240,14 +268,22 @@ def run_scene(lib, scene_name, config_path, timeout_s):
 
             time.sleep(0.5)
 
-        r = results[0]
-        pixel_count = r.img_width * r.img_height
+        # Re-read under a held frame: the poll loop released each frame as it went, so the
+        # pointers in `results` are stale by now. The server is idle (or the run was
+        # truncated), so this reads the same snapshot the loop stopped on.
+        with _result_frame(lib, server) as frame:
+            err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
+            if err != 0:
+                raise RuntimeError(f"FrameGetRawXyz failed: err={err}")
 
-        if r.xyz_buffer is None:
-            print(f"  [{scene_name}] WARNING: xyz_buffer is NULL despite has_valid_data", file=sys.stderr)
+            r = results[0]
+            pixel_count = r.img_width * r.img_height
 
-        filtered_stats   = compute_stats(r.xyz_buffer,            pixel_count, r.snapshot_intensity)
-        unfiltered_stats = compute_stats(r.unfiltered_xyz_buffer, pixel_count, r.unfiltered_snapshot_intensity)
+            if r.xyz_buffer is None:
+                print(f"  [{scene_name}] WARNING: xyz_buffer is NULL despite has_valid_data", file=sys.stderr)
+
+            filtered_stats   = compute_stats(r.xyz_buffer,            pixel_count, r.snapshot_intensity)
+            unfiltered_stats = compute_stats(r.unfiltered_xyz_buffer, pixel_count, r.unfiltered_snapshot_intensity)
 
         return {
             "scene":         scene_name,

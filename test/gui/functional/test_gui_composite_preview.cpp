@@ -23,6 +23,7 @@
 #include "gui/gui_state.hpp"            // GuiState + DisplayStateBaseline (M8 AC3)
 #include "gui/gui_state_reconcile.hpp"  // ReconcileGuiEffects / ApplyGuiEffects (M8 AC3 reconciler-path)
 #include "gui/server_poller.hpp"
+#include "support/scoped_result_frame.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -206,7 +207,8 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -534,14 +536,15 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // `return;`, which cannot coexist with a non-void lambda return type.
     auto ReadRedBlueSums = [&](unsigned long long& sum_r, unsigned long long& sum_b) {
       // task-composite-preview-sibling-race: Stop() the global poller so its background
-      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // DoSnapshot() cannot race the synchronous composite read below.
       // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
       // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
       // — this test has 3 direct composite reads (below at L1726/L1737/L1746) all funneled
       // through here, so one Stop() at the lambda head covers them all.
       gui::g_server_poller.Stop();
       LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      lumice::test::ScopedResultFrame frame_comp(gui::g_server);
+      IM_CHECK_EQ(LUMICE_FrameGetComposite(frame_comp.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
       IM_CHECK(comp[0].img_buffer != nullptr);
       const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
       sum_r = 0;
@@ -641,14 +644,15 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
 
     auto ReadRedGreenSums = [&](unsigned long long& sum_r, unsigned long long& sum_g) {
       // task-composite-preview-sibling-race: Stop() the global poller so its background
-      // DoSnapshot() cannot race the synchronous LUMICE_GetCompositeResults() call below.
+      // DoSnapshot() cannot race the synchronous composite read below.
       // Same Stop()-before-read serialization as ReadComposite() above; see the essay on
       // that lambda (task-fix-composite-byte-identical-flake) for the full race explanation
       // — this test has 3 direct composite reads (below at L1826/L1835/L1846) all funneled
       // through here, so one Stop() at the lambda head covers them all.
       gui::g_server_poller.Stop();
       LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-      IM_CHECK_EQ(LUMICE_GetCompositeResults(gui::g_server, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+      lumice::test::ScopedResultFrame frame_comp(gui::g_server);
+      IM_CHECK_EQ(LUMICE_FrameGetComposite(frame_comp.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
       IM_CHECK(comp[0].img_buffer != nullptr);
       const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
       sum_r = 0;

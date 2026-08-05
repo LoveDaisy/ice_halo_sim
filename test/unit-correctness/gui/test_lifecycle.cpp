@@ -47,6 +47,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/server_poller.hpp"
 #include "lumice.h"
+#include "support/scoped_result_frame.hpp"
 
 namespace gui = lumice::gui;
 
@@ -104,7 +105,8 @@ bool RunFiniteToCompletion(LUMICE_Server* server) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -131,7 +133,8 @@ bool WaitForValidData(LUMICE_Server* server) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[2]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }
@@ -146,10 +149,10 @@ bool WaitForValidData(LUMICE_Server* server) {
 // payload_epoch would pass for the wrong reason whenever the timing happened not to line up
 // (see the "assert pixel content, not just the stamp" requirement in the task's risk analysis).
 // A plain FNV-1a over the raw float bytes: no tolerance, no interpretation, just "same bytes?".
-uint64_t PixelFingerprint(const std::vector<float>& xyz) {
+uint64_t PixelFingerprint(const float* xyz, size_t float_count) {
   uint64_t h = 1469598103934665603ULL;
-  const auto* bytes = reinterpret_cast<const unsigned char*>(xyz.data());
-  const size_t n = xyz.size() * sizeof(float);
+  const auto* bytes = reinterpret_cast<const unsigned char*>(xyz);
+  const size_t n = float_count * sizeof(float);
   for (size_t i = 0; i < n; ++i) {
     h = (h ^ bytes[i]) * 1099511628211ULL;
   }
@@ -613,7 +616,8 @@ TEST(GuiLifecycle, completed_below_threshold_force_uploads) {
   // without assuming anything about its magnitude.
   auto arm_gate_above_achieved = [&](LUMICE_RayCount* out_rays) {
     LUMICE_StatsResult stats{};
-    LUMICE_GetCachedStats(server, &stats);
+    lumice::test::ScopedResultFrame frame(server);
+    LUMICE_FrameGetStats(frame.get(), &stats);
     *out_rays = stats.sim_ray_num;
     local.SetCalibratedThreshold(stats.sim_ray_num + 1);
   };
@@ -992,7 +996,8 @@ TEST(GuiLifecycle, resume_rearms_quality_gate_clock) {
   LUMICE_RayCount rays = 0;
   {
     LUMICE_StatsResult stats{};
-    LUMICE_GetCachedStats(server, &stats);
+    lumice::test::ScopedResultFrame frame(server);
+    LUMICE_FrameGetStats(frame.get(), &stats);
     rays = stats.sim_ray_num;
     local.SetCalibratedThreshold(stats.sim_ray_num + 1);
   }
@@ -1065,7 +1070,8 @@ TEST(GuiLifecycle, restart_does_not_republish_prior_run_pixels) {
     ASSERT_TRUE(sa->payload != nullptr);
     EXPECT_EQ(sa->payload->payload_epoch, epoch_a);
     EXPECT_TRUE(sa->payload->texture_ray_count > 0);
-    pixels_a = PixelFingerprint(sa->payload->xyz_data);
+    pixels_a =
+        PixelFingerprint(sa->payload->xyz_buffer, static_cast<size_t>(sa->payload->width) * sa->payload->height * 3);
     serial_a = sa->texture_serial;
   }
 
@@ -1090,7 +1096,9 @@ TEST(GuiLifecycle, restart_does_not_republish_prior_run_pixels) {
 
   // The image in the window IS run A's, in both worlds — this is the premise of the case, not the
   // defect. What must not happen is that image being re-published as run B's work.
-  EXPECT_EQ(PixelFingerprint(sb->payload->xyz_data), pixels_a);
+  EXPECT_EQ(
+      PixelFingerprint(sb->payload->xyz_buffer, static_cast<size_t>(sb->payload->width) * sb->payload->height * 3),
+      pixels_a);
 
   // The defect's exact shape, all four RED before the fix: the poller materializes a "fresh"
   // payload out of run A's pixels, stamps it epoch_b, and mints a new serial for it.
@@ -1123,9 +1131,66 @@ TEST(GuiLifecycle, restart_does_not_republish_prior_run_pixels) {
   LUMICE_DestroyServer(server);
 }
 
-// 10b — the composite (raypath-color) half of 10a. Not a courtesy duplicate: PopulateCompositePayload
-// runs INSIDE the very same `if (quality_ok)` block that builds the XYZ payload, so whatever gates
-// one gates the other. This pins both directions of that coupling — the window must not publish a
+// 10c — carry-forward stays a pure refcount bump.
+//
+// The payload no longer owns its pixels: it holds a share of the result frame and points into it.
+// That makes the anti-flicker carry-forward path (`next->payload = prev->payload`) load-bearing in
+// a way it was not before — if anyone ever rewrote it to build a fresh payload out of the previous
+// one, the rebuilt payload would either re-copy every pixel (the cost this whole change removed) or
+// carry buffer pointers without the frame that keeps them alive. Neither shows up in the pixel or
+// epoch assertions the sibling cases make: a deep copy compares byte-identical.
+//
+// So this case asserts the one thing those cannot — that the two polls hand out the SAME
+// TexturePayload OBJECT. Pointer identity is the whole assertion; it is red for a deep copy and
+// green only for a shared pointer.
+TEST(GuiLifecycle, carry_forward_reuses_payload_pointer_not_copy) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);  // materializes a payload for this generation
+
+  auto snap1 = local.LoadSnapshot();
+  ASSERT_TRUE(snap1 != nullptr);
+  ASSERT_TRUE(snap1->payload != nullptr);
+  ASSERT_TRUE(snap1->has_new_texture);
+  const gui::TexturePayload* first = snap1->payload.get();
+  const float* first_pixels = snap1->payload->xyz_buffer;
+
+  // Same generation, and this resume has already put a frame on screen — so neither the
+  // new-snapshot branch nor the terminal-frame rescue can fire, and the publish below MUST take the
+  // carry-forward branch. No ResetGenerationForTest() in between: that is what a resume does, and a
+  // resume is exactly what this case must not have.
+  local.PollOnceForTest(server);
+
+  auto snap2 = local.LoadSnapshot();
+  ASSERT_TRUE(snap2 != nullptr);
+  ASSERT_TRUE(snap2->payload != nullptr);
+  EXPECT_TRUE(!snap2->has_new_texture);  // the carry-forward branch really was the one taken
+  EXPECT_EQ(snap2->payload.get(), first);
+  EXPECT_EQ(snap2->payload->xyz_buffer, first_pixels);
+  EXPECT_EQ(snap2->texture_serial, snap1->texture_serial);
+  // The frame share travels with the payload, so the pixels stay readable for as long as either
+  // snapshot is held — which is what makes pointing at them instead of copying them safe.
+  EXPECT_TRUE(snap2->payload->frame != nullptr);
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// 10b — the composite (raypath-color) half of 10a. Not a courtesy duplicate: the composite payload
+// fields are assigned INSIDE the very same `if (quality_ok)` block that builds the XYZ payload, so
+// whatever gates one gates the other. This pins both directions of that coupling — the window must not publish a
 // composite built from the previous run's lanes, and the window ending must not leave the composite
 // path suppressed. It also checks the composite fire-gate's mode_changed OR-branch, which reads
 // snap.payload and could otherwise fire an upload on a carried-forward frame.
@@ -1193,7 +1258,7 @@ TEST(GuiLifecycle, restart_window_does_not_republish_prior_run_composite) {
     ASSERT_TRUE(sa->payload != nullptr);
     // If this fails the case is not exercising the composite path at all and the rest proves nothing.
     ASSERT_TRUE(sa->payload->is_composite);
-    ASSERT_TRUE(!sa->payload->rgb_data.empty());
+    ASSERT_TRUE(sa->payload->rgb_buffer != nullptr);
     EXPECT_EQ(sa->payload->payload_epoch, epoch_a);
     serial_a = sa->texture_serial;
   }
@@ -1234,7 +1299,7 @@ TEST(GuiLifecycle, restart_window_does_not_republish_prior_run_composite) {
     ASSERT_TRUE(sc != nullptr);
     ASSERT_TRUE(sc->payload != nullptr);
     EXPECT_TRUE(sc->payload->is_composite);
-    EXPECT_TRUE(!sc->payload->rgb_data.empty());
+    EXPECT_TRUE(sc->payload->rgb_buffer != nullptr);
     EXPECT_EQ(sc->payload->payload_epoch, epoch_c);
     EXPECT_TRUE(gui::ShouldFireCompositeUpload(*sc, serial_a, /*display_epoch_floor=*/epoch_a,
                                                /*show_composite_preview=*/true,

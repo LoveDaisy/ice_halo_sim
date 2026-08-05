@@ -149,8 +149,10 @@ typedef struct LUMICE_RenderResult_ {
 
 **Notes**:
 - The image data pointed to by `img_buffer` is managed internally by the library and does not need to be freed manually
-- `img_buffer` remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitScene()`
-- If you need to retain the data long-term, you should `memcpy` it yourself
+- `img_buffer` is a read-only view into the `LUMICE_ResultFrame` it was obtained from, and stays
+  valid until that frame is released with `LUMICE_ReleaseResultFrame()` — holding the frame is what
+  keeps the pixels alive, so a second reader acquiring its own frame cannot invalidate yours
+- If you need the data to outlive the frame, `memcpy` it yourself before releasing
 - Image data is in RGB format, with 3 bytes per pixel (R, G, B)
 - Image data size = `img_width * img_height * 3` bytes
 - Sentinel marker: `img_buffer == NULL`
@@ -476,7 +478,7 @@ A scene carries an optional set of *color classes*: each has an RGB color plus a
 placement-scoped *match* predicates `{layer, crystal, predicate}` that decide which surviving rays
 get color-tagged. The composite mode (`LUMICE_COLOR_MODE_DOMINANT` / `_ADDITIVE` / `_PAINTER`) is
 a scene setting. A scene with no color classes disables color entirely — the mono
-`LUMICE_GetRenderResults` output and the emitted JSON are byte-identical to a config that never
+`LUMICE_FrameGetRender` output and the emitted JSON are byte-identical to a config that never
 mentioned the feature.
 
 ```c
@@ -500,7 +502,7 @@ Two disjoint change paths — pick by whether the *members* change:
 
 - **Structure change** (`match[]` refs / `combine`) → **re-simulation**. Rebuild the scene's color
   classes and re-commit with `LUMICE_CommitScene`. Read the composite images via
-  `LUMICE_GetCompositeResults` (one sRGB `LUMICE_RenderResult` per colored renderer).
+  `LUMICE_FrameGetComposite` (one sRGB `LUMICE_RenderResult` per colored renderer).
 - **Appearance change** (RGB / visible / solo / z-order / composite mode) →
   **no re-simulation**:
 
@@ -518,7 +520,7 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server,
 - `mode`: `LUMICE_COLOR_MODE_*`.
 
 **Return value**:
-- `LUMICE_OK`: success — the next `LUMICE_GetCompositeResults` re-composites the
+- `LUMICE_OK`: success — the next `LUMICE_FrameGetComposite` re-composites the
   already-accumulated data with the new appearance. The simulation epoch and
   accumulator are untouched (no restart).
 - `LUMICE_ERR_NULL_ARG`: `server` is `NULL`, or `classes` is `NULL` with
@@ -554,56 +556,118 @@ predicate can reference a raypath the physical filter already excludes).
 - `LUMICE_ERR_INVALID_CONFIG`: `class_count` mismatch.
 
 Reads the frozen snapshot state (no `DoSnapshot` trigger) — callers relying on
-freshness should query `LUMICE_GetCompositeResults` / `LUMICE_GetRawXyzResults`
-first. `O(W*H * class_count * consumers)` scan; intended for infrequent polls
+freshness should call `LUMICE_AcquireResultFrame` first, which materializes a
+pending snapshot. `O(W*H * class_count * consumers)` scan; intended for infrequent polls
 (commit-debounce cadence, ~1 Hz), not per render frame — the GUI color window
 throttles its poll to 500ms (`kSignalPollIntervalSec` in `color_window.cpp`).
 
 ### Retrieving Results
 
-Result retrieval uses a unified array + sentinel pattern:
-- Function signature: `LUMICE_ErrorCode LUMICE_GetXxxResults(server, out, max_count)`
+Results are read from a **result frame** — an immutable snapshot of the simulation that the
+caller holds a share of. Acquire one, read as many of its four views as you need, release it:
+
+```c
+LUMICE_ResultFrame* frame = NULL;
+if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+    LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+    LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS);
+    // ... use renders[i].img_buffer ...
+    LUMICE_ReleaseResultFrame(frame);
+}
+```
+
+**Why a frame and not a getter on the server**: the buffers a read hands back are views into
+library-owned memory. With server-taking getters that memory was only valid until the *next*
+getter call on the same server, so one reader's read invalidated another reader's still-in-use
+pixels — a use-after-free, not merely a stale read. A frame gives the reader a real share of the
+data's lifetime, so the pixels stay valid until *that* reader releases *its* frame.
+
+Two further properties come free from the model:
+- **Same generation by construction.** Any two reads off one frame describe the same snapshot,
+  so no combined "xyz + composite" entry point is needed to pair them.
+- **Frames are independent.** Acquiring a second frame does not affect the first, and a caller
+  may hold as many as it likes — including across a server teardown.
+
+The four read functions keep the array + sentinel shape of the getters they replace, so only the
+first argument differs:
 - The `out` array must be at least `max_count + 1` in size (to include the sentinel entry)
 - A zero-valued sentinel entry immediately follows the valid results
 - The caller loops until it encounters the sentinel
+- All of them return `LUMICE_ERR_NULL_ARG` on a `NULL` frame or `out`
 
-#### LUMICE_GetRenderResults
-
-Retrieves render results.
-
-```c
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-```
-
-**Parameters**:
-- `server`: server handle pointer
-- `out`: output array, at least `max_count + 1` in size
-- `max_count`: maximum number of results (recommended: `LUMICE_MAX_RENDER_RESULTS`)
-
-**Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
-
-**Sentinel**: the trailing entry has `img_buffer == NULL`
-
-#### LUMICE_GetStatsResults
-
-Retrieves statistics results.
+#### LUMICE_AcquireResultFrame
 
 ```c
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
 ```
 
-**Parameters**:
-- `server`: server handle pointer
-- `out`: output array, at least `max_count + 1` in size
-- `max_count`: maximum number of results (recommended: `LUMICE_MAX_STATS_RESULTS`)
+Materializes a pending snapshot (as the getters it replaces did), then writes a new frame handle
+to `*out_frame`. The caller owns that handle and MUST eventually pass it to
+`LUMICE_ReleaseResultFrame`.
 
 **Return value**:
-- `LUMICE_OK`: success
-- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+- `LUMICE_OK`: success. `*out_frame` is never `NULL` — even before the first snapshot, where the
+  frame simply reads as "no results" (every `LUMICE_FrameGet*` writes its sentinel / all-zero struct)
+- `LUMICE_ERR_NULL_ARG`: `server` or `out_frame` is `NULL`
 
-**Sentinel**: the trailing entry has `sim_ray_num == 0`
+#### LUMICE_ReleaseResultFrame
+
+```c
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
+```
+
+NULL-safe no-op (same contract as `LUMICE_DestroyServer`). Each handle must be released exactly
+once; releasing the same handle twice is undefined behavior — this mirrors `LUMICE_DestroyServer`
+and every other handle in this API, so there is no double-free sentinel.
+
+**Failure mode if you forget**: that one frame leaks, and nothing else. It cannot corrupt memory
+or affect any other reader, because a frame is immutable and separately reference-counted; a leak
+is what ASan/LSan/valgrind already report. After the release, every pointer read out of that frame
+is dangling — copy what you still need first.
+
+#### LUMICE_FrameGetRender
+
+Mono / full-spectrum sRGB uint8 images.
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+```
+
+**Sentinel**: the trailing entry has `img_buffer == NULL`. `composite_p99_y` is left at 0 on this
+path and must be ignored. Recommended `max_count`: `LUMICE_MAX_RENDER_RESULTS`.
+
+#### LUMICE_FrameGetComposite
+
+Per-raypath composite sRGB images, one per colored renderer.
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+```
+
+**Sentinel**: the trailing entry has `img_buffer == NULL`; the result is empty (`out[0]` is the
+sentinel) when no `raypath_color` is configured, which leaves the mono path unaffected.
+`composite_p99_y` is meaningful here.
+
+#### LUMICE_FrameGetRawXyz
+
+Raw XYZ float data plus the intensity scalars.
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count);
+```
+
+**Sentinel**: the trailing entry has `xyz_buffer == NULL`.
+
+#### LUMICE_FrameGetStats
+
+Simulation statistics — a single value, so no `max_count`.
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
+```
+
+Writes an all-zero struct when the frame carries no stats (e.g. it was acquired before the first
+snapshot).
 
 ### State and Control
 
@@ -672,22 +736,23 @@ int main() {
     while (1) {
         usleep(1000000);  // 1 second
 
-        // Get render results
-        LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
-        if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
-            for (int i = 0; renders[i].img_buffer != NULL; i++) {
-                printf("Render[%02d]: %dx%d\n",
-                       renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+        // Acquire one frame; renders and stats below are read off the same snapshot
+        LUMICE_ResultFrame* frame = NULL;
+        if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+            LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+            if (LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
+                for (int i = 0; renders[i].img_buffer != NULL; i++) {
+                    printf("Render[%02d]: %dx%d\n",
+                           renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+                }
             }
-        }
 
-        // Get stats results
-        LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
-        if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
-            for (int i = 0; stats[i].sim_ray_num != 0; i++) {
-                printf("Stats: rays=%lu, crystals=%lu\n",
-                       stats[i].sim_ray_num, stats[i].crystal_num);
+            LUMICE_StatsResult stats;
+            if (LUMICE_FrameGetStats(frame, &stats) == LUMICE_OK) {
+                printf("Stats: rays=%lu, crystals=%lu\n", stats.sim_ray_num, stats.crystal_num);
             }
+
+            LUMICE_ReleaseResultFrame(frame);
         }
 
         // Check if processing is complete
@@ -747,34 +812,37 @@ int main(int argc, char* argv[]) {
     while (1) {
         usleep(1000000);
 
-        // Get render results
-        LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
-        if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
-            for (int i = 0; renders[i].img_buffer != NULL; i++) {
-                printf("Render[%02d]: %dx%d, buffer=%p\n",
-                       renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
-                       (const void*)renders[i].img_buffer);
+        // One frame per poll: the images stay valid until this frame is released,
+        // no matter what any other thread reads in the meantime.
+        LUMICE_ResultFrame* frame = NULL;
+        if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+            LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+            if (LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
+                for (int i = 0; renders[i].img_buffer != NULL; i++) {
+                    printf("Render[%02d]: %dx%d, buffer=%p\n",
+                           renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
+                           (const void*)renders[i].img_buffer);
 
-                // Save image (example)
-                char filename[256];
-                snprintf(filename, sizeof(filename), "output_%d_%dx%d.raw",
-                         renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
-                FILE* img_file = fopen(filename, "wb");
-                if (img_file) {
-                    size_t img_size = (size_t)renders[i].img_width * renders[i].img_height * 3;
-                    fwrite(renders[i].img_buffer, 1, img_size, img_file);
-                    fclose(img_file);
+                    // Save image (example)
+                    char filename[256];
+                    snprintf(filename, sizeof(filename), "output_%d_%dx%d.raw",
+                             renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+                    FILE* img_file = fopen(filename, "wb");
+                    if (img_file) {
+                        size_t img_size = (size_t)renders[i].img_width * renders[i].img_height * 3;
+                        fwrite(renders[i].img_buffer, 1, img_size, img_file);
+                        fclose(img_file);
+                    }
                 }
             }
-        }
 
-        // Get stats results
-        LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
-        if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
-            for (int i = 0; stats[i].sim_ray_num != 0; i++) {
+            LUMICE_StatsResult stats;
+            if (LUMICE_FrameGetStats(frame, &stats) == LUMICE_OK) {
                 printf("Stats: rays=%lu, segments=%lu, crystals=%lu\n",
-                       stats[i].sim_ray_num, stats[i].ray_seg_num, stats[i].crystal_num);
+                       stats.sim_ray_num, stats.ray_seg_num, stats.crystal_num);
             }
+
+            LUMICE_ReleaseResultFrame(frame);
         }
 
         // Check if processing is complete
@@ -825,26 +893,44 @@ if (err != LUMICE_OK) {
 
 ## Thread Safety
 
-### Thread-Safe APIs
+### Reading Results Is Thread-Safe — By Holding a Share, Not by Being Lucky
 
-The following APIs are **thread-safe**:
-- `LUMICE_QueryServerState()`: can be safely called from multiple threads
-- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: can be safely called from multiple threads
+`LUMICE_AcquireResultFrame`, `LUMICE_ReleaseResultFrame`, and all four `LUMICE_FrameGet*`
+functions are **thread-safe**: any number of threads may acquire, read, and release frames
+concurrently, with no external locking. This is not an incidental property to verify per call —
+it is the reason the frame model exists (see [Retrieving Results](#retrieving-results)). A
+pointer a `FrameGet*` call hands back (`img_buffer` / `xyz_buffer`) is a borrow into a frame the
+caller holds a real share of; it stays valid for exactly as long as *that* frame is held, until
+the matching `LUMICE_ReleaseResultFrame` — independent of what any other thread does to the
+server, and independent of how many *other* frames exist. Two frames never interfere with each
+other, whether held by the same thread or different ones.
+
+`LUMICE_FrameGetStats` is not part of that borrow family: it copies a **plain value** struct with
+no pointer into the frame, so nothing dangles after release. It rides the same acquire/release
+envelope as the other three only because all four reads come from one frame, not because it needs
+the borrow protection they do.
+
+`LUMICE_QueryServerState()` is also thread-safe and may be called from any thread at any time.
 
 ### Non-Thread-Safe APIs
 
-The following APIs are **not thread-safe** and must not be called simultaneously from multiple threads:
-- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: server lifecycle management
+The following mutate shared server state directly and must not be called concurrently with each
+other or with any other call on the same server:
+- `LUMICE_CreateServer()` / `LUMICE_CreateServerEx()` / `LUMICE_DestroyServer()`: server lifecycle
+  management
 - `LUMICE_CommitScene()`: configuration submission
+- `LUMICE_StopServer()`: server shutdown
 - `LUMICE_Scene*` handle mutation (`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`
   on one handle) — a handle has no internal locking. Distinct handles are independent, so building
   two scenes on two threads is fine.
-- `LUMICE_StopServer()`: server shutdown
 
 ### Multithreading Recommendations
 
-1. **Single server, multiple threads**: Use a mutex to protect non-thread-safe operations
-2. **Multiple servers**: Use a separate server instance per thread
+1. **Single server, multiple threads**: designate one owner thread for `LUMICE_CommitScene()` /
+   `LUMICE_StopServer()` / `LUMICE_DestroyServer()`. Any number of other threads may freely
+   acquire and read result frames concurrently with that owner and with each other — no mutex
+   needed on the read side.
+2. **Multiple servers**: use a separate server instance per thread.
 
 ## Integration with Other Languages
 
@@ -886,10 +972,15 @@ lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POIN
 lib.LUMICE_CommitScene.restype = ctypes.c_int
 lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
 lib.LUMICE_SceneDestroy.restype = None
-lib.LUMICE_GetRenderResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
-lib.LUMICE_GetRenderResults.restype = ctypes.c_int
-lib.LUMICE_GetStatsResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult), ctypes.c_int]
-lib.LUMICE_GetStatsResults.restype = ctypes.c_int
+# The frame handle is opaque, so c_void_p is the whole binding — no struct layout to mirror.
+lib.LUMICE_AcquireResultFrame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+lib.LUMICE_AcquireResultFrame.restype = ctypes.c_int
+lib.LUMICE_ReleaseResultFrame.argtypes = [ctypes.c_void_p]
+lib.LUMICE_ReleaseResultFrame.restype = None
+lib.LUMICE_FrameGetRender.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
+lib.LUMICE_FrameGetRender.restype = ctypes.c_int
+lib.LUMICE_FrameGetStats.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult)]
+lib.LUMICE_FrameGetStats.restype = ctypes.c_int
 lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 lib.LUMICE_QueryServerState.restype = ctypes.c_int
 lib.LUMICE_StopServer.argtypes = [ctypes.c_void_p]
@@ -916,13 +1007,18 @@ def simulate(config_file):
         while True:
             time.sleep(1)
 
-            # Get render results
-            renders = (LUMICE_RenderResult * (LUMICE_MAX_RENDER_RESULTS + 1))()
-            if lib.LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == 0:
-                for r in renders:
-                    if not r.img_buffer:
-                        break
-                    print(f"Render[{r.renderer_id:02d}]: {r.img_width}x{r.img_height}")
+            # Get render results off a frame
+            frame = ctypes.c_void_p()
+            if lib.LUMICE_AcquireResultFrame(server, ctypes.byref(frame)) == 0:
+                try:
+                    renders = (LUMICE_RenderResult * (LUMICE_MAX_RENDER_RESULTS + 1))()
+                    if lib.LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == 0:
+                        for r in renders:
+                            if not r.img_buffer:
+                                break
+                            print(f"Render[{r.renderer_id:02d}]: {r.img_width}x{r.img_height}")
+                finally:
+                    lib.LUMICE_ReleaseResultFrame(frame)
 
             # Check state
             state = ctypes.c_int()
@@ -963,8 +1059,10 @@ extern "C" {
     fn LUMICE_SceneFromJsonFile(filename: *const c_char, out_scene: *mut *mut c_void) -> c_int;
     fn LUMICE_CommitScene(server: *mut c_void, scene: *const c_void, out_reused: *mut c_int) -> c_int;
     fn LUMICE_SceneDestroy(scene: *mut c_void);
-    fn LUMICE_GetRenderResults(server: *mut c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
-    fn LUMICE_GetStatsResults(server: *mut c_void, out: *mut LUMICE_StatsResult, max_count: c_int) -> c_int;
+    fn LUMICE_AcquireResultFrame(server: *mut c_void, out_frame: *mut *mut c_void) -> c_int;
+    fn LUMICE_ReleaseResultFrame(frame: *mut c_void);
+    fn LUMICE_FrameGetRender(frame: *const c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
+    fn LUMICE_FrameGetStats(frame: *const c_void, out: *mut LUMICE_StatsResult) -> c_int;
     fn LUMICE_QueryServerState(server: *mut c_void, out: *mut c_int) -> c_int;
     fn LUMICE_StopServer(server: *mut c_void);
 }
@@ -982,7 +1080,7 @@ extern "C" {
 
 ### Q3: When does img_buffer become invalid?
 
-**A**: The `img_buffer` pointer remains valid until the next call to `LUMICE_GetRenderResults()` or `LUMICE_CommitScene()`. If you need to retain the data long-term, you should `memcpy` it yourself.
+**A**: When you release the frame it came from. `img_buffer` is a read-only view into a `LUMICE_ResultFrame`, and holding that frame keeps the pixels alive — no other reader's activity, and no new snapshot, can invalidate them while you hold it. Call `LUMICE_ReleaseResultFrame()` when you are done, and `memcpy` beforehand anything you need to outlive the frame.
 
 ### Q4: Can the server process multiple configurations simultaneously?
 
@@ -990,7 +1088,7 @@ extern "C" {
 
 ### Q5: How do I check if the result array is empty?
 
-**A**: Check whether the first element is the sentinel. For render results: `renders[0].img_buffer == NULL` means no results. For stats results: `stats[0].sim_ray_num == 0` means no results.
+**A**: Check whether the first element is the sentinel. For render and composite results: `renders[0].img_buffer == NULL` means no results; for raw XYZ, `xyz[0].xyz_buffer == NULL`. `LUMICE_FrameGetStats` writes a single value rather than an array, so its "no results" form is an all-zero struct (`sim_ray_num == 0`).
 
 ## Related Documentation
 

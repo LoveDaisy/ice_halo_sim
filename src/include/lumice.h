@@ -43,9 +43,22 @@ extern "C" {
 // orientation was sampled). This is an APPEND, not a removal or a reorder, so
 // existing field offsets are unchanged; but sizeof(LUMICE_StatsResult) grows
 // from 24 to 32, so a caller that was NOT recompiled and passes an array of the
-// old struct to LUMICE_GetStatsResults will have it written past the end of
-// each element. Recompile against this header.
-#define LUMICE_API_VERSION 414
+// old struct to LUMICE_FrameGetStats will have it written past the end.
+// Recompile against this header.
+//
+// BREAKING (v4.15): the six server-taking result getters are REMOVED and replaced by the
+// LUMICE_ResultFrame handle. Gone: LUMICE_GetRenderResults / LUMICE_GetCompositeResults /
+// LUMICE_GetRawXyzResults / LUMICE_GetRawXyzAndCompositeResults / LUMICE_GetStatsResults /
+// LUMICE_GetCachedStats. Read results by acquiring a frame — LUMICE_AcquireResultFrame, then
+// LUMICE_FrameGetRender / _FrameGetComposite / _FrameGetRawXyz / _FrameGetStats, then
+// LUMICE_ReleaseResultFrame. The buffers a frame hands out stay valid until THAT frame is
+// released, instead of until the next getter call on the server; that is the whole point of the
+// change — the old contract let one caller's read invalidate another's still-in-use pixels.
+// Two old contracts disappear with their functions, both now structural: the combined
+// xyz+composite getter existed to guarantee one generation, which any two reads off one frame
+// have by construction; and the cached-stats getter's "may be stale, never triggers a snapshot"
+// mode is gone — a frame carries the stats of the snapshot it is.
+#define LUMICE_API_VERSION 415
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -55,6 +68,12 @@ typedef struct LUMICE_Server_ LUMICE_Server;
 // down for its lifecycle + Add*/Set* build API. Declared here alongside the other opaque handle
 // types; the build functions live below the leaf POD structs they consume.
 typedef struct LUMICE_Scene_ LUMICE_Scene;
+// Opaque, immutable, reference-counted snapshot of ALL results (mono render, composite,
+// raw XYZ, stats) as of one server-side snapshot. Acquiring one gives the caller a real
+// share of the data's lifetime: every buffer reachable through it stays valid until the
+// caller releases the frame, no matter what the server does meanwhile. See the "Results"
+// section below for the acquire/release + read functions.
+typedef struct LUMICE_ResultFrame_ LUMICE_ResultFrame;
 
 // =============== Error Codes ===============
 typedef enum LUMICE_ErrorCode_ {
@@ -154,12 +173,12 @@ typedef struct LUMICE_RenderResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const unsigned char* img_buffer;  // Read-only, managed by Server.
-                                    // Valid until next LUMICE_GetRenderResults() or LUMICE_CommitScene().
+  const unsigned char* img_buffer;  // Read-only view into the LUMICE_ResultFrame it was obtained
+                                    // from. Valid until that frame is released with
+                                    // LUMICE_ReleaseResultFrame().
                                     // Sentinel: img_buffer == NULL
-  // task-345.3: composite-only auto-EV anchor. Populated by
-  // LUMICE_GetCompositeResults / LUMICE_GetRawXyzAndCompositeResults's composite_out —
-  // MEANINGFUL ONLY on the composite path. LUMICE_GetRenderResults (mono/full-spectrum)
+  // Composite-only auto-EV anchor. Populated by LUMICE_FrameGetComposite —
+  // MEANINGFUL ONLY on the composite path. LUMICE_FrameGetRender (mono/full-spectrum)
   // leaves this at 0 and consumers must ignore it there. Composite path: P99 over the
   // union of NON-ZERO UNEXPOSED (raw lane) Y values across every participating color
   // class (the anchor the GUI's auto-EV feeds into ComputeEvAuto for composite display).
@@ -173,8 +192,9 @@ typedef struct LUMICE_RawXyzResult_ {
   int renderer_id;
   int img_width;
   int img_height;
-  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel.
-                             // Valid until next LUMICE_GetRawXyzResults() or LUMICE_CommitScene().
+  const float* xyz_buffer;   // Read-only XYZ float data, 3 floats per pixel. A view into the
+                             // LUMICE_ResultFrame it was obtained from; valid until that frame
+                             // is released with LUMICE_ReleaseResultFrame().
                              // Sentinel: xyz_buffer == NULL
   float snapshot_intensity;  // Per-pixel landed intensity (landed_ray_weights / (kNormScale * total_pixels))
   float intensity_factor;    // Per-renderer intensity factor (2^EV)
@@ -880,7 +900,7 @@ typedef struct LUMICE_ColorClassDisplay_ {
 // simulation. Colors, visibility, solo, z-order, composite mode — none of these touch the
 // accumulator, the epoch, or the consumer set. The compositor re-runs on the SAME
 // already-accumulated per-class Y-lanes and produces new pixel output on the next
-// LUMICE_GetCompositeResults call.
+// frame acquired with LUMICE_AcquireResultFrame.
 //
 // classes[i] targets committed color class i (physical index in raypath_color[]; the
 // server's active class table). class_count MUST equal the current raypath_color_count of
@@ -899,10 +919,10 @@ typedef struct LUMICE_ColorClassDisplay_ {
 // mode: composite mode (LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER). Values outside
 // this range return LUMICE_ERR_INVALID_VALUE.
 //
-// Thread safety: display-time only; safe relative to OTHER display-time getters (Get*Results,
-// LUMICE_GetSimLifecycle, etc.). NOT thread-safe with a concurrent LUMICE_CommitScene
-// — the existing single-owner commit rule (doc/capi-lifecycle-architecture.md §4) still
-// applies to this setter.
+// Thread safety: display-time only; safe relative to OTHER display-time readers
+// (LUMICE_AcquireResultFrame, LUMICE_GetSimLifecycle, etc.). NOT thread-safe with a concurrent
+// LUMICE_CommitScene — the existing single-owner commit rule
+// (doc/capi-lifecycle-architecture.md §4) still applies to this setter.
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode);
 
@@ -912,15 +932,15 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 // the mono / non-composite path is unaffected).
 //
 // No accumulator reset / no epoch bump / no sim restart — the setter just flips the internal
-// snapshot_dirty_ flag, so the next LUMICE_GetCompositeResults() (or GetRawXyzAndComposite)
-// rebuilds the composite with the new EV. Callers that already keep the poller running (a
-// live sim, or a display-time refresh triggered by other setters) get the new brightness on
-// the next poll; callers that stopped the poller must wake it (mirrors the
-// LUMICE_SetRaypathColors + poller-wake pattern used by the GUI).
+// snapshot_dirty_ flag, so the next acquired result frame rebuilds the composite with the new EV.
+// Callers that already keep the poller running (a live sim, or a display-time refresh triggered
+// by other setters) get the new brightness on the next poll; callers that stopped the poller must
+// wake it (mirrors the LUMICE_SetRaypathColors + poller-wake pattern used by the GUI).
 //
-// Thread safety: display-time only; safe relative to other display-time getters (Get*Results,
-// LUMICE_GetSimLifecycle, LUMICE_SetRaypathColors, etc.). NOT thread-safe with concurrent
-// LUMICE_CommitScene (same single-owner rule as the rest of the display-time surface).
+// Thread safety: display-time only; safe relative to other display-time readers
+// (LUMICE_AcquireResultFrame, LUMICE_GetSimLifecycle, LUMICE_SetRaypathColors, etc.). NOT
+// thread-safe with concurrent LUMICE_CommitScene (same single-owner rule as the rest of the
+// display-time surface).
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total);
 
 // Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
@@ -934,7 +954,7 @@ LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_tot
 // (returns LUMICE_OK; out_flags is not touched).
 //
 // Reads the frozen snapshot state (no DoSnapshot trigger); callers relying on freshness should
-// query LUMICE_GetCompositeResults / LUMICE_GetRawXyzResults first. O(W*H * class_count *
+// acquire a result frame first. O(W*H * class_count *
 // consumers) scan; intended for infrequent polls (commit-debounce cadence, ~1 Hz), not per
 // render frame.
 LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count);
@@ -948,66 +968,74 @@ LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flag
 // (e.g., Type arr[N + 1]{}) and pass max_count = N. Minimum array size:
 // max_count + 1 for sentinel iteration, max_count for direct index access.
 
-// Fill render results into out array (img_buffer == NULL sentinel when count < max_count).
-// Returns sRGB uint8 image data (CPU-converted from XYZ).
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-
-// Fill per-raypath composite results into out array (img_buffer == NULL sentinel
-// when count < max_count). Reuses LUMICE_RenderResult: a composite is an sRGB uint8
-// W*H*3 image, one per colored renderer. Empty (out[0] sentinel) when no
-// `raypath_color` is configured — the mono LUMICE_GetRenderResults path is
-// unaffected. Lifetime: img_buffer is read-only and server-owned. Unlike the mono
-// LUMICE_GetRenderResults buffer (which aliases a per-consumer image buffer), the
-// composite buffer is genuinely freed and rebuilt whenever a fresh snapshot is
-// materialized — so it is only guaranteed valid until the NEXT LUMICE_Get*Results()
-// call (render/composite/stats/xyz, any of which may trigger a snapshot) or
-// LUMICE_CommitScene(). Copy the pixels before the next Get*Results if you need them.
-LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-
-// Fill raw XYZ results into out array (xyz_buffer == NULL sentinel when count < max_count).
-// Returns unconverted XYZ float data + intensity scalars for GPU-side conversion.
-LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count);
-
-// task-345.2: atomic combined getter — fills raw XYZ + composite results from a
-// SINGLE server-side snapshot. Composite results are guaranteed to belong to
-// xyz_out[0].snapshot_generation by construction (structural, not
-// probabilistic). Prefer this over calling LUMICE_GetRawXyzResults() +
-// LUMICE_GetCompositeResults() separately when the caller needs both in one
-// coherent view (e.g. the GUI poller under an active simulation, where
-// concurrent batch churn between two independent calls otherwise pairs xyz
-// with a newer-generation composite).
+// ---------- Result frame (opaque handle) ----------
+// Every result read goes through a frame. Acquire one, read whatever kinds of result you
+// need out of it, release it:
 //
-// Sentinels: xyz_out[xyz_count].xyz_buffer == NULL when xyz_count < xyz_max_count;
-// composite_out[composite_count].img_buffer == NULL when composite_count < composite_max_count.
-// Composite is empty (composite_out[0] sentinel) when no `raypath_color` is configured.
+//     LUMICE_ResultFrame* frame = NULL;
+//     if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+//       LUMICE_RawXyzResult xyz[2] = {0};
+//       LUMICE_FrameGetRawXyz(frame, xyz, 1);
+//       /* xyz[0].xyz_buffer stays valid until the Release below */
+//       LUMICE_ReleaseResultFrame(frame);
+//     }
 //
-// Lifetime: same as the individual getters — pointers stay valid until the
-// NEXT LUMICE_Get*Results() call (which may trigger a new snapshot) or
-// LUMICE_CommitScene(). Copy the pixels before the next Get*Results if you
-// need them.
-LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
-                                                     int xyz_max_count, LUMICE_RenderResult* composite_out,
-                                                     int composite_max_count);
+// WHY a handle rather than plain getters: the buffers these results point at are owned by
+// the server, and the server keeps producing new snapshots. Without a handle a reader holds
+// a pointer with no share of its lifetime — the next snapshot frees or rewrites the memory
+// under it, which is a use-after-free, not merely a stale read. Holding a frame is what
+// makes the borrow safe, and it is why the read functions below take a frame instead of a
+// server.
+//
+// Two frames are independent: acquiring a second one does not affect the first, and a
+// caller may hold as many as it likes.
+//
+// Materializes a pending snapshot (like the getters it replaces), then writes a new frame
+// handle to *out_frame. The caller owns that handle and MUST eventually pass it to
+// LUMICE_ReleaseResultFrame. Returns LUMICE_ERR_NULL_ARG if `server` or `out_frame` is NULL.
+// On success *out_frame is never NULL, even before the first snapshot — such a frame simply
+// reads as "no results" (every FrameGet* writes its sentinel / all-zero struct).
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
 
-// Fill stats results into out array (sim_ray_num == 0 sentinel when count < max_count).
-// Note: triggers DoSnapshot internally (includes PostSnapshot XYZ→RGB conversion).
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+// Release a frame handle. NULL-safe no-op (same contract as LUMICE_DestroyServer). Each
+// handle must be Released exactly once; releasing the same handle twice is undefined
+// behavior (this mirrors LUMICE_DestroyServer and every other handle in this API — there is
+// no double-free sentinel).
+//
+// Failure mode if you forget: the frame — and only that frame — leaks. It cannot corrupt
+// memory or affect any other reader, because a frame is immutable and separately
+// reference-counted; and a leak is what ASan/LSan/valgrind already report, so no
+// project-specific machinery is needed to find one. After the Release, every pointer read
+// out of that frame is dangling; copy what you still need first.
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
 
-// Get cached stats without triggering DoSnapshot/PostSnapshot.
-// Returns the stats from the most recent snapshot (updated by LUMICE_GetRawXyzResults).
-// Returns all-zero struct if no snapshot has been taken yet.
-// NOTE vs LUMICE_GetSimRayCount: this reads a CACHE that only refreshes when
-// something else takes a snapshot (e.g. a GUI poller's LUMICE_GetRawXyzResults);
-// with no such driver (e.g. a headless benchmark) it can stay stale/zero. Use
-// LUMICE_GetSimRayCount when you need a live sim_ray_num with no external trigger.
-LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out);
+// Read functions. Same (out, max_count) array shape and same sentinel contract as the
+// server-taking getters, so only the first argument differs. Any two reads from the SAME
+// frame describe the same snapshot generation by construction — no separate "combined"
+// getter is needed to pair them. All return LUMICE_ERR_NULL_ARG on a NULL frame/out.
+
+// Raw XYZ float data + intensity scalars (xyz_buffer == NULL sentinel).
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count);
+
+// Per-raypath composite sRGB images, one per colored renderer (img_buffer == NULL sentinel).
+// Empty (out[0] sentinel) when no `raypath_color` is configured — the mono path below is
+// unaffected. composite_p99_y is meaningful here (see its field docs).
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+
+// Mono / full-spectrum sRGB uint8 images (img_buffer == NULL sentinel). composite_p99_y is
+// left at 0 on this path and must be ignored.
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+
+// Simulation statistics. Single value, so no max_count: writes an all-zero struct when the
+// frame carries no stats (e.g. acquired before the first snapshot).
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
 
 // Cheap O(1) live accumulated sim ray count — no snapshot, no render, no XYZ copy.
 // For progress polling (e.g. the --benchmark drain loop) that needs sim_ray_num
-// every iteration but not a rendered image. Unlike LUMICE_GetStatsResults, this
-// does NOT trigger DoSnapshot/PostSnapshot; and unlike LUMICE_GetCachedStats it
-// reads the running counter directly, so it needs no external snapshot driver to
-// stay fresh. Writes 0 if no StatsConsumer (or none produced yet). (task-317)
+// every iteration but not a rendered image. Unlike acquiring a result frame, this
+// does NOT trigger DoSnapshot/PostSnapshot, and it reads the running counter
+// directly, so it needs no external snapshot driver to stay fresh.
+// Writes 0 if no StatsConsumer (or none produced yet).
 LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* out);
 
 // =============== State & Control ===============

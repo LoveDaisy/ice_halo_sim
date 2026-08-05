@@ -1144,7 +1144,7 @@ LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, si
 
 // Display-time color update: see doc/capi-lifecycle-architecture.md §4 / §6.4.
 // task-342.2: does NOT restart the simulation — accumulator, epoch, and consumers are
-// untouched. Only the next Get*Results call re-composites with the new appearance.
+// untouched. Only the next acquired result frame re-composites with the new appearance.
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode) {
   if (!server) {
@@ -1190,7 +1190,7 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 // task-345.3: display-time EV multiplier for the composite path. See the
 // LUMICE_SetCompositeExposure comment in include/lumice.h for the semantics
 // (single scalar, mono path untouched, snapshot_dirty_ flipped so the next
-// Get*Results rebakes the composite). No ev_total validation: the GUI is the
+// acquired result frame rebakes the composite). No ev_total validation: the GUI is the
 // only in-tree caller and already clamps to [-6, 6]; server-side double-clamp
 // would hide caller bugs without preventing any real hazard.
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total) {
@@ -2574,70 +2574,34 @@ LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* s
 
 
 // =============== Results ===============
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
-  if (!server || !out) {
+// LUMICE_ResultFrame_ wraps a share of one published, immutable server-side snapshot.
+// Lifecycle mirrors LUMICE_Scene_ (new/delete); the shared_ptr inside is what makes the
+// borrow safe — the buffers a caller reads out of the frame cannot be freed or rewritten
+// while it holds one.
+struct LUMICE_ResultFrame_ {
+  std::shared_ptr<const ns::ResultFrame> frame_;
+};
+
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame) {
+  if (!server || !out_frame) {
     return LUMICE_ERR_NULL_ARG;
   }
-
-  auto render_results = server->server_->GetRenderResults();
-  int count = static_cast<int>(render_results.size());
-  if (count > max_count) {
-    count = max_count;
-  }
-
-  for (int i = 0; i < count; i++) {
-    out[i].renderer_id = render_results[i].renderer_id_;
-    out[i].img_width = render_results[i].img_width_;
-    out[i].img_height = render_results[i].img_height_;
-    out[i].img_buffer = render_results[i].img_buffer_;
-    // task-345.3: mono path — composite_p99_y is composite-only; leave at 0.
-    out[i].composite_p99_y = 0.0f;
-  }
-
-  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
-  if (count < max_count) {
-    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
-  }
-
+  *out_frame = new LUMICE_ResultFrame_{ server->server_->AcquireResultFrame() };
   return LUMICE_OK;
 }
 
 
-LUMICE_ErrorCode LUMICE_GetCompositeResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count) {
-  if (!server || !out) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  auto composite_results = server->server_->GetCompositeResults();
-  int count = static_cast<int>(composite_results.size());
-  if (count > max_count) {
-    count = max_count;
-  }
-
-  for (int i = 0; i < count; i++) {
-    out[i].renderer_id = composite_results[i].renderer_id_;
-    out[i].img_width = composite_results[i].img_width_;
-    out[i].img_height = composite_results[i].img_height_;
-    out[i].img_buffer = composite_results[i].img_buffer_;
-    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
-    out[i].composite_p99_y = composite_results[i].composite_p99_y_;
-  }
-
-  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
-  if (count < max_count) {
-    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
-  }
-
-  return LUMICE_OK;
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame) {
+  delete frame;  // delete nullptr is a no-op (NULL-safe, same as LUMICE_DestroyServer)
 }
 
 
-LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzResult* out, int max_count) {
-  if (!server || !out) {
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count) {
+  if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
 
-  auto results = server->server_->GetRawXyzResults();
+  const auto& results = frame->frame_->xyz_results_;
   int count = static_cast<int>(results.size());
   if (count > max_count) {
     count = max_count;
@@ -2665,94 +2629,75 @@ LUMICE_ErrorCode LUMICE_GetRawXyzResults(LUMICE_Server* server, LUMICE_RawXyzRes
 }
 
 
-LUMICE_ErrorCode LUMICE_GetRawXyzAndCompositeResults(LUMICE_Server* server, LUMICE_RawXyzResult* xyz_out,
-                                                     int xyz_max_count, LUMICE_RenderResult* composite_out,
-                                                     int composite_max_count) {
-  if (!server || !xyz_out || !composite_out) {
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count) {
+  if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
 
-  std::vector<lumice::RawXyzResult> xyz_results;
-  std::vector<lumice::RenderResult> composite_results;
-  server->server_->GetRawXyzAndCompositeResults(xyz_results, composite_results);
-
-  int xyz_count = static_cast<int>(xyz_results.size());
-  if (xyz_count > xyz_max_count) {
-    xyz_count = xyz_max_count;
-  }
-  for (int i = 0; i < xyz_count; i++) {
-    xyz_out[i].renderer_id = xyz_results[i].renderer_id_;
-    xyz_out[i].img_width = xyz_results[i].img_width_;
-    xyz_out[i].img_height = xyz_results[i].img_height_;
-    xyz_out[i].xyz_buffer = xyz_results[i].xyz_buffer_;
-    xyz_out[i].snapshot_intensity = xyz_results[i].snapshot_intensity_;
-    xyz_out[i].intensity_factor = xyz_results[i].intensity_factor_;
-    xyz_out[i].has_valid_data = xyz_results[i].has_valid_data_ ? 1 : 0;
-    xyz_out[i].snapshot_generation = xyz_results[i].snapshot_generation_;
-    xyz_out[i].effective_pixels = xyz_results[i].effective_pixels_;
-    xyz_out[i].epoch = xyz_results[i].epoch_;
-  }
-  if (xyz_count < xyz_max_count) {
-    std::memset(&xyz_out[xyz_count], 0, sizeof(LUMICE_RawXyzResult));
+  const auto& results = frame->frame_->composite_results_;
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
   }
 
-  int composite_count = static_cast<int>(composite_results.size());
-  if (composite_count > composite_max_count) {
-    composite_count = composite_max_count;
-  }
-  for (int i = 0; i < composite_count; i++) {
-    composite_out[i].renderer_id = composite_results[i].renderer_id_;
-    composite_out[i].img_width = composite_results[i].img_width_;
-    composite_out[i].img_height = composite_results[i].img_height_;
-    composite_out[i].img_buffer = composite_results[i].img_buffer_;
-    // task-345.3: composite path — participating-classes union P99 (auto-EV anchor).
-    composite_out[i].composite_p99_y = composite_results[i].composite_p99_y_;
-  }
-  if (composite_count < composite_max_count) {
-    std::memset(&composite_out[composite_count], 0, sizeof(LUMICE_RenderResult));
-  }
-
-  return LUMICE_OK;
-}
-
-
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count) {
-  if (!server || !out) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-
-  int count = 0;
-  if (max_count > 0) {
-    auto stats_result = server->server_->GetStatsResult();
-    if (stats_result.has_value()) {
-      out[0].ray_seg_num = stats_result->ray_seg_num_;
-      out[0].sim_ray_num = stats_result->sim_ray_num_;
-      out[0].crystal_num = stats_result->crystal_num_;
-      out[0].orientation_num = stats_result->orientation_num_;
-      count = 1;
-    }
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].w_;
+    out[i].img_height = results[i].h_;
+    out[i].img_buffer = results[i].rgb_ ? results[i].rgb_->data() : nullptr;
+    // Composite path — participating-classes union P99 (auto-EV anchor).
+    out[i].composite_p99_y = results[i].p99_y_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
   if (count < max_count) {
-    std::memset(&out[count], 0, sizeof(LUMICE_StatsResult));
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
   }
 
   return LUMICE_OK;
 }
 
 
-LUMICE_ErrorCode LUMICE_GetCachedStats(LUMICE_Server* server, LUMICE_StatsResult* out) {
-  if (!server || !out) {
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count) {
+  if (!frame || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
 
-  auto result = server->server_->GetCachedStatsResult();
-  if (result.has_value()) {
-    out->ray_seg_num = result->ray_seg_num_;
-    out->sim_ray_num = result->sim_ray_num_;
-    out->crystal_num = result->crystal_num_;
-    out->orientation_num = result->orientation_num_;
+  const auto& results = frame->frame_->render_results_;
+  int count = static_cast<int>(results.size());
+  if (count > max_count) {
+    count = max_count;
+  }
+
+  for (int i = 0; i < count; i++) {
+    out[i].renderer_id = results[i].renderer_id_;
+    out[i].img_width = results[i].img_width_;
+    out[i].img_height = results[i].img_height_;
+    out[i].img_buffer = results[i].img_buffer_;
+    // Mono path — composite_p99_y is composite-only; leave at 0.
+    out[i].composite_p99_y = 0.0f;
+  }
+
+  // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
+  if (count < max_count) {
+    std::memset(&out[count], 0, sizeof(LUMICE_RenderResult));
+  }
+
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out) {
+  if (!frame || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  const auto& stats = frame->frame_->stats_result_;
+  if (stats.has_value()) {
+    out->ray_seg_num = stats->ray_seg_num_;
+    out->sim_ray_num = stats->sim_ray_num_;
+    out->crystal_num = stats->crystal_num_;
+    out->orientation_num = stats->orientation_num_;
   } else {
     std::memset(out, 0, sizeof(LUMICE_StatsResult));
   }
@@ -2765,9 +2710,9 @@ LUMICE_ErrorCode LUMICE_GetSimRayCount(LUMICE_Server* server, LUMICE_RayCount* o
   if (!server || !out) {
     return LUMICE_ERR_NULL_ARG;
   }
-  // Cheap O(1) live ray-count read — no snapshot / no render (task-317). For
-  // progress polling that needs sim_ray_num every iteration without paying the
-  // per-poll DoSnapshot/sRGB render cost of LUMICE_GetStatsResults.
+  // Cheap O(1) live ray-count read — no snapshot / no render. For progress polling that
+  // needs sim_ray_num every iteration without paying the per-poll DoSnapshot/sRGB render
+  // cost of materializing a result frame.
   *out = static_cast<LUMICE_RayCount>(server->server_->GetLiveSimRayCount());
   return LUMICE_OK;
 }

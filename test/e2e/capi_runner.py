@@ -27,6 +27,7 @@ hook intercepts all subsequent server log output without any visible indication.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import re
@@ -66,7 +67,7 @@ assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
 
 # Mirrors LUMICE_RenderResult in src/include/lumice.h. task-345.3 grew this
 # struct by adding composite_p99_y (float at offset 24, 8-byte aligned = 32
-# bytes total); the ctypes mirror must include it or LUMICE_GetRenderResults
+# bytes total); the ctypes mirror must include it or LUMICE_FrameGetRender
 # will overflow the out array by 8 bytes and corrupt the Python heap
 # (task-cuda-ctypes-teardown-crash root cause). C++-side static_assert lives
 # in test/unit-correctness/server/test_c_api.cpp.
@@ -104,11 +105,10 @@ def _assert_stats_mirror_matches_header() -> None:
     typed next to it, so it cannot notice the C struct growing underneath: both
     sides of the comparison live in this file. It stayed green while the C side
     went to four fields, and the failure it let through is not a wrong assertion
-    but a heap overflow: LUMICE_GetStatsResults writes sizeof(C struct) per row
-    into an array Python sized from the mirror, so a stale mirror means the
-    library writes past the end of the buffer (and the sentinel memset writes
-    further still). Read the header instead, so the next added field turns this
-    red at import time rather than corrupting memory in whichever test runs first.
+    but a heap overflow: LUMICE_FrameGetStats writes sizeof(C struct) into storage
+    Python sized from the mirror, so a stale mirror means the library writes past the
+    end of the buffer. Read the header instead, so the next added field turns this red
+    at import time rather than corrupting memory in whichever test runs first.
     """
     header = Path(__file__).resolve().parents[2] / "src" / "include" / "lumice.h"
     if not header.is_file():  # source tree not available (e.g. installed wheel)
@@ -131,10 +131,6 @@ def _assert_stats_mirror_matches_header() -> None:
 
 
 _assert_stats_mirror_matches_header()
-
-# lumice.h LUMICE_MAX_STATS_RESULTS. The out array must hold one extra slot for
-# the all-zero sentinel LUMICE_GetStatsResults writes past the last filled row.
-_LUMICE_MAX_STATS_RESULTS = 1
 
 # Backend constants (lumice.h:391-392).
 LUMICE_BACKEND_CPU = 0
@@ -160,6 +156,12 @@ assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
 
 
 # LUMICE_ServerState constants (lumice.h)
+# Drain-settle bounds for _read_sample_counts (see the comment there for why the
+# IDLE signal alone is not sufficient). Timeout FAILS the read rather than returning
+# a partial total.
+_STATS_SETTLE_POLL_SEC = 0.1
+_STATS_SETTLE_TIMEOUT_SEC = 30.0
+
 _LUMICE_SERVER_IDLE = 0
 _LUMICE_SERVER_RUNNING = 1
 _LUMICE_SERVER_NOT_READY = 2
@@ -314,22 +316,30 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_QueryServerState.restype = ctypes.c_int
     lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 
-    lib.LUMICE_GetRawXyzResults.restype = ctypes.c_int
-    lib.LUMICE_GetRawXyzResults.argtypes = [
+    # Result frame: an opaque handle, so it maps to a bare c_void_p and there is no
+    # layout to mirror. Only the three value structs the FrameGet* functions fill still
+    # have Python mirrors, and their fields are unchanged by the frame API.
+    lib.LUMICE_AcquireResultFrame.restype = ctypes.c_int
+    lib.LUMICE_AcquireResultFrame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+
+    lib.LUMICE_ReleaseResultFrame.restype = None
+    lib.LUMICE_ReleaseResultFrame.argtypes = [ctypes.c_void_p]
+
+    lib.LUMICE_FrameGetRawXyz.restype = ctypes.c_int
+    lib.LUMICE_FrameGetRawXyz.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(LUMICE_RawXyzResult),
         ctypes.c_int,
     ]
 
-    lib.LUMICE_GetStatsResults.restype = ctypes.c_int
-    lib.LUMICE_GetStatsResults.argtypes = [
+    lib.LUMICE_FrameGetStats.restype = ctypes.c_int
+    lib.LUMICE_FrameGetStats.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(LUMICE_StatsResult),
-        ctypes.c_int,
     ]
 
-    lib.LUMICE_GetRenderResults.restype = ctypes.c_int
-    lib.LUMICE_GetRenderResults.argtypes = [
+    lib.LUMICE_FrameGetRender.restype = ctypes.c_int
+    lib.LUMICE_FrameGetRender.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(LUMICE_RenderResult),
         ctypes.c_int,
@@ -424,12 +434,32 @@ def _summarize_backend(lines: List[str]) -> tuple[str, bool]:
     return routed, fell_back
 
 
+@contextlib.contextmanager
+def _result_frame(lib, server):
+    """Acquire a result frame, yield the handle, release it on the way out.
+
+    The C contract is a plain acquire/release pair (lumice.h). Python gets a context
+    manager for the same reason the C++ tests get a scoped holder: an exception raised
+    between the two calls would otherwise skip the release. Every field the FrameGet*
+    functions hand back points into the frame, so any reading of those fields belongs
+    INSIDE the `with` — the pointers are only guaranteed while the frame is held.
+    """
+    frame = ctypes.c_void_p()
+    err = lib.LUMICE_AcquireResultFrame(server, ctypes.byref(frame))
+    if err != 0:
+        raise RuntimeError(f"AcquireResultFrame failed err={err}")
+    try:
+        yield frame
+    finally:
+        lib.LUMICE_ReleaseResultFrame(frame)
+
+
 def _read_sample_counts(lib, server) -> tuple:
     """Read (crystal_num, orientation_num) from LUMICE_StatsResult.
 
-    One call rather than two: both come from the same LUMICE_GetStatsResults
-    row, and LUMICE_GetStatsResults triggers DoSnapshot, so reading them
-    separately would take two snapshots of a run that is supposed to be over.
+    One call rather than two: both come from the same stats struct on one frame, and
+    acquiring a frame materializes a snapshot, so reading them separately would take
+    two snapshots of a run that is supposed to be over.
 
     Call only after the polling loop observed has_valid_data AND IDLE. The value
     is the deterministic population (a config constant, OVERWRITTEN on the way
@@ -440,15 +470,65 @@ def _read_sample_counts(lib, server) -> tuple:
     point of the split.
     Returns 0 when no stats row is available (no StatsConsumer output yet).
     """
-    stats = (LUMICE_StatsResult * (_LUMICE_MAX_STATS_RESULTS + 1))()
-    err = lib.LUMICE_GetStatsResults(server, stats, _LUMICE_MAX_STATS_RESULTS)
+    stats = LUMICE_StatsResult()
+    with _result_frame(lib, server) as frame:
+        err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))
     if err != 0:
-        raise RuntimeError(f"GetStatsResults failed err={err}")
-    # Row 0 is the only stats row (LUMICE_MAX_STATS_RESULTS == 1); sim_ray_num
-    # == 0 is the sentinel meaning "no row produced".
-    if stats[0].sim_ray_num == 0:
+        raise RuntimeError(f"FrameGetStats failed err={err}")
+
+    # Wait for the consumer to finish draining before trusting this read.
+    #
+    # WHY THIS IS NEEDED (mechanism, verified by reading the source, not inferred from a
+    # flake): the polling loop above waits for LUMICE_SERVER_IDLE, but ServerImpl's idle
+    # predicate is entirely PRODUCER-side — it checks that no simulator is busy, that no
+    # scenes are pending, and that scene generation is done. None of those says the
+    # CONSUMER has drained the queue. Meanwhile orientation_num/crystal_num are running
+    # totals frozen at snapshot time (StatsConsumer accumulates per batch and
+    # PrepareSnapshot freezes the sum), so a read taken while batches are still queued
+    # returns a partial total — exactly what this function's docstring warns about.
+    #
+    # The pending batches are LATE, not LOST: the data queue is only shut down by Stop()
+    # / Terminate(), so at IDLE the consumer thread is still blocked in Get() and will
+    # consume them. That is what makes waiting converge rather than spin.
+    #
+    # Observed as an intermittent CI failure on Linux (orientation_num 19616 vs 20000 —
+    # a whole multiple of the dispatch grain, i.e. N unconsumed chunks). It is timing,
+    # not a stdlib difference, and it is latent on any platform; Linux scheduling just
+    # exposes it more often.
+    #
+    # ⚠️ This is a TEST-SIDE workaround for a real gap in the completion contract
+    # (IDLE should imply "drained", or a separate drained signal should exist).
+    # Recorded in the backlog; do not let it stand in for fixing the contract.
+    settle_deadline = time.time() + _STATS_SETTLE_TIMEOUT_SEC
+    prev = (int(stats.sim_ray_num), int(stats.crystal_num), int(stats.orientation_num))
+    while True:
+        time.sleep(_STATS_SETTLE_POLL_SEC)
+        probe = LUMICE_StatsResult()
+        with _result_frame(lib, server) as frame:
+            err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(probe))
+        if err != 0:
+            raise RuntimeError(f"FrameGetStats failed err={err}")
+        cur = (int(probe.sim_ray_num), int(probe.crystal_num), int(probe.orientation_num))
+        if cur == prev:
+            stats = probe
+            break
+        prev = cur
+        if time.time() > settle_deadline:
+            # Fail loudly. Returning the last value here would turn "the run never
+            # settled" into a green test carrying a partial total — strictly worse
+            # than the failure this wait exists to prevent.
+            raise RuntimeError(
+                f"stats did not settle within {_STATS_SETTLE_TIMEOUT_SEC}s after the "
+                f"server reported IDLE; last two reads (sim_ray, crystal, orientation) "
+                f"were {prev} then {cur}. Either the consumer is not draining or the "
+                f"idle predicate fired while production was still running."
+            )
+
+    # A server holds at most one stats struct, so this is a single value rather than a
+    # row array; sim_ray_num == 0 still means "nothing produced yet".
+    if stats.sim_ray_num == 0:
         return 0, 0
-    return int(stats[0].crystal_num), int(stats[0].orientation_num)
+    return int(stats.crystal_num), int(stats.orientation_num)
 
 
 def _commit_config(lib, server, config_path: str) -> None:
@@ -514,9 +594,10 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
                     f"Timeout {elapsed:.1f}s waiting for {config_path}"
                 )
 
-            err = lib.LUMICE_GetRawXyzResults(server, results, 1)
+            with _result_frame(lib, server) as frame:
+                err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
             if err != 0:
-                raise RuntimeError(f"GetRawXyzResults failed err={err}")
+                raise RuntimeError(f"FrameGetRawXyz failed err={err}")
 
             err2 = lib.LUMICE_QueryServerState(server, ctypes.byref(state_out))
             if err2 != 0:
@@ -655,13 +736,10 @@ def run_scene_capi_buffered(
                 t_start = time.time()
                 consecutive_ok = 0
 
-                # GetRawXyzResults clears snapshot_dirty_ without invoking
-                # PostSnapshot (server.cpp:421), so a later GetRenderResults
-                # would observe snapshot_dirty_=false and skip DoSnapshot,
-                # leaving cached_render_results_ empty. Call GetRenderResults
-                # first inside the loop — it runs PrepareSnapshot+PostSnapshot
-                # together when dirty, and GetRawXyzResults then reads the
-                # same prepared snapshot.
+                # Render and xyz are read off ONE frame. The call order between them
+                # used to matter — the xyz getter cleared snapshot_dirty_ without running
+                # PostSnapshot, so a render read afterwards found nothing prepared — but a
+                # frame is materialized once, by the acquire, and carries both.
                 while True:
                     elapsed = time.time() - t_start
                     if elapsed > timeout_sec:
@@ -669,16 +747,16 @@ def run_scene_capi_buffered(
                             f"Timeout {elapsed:.1f}s waiting for {config_path} (backend={backend})"
                         )
 
-                    # LUMICE_GetRenderResults always returns LUMICE_OK (0) when
-                    # args are non-null; see c_api.cpp:728. The err check is a
-                    # safety net for future API additions.
-                    err = lib.LUMICE_GetRenderResults(server, renders, 1)
-                    if err != 0:
-                        raise RuntimeError(f"GetRenderResults failed err={err}")
+                    # LUMICE_FrameGet* always returns LUMICE_OK (0) when args are
+                    # non-null. The err checks are a safety net for future API additions.
+                    with _result_frame(lib, server) as frame:
+                        err = lib.LUMICE_FrameGetRender(frame, renders, 1)
+                        if err != 0:
+                            raise RuntimeError(f"FrameGetRender failed err={err}")
 
-                    err = lib.LUMICE_GetRawXyzResults(server, results, 1)
-                    if err != 0:
-                        raise RuntimeError(f"GetRawXyzResults failed err={err}")
+                        err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
+                        if err != 0:
+                            raise RuntimeError(f"FrameGetRawXyz failed err={err}")
 
                     err2 = lib.LUMICE_QueryServerState(server, ctypes.byref(state_out))
                     if err2 != 0:
@@ -697,49 +775,59 @@ def run_scene_capi_buffered(
 
                     time.sleep(0.2)
 
-                r = results[0]
-                r_w = int(r.img_width)
-                r_h = int(r.img_height)
-                r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
-                r_snap = float(r.snapshot_intensity)
-                r_valid = bool(r.has_valid_data)
-                r_eff = int(r.effective_pixels)
-                if r_xyz_addr is None:
-                    raise RuntimeError(
-                        f"{config_path}: race — xyz pointer became NULL after IDLE check"
+                # Re-read under a freshly held frame: the poll loop released each
+                # frame as it went (the `with _result_frame` block above exits every
+                # iteration), so `results`/`renders` are stale by the time the loop
+                # breaks — same fix as scripts/dump_xyz_stats.py::run_scene.
+                with _result_frame(lib, server) as frame:
+                    err = lib.LUMICE_FrameGetRender(frame, renders, 1)
+                    if err != 0:
+                        raise RuntimeError(f"FrameGetRender failed err={err}")
+                    err = lib.LUMICE_FrameGetRawXyz(frame, results, 1)
+                    if err != 0:
+                        raise RuntimeError(f"FrameGetRawXyz failed err={err}")
+
+                    r = results[0]
+                    r_w = int(r.img_width)
+                    r_h = int(r.img_height)
+                    r_xyz_addr = ctypes.cast(r.xyz_buffer, ctypes.c_void_p).value
+                    r_snap = float(r.snapshot_intensity)
+                    r_valid = bool(r.has_valid_data)
+                    r_eff = int(r.effective_pixels)
+                    if r_xyz_addr is None:
+                        raise RuntimeError(
+                            f"{config_path}: race — xyz pointer became NULL after IDLE check"
+                        )
+
+                    n_xyz = r_w * r_h * 3
+                    flt_buf = (
+                        np.frombuffer(
+                            (ctypes.c_float * n_xyz).from_address(r_xyz_addr),
+                            dtype=np.float32,
+                        )
+                        .copy()
+                        .reshape(r_h, r_w, 3)
+                        .astype(np.float64)
                     )
 
-                n_xyz = r_w * r_h * 3
-                flt_buf = (
-                    np.frombuffer(
-                        (ctypes.c_float * n_xyz).from_address(r_xyz_addr),
-                        dtype=np.float32,
+                    rr = renders[0]
+                    rr_w = int(rr.img_width)
+                    rr_h = int(rr.img_height)
+                    rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
+                    if rr_addr is None or rr_w == 0 or rr_h == 0:
+                        raise RuntimeError(
+                            f"{config_path}: LUMICE_FrameGetRender returned empty buffer"
+                        )
+                    # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
+                    n_rgb = rr_w * rr_h * 3
+                    rgb_buf = (
+                        np.frombuffer(
+                            (ctypes.c_ubyte * n_rgb).from_address(rr_addr),
+                            dtype=np.uint8,
+                        )
+                        .copy()
+                        .reshape(rr_h, rr_w, 3)
                     )
-                    .copy()
-                    .reshape(r_h, r_w, 3)
-                    .astype(np.float64)
-                )
-
-                # Render buffer already populated by the last GetRenderResults
-                # call inside the polling loop (same snapshot as raw XYZ).
-                rr = renders[0]
-                rr_w = int(rr.img_width)
-                rr_h = int(rr.img_height)
-                rr_addr = ctypes.cast(rr.img_buffer, ctypes.c_void_p).value
-                if rr_addr is None or rr_w == 0 or rr_h == 0:
-                    raise RuntimeError(
-                        f"{config_path}: GetRenderResults returned empty buffer"
-                    )
-                # img_buffer is packed RGB uint8 (3 bytes/pixel, sRGB); per lumice.h:262.
-                n_rgb = rr_w * rr_h * 3
-                rgb_buf = (
-                    np.frombuffer(
-                        (ctypes.c_ubyte * n_rgb).from_address(rr_addr),
-                        dtype=np.uint8,
-                    )
-                    .copy()
-                    .reshape(rr_h, rr_w, 3)
-                )
 
                 crystal_num, orientation_num = _read_sample_counts(lib, server)
 

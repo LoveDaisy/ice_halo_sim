@@ -123,8 +123,10 @@ typedef struct LUMICE_RenderResult_ {
 
 **注意**：
 - `img_buffer` 指向的图像数据由库内部管理，不需要手动释放
-- `img_buffer` 有效期：直到下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitScene()` 调用
-- 如需长期持有，应自行 `memcpy` 拷贝
+- `img_buffer` 是其来源 `LUMICE_ResultFrame` 的只读视图，有效期直到该帧被
+  `LUMICE_ReleaseResultFrame()` 释放为止——持有帧本身就是保住这段像素的手段，
+  另一个读者去取自己的帧不会让你手上的失效
+- 如需数据活得比帧更久，请在释放前自行 `memcpy` 拷贝
 - 图像数据格式为RGB，每个像素3个字节（R, G, B）
 - 图像数据大小 = `img_width * img_height * 3` 字节
 - 哨兵标识：`img_buffer == NULL`
@@ -352,49 +354,104 @@ LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* s
 
 ### 结果获取
 
-结果获取使用统一的数组+哨兵模式：
-- 函数签名：`LUMICE_ErrorCode LUMICE_GetXxxResults(server, out, max_count)`
+结果从**结果帧**（result frame）读取——一份不可变的仿真快照，调用方持有它的一份生命周期。
+取帧、读其四个视图中需要的若干个、释放：
+
+```c
+LUMICE_ResultFrame* frame = NULL;
+if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+    LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+    LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS);
+    // ... 使用 renders[i].img_buffer ...
+    LUMICE_ReleaseResultFrame(frame);
+}
+```
+
+**为什么是帧、而不是 server 上的 getter**：读取返回的缓冲区是库内存的视图。在旧的
+server-taking getter 下，这块内存只在**下一次** getter 调用之前有效，于是一个读者的读取会
+让另一个读者仍在使用的像素失效——那是 use-after-free，而不只是读到陈旧数据。帧给读者一份
+真实的生命周期份额，像素一直有效到**该读者**释放**自己那一帧**为止。
+
+模型本身还免费带来两条性质：
+- **同世代由构造保证**：同一帧上的任意两次读取描述的是同一次快照，不再需要一个合并的
+  「xyz + composite」入口去凑同世代。
+- **帧之间互相独立**：取第二帧不影响第一帧，调用方想持有多少帧都可以——跨 server 销毁也成立。
+
+四个读取函数保持了它们所替代的 getter 的数组+哨兵形态，只有第一个参数不同：
 - `out` 数组大小至少为 `max_count + 1`（含哨兵位）
 - 有效结果之后紧跟一个全零的哨兵条目
 - 调用方循环到哨兵自然结束
+- 帧或 `out` 为 `NULL` 时一律返回 `LUMICE_ERR_NULL_ARG`
 
-#### LUMICE_GetRenderResults
-
-获取渲染结果。
-
-```c
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-```
-
-**参数**：
-- `server`: 服务器句柄指针
-- `out`: 输出数组，大小至少为 `max_count + 1`
-- `max_count`: 最大结果数量（推荐使用 `LUMICE_MAX_RENDER_RESULTS`）
-
-**返回值**：
-- `LUMICE_OK`: 成功
-- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
-
-**哨兵**：末尾条目的 `img_buffer == NULL`
-
-#### LUMICE_GetStatsResults
-
-获取统计结果。
+#### LUMICE_AcquireResultFrame
 
 ```c
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
 ```
 
-**参数**：
-- `server`: 服务器句柄指针
-- `out`: 输出数组，大小至少为 `max_count + 1`
-- `max_count`: 最大结果数量（推荐使用 `LUMICE_MAX_STATS_RESULTS`）
+物化一次待处理的快照（与它替代的 getter 一致），然后向 `*out_frame` 写入一个新的帧句柄。
+调用方拥有该句柄，**必须**最终传给 `LUMICE_ReleaseResultFrame`。
 
 **返回值**：
-- `LUMICE_OK`: 成功
-- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
+- `LUMICE_OK`: 成功。`*out_frame` 永不为 `NULL`——即便在首次快照之前，此时帧只是读作
+  「无结果」（每个 `LUMICE_FrameGet*` 写出各自的哨兵 / 全零结构体）
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `out_frame` 为 `NULL`
 
-**哨兵**：末尾条目的 `sim_ray_num == 0`
+#### LUMICE_ReleaseResultFrame
+
+```c
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
+```
+
+NULL-safe no-op（与 `LUMICE_DestroyServer` 同契约）。每个句柄必须恰好释放一次；重复释放同一
+句柄是未定义行为——这与 `LUMICE_DestroyServer` 以及本 API 中其他所有句柄一致，因此**刻意不设**
+double-free 哨兵。
+
+**忘记释放的失效模式**：只泄漏那一帧，仅此而已。它不会破坏内存、也不会影响任何其他读者，
+因为帧是不可变的、且各自独立引用计数；而泄漏正是 ASan/LSan/valgrind 本来就会报的东西。
+释放之后，从该帧读出的每个指针都是悬垂的——需要保留的内容请先拷贝。
+
+#### LUMICE_FrameGetRender
+
+mono / 全光谱 sRGB uint8 图像。
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+```
+
+**哨兵**：末尾条目的 `img_buffer == NULL`。该路径上 `composite_p99_y` 保持为 0，应忽略。
+`max_count` 推荐使用 `LUMICE_MAX_RENDER_RESULTS`。
+
+#### LUMICE_FrameGetComposite
+
+per-raypath 合成 sRGB 图像，每个染色 renderer 一张。
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetComposite(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+```
+
+**哨兵**：末尾条目的 `img_buffer == NULL`；未配置 `raypath_color` 时结果为空（`out[0]` 即哨兵），
+mono 路径不受影响。`composite_p99_y` 在这条路径上有意义。
+
+#### LUMICE_FrameGetRawXyz
+
+原始 XYZ 浮点数据与强度标量。
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_RawXyzResult* out, int max_count);
+```
+
+**哨兵**：末尾条目的 `xyz_buffer == NULL`。
+
+#### LUMICE_FrameGetStats
+
+仿真统计——单个值，因此没有 `max_count`。
+
+```c
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
+```
+
+帧不携带统计数据时（例如取自首次快照之前）写出全零结构体。
 
 ### 状态与控制
 
@@ -463,22 +520,23 @@ int main() {
     while (1) {
         usleep(1000000);  // 1 second
 
-        // 获取渲染结果
-        LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
-        if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
-            for (int i = 0; renders[i].img_buffer != NULL; i++) {
-                printf("Render[%02d]: %dx%d\n",
-                       renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+        // 取一帧；下面的渲染结果与统计读自同一次快照
+        LUMICE_ResultFrame* frame = NULL;
+        if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+            LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+            if (LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
+                for (int i = 0; renders[i].img_buffer != NULL; i++) {
+                    printf("Render[%02d]: %dx%d\n",
+                           renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+                }
             }
-        }
 
-        // 获取统计结果
-        LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
-        if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
-            for (int i = 0; stats[i].sim_ray_num != 0; i++) {
-                printf("Stats: rays=%lu, crystals=%lu\n",
-                       stats[i].sim_ray_num, stats[i].crystal_num);
+            LUMICE_StatsResult stats;
+            if (LUMICE_FrameGetStats(frame, &stats) == LUMICE_OK) {
+                printf("Stats: rays=%lu, crystals=%lu\n", stats.sim_ray_num, stats.crystal_num);
             }
+
+            LUMICE_ReleaseResultFrame(frame);
         }
 
         // 检查是否完成
@@ -538,34 +596,37 @@ int main(int argc, char* argv[]) {
     while (1) {
         usleep(1000000);
 
-        // 获取渲染结果
-        LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
-        if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
-            for (int i = 0; renders[i].img_buffer != NULL; i++) {
-                printf("Render[%02d]: %dx%d, buffer=%p\n",
-                       renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
-                       (const void*)renders[i].img_buffer);
+        // 每次轮询取一帧：在这一帧被释放前，图像一直有效，
+        // 无论其间别的线程读了什么。
+        LUMICE_ResultFrame* frame = NULL;
+        if (LUMICE_AcquireResultFrame(server, &frame) == LUMICE_OK) {
+            LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1];
+            if (LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == LUMICE_OK) {
+                for (int i = 0; renders[i].img_buffer != NULL; i++) {
+                    printf("Render[%02d]: %dx%d, buffer=%p\n",
+                           renders[i].renderer_id, renders[i].img_width, renders[i].img_height,
+                           (const void*)renders[i].img_buffer);
 
-                // 保存图像（示例）
-                char filename[256];
-                snprintf(filename, sizeof(filename), "output_%d_%dx%d.raw",
-                         renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
-                FILE* img_file = fopen(filename, "wb");
-                if (img_file) {
-                    size_t img_size = (size_t)renders[i].img_width * renders[i].img_height * 3;
-                    fwrite(renders[i].img_buffer, 1, img_size, img_file);
-                    fclose(img_file);
+                    // 保存图像（示例）
+                    char filename[256];
+                    snprintf(filename, sizeof(filename), "output_%d_%dx%d.raw",
+                             renders[i].renderer_id, renders[i].img_width, renders[i].img_height);
+                    FILE* img_file = fopen(filename, "wb");
+                    if (img_file) {
+                        size_t img_size = (size_t)renders[i].img_width * renders[i].img_height * 3;
+                        fwrite(renders[i].img_buffer, 1, img_size, img_file);
+                        fclose(img_file);
+                    }
                 }
             }
-        }
 
-        // 获取统计结果
-        LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1];
-        if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) == LUMICE_OK) {
-            for (int i = 0; stats[i].sim_ray_num != 0; i++) {
+            LUMICE_StatsResult stats;
+            if (LUMICE_FrameGetStats(frame, &stats) == LUMICE_OK) {
                 printf("Stats: rays=%lu, segments=%lu, crystals=%lu\n",
-                       stats[i].sim_ray_num, stats[i].ray_seg_num, stats[i].crystal_num);
+                       stats.sim_ray_num, stats.ray_seg_num, stats.crystal_num);
             }
+
+            LUMICE_ReleaseResultFrame(frame);
         }
 
         // 检查是否完成
@@ -616,23 +677,35 @@ if (err != LUMICE_OK) {
 
 ## 线程安全性
 
-### 线程安全API
+### 读结果是线程安全的——靠持有一份份额，不是靠运气
 
-以下API是**线程安全**的：
-- `LUMICE_QueryServerState()`: 可以安全地从多个线程调用
-- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: 可以安全地从多个线程调用
+`LUMICE_AcquireResultFrame`、`LUMICE_ReleaseResultFrame`，以及全部四个 `LUMICE_FrameGet*`
+函数都是**线程安全**的：任意数量的线程可以并发取帧、读帧、释放帧，无需任何外部加锁。这不是
+一条要逐个调用点核实的偶然性质——它正是帧模型存在的理由（见[结果获取](#结果获取)）。
+`FrameGet*` 返回的指针（`img_buffer` / `xyz_buffer`）是借入调用方持有的那一帧内部的视图，
+它的有效期恰好等于**那一帧**被持有的时长，直到匹配的 `LUMICE_ReleaseResultFrame`
+为止——与其间任何其他线程对 server 做了什么无关，也与同时存在多少**其他**帧无关。
+两帧之间互不干扰，不论持有者是同一线程还是不同线程。
+
+`LUMICE_FrameGetStats` 不属于这条借用族：它拷贝的是一个不含指针的**纯值**结构体，释放后
+不会有任何指针悬垂。它与另外三个共用同一套取帧/释放包络，只是因为四种读取都来自同一帧，
+而不是因为它也需要那三者所需的借用保护。
+
+`LUMICE_QueryServerState()` 同样线程安全，可在任意线程的任意时刻调用。
 
 ### 非线程安全API
 
-以下API**不是线程安全**的，不应从多个线程同时调用：
-- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
+以下API直接修改共享的 server 状态，不应与彼此、也不应与同一 server 上的其他调用同时发生：
+- `LUMICE_CreateServer()` / `LUMICE_CreateServerEx()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
 - `LUMICE_CommitScene()`: 配置提交
-- 对同一个 `LUMICE_Scene*` 句柄的修改（`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`）——句柄内部没有加锁。不同句柄互相独立，两个线程各建各的场景是安全的。
 - `LUMICE_StopServer()`: 服务器停止
+- 对同一个 `LUMICE_Scene*` 句柄的修改（`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`）——句柄内部没有加锁。不同句柄互相独立，两个线程各建各的场景是安全的。
 
 ### 多线程使用建议
 
-1. **单服务器多线程**：使用互斥锁保护非线程安全的操作
+1. **单服务器多线程**：指定一个 owner 线程专门调用 `LUMICE_CommitScene()` /
+   `LUMICE_StopServer()` / `LUMICE_DestroyServer()`；其余任意数量的线程可以与该 owner
+   以及彼此并发地取帧读结果——读侧不需要互斥锁。
 2. **多服务器**：每个线程使用独立的服务器实例
 
 ## 与其他语言集成
@@ -675,10 +748,15 @@ lib.LUMICE_CommitScene.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POIN
 lib.LUMICE_CommitScene.restype = ctypes.c_int
 lib.LUMICE_SceneDestroy.argtypes = [ctypes.c_void_p]
 lib.LUMICE_SceneDestroy.restype = None
-lib.LUMICE_GetRenderResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
-lib.LUMICE_GetRenderResults.restype = ctypes.c_int
-lib.LUMICE_GetStatsResults.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult), ctypes.c_int]
-lib.LUMICE_GetStatsResults.restype = ctypes.c_int
+# 帧句柄是不透明的，绑定就只有 c_void_p——没有结构体布局需要镜像。
+lib.LUMICE_AcquireResultFrame.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+lib.LUMICE_AcquireResultFrame.restype = ctypes.c_int
+lib.LUMICE_ReleaseResultFrame.argtypes = [ctypes.c_void_p]
+lib.LUMICE_ReleaseResultFrame.restype = None
+lib.LUMICE_FrameGetRender.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_RenderResult), ctypes.c_int]
+lib.LUMICE_FrameGetRender.restype = ctypes.c_int
+lib.LUMICE_FrameGetStats.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_StatsResult)]
+lib.LUMICE_FrameGetStats.restype = ctypes.c_int
 lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 lib.LUMICE_QueryServerState.restype = ctypes.c_int
 lib.LUMICE_StopServer.argtypes = [ctypes.c_void_p]
@@ -706,12 +784,17 @@ def simulate(config_file):
             time.sleep(1)
 
             # 获取渲染结果
-            renders = (LUMICE_RenderResult * (LUMICE_MAX_RENDER_RESULTS + 1))()
-            if lib.LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) == 0:
-                for r in renders:
-                    if not r.img_buffer:
-                        break
-                    print(f"Render[{r.renderer_id:02d}]: {r.img_width}x{r.img_height}")
+            frame = ctypes.c_void_p()
+            if lib.LUMICE_AcquireResultFrame(server, ctypes.byref(frame)) == 0:
+                try:
+                    renders = (LUMICE_RenderResult * (LUMICE_MAX_RENDER_RESULTS + 1))()
+                    if lib.LUMICE_FrameGetRender(frame, renders, LUMICE_MAX_RENDER_RESULTS) == 0:
+                        for r in renders:
+                            if not r.img_buffer:
+                                break
+                            print(f"Render[{r.renderer_id:02d}]: {r.img_width}x{r.img_height}")
+                finally:
+                    lib.LUMICE_ReleaseResultFrame(frame)
 
             # 检查状态
             state = ctypes.c_int()
@@ -752,8 +835,10 @@ extern "C" {
     fn LUMICE_SceneFromJsonFile(filename: *const c_char, out_scene: *mut *mut c_void) -> c_int;
     fn LUMICE_CommitScene(server: *mut c_void, scene: *const c_void, out_reused: *mut c_int) -> c_int;
     fn LUMICE_SceneDestroy(scene: *mut c_void);
-    fn LUMICE_GetRenderResults(server: *mut c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
-    fn LUMICE_GetStatsResults(server: *mut c_void, out: *mut LUMICE_StatsResult, max_count: c_int) -> c_int;
+    fn LUMICE_AcquireResultFrame(server: *mut c_void, out_frame: *mut *mut c_void) -> c_int;
+    fn LUMICE_ReleaseResultFrame(frame: *mut c_void);
+    fn LUMICE_FrameGetRender(frame: *const c_void, out: *mut LUMICE_RenderResult, max_count: c_int) -> c_int;
+    fn LUMICE_FrameGetStats(frame: *const c_void, out: *mut LUMICE_StatsResult) -> c_int;
     fn LUMICE_QueryServerState(server: *mut c_void, out: *mut c_int) -> c_int;
     fn LUMICE_StopServer(server: *mut c_void);
 }
@@ -771,7 +856,7 @@ extern "C" {
 
 ### Q3: img_buffer 何时失效？
 
-**A**: `img_buffer` 指针有效至下一次 `LUMICE_GetRenderResults()` 或 `LUMICE_CommitScene()` 调用。如需长期持有，应自行 `memcpy` 拷贝数据。
+**A**: 直到你释放它所属的那一帧。`img_buffer` 是 `LUMICE_ResultFrame` 的只读视图，持有帧即保住像素——其他读者的动作、以及新的快照，都无法在你持有期间让它失效。用完调用 `LUMICE_ReleaseResultFrame()`；需要活得比帧更久的数据请提前 `memcpy`。
 
 ### Q4: 服务器可以同时处理多个配置吗？
 
@@ -779,7 +864,7 @@ extern "C" {
 
 ### Q5: 如何判断结果数组是否为空？
 
-**A**: 检查数组第一个元素是否为哨兵。对于渲染结果：`renders[0].img_buffer == NULL` 表示无结果。对于统计结果：`stats[0].sim_ray_num == 0` 表示无结果。
+**A**: 检查数组第一个元素是否为哨兵。渲染与 composite 结果：`renders[0].img_buffer == NULL` 表示无结果；raw XYZ 为 `xyz[0].xyz_buffer == NULL`。`LUMICE_FrameGetStats` 写的是单个值而非数组，其「无结果」形态是全零结构体（`sim_ray_num == 0`）。
 
 ## 相关文档
 

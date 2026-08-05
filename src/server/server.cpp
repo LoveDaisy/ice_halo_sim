@@ -69,16 +69,12 @@ class ServerImpl {
   ~ServerImpl();
 
   Error CommitConfig(const nlohmann::json& config_json, bool* out_reused = nullptr);
-  std::vector<RenderResult> GetRenderResults();
-  std::vector<RawXyzResult> GetRawXyzResults();
-  // task-345.2: atomic combined getter — one DoSnapshot() call, so xyz and
-  // composite are guaranteed to belong to the same snapshot_generation_ by
-  // construction (kills the poller's drift-guard, ④). See
-  // Server::GetRawXyzAndCompositeResults docstring for rationale.
-  void GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out, std::vector<RenderResult>& composite_out);
-  std::optional<StatsResult> GetStatsResult();
-  std::optional<StatsResult> GetCachedStatsResult();
   size_t GetLiveSimRayCount();
+
+  // THE result entry point. Materializes a snapshot if one is pending, then
+  // returns a share of the published frame — the caller's pointers stay valid for as long
+  // as it keeps that share, independently of every later snapshot. Never returns null.
+  std::shared_ptr<const ResultFrame> AcquireResultFrame();
 
   void Stop();
   void Start();
@@ -100,13 +96,13 @@ class ServerImpl {
   // `ev_total` is applied as `2^ev_total` inside DoSnapshot Phase 2 (a single
   // scalar shared across every lane / every mode — per-lane renormalization
   // remains structurally excluded). No sim restart, no epoch bump: flips
-  // snapshot_dirty_ so the next Get*Results triggers one composite rebake
+  // snapshot_dirty_ so the next acquired result frame triggers one composite rebake
   // with the new EV. Mono path is untouched (structural AC4).
   Error SetCompositeExposure(float ev_total);
 
   // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
-  // lanes (no DoSnapshot trigger — GUI polling loop is expected to already query
-  // GetCompositeResults / GetRawXyzResults). Writes 1 into out_flags[i] when
+  // lanes (no DoSnapshot trigger — the GUI polling loop is expected to have already
+  // acquired a result frame). Writes 1 into out_flags[i] when
   // any RenderConsumer has a non-zero pixel in class i's snapshot Y-lane; 0
   // otherwise. class_count must equal the active color-class count.
   Error GetColorClassSignals(uint8_t* out_flags, int class_count);
@@ -158,9 +154,8 @@ class ServerImpl {
   // task-342.4 Step 1: unified snapshot consumer. Returns true iff this call
   // actually consumed a dirty snapshot (Phase 1..2 executed); false if
   // snapshot_dirty_ was clear on entry (nothing to do). Merges the previously
-  // duplicate Phase-1 in GetRawXyzResults into a single dirty-flag owner so
-  // any pair of Get*Results calls in the same poll tick see coherent state
-  // (see plan §3 keypoint 1).
+  // duplicate Phase-1 in the raw-xyz getter into a single dirty-flag owner, so every
+  // kind of result materialized in one pass is coherent with the others.
   bool DoSnapshot();
 
   // Persistent thread loop: wait for Start(), run work_fn, repeat until kTerminating.
@@ -226,51 +221,51 @@ class ServerImpl {
     0
   };  // Increments on each PrepareSnapshot; NOT reset on Stop (poller resets its own tracker)
 
-  // Cached results under snapshot_mutex_ — populated by DoSnapshot, read by Get*Results
-  std::vector<RenderResult> cached_render_results_;
-  std::optional<StatsResult> cached_stats_result_;
-  // task-336.3: owning cache of composited colored images, one per RenderConsumer
-  // with a non-zero colored mask. Produced in DoSnapshot Phase 2, under
-  // snapshot_mutex_. Export to the C-API is deferred to 336.4 — for now this is
-  // internal (see GetCompositeResults() below). Empty when no raypath_color.
-  struct CompositeResult {
-    int renderer_id_;
-    int w_;
-    int h_;
-    std::vector<uint8_t> rgb_;  // W*H*3 sRGB
-    // task-345.3: P99 over the union of NON-ZERO UNEXPOSED (raw lane) Y
-    // values across every participating class. The composite-path auto-EV
-    // anchor consumed by the GUI (mono path keeps xyz_data-derived P99).
-    // 0 when no participating class carries any positive Y.
-    float p99_y_ = 0.0f;
-  };
-  std::vector<CompositeResult> cached_composite_results_;
+  // The one published snapshot, replacing the former
+  // cached_render_results_/cached_stats_result_/cached_composite_results_ trio. Those were
+  // MUTABLE caches: each DoSnapshot std::move'd over them, freeing pixels a reader was
+  // still pointing at (the confirmed heap-use-after-free this task removes). A frame is
+  // immutable and reference-counted instead — publishing a new one cannot disturb an old
+  // reader, and the old frame dies when its last holder drops it.
+  //
+  // INVARIANT: never null. The constructor publishes an all-zero frame, so every reader
+  // dereferences unconditionally — that is what makes lumice.h's "all-zero struct if no
+  // snapshot has been taken yet" promise structural rather than a per-call null branch.
+  std::shared_ptr<const ResultFrame> published_frame_;
 
- public:
-  // task-336.4: composite results getter, mirroring GetRenderResults so the
-  // C-API can export it via the existing RenderResult surface. Returns
-  // RenderResult handles whose img_buffer_ points into the ServerImpl-owned
-  // cached_composite_results_ (NOT owning copies) — same lifetime contract as
-  // GetRenderResults: valid until the next DoSnapshot() rebuild or CommitConfig.
-  // Empty when no raypath_color is configured (no colored consumer → no cache).
-  std::vector<RenderResult> GetCompositeResults() {
-    DoSnapshot();
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
-    std::vector<RenderResult> out;
-    out.reserve(cached_composite_results_.size());
-    for (const auto& cr : cached_composite_results_) {
-      RenderResult r;
-      r.renderer_id_ = cr.renderer_id_;
-      r.img_width_ = cr.w_;
-      r.img_height_ = cr.h_;
-      r.img_buffer_ = cr.rgb_.data();  // points into ServerImpl-owned cache
-      r.composite_p99_y_ = cr.p99_y_;
-      out.push_back(r);
-    }
-    return out;
+  // Published-frame access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use
+  // the C++11 free functions std::atomic_load/atomic_store (deprecated in C++20 but valid
+  // here). Same idiom as ServerPoller's published_ (src/gui/server_poller.hpp).
+  // MIGRATION: when the project moves to C++20, change published_frame_ to
+  // std::atomic<std::shared_ptr<const ResultFrame>> and rewrite these two helpers to use
+  // published_frame_.load()/.store() — only these two functions change.
+  std::shared_ptr<const ResultFrame> LoadPublished() const { return std::atomic_load(&published_frame_); }
+  void StorePublished(std::shared_ptr<const ResultFrame> next) {
+    std::atomic_store(&published_frame_, std::move(next));
   }
 
- private:
+  // Serializes the whole two-phase snapshot pass. Phase 1 (consumer_mutex_) and Phase 2
+  // (snapshot_mutex_) take different locks, so two DoSnapshot calls could previously
+  // interleave: one thread's PrepareSnapshot could run while another was still reading the
+  // same consumer's snapshot lanes in Phase 2. That was already a torn-frame source; with
+  // Phase 1 now re-pointing the consumer's buffer members (see FrameBufferPool) it would be
+  // a pointer-level race, so the pass is made mutually exclusive. Outermost lock of the
+  // three — always taken BEFORE consumer_mutex_/snapshot_mutex_, never while holding either.
+  std::mutex do_snapshot_mutex_;
+
+  // Scratch for DoSnapshot Phase 2's composite pass, and used nowhere else. It was a
+  // local std::vector inside the per-consumer loop, i.e. one W*H*3 float allocation and
+  // free per colored consumer per snapshot, for a buffer that is filled and consumed
+  // within a single loop iteration and never published.
+  //
+  // Reuse is safe for two reasons, both of which must hold if this ever moves:
+  // do_snapshot_mutex_ above serializes whole snapshot passes, so no two writers exist
+  // at once; and CompositeColorClassesLinear assign()s the full size on entry, so no
+  // iteration can read what a previous one left behind. Nothing holds a pointer,
+  // reference or iterator into it past its loop iteration — keep it that way.
+  std::vector<float> linear_rgb_scratch_;
+
+
   std::vector<std::thread> simulator_threads_;
   mutable std::mutex prod_mutex_;
 
@@ -433,6 +428,12 @@ bool ResolveGpuRoute(BackendKind preferred_backend, Logger& logger) {
 ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred_backend)
     : config_manager_{}, scene_queue_(std::make_shared<Queue<SimBatch>>()),
       data_queue_(std::make_shared<Queue<SimData>>()), status_(ServerStatus::kIdle) {
+  // Publish an empty frame up front so published_frame_ is never null. A
+  // reader that arrives before the first snapshot then gets an honest "nothing yet"
+  // (no results, nullopt stats) instead of forcing every read path to carry a null
+  // branch — and lumice.h's "all-zero struct if no snapshot has been taken yet" promise
+  // for the cached-stats read holds by construction.
+  StorePublished(std::make_shared<const ResultFrame>());
   preferred_backend_.store(preferred_backend, std::memory_order_release);
   // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for variables.
   const bool gpu_route = ResolveGpuRoute(preferred_backend, logger_);
@@ -695,17 +696,23 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
 // task-342.4 Step 1: this is the single owner of the snapshot_dirty_ flag and
-// snapshot_generation_ counter. Any Get*Results method that needs an up-to-date
+// snapshot_generation_ counter. Any result-frame acquisition that needs an up-to-date
 // materialized snapshot funnels through here so that two consumers in the same
 // poll tick (e.g. RawXyz + Composite) see a coherent Phase-1..2 atomic event
 // rather than racing the dirty flag against each other (plan §3 keypoint 1).
 bool ServerImpl::DoSnapshot() {
+  // One snapshot pass at a time (see do_snapshot_mutex_'s declaration for why the two
+  // per-phase locks are not enough).
+  std::lock_guard<std::mutex> snapshot_pass(do_snapshot_mutex_);
+
   // Phase 1: memcpy under consumer_mutex_ (short hold).
   // Copy shared_ptrs so consumers stay alive even if Stop() clears consumers_.
   std::vector<ConsumerPtrS> snapshot_consumers;
   ColorClassTable snap_class_table;
   CompositeMode snap_composite_mode = CompositeMode::kDominant;
   float snap_display_ev_total = 0.0f;
+  uint64_t generation = 0;
+  bool valid_data = false;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     if (!snapshot_dirty_) {
@@ -724,13 +731,15 @@ bool ServerImpl::DoSnapshot() {
     snap_class_table = active_class_table_;
     snap_composite_mode = active_composite_mode_;
     snap_display_ev_total = display_ev_total_;
+    valid_data = has_ever_consumed_;
     snapshot_dirty_ = false;
-    // task-342.4 Step 1: bumping the generation is now the shared owner's
-    // responsibility (previously lived only in GetRawXyzResults's Phase-1).
+    // Bumping the generation is the shared owner's responsibility (it once lived only
+    // in the raw-xyz getter's Phase-1).
     // The counter is the single mechanism by which poller detects new
     // snapshots, so it must be tied to the dirty-consume event itself, not
     // to any one consumer accessor.
     snapshot_generation_++;
+    generation = snapshot_generation_;
   }
   // Phase 1.5: pixel counting outside consumer_mutex_ (snapshot_xyz_ is stable here).
   for (const auto& c : snapshot_consumers) {
@@ -738,14 +747,16 @@ bool ServerImpl::DoSnapshot() {
       rc->CountEffectivePixels();
     }
   }
-  // Phase 2: XYZ→RGB + cache results under snapshot_mutex_ (no consumer_mutex_).
+  // Phase 2: XYZ→RGB, then ASSEMBLE a new frame under snapshot_mutex_ (no consumer_mutex_).
   // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
-  std::vector<RenderResult> render_results;
-  std::optional<StatsResult> stats_result;
-  // task-336.3: composite colored consumers into cached RGB images. Built
-  // outside the snapshot_mutex_ block (pure reads of the frozen snapshot lanes)
-  // and swapped in under the lock alongside the render results.
-  std::vector<CompositeResult> composite_results;
+  //
+  // The results are collected into a fresh ResultFrame that gets published at
+  // the end. Nothing here overwrites data an earlier reader may still hold — that
+  // overwrite (a std::move over cached_composite_results_) was the use-after-free.
+  auto frame = std::make_shared<ResultFrame>();
+  frame->snapshot_generation_ = generation;
+  frame->epoch_ = committed_epoch_.load(std::memory_order_acquire);
+  frame->has_valid_data_ = valid_data;
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : snapshot_consumers) {
@@ -754,10 +765,30 @@ bool ServerImpl::DoSnapshot() {
     for (const auto& c : snapshot_consumers) {
       auto result = c->GetResult();
       if (auto* r = std::get_if<RenderResult>(&result)) {
-        render_results.push_back(*r);
+        // The mono image buffer travels WITH the view: img_buffer_ points into the
+        // storage anchor pushed alongside it, so the frame keeps it alive.
+        auto* rc = dynamic_cast<RenderConsumer*>(c.get());
+        frame->render_results_.push_back(*r);
+        frame->render_storage_.push_back(rc != nullptr ? rc->SnapshotImageStorage() : nullptr);
       } else if (auto* s = std::get_if<StatsResult>(&result)) {
-        stats_result = *s;
+        frame->stats_result_ = *s;
       }
+    }
+    // Raw XYZ views + their storage anchors, same treatment as the mono images above.
+    // The lifecycle fields are stamped from the values read in Phase 1, so they describe
+    // the state this frame was BUILT under; AcquireResultFrame re-stamps them for readers
+    // if the live state has since moved (see there).
+    for (const auto& c : snapshot_consumers) {
+      auto* rc = dynamic_cast<RenderConsumer*>(c.get());
+      if (rc == nullptr) {
+        continue;
+      }
+      auto r = rc->GetRawXyzResult();
+      r.has_valid_data_ = valid_data;
+      r.snapshot_generation_ = generation;
+      r.epoch_ = frame->epoch_;
+      frame->xyz_results_.push_back(r);
+      frame->xyz_storage_.push_back(rc->SnapshotXyzStorage());
     }
     // task-336.3: only colored consumers (ColoredMask()!=0) produce a composite.
     // Zero-config consumers (mask 0) are skipped → no composite, mono path
@@ -767,15 +798,14 @@ bool ServerImpl::DoSnapshot() {
       if (rc == nullptr || rc->ColoredMask() == 0) {
         continue;
       }
-      std::vector<float> linear_rgb;
       // task-345.3: display-time EV multiplier + participating-P99 anchor
       // both flow through the compositor in one pass. `display_exposure_scale
       // = 2^snap_display_ev_total`; CLI paths never call SetCompositeExposure
       // so snap_display_ev_total stays at 0 → 2^0 = 1.0 → no behavior change.
       const float display_exposure_scale = std::pow(2.0f, snap_display_ev_total);
       float participating_p99 = 0.0f;
-      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, display_exposure_scale, linear_rgb,
-                                       &participating_p99)) {
+      if (!CompositeColorClassesLinear(*rc, snap_class_table, snap_composite_mode, display_exposure_scale,
+                                       linear_rgb_scratch_, &participating_p99)) {
         continue;
       }
       CompositeResult cr;
@@ -787,134 +817,62 @@ bool ServerImpl::DoSnapshot() {
       }
       cr.w_ = rc->ImageWidth();
       cr.h_ = rc->ImageHeight();
-      LinearRgbToSrgbU8(linear_rgb, cr.rgb_);
+      auto rgb = std::make_shared<std::vector<uint8_t>>();
+      LinearRgbToSrgbU8(linear_rgb_scratch_, *rgb);
+      cr.rgb_ = std::move(rgb);
       cr.p99_y_ = participating_p99;
-      composite_results.push_back(std::move(cr));
+      frame->composite_results_.push_back(std::move(cr));
     }
-    cached_render_results_ = std::move(render_results);
-    cached_stats_result_ = stats_result;
-    cached_composite_results_ = std::move(composite_results);
   }
+  // Publish. The frame just built becomes the current one; the previous frame stays alive
+  // exactly as long as somebody still holds it, and its pixels are freed only then.
+  StorePublished(std::move(frame));
   return true;
 }
 
-std::vector<RenderResult> ServerImpl::GetRenderResults() {
-  DoSnapshot();
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  return cached_render_results_;
-}
-
-std::vector<RawXyzResult> ServerImpl::GetRawXyzResults() {
-  // task-342.4 Step 1: funnel through the shared DoSnapshot() so the
-  // dirty-flag / snapshot_generation_ / cached_* fields have exactly one
-  // owner. Previously this method carried its own copy of Phase-1 (dirty
-  // consume + generation bump + PrepareSnapshot loop + CountEffectivePixels
-  // + non-RenderConsumer StatsResult cache update). All of that now lives
-  // inside DoSnapshot(); calling it here yields identical semantics to the
-  // old implementation when only RawXyz consumers are wired, plus race-free
-  // interleaving with GetCompositeResults() (plan §3 keypoint 1).
-  DoSnapshot();
-  std::vector<ConsumerPtrS> snapshot_consumers;
-  bool valid_data = false;
-  uint64_t generation = 0;
-  {
-    std::lock_guard<TicketMutex> lock(consumer_mutex_);
-    valid_data = has_ever_consumed_;
-    generation = snapshot_generation_;
-    snapshot_consumers = consumers_;
-  }
-  std::vector<RawXyzResult> results;
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  for (const auto& c : snapshot_consumers) {
-    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
-    if (render_consumer) {
-      auto r = render_consumer->GetRawXyzResult();
-      r.has_valid_data_ = valid_data;
-      r.snapshot_generation_ = generation;
-      // Best-effort epoch stamp (plan §5-R5): consumer data + this read are
-      // serialized under consumer_mutex_/snapshot_mutex_, so a "new epoch with
-      // stale data" tear cannot occur; the atomic-single-value publish is 1.4's job.
-      r.epoch_ = committed_epoch_.load(std::memory_order_acquire);
-      results.push_back(r);
-    }
-  }
-  // task-342.4 Step 1: the previous "if (did_snapshot) { cache non-RenderConsumer
-  // StatsResult }" block that used to live here has been removed. It was a
-  // duplicate of DoSnapshot() Phase-2's existing per-consumer GetResult() /
-  // StatsResult caching (see the loop that writes cached_stats_result_ above),
-  // which now runs unconditionally through DoSnapshot() from every accessor —
-  // so cached_stats_result_ stays up to date via a single owner.
-  return results;
-}
-
-// task-345.2: atomic combined read. Kills the ServerPoller drift-guard (④) by
-// funneling xyz + composite through exactly ONE DoSnapshot() trigger — a
-// concurrent ConsumeData bump cannot slip a second Phase-2 rebuild between the
-// two reads, so composite_out is guaranteed to belong to xyz_out[0]'s
-// snapshot_generation_ by construction (structural, not probabilistic).
+// The single result entry point. Materializes a pending snapshot (if any),
+// then hands out a share of the published frame.
 //
-// The lock discipline mirrors GetRawXyzResults + GetCompositeResults verbatim
-// (consumer_mutex_ then snapshot_mutex_; the two mutexes are never held
-// nested), so no new lock-ordering surface. Body kept a direct merge (not
-// helper-extracted) — plan-review flagged the light duplication with the two
-// existing getters as a code-review-time follow-up, not a blocker; see plan
-// §7 risk 2 mitigation ("严格镜像现有加锁顺序").
-void ServerImpl::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
-                                              std::vector<RenderResult>& composite_out) {
-  xyz_out.clear();
-  composite_out.clear();
+// The two lifecycle fields are stamped HERE, from the live server state, rather than being
+// taken from the frame as built: has_valid_data_ / epoch_ are answers to "what is true of
+// this server now", not "what was true when these pixels were made". Stop() clears
+// has_ever_consumed_ and CommitConfig bumps committed_epoch_ WITHOUT producing a new
+// snapshot, and the old getters read both live on every call — the GUI poller's staleness
+// gates are built on exactly that. Re-stamping onto a shallow copy (cheap: every pixel
+// payload sits behind a shared_ptr) preserves it without making frames mutable.
+std::shared_ptr<const ResultFrame> ServerImpl::AcquireResultFrame() {
   DoSnapshot();
-  std::vector<ConsumerPtrS> snapshot_consumers;
+  auto frame = LoadPublished();  // never null (see published_frame_)
+
   bool valid_data = false;
-  uint64_t generation = 0;
   {
     std::lock_guard<TicketMutex> lock(consumer_mutex_);
     valid_data = has_ever_consumed_;
-    generation = snapshot_generation_;
-    snapshot_consumers = consumers_;
   }
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  for (const auto& c : snapshot_consumers) {
-    auto* render_consumer = dynamic_cast<RenderConsumer*>(c.get());
-    if (render_consumer) {
-      auto r = render_consumer->GetRawXyzResult();
-      r.has_valid_data_ = valid_data;
-      r.snapshot_generation_ = generation;
-      r.epoch_ = committed_epoch_.load(std::memory_order_acquire);
-      xyz_out.push_back(r);
-    }
+  const uint64_t epoch = committed_epoch_.load(std::memory_order_acquire);
+  if (frame->has_valid_data_ == valid_data && frame->epoch_ == epoch) {
+    return frame;
   }
-  composite_out.reserve(cached_composite_results_.size());
-  for (const auto& cr : cached_composite_results_) {
-    RenderResult r;
-    r.renderer_id_ = cr.renderer_id_;
-    r.img_width_ = cr.w_;
-    r.img_height_ = cr.h_;
-    r.img_buffer_ = cr.rgb_.data();
-    composite_out.push_back(r);
-  }
-}
 
-std::optional<StatsResult> ServerImpl::GetStatsResult() {
-  DoSnapshot();
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  return cached_stats_result_;
-}
-
-std::optional<StatsResult> ServerImpl::GetCachedStatsResult() {
-  std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  return cached_stats_result_;
+  auto restamped = std::make_shared<ResultFrame>(*frame);
+  restamped->has_valid_data_ = valid_data;
+  restamped->epoch_ = epoch;
+  for (auto& r : restamped->xyz_results_) {
+    r.has_valid_data_ = valid_data;
+    r.epoch_ = epoch;
+  }
+  return restamped;
 }
 
 // task-317: cheap O(1) live sim-ray-count read for the --benchmark drain-count
-// poll loop. Unlike GetStatsResult() (which calls DoSnapshot -> RenderConsumer
+// poll loop. Unlike acquiring a result frame (which calls DoSnapshot -> RenderConsumer
 // sRGB every poll — the render-per-poll root cause), this only reads the running
 // StatsConsumer counter under consumer_mutex_. No snapshot, no render, no XYZ
 // copy — so the poll thread does not perturb the throughput measurement nor
 // starve drain-window closure.
 // Sentinel note (inherited ambiguity, not new): 0 means BOTH "no StatsConsumer
 // registered" AND "StatsConsumer present but no rays yet" — the same conflation
-// the old have_stats?…:0 GetStatsResults path had. Fine for the benchmark's
+// the old have_stats?…:0 stats-getter path had. Fine for the benchmark's
 // monotonic-progress read; a caller needing to distinguish a lifecycle error
 // from a cold start should switch to std::optional<size_t>.
 size_t ServerImpl::GetLiveSimRayCount() {
@@ -1279,7 +1237,7 @@ void ServerImpl::ConsumeData() {
           // not bias the image. BUT a batch that ran to completion with a
           // legitimately all-black result is still *valid data*: the simulation
           // converged, the answer is just zero intensity. We therefore flip
-          // has_ever_consumed_ so GetRawXyzResults reports has_valid_data=true,
+          // has_ever_consumed_ so the frame's xyz results report has_valid_data=true,
           // and dirty the snapshot so PrepareSnapshot produces a clean zero
           // frame (without this, an all-black simulation — e.g. an impossible
           // raypath filter — never sets has_valid_data, so the buffered poller
@@ -1508,7 +1466,7 @@ Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_c
 // =============== ServerImpl::SetCompositeExposure ===============
 // task-345.3: display-time EV for the composite path. Same shape as
 // SetRaypathColors: writes one field under consumer_mutex_ then flips
-// snapshot_dirty_ so the next Get*Results triggers exactly one composite
+// snapshot_dirty_ so the next acquired result frame triggers exactly one composite
 // rebake with the new EV. No validation on ev_total — any finite float is
 // legitimate (the GUI already clamps to [-6, 6] before calling; the server
 // intentionally does not double-clamp so a hypothetical future caller can
@@ -1600,61 +1558,21 @@ Error Server::CommitConfig(const std::string& config_str) {
   }
 }
 
-std::vector<RenderResult> Server::GetRenderResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetRenderResults();
-}
-
-std::vector<RenderResult> Server::GetCompositeResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetCompositeResults();
-}
-
-std::vector<RawXyzResult> Server::GetRawXyzResults() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return {};
-  }
-  return impl_->GetRawXyzResults();
-}
-
-void Server::GetRawXyzAndCompositeResults(std::vector<RawXyzResult>& xyz_out,
-                                          std::vector<RenderResult>& composite_out) {
-  xyz_out.clear();
-  composite_out.clear();
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return;
-  }
-  impl_->GetRawXyzAndCompositeResults(xyz_out, composite_out);
-}
-
-std::optional<StatsResult> Server::GetStatsResult() {
-  if (!impl_) {
-    LOG_WARNING("Server is terminated!");
-    return std::nullopt;
-  }
-  return impl_->GetStatsResult();
-}
-
-std::optional<StatsResult> Server::GetCachedStatsResult() {
-  if (!impl_) {
-    return std::nullopt;
-  }
-  return impl_->GetCachedStatsResult();
-}
-
 size_t Server::GetLiveSimRayCount() {
   if (!impl_) {
     return 0;
   }
   return impl_->GetLiveSimRayCount();
+}
+
+std::shared_ptr<const ResultFrame> Server::AcquireResultFrame() {
+  if (!impl_) {
+    LOG_WARNING("Server is terminated!");
+    // A terminated server still owes the caller a dereferenceable frame — an empty one
+    // reads exactly as "no results", which is the truth here.
+    return std::make_shared<const ResultFrame>();
+  }
+  return impl_->AcquireResultFrame();
 }
 
 void Server::Stop() {

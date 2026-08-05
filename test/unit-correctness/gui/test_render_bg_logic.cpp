@@ -25,6 +25,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/log_sink.hpp"
 #include "lumice.h"
+#include "support/scoped_result_frame.hpp"
 
 namespace gui = lumice::gui;
 
@@ -96,9 +97,10 @@ TEST(Calibration, no_warning_on_startup) {
   gui::CalibrateQualityThreshold();
 
   // Positive assertion: stats must have data
-  LUMICE_StatsResult stats[2]{};
-  LUMICE_GetStatsResults(gui::g_server, stats, 1);
-  EXPECT_GT(stats[0].sim_ray_num, 0UL);
+  LUMICE_StatsResult stats{};
+  lumice::test::ScopedResultFrame frame(gui::g_server);
+  LUMICE_FrameGetStats(frame.get(), &stats);
+  EXPECT_GT(stats.sim_ray_num, 0UL);
 
   // Negative assertion: no calibration warning
   bool found_warning = false;

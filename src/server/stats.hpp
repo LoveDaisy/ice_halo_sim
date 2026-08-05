@@ -18,8 +18,8 @@ class StatsConsumer : public IConsume {
   // Live (un-snapshotted) accumulated sim ray count. Cheap O(1) read of the
   // running counter for progress polling (e.g. the --benchmark drain loop),
   // which needs sim_ray_num every iteration but NOT a rendered snapshot.
-  // task-317: the drain-count benchmark poll used GetStatsResult(), which
-  // unconditionally triggers DoSnapshot -> RenderConsumer sRGB (powf/pixel),
+  // The drain-count benchmark poll once read stats off a full result snapshot,
+  // which unconditionally triggers DoSnapshot -> RenderConsumer sRGB (powf/pixel),
   // dominating wall-time and starving drain-window closure. Callers must hold
   // consumer_mutex_ (Consume() mutates sim_rays_ under it).
   size_t LiveSimRays() const { return sim_rays_; }

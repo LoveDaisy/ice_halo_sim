@@ -11,6 +11,7 @@
 
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
+#include "support/scoped_result_frame.hpp"
 #include "test_gui_shared.hpp"
 
 // ========== Performance Tests ==========
@@ -255,9 +256,10 @@ void RegisterPerfTests(ImGuiTestEngine* engine) {
         if (!gui::g_server) {
           return 0;
         }
-        LUMICE_StatsResult stats[2]{};
-        LUMICE_GetStatsResults(gui::g_server, stats, 1);
-        return stats[0].sim_ray_num;
+        LUMICE_StatsResult stats{};
+        lumice::test::ScopedResultFrame frame(gui::g_server);
+        LUMICE_FrameGetStats(frame.get(), &stats);
+        return stats.sim_ray_num;
       };
 
       // Sweep sun altitude between 10° and 30° (typical manual drag range)

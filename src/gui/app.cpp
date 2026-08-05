@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -293,8 +294,17 @@ static void RefreshCpuTextureForSave() {
     return;  // No simulation data to refresh
   }
 
+  // Holding the frame across the read + conversion below is what makes the borrow safe:
+  // the poller worker may publish a new snapshot at any moment, and before frames existed
+  // that would have rewritten xyz_buffer mid-conversion.
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(g_server, &raw_frame) != LUMICE_OK) {
+    return;
+  }
+  std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+
   LUMICE_RawXyzResult xyz_results[2]{};
-  LUMICE_GetRawXyzResults(g_server, xyz_results, 1);
+  LUMICE_FrameGetRawXyz(frame.get(), xyz_results, 1);
   if (xyz_results[0].xyz_buffer == nullptr || xyz_results[0].img_width <= 0 || xyz_results[0].img_height <= 0) {
     return;
   }
@@ -801,12 +811,20 @@ void CalibrateQualityThreshold() {
   double elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
   // Read stats to get actual rays simulated
-  LUMICE_StatsResult stats[2]{};
-  LUMICE_GetStatsResults(g_server, stats, 1);
+  LUMICE_StatsResult stats{};
+  {
+    LUMICE_ResultFrame* raw_frame = nullptr;
+    if (LUMICE_AcquireResultFrame(g_server, &raw_frame) != LUMICE_OK) {
+      GUI_LOG_WARNING("[Calibration] could not acquire a result frame, using default threshold");
+      return;
+    }
+    std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+    LUMICE_FrameGetStats(frame.get(), &stats);
+  }
   GUI_LOG_DEBUG("[Calibration] waited {}ms, state={}, sim_ray_num={}", waited_ms,
-                final_state == LUMICE_SERVER_IDLE ? "IDLE" : "RUNNING", stats[0].sim_ray_num);
+                final_state == LUMICE_SERVER_IDLE ? "IDLE" : "RUNNING", stats.sim_ray_num);
 
-  if (stats[0].sim_ray_num == 0 || elapsed_ms <= 0) {
+  if (stats.sim_ray_num == 0 || elapsed_ms <= 0) {
     GUI_LOG_WARNING("[Calibration] no data produced in {:.0f}ms, using default threshold", elapsed_ms);
     return;
   }
@@ -814,12 +832,12 @@ void CalibrateQualityThreshold() {
   // Compute: how many rays would be produced in the calibration window?
   // Uses kCalibrationWindowMs (fixed) instead of kCommitIntervalMs so that changing
   // the commit interval doesn't accidentally tighten/loosen the quality gate.
-  double rays_per_window = static_cast<double>(stats[0].sim_ray_num) * kCalibrationWindowMs / elapsed_ms;
+  double rays_per_window = static_cast<double>(stats.sim_ray_num) * kCalibrationWindowMs / elapsed_ms;
   auto threshold = std::max(kMinRaysFloor, static_cast<unsigned long long>(rays_per_window * kCalibrationFraction));
 
   g_server_poller.SetCalibratedThreshold(threshold);
   GUI_LOG_INFO("[Calibration] done in {:.0f}ms: {} rays, {:.0f} rays/window({}ms), threshold={}", elapsed_ms,
-               stats[0].sim_ray_num, rays_per_window, kCalibrationWindowMs, threshold);
+               stats.sim_ray_num, rays_per_window, kCalibrationWindowMs, threshold);
 
   // Stop the server — ready for user's first actual Run
   LUMICE_StopServer(g_server);
@@ -1526,12 +1544,14 @@ void SyncFromPoller() {
                     payload->intensity_factor);
     // task-342.4 Step 3 + task-345.4: choose sRGB uint8 vs XYZ float upload path. Server produces
     // composite iff raypath_color is active; user can toggle back to full-spectrum via the status
-    // bar (`show_composite_preview`). Auto-EV / stats / serial-dedup still consume xyz_data-derived
+    // bar (`show_composite_preview`). Auto-EV / stats / serial-dedup still consume xyz-derived
     // fields below — those are populated in both branches (plan §3 keypoint 3).
+    // Both buffers are views into the result frame the payload holds, so `payload` staying alive
+    // for this whole block is what keeps them readable.
     if (effective_composite) {
-      g_preview.UploadTexture(payload->rgb_data.data(), payload->width, payload->height);
+      g_preview.UploadTexture(payload->rgb_buffer, payload->width, payload->height);
     } else {
-      g_preview.UploadXyzTexture(payload->xyz_data.data(), payload->width, payload->height);
+      g_preview.UploadXyzTexture(payload->xyz_buffer, payload->width, payload->height);
     }
     g_state.last_uploaded_as_composite = effective_composite;
     g_state.snapshot_intensity = payload->snapshot_intensity;

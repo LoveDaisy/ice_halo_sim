@@ -41,6 +41,14 @@ struct SceneDeleter {
 };
 using ScenePtr = std::unique_ptr<LUMICE_Scene, SceneDeleter>;
 
+// Same treatment for result frames. The C API's contract is plain acquire/release (that is
+// what a C caller writes); this wrapper is a C++ caller's convenience for getting the
+// release right on every exit path, not something the API requires.
+struct ResultFrameDeleter {
+  void operator()(LUMICE_ResultFrame* frame) const { LUMICE_ReleaseResultFrame(frame); }
+};
+using ResultFramePtr = std::unique_ptr<LUMICE_ResultFrame, ResultFrameDeleter>;
+
 // Warn (once, on config load) if the last multi-scattering layer has prob > 0.
 // core semantics: the last layer's prob-fail rays would have "continued to the
 // next layer", but there is no next layer, so they are silently discarded (see
@@ -245,8 +253,13 @@ std::filesystem::path FormatImagePath(const std::filesystem::path& output_dir, i
 
 void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& output_dir, std::string_view image_format,
                        int jpeg_quality) {
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
+    return;
+  }
+  ResultFramePtr frame(raw_frame);
   LUMICE_RenderResult renders[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  if (LUMICE_GetRenderResults(server, renders, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
+  if (LUMICE_FrameGetRender(frame.get(), renders, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
     return;
   }
   for (int i = 0; renders[i].img_buffer != nullptr; i++) {
@@ -270,14 +283,19 @@ void SaveRenderResults(LUMICE_Server* server, const std::filesystem::path& outpu
 }
 
 // task-336.4: additive per-raypath composite output. When `raypath_color` is
-// configured, LUMICE_GetCompositeResults yields one colored image per renderer
+// configured, LUMICE_FrameGetComposite yields one colored image per renderer
 // (written as img_XX_components.<fmt>); otherwise it returns an empty set
 // (out[0] sentinel) and nothing is written — the mono img_XX.<fmt> path above is
 // byte-for-byte unchanged (zero-regression).
 void SaveCompositeResults(LUMICE_Server* server, const std::filesystem::path& output_dir, std::string_view image_format,
                           int jpeg_quality) {
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
+    return;
+  }
+  ResultFramePtr frame(raw_frame);
   LUMICE_RenderResult composites[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  if (LUMICE_GetCompositeResults(server, composites, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
+  if (LUMICE_FrameGetComposite(frame.get(), composites, LUMICE_MAX_RENDER_RESULTS) != LUMICE_OK) {
     return;
   }
   for (int i = 0; composites[i].img_buffer != nullptr; i++) {
@@ -302,13 +320,18 @@ void SaveCompositeResults(LUMICE_Server* server, const std::filesystem::path& ou
 }
 
 void PrintStats(LUMICE_Server* server) {
-  LUMICE_StatsResult stats[LUMICE_MAX_STATS_RESULTS + 1]{};
-  if (LUMICE_GetStatsResults(server, stats, LUMICE_MAX_STATS_RESULTS) != LUMICE_OK) {
+  LUMICE_ResultFrame* raw_frame = nullptr;
+  if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
     return;
   }
-  for (int i = 0; stats[i].sim_ray_num != 0; i++) {
-    std::cout << "Stats: sim_rays=" << stats[i].sim_ray_num << ", crystals=" << stats[i].crystal_num
-              << ", orientations=" << stats[i].orientation_num << "\n";
+  ResultFramePtr frame(raw_frame);
+  LUMICE_StatsResult stats{};
+  if (LUMICE_FrameGetStats(frame.get(), &stats) != LUMICE_OK) {
+    return;
+  }
+  if (stats.sim_ray_num != 0) {
+    std::cout << "Stats: sim_rays=" << stats.sim_ray_num << ", crystals=" << stats.crystal_num
+              << ", orientations=" << stats.orientation_num << "\n";
   }
 }
 
@@ -402,8 +425,8 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
     if (LUMICE_QueryServerState(server, &state) != LUMICE_OK) {
       continue;
     }
-    // task-317: read sim_ray_num via the cheap O(1) live counter, NOT
-    // LUMICE_GetStatsResults — the latter triggers a full DoSnapshot +
+    // Read sim_ray_num via the cheap O(1) live counter, NOT by acquiring a result
+    // frame — the latter triggers a full DoSnapshot +
     // RenderConsumer sRGB (powf/pixel) on EVERY poll. For the drain-count path
     // (many polls) that render tax dominated wall-time, starved drain-window
     // closure, and (on CUDA) let the unbounded session run long enough to trip

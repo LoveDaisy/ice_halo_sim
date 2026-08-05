@@ -7,17 +7,34 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 #include "include/lumice.h"
 
 namespace lumice::gui {
 
-// Texture payload: materialized once, then read-only. Anti-flicker carry-forward reuses the
-// same shared_ptr across sparse polls (zero pixel copy — only a refcount bump). See §5.4 of
-// doc/gui-preview-lifecycle-architecture.md and the versioned-snapshot-handoff plan.
+// Texture payload: materialized once, then read-only. Materializing it costs no pixel copy at
+// all — it takes a share of the result frame's lifetime and points at the frame's own buffers.
+// Anti-flicker carry-forward then reuses the same shared_ptr across sparse polls, so that path
+// is a refcount bump on an object that is itself already copy-free (§5.4 of
+// doc/gui-preview-lifecycle-architecture.md and the versioned-snapshot-handoff plan).
+//
+// INVARIANT: a TexturePayload is only ever shared whole, via shared_ptr<const TexturePayload>.
+// It is never copied or sliced by value — the buffer pointers below and the `frame` that keeps
+// them alive must not be separable. Copy is deleted below to make that a compile-time gate
+// rather than a comment-only convention.
 struct TexturePayload {
-  std::vector<float> xyz_data;  // XYZ float texture data (for GPU conversion)
+  TexturePayload() = default;
+  TexturePayload(const TexturePayload&) = delete;
+  TexturePayload& operator=(const TexturePayload&) = delete;
+
+  // The sole reason xyz_buffer / rgb_buffer below are safe to dereference: a result frame keeps
+  // its pixel storage alive for exactly as long as it is held, no matter how many further
+  // snapshots the server publishes. As long as this TexturePayload lives, so does the frame,
+  // and so do those buffers.
+  std::shared_ptr<LUMICE_ResultFrame> frame;
+  // XYZ float texture data (for GPU conversion), W*H*3 — a view INTO `frame`.
+  // Only assign this together with `frame`; never point it at anything the frame does not own.
+  const float* xyz_buffer = nullptr;
   int width = 0;
   int height = 0;
   float snapshot_intensity = 0;
@@ -35,15 +52,16 @@ struct TexturePayload {
   unsigned long long payload_epoch = 0;
 
   // task-342.4 Step 2: composite (raypath_color) surface.
-  // rgb_data is a sRGB uint8 buffer (W*H*3), populated ONLY when raypath_color is
-  // active on this snapshot. is_composite tells the main-thread upload path which
+  // rgb_buffer is a sRGB uint8 buffer (W*H*3) inside the SAME `frame` as xyz_buffer, non-null
+  // ONLY when raypath_color is active on this snapshot. Like xyz_buffer it is a view — only
+  // assign it together with `frame`. is_composite tells the main-thread upload path which
   // GL texture format + shader mode to use:
-  //   is_composite == true  → UploadTexture(rgb_data, W, H) + u_xyz_mode=0
-  //   is_composite == false → UploadXyzTexture(xyz_data, W, H) + u_xyz_mode=1 (unchanged)
-  // xyz_data / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
+  //   is_composite == true  → UploadTexture(rgb_buffer, W, H) + u_xyz_mode=0
+  //   is_composite == false → UploadXyzTexture(xyz_buffer, W, H) + u_xyz_mode=1 (unchanged)
+  // xyz_buffer / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
   // (auto-EV + quality gate are not touched by this change), even when is_composite
   // is true — see plan §3 keypoint 3.
-  std::vector<unsigned char> rgb_data;
+  const unsigned char* rgb_buffer = nullptr;
   bool is_composite = false;
 };
 
@@ -170,29 +188,11 @@ class ServerPoller {
   // WakeForRefresh split). Not used in production.
   void PublishValidResetForTest() { PublishValidReset(); }
 
-  // Test-only: drives PopulateCompositePayload() directly with caller-supplied
-  // composite_result so a regression test can pin the "composite bytes are
-  // copied and is_composite becomes true" invariant against the same code path
-  // PollOnce() drives. Post-345.2 there is no drift-guard branch to exercise
-  // separately — the atomic combined C-API (LUMICE_GetRawXyzAndCompositeResults)
-  // makes cross-generation pairing structurally impossible upstream. See
-  // test/gui/functional/test_gui_composite_preview.cpp.
-  void PopulateCompositePayloadForTest(const LUMICE_RenderResult& composite_result, TexturePayload* payload) {
-    PopulateCompositePayload(composite_result, payload);
-  }
-
  private:
   enum class State { kPaused, kRunning, kTerminating };
 
   void WorkerLoop();
   void PollOnce();
-
-  // Copies composite_results[0]'s RGB bytes into payload->rgb_data and sets
-  // is_composite=true. Split out of PollOnce() to keep its cognitive
-  // complexity down. Post-345.2: no drift-guard — the caller already sourced
-  // xyz + composite from a single LUMICE_GetRawXyzAndCompositeResults() call,
-  // so they belong to the same server snapshot_generation by construction.
-  void PopulateCompositePayload(const LUMICE_RenderResult& composite_result, TexturePayload* payload);
 
   // Published-snapshot access helpers. C++17 has no std::atomic<std::shared_ptr<T>>, so we use
   // the C++11 free functions std::atomic_load/atomic_store (deprecated in C++20 but valid here).
@@ -245,8 +245,8 @@ class ServerPoller {
   std::shared_ptr<const PreviewSnapshot> published_;
   // Serializes producer-side RMW (build-from-prev + store) so concurrent publishers
   // (worker PollOnce ‖ main-thread InvalidateStagedTexture/Start/WakeForRestart/WakeForRefresh) never lose an
-  // update. Consumers never take this lock. The 24MB pixel memcpy is prepared OUTSIDE this lock;
-  // the critical section is pointer/refcount-level only (see PollOnce).
+  // update. Consumers never take this lock. The candidate payload is built OUTSIDE this lock; the
+  // critical section is pointer/refcount-level only (see PollOnce).
   std::mutex publish_mutex_;
   std::atomic<uint64_t> texture_serial_{ 0 };  // Monotonic texture serial source (producer side)
   uint64_t last_generation_{ 0 };              // Tracks snapshot generation to detect new data

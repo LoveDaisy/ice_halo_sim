@@ -1,4 +1,4 @@
-"""Regression guard: sentinel-overflow in LUMICE_GetRawXyzResults.
+"""Regression guard: sentinel-overflow in the raw-XYZ result read.
 
 Fix commit: 5287efe (fix(capi-sentinel-overflow): guard sentinel write past max_count)
 

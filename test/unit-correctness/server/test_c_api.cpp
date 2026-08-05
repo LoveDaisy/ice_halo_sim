@@ -43,7 +43,7 @@ static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must b
 // ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
 // task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes
 // in task-345.3 when composite_p99_y was appended (float@24 + 4 pad, 8-aligned),
-// but the ctypes mirror was not updated. Result: LUMICE_GetRenderResults wrote
+// but the ctypes mirror was not updated. Result: the render getter wrote
 // 8 bytes past the Python-allocated (LUMICE_RenderResult * 1)() buffer on every
 // poll, corrupting the Python heap and aborting under _ctypes teardown or the
 // next glibc malloc/free check. LUMICE_ServerConfig has the same failure mode
@@ -1235,12 +1235,15 @@ TEST_F(ServerLifecycleApi, GetColorOverflowInfoNullArgs) {
 }
 
 
-TEST_F(ServerLifecycleApi, GetRenderResults) {
+TEST_F(ServerLifecycleApi, FrameGetRender) {
   CommitAndWaitForIdle();
+
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
 
   // out array size = LUMICE_MAX_RENDER_RESULTS + 1 (sentinel slot)
   LUMICE_RenderResult out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRenderResults(server_, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRender(frame, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
 
   // First (and only) renderer matches MakeMinimalConfigJson() resolution 800x400, id=1
   EXPECT_EQ(out[0].renderer_id, 1);
@@ -1250,14 +1253,19 @@ TEST_F(ServerLifecycleApi, GetRenderResults) {
 
   // Sentinel: img_buffer == NULL marks end of array
   EXPECT_EQ(out[1].img_buffer, nullptr);
+
+  LUMICE_ReleaseResultFrame(frame);
 }
 
 
-TEST_F(ServerLifecycleApi, GetRawXyzResults) {
+TEST_F(ServerLifecycleApi, FrameGetRawXyz) {
   CommitAndWaitForIdle();
 
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+
   LUMICE_RawXyzResult out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(server_, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
 
   EXPECT_EQ(out[0].renderer_id, 1);
   EXPECT_EQ(out[0].img_width, 800);
@@ -1267,55 +1275,142 @@ TEST_F(ServerLifecycleApi, GetRawXyzResults) {
 
   // Sentinel: xyz_buffer == NULL marks end of array
   EXPECT_EQ(out[1].xyz_buffer, nullptr);
+
+  LUMICE_ReleaseResultFrame(frame);
 }
 
 
-TEST_F(ServerLifecycleApi, GetStatsResults) {
+TEST_F(ServerLifecycleApi, FrameGetStats) {
   CommitAndWaitForIdle();
 
-  LUMICE_StatsResult out[LUMICE_MAX_STATS_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetStatsResults(server_, out, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+
+  LUMICE_StatsResult out{};
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &out), LUMICE_OK);
 
   // After running 1000 rays through one crystal with single-pass scattering:
-  EXPECT_GT(out[0].sim_ray_num, 0u);
-  EXPECT_GT(out[0].crystal_num, 0u);
+  EXPECT_GT(out.sim_ray_num, 0u);
+  EXPECT_GT(out.crystal_num, 0u);
   // The orientation half must be mapped too. c_api.cpp fills this struct with a
   // hand-written field-by-field copy, which is the copy-paste shape where a new
   // field is easiest to forget — and forgetting it yields 0, which reads as
   // "this scene never randomizes orientation" rather than as a missing wire.
-  EXPECT_GT(out[0].orientation_num, 0u);
+  EXPECT_GT(out.orientation_num, 0u);
 
-  // Sentinel: sim_ray_num == 0 marks end of array
-  EXPECT_EQ(out[1].sim_ray_num, 0u);
+  LUMICE_ReleaseResultFrame(frame);
 }
 
 
-TEST_F(ServerLifecycleApi, GetCachedStatsConsistency) {
+// ---------------------------------------------------------------------------------------
+// Result frame (opaque handle). The lifetime property itself — a frame held across a later
+// snapshot keeps its own data — lives in test_result_frame_lifetime.cpp; what is checked
+// here is the frame reads themselves and the handle's own contract.
+// ---------------------------------------------------------------------------------------
+
+// Every kind of result read off ONE frame belongs to ONE snapshot. This is what retires the
+// combined xyz+composite getter: pairing is not something a caller has to ask for.
+TEST_F(ServerLifecycleApi, ResultFrameReadsShareOneGeneration) {
   CommitAndWaitForIdle();
-  // Precondition: simulation has completed; no new data is being produced.
-  // This guarantees DoSnapshot results are stable across calls.
 
-  // Trigger DoSnapshot (which updates cached_stats_result_) by calling GetStatsResults.
-  // Note: any Get function that triggers DoSnapshot updates the cache, not just GetStatsResults.
-  LUMICE_StatsResult fresh[LUMICE_MAX_STATS_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetStatsResults(server_, fresh, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
-  ASSERT_GT(fresh[0].sim_ray_num, 0u);
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
 
-  // Cached stats should now match the fresh ones.
-  LUMICE_StatsResult cached{};
-  ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached), LUMICE_OK);
-  EXPECT_EQ(cached.sim_ray_num, fresh[0].sim_ray_num);
-  EXPECT_EQ(cached.crystal_num, fresh[0].crystal_num);
-  EXPECT_EQ(cached.orientation_num, fresh[0].orientation_num);
-  EXPECT_EQ(cached.ray_seg_num, fresh[0].ray_seg_num);
+  LUMICE_RawXyzResult xyz_a[2]{};
+  LUMICE_RawXyzResult xyz_b[2]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz_a, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz_b, 1), LUMICE_OK);
+  EXPECT_EQ(xyz_a[0].snapshot_generation, xyz_b[0].snapshot_generation);
+  EXPECT_EQ(xyz_a[0].xyz_buffer, xyz_b[0].xyz_buffer) << "two reads of one frame disagree";
 
-  // Cache stability: a second GetCachedStats call without any intervening Get*Results
-  // call must return the same values (no new snapshot).
-  LUMICE_StatsResult cached_again{};
-  ASSERT_EQ(LUMICE_GetCachedStats(server_, &cached_again), LUMICE_OK);
-  EXPECT_EQ(cached_again.sim_ray_num, cached.sim_ray_num);
-  EXPECT_EQ(cached_again.crystal_num, cached.crystal_num);
-  EXPECT_EQ(cached_again.orientation_num, cached.orientation_num);
+  // Stats are re-read the same way. This is what the retired cached-stats consistency case
+  // used to check by a different route: it read stats twice and required no new snapshot in
+  // between. A frame makes "no new snapshot in between" true by construction rather than by
+  // the reader picking a getter that promises not to refresh.
+  LUMICE_StatsResult stats_a{};
+  LUMICE_StatsResult stats_b{};
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats_a), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetStats(frame, &stats_b), LUMICE_OK);
+  ASSERT_GT(stats_a.sim_ray_num, 0u) << "no stats to compare — the case would be vacuous";
+  EXPECT_EQ(stats_a.sim_ray_num, stats_b.sim_ray_num);
+  EXPECT_EQ(stats_a.crystal_num, stats_b.crystal_num);
+  EXPECT_EQ(stats_a.orientation_num, stats_b.orientation_num);
+  EXPECT_EQ(stats_a.ray_seg_num, stats_b.ray_seg_num);
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+
+// Release really does give the share back, and taking another frame afterwards works.
+TEST_F(ServerLifecycleApi, ResultFrameAcquireReleaseAcquire) {
+  CommitAndWaitForIdle();
+
+  LUMICE_ResultFrame* first = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &first), LUMICE_OK);
+  LUMICE_ReleaseResultFrame(first);
+
+  LUMICE_ResultFrame* second = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &second), LUMICE_OK);
+  ASSERT_NE(second, nullptr);
+  LUMICE_RenderResult out[2]{};
+  EXPECT_EQ(LUMICE_FrameGetRender(second, out, 1), LUMICE_OK);
+  EXPECT_NE(out[0].img_buffer, nullptr);
+  LUMICE_ReleaseResultFrame(second);
+}
+
+
+// A frame acquired before anything has run is empty, not invalid: every read succeeds and
+// writes its sentinel / all-zero struct. Nothing here may crash.
+TEST_F(ServerLifecycleApi, ResultFrameBeforeAnySnapshotIsEmpty) {
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  ASSERT_NE(frame, nullptr);
+
+  LUMICE_RenderResult render[2]{};
+  LUMICE_RenderResult composite[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  LUMICE_StatsResult stats{ 1, 1, 1, 1 };  // pre-dirtied: an untouched out param would pass
+  EXPECT_EQ(LUMICE_FrameGetRender(frame, render, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame, composite, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetStats(frame, &stats), LUMICE_OK);
+  EXPECT_EQ(render[0].img_buffer, nullptr);
+  EXPECT_EQ(composite[0].img_buffer, nullptr);
+  EXPECT_EQ(xyz[0].xyz_buffer, nullptr);
+  EXPECT_EQ(stats.sim_ray_num, 0u);
+  EXPECT_EQ(stats.ray_seg_num, 0u);
+  EXPECT_EQ(stats.crystal_num, 0u);
+  EXPECT_EQ(stats.orientation_num, 0u);
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+
+TEST_F(ServerLifecycleApi, ResultFrameNullArgs) {
+  LUMICE_ResultFrame* frame = nullptr;
+  EXPECT_EQ(LUMICE_AcquireResultFrame(nullptr, &frame), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_AcquireResultFrame(server_, nullptr), LUMICE_ERR_NULL_ARG);
+
+  LUMICE_RenderResult render[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  LUMICE_StatsResult stats{};
+  EXPECT_EQ(LUMICE_FrameGetRender(nullptr, render, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetComposite(nullptr, render, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(nullptr, xyz, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetStats(nullptr, &stats), LUMICE_ERR_NULL_ARG);
+
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRender(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetComposite(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame, nullptr, 1), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_FrameGetStats(frame, nullptr), LUMICE_ERR_NULL_ARG);
+  LUMICE_ReleaseResultFrame(frame);
+
+  // NULL-safe no-op, same contract as LUMICE_DestroyServer / LUMICE_SceneDestroy.
+  // Double-release is deliberately NOT tested: the contract says it is undefined behavior
+  // and there is no double-free sentinel, which is the same answer every other handle in
+  // this API gives.
+  LUMICE_ReleaseResultFrame(nullptr);
 }
 
 
@@ -1389,32 +1484,6 @@ TEST_F(ServerLifecycleApi, ZeroExitBatchNoHang) {
 }
 
 
-// NULL-arg checks for the four Get* result functions.
-TEST(ResultsApi, NullArgsGetters) {
-  auto* server = LUMICE_CreateServer();
-  ASSERT_NE(server, nullptr);
-
-  LUMICE_RenderResult render_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRenderResults(nullptr, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRenderResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_RawXyzResult xyz_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRawXyzResults(nullptr, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRawXyzResults(server, nullptr, LUMICE_MAX_RENDER_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StatsResult stats_out[LUMICE_MAX_STATS_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetStatsResults(nullptr, stats_out, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetStatsResults(server, nullptr, LUMICE_MAX_STATS_RESULTS), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StatsResult cached{};
-  EXPECT_EQ(LUMICE_GetCachedStats(nullptr, &cached), LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetCachedStats(server, nullptr), LUMICE_ERR_NULL_ARG);
-
-  LUMICE_StopServer(server);
-  LUMICE_DestroyServer(server);
-}
-
-
 TEST(ResultsApi, NullArgsQueryState) {
   auto* server = LUMICE_CreateServer();
   ASSERT_NE(server, nullptr);
@@ -1436,27 +1505,28 @@ TEST(ResultsApi, GetBeforeCommit) {
   auto* server = LUMICE_CreateServer();
   ASSERT_NE(server, nullptr);
 
+  LUMICE_ResultFrame* frame = nullptr;
+  EXPECT_EQ(LUMICE_AcquireResultFrame(server, &frame), LUMICE_OK);
+  ASSERT_NE(frame, nullptr) << "acquiring before a commit must still yield a frame, just an empty one";
+
   // Render results: empty count, sentinel at index 0
   LUMICE_RenderResult render_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRenderResults(server, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRender(frame, render_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_EQ(render_out[0].img_buffer, nullptr);
 
   // Raw XYZ results: empty count, sentinel at index 0
   LUMICE_RawXyzResult xyz_out[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetRawXyzResults(server, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(LUMICE_FrameGetRawXyz(frame, xyz_out, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   EXPECT_EQ(xyz_out[0].xyz_buffer, nullptr);
 
-  // Stats results: empty count, sentinel at index 0
-  LUMICE_StatsResult stats_out[LUMICE_MAX_STATS_RESULTS + 1]{};
-  EXPECT_EQ(LUMICE_GetStatsResults(server, stats_out, LUMICE_MAX_STATS_RESULTS), LUMICE_OK);
-  EXPECT_EQ(stats_out[0].sim_ray_num, 0u);
+  // Stats: all-zero struct
+  LUMICE_StatsResult stats_out{};
+  EXPECT_EQ(LUMICE_FrameGetStats(frame, &stats_out), LUMICE_OK);
+  EXPECT_EQ(stats_out.sim_ray_num, 0u);
+  EXPECT_EQ(stats_out.crystal_num, 0u);
+  EXPECT_EQ(stats_out.ray_seg_num, 0u);
 
-  // Cached stats: all-zero struct
-  LUMICE_StatsResult cached{};
-  EXPECT_EQ(LUMICE_GetCachedStats(server, &cached), LUMICE_OK);
-  EXPECT_EQ(cached.sim_ray_num, 0u);
-  EXPECT_EQ(cached.crystal_num, 0u);
-  EXPECT_EQ(cached.ray_seg_num, 0u);
+  LUMICE_ReleaseResultFrame(frame);
 
   // Server state: IDLE (no commit, no work running)
   LUMICE_ServerState state = LUMICE_SERVER_RUNNING;  // Initialize to non-IDLE to detect change
@@ -3806,13 +3876,16 @@ TEST(RaypathColorApi, SetRaypathColorsDoesNotRestartSim) {
   LUMICE_RayCount rc0 = 0;
   ASSERT_EQ(LUMICE_GetSimRayCount(s, &rc0), LUMICE_OK);
 
+  LUMICE_ResultFrame* frame_before = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_before), LUMICE_OK);
   LUMICE_RenderResult before[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, before, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_before, before, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(before[0].img_buffer, nullptr);
   const int w = before[0].img_width;
   const int h = before[0].img_height;
   const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 3;
   std::vector<uint8_t> before_px(before[0].img_buffer, before[0].img_buffer + nbytes);
+  LUMICE_ReleaseResultFrame(frame_before);
   const int red_p = BrightestRedPixel(before_px.data(), w, h);
   ASSERT_GE(red_p, 0) << "no red pixel to recolor — class0 (match-all red) should light pixels";
 
@@ -3833,24 +3906,30 @@ TEST(RaypathColorApi, SetRaypathColorsDoesNotRestartSim) {
   EXPECT_GE(rc1, rc0) << "accumulator must not be cleared/reset";
 
   // New color shows: the formerly-red pixel is now blue.
+  LUMICE_ResultFrame* frame_after = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_after), LUMICE_OK);
   LUMICE_RenderResult after[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, after, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_after, after, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(after[0].img_buffer, nullptr);
   const uint8_t* ap = after[0].img_buffer;
   EXPECT_GT(ap[red_p * 3 + 2], 0) << "recolored pixel must now be blue";
   EXPECT_EQ(ap[red_p * 3 + 0], 0) << "recolored pixel must no longer be red";
   EXPECT_NE(std::memcmp(before_px.data(), ap, nbytes), 0) << "composite must actually change";
+  LUMICE_ReleaseResultFrame(frame_after);
 
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
 }
 
-// task-342.4 Step 1 regression: RawXyz then Composite in the same tick must
-// both reflect the current data generation. Before the DoSnapshot()/GetRawXyz
-// unification, RawXyz would consume snapshot_dirty_ first and Composite's
-// DoSnapshot() would then early-return, leaving cached_composite_results_ stale
-// (empty or last-tick's pixels). See plan §3 keypoint 1.
-TEST(RaypathColorApi, RawXyzThenCompositeSeesFreshGeneration) {
+// Ordering regression, restated for the frame model. The two defects this guards
+// were both about WHICH read consumed snapshot_dirty_: reading xyz first left the composite
+// stale (its DoSnapshot early-returned), and reading composite first advanced no generation
+// at all (the bump lived only in xyz's Phase 1). Read order is no longer a thing a caller
+// can get wrong — one snapshot materializes both kinds into one frame — so the two ordering
+// variants that used to be separate cases are one case here. What survives from them is the
+// assertion: after a run, ONE frame carries fresh xyz AND fresh composite AND a generation
+// that advanced.
+TEST(RaypathColorApi, XyzAndCompositeMaterializeTogether) {
   LUMICE_ServerConfig sc{};
   sc.num_workers = 1;
   sc.sim_seed = 4242u;
@@ -3859,17 +3938,18 @@ TEST(RaypathColorApi, RawXyzThenCompositeSeesFreshGeneration) {
   ASSERT_EQ(CommitJsonConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
-  // Same-tick double consume: RawXyz first (previously the dirty-flag hog),
-  // Composite second. Both must see this-generation results.
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame), LUMICE_OK);
+
   LUMICE_RawXyzResult raw[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, raw, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(raw[0].xyz_buffer, nullptr);
-  ASSERT_NE(raw[0].has_valid_data, 0);
-  const unsigned long long gen_after_rawxyz = raw[0].snapshot_generation;
-  EXPECT_GT(gen_after_rawxyz, 0ull) << "generation must advance on first consume";
+  EXPECT_NE(raw[0].has_valid_data, 0);
+  const unsigned long long generation = raw[0].snapshot_generation;
+  EXPECT_GT(generation, 0ull) << "generation must advance on first consume";
 
   LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(comp[0].img_buffer, nullptr) << "composite must be populated (class0 is match-all red)";
   const size_t nbytes = static_cast<size_t>(comp[0].img_width) * static_cast<size_t>(comp[0].img_height) * 3;
   uint64_t sum = 0;
@@ -3878,54 +3958,31 @@ TEST(RaypathColorApi, RawXyzThenCompositeSeesFreshGeneration) {
   }
   EXPECT_GT(sum, 0u) << "composite must reflect the current-tick data, not an all-zero stale cache";
 
-  // A second RawXyz call in the same tick must not regress the generation
-  // (no new dirty snapshot arrived; both cached values are consistent).
+  LUMICE_ReleaseResultFrame(frame);
+
+  // A second frame taken with nothing new committed must not regress the generation.
+  LUMICE_ResultFrame* frame2 = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame2), LUMICE_OK);
   LUMICE_RawXyzResult raw2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  EXPECT_GE(raw2[0].snapshot_generation, gen_after_rawxyz);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame2, raw2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_GE(raw2[0].snapshot_generation, generation);
+  LUMICE_ReleaseResultFrame(frame2);
 
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
 }
 
-// task-342.4 Step 1 regression: reverse order (Composite then RawXyz). Before
-// the fix, Composite's DoSnapshot() would consume the dirty flag but NOT bump
-// snapshot_generation_ (that lived only in RawXyz's Phase-1), so RawXyz would
-// see generation stuck forever and the poller's has_new_snapshot check would
-// permanently return false. See plan §3 keypoint 1.
-TEST(RaypathColorApi, CompositeThenRawXyzGenerationStillAdvances) {
-  LUMICE_ServerConfig sc{};
-  sc.num_workers = 1;
-  sc.sim_seed = 5151u;
-  LUMICE_Server* s = LUMICE_CreateServerEx(&sc);
-  ASSERT_NE(s, nullptr);
-  ASSERT_EQ(CommitJsonConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
-  ASSERT_TRUE(WaitForIdle(s, 10000));
-
-  LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_NE(comp[0].img_buffer, nullptr);
-
-  LUMICE_RawXyzResult raw[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_NE(raw[0].xyz_buffer, nullptr);
-  EXPECT_NE(raw[0].has_valid_data, 0) << "RawXyz must see the snapshot that Composite consumed";
-  EXPECT_GT(raw[0].snapshot_generation, 0ull)
-      << "generation must advance even when Composite consumed the dirty flag first";
-
-  LUMICE_StopServer(s);
-  LUMICE_DestroyServer(s);
-}
-
-// code-review-02 Major 2 regression: deterministically reproduce the generation-drift
-// scenario ServerPoller::PopulateCompositePayload() (server_poller.cpp) guards against — a
-// Get*Results call landing strictly between an initial LUMICE_GetRawXyzResults() capture and
-// a later re-check must be observable as a newer snapshot_generation, and that drift must be
-// exactly what a "recheck != captured" comparison flags. Uses LUMICE_SetRaypathColors() to
-// deterministically arm snapshot_dirty_ without depending on background-thread timing (AC2:
-// it forces the next DoSnapshot() to re-run even without new ray data) — this is functionally
-// identical to a background batch commit landing in that window, but reproducible on demand.
-TEST(RaypathColorApi, CompositeGenerationDriftDetectableViaRecheck) {
+// Generation-drift regression, re-aimed at the frame model. The original case proved
+// that generation drift between an xyz capture and a later re-check was *detectable*, because
+// the poller then read xyz and composite through two separate server-taking getters and had to
+// notice when a snapshot landed between them. One frame carries both, so that particular drift
+// window no longer exists (ResultFrameReadsShareOneGeneration covers the in-frame half). What
+// still has to hold, and is what this case now asserts, is the other half: arming a dirty event
+// must make the NEXT acquired frame genuinely newer — a newer snapshot_generation carrying
+// pixels that actually changed, not a stale re-read wearing a fresh number.
+// LUMICE_SetRaypathColors() arms snapshot_dirty_ on demand, so this does not depend on
+// background-thread timing.
+TEST(RaypathColorApi, RecolorAdvancesGenerationOnNextFrame) {
   LUMICE_ServerConfig sc{};
   sc.num_workers = 1;
   sc.sim_seed = 8181u;
@@ -3934,25 +3991,26 @@ TEST(RaypathColorApi, CompositeGenerationDriftDetectableViaRecheck) {
   ASSERT_EQ(CommitJsonConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
-  // Baseline (no drift armed yet): mirrors PopulateCompositePayload's happy path, where the
-  // recheck observes the same generation that was captured before the composite call.
+  LUMICE_ResultFrame* frame1 = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame1), LUMICE_OK);
   LUMICE_RawXyzResult raw1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, raw1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  const unsigned long long captured_xyz_generation = raw1[0].snapshot_generation;
-
   LUMICE_RenderResult comp1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame1, raw1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame1, comp1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(comp1[0].img_buffer, nullptr);
+  const unsigned long long captured_generation = raw1[0].snapshot_generation;
   const size_t nbytes = static_cast<size_t>(comp1[0].img_width) * static_cast<size_t>(comp1[0].img_height) * 3;
   std::vector<uint8_t> comp1_px(comp1[0].img_buffer, comp1[0].img_buffer + nbytes);
 
-  LUMICE_RawXyzResult regen_check1[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, regen_check1, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  EXPECT_EQ(regen_check1[0].snapshot_generation, captured_xyz_generation)
-      << "no drift armed yet: recheck must observe the same generation that was captured before Composite";
+  // Nothing armed: a second frame taken from an idle server must not claim to be newer.
+  LUMICE_ResultFrame* frame_same = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_same), LUMICE_OK);
+  LUMICE_RawXyzResult raw_same[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame_same, raw_same, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(raw_same[0].snapshot_generation, captured_generation)
+      << "no dirty event armed: acquiring again must not manufacture a new generation";
+  LUMICE_ReleaseResultFrame(frame_same);
 
-  // Deterministically arm a new dirty event exactly in the window PopulateCompositePayload's
-  // recheck is meant to catch: after xyz was "captured" above, but before the recheck below.
   LUMICE_ColorClassDisplay disp[2]{};
   disp[0].color[2] = 1.0f;  // class0 red->blue
   disp[0].visible = 1;
@@ -3960,34 +4018,35 @@ TEST(RaypathColorApi, CompositeGenerationDriftDetectableViaRecheck) {
   disp[1].visible = 1;
   ASSERT_EQ(LUMICE_SetRaypathColors(s, disp, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
 
-  // Plays the role of PollOnce()'s LUMICE_GetCompositeResults(): consumes the freshly-armed
-  // dirty flag and materializes a generation newer than captured_xyz_generation.
+  LUMICE_ResultFrame* frame2 = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame2), LUMICE_OK);
+  LUMICE_RawXyzResult raw2[LUMICE_MAX_RENDER_RESULTS + 1]{};
   LUMICE_RenderResult comp2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame2, raw2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame2, comp2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(comp2[0].img_buffer, nullptr);
+  EXPECT_GT(raw2[0].snapshot_generation, captured_generation)
+      << "the armed dirty event must materialize as a newer generation on the next frame";
   EXPECT_NE(std::memcmp(comp1_px.data(), comp2[0].img_buffer, nbytes), 0)
-      << "comp2 must reflect the recolor, proving it genuinely belongs to a newer generation "
-         "than captured_xyz_generation rather than a stale cache hit";
+      << "comp2 must reflect the recolor, proving the newer generation carries new pixels "
+         "rather than a stale cache hit wearing a fresh number";
 
-  // Plays the role of PopulateCompositePayload's regen_check: must observe a generation newer
-  // than captured_xyz_generation — exactly the condition PopulateCompositePayload uses to
-  // decide whether to drop this tick's composite (server_poller.cpp).
-  LUMICE_RawXyzResult regen_check2[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, regen_check2, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  EXPECT_GT(regen_check2[0].snapshot_generation, captured_xyz_generation)
-      << "drift must be detectable: recheck.snapshot_generation != captured_xyz_generation is "
-         "the exact condition PopulateCompositePayload checks to drop a mismatched composite";
+  // frame1 was held across all of the above and still reads its own pixels.
+  LUMICE_RenderResult comp1_again[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame1, comp1_again, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  EXPECT_EQ(std::memcmp(comp1_px.data(), comp1_again[0].img_buffer, nbytes), 0);
 
+  LUMICE_ReleaseResultFrame(frame2);
+  LUMICE_ReleaseResultFrame(frame1);
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
 }
 
-// task-345.2 Step 2 regression: the atomic combined getter must pair xyz +
-// composite from a SINGLE snapshot — i.e., composite_out[0] MUST belong to
-// xyz_out[0].snapshot_generation, even when repeated churn arms a fresh dirty
-// event between each call. Contrast with CompositeGenerationDriftDetectableViaRecheck
-// above, which proves the OPPOSITE property for the three-call sequence
-// (xyz → composite → recheck) that the fix eliminates from the poller path.
+// Same-generation-pairing regression, carried to the frame model. The contract is unchanged —
+// xyz and composite must come from ONE snapshot even while churn arms a fresh dirty event
+// before every read — but it is no longer something a dedicated combined getter has to
+// promise: both are read off one frame, so the pairing is structural. The case is kept
+// because the contract is kept; only the mechanism it points at changed.
 TEST(RaypathColorApi, RawXyzAndCompositeSameGenerationUnderChurn) {
   LUMICE_ServerConfig sc{};
   sc.num_workers = 1;
@@ -4010,42 +4069,42 @@ TEST(RaypathColorApi, RawXyzAndCompositeSameGenerationUnderChurn) {
     disp[1].visible = 1;
     ASSERT_EQ(LUMICE_SetRaypathColors(s, disp, 2, nullptr, LUMICE_COLOR_MODE_DOMINANT), LUMICE_OK);
 
+    LUMICE_ResultFrame* frame = nullptr;
+    ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame), LUMICE_OK) << "round " << round;
+
     LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
     LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    ASSERT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
-              LUMICE_OK)
-        << "round " << round;
+    ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK) << "round " << round;
+    ASSERT_EQ(LUMICE_FrameGetComposite(frame, comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK) << "round " << round;
     ASSERT_NE(xyz[0].xyz_buffer, nullptr) << "round " << round;
     ASSERT_NE(comp[0].img_buffer, nullptr) << "round " << round << ": raypath_color is configured";
 
-    // Same-generation invariant (structural property of one-DoSnapshot() call).
-    // The composite that the getter returns MUST correspond to this call's xyz
-    // snapshot_generation — no cross-generation mix is possible when there is
-    // exactly ONE DoSnapshot() trigger inside the atomic call.
+    // Same-generation invariant. One frame is materialized by exactly one DoSnapshot(), so the
+    // composite read off it cannot belong to a different generation than the xyz read off it.
     EXPECT_GT(xyz[0].snapshot_generation, prev_generation)
         << "round " << round << ": SetRaypathColors armed dirty → generation must advance";
     prev_generation = xyz[0].snapshot_generation;
 
-    // Cross-check: an immediate independent LUMICE_GetRawXyzResults() call
-    // right after the combined call must observe the same generation
-    // (nothing else bumps it in this thread), i.e. the combined call did
-    // NOT leave the server in a "generation drift is armed for the next
-    // observer" state.
+    // Cross-check: re-reading the same frame after the composite read must observe the same
+    // generation — the frame is immutable, so nothing about reading it can arm drift for the
+    // next observer.
     LUMICE_RawXyzResult recheck[LUMICE_MAX_RENDER_RESULTS + 1]{};
-    ASSERT_EQ(LUMICE_GetRawXyzResults(s, recheck, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+    ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, recheck, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_EQ(recheck[0].snapshot_generation, xyz[0].snapshot_generation)
-        << "round " << round << ": no drift armed between combined call and immediate recheck";
+        << "round " << round << ": re-reading one frame must not shift its generation";
+
+    LUMICE_ReleaseResultFrame(frame);
   }
 
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
 }
 
-// The combined getter's xyz/composite outputs must byte-match what the two
-// individual getters would return when called in the ordinary "no churn armed
-// between them" case — proves the merged code path preserves the semantics of
-// its two callees, not just adds a new atomic guarantee.
-TEST(RaypathColorApi, RawXyzAndCompositeMatchesIndividualGettersNoChurn) {
+// The combined getter this case was written for is gone: there is nothing left for it to be
+// "combined" against. What the byte-level comparison was actually buying — an idle server hands
+// out the same frozen data no matter how many times it is asked — is worth keeping on its own,
+// so the comparison is re-aimed at two independently acquired frames.
+TEST(RaypathColorApi, IdleServerFramesAgreeByteForByte) {
   LUMICE_ServerConfig sc{};
   sc.num_workers = 1;
   sc.sim_seed = 2929u;
@@ -4054,49 +4113,37 @@ TEST(RaypathColorApi, RawXyzAndCompositeMatchesIndividualGettersNoChurn) {
   ASSERT_EQ(CommitJsonConfig(s, MakeColorSimConfigJson().c_str()), LUMICE_OK);
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
-  LUMICE_RawXyzResult xyz_c[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_RenderResult comp_c[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz_c, LUMICE_MAX_RENDER_RESULTS, comp_c, LUMICE_MAX_RENDER_RESULTS),
-            LUMICE_OK);
-  ASSERT_NE(xyz_c[0].xyz_buffer, nullptr);
-  ASSERT_NE(comp_c[0].img_buffer, nullptr);
-  const int width = xyz_c[0].img_width;
-  const int height = xyz_c[0].img_height;
+  LUMICE_ResultFrame* frame_a = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_a), LUMICE_OK);
+  LUMICE_RawXyzResult xyz_a[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RenderResult comp_a[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame_a, xyz_a, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_a, comp_a, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(xyz_a[0].xyz_buffer, nullptr);
+  ASSERT_NE(comp_a[0].img_buffer, nullptr);
+  const int width = xyz_a[0].img_width;
+  const int height = xyz_a[0].img_height;
   const size_t rgb_bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
   const size_t xyz_floats = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-  std::vector<uint8_t> comp_copy(comp_c[0].img_buffer, comp_c[0].img_buffer + rgb_bytes);
-  std::vector<float> xyz_copy(xyz_c[0].xyz_buffer, xyz_c[0].xyz_buffer + xyz_floats);
-  const unsigned long long combined_generation = xyz_c[0].snapshot_generation;
+  std::vector<uint8_t> comp_copy(comp_a[0].img_buffer, comp_a[0].img_buffer + rgb_bytes);
+  std::vector<float> xyz_copy(xyz_a[0].xyz_buffer, xyz_a[0].xyz_buffer + xyz_floats);
+  const unsigned long long generation_a = xyz_a[0].snapshot_generation;
+  LUMICE_ReleaseResultFrame(frame_a);
 
-  // Idle server → no dirty → the individual getters must land on the SAME
-  // frozen snapshot the combined call just materialized (generation stable).
-  LUMICE_RawXyzResult xyz_i[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetRawXyzResults(s, xyz_i, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  EXPECT_EQ(xyz_i[0].snapshot_generation, combined_generation);
-  EXPECT_EQ(std::memcmp(xyz_i[0].xyz_buffer, xyz_copy.data(), xyz_floats * sizeof(float)), 0);
+  // Idle server → no dirty → the second frame must be the SAME frozen snapshot, byte for byte.
+  LUMICE_ResultFrame* frame_b = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_b), LUMICE_OK);
+  LUMICE_RawXyzResult xyz_b[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  LUMICE_RenderResult comp_b[LUMICE_MAX_RENDER_RESULTS + 1]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame_b, xyz_b, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_b, comp_b, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_NE(comp_b[0].img_buffer, nullptr);
+  EXPECT_EQ(xyz_b[0].snapshot_generation, generation_a);
+  EXPECT_EQ(std::memcmp(xyz_b[0].xyz_buffer, xyz_copy.data(), xyz_floats * sizeof(float)), 0);
+  EXPECT_EQ(std::memcmp(comp_b[0].img_buffer, comp_copy.data(), rgb_bytes), 0);
 
-  LUMICE_RenderResult comp_i[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, comp_i, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-  ASSERT_NE(comp_i[0].img_buffer, nullptr);
-  EXPECT_EQ(std::memcmp(comp_i[0].img_buffer, comp_copy.data(), rgb_bytes), 0);
-
+  LUMICE_ReleaseResultFrame(frame_b);
   LUMICE_StopServer(s);
-  LUMICE_DestroyServer(s);
-}
-
-// NULL-arg guard mirrors the two individual getters.
-TEST(RaypathColorApi, RawXyzAndCompositeRejectsNullArgs) {
-  LUMICE_Server* s = LUMICE_CreateServer();
-  ASSERT_NE(s, nullptr);
-  LUMICE_RawXyzResult xyz[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  LUMICE_RenderResult comp[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  EXPECT_EQ(
-      LUMICE_GetRawXyzAndCompositeResults(nullptr, xyz, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
-      LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, nullptr, LUMICE_MAX_RENDER_RESULTS, comp, LUMICE_MAX_RENDER_RESULTS),
-            LUMICE_ERR_NULL_ARG);
-  EXPECT_EQ(LUMICE_GetRawXyzAndCompositeResults(s, xyz, LUMICE_MAX_RENDER_RESULTS, nullptr, LUMICE_MAX_RENDER_RESULTS),
-            LUMICE_ERR_NULL_ARG);
   LUMICE_DestroyServer(s);
 }
 
@@ -4111,11 +4158,14 @@ TEST(RaypathColorApi, SetRaypathColorsRejectsBadArgsAllOrNothing) {
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
   // Capture the current composite to prove rejections leave it untouched.
+  LUMICE_ResultFrame* frame_before = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_before), LUMICE_OK);
   LUMICE_RenderResult before[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, before, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_before, before, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(before[0].img_buffer, nullptr);
   const size_t nbytes = static_cast<size_t>(before[0].img_width) * static_cast<size_t>(before[0].img_height) * 3;
   std::vector<uint8_t> before_px(before[0].img_buffer, before[0].img_buffer + nbytes);
+  LUMICE_ReleaseResultFrame(frame_before);
 
   // count mismatch (active is 2). Pass a 1-element array + count 1 (no OOB read).
   LUMICE_ColorClassDisplay one[1]{};
@@ -4135,11 +4185,14 @@ TEST(RaypathColorApi, SetRaypathColorsRejectsBadArgsAllOrNothing) {
   EXPECT_EQ(LUMICE_SetRaypathColors(s, two, 2, oob, LUMICE_COLOR_MODE_DOMINANT), LUMICE_ERR_INVALID_CONFIG);
 
   // All rejections were all-or-nothing: composite unchanged (still red, not blue).
+  LUMICE_ResultFrame* frame_mid = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame_mid), LUMICE_OK);
   LUMICE_RenderResult mid[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, mid, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame_mid, mid, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
   ASSERT_NE(mid[0].img_buffer, nullptr);
   EXPECT_EQ(std::memcmp(before_px.data(), mid[0].img_buffer, nbytes), 0)
       << "rejected SetRaypathColors must not mutate the active table";
+  LUMICE_ReleaseResultFrame(frame_mid);
 
   // A valid permutation {1,0} succeeds.
   const int perm[2] = { 1, 0 };
@@ -4221,8 +4274,11 @@ TEST(RaypathColorApi, GetColorClassSignalBasic) {
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
   // Trigger a snapshot so lane data is materialized (mirror the GUI polling contract).
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame), LUMICE_OK);
   LUMICE_RenderResult composite[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  LUMICE_ReleaseResultFrame(frame);
 
   int flags[2] = { -1, -1 };
   EXPECT_EQ(LUMICE_GetColorClassSignal(s, flags, 2), LUMICE_OK);
@@ -4255,8 +4311,11 @@ TEST(RaypathColorApi, GetColorClassSignalEmptyClassReportsZero) {
   ASSERT_EQ(CommitJsonConfig(s, json.c_str()), LUMICE_OK);
   ASSERT_TRUE(WaitForIdle(s, 10000));
 
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(s, &frame), LUMICE_OK);
   LUMICE_RenderResult composite[LUMICE_MAX_RENDER_RESULTS + 1]{};
-  ASSERT_EQ(LUMICE_GetCompositeResults(s, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame, composite, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
+  LUMICE_ReleaseResultFrame(frame);
 
   int flags[2] = { -1, -1 };
   EXPECT_EQ(LUMICE_GetColorClassSignal(s, flags, 2), LUMICE_OK);

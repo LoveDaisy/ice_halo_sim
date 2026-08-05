@@ -36,6 +36,7 @@
 #include "imgui_internal.h"
 #include "imgui_te_engine.h"
 #include "imgui_te_exporters.h"
+#include "support/scoped_result_frame.hpp"
 #include "test_gui_shared.hpp"
 
 // ========== Global variable definitions ==========
@@ -446,9 +447,12 @@ int main(int argc, char** argv) {
             // never restarted, so its counter is still growing under the previous
             // epoch — double-counting would appear as inflated cumulative rays).
             // `last_commit` always advances so the 70ms cadence check is unchanged.
-            LUMICE_StatsResult stats[2]{};
-            LUMICE_GetStatsResults(gui::g_server, stats, 1);
-            unsigned long snapshot_rays = stats[0].sim_ray_num;
+            LUMICE_StatsResult stats{};
+            {
+              lumice::test::ScopedResultFrame frame(gui::g_server);
+              LUMICE_FrameGetStats(frame.get(), &stats);
+            }
+            unsigned long snapshot_rays = stats.sim_ray_num;
 
             bool committed = gui::DoRun(/*user_initiated=*/false);
             if (committed) {

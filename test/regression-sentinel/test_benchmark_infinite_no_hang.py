@@ -1,10 +1,10 @@
 """Regression guard: `--benchmark` on an infinite-ray_num config must TERMINATE.
 
 Fix commit: task-317 (benchmark reads sim_ray_num via the cheap O(1)
-LUMICE_GetSimRayCount instead of the render-triggering LUMICE_GetStatsResults).
+LUMICE_GetSimRayCount instead of a render-triggering result read).
 
 Root cause (diagnosed white-box on dev49 via live gdb stacks): the drain-count
-`--benchmark` poll loop called LUMICE_GetStatsResults every iteration just to
+`--benchmark` poll loop took a full result snapshot every iteration just to
 read sim_ray_num, but that unconditionally triggers a full DoSnapshot ->
 RenderConsumer sRGB (LinearToSrgbBatch, powf/pixel) render the benchmark never
 uses. For the drain-count path (which runs many polls) the per-poll render tax

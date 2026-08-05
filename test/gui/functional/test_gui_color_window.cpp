@@ -25,6 +25,7 @@
 #include "gui/file_io.hpp"  // BuildScene — pipeline assertion for AC4 default flow-through.
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "support/scoped_result_frame.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -88,7 +89,8 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
     LUMICE_QueryServerState(server, &st);
     if (st == LUMICE_SERVER_IDLE) {
       LUMICE_RawXyzResult xyz[1]{};
-      LUMICE_GetRawXyzResults(server, xyz, 1);
+      lumice::test::ScopedResultFrame frame_xyz(server);
+      LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1);
       if (xyz[0].has_valid_data) {
         return true;
       }

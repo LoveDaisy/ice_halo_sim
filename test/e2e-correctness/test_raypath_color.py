@@ -2,7 +2,7 @@
 
 Pins the full CLI delivery path: a config with a `raypath_color` section must
 produce an additional composited image `img_XX_components.<fmt>` (via the
-LUMICE_GetCompositeResults C-API + SaveCompositeResults in main.cpp), while the
+LUMICE_FrameGetComposite C-API + SaveCompositeResults in main.cpp), while the
 mono `img_XX.<fmt>` output is still produced (additive, not a replacement).
 
 The fixture `raypath_color_three_arcs.json` is a single-MS scene under the

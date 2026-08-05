@@ -7,11 +7,11 @@ against it on the same scenes, with two complementary metrics:
 
   - Axis A: Metal exit-seam        vs legacy CPU
   - Axis B: CpuTraceBackend        vs legacy CPU
-  - Metric 1: raw XYZ Pearson corr (accumulated layer, GetRawXyzResults)
+  - Metric 1: raw XYZ Pearson corr (accumulated layer, LUMICE_FrameGetRawXyz)
                 — 258.6.2 switched to block-mean (4×4) downsampled Pearson
                   (`_raw_corr_ds`) to suppress Monte-Carlo speckle floor on
                   sparse filter scenes. See baseline.md threshold section.
-  - Metric 2: render-image PSNR    (final sRGB image, GetRenderResults)
+  - Metric 2: render-image PSNR    (final sRGB image, LUMICE_FrameGetRender)
 
 Every test asserts Metal/Cpu actually ran (routed_backend matches AND no
 "falling back" warning). The negative smoke test confirms the assertion
