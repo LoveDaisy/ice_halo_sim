@@ -657,6 +657,36 @@ tried and reverted, rather than re-deriving the same dead end:
    *because* of the exact lifetime defect this invariant now closes at the source. Citing that
    copy's existence as evidence the defect doesn't need fixing assumes the conclusion. Rejected.
 
+### §9.3a Honest boundary — what the ASan evidence does and does not establish
+
+The use-after-free above was reproduced **deterministically**, but by a *constructed* sequence:
+a single thread deliberately holding a result pointer across two further getter calls, then
+reading it. That is what makes it a reliable regression gate
+(`test/unit-correctness/server/test_result_frame_lifetime.cpp`) — it fires every run, not
+one in N.
+
+What was **not** established is how often the equivalent interleaving arises on its own. Six
+attempts to reproduce it from the natural two-thread production shape (the GUI poller worker
+reading a frame while the main thread's save path drives a new snapshot) all came back clean —
+but every one of those runs was **low-powered**: 85–475 reader windows per run, against a
+measured snapshot-publish rate of roughly 7–9.5 per second, which puts the expected hit count
+near zero even if the race is real. Those six clean runs are therefore **not** evidence that the
+race does not occur in practice; they are evidence that ASan's overhead makes this particular
+race expensive to sample.
+
+Two things follow, and both are load-bearing:
+
+- **Do not cite the clean runs as a safety argument.** "We could not reproduce it naturally"
+  and "it does not happen" are different claims, and only the first one is supported.
+- **The fix does not depend on the number.** A use-after-free that reproduces on demand is a
+  correctness gate, not a cost/benefit tradeoff to be weighed against an incidence estimate.
+  The frequency question was deliberately left open rather than answered badly.
+
+If a future change ever needs the actual rate, the cheap route is *not* ASan — its slowdown is
+what starved the sample count. Compare the published-snapshot generation counter immediately
+before and after a reader's window: a generation that advanced inside the window is exactly one
+free that occurred while a pointer was held, and it can be counted at full speed.
+
 ### §9.4 AC6's Three Versions — the Most Expensive Lesson of This Scrum
 
 The acceptance criterion governing HOW the invariant would be enforced went through three
