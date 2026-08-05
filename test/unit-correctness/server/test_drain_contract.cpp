@@ -223,6 +223,30 @@ TEST_F(DrainContract, NotDrainedAfterFreshCommit) {
   EXPECT_FALSE(IsDrained(second)) << "the previous epoch's drain leaked into the new one";
 }
 
+// A narrower race than NotDrainedAfterFreshCommit above: that test waits for
+// WaitForDrain to observe full settlement before re-committing, so by the time the
+// second CommitConfig lands, the previous epoch's terminal PublishDrainedEpochIfSettled
+// call has already returned and nothing is in flight. This test re-commits with no
+// settling gap at all, so the second CommitConfig's Stop() can land while the first
+// epoch is still mid-flight (queued, generating, or between clearing scene_gen_active_
+// and publishing). Pins that the epoch bump never becomes visible as "drained" before
+// CommitConfig returns — see PublishDrainedEpochIfSettled's doc comment (server.cpp,
+// "THE OTHER DIRECTION") for why CommitConfig's Stop() barrier closes this window.
+TEST_F(DrainContract, NotDrainedImmediatelyAfterRapidRecommit) {
+  constexpr int kRounds = 20;
+  for (int round = 0; round < kRounds; round++) {
+    ASSERT_EQ(CommitJson(server_, kConfig), LUMICE_OK) << "round " << round;
+    // No wait here on purpose — re-commit as fast as possible, potentially while the
+    // previous epoch is still producing or consuming.
+    ASSERT_EQ(CommitJson(server_, kConfig), LUMICE_OK) << "round " << round;
+    const LUMICE_DrainResult right_after = ReadDrain(server_);
+    EXPECT_FALSE(IsDrained(right_after)) << "epoch " << right_after.current_epoch
+                                         << " falsely reported drained immediately after "
+                                            "a rapid re-commit, round "
+                                         << round;
+  }
+}
+
 // Pre-commit state, asserted rather than left to chance: both counters are 0, so the
 // equality test reads "drained". That is deliberate and documented — a server that has
 // produced nothing has had all zero of it consumed — but it means the comparison only
