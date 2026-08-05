@@ -578,18 +578,27 @@ void ServerPoller::PollOnce() {
   //  - The destination is kIdleHeartbeat, not kPaused. Even a correct guard is a single
   //    observation; the heartbeat is what keeps a wrong one recoverable (I3b).
   //
-  // The kRunning re-check inside the lock is not optional garnish: a concurrent Stop() may have
-  // just written kPaused (its caller is about to destroy the server) or a WakeForRestart may have
-  // written kRunning for a newer epoch. Both write under this same mutex_, so re-reading here
+  // The drain status is read unconditionally rather than behind a `lifecycle == COMPLETED`
+  // pre-check. That pre-check would be free at runtime — LUMICE_GetDrainStatus is two atomic loads,
+  // in a function that already calls GetSimLifecycle (three locks) and acquires a result frame on
+  // every poll — and it would cost something that is not free: it re-states one of
+  // ShouldSelfPause's three terms at the call site, so the predicate would no longer be the sole
+  // owner of "may the poller stop polling". That is a measured consequence, not a stylistic
+  // preference: with the pre-check in place, a probe that made ShouldSelfPause return true
+  // unconditionally left the end-to-end negative (running_sim_never_self_pauses) GREEN, because a
+  // running sim never reached the predicate at all — the test could not see the defect it exists
+  // for. Splitting a decision across a call site and its predicate hides exactly this.
+  //
+  // The kRunning re-check inside the lock is not optional garnish either: a concurrent Stop() may
+  // have just written kPaused (its caller is about to destroy the server) or a WakeForRestart may
+  // have written kRunning for a newer epoch. Both write under this same mutex_, so re-reading here
   // makes the last writer win deterministically instead of this line clobbering either.
-  if (lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
-    LUMICE_DrainResult drain{};
-    LUMICE_GetDrainStatus(server, &drain);
-    if (ShouldSelfPause(lc, drain)) {
-      std::lock_guard<std::mutex> lk(mutex_);
-      if (state_.load() == State::kRunning) {
-        state_.store(State::kIdleHeartbeat);
-      }
+  LUMICE_DrainResult drain{};
+  LUMICE_GetDrainStatus(server, &drain);
+  if (ShouldSelfPause(lc, drain)) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (state_.load() == State::kRunning) {
+      state_.store(State::kIdleHeartbeat);
     }
   }
 }
