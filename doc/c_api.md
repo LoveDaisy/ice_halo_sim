@@ -687,6 +687,67 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 - `LUMICE_OK`: success, state written to `*out`
 - `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
 
+#### LUMICE_GetDrainStatus
+
+Reads the consumer-side drain status: whether the current epoch's data has been fully
+consumed, so the accumulated statistics are final.
+
+```c
+typedef struct LUMICE_DrainResult_ {
+  unsigned long long drained_epoch;
+  unsigned long long current_epoch;
+} LUMICE_DrainResult;
+
+LUMICE_ErrorCode LUMICE_GetDrainStatus(LUMICE_Server* server, LUMICE_DrainResult* out);
+```
+
+**Parameters**:
+- `server`: server handle pointer
+- `out`: pointer to receive `{drained_epoch, current_epoch}`
+
+**Return value**:
+- `LUMICE_OK`: success
+- `LUMICE_ERR_NULL_ARG`: `server` or `out` is `NULL`
+
+**Contract**: the current epoch is fully drained iff `drained_epoch == current_epoch`.
+`current_epoch` is the same value `LUMICE_GetSimLifecycle()` reports, sampled in this call
+so no second round trip is needed to compare them.
+
+**Why `LUMICE_SERVER_IDLE` is not enough**: `LUMICE_QueryServerState` /
+`LUMICE_GetSimLifecycle` derive their verdict from producer-side predicates only — no
+simulator busy, no pending scenes, scene generation finished. None of them asks whether
+the consumer thread has drained its queue. Statistics
+(`LUMICE_FrameGetStats` → `crystal_num` / `orientation_num` / `sim_ray_num`) are running
+totals frozen at snapshot time, so a read taken the moment the server first reports IDLE
+can return a **partial** total — observed as `orientation_num` 19616 against an expected
+20000, exactly a whole number of dispatch grains short. Any reader that needs final
+totals must poll this call, not the state enum.
+
+**Cost**: O(1) atomic reads, same class as `LUMICE_GetSimRayCount` — no snapshot, no
+render, no lock. Safe to call on every poll iteration.
+
+**Edge cases**:
+- An infinite run (`ray_num` unbounded) never drains, mirroring the way its lifecycle
+  never reaches `COMPLETED`.
+- `LUMICE_StopServer()` does **not** publish a drain. Stopping discards whatever is still
+  queued, so "stopped" stays distinguishable from "drained" rather than being reported as
+  a clean finish.
+- `drained_epoch` is monotonic and never reset. A new commit advances `current_epoch` past
+  it, which makes the equality test read "not drained yet" on its own.
+
+**Typical use**:
+
+```c
+LUMICE_DrainResult drain;
+for (;;) {
+    if (LUMICE_GetDrainStatus(server, &drain) != LUMICE_OK) { /* handle */ }
+    if (drain.drained_epoch == drain.current_epoch) {
+        break;  // totals are final; safe to acquire a result frame and read stats
+    }
+    sleep_ms(10);
+}
+```
+
 #### LUMICE_StopServer
 
 Stops the server.

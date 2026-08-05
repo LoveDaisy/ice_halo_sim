@@ -2762,6 +2762,24 @@ LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecyc
 }
 
 
+LUMICE_ErrorCode LUMICE_GetDrainStatus(LUMICE_Server* server, LUMICE_DrainResult* out) {
+  if (!server || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+
+  // Order matters: read the drained epoch BEFORE the current one. Sampled the
+  // other way round, a CommitConfig landing between the two reads would pair an
+  // old current_epoch with a drained_epoch the commit has already outrun, and
+  // the caller's equality test would report the SUPERSEDED epoch as drained.
+  // This order can only ever under-report (drained trails current), which the
+  // caller's poll loop resolves on its next iteration.
+  out->drained_epoch = static_cast<unsigned long long>(server->server_->DrainedEpoch());
+  out->current_epoch = static_cast<unsigned long long>(server->server_->CommittedEpoch());
+
+  return LUMICE_OK;
+}
+
+
 // Readback of the color-degrade counters. component_overflow_count is the
 // synchronous host-side count written inside CommitConfig; the three GPU-only
 // caps (symmetry-group / OR-summand / color-class) are published asynchronously

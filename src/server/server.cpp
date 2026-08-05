@@ -81,6 +81,7 @@ class ServerImpl {
   ServerStatus GetStatus() const;
   SimLifecycle GetSimLifecycle() const;
   uint64_t CommittedEpoch() const;
+  uint64_t DrainedEpoch() const;
   bool IsIdle();
   void SetPreferredBackend(BackendKind backend);
 
@@ -151,6 +152,9 @@ class ServerImpl {
 
   void ConsumeData();
   void GenerateScene();
+  // Publish drained_epoch_ if the current epoch is fully consumed.
+  // Called from the two places a "last transition" can happen — see its definition.
+  void PublishDrainIfSettled();
   // task-342.4 Step 1: unified snapshot consumer. Returns true iff this call
   // actually consumed a dirty snapshot (Phase 1..2 executed); false if
   // snapshot_dirty_ was clear on entry (nothing to do). Merges the previously
@@ -291,6 +295,14 @@ class ServerImpl {
   // is reset-causing today, so every success ++s. A future "continue-same-config"
   // path (append rays without reset) must skip this ++. See plan §2 decision 3.
   std::atomic<uint64_t> committed_epoch_{ 0 };
+  // Highest epoch whose data the CONSUMER has fully drained. Read
+  // via DrainedEpoch() / LUMICE_GetDrainStatus; "current epoch is drained" is
+  // drained_epoch_ == committed_epoch_. Deliberately NOT cleared by Stop() or
+  // CommitConfig(): a new epoch bumps committed_epoch_ past this value, so the
+  // comparison reads "not drained yet" on its own, with no reset site to forget
+  // (same shape as the ResultFrame's `fresh = snap->epoch == committed_epoch`).
+  // Published only by PublishDrainIfSettled(); monotonically non-decreasing.
+  std::atomic<uint64_t> drained_epoch_{ 0 };
 
   // Persistent thread state machine: threads wait on start_cv_ when kStopped,
   // work when kRunning, and exit when kTerminating.
@@ -1053,6 +1065,93 @@ uint64_t ServerImpl::CommittedEpoch() const {
   return committed_epoch_.load(std::memory_order_acquire);
 }
 
+uint64_t ServerImpl::DrainedEpoch() const {
+  return drained_epoch_.load(std::memory_order_acquire);
+}
+
+// =============== The drain signal ===============
+// GetStatus()'s kIdle is a PRODUCER-side verdict: it says nothing about whether
+// the consumer thread has drained data_queue_, so a reader that trusts it can
+// freeze a PARTIAL accumulator total (measured: orientation_num 19616 vs 20000).
+// This publishes the separate, consumer-side answer instead of overloading kIdle
+// with a third meaning (which is the documented way kIdle got ambiguous already).
+//
+// THE PREDICATE, and why each term is here / absent. Read order is load-bearing;
+// the three atomics are seq_cst (plain `=` / `+=` writes), so program order here
+// IS the observed order.
+//
+//   1. state_ == kRunning — Stop()/Terminate() throw away whatever is still
+//      queued (Queue::Shutdown swaps the deque out), so a stopping server must
+//      never be reported drained. Read first: everything below is meaningless
+//      once the queues are being torn down.
+//   2. epoch snapshot, taken BEFORE the predicates, never after. If a
+//      CommitConfig lands mid-check, a stamp taken afterwards would attribute
+//      the OLD epoch's emptiness to the NEW epoch. Taken first, the worst case
+//      is publishing an already-superseded epoch number, which the reader's
+//      `drained == current` test simply rejects.
+//   3. work_started_ — GenerateScene sets it AFTER scene_gen_active_ (see the
+//      ordering comment at its assignment), so `work_started_ && !scene_gen_active_`
+//      means "generation ran and finished", never "generation has not started".
+//      Without it, the window between Start() and GenerateScene's first line
+//      satisfies every other term.
+//   4. !scene_gen_active_ — no further batch will be enqueued for this epoch,
+//      hence no further sim_scene_cnt_ increment. MUST be read BEFORE the count
+//      (term 5): GetStatus() reads them the other way round, and that order has
+//      a real hole — count==0 observed first, GenerateScene then enqueues more
+//      and finishes, scene_gen_active_==false observed second, and the verdict
+//      is "idle" with those batches still unconsumed. That is a plausible
+//      mechanism for the whole-dispatch-grain deficit this task exists to fix.
+//   5. sim_scene_cnt_ <= 0 — the producer++/consumer-- counter, incremented per
+//      SimData a batch WILL yield (GenerateScene) and decremented only after
+//      that SimData has been handed to the consumers (ConsumeData). With term 4
+//      already true, "no outstanding credit" is exactly "every SimData this
+//      epoch will ever produce has been consumed". Note this also covers the
+//      device-fused third-clock accumulation window: an un-drained xyz_win_ holds
+//      xyz_win_.calls credits that DrainDeviceXyz only settles when it emplaces
+//      (simulator.cpp: sim_scene_credit_ = xyz_win_.calls), so a pending window
+//      keeps this term false. No separate Simulator-side pending-work accessor
+//      is needed; adding one would be a second copy of a fact this counter
+//      already carries.
+//   6. data_queue_->Empty() — strictly redundant given term 5, kept as cheap
+//      defence in depth because term 5 rests on a counter that HAS drifted
+//      before (the 1-vs-N credit imbalance fixed by counting SimData rather
+//      than SimBatch — see GenerateScene's kNsimdataPerBatch). If it goes wrong
+//      again, this term degrades the signal to "late" instead of "wrong". It
+//      cannot deadlock the signal: only the consumer can leave the queue
+//      non-empty, and the consumer re-runs this check after every item it takes.
+//
+// DELIBERATELY ABSENT: "all simulators are idle" (Simulator::IsIdle). It is
+// implied by term 5, and adding it would introduce a livelock — the consumer can
+// decrement the last credit while the worker has not yet reached its
+// `idle_ = true` store, and since this check only re-runs when another item is
+// consumed, there would be no later call to correct the verdict.
+//
+// Two call sites, because either thread can be the one that completes the last
+// transition: the consumer after its final decrement, and GenerateScene after it
+// clears scene_gen_active_. Whichever runs last sees the settled state.
+void ServerImpl::PublishDrainIfSettled() {
+  if (state_.load() != ServerState::kRunning) {
+    return;
+  }
+  const uint64_t epoch = committed_epoch_.load(std::memory_order_acquire);
+  if (!work_started_.load() || scene_gen_active_.load()) {
+    return;
+  }
+  if (sim_scene_cnt_.load() > 0) {
+    return;
+  }
+  if (!data_queue_->Empty()) {
+    return;
+  }
+  // Monotonic max-store: the two call sites can race, and an older epoch must
+  // never overwrite a newer one.
+  uint64_t prev = drained_epoch_.load(std::memory_order_relaxed);
+  while (prev < epoch &&
+         !drained_epoch_.compare_exchange_weak(prev, epoch, std::memory_order_release, std::memory_order_relaxed)) {
+  }
+  ILOG_DEBUG(logger_, "PublishDrainIfSettled: epoch {} drained", epoch);
+}
+
 
 #define CHECK_STOP                                           \
   if (state_.load() != ServerState::kRunning) { /* NOLINT */ \
@@ -1262,6 +1361,12 @@ void ServerImpl::ConsumeData() {
     if (sim_scene_cnt_ < kMaxSceneCnt / 2) {
       scene_cv_.notify_one();
     }
+    // The consumer is one of the two threads that can complete the
+    // last transition into "this epoch is fully drained" — publish from here,
+    // immediately after the decrement that may have brought the credit to zero.
+    // Placed after the CHECK_STOP-free decrement and before the loop's own
+    // CHECK_STOP so a Stop racing us is caught by the state_ test inside.
+    PublishDrainIfSettled();
 
     CHECK_STOP
   }
@@ -1389,6 +1494,12 @@ void ServerImpl::GenerateScene() {
     ILOG_TRACE(logger_, "GenerateScene: finish wl");
   }
   scene_gen_active_ = false;  // All exit paths (normal + CHECK_STOP break) converge here
+  // The other half of the drain publication. If the consumer already
+  // drained everything before this store, its own call saw scene_gen_active_
+  // still true and declined — this call is the one that completes the verdict.
+  // A CHECK_STOP break also lands here, which is why PublishDrainIfSettled
+  // re-checks state_ (a stopped server discards its queue; it is not "drained").
+  PublishDrainIfSettled();
   ILOG_DEBUG(logger_, "GenerateScene exit");
 }
 
@@ -1621,6 +1732,13 @@ uint64_t Server::CommittedEpoch() const {
     return 0;
   }
   return impl_->CommittedEpoch();
+}
+
+uint64_t Server::DrainedEpoch() const {
+  if (!impl_) {
+    return 0;
+  }
+  return impl_->DrainedEpoch();
 }
 
 bool Server::IsIdle() const {
