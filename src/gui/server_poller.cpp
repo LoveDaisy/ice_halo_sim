@@ -52,14 +52,19 @@ void ServerPoller::Start(LUMICE_Server* server) {
 void ServerPoller::Stop() {
   {
     std::lock_guard<std::mutex> lk(mutex_);
-    if (state_.load() != State::kRunning) {
+    const State s = state_.load();
+    // kIdleHeartbeat is NOT a rest state to early-return on: the worker still wakes every
+    // kIdleHeartbeatIntervalMs and dereferences server_. Skipping the handshake for it would let
+    // Stop() return with a tick either in flight or one timer edge away, and every caller of
+    // Stop() destroys or stops the server right afterwards.
+    if (s != State::kRunning && s != State::kIdleHeartbeat) {
       return;
     }
     state_.store(State::kPaused);
   }
   cv_.notify_all();
 
-  // Wait for worker to confirm it has left the poll loop
+  // Wait for the worker to confirm it is not inside any PollOnce() — full-speed or heartbeat.
   {
     std::unique_lock<std::mutex> lk(mutex_);
     cv_.wait(lk, [this] { return !active_; });
@@ -172,20 +177,61 @@ void ServerPoller::SetCalibratedThreshold(unsigned long long threshold) {
   GUI_LOG_INFO("[Poller] calibration set: threshold={}", threshold);
 }
 
+// Three cadences, not two (invariant I3, doc/gui-preview-lifecycle-architecture.md §9):
+//   kRunning        — poll every kPollIntervalMs.
+//   kIdleHeartbeat  — poll every kIdleHeartbeatIntervalMs. The run is believed over and drained;
+//                     the heartbeat is the second chance that makes that a BELIEF rather than a
+//                     one-shot verdict. I3's own words: idle may throttle down, but must not fall
+//                     so silent it cannot self-heal.
+//   kPaused         — untimed wait, zero polling. Only Stop() puts the worker here, and its
+//                     callers rely on that to destroy the server.
+//
+// Why the heartbeat is not simply "sleep longer in the kRunning loop": the wake entry points
+// (WakeForRestart / WakeForRefresh / Start) and Stop() all key off state_, and a poller that
+// stayed kRunning after completing would tell every one of them the wrong thing.
 void ServerPoller::WorkerLoop() {
   while (true) {
     {
       std::unique_lock<std::mutex> lk(mutex_);
-      active_ = false;
-      cv_.notify_all();  // Signal Stop() that worker is paused
-      cv_.wait(lk, [this] { return state_.load() != State::kPaused; });
+      // Wait-for-work loop. Re-entered after every heartbeat tick, which is why it re-publishes
+      // active_ = false + notify each time round: a Stop() that arrives during a tick blocks on
+      // active_ and must be released the moment the tick finishes.
+      for (;;) {
+        active_ = false;
+        cv_.notify_all();  // Signal Stop()/dtor that the worker is not inside PollOnce()
+        const State s = state_.load();
+        if (s == State::kRunning || s == State::kTerminating) {
+          break;
+        }
+        if (s == State::kIdleHeartbeat) {
+          // Returns true iff the predicate held — i.e. someone moved us out of kIdleHeartbeat
+          // (Stop / wake / dtor). false means the timer expired: that is a heartbeat tick.
+          const bool state_changed = cv_.wait_for(lk, std::chrono::milliseconds(gui::kIdleHeartbeatIntervalMs),
+                                                  [this] { return state_.load() != State::kIdleHeartbeat; });
+          if (state_changed) {
+            continue;  // re-dispatch on the new state at the top
+          }
+          // active_ is published under the same lock that wait_for reacquired, so a concurrent
+          // Stop() either got here first (and the predicate above would have been true) or blocks
+          // on active_ until this tick completes. There is no window in between.
+          active_ = true;
+          lk.unlock();
+          heartbeat_tick_count_.fetch_add(1, std::memory_order_relaxed);
+          PollOnce();
+          lk.lock();
+          continue;
+        }
+        // kPaused — explicit stop. Untimed wait; unchanged from before the heartbeat existed.
+        cv_.wait(lk, [this] { return state_.load() != State::kPaused; });
+      }
       if (state_.load() == State::kTerminating) {
         return;
       }
       active_ = true;
     }
 
-    // Inner poll loop — runs while kRunning
+    // Inner poll loop — runs while kRunning. Exits on Stop() (kPaused), on the dtor
+    // (kTerminating), and on PollOnce()'s own self-pause (kIdleHeartbeat).
     while (state_.load() == State::kRunning) {
       PollOnce();
 
@@ -196,6 +242,17 @@ void ServerPoller::WorkerLoop() {
       cv_.wait_for(lk, sleep_duration, [this] { return state_.load() != State::kRunning; });
     }
   }
+}
+
+// Invariant I3a. See the header for why each of the three terms is load-bearing and why the last
+// two are not the same test twice. Kept free of every member so the decision is exercisable as a
+// truth table (test_lifecycle.cpp, self_pause_predicate_truth_table) rather than only through a
+// live server plus a worker thread plus a race.
+bool ShouldSelfPause(const LUMICE_SimLifecycleResult& lc, const LUMICE_DrainResult& drain) {
+  if (lc.lifecycle != LUMICE_LIFECYCLE_COMPLETED) {
+    return false;
+  }
+  return drain.drained_epoch == lc.epoch && drain.current_epoch == lc.epoch;
 }
 
 // See doc/accumulator-consumer-architecture.md §8.1 (polling contract), §8.3 (data flow).
@@ -218,6 +275,27 @@ void ServerPoller::PollOnce() {
   // dropped the QueryServerState + has_valid_data side-channels this replaced).
   LUMICE_SimLifecycleResult lc{};
   LUMICE_GetSimLifecycle(server, &lc);
+
+  // Probe, not a recovery branch (see heartbeat_unreachable_logged_ in the header). If this ever
+  // fires it means the lifecycle left COMPLETED without anything waking the poller, and the right
+  // response is to find out how — not to have a self-promotion branch quietly absorb it. Note the
+  // heartbeat needs no such branch to keep the DISPLAY correct: it observes and publishes
+  // unconditionally, so convergence never depended on being told. Only the poll RATE would be
+  // affected, and a wrong rate is visible, benign, and healed by the next wake of any kind.
+  if (state_.load() == State::kIdleHeartbeat) {
+    if (lc.lifecycle != LUMICE_LIFECYCLE_COMPLETED) {
+      if (!heartbeat_unreachable_logged_) {
+        heartbeat_unreachable_logged_ = true;
+        GUI_LOG_WARNING(
+            "[Poller] heartbeat observed a lifecycle believed unreachable here: "
+            "lifecycle={} epoch={} (expected COMPLETED). Polling stays at the heartbeat "
+            "rate until the next wake.",
+            lc.lifecycle, lc.epoch);
+      }
+    } else {
+      heartbeat_unreachable_logged_ = false;  // re-arm: the next episode logs again
+    }
+  }
 
   // One frame per poll, held at least to the end of this function. Everything read out of it —
   // xyz, composite, stats — belongs to the same snapshot generation by construction, which is
@@ -484,13 +562,35 @@ void ServerPoller::PollOnce() {
     StorePublished(std::move(next));
   }
 
-  // Self-pause once the run has genuinely completed (finite run drained clean, incl. zero-output).
-  // COMPLETED is the durable terminal edge (infinite runs stay RUNNING; a transient restart IDLE is
-  // NOT COMPLETED), so this never pauses mid-run. The last published snapshot before pausing carries
-  // lifecycle==COMPLETED, so the main thread's per-frame reconcile still reaches kDone (I3).
+  // Throttle down to the slow heartbeat once the run has genuinely completed AND its data has been
+  // drained (invariant I3a — see ShouldSelfPause for the three terms). Two things changed here
+  // relative to the original "COMPLETED ⇒ kPaused":
+  //
+  //  - The condition asks the consumer, not just the producer. It used to reason that the last
+  //    published snapshot carries lifecycle==COMPLETED, so the main thread's reconcile still
+  //    reaches kDone. That argument is sound — but only for the sim_state projection. The same
+  //    bundle also carries the four stats counters, and those are carried FORWARD from the
+  //    previous poll when this one produced nothing new, so a poll that observes COMPLETED before
+  //    the consumer has drained publishes a partial total and then stops, leaving the status bar
+  //    permanently short by whole dispatch grains. "May I stop looking?" has to mean "is what I
+  //    can see now the truth?" for every field in the bundle, not just the one that motivated the
+  //    guard.
+  //  - The destination is kIdleHeartbeat, not kPaused. Even a correct guard is a single
+  //    observation; the heartbeat is what keeps a wrong one recoverable (I3b).
+  //
+  // The kRunning re-check inside the lock is not optional garnish: a concurrent Stop() may have
+  // just written kPaused (its caller is about to destroy the server) or a WakeForRestart may have
+  // written kRunning for a newer epoch. Both write under this same mutex_, so re-reading here
+  // makes the last writer win deterministically instead of this line clobbering either.
   if (lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED) {
-    std::lock_guard<std::mutex> lk(mutex_);
-    state_.store(State::kPaused);
+    LUMICE_DrainResult drain{};
+    LUMICE_GetDrainStatus(server, &drain);
+    if (ShouldSelfPause(lc, drain)) {
+      std::lock_guard<std::mutex> lk(mutex_);
+      if (state_.load() == State::kRunning) {
+        state_.store(State::kIdleHeartbeat);
+      }
+    }
   }
 }
 

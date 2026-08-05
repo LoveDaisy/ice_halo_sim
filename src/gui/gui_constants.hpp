@@ -32,6 +32,18 @@ constexpr int kCommitIntervalMs =
          // 70ms gives Windows enough headroom: first_upload avg ~48ms + poll ~20ms needs >60ms window.
 constexpr int kPollIntervalMs = 20;  // Server poll interval (T_poll, ms). Shorter than VSync frame (16.67ms at 60fps)
                                      // to ensure each frame has fresh data available via LoadSnapshot().
+// Slow heartbeat used once the poller believes the run has reached its terminal state and has
+// self-paused (ServerPoller::State::kIdleHeartbeat). Invariant I3's second clause — "idle may
+// throttle to a slow heartbeat, but must never fall so silent it cannot self-heal"
+// (doc/gui-preview-lifecycle-architecture.md §9) — is what this exists for: without it, the one
+// poll that observes the terminal edge is the ONLY chance to get the terminal truth on screen,
+// which turns a level-triggered reconciler back into an edge-triggered one.
+// Invariant: kIdleHeartbeatIntervalMs > kPollIntervalMs (a heartbeat that is not a throttle down
+// from the running cadence is not a heartbeat). The specific value is a pure UX/cost tradeoff with
+// no correctness content — I3 demands "not silent", not any particular rate.
+constexpr int kIdleHeartbeatIntervalMs = 500;
+static_assert(kIdleHeartbeatIntervalMs > kPollIntervalMs,
+              "the idle heartbeat must be a throttled-DOWN cadence relative to the running poll");
 // Crystal edit-modal preview animation tick (ms between successive sample_seed advances while a
 // shape distribution is active). ~3.3 Hz sits in the 2-4 Hz visual-comfort band (faster reads as
 // noise); it is a pure UX cadence choice, not a correctness constraint.
