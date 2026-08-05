@@ -403,7 +403,7 @@ class Server {
    *                    Error::InvalidConfig.
    * @param mode        Composite mode (dominant/additive/painter).
    * @return Error::Success on success. Never restarts the simulation — accumulator, epoch,
-   *         and consumers stay put. Only the next Get*Results call re-composites.
+   *         and consumers stay put. Only the next acquired result frame re-composites.
    */
   Error SetRaypathColors(const ColorClassDisplay* classes, int class_count, const int* z_order, CompositeMode mode);
 
@@ -448,7 +448,7 @@ class Server {
    * @brief task-345.3: display-time EV multiplier for the composite path only.
    * @param ev_total Total EV (manual + auto) to apply as 2^ev_total inside DoSnapshot Phase 2.
    * @return Error::Success. Mono path is untouched — only the composite result carries the
-   *         resulting brightness change. Flips snapshot_dirty_ so the next Get*Results
+   *         resulting brightness change. Flips snapshot_dirty_ so the next acquired result frame
    *         re-bakes the composite; no epoch bump, no accumulator reset.
    */
   Error SetCompositeExposure(float ev_total);

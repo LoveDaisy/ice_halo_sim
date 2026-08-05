@@ -893,26 +893,44 @@ if (err != LUMICE_OK) {
 
 ## Thread Safety
 
-### Thread-Safe APIs
+### Reading Results Is Thread-Safe — By Holding a Share, Not by Being Lucky
 
-The following APIs are **thread-safe**:
-- `LUMICE_QueryServerState()`: can be safely called from multiple threads
-- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: can be safely called from multiple threads
+`LUMICE_AcquireResultFrame`, `LUMICE_ReleaseResultFrame`, and all four `LUMICE_FrameGet*`
+functions are **thread-safe**: any number of threads may acquire, read, and release frames
+concurrently, with no external locking. This is not an incidental property to verify per call —
+it is the reason the frame model exists (see [Retrieving Results](#retrieving-results)). A
+pointer a `FrameGet*` call hands back (`img_buffer` / `xyz_buffer`) is a borrow into a frame the
+caller holds a real share of; it stays valid for exactly as long as *that* frame is held, until
+the matching `LUMICE_ReleaseResultFrame` — independent of what any other thread does to the
+server, and independent of how many *other* frames exist. Two frames never interfere with each
+other, whether held by the same thread or different ones.
+
+`LUMICE_FrameGetStats` is not part of that borrow family: it copies a **plain value** struct with
+no pointer into the frame, so nothing dangles after release. It rides the same acquire/release
+envelope as the other three only because all four reads come from one frame, not because it needs
+the borrow protection they do.
+
+`LUMICE_QueryServerState()` is also thread-safe and may be called from any thread at any time.
 
 ### Non-Thread-Safe APIs
 
-The following APIs are **not thread-safe** and must not be called simultaneously from multiple threads:
-- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: server lifecycle management
+The following mutate shared server state directly and must not be called concurrently with each
+other or with any other call on the same server:
+- `LUMICE_CreateServer()` / `LUMICE_CreateServerEx()` / `LUMICE_DestroyServer()`: server lifecycle
+  management
 - `LUMICE_CommitScene()`: configuration submission
+- `LUMICE_StopServer()`: server shutdown
 - `LUMICE_Scene*` handle mutation (`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`
   on one handle) — a handle has no internal locking. Distinct handles are independent, so building
   two scenes on two threads is fine.
-- `LUMICE_StopServer()`: server shutdown
 
 ### Multithreading Recommendations
 
-1. **Single server, multiple threads**: Use a mutex to protect non-thread-safe operations
-2. **Multiple servers**: Use a separate server instance per thread
+1. **Single server, multiple threads**: designate one owner thread for `LUMICE_CommitScene()` /
+   `LUMICE_StopServer()` / `LUMICE_DestroyServer()`. Any number of other threads may freely
+   acquire and read result frames concurrently with that owner and with each other — no mutex
+   needed on the read side.
+2. **Multiple servers**: use a separate server instance per thread.
 
 ## Integration with Other Languages
 

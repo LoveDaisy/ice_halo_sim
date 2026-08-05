@@ -96,7 +96,7 @@ class ServerImpl {
   // `ev_total` is applied as `2^ev_total` inside DoSnapshot Phase 2 (a single
   // scalar shared across every lane / every mode — per-lane renormalization
   // remains structurally excluded). No sim restart, no epoch bump: flips
-  // snapshot_dirty_ so the next Get*Results triggers one composite rebake
+  // snapshot_dirty_ so the next acquired result frame triggers one composite rebake
   // with the new EV. Mono path is untouched (structural AC4).
   Error SetCompositeExposure(float ev_total);
 
@@ -696,7 +696,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 
 // See doc/accumulator-consumer-architecture.md §4.2 (two-phase snapshot protocol).
 // task-342.4 Step 1: this is the single owner of the snapshot_dirty_ flag and
-// snapshot_generation_ counter. Any Get*Results method that needs an up-to-date
+// snapshot_generation_ counter. Any result-frame acquisition that needs an up-to-date
 // materialized snapshot funnels through here so that two consumers in the same
 // poll tick (e.g. RawXyz + Composite) see a coherent Phase-1..2 atomic event
 // rather than racing the dirty flag against each other (plan §3 keypoint 1).
@@ -1466,7 +1466,7 @@ Error ServerImpl::SetRaypathColors(const ColorClassDisplay* classes, int class_c
 // =============== ServerImpl::SetCompositeExposure ===============
 // task-345.3: display-time EV for the composite path. Same shape as
 // SetRaypathColors: writes one field under consumer_mutex_ then flips
-// snapshot_dirty_ so the next Get*Results triggers exactly one composite
+// snapshot_dirty_ so the next acquired result frame triggers exactly one composite
 // rebake with the new EV. No validation on ev_total — any finite float is
 // legitimate (the GUI already clamps to [-6, 6] before calling; the server
 // intentionally does not double-clamp so a hypothetical future caller can

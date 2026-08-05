@@ -677,23 +677,35 @@ if (err != LUMICE_OK) {
 
 ## 线程安全性
 
-### 线程安全API
+### 读结果是线程安全的——靠持有一份份额，不是靠运气
 
-以下API是**线程安全**的：
-- `LUMICE_QueryServerState()`: 可以安全地从多个线程调用
-- `LUMICE_GetRenderResults()` / `LUMICE_GetStatsResults()`: 可以安全地从多个线程调用
+`LUMICE_AcquireResultFrame`、`LUMICE_ReleaseResultFrame`，以及全部四个 `LUMICE_FrameGet*`
+函数都是**线程安全**的：任意数量的线程可以并发取帧、读帧、释放帧，无需任何外部加锁。这不是
+一条要逐个调用点核实的偶然性质——它正是帧模型存在的理由（见[结果获取](#结果获取)）。
+`FrameGet*` 返回的指针（`img_buffer` / `xyz_buffer`）是借入调用方持有的那一帧内部的视图，
+它的有效期恰好等于**那一帧**被持有的时长，直到匹配的 `LUMICE_ReleaseResultFrame`
+为止——与其间任何其他线程对 server 做了什么无关，也与同时存在多少**其他**帧无关。
+两帧之间互不干扰，不论持有者是同一线程还是不同线程。
+
+`LUMICE_FrameGetStats` 不属于这条借用族：它拷贝的是一个不含指针的**纯值**结构体，释放后
+不会有任何指针悬垂。它与另外三个共用同一套取帧/释放包络，只是因为四种读取都来自同一帧，
+而不是因为它也需要那三者所需的借用保护。
+
+`LUMICE_QueryServerState()` 同样线程安全，可在任意线程的任意时刻调用。
 
 ### 非线程安全API
 
-以下API**不是线程安全**的，不应从多个线程同时调用：
-- `LUMICE_CreateServer()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
+以下API直接修改共享的 server 状态，不应与彼此、也不应与同一 server 上的其他调用同时发生：
+- `LUMICE_CreateServer()` / `LUMICE_CreateServerEx()` / `LUMICE_DestroyServer()`: 服务器生命周期管理
 - `LUMICE_CommitScene()`: 配置提交
-- 对同一个 `LUMICE_Scene*` 句柄的修改（`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`）——句柄内部没有加锁。不同句柄互相独立，两个线程各建各的场景是安全的。
 - `LUMICE_StopServer()`: 服务器停止
+- 对同一个 `LUMICE_Scene*` 句柄的修改（`LUMICE_SceneAdd*` / `LUMICE_SceneSet*` / `LUMICE_SceneDestroy`）——句柄内部没有加锁。不同句柄互相独立，两个线程各建各的场景是安全的。
 
 ### 多线程使用建议
 
-1. **单服务器多线程**：使用互斥锁保护非线程安全的操作
+1. **单服务器多线程**：指定一个 owner 线程专门调用 `LUMICE_CommitScene()` /
+   `LUMICE_StopServer()` / `LUMICE_DestroyServer()`；其余任意数量的线程可以与该 owner
+   以及彼此并发地取帧读结果——读侧不需要互斥锁。
 2. **多服务器**：每个线程使用独立的服务器实例
 
 ## 与其他语言集成

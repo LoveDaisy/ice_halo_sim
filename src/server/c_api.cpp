@@ -1144,7 +1144,7 @@ LUMICE_ErrorCode LUMICE_SceneToJson(const LUMICE_Scene* scene, char* out_buf, si
 
 // Display-time color update: see doc/capi-lifecycle-architecture.md §4 / §6.4.
 // task-342.2: does NOT restart the simulation — accumulator, epoch, and consumers are
-// untouched. Only the next Get*Results call re-composites with the new appearance.
+// untouched. Only the next acquired result frame re-composites with the new appearance.
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode) {
   if (!server) {
@@ -1190,7 +1190,7 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 // task-345.3: display-time EV multiplier for the composite path. See the
 // LUMICE_SetCompositeExposure comment in include/lumice.h for the semantics
 // (single scalar, mono path untouched, snapshot_dirty_ flipped so the next
-// Get*Results rebakes the composite). No ev_total validation: the GUI is the
+// acquired result frame rebakes the composite). No ev_total validation: the GUI is the
 // only in-tree caller and already clamps to [-6, 6]; server-side double-clamp
 // would hide caller bugs without preventing any real hazard.
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total) {

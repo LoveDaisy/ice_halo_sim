@@ -919,10 +919,10 @@ typedef struct LUMICE_ColorClassDisplay_ {
 // mode: composite mode (LUMICE_COLOR_MODE_DOMINANT / _ADDITIVE / _PAINTER). Values outside
 // this range return LUMICE_ERR_INVALID_VALUE.
 //
-// Thread safety: display-time only; safe relative to OTHER display-time getters (Get*Results,
-// LUMICE_GetSimLifecycle, etc.). NOT thread-safe with a concurrent LUMICE_CommitScene
-// — the existing single-owner commit rule (doc/capi-lifecycle-architecture.md §4) still
-// applies to this setter.
+// Thread safety: display-time only; safe relative to OTHER display-time readers
+// (LUMICE_AcquireResultFrame, LUMICE_GetSimLifecycle, etc.). NOT thread-safe with a concurrent
+// LUMICE_CommitScene — the existing single-owner commit rule
+// (doc/capi-lifecycle-architecture.md §4) still applies to this setter.
 LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_ColorClassDisplay* classes,
                                          int class_count, const int* z_order, int mode);
 
