@@ -220,6 +220,76 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 与 `GuiLifecycle.restart_window_does_not_republish_prior_run_composite`，均断言**像素/合成字节的
 > 内容指纹**而非只断言世代号——只断言号会在时序恰好没撞上时以错误理由变绿。
 
+> **落地补丁（2026-08-06，PR 见 git log）：I3 两个分句此前都不合规。**
+> 同前两条，不是新增不变量，而是补上实现对 I3 的一次合规回归——I3 文本不变。
+>
+> **前半句「观测真相 ≠ 显示状态则 poll 不得停」**：`ServerPoller::PollOnce()` 尾部的自暂停
+> guard 只判 `lifecycle == COMPLETED`。`COMPLETED` 是**生产端**判据（无 simulator 忙、无待生成
+> 场景、生成已结束），它不问消费端是否已把 `data_queue_` 排空；而 `PreviewSnapshot` 的四个统计
+> 计数在本次 poll 无新产出时是从上一份 **carry-forward** 过来的。两者相乘 = 在消费端排空之前
+> 观测到 `COMPLETED` 的那次 poll 会发布一个**部分总和**然后停摆，此后没有任何一次 poll 去纠正它。
+> 实测形态：`orientation_num` 19616 对 20000，短缺恒为 128（dispatch 粒度）的整数倍；
+> Linux + Mesa（尤其 4 核）复现，macOS/Metal 不复现。
+> guard 原注释的论证（「最后一次发布携带 COMPLETED，主线程 reconcile 仍能到 kDone」）本身成立，
+> 但**只覆盖 sim_state 这一路投影**，覆盖不了同一 bundle 里的计数——「我可以不看了吗」必须对
+> bundle 的每个字段都意味着「现在看到的就是真相」。
+>
+> **后半句「允许 idle 降频慢心跳，但不得彻底静默到无法自愈」**：`WorkerLoop` 在自暂停后坐
+> 无超时 `cv_.wait`，**零轮询**；5 个唤醒入口（`Start` / 两处 `WakeForRestart` /
+> 两处 `WakeForRefresh`）**全部由用户动作驱动**。即第二分句完全没有落实。
+>
+> ⭐ **两者合起来才是这条缝的机制层定性**：实现只依赖第一分句（guard 判得准），第二分句给的
+> 安全网是零；而第一分句的前提不成立 ⇒ **guard 判错 + 无网可兜**。换句话说，**自暂停把终态观测
+> 变成了唯一一次机会**——恰恰是在整个设计最要紧的那一次跃迁上，把电平触发退回成了边沿触发，
+> 而 §3 P2 的原话正是「撕裂读、丢帧、时序抖动都不再致命，**因为不存在"唯一的一次机会"**」。
+> 这解释了此前被当成三个独立缺陷分别修过的三次故障：终帧被质量闸吞掉、计数没到终值、
+> 服务端侧同构的 `kIdle` 早报——**不是三个 bug，是一个一次性结构的三种失效方式**。
+> 两半必须一起修：只修 guard 得到「更准但仍是一次性」，只加心跳得到「有网但 guard 仍错」。
+>
+> 修复落点（均在 `src/gui/server_poller.*`，无 C API / core 改动）：
+> - 自暂停判据抽成纯自由函数 `ShouldSelfPause(lc, drain)`，三个条件：`COMPLETED` +
+>   `drain.drained_epoch == lc.epoch`（消费端已排空——`LUMICE_GetDrainStatus`，见
+>   `doc/capi-lifecycle-architecture.md`）+ `drain.current_epoch == lc.epoch`（读 `lc` 之后没有
+>   更新的代被提交）。第三项**不能被第二项蕴含**：`drained_epoch` 单调而 `lc.epoch` 是快照，
+>   commit 之后 `drained == lc.epoch` 仍然成立，少了第三项就会把刚开跑的新一代判成已终态。
+> - 该函数是这个决策的**唯一 owner**，调用点不得再复制其中任何一项。这不是风格要求，是实测：
+>   调用点曾保留一个 `lifecycle == COMPLETED` 前置检查，红态探针把谓词改成恒真时，本该抓它的
+>   端到端否定用例仍然全绿——运行中的仿真根本走不到谓词。决策被劈成两半，测试就只能看见一半。
+> - 自暂停的目的地从 `kPaused` 改为新增的 `kIdleHeartbeat`：worker 在该态用
+>   `cv_.wait_for(kIdleHeartbeatIntervalMs)` 等待，超时即跑一次 `PollOnce()`。心跳复用既有
+>   `PollOnce()` 而不是发明第二条读取路径——无新 generation 时它是 O(1) 的
+>   （`DoSnapshot` 在 `snapshot_dirty_` 为假时直接早退，不做任何 stats/纹理构造），
+>   且必然是安全空操作：`uploaded_since_resume_` 已为真 ⇒ 不触发终帧救援 ⇒ 走 carry-forward ⇒
+>   `texture_serial` 不变 ⇒ 消费端不会重复上传。
+> - **`kPaused` 与 `kIdleHeartbeat` 必须是两个状态**。心跳引入前，「自暂停」与「不再碰
+>   `server_`」是同一件事，所以 `Stop()` 可以对自暂停态直接早退。加了心跳之后这是两个不同的事实：
+>   `Stop()` 的调用方下一行就销毁服务器（`MaybeReconstructServerForBackend` 里
+>   `Stop()` → `LUMICE_DestroyServer`；`DoStop` 里 `Stop()` → `LUMICE_StopServer`），
+>   早退会留下真实 UAF 窗口。故 `Stop()` 现在把 `kIdleHeartbeat` 也收敛到 `kPaused` 并照旧等
+>   `active_`，而 `active_` 的语义相应扩大为「正在执行**任意一次** `PollOnce()`」。
+>   这一条经红态探针坐实：把 `Stop()` 的早退改回只认 `kRunning`，回归用例直接段错误。
+> - `kIdleHeartbeat` 态若观测到 `lifecycle != COMPLETED`，只打一条 `GUI_LOG_WARNING` **探测日志**，
+>   不做任何模式切换。理由：全 GUI 树枚举「能让 lifecycle 离开 COMPLETED」的路径，每一条都紧邻
+>   一次 poller 唤醒或停止，该状态到不了；而心跳**本身**已是电平触发 reconciler，显示收敛不依赖
+>   任何人通知，所谓「恢复全速」只是**速率优化**而非正确性属性。给到不了的状态写恢复分支，得到的
+>   是一个永远跑不到、构造上无法被测试覆盖、却要后人搞懂它在防什么的死分支；写成探测器则真不可达
+>   时零成本，真发生时**能学到东西**。明示接受的代价：若漏了某条路径，症状是「未通知的重启后预览
+>   刷新走心跳速率而非全速」——可见、良性、下次任何唤醒即自愈。
+>
+> `kIdleHeartbeatIntervalMs = 500`（`gui_constants.hpp`）是纯 UX/成本折衷，**无正确性含义**——
+> I3 只要求「不得彻底静默」，没给数字；该值待后续用容器复现配方做一次能耗/自愈延迟实测校准。
+>
+> 回归测试：`gui_unit_test` 的 `GuiLifecycle.self_pause_predicate_truth_table`（6 行纯真值表）、
+> `self_pause_publishes_final_totals`（接线 + 独立交叉核对 `LUMICE_GetDrainStatus`）、
+> `running_sim_never_self_pauses`（guard 恒为真方向的端到端否定）、
+> `idle_heartbeat_ticks_after_self_pause`（I3b + 心跳不 bump `texture_serial`）、
+> `stop_during_idle_heartbeat_quiesces_worker`（Stop 静默契约；`Stop()` 返回**之后**取基线——
+> 契约是「返回后不得再有 tick」，而 `Stop()` 允许在途 tick 跑完）；外加 `gui_test`
+> `gui_lifecycle/gpu_run_reaches_done` 里的 `--fixed-dt` 双时钟断言。
+>
+> **未闭合、明示**：`COMPLETED 但尚未排空` 这个组合没有注入 seam，本机（macOS/Metal）不复现，
+> 因此只由真值表覆盖其逻辑；端到端证据来自 Linux/Mesa 容器复现，不来自本机绿。
+
 ---
 
 ## 10. 落地边界：最小核 vs 完整版
