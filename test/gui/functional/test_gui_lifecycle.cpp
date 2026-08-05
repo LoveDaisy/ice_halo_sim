@@ -73,6 +73,31 @@ void RegisterLifecycleTests(ImGuiTestEngine* engine) {
     }
     IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
 
+    // The completed run has now self-paused the poller into its slow heartbeat (I3b). Two clocks
+    // meet here and the question is whether they interfere: --fixed-dt pins ImGuiIO::DeltaTime to
+    // 1/60s for the main thread's frame pump, while the heartbeat is a steady_clock wait_for on the
+    // poller's own worker thread. They are structurally unrelated, but "structurally unrelated" is
+    // an argument, and this group exists to check arguments against frames.
+    //
+    // Asserted in the direction that can actually fail. "No tick fired" would be a statement about
+    // how fast this machine got from completion to here — true on a fast run, a flake on a slow
+    // one, and worth nothing either way. What matters is (a) the injected dt does not starve the
+    // heartbeat, so ticks do appear in real time, and (b) those ticks do not disturb the display
+    // state the reconcile already settled on. A heartbeat that dragged sim_state back off kDone
+    // would be the same edge/level confusion this task is closing, one layer up.
+    {
+      const uint64_t ticks_at_done = gui::g_server_poller.HeartbeatTickCountForTest();
+      const auto hb_start = std::chrono::steady_clock::now();
+      const auto hb_budget = std::chrono::milliseconds(4 * gui::kIdleHeartbeatIntervalMs);
+      while (gui::g_server_poller.HeartbeatTickCountForTest() == ticks_at_done &&
+             std::chrono::steady_clock::now() - hb_start < hb_budget) {
+        ctx->Yield();  // keep the fixed-dt frame pump running while real time elapses
+      }
+      IM_CHECK_GT(gui::g_server_poller.HeartbeatTickCountForTest(), ticks_at_done);
+      ctx->Yield();  // one more SyncFromPoller AFTER a heartbeat tick published
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+    }
+
     // Cleanup
     gui::g_server_poller.Stop();
     if (gui::g_server) {

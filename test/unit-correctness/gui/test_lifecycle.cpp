@@ -1309,3 +1309,299 @@ TEST(GuiLifecycle, restart_window_does_not_republish_prior_run_composite) {
   local.Stop();
   LUMICE_DestroyServer(server);
 }
+
+// ---- Tests 11a-11e: the terminal observation is level-triggered, not a single chance ----
+//
+// The defect family these pin: PollOnce() used to stop the worker the instant it saw
+// lifecycle==COMPLETED, and the justification on record ("the last published snapshot carries
+// COMPLETED, so the reconcile still reaches kDone") only covered the sim_state projection. The same
+// bundle also carries four stats counters, which are carried FORWARD when a poll produces nothing
+// new — so a poll that observed COMPLETED before the CONSUMER had drained published a partial total
+// and then stopped, with no later poll to correct it. COMPLETED is a producer-side verdict; it asks
+// nothing about the consumer's queue.
+//
+// Two halves, and the ledger that produced this task requires both — fixing either alone leaves the
+// other live ("a more accurate guard that is still one-shot", or "a heartbeat behind a guard that
+// still decides wrong"):
+//   I3a — the guard now also requires the drain signal (11a truth table, 11b end-to-end, 11c the
+//         end-to-end negative).
+//   I3b — after self-pausing the worker keeps a slow heartbeat instead of falling silent, so a
+//         wrong belief is recoverable rather than terminal (11d).
+// 11e guards the safety property the heartbeat introduces: Stop()'s callers destroy the server
+// right after it returns, so a heartbeat tick must never outlive it.
+//
+// What is NOT pinned here, stated rather than papered over: the COMPLETED-but-not-yet-drained
+// combination cannot be constructed on demand. It is a race window with no injection seam, and it
+// does not reproduce on macOS/Metal (the CI symptom was Linux + Mesa). 11a covers that row as pure
+// logic; the end-to-end evidence for it is the containerized repro in the task's verification plan,
+// not this file.
+
+namespace {
+
+// Small finite run whose totals are exactly checkable, mirroring test_drain_contract.cpp's config
+// and for the same reason: scattering prob 0.0 keeps orientation_num and ray_num strictly 1:1, and
+// GenerateScene issues 128-ray dispatch grains, so any grain the consumer has not taken shows up as
+// a recognizable shortfall rather than as noise. That shortfall — 19616 against 20000 — is the
+// measured symptom this whole task exists to close.
+const char* kExactTotalsConfig = R"({
+  "crystal": [{
+    "id": 1, "type": "prism",
+    "shape": {"height": 1.5},
+    "axis": {"zenith": {"type": "gauss", "mean": 90.0, "std": 10.0},
+             "azimuth": {"type": "uniform", "mean": 0.0, "std": 180.0},
+             "roll": {"type": "uniform", "mean": 0.0, "std": 180.0}}
+  }],
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
+                     "diameter": 0.5, "spectrum": "D65"},
+    "ray_num": 20000,
+    "max_hits": 8,
+    "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+  },
+  "render": [{
+    "id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
+    "resolution": [64, 32], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+    "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0
+  }]
+})";
+constexpr LUMICE_RayCount kExactTotalsSimRays = 20000;
+
+// Never-ending variant of kFiniteConfig: production never stops, so the run never completes and
+// never drains. Used as the end-to-end negative for the self-pause guard.
+const char* kInfiniteConfig = R"({
+  "crystal": [{"id": 1, "type": "prism", "shape": {"height": 1.0}}],
+  "filter": [],
+  "scene": {
+    "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0, "diameter": 0.5, "spectrum": "D65"},
+    "ray_num": "infinite",
+    "max_hits": 8,
+    "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
+  },
+  "render": [{"id": 1, "lens": {"type": "rectangular", "fov": 180.0},
+              "resolution": [256, 128], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
+              "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0}]
+})";
+
+// Spin until `pred` holds or the real-time budget runs out. Returns whether it held. Real time,
+// deliberately: the heartbeat is driven by steady_clock inside the worker, so nothing in the test
+// process can advance it.
+template <typename Pred>
+bool WaitFor(Pred pred, int timeout_ms) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (pred()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return pred();
+}
+
+// Block until the server reports the current epoch fully drained (LUMICE_GetDrainStatus).
+// Distinct from WaitForValidData above, which waits for the PRODUCER-side IDLE verdict — the whole
+// point of these cases is that those two moments are not the same moment.
+bool WaitForDrained(LUMICE_Server* server, int timeout_ms) {
+  return WaitFor(
+      [server] {
+        LUMICE_DrainResult d{};
+        LUMICE_GetDrainStatus(server, &d);
+        return d.current_epoch != 0 && d.drained_epoch == d.current_epoch;
+      },
+      timeout_ms);
+}
+
+}  // namespace
+
+// ---- 11a: the self-pause predicate, as a truth table (I3a) ----
+// Pure — no server, no worker, no timing. Every row is a decision the live code cannot be made to
+// take on demand, which is exactly why the predicate was extracted as a free function.
+TEST(GuiLifecycle, self_pause_predicate_truth_table) {
+  constexpr unsigned long long kN = 42;
+  auto lc = [](int lifecycle, unsigned long long epoch) {
+    LUMICE_SimLifecycleResult v{};
+    v.lifecycle = lifecycle;
+    v.epoch = epoch;
+    return v;
+  };
+  auto drain = [](unsigned long long drained, unsigned long long current) {
+    LUMICE_DrainResult v{};
+    v.drained_epoch = drained;
+    v.current_epoch = current;
+    return v;
+  };
+
+  // 1-2: not the terminal edge. A running sim and a reset/idle server are both mid-flight; drained
+  // numbers that happen to line up must not be read as completion.
+  EXPECT_FALSE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_RUNNING, kN), drain(kN, kN)));
+  EXPECT_FALSE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_IDLE, kN), drain(kN, kN)));
+
+  // 3: the only true row — completed, drained, and nothing newer committed.
+  EXPECT_TRUE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_COMPLETED, kN), drain(kN, kN)));
+
+  // 4: THE row this task exists for. COMPLETED is a producer-side verdict and the consumer is still
+  // draining, so the stats visible now are a partial total. Deleting the drained_epoch term makes
+  // this the pre-fix behavior — worker stops, partial counts freeze on the status bar.
+  EXPECT_FALSE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_COMPLETED, kN), drain(kN - 1, kN)));
+
+  // 5-6: a NEWER epoch was committed between the lifecycle read at the top of PollOnce and the
+  // drain read at the bottom (CommitScene + WakeForRestart on the main thread). Row 5 is the one
+  // that catches an implementation testing only drained_epoch: drained == lc.epoch is satisfied
+  // there, and monotonicity means it STAYS satisfied after the commit — so without the
+  // current_epoch term the poller would pause a generation that just started.
+  EXPECT_FALSE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_COMPLETED, kN), drain(kN, kN + 1)));
+  EXPECT_FALSE(gui::ShouldSelfPause(lc(LUMICE_LIFECYCLE_COMPLETED, kN), drain(kN + 1, kN + 1)));
+}
+
+// ---- 11b: a poll taken at the drained moment publishes FINAL totals (I3a, end-to-end) ----
+// Wiring test for the predicate: the truth table proves the decision is right, this proves PollOnce
+// feeds it the real signals and that the bundle published under that decision carries the true
+// totals rather than a partial sum. Deterministic because it waits for the drain signal first — the
+// half that cannot be made deterministic (COMPLETED before drained) is called out in the block
+// comment above.
+TEST(GuiLifecycle, self_pause_publishes_final_totals) {
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  ASSERT_EQ(CommitJsonConfig(server, kExactTotalsConfig), LUMICE_OK);
+  ASSERT_TRUE(WaitForDrained(server, 30000)) << "epoch never reported drained";
+
+  LUMICE_SimLifecycleResult lc{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server, &lc), LUMICE_OK);
+  EXPECT_EQ(lc.lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+
+  // Independent cross-check, not a re-read of what the poller believes: ask the server directly.
+  // A test that only asserted on the poller's own published bundle would pass just as happily if
+  // the poller and the code under test shared the same wrong assumption.
+  LUMICE_DrainResult drain{};
+  ASSERT_EQ(LUMICE_GetDrainStatus(server, &drain), LUMICE_OK);
+  EXPECT_EQ(drain.drained_epoch, lc.epoch);
+  EXPECT_EQ(drain.current_epoch, lc.epoch);
+  EXPECT_TRUE(gui::ShouldSelfPause(lc, drain));
+
+  gui::ServerPoller local;
+  local.ResetGenerationForTest();
+  local.PollOnceForTest(server);
+  auto snap = local.LoadSnapshot();
+  ASSERT_TRUE(snap != nullptr);
+  EXPECT_TRUE(snap->valid);
+  EXPECT_EQ(snap->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+  // Exact, not approximate: with scattering prob 0.0 the totals are the configured ray budget, and
+  // a missed 128-ray dispatch grain is visible as an exact shortfall.
+  EXPECT_EQ(snap->stats_sim_ray_num, kExactTotalsSimRays);
+  EXPECT_EQ(snap->stats_orientation_num, kExactTotalsSimRays);
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// ---- 11c: a still-producing run never self-pauses (I3a, end-to-end negative) ----
+// The guard's other failure mode: always true. An unbounded run never completes and never drains,
+// so the worker must stay in the full-speed loop — no heartbeat tick may ever fire. Runs the REAL
+// worker thread (Start(), not the synchronous test seam) because "did the worker change cadence"
+// is the property under test.
+TEST(GuiLifecycle, running_sim_never_self_pauses) {
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  ASSERT_EQ(CommitJsonConfig(server, kInfiniteConfig), LUMICE_OK);
+
+  gui::ServerPoller local;
+  local.Start(server);
+
+  // Long enough for several heartbeat periods to have elapsed had the worker wrongly throttled:
+  // a self-pause at any point in the first ~1.5s leaves at least two ticks behind.
+  ASSERT_TRUE(WaitFor([&local] { return local.LoadSnapshot() != nullptr; }, 5000)) << "worker never polled";
+  std::this_thread::sleep_for(std::chrono::milliseconds(3 * gui::kIdleHeartbeatIntervalMs));
+  EXPECT_EQ(local.HeartbeatTickCountForTest(), 0u) << "an unbounded run self-paused";
+
+  auto snap = local.LoadSnapshot();
+  ASSERT_TRUE(snap != nullptr);
+  EXPECT_NE(snap->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+
+  local.Stop();
+  LUMICE_StopServer(server);
+  LUMICE_DestroyServer(server);
+}
+
+// ---- 11d: after self-pausing the worker keeps a slow heartbeat (I3b) ----
+// I3's second clause, verbatim: idle may throttle to a slow heartbeat, but must not fall so silent
+// it cannot self-heal. Before this, WorkerLoop sat in an untimed cv_.wait after self-pausing and
+// all five wake entry points were user actions — so the single poll that observed the terminal edge
+// was the ONLY chance to get the terminal truth on screen. The heartbeat is what makes that
+// observation retryable, which is the whole difference between a level-triggered reconciler and an
+// edge-triggered one.
+//
+// Also asserts what the heartbeat must NOT do: republish a texture. Each tick is a safe no-op —
+// carry-forward, same serial — or the preview would re-upload twice a second forever.
+TEST(GuiLifecycle, idle_heartbeat_ticks_after_self_pause) {
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  ASSERT_EQ(CommitJsonConfig(server, kFiniteConfig), LUMICE_OK);
+
+  gui::ServerPoller local;
+  local.Start(server);
+
+  // The first tick is itself the evidence of a self-pause: only the kIdleHeartbeat branch bumps
+  // this counter, and only PollOnce's drain-aware guard can enter that state.
+  ASSERT_TRUE(WaitFor([&local] { return local.HeartbeatTickCountForTest() >= 1; }, 30000))
+      << "worker never self-paused into the heartbeat";
+
+  auto before = local.LoadSnapshot();
+  ASSERT_TRUE(before != nullptr);
+  const unsigned long long serial_before = before->texture_serial;
+  const LUMICE_RayCount rays_before = before->stats_sim_ray_num;
+  const uint64_t ticks_before = local.HeartbeatTickCountForTest();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(5 * gui::kIdleHeartbeatIntervalMs / 2));
+  EXPECT_GE(local.HeartbeatTickCountForTest() - ticks_before, 2u) << "the heartbeat stopped after its first tick";
+
+  auto after = local.LoadSnapshot();
+  ASSERT_TRUE(after != nullptr);
+  EXPECT_TRUE(after->valid);
+  EXPECT_EQ(after->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
+  EXPECT_EQ(after->stats_sim_ray_num, rays_before);
+  EXPECT_EQ(after->texture_serial, serial_before) << "a heartbeat tick bumped the texture serial";
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// ---- 11e: Stop() quiesces the heartbeat before returning (the contract the heartbeat endangers) ----
+// Stop()'s callers destroy the server on the next line — MaybeReconstructServerForBackend does
+// Stop() then LUMICE_DestroyServer, DoStop does Stop() then LUMICE_StopServer. Before the
+// heartbeat, "self-paused" and "not touching the server" were the same state and Stop() could
+// early-return on it. They are now different facts, and if Stop() still early-returned, a tick
+// landing after it returned would dereference a destroyed server.
+//
+// The sequence below is that use-after-free: Stop(), then destroy, then wait out two heartbeat
+// periods. This repository has no ASan/TSan build (verified: no -fsanitize anywhere under scripts/
+// or the CMake tree), so the tick-count assertion is the signal that does not depend on one — and
+// it is a genuine assertion rather than a hope that a crash shows up, since "no tick after Stop()
+// returned" IS the contract. It is not, and does not claim to be, proof of memory safety; if a
+// sanitizer build is ever added, this case belongs in it.
+TEST(GuiLifecycle, stop_during_idle_heartbeat_quiesces_worker) {
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  ASSERT_EQ(CommitJsonConfig(server, kFiniteConfig), LUMICE_OK);
+
+  gui::ServerPoller local;
+  local.Start(server);
+
+  // Establish the premise first. Without this, "no further ticks" below is vacuously true for a
+  // worker that never entered the heartbeat at all.
+  ASSERT_TRUE(WaitFor([&local] { return local.HeartbeatTickCountForTest() >= 1; }, 30000))
+      << "worker never self-paused into the heartbeat";
+
+  local.Stop();
+  // Read the baseline AFTER Stop() returns, not before. Stop() is allowed to let an in-flight tick
+  // finish — that is what waiting on active_ means — so a before/after comparison would go red on
+  // the legitimate case of a tick that started microseconds before the call. The contract is about
+  // what happens after the return, and that is what this measures.
+  const uint64_t ticks_at_return = local.HeartbeatTickCountForTest();
+
+  // The UAF window, if the contract were broken: from here on the worker has no valid server.
+  LUMICE_DestroyServer(server);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(2 * gui::kIdleHeartbeatIntervalMs));
+  EXPECT_EQ(local.HeartbeatTickCountForTest(), ticks_at_return)
+      << "a heartbeat tick ran after Stop() returned — its caller had already destroyed the server";
+}
