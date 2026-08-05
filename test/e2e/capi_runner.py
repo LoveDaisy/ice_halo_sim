@@ -156,6 +156,12 @@ assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
 
 
 # LUMICE_ServerState constants (lumice.h)
+# Drain-settle bounds for _read_sample_counts (see the comment there for why the
+# IDLE signal alone is not sufficient). Timeout FAILS the read rather than returning
+# a partial total.
+_STATS_SETTLE_POLL_SEC = 0.1
+_STATS_SETTLE_TIMEOUT_SEC = 30.0
+
 _LUMICE_SERVER_IDLE = 0
 _LUMICE_SERVER_RUNNING = 1
 _LUMICE_SERVER_NOT_READY = 2
@@ -470,29 +476,53 @@ def _read_sample_counts(lib, server) -> tuple:
     if err != 0:
         raise RuntimeError(f"FrameGetStats failed err={err}")
 
-    # TEMPORARY DIAGNOSTIC (PR #250, E2E Slow Ubuntu x86_64 failure) — remove once the
-    # orientation_num shortfall is explained. Discriminates two candidate causes that the
-    # asserted value alone cannot tell apart:
-    #   (a) drain race — the run reports IDLE while batches are still queued, so this read
-    #       is effectively mid-run and BOTH sim_ray_num and orientation_num fall short
-    #       together (the docstring above already warns the stochastic half keeps growing);
-    #   (b) orientation-specific accounting — sim_ray_num is complete but orientation_num
-    #       is not, which would point at the counter rather than at drain timing.
-    # The re-read is diagnostic only: the returned value is still the FIRST read, so this
-    # cannot mask a failure by giving the run extra time.
-    _first = (int(stats.sim_ray_num), int(stats.crystal_num), int(stats.orientation_num))
-    time.sleep(0.5)
-    stats2 = LUMICE_StatsResult()
-    with _result_frame(lib, server) as frame2:
-        lib.LUMICE_FrameGetStats(frame2, ctypes.byref(stats2))
-    _second = (int(stats2.sim_ray_num), int(stats2.crystal_num), int(stats2.orientation_num))
-    print(
-        f"[DIAG pr250] stats read#1 (sim_ray={_first[0]} crystal={_first[1]} "
-        f"orient={_first[2]}) -> after 0.5s read#2 (sim_ray={_second[0]} "
-        f"crystal={_second[1]} orient={_second[2]}); climbed="
-        f"{_second != _first}",
-        flush=True,
-    )
+    # Wait for the consumer to finish draining before trusting this read.
+    #
+    # WHY THIS IS NEEDED (mechanism, verified by reading the source, not inferred from a
+    # flake): the polling loop above waits for LUMICE_SERVER_IDLE, but ServerImpl's idle
+    # predicate is entirely PRODUCER-side — it checks that no simulator is busy, that no
+    # scenes are pending, and that scene generation is done. None of those says the
+    # CONSUMER has drained the queue. Meanwhile orientation_num/crystal_num are running
+    # totals frozen at snapshot time (StatsConsumer accumulates per batch and
+    # PrepareSnapshot freezes the sum), so a read taken while batches are still queued
+    # returns a partial total — exactly what this function's docstring warns about.
+    #
+    # The pending batches are LATE, not LOST: the data queue is only shut down by Stop()
+    # / Terminate(), so at IDLE the consumer thread is still blocked in Get() and will
+    # consume them. That is what makes waiting converge rather than spin.
+    #
+    # Observed as an intermittent CI failure on Linux (orientation_num 19616 vs 20000 —
+    # a whole multiple of the dispatch grain, i.e. N unconsumed chunks). It is timing,
+    # not a stdlib difference, and it is latent on any platform; Linux scheduling just
+    # exposes it more often.
+    #
+    # ⚠️ This is a TEST-SIDE workaround for a real gap in the completion contract
+    # (IDLE should imply "drained", or a separate drained signal should exist).
+    # Recorded in the backlog; do not let it stand in for fixing the contract.
+    settle_deadline = time.time() + _STATS_SETTLE_TIMEOUT_SEC
+    prev = (int(stats.sim_ray_num), int(stats.crystal_num), int(stats.orientation_num))
+    while True:
+        time.sleep(_STATS_SETTLE_POLL_SEC)
+        probe = LUMICE_StatsResult()
+        with _result_frame(lib, server) as frame:
+            err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(probe))
+        if err != 0:
+            raise RuntimeError(f"FrameGetStats failed err={err}")
+        cur = (int(probe.sim_ray_num), int(probe.crystal_num), int(probe.orientation_num))
+        if cur == prev:
+            stats = probe
+            break
+        prev = cur
+        if time.time() > settle_deadline:
+            # Fail loudly. Returning the last value here would turn "the run never
+            # settled" into a green test carrying a partial total — strictly worse
+            # than the failure this wait exists to prevent.
+            raise RuntimeError(
+                f"stats did not settle within {_STATS_SETTLE_TIMEOUT_SEC}s after the "
+                f"server reported IDLE; last two reads (sim_ray, crystal, orientation) "
+                f"were {prev} then {cur}. Either the consumer is not draining or the "
+                f"idle predicate fired while production was still running."
+            )
 
     # A server holds at most one stats struct, so this is a single value rather than a
     # row array; sim_ray_num == 0 still means "nothing produced yet".
