@@ -1233,7 +1233,10 @@ USER_DEFAULTS_STORE_CPP = SRC / "gui" / "user_defaults.cpp"
 USER_DEFAULTS_FILENAME_OWNERS = frozenset({USER_DEFAULTS_STORE_HPP, USER_DEFAULTS_STORE_CPP})
 USER_DEFAULTS_WRITE_CALL = re.compile(r"\bWriteUserDefaultsFile\s*\(")
 # The declaration in the header and the definition in the .cpp, told apart from a
-# call by the leading return type.
+# call by the leading return type. This assumes both stay on one line and start with
+# a bare `bool`: adding `[[nodiscard]]`/`static`, or breaking the return type onto its
+# own line, makes the signature look like a call and the check fire on a clean tree.
+# Change the signature, change this regex — and re-run the red probe both ways.
 USER_DEFAULTS_WRITE_SIGNATURE = re.compile(r"^\s*bool\s+WriteUserDefaultsFile\s*\(")
 USER_DEFAULTS_FILENAME_SYMBOL = re.compile(r"\bkUserDefaultsFileName\b")
 
@@ -1278,12 +1281,23 @@ def check_user_defaults_single_write_path() -> list[Violation]:
             call_sites.append((path, lineno))
 
     if len(call_sites) != 1:
-        message = (
-            f"WriteUserDefaultsFile() must have exactly ONE caller under src/ "
-            f"(defaults_diff.cpp's WriteActiveOverlayDoc); found {len(call_sites)}. "
-            "A second writer is a second answer to 'what did the user save' — commit "
-            "the whole document through WriteActiveOverlayDoc instead. See AGENTS.md."
-        )
+        if call_sites:
+            message = (
+                f"WriteUserDefaultsFile() must have exactly ONE caller under src/ "
+                f"(defaults_diff.cpp's WriteActiveOverlayDoc); found {len(call_sites)}. "
+                "A second writer is a second answer to 'what did the user save' — commit "
+                "the whole document through WriteActiveOverlayDoc instead. See AGENTS.md."
+            )
+        else:
+            # Anchored on the signature, so say so: the line being pointed at is the
+            # declaration/definition, not an offending call. Without this wording the
+            # message reads as "this signature is the violation".
+            message = (
+                "WriteUserDefaultsFile() has NO caller under src/ — the one write path "
+                "(defaults_diff.cpp's WriteActiveOverlayDoc) is gone, so nothing commits "
+                "the user's defaults any more. This line is the signature the check "
+                "anchored on, not the fault. See AGENTS.md."
+            )
         # Nothing to point at when the count is zero, so anchor on the definition
         # rather than dropping the diagnostic.
         anchors = call_sites or signature_sites

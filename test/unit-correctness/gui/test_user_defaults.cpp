@@ -127,6 +127,12 @@ bool SeedPresetOverrideOnDisk(const std::filesystem::path& dir, gui::AxisPreset 
 // itself never went through, and the live path composes these three primitives at its own call
 // site. The assertions below are about the DOCUMENT shape the erase leaves behind, which is
 // EraseAxisPresetZenithStdFromDoc's own contract and the half a wholesale rewrite would break.
+//
+// ⛔ Do NOT reuse this helper to assert the disk-first ORDER itself. It reproduces that order to
+// build a starting state, so an assertion about ordering made through it would be checking this
+// file's copy of the sequence, not the panel's. The order contract belongs to CommitCopy and is
+// pinned in gui_test (save_failure_leaves_the_preset_cache_untouched) — a second place asserting
+// it here is exactly the parallel-implementation shape this task deleted.
 bool RestoreOnePresetOnDisk(const std::filesystem::path& dir, gui::AxisPreset preset) {
   json doc = ReadOverlayDoc(dir);
   gui::EraseAxisPresetZenithStdFromDoc(doc, preset);
@@ -917,9 +923,12 @@ TEST(UserDefaults, preset_without_adjustable_face_is_never_written) {
     // must not invent a key, and an erase must not leave a `presets`/`axis` skeleton behind. They
     // are the primitives the panel's §1 controls call, so this is the store-level defense in the
     // place the panel would actually hit it.
+    // One assertion per direction, not one after both: checking only the net effect of write+erase
+    // would still pass if a future write DID invent a key, so long as the erase removed it again.
     gui::WriteAxisPresetZenithStdToDoc(working, preset, 3.0f);
+    EXPECT_TRUE(working.empty());  // a write must not invent a key
     gui::EraseAxisPresetZenithStdFromDoc(working, preset);
-    EXPECT_TRUE(working.empty());
+    EXPECT_TRUE(working.empty());  // an erase must not leave a skeleton behind
   }
 
   // Nothing reached the file either.
