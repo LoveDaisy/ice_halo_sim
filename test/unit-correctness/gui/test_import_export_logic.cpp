@@ -2816,4 +2816,464 @@ TEST(ImportExport, dorevert_reverts_sim_resolution_index_via_owner) {
   gui::DoRevert();
 
   EXPECT_EQ(gui::g_state.renderer.sim_resolution_index, committed_resolution);
+// ============================================================================
+// Universal "missing key -> the owning struct's default" invariant.
+//
+// Every deserialization fallback in file_io.cpp encodes one rule: when a key is absent from a
+// document, the loaded field takes its owning struct's documented default. Until now that rule
+// was only ever asserted as scattered per-field instances, and the instances did not cover it —
+// the fallbacks EXECUTE on almost every case in this file (so line coverage reports them green)
+// while nothing asserts the VALUE they produce. Commit 00fb12fc fixed one site where the struct
+// default had moved and the loader's hardcoded literal had not; the same shape sat undetected at
+// dozens of sibling sites.
+//
+// The two tables below quantify over the rule instead. Each row is a minimal document in which
+// the key's PARENT object is present and the key itself is absent, plus a check that compares the
+// loaded field against a freshly default-constructed instance of the struct that OWNS the field.
+// The expected value is evaluated here, independently of file_io.cpp — that independence is the
+// whole mechanism: a fallback written as `j.value(k, Struct{}.field)` cannot drift from
+// `Struct{}.field`, but a hardcoded literal can, and drift is exactly what these tables catch.
+//
+// Two tables, not one: file_io.cpp has two independent parse entry points — DeserializeGuiStateJson
+// (the GUI-native .lmc format) and DeserializeFromJson (the legacy core/CLI JSON import) — and they
+// do NOT agree on every field's missing-key semantics. Merging them would force a false choice
+// about which path is "right"; keeping them apart lets each be pinned as it actually behaves.
+//
+// Deliberately OUT of the tables (each has a DISABLED_ contract anchor below):
+//   * Six fallbacks whose literal differs from the owning struct's default with no written reason.
+//     They are escalated, not fixed, here — changing one silently changes how existing documents
+//     load. Asserting "== struct default" on them would just be a red test asserting a decision
+//     nobody has made.
+//   * upper_h / lower_h, whose divergence IS written down (file_io.cpp's "Historical fallbacks
+//     preserved" comment). Same treatment as the six, so that "is this field covered by the
+//     universal invariant?" has one answer for every known divergence rather than two.
+// Deliberately outside the invariant's SHAPE (no anchor needed): fallbacks whose value is consumed
+// as a local map key / branch discriminator / error-message id and never stored into a struct
+// field. "== the owning struct's default" is not a proposition about them — they have no owner.
+// ============================================================================
+
+namespace {
+
+// One row of an invariant table.
+struct MissingKeyCase {
+  const char* label;  // "<owning struct>::<field>  (json <parent>.<key>)"
+  const char* doc;    // parent object PRESENT, the key ABSENT
+  void (*check)(const gui::GuiState& loaded);
+};
+
+// ---------------------------------------------------------------- GUI-native (.lmc) path
+const MissingKeyCase kGuiNativeCases[] = {
+  // -- root-level GuiState fields; the parent object is the document root, always present --
+  { "GuiState::aspect_preset (root.aspect_ratio)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.aspect_preset, gui::GuiState{}.aspect_preset); } },
+  { "GuiState::aspect_portrait (root.aspect_portrait)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.aspect_portrait, gui::GuiState{}.aspect_portrait); } },
+  { "GuiState::bg_path (root.bg_path)", "{}",
+    [](const gui::GuiState& s) { EXPECT_TRUE(s.bg_path == gui::GuiState{}.bg_path); } },
+  { "GuiState::bg_show (root.bg_show)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.bg_show, gui::GuiState{}.bg_show); } },
+  { "GuiState::bg_alpha (root.bg_alpha)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.bg_alpha, gui::GuiState{}.bg_alpha); } },
+  // The six line/label flags also pin the legacy `overlay_<x>` fallback chain: with the legacy
+  // key absent too, each new key must land on its OWN struct default, not on a shared literal.
+  { "GuiState::show_horizon_line (root.overlay_horizon_line)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_horizon_line, gui::GuiState{}.show_horizon_line); } },
+  { "GuiState::show_horizon_label (root.overlay_horizon_label)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_horizon_label, gui::GuiState{}.show_horizon_label); } },
+  { "GuiState::show_grid_line (root.overlay_grid_line)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_grid_line, gui::GuiState{}.show_grid_line); } },
+  { "GuiState::show_grid_label (root.overlay_grid_label)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_grid_label, gui::GuiState{}.show_grid_label); } },
+  { "GuiState::show_sun_circles_line (root.overlay_sun_circles_line)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_sun_circles_line, gui::GuiState{}.show_sun_circles_line); } },
+  { "GuiState::show_sun_circles_label (root.overlay_sun_circles_label)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_sun_circles_label, gui::GuiState{}.show_sun_circles_label); } },
+  { "GuiState::horizon_alpha (root.overlay_horizon_alpha)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.horizon_alpha, gui::GuiState{}.horizon_alpha); } },
+  { "GuiState::grid_alpha (root.overlay_grid_alpha)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.grid_alpha, gui::GuiState{}.grid_alpha); } },
+  { "GuiState::sun_circles_alpha (root.overlay_sun_circles_alpha)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun_circles_alpha, gui::GuiState{}.sun_circles_alpha); } },
+  { "GuiState::show_zenith_nadir_line (root.overlay_zenith_nadir_line)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.show_zenith_nadir_line, gui::GuiState{}.show_zenith_nadir_line); } },
+  { "GuiState::zenith_nadir_alpha (root.overlay_zenith_nadir_alpha)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.zenith_nadir_alpha, gui::GuiState{}.zenith_nadir_alpha); } },
+  { "GuiState::zenith_nadir_radius_px (root.overlay_zenith_nadir_radius_px)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.zenith_nadir_radius_px, gui::GuiState{}.zenith_nadir_radius_px); } },
+  { "GuiState::right_panel_collapsed (root.right_panel_collapsed)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.right_panel_collapsed, gui::GuiState{}.right_panel_collapsed); } },
+  { "GuiState::modal_layout_vertical (root.modal_layout_vertical)", "{}",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.modal_layout_vertical, gui::GuiState{}.modal_layout_vertical); } },
+
+  // -- root.sun --
+  { "SunConfig::altitude (sun.altitude)", R"({"sun":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun.altitude, gui::SunConfig{}.altitude); } },
+  { "SunConfig::diameter (sun.diameter)", R"({"sun":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun.diameter, gui::SunConfig{}.diameter); } },
+  { "SunConfig::spectrum_index (sun.spectrum)", R"({"sun":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun.spectrum_index, gui::SunConfig{}.spectrum_index); } },
+
+  // -- root.sim --
+  { "SimConfig::ray_num_millions (sim.ray_num_millions)", R"({"sim":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sim.ray_num_millions, gui::SimConfig{}.ray_num_millions); } },
+  { "SimConfig::max_hits (sim.max_hits)", R"({"sim":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sim.max_hits, gui::SimConfig{}.max_hits); } },
+  { "SimConfig::infinite (sim.infinite)", R"({"sim":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sim.infinite, gui::SimConfig{}.infinite); } },
+
+  // -- root.renderer --
+  { "RenderConfig::lens_type (renderer.lens_type)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.lens_type, gui::RenderConfig{}.lens_type); } },
+  { "RenderConfig::fov (renderer.fov)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.fov, gui::RenderConfig{}.fov); } },
+  { "RenderConfig::elevation (renderer.elevation)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.elevation, gui::RenderConfig{}.elevation); } },
+  { "RenderConfig::azimuth (renderer.azimuth)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.azimuth, gui::RenderConfig{}.azimuth); } },
+  { "RenderConfig::roll (renderer.roll)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.roll, gui::RenderConfig{}.roll); } },
+  { "RenderConfig::sim_resolution_index (renderer.sim_resolution)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) {
+      EXPECT_EQ(s.renderer.sim_resolution_index, gui::RenderConfig{}.sim_resolution_index);
+    } },
+  { "RenderConfig::visible (renderer.visible)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.visible, gui::RenderConfig{}.visible); } },
+  { "RenderConfig::front (renderer.front)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.front, gui::RenderConfig{}.front); } },
+  { "RenderConfig::opacity (renderer.opacity)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.opacity, gui::RenderConfig{}.opacity); } },
+  { "RenderConfig::exposure_offset (renderer.exposure_offset)", R"({"renderer":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.exposure_offset, gui::RenderConfig{}.exposure_offset); } },
+
+  // -- root.layers[] (v2 inline format) --
+  { "Layer::probability (layers[0].prob)", R"({"layers":[{}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.layers.size(), 1u);
+      EXPECT_EQ(s.layers[0].probability, gui::Layer{}.probability);
+    } },
+  { "EntryCard::proportion (layers[0].entries[0].proportion)", R"({"layers":[{"entries":[{}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.layers.size(), 1u);
+      ASSERT_EQ(s.layers[0].entries.size(), 1u);
+      EXPECT_EQ(s.layers[0].entries[0].proportion, gui::EntryCard{}.proportion);
+    } },
+
+  // -- the inline crystal (ParseCrystal, shared by both entry points) --
+  { "CrystalConfig::name (crystal.name)", R"({"layers":[{"entries":[{"crystal":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].name, gui::CrystalConfig{}.name);
+    } },
+  { "CrystalConfig::type (crystal.type)", R"({"layers":[{"entries":[{"crystal":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].type, gui::CrystalConfig{}.type);
+    } },
+  // ParseShapeDist: `type` is owned by ShapeDist; `center` comes from the per-scalar default the
+  // CALL SITE passes, so it is pinned against that scalar's own struct default.
+  { "ShapeDist::type (crystal.shape.height.type)", R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].height.type, gui::ShapeDist{}.type);
+    } },
+  { "ShapeDist::spread (crystal.shape.height.std)",
+    R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{"type":"uniform","mean":2.0}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].height.spread, gui::ShapeDist{}.spread);
+    } },
+  { "CrystalConfig::height.center (crystal.shape.height.mean)",
+    R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{"type":"uniform","std":0.5}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].height.center, gui::CrystalConfig{}.height.center);
+    } },
+  { "CrystalConfig::face_distance[0].center (crystal.shape.face_distance[0].mean)",
+    R"({"layers":[{"entries":[{"crystal":{"shape":{"face_distance":[{"type":"uniform","std":0.1}]}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].face_distance[0].center, gui::CrystalConfig{}.face_distance[0].center);
+    } },
+  { "CrystalConfig::prism_h.center (crystal.shape.prism_h.mean)",
+    R"({"layers":[{"entries":[{"crystal":{"type":"pyramid","shape":{"prism_h":{"type":"uniform","std":0.1}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].prism_h.center, gui::CrystalConfig{}.prism_h.center);
+    } },
+  // ParseAxisDist: `mean` / `std` are owned by AxisDist. `type` is a known divergence — see the
+  // DISABLED_ anchor below — so each row here pins `type` explicitly to keep the other field free.
+  { "AxisDist::mean (crystal.axis.zenith.mean)",
+    R"({"layers":[{"entries":[{"crystal":{"axis":{"zenith":{"type":"uniform","std":360.0}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].zenith.mean, gui::AxisDist{}.mean);
+    } },
+  { "AxisDist::std (crystal.axis.zenith.std)",
+    R"({"layers":[{"entries":[{"crystal":{"axis":{"zenith":{"type":"uniform","mean":0.0}}}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].zenith.std, gui::AxisDist{}.std);
+    } },
+
+  // -- the inline filter (ParseFilterFromGuiJson) --
+  { "FilterConfig::name (filter.name)", R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].name, gui::FilterConfig{}.name);
+    } },
+  { "FilterConfig::action (filter.action)", R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].action, gui::FilterConfig{}.action);
+    } },
+  { "FilterConfig::sym_p (filter.sym_p)", R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].sym_p, gui::FilterConfig{}.sym_p);
+    } },
+  { "FilterConfig::sym_b (filter.sym_b)", R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].sym_b, gui::FilterConfig{}.sym_b);
+    } },
+  { "FilterConfig::sym_d (filter.sym_d)", R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].sym_d, gui::FilterConfig{}.sym_d);
+    } },
+  // No `type` and no `raypath_text`: the legacy arm must reconstruct FilterConfig's default
+  // 1-row / 1-factor empty-raypath SoP.
+  { "FilterConfig::param (filter.type + filter.raypath_text)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsRaypath());
+      EXPECT_EQ(s.filters[0].RaypathText(), gui::RaypathParams{}.raypath_text);
+      EXPECT_TRUE(s.filters[0].param == gui::FilterConfig{}.param);
+    } },
+  { "EntryExitParams::entry_text (filter.entry_text)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsEntryExit());
+      EXPECT_EQ(s.filters[0].EntryExitParamsValue().entry_text, gui::EntryExitParams{}.entry_text);
+    } },
+  { "EntryExitParams::exit_text (filter.exit_text)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsEntryExit());
+      EXPECT_EQ(s.filters[0].EntryExitParamsValue().exit_text, gui::EntryExitParams{}.exit_text);
+    } },
+  { "EntryExitParams::length_mode (filter.length_mode)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsEntryExit());
+      EXPECT_EQ(s.filters[0].EntryExitParamsValue().length_mode, gui::EntryExitParams{}.length_mode);
+    } },
+  { "EntryExitParams::min_len (filter.min_len)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsEntryExit());
+      EXPECT_EQ(s.filters[0].EntryExitParamsValue().min_len, gui::EntryExitParams{}.min_len);
+    } },
+  { "EntryExitParams::max_len (filter.max_len)",
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      ASSERT_TRUE(s.filters[0].IsEntryExit());
+      EXPECT_EQ(s.filters[0].EntryExitParamsValue().max_len, gui::EntryExitParams{}.max_len);
+    } },
+
+  // -- legacy v1 .lmc pool format (root.crystals + root.scattering) --
+  { "Layer::probability (v1 scattering[0].prob)", R"({"crystals":[],"scattering":[{}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.layers.size(), 1u);
+      EXPECT_EQ(s.layers[0].probability, gui::Layer{}.probability);
+    } },
+  { "EntryCard::proportion (v1 scattering[0].entries[0].proportion)",
+    R"({"crystals":[],"scattering":[{"entries":[{}]}]})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.layers.size(), 1u);
+      ASSERT_EQ(s.layers[0].entries.size(), 1u);
+      EXPECT_EQ(s.layers[0].entries[0].proportion, gui::EntryCard{}.proportion);
+    } },
+};
+
+// ------------------------------------------------------------- legacy core/CLI JSON path
+const MissingKeyCase kCoreJsonCases[] = {
+  { "SimConfig::max_hits (scene.max_hits)", R"({"scene":{}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sim.max_hits, gui::SimConfig{}.max_hits); } },
+  { "SunConfig::altitude (scene.light_source.altitude)", R"({"scene":{"light_source":{}}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun.altitude, gui::SunConfig{}.altitude); } },
+  { "SunConfig::diameter (scene.light_source.diameter)", R"({"scene":{"light_source":{}}})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.sun.diameter, gui::SunConfig{}.diameter); } },
+  { "RenderConfig::lens_type (render[0].lens.type)", R"({"render":[{"lens":{}}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.lens_type, gui::RenderConfig{}.lens_type); } },
+  { "RenderConfig::fov (render[0].lens.fov)", R"({"render":[{"lens":{}}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.fov, gui::RenderConfig{}.fov); } },
+  { "RenderConfig::elevation (render[0].view.elevation)", R"({"render":[{"view":{}}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.elevation, gui::RenderConfig{}.elevation); } },
+  { "RenderConfig::azimuth (render[0].view.azimuth)", R"({"render":[{"view":{}}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.azimuth, gui::RenderConfig{}.azimuth); } },
+  { "RenderConfig::roll (render[0].view.roll)", R"({"render":[{"view":{}}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.roll, gui::RenderConfig{}.roll); } },
+  { "RenderConfig::front (render[0].front)", R"({"render":[{}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.front, gui::RenderConfig{}.front); } },
+  { "RenderConfig::opacity (render[0].opacity)", R"({"render":[{}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.opacity, gui::RenderConfig{}.opacity); } },
+  { "RenderConfig::exposure_offset (render[0].intensity_factor)", R"({"render":[{}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.exposure_offset, gui::RenderConfig{}.exposure_offset); } },
+
+  { "CrystalConfig::name (crystal[].name)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].name, gui::CrystalConfig{}.name);
+    } },
+  { "CrystalConfig::type (crystal[].type)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals[0].type, gui::CrystalConfig{}.type);
+    } },
+
+  { "FilterConfig::name (filter[].name, simple)",
+    R"({"crystal":[{"id":1}],"filter":[{"id":1,"type":"raypath"}],
+        "scene":{"scattering":[{"entries":[{"crystal":1,"filter":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].name, gui::FilterConfig{}.name);
+    } },
+  { "FilterConfig::action (filter[].action, simple)",
+    R"({"crystal":[{"id":1}],"filter":[{"id":1,"type":"raypath"}],
+        "scene":{"scattering":[{"entries":[{"crystal":1,"filter":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].action, gui::FilterConfig{}.action);
+    } },
+  { "FilterConfig::name (filter[].name, complex reconstruct)",
+    R"({"crystal":[{"id":1}],
+        "filter":[{"id":1,"type":"raypath","raypath":[3,5]},{"id":2,"type":"complex","composition":[[1]]}],
+        "scene":{"scattering":[{"entries":[{"crystal":1,"filter":2}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].name, gui::FilterConfig{}.name);
+    } },
+  { "FilterConfig::action (filter[].action, complex reconstruct)",
+    R"({"crystal":[{"id":1}],
+        "filter":[{"id":1,"type":"raypath","raypath":[3,5]},{"id":2,"type":"complex","composition":[[1]]}],
+        "scene":{"scattering":[{"entries":[{"crystal":1,"filter":2}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_EQ(s.filters[0].action, gui::FilterConfig{}.action);
+    } },
+
+  { "ColorClassDisplayState::visible (raypath_color.classes[0].visible)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
+        "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.raypath_color.size(), 1u);
+      EXPECT_EQ(s.raypath_color[0].visible, gui::ColorClassConfig{}.visible);
+    } },
+  { "ColorClassDisplayState::solo (raypath_color.classes[0].solo)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
+        "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.raypath_color.size(), 1u);
+      EXPECT_EQ(s.raypath_color[0].solo, gui::ColorClassConfig{}.solo);
+    } },
+  { "ColorClassRefConfig::layer_idx (raypath_color.classes[0].match[0].layer)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
+        "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.raypath_color.size(), 1u);
+      ASSERT_EQ(s.raypath_color[0].match.size(), 1u);
+      EXPECT_EQ(s.raypath_color[0].match[0].layer_idx, gui::ColorClassRefConfig{}.layer_idx);
+    } },
+  { "ColorClassRefConfig::sym_p/sym_b/sym_d (raypath_color.classes[0].match[0].symmetry)",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
+        "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.raypath_color.size(), 1u);
+      ASSERT_EQ(s.raypath_color[0].match.size(), 1u);
+      EXPECT_EQ(s.raypath_color[0].match[0].sym_p, gui::ColorClassRefConfig{}.sym_p);
+      EXPECT_EQ(s.raypath_color[0].match[0].sym_b, gui::ColorClassRefConfig{}.sym_b);
+      EXPECT_EQ(s.raypath_color[0].match[0].sym_d, gui::ColorClassRefConfig{}.sym_d);
+    } },
+};
+
+}  // namespace
+
+TEST(ImportExport, DeserializeGuiStateJsonMissingKeyDefaults) {
+  gui::DoNew();
+  for (const auto& c : kGuiNativeCases) {
+    SCOPED_TRACE(c.label);
+    gui::GuiState loaded;
+    ASSERT_TRUE(gui::DeserializeGuiStateJson(c.doc, loaded)) << "document failed to parse: " << c.doc;
+    c.check(loaded);
+  }
+}
+
+TEST(ImportExport, DeserializeFromJsonMissingKeyDefaults) {
+  gui::DoNew();
+  for (const auto& c : kCoreJsonCases) {
+    SCOPED_TRACE(c.label);
+    gui::GuiState loaded;
+    ASSERT_TRUE(gui::DeserializeFromJson(c.doc, loaded)) << "document failed to parse: " << c.doc;
+    c.check(loaded);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Contract anchors for the known divergences the two tables above exclude.
+//
+// These are DISABLED_ on purpose: they are not pending work items, they are the written record
+// that a divergence exists, kept as code so it cannot be lost the way a note in a conversation
+// is. Each states the field, the loader's current fallback, and the owning struct's default.
+// Enabling one is the LAST step of changing that fallback, never the first — changing any of
+// them changes how already-written documents load, which is an owner decision, not a refactor.
+// ---------------------------------------------------------------------------
+
+// file_io.cpp ParseAxisDist: absent `type` falls back to "gauss" (and the bare-number arm picks
+// kGauss too), while AxisDist{}.type is kUniform. Reached from BOTH entry points, so a change
+// here also moves the baseline user_defaults.cpp loads through DeserializeGuiStateJson.
+TEST(ImportExport, DISABLED_AxisDistTypeFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback \"gauss\" != AxisDist{}.type (kUniform); escalated, not fixed";
+}
+
+// file_io.cpp DeserializeFromJson (both the simple-filter pass and the complex rebuild): an absent
+// `symmetry` string yields sym_p/sym_b/sym_d = false, while FilterConfig{} defaults all three to
+// true — and the GUI-native path reads them as FilterConfig{}.sym_*. The two paths disagree.
+TEST(ImportExport, DISABLED_LegacyFilterSymmetryFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback \"\" -> P/B/D all false != FilterConfig{}.sym_* (all true)";
+}
+
+// file_io.cpp DeserializeFromJson: absent `prob` falls back to 1.0f; Layer{}.probability is 0.0f,
+// and the GUI-native path uses 0.0f.
+TEST(ImportExport, DISABLED_LegacyProbFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback 1.0f != Layer{}.probability (0.0f)";
+}
+
+// file_io.cpp DeserializeFromJson: absent `proportion` falls back to 1.0f; EntryCard{}.proportion
+// is 100.0f, and the wire values on this same path are 0-100 scale (not fractions).
+TEST(ImportExport, DISABLED_LegacyProportionFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback 1.0f != EntryCard{}.proportion (100.0f)";
+}
+
+// file_io.cpp DeserializeFromJson: absent `visible` falls back to "upper" (0); RenderConfig{}.visible
+// is 2 ("full"), and the GUI-native path uses "full".
+TEST(ImportExport, DISABLED_LegacyVisibleFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback \"upper\" (0) != RenderConfig{}.visible (2, \"full\")";
+}
+
+// file_io.cpp ParseCrystal: absent pyramid `upper_h` / `lower_h` fall back to 0.0f while
+// CrystalConfig{} defaults both to 0.2f. Unlike the five above this one IS written down at the
+// call site ("Historical fallbacks preserved: ... upper_h/lower_h to 0.0 when absent"); it gets an
+// anchor anyway so that "is this field covered by the universal invariant?" has a single answer
+// for every known divergence.
+TEST(ImportExport, DISABLED_UpperLowerHFallbackDivergesFromStructDefault) {
+  FAIL() << "loader fallback 0.0f != CrystalConfig{}.upper_h/lower_h center (0.2f); documented, kept";
 }
