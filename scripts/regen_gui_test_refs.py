@@ -51,7 +51,9 @@ class ReferenceGroup:
                 sharing one would have their samples pooled into a single threshold.
     scenes      scene names, matching the test registration order in the group's source.
     modes       per-scene variant suffixes; [None] for groups without variants.
-    tmp_prefix  the test writes its capture to /tmp/<tmp_prefix><key>.png.
+    tmp_prefix  the test writes its capture as <tmp_prefix><key>.png. The DIRECTORY is not
+                part of this contract: the driver passes gui_test --export-dir and collects
+                from there, so only the filename is shared with the test source.
     ref_prefix  the reference lives at <refs_dir>/<ref_prefix><key>.jpg.
     source      the group's test source, quoted in the "copy thresholds back" hint.
     """
@@ -224,13 +226,18 @@ def _run(binary: str, extra_args: list[str], capture_stderr: bool = False) -> tu
     return result.returncode, result.stderr if capture_stderr else ""
 
 
-def _collect_pngs(group: ReferenceGroup, run_dir: str, scenes: list[str]) -> None:
-    """Move /tmp/<tmp_prefix>*.png → run_dir/<key>.png for every (scene, mode)."""
+def _collect_pngs(group: ReferenceGroup, run_dir: str, scenes: list[str], export_dir: str) -> None:
+    """Move export_dir/<tmp_prefix>*.png → run_dir/<key>.png for every (scene, mode).
+
+    export_dir is the directory this driver told gui_test to write to (--export-dir), not a
+    location reconstructed here. gui_test's own default is a per-process temp subdirectory it
+    picks itself, which a collector could not predict — and should not have to.
+    """
     os.makedirs(run_dir, exist_ok=True)
     for scene in scenes:
         for mode in group.modes:
             key = _scene_key(scene, mode)
-            src = f"/tmp/{group.tmp_prefix}{key}.png"
+            src = os.path.join(export_dir, f"{group.tmp_prefix}{key}.png")
             dst = os.path.join(run_dir, f"{key}.png")
             if os.path.exists(src):
                 shutil.move(src, dst)
@@ -318,10 +325,12 @@ def phase_a_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     for i in range(n):
         run_dir = os.path.join(staging, f"run_{i}")
         print(f"[Phase A][{group.key}] Run {i + 1}/{n}...", flush=True)
-        rc, _ = _run(binary, ["--keep-export-png"])
+        export_dir = os.path.join(staging, f"export_{i}")
+        os.makedirs(export_dir, exist_ok=True)
+        rc, _ = _run(binary, ["--keep-export-png", "--export-dir", export_dir])
         if rc != 0:
             print(f"  WARNING: run {i} exited {rc}", file=sys.stderr)
-        _collect_pngs(group, run_dir, scenes)
+        _collect_pngs(group, run_dir, scenes, export_dir)
 
     # Per (scene, mode): pixel-average → apply format silence rule → save reference
     print()

@@ -67,7 +67,7 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
     // The reference is PNG, not JPEG: the driver's format rule picked it because this frame
     // has zero run-to-run variance (so JPEG artifacts would be its only noise) and a flat UI
     // screenshot compresses smaller losslessly anyway.
-    const std::string tmp_path = "/tmp/lumice_capture_harness_fullframe.png";
+    const std::string tmp_path = GuiTestTempPath("lumice_capture_harness_fullframe.png").string();
     const std::string ref_path = std::string(LUMICE_TEST_REF_DIR) + "/smoke_fullframe.png";
     auto rgb = lumice::test::StripAlpha(g_fullframe_capture.pixels.data(), g_fullframe_capture.width,
                                         g_fullframe_capture.height);

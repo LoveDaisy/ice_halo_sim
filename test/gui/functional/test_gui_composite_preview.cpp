@@ -281,7 +281,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     // branch and resets g_state via InitDefaultState — the exact production shape of the bug.
     std::string json;
     IM_CHECK(gui::BuildExportJsonOrWarn(gui::InitDefaultState(), &json, nullptr));
-    const char* tmp_path = "/tmp/lumice_fence_open_json.json";
+    const std::string tmp_path = GuiTestTempPath("lumice_fence_open_json.json").string();
     IM_CHECK(gui::ExportConfigJson(tmp_path, json));
 
     // Frame B: DoOpen(.json) runs synchronously from TestFunc coroutine (JSON branch is CPU-only:
@@ -317,7 +317,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK(!(r > 32 && r > g + 32 && r > b + 32));  // NOT strongly red-dominant = not the stale composite.
 
     gui::g_server_poller.Stop();
-    std::remove(tmp_path);
+    std::remove(tmp_path.c_str());
     LUMICE_DestroyServer(server);
   };
 
@@ -345,7 +345,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     }
 
     // Save a .lmc without baked preview (save_texture=false) — hits the no-baked sub-branch.
-    const char* tmp_path = "/tmp/lumice_fence_open_lmc_no_baked.lmc";
+    const std::string tmp_path = GuiTestTempPath("lumice_fence_open_lmc_no_baked.lmc").string();
     IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/false));
 
     // Seed global poller with the color composite from the running sim.
@@ -368,7 +368,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(snap_post->texture_serial, snap_pre->texture_serial);
 
     gui::g_server_poller.Stop();
-    std::remove(tmp_path);
+    std::remove(tmp_path.c_str());
     LUMICE_DestroyServer(server);
   };
 
@@ -404,7 +404,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     const int baked_h = 6;
     std::vector<unsigned char> baked_pixels(baked_w * baked_h * 3, 0x55);
     gui::g_preview.UpdateCpuTextureData(baked_pixels.data(), baked_w, baked_h);
-    const char* tmp_path = "/tmp/lumice_fence_open_lmc_baked.lmc";
+    const std::string tmp_path = GuiTestTempPath("lumice_fence_open_lmc_baked.lmc").string();
     IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true));
 
     // Seed global poller with the color composite.
@@ -429,7 +429,7 @@ void RegisterCompositePreviewTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(snap_post->texture_serial, serial_pre);
 
     gui::g_server_poller.Stop();
-    std::remove(tmp_path);
+    std::remove(tmp_path.c_str());
     LUMICE_DestroyServer(server);
   };
 

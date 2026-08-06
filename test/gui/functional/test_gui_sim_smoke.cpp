@@ -163,7 +163,7 @@ void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine) {
       vp.vp_w = scene.render_w;
       vp.vp_h = scene.render_h;
 
-      const std::string tmp_path = std::string("/tmp/lumice_sim_e2e_smoke_") + scene.name + ".png";
+      const std::string tmp_path = GuiTestTempPath(std::string("lumice_sim_e2e_smoke_") + scene.name + ".png").string();
       IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, tmp_path));
 
       // 7. Read the export back off disk. Going through the file (rather than trusting the

@@ -191,6 +191,26 @@ inline unsigned long long ExpectedSimRayNum(float ray_num_millions) {
   return static_cast<unsigned long long>(static_cast<LUMICE_RayCount>(ray_num_millions * 1e6));
 }
 
+// Absolute path for a scratch file this suite writes (a capture PNG, a round-tripped .lmc, an
+// exported JSON). Callers pass a bare filename; this decides the directory.
+//
+// It exists because a hardcoded "/tmp/..." is not a path on Windows. That is not hypothetical
+// here: a gui_unit_test case that hardcoded one died on its first assertion for its entire life
+// on Windows, and only surfaced because that target runs in CI on three platforms. gui_test's
+// equivalents did not surface because gui_test runs in CI on one.
+//
+// The directory is, in order: --export-dir if given, else a per-process subdirectory of
+// std::filesystem::temp_directory_path(). The per-process suffix is what makes two concurrent
+// gui_test processes safe to run — a fixed filename under a shared directory is a data race
+// between shards, and sharding the correctness pool is the reason this suite's runtime is worth
+// attacking at all. The directory is created on first use.
+//
+// scripts/regen_gui_test_refs.py passes --export-dir explicitly and collects from there. It used
+// to reconstruct "/tmp/<tmp_prefix><key>.png" from its own GROUPS table, i.e. it kept a second
+// copy of a path the test picked; now it dictates the directory and only the FILENAME is shared
+// (still "<tmp_prefix><key>.png", so the GROUPS table's meaning is unchanged).
+std::filesystem::path GuiTestTempPath(const std::string& filename);
+
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();

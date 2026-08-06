@@ -280,7 +280,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_preview_vp.vp_h > 0);
 
       // Request export
-      const char* tmp_path = "/tmp/lumice_export_test.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_export_test.png").string();
       g_export_test.export_path = tmp_path;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -293,12 +293,12 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       int img_w = 0;
       int img_h = 0;
       int img_ch = 0;
-      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      bool loaded = lumice::test::LoadPng(tmp_path.c_str(), img_data, img_w, img_h, img_ch);
       IM_CHECK(loaded);
       IM_CHECK(img_w > 0);
       IM_CHECK(img_h > 0);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -323,7 +323,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK(expected_h > 0);
 
       // Export
-      const char* tmp_path = "/tmp/lumice_export_dim_test.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_export_dim_test.png").string();
       g_export_test.export_path = tmp_path;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -335,12 +335,12 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       int img_w = 0;
       int img_h = 0;
       int img_ch = 0;
-      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      bool loaded = lumice::test::LoadPng(tmp_path.c_str(), img_data, img_w, img_h, img_ch);
       IM_CHECK(loaded);
       IM_CHECK_EQ(img_w, expected_w);
       IM_CHECK_EQ(img_h, expected_h);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -360,7 +360,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Export
-      const char* tmp_path = "/tmp/lumice_export_content_test.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_export_content_test.png").string();
       g_export_test.export_path = tmp_path;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -372,7 +372,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       int img_w = 0;
       int img_h = 0;
       int img_ch = 0;
-      bool loaded = lumice::test::LoadPng(tmp_path, img_data, img_w, img_h, img_ch);
+      bool loaded = lumice::test::LoadPng(tmp_path.c_str(), img_data, img_w, img_h, img_ch);
       IM_CHECK(loaded);
       bool has_nonzero = false;
       for (size_t i = 0; i < img_data.size() && !has_nonzero; ++i) {
@@ -382,7 +382,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK(has_nonzero);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -401,7 +401,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // First export
-      const char* tmp_path1 = "/tmp/lumice_export_twice_1.png";
+      const std::string tmp_path1 = GuiTestTempPath("lumice_export_twice_1.png").string();
       g_export_test.export_path = tmp_path1;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -411,7 +411,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       // Second export (verify FBO cleanup is correct — prev_fbo restored properly)
       g_export_test.export_done = false;
       g_export_test.export_result = false;
-      const char* tmp_path2 = "/tmp/lumice_export_twice_2.png";
+      const std::string tmp_path2 = GuiTestTempPath("lumice_export_twice_2.png").string();
       g_export_test.export_path = tmp_path2;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -422,13 +422,13 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> img1, img2;
       int w1 = 0, h1 = 0, ch1 = 0;
       int w2 = 0, h2 = 0, ch2 = 0;
-      IM_CHECK(lumice::test::LoadPng(tmp_path1, img1, w1, h1, ch1));
-      IM_CHECK(lumice::test::LoadPng(tmp_path2, img2, w2, h2, ch2));
+      IM_CHECK(lumice::test::LoadPng(tmp_path1.c_str(), img1, w1, h1, ch1));
+      IM_CHECK(lumice::test::LoadPng(tmp_path2.c_str(), img2, w2, h2, ch2));
       IM_CHECK_EQ(w1, w2);
       IM_CHECK_EQ(h1, h2);
 
-      std::remove(tmp_path1);
-      std::remove(tmp_path2);
+      std::remove(tmp_path1.c_str());
+      std::remove(tmp_path2.c_str());
     };
   }
 

@@ -341,7 +341,7 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
 
       // 8. Off-screen FBO capture, then compare against the committed reference.
       // The tmp filename must match ReferenceGroup.tmp_prefix in scripts/regen_gui_test_refs.py.
-      const std::string tmp_path = std::string("/tmp/lumice_lens_proj_") + scene.name + ".png";
+      const std::string tmp_path = GuiTestTempPath(std::string("lumice_lens_proj_") + scene.name + ".png").string();
       const std::string ref_path = std::string(LUMICE_TEST_REF_DIR) + "/lens_proj_" + scene.name + ".jpg";
       IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, tmp_path));
 

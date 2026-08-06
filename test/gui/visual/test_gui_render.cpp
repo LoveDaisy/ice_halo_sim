@@ -77,7 +77,7 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       gui::g_state.aspect_portrait = false;
 
       // Save
-      const char* tmp_path = "/tmp/lumice_aspect_test.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_aspect_test.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -96,7 +96,7 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::k4x3);
       IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -110,7 +110,7 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
       gui::g_state.aspect_portrait = false;
 
-      const char* tmp_path = "/tmp/lumice_aspect_2x1_test.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_aspect_2x1_test.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -126,7 +126,7 @@ void RegisterAspectRatioTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.aspect_preset, gui::AspectPreset::k2x1);
       IM_CHECK_EQ(gui::g_state.aspect_portrait, false);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
