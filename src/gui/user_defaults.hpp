@@ -399,13 +399,11 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset);
 // For a caller that has ALREADY committed the document itself — the defaults panel writes its
 // whole working copy in one go, so by the time it calls this the value is on disk. Nothing else
 // should: memory that leads disk is exactly how "what this session resolves" and "what the next
-// launch reads" drift apart, which is why RevertOneAxisPresetOverride below does the file first.
+// launch reads" drift apart. That ordering is the panel's own to keep, and it says so at the call
+// site (defaults_panel.cpp's CommitCopy, "ORDER IS PART OF THE CONTRACT"); there is deliberately
+// no store-side revert wrapper composing the two here, because a second writer of this file is a
+// second answer to "what did the user save".
 void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value);
-
-// Drop the user's override for one preset, returning it to the factory value. Disk first, memory
-// second — the reverse order would leave a failed write reporting success in this session and
-// resurrecting the old value on the next launch. Other presets and the GuiState half are untouched.
-bool RevertOneAxisPresetOverride(AxisPreset preset);
 
 // The zenith distribution a preset button actually writes: the factory row, with the user's std
 // substituted when one is stored. Single source for that resolution — the axis modal's preset

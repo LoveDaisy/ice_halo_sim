@@ -447,29 +447,6 @@ void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<f
   g_axis_overrides.slots[slot] = stored_value ? AxisPresetOverride{ true, *stored_value } : AxisPresetOverride{};
 }
 
-bool RevertOneAxisPresetOverride(AxisPreset preset) {
-  const AxisPresetEntry& entry = AxisPresetEntryFor(preset);
-  if (!entry.has_adjustable_zenith_std || entry.override_json_name == nullptr) {
-    return false;  // nothing can be stored for it, so there is nothing to restore
-  }
-
-  const auto dir = GetActiveUserConfigDir();
-  if (!dir) {
-    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was changed");
-    return false;
-  }
-  nlohmann::json doc = ReadOverlayJsonIfPresent(*dir);
-  EraseAxisPresetZenithStdFromDoc(doc, preset);
-
-  if (!WriteUserDefaultsFile(*dir, doc)) {
-    return false;
-  }
-  // Disk first, memory second (see the header): a failed write above returns with the in-memory
-  // override still in place, which is what the next launch would read back anyway.
-  AdoptAxisPresetZenithStdOverrideInMemory(preset, std::nullopt);
-  return true;
-}
-
 AxisDist EffectiveAxisPresetZenith(const AxisPresetEntry& entry) {
   AxisDist zenith = entry.zenith;
   if (const auto stored = GetUserAxisPresetZenithStdOverride(entry.id)) {
