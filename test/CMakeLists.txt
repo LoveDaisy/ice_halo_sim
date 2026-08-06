@@ -235,6 +235,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_panel_registry.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_visibility_enablement_predicate.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_sampling_density_stats.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_lifecycle.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"

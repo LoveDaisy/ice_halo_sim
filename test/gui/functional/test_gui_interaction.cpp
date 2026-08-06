@@ -3343,6 +3343,55 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // ===== Visibility group: lens x widget enablement =====
+  //
+  // p2_render/visibility_enablement_matrix — the whole (lens type x Visibility widget) grid as one
+  // universally quantified claim, replacing the six per-lens instance cases that stood here (Globe,
+  // three full-sky lenses, and two single-fisheye baselines) plus the two later duplicates of them
+  // (visibility_globe_disables_front / visibility_full_sky_disables_all). Those nine cells were the
+  // subset of the grid somebody had thought to write down; five of the eleven lens types were never
+  // covered at all, and two of the cases were byte-identical once their lens constant was factored
+  // out.
+  //
+  // What this case pins is the CALL SITE: that the four widgets app_panels.cpp actually draws carry
+  // the enablement the rule says they should, for every lens the enum has. Its sibling
+  // `VisibilityEnablement.inline_ac2_registry_gate_matches_semantics_for_every_lens`
+  // (test/unit-correctness/gui/test_visibility_enablement_predicate.cpp) pins the rule itself, and
+  // runs windowless on all three CI platforms; this half needs a live frame to read ItemFlags, so it
+  // can only run where gui_test does.
+  //
+  // Expected values are re-derived from LensIsFullSky / kLensTypeGlobe rather than from
+  // ConstraintFor, for the reason spelled out at the head of RegisterP1SliderBoundaryTests' registry
+  // block: the call site reads the registry now, so asking the registry what to expect would compare
+  // one line of code against itself.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_enablement_matrix");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      // The radio group is one field (renderer.visible) drawn as three widgets; all three must move
+      // together, which is why they are listed individually rather than sampled.
+      const char* const kVisibleRefs[] = { "**/Upper##visible", "**/Full##visible", "**/Lower##visible" };
+
+      ResetTestState();
+      ctx->Yield(2);
+      for (int lens = 0; lens < gui::kLensTypeCount; ++lens) {
+        gui::g_state.renderer.lens_type = lens;
+        ctx->Yield(3);
+
+        const bool full_sky = gui::LensIsFullSky(lens);
+        const bool front_applies = !(full_sky || lens == gui::kLensTypeGlobe);
+
+        for (const char* ref : kVisibleRefs) {
+          const bool disabled = (ctx->ItemInfo(ref).ItemFlags & ImGuiItemFlags_Disabled) != 0;
+          ctx->LogDebug("lens=%d %s disabled=%d expected=%d", lens, ref, disabled ? 1 : 0, full_sky ? 1 : 0);
+          IM_CHECK_EQ(disabled, full_sky);
+        }
+        const bool front_disabled = (ctx->ItemInfo("**/Front##visible").ItemFlags & ImGuiItemFlags_Disabled) != 0;
+        ctx->LogDebug("lens=%d Front disabled=%d expected=%d", lens, front_disabled ? 1 : 0, front_applies ? 0 : 1);
+        IM_CHECK_EQ(front_disabled, !front_applies);
+      }
+    };
+  }
+
   // ===== task-visible-lens-adapt (scrum-globe-view-v3 176.2) =====
   // lens × visibility adapter matrix: full-sky lenses disable the entire
   // Visibility section; Globe disables only the Front radio button.
