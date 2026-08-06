@@ -279,6 +279,21 @@ endif()
 # collect zero tests and pytest exits 5 ("no tests collected"), which ctest
 # reports as a hard FAILURE — on every platform, since both carry the `parity`
 # label that `ctest -L "unit-correctness|parity|golden-analytic"` selects.
+# Where these two actually run, which is not where a reader assumes:
+#
+# This find_program gates the whole block, and CI's four build-matrix jobs never install
+# pytest — so on those runners PYTEST_EXECUTABLE is not found, the if() body does not execute,
+# and neither test is ever REGISTERED. Their ctest step reports "out of 3"; the same selector
+# locally reports 5. The two missing ones are exactly CudaMultiMsParity and
+# CudaRandomGeometryParity.
+#
+# So the capture point for these is a local `./scripts/test.sh quick` (or a direct ctest on
+# dev49 / win-builder), NOT CI. Stated here because "it's an add_test, therefore CI runs it" is
+# the natural reading and it is wrong.
+#
+# Deliberately NOT resolved here: whether to install pytest in the build jobs (making them run)
+# or to accept the status quo (leaving them local-only) is a decision with cost on both sides
+# and is not this comment's to make. Both readings leave the paragraph above true.
 find_program(PYTEST_EXECUTABLE NAMES pytest pytest3 HINTS ENV PATH)
 if(PYTEST_EXECUTABLE)
   add_test(NAME "CudaMultiMsParity"
