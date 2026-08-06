@@ -42,8 +42,15 @@ using ResultFramePtr = std::unique_ptr<LUMICE_ResultFrame, ResultFrameDeleter>;
 // The shared shape, for the one consumer that needs the frame to outlive the scope that
 // acquired it: server_poller.cpp hands a share to the texture payload it materializes, which
 // is what lets the payload point straight at the frame's buffers instead of copying them.
-// Construct with the deleter attached — `SharedResultFramePtr(raw, ResultFrameDeleter{})` —
-// since shared_ptr type-erases it rather than carrying it in the type.
+//
+// shared_ptr type-erases its deleter instead of carrying it in the type, so unlike
+// ResultFramePtr this alias cannot make the right deleter automatic. Build one with
+// MakeSharedResultFrame below rather than constructing the alias directly — that turns
+// "remember to pass ResultFrameDeleter{}" from an instruction into a mechanism.
 using SharedResultFramePtr = std::shared_ptr<LUMICE_ResultFrame>;
+
+inline SharedResultFramePtr MakeSharedResultFrame(LUMICE_ResultFrame* frame) {
+  return SharedResultFramePtr(frame, ResultFrameDeleter{});
+}
 
 }  // namespace lumice

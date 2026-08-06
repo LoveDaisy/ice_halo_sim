@@ -315,7 +315,7 @@ void ServerPoller::PollOnce() {
   if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
     return;
   }
-  lumice::SharedResultFramePtr frame(raw_frame, lumice::ResultFrameDeleter{});
+  lumice::SharedResultFramePtr frame = lumice::MakeSharedResultFrame(raw_frame);
 
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_RenderResult composite_results[2]{};
