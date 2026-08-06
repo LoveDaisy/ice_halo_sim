@@ -132,6 +132,7 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   EXPECT_EQ(snap.renderer_resim.sim_resolution_index, 3);
   EXPECT_FLOAT_EQ(snap.renderer_resim.background[0], 0.1f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.background[2], 0.3f);
+  EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[0], 0.4f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[1], 0.5f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.opacity, 0.65f);
 
