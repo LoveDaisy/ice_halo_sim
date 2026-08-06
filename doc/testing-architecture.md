@@ -707,6 +707,59 @@ green full-suite run is not a baseline: the real-timing cases are load-sensitive
 build elsewhere on the machine is enough to turn one red. Load produces false reds, never false
 greens — so "nothing caught it" survives a noisy machine, while "this suite is flaky" does not.
 
+#### §4.8.1 Landed status (2026-08-07)
+
+The diagnosis above named three production-side sites where a rule stayed control flow instead of
+becoming data. Outcome, one line each:
+
+| Site | Outcome |
+|---|---|
+| `src/gui/app_panels.cpp` visibility radio buttons (`renderer.visible`, `renderer.front`) | Landed. Both fields already had a registered predicate (`NotUnderFullSky` / `NotUnderFullSkyOrGlobe`, `src/gui/field_editor_registry.cpp:432-433`) — the same one the FOV slider fifteen lines above already consumed; the radio buttons just weren't wired to it. `app_panels.cpp:697` and `:708` now read `ConstraintFor(...)` the same way the FOV slider does. One `gui_unit_test` invariant plus one `gui_test` call-site matrix (11 lens types × 4 widgets) replaced 9 instance cases. |
+| `src/gui/file_io.cpp` hardcoded `.value(key, default)` fallbacks | Landed. Hardcoded-literal share dropped from 88% to 21.2%; one universal "missing key → struct default" invariant now covers 80 fields and reproduces the `00fb12fc` regression class that the prior 721 cases caught zero of. Side finding: on the legacy core-JSON load path, the comparison point turned out to be the *core* struct's default, not the GUI struct's — core's parser seeds every field via `if (contains) get_to`, so a missing key lands on the core seed rather than a GUI-side literal. That reclassified what first looked like 6 genuine GUI/core default divergences down to 2, both left as core-side policy decisions. |
+| GLSL/C++ shared projection header | **Not pursued — a NO-GO on rationale, not on feasibility.** See below. |
+
+**The projection header decision.** A real dual compile was run: the same candidate text was accepted
+both by clang (`-std=c++17 -Wall -Wextra`, exit 0) and by the driver's own GLSL compiler at `gui_test`
+startup, with the scene rendering correctly — the header is buildable. What killed the proposal was the
+two property tests it was meant to unlock: `inverse(forward(d)) ≈ d` closes under *any* self-consistent
+convention and cannot detect a handedness flip (`test/unit-correctness/gui/test_render_handedness_guard.cpp`'s
+header comment already argues this, which is why that suite picked an absolute-screen-side oracle
+instead); and "GUI inverse projection agrees with CLI forward projection in handedness" already exists —
+the same file's 8 cases cover it across 3 forward implementations plus one inverse read-back. The
+repository holds five implementations of the projection math, and a shared header for four of them is
+already in place (`src/core/shared/projection_shared.h`, used by CLI/Metal/CUDA); only the fragment-shader
+copy was never folded in. `git log -L` on the five GLSL inverse-projection functions (`linearInverse`,
+`fisheyeInverse`, `dualFisheyeInverse`, `rectangularInverse`, `globeInverse`) counts 14 edits total, most
+recent over three months before this decision, against 54 commits to the same file in the same span —
+this logic barely moves, so the cost of keeping two hand-synced copies stays low. **Trigger condition,
+not a to-do:** several of those 14 edits were fixing GLSL/C++ divergence itself (commit `458a6785`:
+`BuildViewMatrix`'s rotation chain, fisheye `img_radius`, dual-fisheye sign) — the two sides *have*
+diverged before, concentrated in the window when the projection math was actively being tuned. If that
+math re-enters active development (a docking migration changing viewport semantics, a new lens type),
+re-open this decision; the low-churn premise it rests on will no longer hold.
+
+**The suite-scope decision (owner, 2026-08-07).** The original N=20/50/100 budget proposal is replaced
+by two independent axes — tier (T1 must-keep / T2 next / T3 fuller coverage) crossed with writability
+(ready today / blocked on a production-side change / already satisfied / falsified) — because the three
+lists were already cumulative (N=50 was "N=20 plus 30 more", N=100 was "N=50 plus 50 more, no new
+invariant shapes"), so pinning a number to a tier boundary ("why 20 and not 25") was the only thing
+tiering actually removes. **Scope: write T1 + T2.** Of T1's original 20 candidate invariants: one (the
+round-trip identity above) is struck as untestable by construction; 9 were already satisfied, including
+the handedness one just found; 2 are blocked on an observability seam that belongs to the
+preview-lifecycle line, not this one; and 8 are genuinely unwritten today — each of those 8 must be
+re-checked against the current suite before work starts, since the round-trip case shows an "unwritten"
+label from this analysis can itself be stale. **Retirement is not a separately scoped task and never
+covers a whole tier at once.** It comes attached to whichever invariant lands and is proven to cover an
+instance case: landing the visibility predicate retired 8 `visibility_*` cases because each was checked
+against a red probe; landing the fallback invariant retired the field-by-field default assertions it
+subsumed, the same way. There is no all-at-once "721 → N" cutover — authorization to delete an instance
+case comes only from a red-probe or equivalence proof pointing at that specific case, never from a tier
+label. Three limits carry forward unconditionally: the compression figure above (37%, 30–50% range,
+28% white-box-verified) supports only the hole-coverage axis, not overall coverage, where there is no
+evidence and improvement is unlikely; T1 alone gives up six failure classes entirely (overlay-label
+placement, concrete widget interaction, filter SOP grammar, color/compositing, malformed-input
+degradation, multi-monitor/window-size) and is not a shippable suite by itself.
+
 ---
 
 ## §5 Physical-layout naming conventions
