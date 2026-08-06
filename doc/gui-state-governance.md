@@ -170,8 +170,8 @@
 
 ### 8.8 与 `ConfigSnapshot` / Revert baseline 的边界
 
-`GuiState::ConfigSnapshot`（`gui_state.hpp:1101`）只覆盖七个配置字段（晶体 / filter / layer / `sun` / `sim` / `renderer` / 染色规则），其中没有任何一个**顶层字段**登记为 `FieldTier::kView`——而本层的默认值候选恰恰以 `kView` 为主力（`bg_*` / `show_*` / 各类颜色与 alpha / 面板折叠态）。
+`GuiState::ConfigSnapshot`（`gui_state.hpp:1101`）只覆盖七个配置字段（晶体 / filter / layer / `sun` / `sim` / `renderer_resim` / 染色规则），其中没有任何一个**顶层字段**登记为 `FieldTier::kView`——而本层的默认值候选恰恰以 `kView` 为主力（`bg_*` / `show_*` / 各类颜色与 alpha / 面板折叠态）。
 
-⚠️ 但"没有 `kView` 顶层字段"不等于"没有视图性的设置"：档位登记在**顶层字段**这一粒度上（`renderer` 整体登记为 `kStructSoft`，`gui_state_tiers.hpp`），而 `ConfigSnapshot::renderer` 拷贝的是整份 `RenderConfig`，所以镜头 / fov / elevation / azimuth / roll / visible / front 这些纯显示侧的控制项是以**结构体成员**的形式被包含在快照里的，只是不作为独立字段出现在上面那份七项清单中。读这一段时不要把它读成"这些控制项不在 Revert 的作用域内"——它们在。Revert **应当**覆盖哪些字段是一个独立的语义问题，不在本节范围内。
+⚠️ "没有 `kView` 顶层字段"本身不等于"没有视图性的设置"，因为档位登记在**顶层字段**这一粒度上（`renderer` 整体登记为 `kStructSoft`，`gui_state_tiers.hpp`），一个顶层字段内部的成员不会单独出现在那份七项清单里。但对 `renderer` 这一项，答案现在是明确的：快照存的是 `RenderConfigResimFields renderer_resim` 而**不是**整份 `RenderConfig`，镜头 / fov / elevation / azimuth / roll / visible / front 与 `exposure_offset` 结构性地不在快照里，Revert 不覆盖它们。「Revert 应当覆盖哪些字段」这个语义问题已有答案且只有一个真源——`RenderConfigResimFields`，见 §3 偏离 F。
 
 默认值层复用的是 `ConfigSnapshot` 背后"两份状态结构化 diff、按需派生效果"的**模式**，但不能复用其 struct：两者覆盖的字段集合不同，把默认值的 diff 引擎强行套进 `ConfigSnapshot` 会连带改动 Revert 语义。
