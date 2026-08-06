@@ -688,9 +688,9 @@ static ShapeDist ParseShapeDist(const json& j, float default_center) {
     d.center = j.get<float>();
     d.spread = 0.0f;
   } else if (j.is_object()) {
-    d.type = ParseShapeDistType(j.value("type", "no_random"));
+    d.type = ParseShapeDistType(j.value("type", ShapeDistTypeToString(ShapeDist{}.type)));
     d.center = j.value("mean", default_center);
-    d.spread = j.value("std", 0.0f);
+    d.spread = j.value("std", ShapeDist{}.spread);
   }
   if (d.type != ShapeDistType::kNoRandom && d.type != ShapeDistType::kUniform) {
     d.type = ShapeDistType::kUniform;
@@ -706,20 +706,26 @@ static AxisDist ParseAxisDist(const json& j) {
     a.mean = j.get<float>();
     a.std = 0.0f;
   } else if (j.is_object()) {
+    // NOT derived from AxisDist{}.type (kUniform): both arms of this parser have always fallen
+    // back to gauss, a divergence with no written reason. It is reached from both parse entry
+    // points, so changing it moves how every existing document loads; the literal stays until
+    // that is decided (DISABLED_ contract anchor in test_import_export_logic.cpp).
     auto t = j.value("type", "gauss");
     a.type = ParseAxisDistType(t);
-    a.mean = j.value("mean", 0.0f);
-    a.std = j.value("std", 0.0f);
+    a.mean = j.value("mean", AxisDist{}.mean);
+    a.std = j.value("std", AxisDist{}.std);
   }
   return a;
 }
 
 static CrystalConfig ParseCrystal(const json& j) {
   CrystalConfig c;
-  c.name = j.value("name", std::string{});
+  c.name = j.value("name", CrystalConfig{}.name);
 
-  auto type_str = j.value("type", "prism");
-  c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalType::kPrism;
+  // Only "pyramid" selects the non-default arm; an absent (or unrecognised) `type` lands on
+  // CrystalConfig's own default rather than on a literal that could drift away from it.
+  const auto type_str = j.value("type", std::string{});
+  c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalConfig{}.type;
   const LUMICE_CrystalKind kind = (c.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 
   if (j.contains("shape")) {
@@ -727,14 +733,17 @@ static CrystalConfig ParseCrystal(const json& j) {
     if (c.type == CrystalType::kPrism) {
       const char* height_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
       if (s.contains(height_key)) {
-        c.height = ParseShapeDist(s[height_key], 1.0f);
+        c.height = ParseShapeDist(s[height_key], CrystalConfig{}.height.center);
       }
     } else {
-      // Historical fallbacks preserved: prism_h defaults to 1.0, upper_h/lower_h to 0.0 when absent.
+      // prism_h takes CrystalConfig's own default when absent. upper_h/lower_h deliberately do
+      // NOT: they keep a historical 0.0 fallback that differs from CrystalConfig's 0.2, so the
+      // literals stay, spelled out, rather than being folded into the derived form around them.
       const char* prism_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
       const char* upper_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
       const char* lower_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
-      c.prism_h = s.contains(prism_h_key) ? ParseShapeDist(s[prism_h_key], 1.0f) : ShapeDist(1.0f);
+      c.prism_h = s.contains(prism_h_key) ? ParseShapeDist(s[prism_h_key], CrystalConfig{}.prism_h.center) :
+                                            CrystalConfig{}.prism_h;
       c.upper_h = s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f) : ShapeDist(0.0f);
       c.lower_h = s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f) : ShapeDist(0.0f);
       // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
@@ -754,7 +763,7 @@ static CrystalConfig ParseCrystal(const json& j) {
     if (s.contains(fd_key) && s[fd_key].is_array()) {
       size_t n = std::min(s[fd_key].size(), static_cast<size_t>(6));
       for (size_t i = 0; i < n; i++) {
-        c.face_distance[i] = ParseShapeDist(s[fd_key][i], 1.0f);
+        c.face_distance[i] = ParseShapeDist(s[fd_key][i], CrystalConfig{}.face_distance[i].center);
       }
     }
     // shape.sync_group: read into the wire form's parallel array, then scatter back into each
@@ -844,19 +853,23 @@ static json SerializeRendererForGui(const RenderConfig& r) {
 
 static RenderConfig ParseRendererFromGuiJson(const json& jr) {
   RenderConfig r;
-  r.lens_type = LensTypeFromString(jr.value("lens_type", "linear"));
+  // The three string/index-mapped fields below route their fallback through the SAME name/value
+  // table the serializer writes with, so the absent-key default is RenderConfig's default rather
+  // than a spelling of it that has to be kept in step by hand.
+  r.lens_type = LensTypeFromString(jr.value("lens_type", kLensTypeJsonNames[RenderConfig{}.lens_type]));
   r.fov = jr.value("fov", RenderConfig{}.fov);
   r.elevation = jr.value("elevation", RenderConfig{}.elevation);
   r.azimuth = jr.value("azimuth", RenderConfig{}.azimuth);
   r.roll = jr.value("roll", RenderConfig{}.roll);
-  r.sim_resolution_index = SimResolutionIndexFromValue(jr.value("sim_resolution", 1024));
-  std::string vis_str = jr.value("visible", "full");
+  r.sim_resolution_index =
+      SimResolutionIndexFromValue(jr.value("sim_resolution", kSimResolutions[RenderConfig{}.sim_resolution_index]));
+  std::string vis_str = jr.value("visible", kVisibleJsonNames[RenderConfig{}.visible]);
   if (vis_str == "front") {
     r.visible = kVisibleFull;
     r.front = true;
   } else {
     r.visible = VisibleFromString(vis_str);
-    r.front = jr.value("front", false);
+    r.front = jr.value("front", RenderConfig{}.front);
   }
   if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
     for (int i = 0; i < 3; i++)
@@ -886,8 +899,8 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
 
 static FilterConfig ParseFilterFromGuiJson(const json& jf) {
   FilterConfig f;
-  f.name = jf.value("name", std::string{});
-  auto action_str = jf.value("action", "filter_in");
+  f.name = jf.value("name", FilterConfig{}.name);
+  auto action_str = jf.value("action", FilterActionToString(FilterConfig{}.action));
   f.action = (action_str == "filter_out") ? 1 : 0;
   f.sym_p = jf.value("sym_p", FilterConfig{}.sym_p);
   f.sym_b = jf.value("sym_b", FilterConfig{}.sym_b);
@@ -925,13 +938,13 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     // distinguishable from "user typed 0".
     EntryExitParams p;
     if (jf.contains("entry_text")) {
-      p.entry_text = jf.value("entry_text", std::string{});
+      p.entry_text = jf.value("entry_text", EntryExitParams{}.entry_text);
     } else if (jf.contains("entry")) {
       int v = jf.value("entry", 0);
       p.entry_text = (v == 0) ? std::string{} : std::to_string(v);
     }
     if (jf.contains("exit_text")) {
-      p.exit_text = jf.value("exit_text", std::string{});
+      p.exit_text = jf.value("exit_text", EntryExitParams{}.exit_text);
     } else if (jf.contains("exit")) {
       int v = jf.value("exit", 0);
       p.exit_text = (v == 0) ? std::string{} : std::to_string(v);
@@ -939,12 +952,12 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     // Length-mode trio: missing in pre-uplift .lmc files; defaults keep the
     // old "no constraint" behaviour. length_mode is clamped to [0,3] so a
     // corrupt value does not crash the UI Combo.
-    p.length_mode = jf.value("length_mode", 0);
+    p.length_mode = jf.value("length_mode", EntryExitParams{}.length_mode);
     if (p.length_mode < 0 || p.length_mode > 3) {
       p.length_mode = 0;
     }
-    p.min_len = jf.value("min_len", 1);
-    p.max_len = jf.value("max_len", 1);
+    p.min_len = jf.value("min_len", EntryExitParams{}.min_len);
+    p.max_len = jf.value("max_len", EntryExitParams{}.max_len);
     if (p.min_len < 1) {
       p.min_len = 1;
     }
@@ -957,7 +970,7 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
       GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
     }
     // FromLegacyRaypath splits ';' multi-segment sugar into canonical OR rows.
-    f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", std::string{}) });
+    f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", RaypathParams{}.raypath_text) });
   }
   return f;
 }
@@ -1635,9 +1648,14 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   }
 
   FilterConfig f;
-  f.name = jf.value("name", std::string{});
-  const auto action_str = jf.value("action", "filter_in");
+  f.name = jf.value("name", FilterConfig{}.name);
+  const auto action_str = jf.value("action", FilterActionToString(FilterConfig{}.action));
   f.action = (action_str == "filter_out") ? 1 : 0;
+  // Deliberately NOT FilterConfig{}.sym_* (all true). That struct default is the GUI-native
+  // answer, for documents this editor wrote; this branch reads core's format, and core states its
+  // own answer outright — `f.symmetry_ = FilterConfig::kSymNone;` before the contains() check, in
+  // config/filter_config.cpp's from_json. An absent `symmetry` means NO symmetry to the engine
+  // that owns this wire format, and mirroring that is the whole job here.
   const auto sym = jf.value("symmetry", std::string{});
   f.sym_p = (sym.find('P') != std::string::npos);
   f.sym_b = (sym.find('B') != std::string::npos);
@@ -1760,9 +1778,11 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         continue;
       }
       FilterConfig f;
-      f.name = jf.value("name", std::string{});
-      auto action_str = jf.value("action", std::string{ "filter_in" });
+      f.name = jf.value("name", FilterConfig{}.name);
+      auto action_str = jf.value("action", std::string{ FilterActionToString(FilterConfig{}.action) });
       f.action = (action_str == "filter_out") ? 1 : 0;
+      // Same rule as the complex-filter decode above, for the same reason: absent `symmetry` is
+      // core's kSymNone, not FilterConfig{}'s all-true GUI-native default.
       auto sym = jf.value("symmetry", std::string{});
       f.sym_p = (sym.find('P') != std::string::npos);
       f.sym_b = (sym.find('B') != std::string::npos);
@@ -1825,8 +1845,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
 
     if (js.contains("light_source")) {
       auto& jl = js["light_source"];
-      state.sun.altitude = jl.value("altitude", 20.0f);
-      state.sun.diameter = jl.value("diameter", 0.5f);
+      state.sun.altitude = jl.value("altitude", SunConfig{}.altitude);
+      state.sun.diameter = jl.value("diameter", SunConfig{}.diameter);
       if (jl.contains("spectrum")) {
         const auto& sp = jl["spectrum"];
         if (sp.is_string()) {
@@ -1848,7 +1868,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
         state.sim.ray_num_millions = static_cast<float>(js["ray_num"].get<size_t>()) / 1e6;
       }
     }
-    state.sim.max_hits = js.value("max_hits", 8);
+    state.sim.max_hits = js.value("max_hits", SimConfig{}.max_hits);
 
     // Convert ID-referenced scattering to copy-model layers.
     if (js.contains("scattering") && js["scattering"].is_array()) {
@@ -1860,6 +1880,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       std::map<int, int> filter_id_to_pool;
       for (const auto& jlayer : jscattering) {
         Layer layer;
+        // NOT Layer{}.probability (0.0f), which is what the GUI-native path uses. Another
+        // undecided divergence: 1.0f here means an absent `prob` loads as "always continue".
         layer.probability = jlayer.value("prob", 1.0f);
         if (jlayer.contains("entries") && jlayer["entries"].is_array()) {
           const auto& jentries = jlayer["entries"];
@@ -1881,7 +1903,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
               entry.crystal_id = static_cast<int>(state.crystals.size());
               state.crystals.emplace_back();
             }
-            entry.proportion = je.value("proportion", 1.0f);
+            // Core seeds this field explicitly when it parses its own format —
+            // `ScatteringSetting setting{ ..., 100.0f }` in config_manager.cpp's
+            // ParseScatteringInfo — so 100.0f is what an absent `proportion` means to the engine
+            // that owns the wire format, and EntryCard{} agrees. The literal here used to be 1.0f,
+            // which read an absent share as ~1% of a sibling's on a 0-100 scale.
+            entry.proportion = je.value("proportion", EntryCard{}.proportion);
             int filter_id = je.value("filter", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
               auto it = filter_id_to_pool.find(filter_id);
@@ -1951,8 +1978,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             } else {
               cls.combine = LUMICE_COLOR_COMBINE_ANY;
             }
-            cls.visible = jc.value("visible", true);
-            cls.solo = jc.value("solo", false);
+            cls.visible = jc.value("visible", ColorClassConfig{}.visible);
+            cls.solo = jc.value("solo", ColorClassConfig{}.solo);
             cls.z_order = static_cast<int>(ci);
             if (jc.contains("match") && jc["match"].is_array()) {
               for (const auto& jr : jc["match"]) {
@@ -1960,7 +1987,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
                   continue;
                 }
                 ColorClassRefConfig ref;
-                ref.layer_idx = jr.value("layer", 0);
+                ref.layer_idx = jr.value("layer", ColorClassRefConfig{}.layer_idx);
                 const int crystal_json = jr.value("crystal", -1);
                 auto it = crystal_id_to_pool.find(crystal_json);
                 if (it == crystal_id_to_pool.end()) {
@@ -2041,8 +2068,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     RenderConfig r;
 
     if (jr.contains("lens")) {
-      r.lens_type = LensTypeFromString(jr["lens"].value("type", "linear"));
-      r.fov = jr["lens"].value("fov", 90.0f);
+      r.lens_type = LensTypeFromString(jr["lens"].value("type", kLensTypeJsonNames[RenderConfig{}.lens_type]));
+      r.fov = jr["lens"].value("fov", RenderConfig{}.fov);
     }
 
     if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
@@ -2056,18 +2083,23 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     }
 
     if (jr.contains("view")) {
-      r.elevation = jr["view"].value("elevation", 0.0f);
-      r.azimuth = jr["view"].value("azimuth", 0.0f);
-      r.roll = jr["view"].value("roll", 0.0f);
+      r.elevation = jr["view"].value("elevation", RenderConfig{}.elevation);
+      r.azimuth = jr["view"].value("azimuth", RenderConfig{}.azimuth);
+      r.roll = jr["view"].value("roll", RenderConfig{}.roll);
     }
 
+    // Deliberately NOT RenderConfig{}.visible (2, "full"), unlike its GUI-native twin. Core
+    // declares the default for its own format in the field itself — `VisibleRange visible_ =
+    // kUpper` in config/render_config.hpp — and its parser only overwrites it when the key is
+    // present. "upper" mirrors that. The struct default here is the GUI-native answer and applies
+    // to documents this editor wrote, not to the format being read on this path.
     std::string vis_str = jr.value("visible", "upper");
     if (vis_str == "front") {
       r.visible = kVisibleFull;
       r.front = true;
     } else {
       r.visible = VisibleFromString(vis_str);
-      r.front = jr.value("front", false);
+      r.front = jr.value("front", RenderConfig{}.front);
     }
 
     if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
@@ -2078,8 +2110,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       for (int i = 0; i < 3; i++)
         r.ray_color[i] = jr["ray_color"][i].get<float>();
     }
-    r.opacity = jr.value("opacity", 1.0f);
-    float ifactor = jr.value("intensity_factor", 1.0f);
+    r.opacity = jr.value("opacity", RenderConfig{}.opacity);
+    // The wire carries a linear intensity factor, the struct an EV offset; the fallback is
+    // therefore the struct default pushed through the same 2^x the reader inverts below.
+    float ifactor = jr.value("intensity_factor", std::exp2(RenderConfig{}.exposure_offset));
     r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
 
     state.renderer = r;
@@ -2211,7 +2245,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   if (root.contains("layers") && root["layers"].is_array()) {
     for (auto& jl : root["layers"]) {
       Layer layer;
-      layer.probability = jl.value("prob", 0.0f);
+      layer.probability = jl.value("prob", Layer{}.probability);
       if (jl.contains("entries") && jl["entries"].is_array()) {
         for (auto& je : jl["entries"]) {
           EntryCard entry;
@@ -2223,7 +2257,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
             entry.crystal_id = static_cast<int>(state.crystals.size());
             state.crystals.emplace_back();
           }
-          entry.proportion = je.value("proportion", 100.0f);
+          entry.proportion = je.value("proportion", EntryCard{}.proportion);
           if (je.contains("filter") && !je["filter"].is_null()) {
             entry.filter_id = static_cast<int>(state.filters.size());
             state.filters.push_back(ParseFilterFromGuiJson(je["filter"]));
@@ -2256,7 +2290,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
       std::map<int, int> filter_id_to_pool;
       for (auto& jl : root["scattering"]) {
         Layer layer;
-        layer.probability = jl.value("prob", 0.0f);
+        layer.probability = jl.value("prob", Layer{}.probability);
         if (jl.contains("entries") && jl["entries"].is_array()) {
           for (auto& je : jl["entries"]) {
             EntryCard entry;
@@ -2274,7 +2308,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
               entry.crystal_id = static_cast<int>(state.crystals.size());
               state.crystals.emplace_back();
             }
-            entry.proportion = je.value("proportion", 100.0f);
+            entry.proportion = je.value("proportion", EntryCard{}.proportion);
             int filter_id = je.value("filter_id", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
               auto it = filter_id_to_pool.find(filter_id);
@@ -2298,9 +2332,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Sun
   if (root.contains("sun")) {
     auto& js = root["sun"];
-    state.sun.altitude = js.value("altitude", 20.0f);
-    state.sun.diameter = js.value("diameter", 0.5f);
-    const auto spec_str = js.value("spectrum", std::string("D65"));
+    state.sun.altitude = js.value("altitude", SunConfig{}.altitude);
+    state.sun.diameter = js.value("diameter", SunConfig{}.diameter);
+    const auto spec_str = js.value("spectrum", std::string(kSpectrumNames[SunConfig{}.spectrum_index]));
     if (spec_str == "custom" && js.contains("custom_spectrum") && js["custom_spectrum"].is_array()) {
       state.sun.custom_spectrum = ParseWlWeightArray(js["custom_spectrum"]);
       state.sun.spectrum_index = state.sun.custom_spectrum.empty() ? 2 : kCustomSpectrumIndex;
@@ -2334,25 +2368,31 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   }
 
   // Aspect ratio (view preference, defaults to Free for old files)
-  state.aspect_preset = AspectPresetFromString(root.value("aspect_ratio", "free"));
-  state.aspect_portrait = root.value("aspect_portrait", false);
+  state.aspect_preset = AspectPresetFromString(
+      root.value("aspect_ratio", kAspectPresetJsonNames[static_cast<int>(GuiState{}.aspect_preset)]));
+  state.aspect_portrait = root.value("aspect_portrait", GuiState{}.aspect_portrait);
 
   // Background image overlay (backward compatible: missing fields use defaults)
-  state.bg_path = PathFromU8(root.value("bg_path", std::string{}));
-  state.bg_show = root.value("bg_show", false);
-  state.bg_alpha = root.value("bg_alpha", 1.0f);
+  state.bg_path = PathFromU8(root.value("bg_path", PathToU8(GuiState{}.bg_path)));
+  state.bg_show = root.value("bg_show", GuiState{}.bg_show);
+  state.bg_alpha = root.value("bg_alpha", GuiState{}.bg_alpha);
 
   // Auxiliary line overlay (backward compatible: legacy `overlay_<x>` key maps to
   // both line and label = legacy_value; new keys override per-axis when present).
-  bool legacy_horizon = root.value("overlay_horizon", false);
-  bool legacy_grid = root.value("overlay_grid", false);
-  bool legacy_sun_circles = root.value("overlay_sun_circles", false);
-  state.show_horizon_line = root.value("overlay_horizon_line", legacy_horizon);
-  state.show_horizon_label = root.value("overlay_horizon_label", legacy_horizon);
-  state.show_grid_line = root.value("overlay_grid_line", legacy_grid);
-  state.show_grid_label = root.value("overlay_grid_label", legacy_grid);
-  state.show_sun_circles_line = root.value("overlay_sun_circles_line", legacy_sun_circles);
-  state.show_sun_circles_label = root.value("overlay_sun_circles_label", legacy_sun_circles);
+  // Each new key falls back to the legacy key, which in turn falls back to that field's OWN
+  // struct default — so the legacy key is read twice per pair rather than being latched into a
+  // local seeded with a literal. That extra read is what keeps line and label independent: with
+  // one shared local, whichever field seeded it would silently dictate the other's default.
+  state.show_horizon_line =
+      root.value("overlay_horizon_line", root.value("overlay_horizon", GuiState{}.show_horizon_line));
+  state.show_horizon_label =
+      root.value("overlay_horizon_label", root.value("overlay_horizon", GuiState{}.show_horizon_label));
+  state.show_grid_line = root.value("overlay_grid_line", root.value("overlay_grid", GuiState{}.show_grid_line));
+  state.show_grid_label = root.value("overlay_grid_label", root.value("overlay_grid", GuiState{}.show_grid_label));
+  state.show_sun_circles_line =
+      root.value("overlay_sun_circles_line", root.value("overlay_sun_circles", GuiState{}.show_sun_circles_line));
+  state.show_sun_circles_label =
+      root.value("overlay_sun_circles_label", root.value("overlay_sun_circles", GuiState{}.show_sun_circles_label));
   if (root.contains("overlay_sun_circle_angles") && root["overlay_sun_circle_angles"].is_array()) {
     state.sun_circle_angles.clear();
     for (const auto& v : root["overlay_sun_circle_angles"]) {
@@ -2373,17 +2413,17 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   read_color3("overlay_horizon_color", state.horizon_color);
   read_color3("overlay_grid_color", state.grid_color);
   read_color3("overlay_sun_circles_color", state.sun_circles_color);
-  state.horizon_alpha = root.value("overlay_horizon_alpha", 0.6f);
-  state.grid_alpha = root.value("overlay_grid_alpha", 0.3f);
-  state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", 0.5f);
-  state.show_zenith_nadir_line = root.value("overlay_zenith_nadir_line", false);
+  state.horizon_alpha = root.value("overlay_horizon_alpha", GuiState{}.horizon_alpha);
+  state.grid_alpha = root.value("overlay_grid_alpha", GuiState{}.grid_alpha);
+  state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", GuiState{}.sun_circles_alpha);
+  state.show_zenith_nadir_line = root.value("overlay_zenith_nadir_line", GuiState{}.show_zenith_nadir_line);
   read_color3("overlay_zenith_nadir_color", state.zenith_nadir_color);
-  state.zenith_nadir_alpha = root.value("overlay_zenith_nadir_alpha", 0.6f);
-  state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", 8.0f);
+  state.zenith_nadir_alpha = root.value("overlay_zenith_nadir_alpha", GuiState{}.zenith_nadir_alpha);
+  state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", GuiState{}.zenith_nadir_radius_px);
 
   // Panel state
-  state.right_panel_collapsed = root.value("right_panel_collapsed", false);
-  state.modal_layout_vertical = root.value("modal_layout_vertical", true);
+  state.right_panel_collapsed = root.value("right_panel_collapsed", GuiState{}.right_panel_collapsed);
+  state.modal_layout_vertical = root.value("modal_layout_vertical", GuiState{}.modal_layout_vertical);
 
   return true;
 }

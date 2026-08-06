@@ -3343,128 +3343,52 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // ===== task-visible-lens-adapt (scrum-globe-view-v3 176.2) =====
-  // lens × visibility adapter matrix: full-sky lenses disable the entire
-  // Visibility section; Globe disables only the Front radio button.
-
-  // p2_render/visibility_globe_front_disabled — Globe lens: Upper/Lower/Full
-  // remain interactive, Front is greyed out (no 2-hemisphere symmetry).
+  // ===== Visibility group: lens x widget enablement =====
+  //
+  // p2_render/visibility_enablement_matrix — the whole (lens type x Visibility widget) grid as one
+  // universally quantified claim, replacing the six per-lens instance cases that stood here (Globe,
+  // three full-sky lenses, and two single-fisheye baselines) plus the two later duplicates of them
+  // (visibility_globe_disables_front / visibility_full_sky_disables_all). Those nine cells were the
+  // subset of the grid somebody had thought to write down; five of the eleven lens types were never
+  // covered at all, and two of the cases were byte-identical once their lens constant was factored
+  // out.
+  //
+  // What this case pins is the CALL SITE: that the four widgets app_panels.cpp actually draws carry
+  // the enablement the rule says they should, for every lens the enum has. Its sibling
+  // `VisibilityEnablement.inline_ac2_registry_gate_matches_semantics_for_every_lens`
+  // (test/unit-correctness/gui/test_visibility_enablement_predicate.cpp) pins the rule itself, and
+  // runs windowless on all three CI platforms; this half needs a live frame to read ItemFlags, so it
+  // can only run where gui_test does.
+  //
+  // Expected values are re-derived from LensIsFullSky / kLensTypeGlobe rather than from
+  // ConstraintFor, for the reason spelled out at the head of RegisterP1SliderBoundaryTests' registry
+  // block: the call site reads the registry now, so asking the registry what to expect would compare
+  // one line of code against itself.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_front_disabled");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_enablement_matrix");
     t->TestFunc = [](ImGuiTestContext* ctx) {
+      // The radio group is one field (renderer.visible) drawn as three widgets; all three must move
+      // together, which is why they are listed individually rather than sampled.
+      const char* const kVisibleRefs[] = { "**/Upper##visible", "**/Full##visible", "**/Lower##visible" };
+
       ResetTestState();
       ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-    };
-  }
+      for (int lens = 0; lens < gui::kLensTypeCount; ++lens) {
+        gui::g_state.renderer.lens_type = lens;
+        ctx->Yield(3);
 
-  // p2_render/visibility_dual_fisheye_all_disabled — dual-fisheye (full-sky)
-  // disables all four Visibility radio buttons.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_fisheye_all_disabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeEqualArea;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-    };
-  }
+        const bool full_sky = gui::LensIsFullSky(lens);
+        const bool front_applies = !(full_sky || lens == gui::kLensTypeGlobe);
 
-  // p2_render/visibility_rectangular_all_disabled — rectangular (full-sky)
-  // disables all four Visibility radio buttons.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_rectangular_all_disabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeRectangular;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-    };
-  }
-
-  // p2_render/visibility_dual_ortho_all_disabled — dual orthographic (full-sky)
-  // disables all four Visibility radio buttons.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_dual_ortho_all_disabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeDualFisheyeOrthographic;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-    };
-  }
-
-  // p2_render/visibility_fisheye_all_enabled — single fisheye (baseline):
-  // all four Visibility radio buttons remain interactive.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_all_enabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-    };
-  }
-
-  // p2_render/visibility_fisheye_ortho_all_enabled — single orthographic fisheye
-  // (kLensTypeFisheyeOrthographic, enum 8) is NOT in kFullSkyLensTypes: all four
-  // Visibility radio buttons remain interactive (orthographic research conclusion).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_fisheye_ortho_all_enabled");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeOrthographic;
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      IM_CHECK((info_upper.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_full = ctx->ItemInfo("**/Full##visible");
-      IM_CHECK((info_full.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_lower = ctx->ItemInfo("**/Lower##visible");
-      IM_CHECK((info_lower.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK((info_front.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        for (const char* ref : kVisibleRefs) {
+          const bool disabled = (ctx->ItemInfo(ref).ItemFlags & ImGuiItemFlags_Disabled) != 0;
+          ctx->LogDebug("lens=%d %s disabled=%d expected=%d", lens, ref, disabled ? 1 : 0, full_sky ? 1 : 0);
+          IM_CHECK_EQ(disabled, full_sky);
+        }
+        const bool front_disabled = (ctx->ItemInfo("**/Front##visible").ItemFlags & ImGuiItemFlags_Disabled) != 0;
+        ctx->LogDebug("lens=%d Front disabled=%d expected=%d", lens, front_disabled ? 1 : 0, front_applies ? 0 : 1);
+        IM_CHECK_EQ(front_disabled, !front_applies);
+      }
     };
   }
 
@@ -3507,35 +3431,6 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       auto info_front = ctx->ItemInfo("**/Front##visible");
       IM_CHECK_EQ(info_upper.RectFull.Min.y, info_front.RectFull.Min.y);
       IM_CHECK(info_front.RectFull.Min.x > info_upper.RectFull.Min.x);
-    };
-  }
-
-  // p2_render/visibility_globe_disables_front — Globe lens disables the Front checkbox.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_globe_disables_front");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
-      ctx->Yield(3);
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
-    };
-  }
-
-  // p2_render/visibility_full_sky_disables_all — Full-sky lens disables the radio buttons
-  // and Front checkbox (outer BeginDisabled path, acceptance criterion #5).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "visibility_full_sky_disables_all");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::g_state.renderer.lens_type = gui::kFullSkyLensTypes[0];
-      ctx->Yield(3);
-      auto info_upper = ctx->ItemInfo("**/Upper##visible");
-      auto info_front = ctx->ItemInfo("**/Front##visible");
-      IM_CHECK(info_upper.ItemFlags & ImGuiItemFlags_Disabled);
-      IM_CHECK(info_front.ItemFlags & ImGuiItemFlags_Disabled);
     };
   }
 

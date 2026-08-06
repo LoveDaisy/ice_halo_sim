@@ -655,7 +655,6 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-  bool full_sky = LensIsFullSky(r.lens_type);
 
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -689,28 +688,30 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::EndDisabled();
     bool is_globe = (r.lens_type == kLensTypeGlobe);
     ImGui::SeparatorText("Visibility");
-    if (full_sky) {
-      ImGui::BeginDisabled();
-    }
+    // Same registry query as the FOV slider above, for the same reason. What used to stand here was
+    // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
+    // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
+    // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
+    // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
+    // full-sky case in, so the call site needs no nesting: one flat pair per field.
+    const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
+    ImGui::BeginDisabled(!visible_c.enabled);
     ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
     ImGui::SameLine();
     ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
     ImGui::SameLine();
     ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+    ImGui::EndDisabled();
+    // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
+    // next widget, so it is unaffected by — and does not affect — the disabled stack.
     ImGui::SameLine(0, 20);
-    if (!full_sky) {
-      ImGui::BeginDisabled(is_globe);
-    }
+    const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
+    ImGui::BeginDisabled(!front_c.enabled);
     ImGui::Checkbox("Front##visible", &r.front);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
     }
-    if (!full_sky) {
-      ImGui::EndDisabled();
-    }
-    if (full_sky) {
-      ImGui::EndDisabled();
-    }
+    ImGui::EndDisabled();
     ImGui::SeparatorText("Pose");
     if (is_globe) {
       ImGui::TextDisabled("(?)");
