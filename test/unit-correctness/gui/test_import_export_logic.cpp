@@ -3273,9 +3273,9 @@ TEST(ImportExport, DISABLED_LegacyVisibleFallbackDivergesFromStructDefault) {
 
 // file_io.cpp ParseCrystal: absent pyramid `upper_h` / `lower_h` fall back to 0.0f while
 // CrystalConfig{} defaults both to 0.2f. Unlike the five above this one IS written down at the
-// call site ("Historical fallbacks preserved: ... upper_h/lower_h to 0.0 when absent"); it gets an
-// anchor anyway so that "is this field covered by the universal invariant?" has a single answer
-// for every known divergence.
+// call site, which says the two fields "deliberately do NOT" take CrystalConfig's default and
+// keep a historical 0.0 fallback instead; it gets an anchor anyway so that "is this field covered
+// by the universal invariant?" has a single answer for every known divergence.
 TEST(ImportExport, DISABLED_UpperLowerHFallbackDivergesFromStructDefault) {
   FAIL() << "loader fallback 0.0f != CrystalConfig{}.upper_h/lower_h center (0.2f); documented, kept";
 }
