@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -65,6 +66,10 @@ unsigned long g_main_loop_cumulative_rays = 0;
 bool g_keep_export_png = false;
 // Set by --export-dir <path>: where GuiTestTempPath() puts scratch files. See that function.
 const char* g_export_dir = nullptr;
+// Set once main() has finished reading argv. GuiTestTempPath() latches its directory on first
+// call and must not do that before --export-dir has been seen; this makes that ordering a
+// checked precondition instead of a comment (see the assert there).
+bool g_args_parsed = false;
 // Set by --fixed-dt: inject a deterministic per-frame dt (1/60s) and skip the
 // frame-limit sleep. Decouples VSync frame-budget semantics from wall-clock cost
 // so correctness tests run at full speed. See scratchpad/task-gui-test-fixed-dt.
@@ -80,6 +85,23 @@ std::vector<unsigned char> g_synth_tex;
 
 // See the declaration in test_gui_shared.hpp for why this exists and who consumes it.
 std::filesystem::path GuiTestTempPath(const std::string& filename) {
+  // The directory is latched on the FIRST call and reused for the rest of the process, so a call
+  // that precedes argv parsing would pin the fallback path for everything afterwards — silently,
+  // writing to the wrong place with nothing to indicate it. Every call today comes from a test
+  // body, which runs long after main() parses; this check is what keeps that true rather than
+  // merely currently-so.
+  //
+  // Deliberately NOT assert(): this binary is built Release (CMAKE_CXX_FLAGS_RELEASE carries
+  // -DNDEBUG), where assert compiles to nothing — the check would be absent from the only
+  // configuration anyone builds gui_test in, which is worse than no check because it reads like
+  // one. Failing loudly costs a branch on a path that runs a handful of times per test.
+  if (!g_args_parsed) {
+    fprintf(stderr,
+            "[FATAL] GuiTestTempPath() called before argv was parsed — the scratch directory\n"
+            "        would latch to the fallback path and --export-dir would be ignored.\n");
+    std::abort();
+  }
+
   static const std::filesystem::path dir = [] {
     if (g_export_dir != nullptr) {
       return std::filesystem::path(g_export_dir);
@@ -249,6 +271,8 @@ int main(int argc, char** argv) {
   }
   g_core_log_level = core_log_level;
   g_gui_log_level = gui_log_level;
+  // argv is fully read; GuiTestTempPath() may now latch its directory.
+  g_args_parsed = true;
 
   // Personal defaults: this binary's no-flag default is DISABLED (kTestHarnessUserConfigDefault),
   // unlike LumiceGUI's auto-detect. Every scenario reaches MakeNewDocumentState() through
