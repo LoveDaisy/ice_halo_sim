@@ -330,6 +330,14 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc);
 // The user's zenith-std override for a built-in axis preset, if any. nullopt means "use the
 // factory value". Prefer EffectiveAxisPresetZenith() below at consumption sites — this raw
 // accessor exists for the tests and for the panel's "is anything saved for this preset" cell.
+//
+// IT CANNOT BE FOLDED INTO EffectiveAxisPresetZenith, and has been mistaken for dead code twice
+// on the assumption that it can. That function returns the COMPOSED AxisDist, in which "nothing
+// stored" and "stored a number that happens to equal the factory value" are indistinguishable —
+// the two produce the same struct. Only this accessor answers the question the panel and the
+// tests actually ask, which is about the OVERRIDE's existence and not about the resulting
+// distribution: the same presence-vs-value distinction DefaultDiffRow::has_saved_override draws
+// for the settings half of the file.
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
 
 // --------------------------------------------------------------------------------------------------
@@ -399,13 +407,11 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset);
 // For a caller that has ALREADY committed the document itself — the defaults panel writes its
 // whole working copy in one go, so by the time it calls this the value is on disk. Nothing else
 // should: memory that leads disk is exactly how "what this session resolves" and "what the next
-// launch reads" drift apart, which is why RevertOneAxisPresetOverride below does the file first.
+// launch reads" drift apart. That ordering is the panel's own to keep, and it says so at the call
+// site (defaults_panel.cpp's CommitCopy, "ORDER IS PART OF THE CONTRACT"); there is deliberately
+// no store-side revert wrapper composing the two here, because a second writer of this file is a
+// second answer to "what did the user save".
 void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value);
-
-// Drop the user's override for one preset, returning it to the factory value. Disk first, memory
-// second — the reverse order would leave a failed write reporting success in this session and
-// resurrecting the old value on the next launch. Other presets and the GuiState half are untouched.
-bool RevertOneAxisPresetOverride(AxisPreset preset);
 
 // The zenith distribution a preset button actually writes: the factory row, with the user's std
 // substituted when one is stored. Single source for that resolution — the axis modal's preset

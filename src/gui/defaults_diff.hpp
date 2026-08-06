@@ -91,10 +91,15 @@ nlohmann::json ReadActiveOverlayDoc();
 
 // Writes `doc` verbatim to the active user-config directory's override file. Public for the same
 // reason ReadActiveOverlayDoc is: the panel's Save is a whole-document commit (it builds the next
-// document in memory, then writes it), not a read-mutate-write of one key, so it needs the write
-// half of UpdateOverlayDocument's directory resolution without the read/mutate half. A second
-// inline GetActiveUserConfigDir() + WriteUserDefaultsFile() at the call site would be the same
-// drift risk ReadActiveOverlayDoc's comment already flags for the read side.
+// document in memory, then writes it), so it needs that directory resolution once, in one place.
+// A second inline GetActiveUserConfigDir() + WriteUserDefaultsFile() at the call site would be the
+// same drift risk ReadActiveOverlayDoc's comment already flags for the read side.
+//
+// THE ONLY WRITER of the override file outside user_defaults.cpp's own WriteUserDefaultsFile, and
+// meant to stay that way: a second write path is a second answer to "what did the user save", and
+// this file has already carried one (an unreachable set of read-mutate-write wrappers left behind
+// by the panel's move to the copy model, complete with its own "this is the only place…" comment).
+// scripts/check_policies.py enforces the call-site count.
 bool WriteActiveOverlayDoc(const nlohmann::json& doc);
 
 // The whole row set for `current`, against the currently effective defaults (factory + whatever is
@@ -177,22 +182,6 @@ bool RowWouldChangeOnSave(const DefaultDiffRow& row, bool checked);
 // first mutation, which is what makes the whole call all-or-nothing.
 bool ApplyCheckedRowsToDoc(nlohmann::json& doc, const std::vector<DefaultDiffRow>& rows,
                            const std::set<std::string>& checked_key_paths, const GuiState& current);
-
-// ------------------------------------------------------------------------------------------------
-// Disk-side wrappers: read the override file, apply one surgical edit, write it back.
-//
-// The panel does NOT use these — it is a pure editor and commits once, through its own copy (see
-// defaults_panel.cpp). They are the one-shot committed-edit API, and today their only callers are
-// test_defaults_diff.cpp: they are the entry point through which the surgical-write contract
-// (untouched keys survive, the "presets" subtree survives, a missing config directory reports
-// failure, a clobbered non-object path node files a downgrade notice) is exercised.
-// ------------------------------------------------------------------------------------------------
-
-bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, const GuiState& current);
-
-bool RevertOneDefault(const std::string& key_path);
-
-bool ResetAllDefaults();
 
 }  // namespace lumice::gui
 

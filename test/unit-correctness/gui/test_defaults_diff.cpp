@@ -492,60 +492,76 @@ TEST(DefaultsDiff, apply_checked_rows_removes_an_absent_optional_key) {
 }
 
 // ================================================================================
-// Write-back contract (the disk-side wrappers)
+// Write-back contract, asserted on the pair the panel's Save actually calls
+// (ApplyCheckedRowsToDoc -> WriteActiveOverlayDoc)
 // ================================================================================
-TEST(DefaultsDiff, write_back_is_surgical_and_keeps_presets) {
+
+// Surgical writes, asserted FILE-side: what the panel commits must edit the keys its rows name
+// and leave every other key of the document exactly where it was.
+//
+// The sibling "presets" subtree is the first-order case (it belongs to the preset library, and a
+// wholesale rewrite here would delete a user's preset overrides), but it is not the only one: a
+// key written by an OLDER version, whose GuiState field has since been removed, produces no row
+// either. Both survive for the same structural reason — the rule only ever touches keys a row
+// names — so both are asserted here, the second one because it is the case no other test covers
+// and the one that would silently start disappearing if the rule were ever rewritten as
+// "keep the keys we know about".
+//
+// Runs the pair together, through the file, rather than asserting on the in-memory document
+// alone: apply_checked_rows_adopts_and_removes_in_one_pass already pins the pure rule, and what
+// is added here is that the document survives the trip to disk unchanged.
+TEST(DefaultsDiff, live_write_back_is_surgical_and_keeps_keys_no_row_names) {
   ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_write");
+  const auto dir = FreshOverlayDir("diff_live_write");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
-  // A pre-existing document with a preset-library subtree this panel does not own.
+  // A pre-existing document with a preset-library subtree this panel does not own, plus a
+  // GuiState key that IS in today's schema (so it produces a row) and one that is not.
   json existing;
   existing["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
   existing["bg_show"] = true;
+  existing["a_key_no_current_field_serializes"] = 7;
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, existing));
 
-  gui::GuiState state = MakeEditedState();
-  EXPECT_TRUE(gui::SaveAcceptedDefaults({ "renderer.lens_type", "bg_alpha" }, state));
+  const gui::GuiState state = MakeEditedState();
+  const auto rows = gui::BuildDefaultDiffRows(state, existing);
+  // The premise both halves of this case rest on, asserted rather than assumed: one of the two
+  // extra keys is named by a row and the other is not.
+  ASSERT_TRUE(FindRow(rows, "bg_show") != nullptr);
+  ASSERT_TRUE(FindRow(rows, "a_key_no_current_field_serializes") == nullptr);
 
-  json saved = ReadOverlayFile(dir);
+  json next = existing;
+  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.lens_type", "bg_alpha" }, state));
+  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
+
+  const json saved = ReadOverlayFile(dir);
   EXPECT_STREQ(saved["renderer"]["lens_type"].get<std::string>().c_str(), "fisheye_equal_area");
   EXPECT_EQ(saved["bg_alpha"].get<float>(), 0.42f);
-  // Untouched keys of both kinds survive: the sibling namespace-2 subtree AND a namespace-1
-  // key this call did not mention.
+  // Untouched keys of both kinds survive: the sibling namespace-2 subtree AND the key no row
+  // names.
   EXPECT_TRUE(saved.contains("presets"));
   EXPECT_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
-  EXPECT_EQ(saved["bg_show"].get<bool>(), true);
-  // A key that was never adopted must not be written just because it was serialized.
-  EXPECT_TRUE(!saved.contains("sun"));
-
-  // Revert removes exactly one key and prunes the object it emptied.
-  EXPECT_TRUE(gui::RevertOneDefault("renderer.lens_type"));
-  saved = ReadOverlayFile(dir);
-  EXPECT_TRUE(!saved.contains("renderer"));
-  EXPECT_TRUE(saved.contains("bg_alpha"));
-  EXPECT_TRUE(saved.contains("presets"));
-
-  // Reset all drops every GuiState key and keeps the preset library.
-  EXPECT_TRUE(gui::ResetAllDefaults());
-  saved = ReadOverlayFile(dir);
-  EXPECT_TRUE(!saved.contains("bg_alpha"));
+  EXPECT_EQ(saved.value("a_key_no_current_field_serializes", 0), 7);
+  // bg_show, by contrast, HAS a row and was left un-checked, so the same pass removes it. That
+  // is the line separating "not mentioned" from "mentioned and declined".
   EXPECT_TRUE(!saved.contains("bg_show"));
-  EXPECT_TRUE(saved.contains("presets"));
-  EXPECT_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
-  EXPECT_EQ(saved.size(), static_cast<size_t>(1));
+  // A key that was never checked must not be written just because it was serialized.
+  EXPECT_TRUE(!saved.contains("sun"));
 }
 
 // No writable config directory (--no-user-config, or an OS that gave us nowhere to write):
-// every write reports failure instead of silently claiming success, and nothing is created.
-TEST(DefaultsDiff, write_back_reports_failure_without_a_directory) {
+// the write reports failure instead of silently claiming success, and nothing is created.
+TEST(DefaultsDiff, live_write_back_reports_failure_without_a_directory) {
   ResetUserDefaultsChannels();
   ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
 
   const gui::GuiState state = MakeEditedState();
-  EXPECT_TRUE(!gui::SaveAcceptedDefaults({ "bg_alpha" }, state));
-  EXPECT_TRUE(!gui::RevertOneDefault("bg_alpha"));
-  EXPECT_TRUE(!gui::ResetAllDefaults());
+  json doc;
+  doc["bg_alpha"] = state.bg_alpha;
+  EXPECT_TRUE(!gui::WriteActiveOverlayDoc(doc));
+  // Nothing was created to write into, so the read side still answers "nothing saved" rather
+  // than reporting a document this call invented.
+  EXPECT_TRUE(gui::ReadActiveOverlayDoc().empty());
 
   // And the row set still builds — the panel must remain usable (read-only) in this state.
   EXPECT_TRUE(!gui::BuildDefaultDiffRows(state).empty());
@@ -613,16 +629,27 @@ TEST(DefaultsDiff, replacing_a_non_object_path_node_is_not_silent) {
   json doc;
   doc["renderer"] = 3;  // a scalar where an object belongs
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-  // Draining first: reading that file back is itself fine (it is valid JSON), but this keeps
-  // the assertion below about the WRITE and nothing else.
+
+  const gui::GuiState state = MakeEditedState();
+  // Built BEFORE the drain below, deliberately: this is the panel's opening snapshot, and
+  // overlaying a document whose "renderer" is a scalar is itself a degradation the loader is
+  // entitled to report. Draining after it keeps the assertions below about the WRITE and
+  // nothing else.
+  const auto rows = gui::BuildDefaultDiffRows(state, doc);
   gui::TakeUserDefaultsDowngradeCount();
   gui::TakeUserDefaultsDowngradeNotices();
 
-  EXPECT_TRUE(gui::SaveAcceptedDefaults({ "renderer.fov" }, MakeEditedState()));
+  json next = doc;
+  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov" }, state));
+  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
 
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
   const auto notices = gui::TakeUserDefaultsDowngradeNotices();
-  EXPECT_EQ(notices.size(), static_cast<size_t>(1));
+  // ASSERT, not EXPECT: the very regression this case exists to catch is "no notice was filed",
+  // and indexing an empty vector on the next line would take this single-process binary down with
+  // a SIGSEGV — hiding every case after it behind a crash instead of a diagnosis. Measured while
+  // red-probing this assertion.
+  ASSERT_EQ(notices.size(), static_cast<size_t>(1));
   EXPECT_TRUE(notices[0].find("renderer") != std::string::npos);
 
   // The write still landed — the notice reports the loss, it does not refuse the edit.
@@ -645,7 +672,17 @@ TEST(DefaultsDiff, an_ordinary_write_reports_no_downgrade) {
   const auto dir = FreshOverlayDir("setbypath_quiet");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
-  EXPECT_TRUE(gui::SaveAcceptedDefaults({ "renderer.fov", "bg_alpha" }, MakeEditedState()));
+  const gui::GuiState state = MakeEditedState();
+  const auto rows = gui::BuildDefaultDiffRows(state, json::object());
+  gui::TakeUserDefaultsDowngradeCount();
+  gui::TakeUserDefaultsDowngradeNotices();
+
+  json next = json::object();
+  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov", "bg_alpha" }, state));
+  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
+  // The premise: the write really did create the nested object the notice would have described,
+  // so a silent zero here is "no loss to report" rather than "no write happened".
+  EXPECT_TRUE(next["renderer"].is_object());
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
   EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
 }

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <functional>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -176,61 +175,10 @@ bool SerializeCurrentState(const GuiState& current, json& out) {
   return true;
 }
 
-// The accepted-key copy itself, given an ALREADY serialized current document. Split out so
-// SaveAcceptedDefaults can fail before it opens the file: a serialization failure must leave the
-// override file untouched, not rewrite it unchanged.
-void ApplyAcceptedKeys(json& doc, const std::vector<std::string>& accepted_key_paths, const json& current_json) {
-  for (const auto& key_path : accepted_key_paths) {
-    const auto tokens = SplitKeyPath(key_path);
-    if (tokens.empty() || IsExcludedRootKey(tokens.front())) {
-      // Defense in depth: the panel never offers an excluded key, but this is the only place
-      // that turns a string into a written key, and a namespace-4 key path in the file would
-      // be read back by MakeNewDocumentState.
-      continue;
-    }
-    if (const json* value = FindByPath(current_json, tokens)) {
-      SetByPath(doc, tokens, *value);
-    } else {
-      ErasePath(doc, tokens);
-    }
-  }
-}
-
 // Drop one key path from `doc`, so it falls back to the factory value. Empty parent objects left
 // behind are pruned, keeping the file readable by hand.
 void EraseKeyPath(json& doc, const std::string& key_path) {
   ErasePath(doc, SplitKeyPath(key_path));
-}
-
-// Drop every GuiState key from `doc`. "presets" survives untouched — it belongs to namespace 2 and
-// is not what this panel edits.
-void EraseEveryGuiStateKey(json& doc) {
-  json preserved = json::object();
-  // Namespace 2 (the preset library) is a sibling section this panel does not edit. Keeping it
-  // by name — rather than deleting the GuiState keys one by one — means a future GuiState key
-  // is reset without anyone having to remember to add it here.
-  const auto presets = doc.find("presets");
-  if (presets != doc.end()) {
-    preserved["presets"] = *presets;
-  }
-  doc = std::move(preserved);
-}
-
-// Shared read-modify-write for all three disk-side wrappers. `mutate` receives the EXISTING document
-// (never a fresh one), so a subtree this panel does not own — "presets" above all — survives every
-// write by construction rather than by three call sites each remembering to preserve it.
-bool UpdateOverlayDocument(const std::function<void(json&)>& mutate) {
-  const auto dir = GetActiveUserConfigDir();
-  if (!dir) {
-    GUI_LOG_WARNING("[GUI] User defaults: no user-config directory available; nothing was saved");
-    return false;
-  }
-  json doc = ReadOverlayJsonIfPresent(*dir);
-  if (!doc.is_object()) {
-    doc = json::object();
-  }
-  mutate(doc);
-  return WriteUserDefaultsFile(*dir, doc);
 }
 
 }  // namespace
@@ -383,24 +331,6 @@ bool ApplyCheckedRowsToDoc(nlohmann::json& doc, const std::vector<DefaultDiffRow
     }
   }
   return true;
-}
-
-bool SaveAcceptedDefaults(const std::vector<std::string>& accepted_key_paths, const GuiState& current) {
-  json current_json;
-  if (!SerializeCurrentState(current, current_json)) {
-    // Deliberately before UpdateOverlayDocument: a failure here must leave the file untouched
-    // rather than rewrite it without the keys it was asked to adopt.
-    return false;
-  }
-  return UpdateOverlayDocument([&](json& doc) { ApplyAcceptedKeys(doc, accepted_key_paths, current_json); });
-}
-
-bool RevertOneDefault(const std::string& key_path) {
-  return UpdateOverlayDocument([&](json& doc) { EraseKeyPath(doc, key_path); });
-}
-
-bool ResetAllDefaults() {
-  return UpdateOverlayDocument([](json& doc) { EraseEveryGuiStateKey(doc); });
 }
 
 }  // namespace lumice::gui
