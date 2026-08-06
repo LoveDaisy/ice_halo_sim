@@ -2764,3 +2764,56 @@ TEST(ImportExport, document_switch_leaves_no_stale_status_bar_stats) {
   EXPECT_EQ(gui::g_state.stats_crystal_num, 77u);
   EXPECT_EQ(gui::g_state.stats_orientation_num, 88u);
 }
+
+// Revert's field scope must equal the scope of the "did the configuration change" predicate,
+// `RenderConfigResimFields` (gui_state.hpp) — the repo's declared single source of truth for that
+// question. The two directions are pinned here as a pair because either one alone is satisfiable
+// by a wrong fix:
+//
+//   (A) A T-view field the predicate deliberately excludes (elevation — camera orbit, a pure
+//       client-side reprojection uniform) must SURVIVE a Revert. Changing it never counts as a
+//       change, so the Revert button never lights up for it; discarding it anyway is Revert
+//       undoing something the UI never claimed was pending. The crystal assertion in the same
+//       case is what stops "just stop restoring renderer at all" from passing.
+//   (B) A field the predicate DOES judge (sim_resolution_index — it changes the sim render grid)
+//       must still be restored. Without this, narrowing the Revert baseline too far reads as a
+//       pass.
+//
+// Both drive the production `gui::DoRevert()` rather than `ConfigSnapshot::ApplyTo` directly, so
+// a future change that restores renderer fields somewhere else along that path is still caught.
+TEST(ImportExport, dorevert_preserves_view_fields_but_reverts_crystal_via_owner) {
+  gui::DoNew();
+
+  // Do not depend on the default document happening to contain a crystal: a later change to the
+  // seeded contents would silently turn this case's premise into a no-op rather than fail it.
+  if (gui::g_state.crystals.empty()) {
+    gui::g_state.crystals.emplace_back();
+  }
+
+  // Commit baseline, as DoRun writes it on a successful run.
+  gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+  const float committed_height = gui::g_state.crystals[0].height.center;
+
+  // The user drags the view (never counted as a change) and edits a crystal (counted).
+  ASSERT_FLOAT_EQ(gui::g_state.renderer.elevation, 0.0f);  // premise: the edit below is a change
+  gui::g_state.renderer.elevation = 30.0f;
+  gui::g_state.crystals[0].height.center = committed_height + 1.0f;
+
+  gui::DoRevert();
+
+  EXPECT_FLOAT_EQ(gui::g_state.renderer.elevation, 30.0f);
+  EXPECT_FLOAT_EQ(gui::g_state.crystals[0].height.center, committed_height);
+}
+
+TEST(ImportExport, dorevert_reverts_sim_resolution_index_via_owner) {
+  gui::DoNew();
+
+  gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+  const int committed_resolution = gui::g_state.renderer.sim_resolution_index;
+
+  gui::g_state.renderer.sim_resolution_index = committed_resolution + 1;
+
+  gui::DoRevert();
+
+  EXPECT_EQ(gui::g_state.renderer.sim_resolution_index, committed_resolution);
+}

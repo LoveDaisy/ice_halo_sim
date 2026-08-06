@@ -350,8 +350,19 @@ struct RenderConfig {
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
 
-// resim-eligibility comparator for RenderConfig. Compares ONLY fields whose change genuinely
-// requires re-running / rebuilding the simulation. Everything else is client-side display state.
+// The resim-eligible projection of RenderConfig: ONLY the fields whose change genuinely requires
+// re-running / rebuilding the simulation. Everything else is client-side display state.
+//
+// This type is the single place that field list is written down. Three questions read it, and all
+// three are its own members so they cannot drift apart:
+//   From(live)      — capture the projection (what a commit records).
+//   Matches(live)   — has the live config changed in a resim-relevant way? (the "is it dirty"
+//                     predicate: gui_state_reconcile.cpp::DiffAgainstCommitBaseline and
+//                     app.cpp::DoRun's expect_rebuild).
+//   ApplyTo(live)   — restore the projection (what Revert puts back).
+// Capture and restore covering exactly the compared field set is the point, not a coincidence:
+// a Revert baseline wider than the predicate would discard edits the UI never counted as changes
+// (a view drag never lights the Revert button, so Revert must not undo it).
 //
 // EXCLUDED — T-view fields (doc/gui-state-governance.md §2 row "T-view"): the simulation always
 // renders a fixed full-sky dual-fisheye and the GUI reprojects it in the preview GL shader, so
@@ -372,20 +383,56 @@ struct RenderConfig {
 // the server only through the commit payload (background / ray_color / opacity); leave them in so
 // they still get applied on Run until they gain a display-time push path.
 //
-// Callers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline and app.cpp::DoRun expect_rebuild
-// (single source of truth — do not fork).
-inline bool RenderConfigResimEqual(const RenderConfig& a, const RenderConfig& b) {
-  return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.background, a.background + 3, b.background) &&
-         std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
-}
+// Consumers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline, app.cpp::DoRun expect_rebuild,
+// and GuiState::ConfigSnapshot's Revert baseline (single source of truth — do not fork).
+struct RenderConfigResimFields {
+  int sim_resolution_index;
+  float background[3];
+  float ray_color[3];
+  float opacity;
 
-// Apple Silicon + libc++ only. RenderConfig layout pin: mirrors the EntryCard pattern
-// (see below). If this size assertion fires, a field was added/removed from RenderConfig —
-// the author must inspect `RenderConfigResimEqual` above and either include the new field
-// (if it participates in resim eligibility) or explicitly exclude it (like exposure_offset).
-// Linux/Windows CI still compiles the struct; this only pins the Apple main-dev platform.
+  static RenderConfigResimFields From(const RenderConfig& r) {
+    return { r.sim_resolution_index,
+             { r.background[0], r.background[1], r.background[2] },
+             { r.ray_color[0], r.ray_color[1], r.ray_color[2] },
+             r.opacity };
+  }
+
+  // Write back onto a live RenderConfig, touching nothing outside this projection.
+  void ApplyTo(RenderConfig& r) const {
+    r.sim_resolution_index = sim_resolution_index;
+    std::copy(std::begin(background), std::end(background), r.background);
+    std::copy(std::begin(ray_color), std::end(ray_color), r.ray_color);
+    r.opacity = opacity;
+  }
+
+  // Does `live` still agree with this captured baseline on the resim-eligible fields?
+  bool Matches(const RenderConfig& live) const { return From(live) == *this; }
+
+  // Value-type equality, kept as free friends so two captured projections can be compared
+  // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
+  // built on top of it, not the only intended consumer.
+  friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
+    return a.sim_resolution_index == b.sim_resolution_index &&
+           std::equal(a.background, a.background + 3, b.background) &&
+           std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
+  }
+  friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
+};
+
+// Apple Silicon + libc++ only. Layout pins, mirroring the EntryCard pattern (see below).
+// Linux/Windows CI still compiles both structs; this only pins the Apple main-dev platform.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimEqual for new fields");
+// RenderConfig: if this fires, a field was added/removed — the author must decide whether it
+// belongs in RenderConfigResimFields above (participates in resim eligibility) or is explicitly
+// excluded (like exposure_offset).
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+// RenderConfigResimFields: naming the field list once does NOT by itself keep the three
+// directions in step. From() aggregate-initializes, so a newly added field is silently
+// value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
+// the old subset. Pinning the size is what turns that omission into a compile error.
+static_assert(sizeof(RenderConfigResimFields) == 32,
+              "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
 #endif
 
 // Resettable subset of RenderConfig (the View `Reset` button targets these
@@ -1111,7 +1158,12 @@ struct GuiState {
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    RenderConfig renderer;
+    // Deliberately NOT a whole RenderConfig: only the fields RenderConfigResimFields judges are
+    // captured, so Revert restores exactly the set that counts as a change. The T-view fields
+    // (lens_type / fov / elevation / azimuth / roll / visible / front) and exposure_offset are
+    // absent *structurally* — not captured-then-skipped-on-restore, which would leave From and
+    // ApplyTo asymmetric and the omission easy to lose track of.
+    RenderConfigResimFields renderer_resim;
     std::vector<ColorClassConfig> raypath_color;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
@@ -1177,7 +1229,9 @@ struct GuiState {
 // Size bumped from 192 → 216 by task-349.2: added `raypath_color` field
 // (std::vector<ColorClassConfig>) so Revert restores color-class edits that
 // go through MarkStructHardDirty (Revert-completeness fix, plan §3.4).
-static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
+// Size then shrank when the Revert baseline narrowed from a full RenderConfig to
+// RenderConfigResimFields: it now holds exactly the fields that count as a change.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 184,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -1191,7 +1245,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.layers = state.layers;
   s.sun = state.sun;
   s.sim = state.sim;
-  s.renderer = state.renderer;
+  s.renderer_resim = RenderConfigResimFields::From(state.renderer);
   s.raypath_color = state.raypath_color;
   return s;
 }
@@ -1202,7 +1256,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.layers = layers;
   state.sun = sun;
   state.sim = sim;
-  state.renderer = renderer;
+  renderer_resim.ApplyTo(state.renderer);
   state.raypath_color = raypath_color;
 }
 
