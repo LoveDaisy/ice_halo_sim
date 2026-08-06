@@ -3086,20 +3086,47 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 
 
 // =============== Crystal Kind ===============
+// The three kind-taking predicates below share one shape, replacing the
+// `(kind == PRISM) ? kPrism : kPyramid` ternary all three used to spell:
+//
+//   switch (kind) { case PRISM: …; case PYRAMID: …; }   // no `default:` label
+//   <negative answer>                                    // out-of-contract value
+//
+// The missing `default:` is the point, not an omission. -Wswitch (in -Wall) fires at
+// every one of these sites the moment LUMICE_CrystalKind gains a third enumerator, so
+// an expansion cannot silently keep mapping the new kind onto Pyramid the way the
+// ternary did. The trailing return then answers a value outside the enum — which no
+// caller in this repo can produce (every one passes a literal or a ternary over the
+// GUI's own two-valued CrystalType), and which C++ cannot even form without UB, but
+// which a C caller passing an int can. Rejecting beats guessing "Pyramid" there.
 int LUMICE_IsLegalFace(LUMICE_CrystalKind kind, int face) {
-  // Two-value enum: extend to switch+assert when CrystalKind expands.
-  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
-  return ns::IsLegalFace(core_kind, face) ? 1 : 0;
+  switch (kind) {
+    case LUMICE_CRYSTAL_PRISM:
+      return ns::IsLegalFace(ns::CrystalKind::kPrism, face) ? 1 : 0;
+    case LUMICE_CRYSTAL_PYRAMID:
+      return ns::IsLegalFace(ns::CrystalKind::kPyramid, face) ? 1 : 0;
+  }
+  return 0;
 }
 
 int LUMICE_IsShapeScalarApplicable(LUMICE_CrystalKind kind, int slot) {
-  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
-  return ns::IsShapeScalarApplicable(core_kind, slot) ? 1 : 0;
+  switch (kind) {
+    case LUMICE_CRYSTAL_PRISM:
+      return ns::IsShapeScalarApplicable(ns::CrystalKind::kPrism, slot) ? 1 : 0;
+    case LUMICE_CRYSTAL_PYRAMID:
+      return ns::IsShapeScalarApplicable(ns::CrystalKind::kPyramid, slot) ? 1 : 0;
+  }
+  return 0;
 }
 
 const char* LUMICE_ShapeScalarSyncKeyName(LUMICE_CrystalKind kind, int slot) {
-  auto core_kind = (kind == LUMICE_CRYSTAL_PRISM) ? ns::CrystalKind::kPrism : ns::CrystalKind::kPyramid;
-  return ns::ShapeScalarSyncKeyName(core_kind, slot);
+  switch (kind) {
+    case LUMICE_CRYSTAL_PRISM:
+      return ns::ShapeScalarSyncKeyName(ns::CrystalKind::kPrism, slot);
+    case LUMICE_CRYSTAL_PYRAMID:
+      return ns::ShapeScalarSyncKeyName(ns::CrystalKind::kPyramid, slot);
+  }
+  return nullptr;
 }
 
 const char* LUMICE_ShapeWedgeAngleKeyName(int upper) {
