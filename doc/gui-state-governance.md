@@ -57,6 +57,7 @@
 - **S4** ~~`MarkFilterDirty` 名不副实~~ **已由 scrum-353.5 落地正名为 `MarkStructHardDirty`**（gui_state.hpp:782），与档位表 T-struct·hard 对齐。
 - **S5** ~~signal 缓存无 server/epoch 键控~~ **已由 scrum-353.5 落地**：`RefreshColorClassSignals`（color_window.cpp）在入口比较 `(server, committed_epoch)`，任一 mismatch 即清 `signal_flags` + `last_poll_time=-1000` 强制立即重 poll，后端切换/epoch 递增不再展示旧信号。
 - **偏离 E（Save 裁定，已落地）**：owner 裁定 = kModified 态 Save 前弹提示（"Run first / Save anyway / Cancel"）——scrum-353.5 落地。Save anyway 保留"存所见"能力，但由用户显式确认；同时**不清 kModified**（保留视觉线索）。
+- **偏离 F（Revert 字段范围，已落地）**：~~Revert 恢复的 `renderer` 字段集宽于「什么才算改动」判定集——`ConfigSnapshot::From`/`ApplyTo` 整体拷贝 `RenderConfig`，于是改视角/换镜头/调 FOV 这些**从未点亮过 Revert 按钮**的操作会被 Revert 连带回滚（入不算改动、出算回滚）~~ **已修复**：这组字段的清单现在只声明在 `RenderConfigResimFields`（`gui_state.hpp`）一处，**「什么才算改动」与「Revert 恢复什么」读的是同一个真源**——该类型自己拥有三个方向：`From`（捕获）/ `Matches`（判定，`gui_state_reconcile.cpp::DiffAgainstCommitBaseline` 与 `app.cpp::DoRun` 的 `expect_rebuild` 都调它）/ `ApplyTo`（恢复）。`ConfigSnapshot` 的 Revert 基线字段随之从整份 `RenderConfig` 收窄为 `RenderConfigResimFields renderer_resim`，T-view 字段（lens_type / fov / elevation / azimuth / roll / visible / front）与 `exposure_offset` **结构性地不在基线里**（不是"捕获了但恢复时跳过"，那会让 `From`/`ApplyTo` 不对称），Revert 后保持用户当前实时值。
 - **已证伪**：sim_resolution 改动**确实** MarkDirty（app_panels.cpp:726）——非偏离。
 
 ## 4. 目标模型：三支柱 + 文档重置 owner
