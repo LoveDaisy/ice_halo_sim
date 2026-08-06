@@ -2818,6 +2818,8 @@ TEST(ImportExport, dorevert_reverts_sim_resolution_index_via_owner) {
   gui::DoRevert();
 
   EXPECT_EQ(gui::g_state.renderer.sim_resolution_index, committed_resolution);
+}
+
 // ============================================================================
 // Universal "missing key -> the owning struct's default" invariant.
 //
@@ -2842,12 +2844,15 @@ TEST(ImportExport, dorevert_reverts_sim_resolution_index_via_owner) {
 // about which path is "right"; keeping them apart lets each be pinned as it actually behaves.
 //
 // Deliberately OUT of the tables (each has a DISABLED_ contract anchor below):
-//   * Six fallbacks whose literal differs from the owning struct's default with no written reason.
-//     They are escalated, not fixed, here — changing one silently changes how existing documents
-//     load. Asserting "== struct default" on them would just be a red test asserting a decision
-//     nobody has made.
+//   * Two fallbacks — ParseAxisDist's `type` and DeserializeFromJson's `prob` — that diverge from
+//     every oracle available. Both were ruled real, and both were ruled to need a change to CORE
+//     rather than to the literal here, so they stay put and are tracked outside this file. Four
+//     others once sat alongside them; they turned out not to be divergences at all. On the legacy
+//     path the oracle is core's default for its own format, not the GUI struct's, and by that
+//     oracle `symmetry`, `visible` and `proportion` were either already correct or a one-literal
+//     fix. They are ordinary rows of kCoreJsonCases now, not anchors.
 //   * upper_h / lower_h, whose divergence IS written down (file_io.cpp's "Historical fallbacks
-//     preserved" comment). Same treatment as the six, so that "is this field covered by the
+//     preserved" comment). Same treatment as the two, so that "is this field covered by the
 //     universal invariant?" has one answer for every known divergence rather than two.
 // Deliberately outside the invariant's SHAPE (no anchor needed): fallbacks whose value is consumed
 // as a local map key / branch discriminator / error-message id and never stored into a struct
@@ -3142,6 +3147,31 @@ const MissingKeyCase kCoreJsonCases[] = {
       EXPECT_EQ(s.crystals[0].type, gui::CrystalConfig{}.type);
     } },
 
+  // The next three rows expect CORE's default, not the GUI struct's, and say where core states it.
+  // On this path the struct that owns the field and the struct that owns the WIRE FORMAT are not
+  // the same one, and for these three they disagree. The GUI-native table asserts the GUI default
+  // for the same fields. That the two formats differ here is the fact being pinned — not a
+  // discrepancy waiting to be reconciled.
+  { "FilterConfig::sym_* (filter[].symmetry) — core: kSymNone, config/filter_config.cpp from_json",
+    R"({"crystal":[{"id":1}],"filter":[{"id":1,"type":"raypath"}],
+        "scene":{"scattering":[{"entries":[{"crystal":1,"filter":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.filters.size(), 1u);
+      EXPECT_FALSE(s.filters[0].sym_p);
+      EXPECT_FALSE(s.filters[0].sym_b);
+      EXPECT_FALSE(s.filters[0].sym_d);
+    } },
+  { "RenderConfig::visible (render[0].visible) — core: kUpper, config/render_config.hpp", R"({"render":[{}]})",
+    [](const gui::GuiState& s) { EXPECT_EQ(s.renderer.visible, gui::kVisibleUpper); } },
+  { "EntryCard::proportion (scene.scattering[].entries[].proportion) — core seeds 100.0f in "
+    "config_manager.cpp ParseScatteringInfo, and EntryCard{} agrees",
+    R"({"crystal":[{"id":1}],"scene":{"scattering":[{"prob":0,"entries":[{"crystal":1}]}]}})",
+    [](const gui::GuiState& s) {
+      ASSERT_EQ(s.layers.size(), 1u);
+      ASSERT_EQ(s.layers[0].entries.size(), 1u);
+      EXPECT_EQ(s.layers[0].entries[0].proportion, gui::EntryCard{}.proportion);
+    } },
+
   { "FilterConfig::name (filter[].name, simple)",
     R"({"crystal":[{"id":1}],"filter":[{"id":1,"type":"raypath"}],
         "scene":{"scattering":[{"entries":[{"crystal":1,"filter":1}]}]}})",
@@ -3242,37 +3272,29 @@ TEST(ImportExport, DeserializeFromJsonMissingKeyDefaults) {
 // file_io.cpp ParseAxisDist: absent `type` falls back to "gauss" (and the bare-number arm picks
 // kGauss too), while AxisDist{}.type is kUniform. Reached from BOTH entry points, so a change
 // here also moves the baseline user_defaults.cpp loads through DeserializeGuiStateJson.
+// Ruled a real divergence — and "correct it to the struct default" was ruled wrong as well, because
+// core has no single answer to mirror: config/math.cpp's from_json(AxisDistribution&) seeds azimuth
+// and roll to kUniform/360 but leaves latitude at the ctor's kNoRandom. The right value is per-slot
+// while ParseAxisDist is one function serving all three, so aligning it is a change to core's
+// semantics and a signature change here, not a literal swap. Tracked outside this file.
 TEST(ImportExport, DISABLED_AxisDistTypeFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback \"gauss\" != AxisDist{}.type (kUniform); escalated, not fixed";
+  FAIL() << "loader fallback \"gauss\" matches neither AxisDist{}.type (kUniform) nor core's "
+            "per-slot defaults (latitude kNoRandom, azimuth/roll kUniform); tracked, not fixed";
 }
 
-// file_io.cpp DeserializeFromJson (both the simple-filter pass and the complex rebuild): an absent
-// `symmetry` string yields sym_p/sym_b/sym_d = false, while FilterConfig{} defaults all three to
-// true — and the GUI-native path reads them as FilterConfig{}.sym_*. The two paths disagree.
-TEST(ImportExport, DISABLED_LegacyFilterSymmetryFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback \"\" -> P/B/D all false != FilterConfig{}.sym_* (all true)";
-}
-
-// file_io.cpp DeserializeFromJson: absent `prob` falls back to 1.0f; Layer{}.probability is 0.0f,
-// and the GUI-native path uses 0.0f.
+// file_io.cpp DeserializeFromJson: absent `prob` falls back to 1.0f. Both oracles say otherwise —
+// Layer{}.probability is 0.0f, and so is core's, since config_manager.cpp value-initializes MsInfo
+// before its contains() check. Not corrected here because the ruling was to REMOVE the default
+// rather than fix it: core is to reject a scattering layer with no `prob` outright, which leaves
+// this loader nothing to fall back to and deletes the divergence instead of relocating it. That is
+// a change to what core accepts, tracked outside this file. Measured at ruling time: 92/92 layers
+// in the repo's config corpus write `prob` explicitly, so nothing in tree reads either value.
 TEST(ImportExport, DISABLED_LegacyProbFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback 1.0f != Layer{}.probability (0.0f)";
-}
-
-// file_io.cpp DeserializeFromJson: absent `proportion` falls back to 1.0f; EntryCard{}.proportion
-// is 100.0f, and the wire values on this same path are 0-100 scale (not fractions).
-TEST(ImportExport, DISABLED_LegacyProportionFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback 1.0f != EntryCard{}.proportion (100.0f)";
-}
-
-// file_io.cpp DeserializeFromJson: absent `visible` falls back to "upper" (0); RenderConfig{}.visible
-// is 2 ("full"), and the GUI-native path uses "full".
-TEST(ImportExport, DISABLED_LegacyVisibleFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback \"upper\" (0) != RenderConfig{}.visible (2, \"full\")";
+  FAIL() << "loader fallback 1.0f != Layer{}.probability (0.0f), and != core's 0.0f; tracked, not fixed";
 }
 
 // file_io.cpp ParseCrystal: absent pyramid `upper_h` / `lower_h` fall back to 0.0f while
-// CrystalConfig{} defaults both to 0.2f. Unlike the five above this one IS written down at the
+// CrystalConfig{} defaults both to 0.2f. Unlike the two above this one IS written down at the
 // call site, which says the two fields "deliberately do NOT" take CrystalConfig's default and
 // keep a historical 0.0 fallback instead; it gets an anchor anyway so that "is this field covered
 // by the universal invariant?" has a single answer for every known divergence.

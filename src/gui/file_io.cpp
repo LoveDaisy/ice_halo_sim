@@ -1651,10 +1651,11 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
   f.name = jf.value("name", FilterConfig{}.name);
   const auto action_str = jf.value("action", FilterActionToString(FilterConfig{}.action));
   f.action = (action_str == "filter_out") ? 1 : 0;
-  // An absent `symmetry` string leaves all three flags false, where FilterConfig{} defaults them
-  // to true and the GUI-native path reads them as FilterConfig{}.sym_*. The two paths disagree and
-  // nothing records which is intended, so this stays as-is (DISABLED_ contract anchor in
-  // test_import_export_logic.cpp) — flipping it would change what already-written configs simulate.
+  // Deliberately NOT FilterConfig{}.sym_* (all true). That struct default is the GUI-native
+  // answer, for documents this editor wrote; this branch reads core's format, and core states its
+  // own answer outright — `f.symmetry_ = FilterConfig::kSymNone;` before the contains() check, in
+  // config/filter_config.cpp's from_json. An absent `symmetry` means NO symmetry to the engine
+  // that owns this wire format, and mirroring that is the whole job here.
   const auto sym = jf.value("symmetry", std::string{});
   f.sym_p = (sym.find('P') != std::string::npos);
   f.sym_b = (sym.find('B') != std::string::npos);
@@ -1780,8 +1781,8 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       f.name = jf.value("name", FilterConfig{}.name);
       auto action_str = jf.value("action", std::string{ FilterActionToString(FilterConfig{}.action) });
       f.action = (action_str == "filter_out") ? 1 : 0;
-      // Same known divergence as the complex-filter decode above: absent `symmetry` yields all
-      // three flags false, FilterConfig{} defaults them true. Left as-is pending that decision.
+      // Same rule as the complex-filter decode above, for the same reason: absent `symmetry` is
+      // core's kSymNone, not FilterConfig{}'s all-true GUI-native default.
       auto sym = jf.value("symmetry", std::string{});
       f.sym_p = (sym.find('P') != std::string::npos);
       f.sym_b = (sym.find('B') != std::string::npos);
@@ -1902,9 +1903,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
               entry.crystal_id = static_cast<int>(state.crystals.size());
               state.crystals.emplace_back();
             }
-            // NOT EntryCard{}.proportion (100.0f). The wire values on this path are 0-100, not
-            // fractions, so 1.0f reads an absent `proportion` as ~1% of a sibling's share.
-            entry.proportion = je.value("proportion", 1.0f);
+            // Core seeds this field explicitly when it parses its own format —
+            // `ScatteringSetting setting{ ..., 100.0f }` in config_manager.cpp's
+            // ParseScatteringInfo — so 100.0f is what an absent `proportion` means to the engine
+            // that owns the wire format, and EntryCard{} agrees. The literal here used to be 1.0f,
+            // which read an absent share as ~1% of a sibling's on a 0-100 scale.
+            entry.proportion = je.value("proportion", EntryCard{}.proportion);
             int filter_id = je.value("filter", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
               auto it = filter_id_to_pool.find(filter_id);
@@ -2084,10 +2088,11 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       r.roll = jr["view"].value("roll", RenderConfig{}.roll);
     }
 
-    // NOT derived from RenderConfig{}.visible, unlike its GUI-native twin: this path's absent-key
-    // fallback is "upper" (0) where the struct default is "full" (2), a divergence with no written
-    // reason. Changing it changes how existing core-JSON documents render, so the literal stays put
-    // until that is decided; see the DISABLED_ contract anchor in test_import_export_logic.cpp.
+    // Deliberately NOT RenderConfig{}.visible (2, "full"), unlike its GUI-native twin. Core
+    // declares the default for its own format in the field itself — `VisibleRange visible_ =
+    // kUpper` in config/render_config.hpp — and its parser only overwrites it when the key is
+    // present. "upper" mirrors that. The struct default here is the GUI-native answer and applies
+    // to documents this editor wrote, not to the format being read on this path.
     std::string vis_str = jr.value("visible", "upper");
     if (vis_str == "front") {
       r.visible = kVisibleFull;
