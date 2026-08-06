@@ -783,10 +783,11 @@ TEST(GuiLifecycle, wake_for_refresh_preserves_valid) {
 //   after RunFiniteToCompletion then a re-commit, BEFORE the new run produces anything —
 //     epoch: 1 -> 2      (RawXyzResult.epoch_ is committed_epoch_ read LIVE in the getter,
 //                         server.cpp; it is not stored with the snapshot)
-//     cached stats: unchanged, still the previous run's 200000 rays
+//     published frame's stats: unchanged, still the previous run's 200000 rays
 //                        (ServerImpl::Stop resets snapshot_dirty_/has_ever_consumed_ but does NOT
-//                         clear cached_stats_result_, which only DoSnapshot() overwrites)
-//     has_valid_data: 1 -> 0   <-- the ONLY field that distinguishes stale cache from fresh data
+//                         replace published_frame_, which only DoSnapshot()'s StorePublished()
+//                         overwrites)
+//     has_valid_data: 1 -> 0   <-- the ONLY field that distinguishes the stale frame from fresh data
 // So "stamp the stats with xyz_results[0].epoch" alone would stamp the STALE stats with the NEW
 // epoch and change nothing. Freshness must be decided by has_valid_data; the epoch stamp then
 // records which generation those stats were actually produced under and travels with them.
@@ -872,9 +873,10 @@ TEST(GuiLifecycle, restart_does_not_republish_prior_run_stats) {
   // make this exact rather than lucky:
   //   - LUMICE_StopServer unconditionally clears has_ever_consumed_, so has_valid_data reads 0
   //     whether or not run B managed to consume anything first.
-  //   - cached_stats_result_ is only ever overwritten inside DoSnapshot(), and DoSnapshot only runs
-  //     from a Get*Results call. Nothing between the commit above and this line makes one, so the
-  //     server's cached stats are still run A's — no timing assumption.
+  //   - published_frame_ is only ever replaced by DoSnapshot()'s StorePublished(), and DoSnapshot
+  //     only runs from an AcquireResultFrame call (the frame model's sole entry point, replacing
+  //     the old Get*Results trio). Nothing between the commit above and this line makes one, so the
+  //     server's published frame still carries run A's stats — no timing assumption.
   // An earlier draft of this case polled straight after the commit and asserted on whichever state
   // it happened to find. That version PASSED against the un-fixed code: run B routinely produced
   // fresh stats before the poll, so the case never entered the branch it existed to check.
