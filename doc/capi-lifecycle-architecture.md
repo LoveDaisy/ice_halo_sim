@@ -723,20 +723,34 @@ not a rebuttal and this document does not make that claim.
 
 ### §9.6 Follow-on Items (Backlogged, Non-Blocking)
 
-Surfaced during code review of the frame-ownership implementation; tracked for future work
-rather than blocking this scrum:
+Surfaced during code review of the frame-ownership implementation. Both have since been
+addressed; the entries stay because the *reasoning* is what a future reader needs, not the
+to-do status.
 
-1. **Frame pointer identity is not stable.** `LUMICE_AcquireResultFrame()` called while the
-   server is alive but has not produced a new snapshot since the last call returns a NEW frame
-   object wrapping the SAME pixel generation — i.e. two acquired frames can be
-   value-equal (same generation, same pixels) while being different objects. This needs to be
-   stated explicitly in `ResultFrame`'s type documentation so nobody substitutes an address
-   comparison for the actual generation check (`snapshot_generation_`).
-2. **Production-side RAII wrapping is not yet uniform.** Three call sites hand-roll their own
-   acquire/release wrapper independently (`main.cpp` uses a named local class; `app.cpp` and
-   `server_poller.cpp` each inline an anonymous one). The test-side helper
-   `test/support/scoped_result_frame.hpp` has already converged on one shape; production has not
-   yet been asked to adopt it.
+1. **Object identity is not frame identity — `snapshot_generation_` is the only sameness test.**
+   ✅ Now stated in `ResultFrame`'s type documentation (`src/server/server.hpp`). The trap has a
+   different shape at each layer, and neither shape supports an address comparison:
+   - **C++** (`ServerImpl::AcquireResultFrame`, returns `shared_ptr<const ResultFrame>`): the
+     published frame is returned as-is when the read-time lifecycle fields already match, but
+     re-stamped onto a **fresh shallow copy** when `has_valid_data_` or `epoch_` has moved. That
+     copy carries the same `snapshot_generation_` and the same pixel payloads at a new address.
+     ⇒ *a different address does not mean a new frame.*
+   - **C** (`LUMICE_AcquireResultFrame`): the wrapper does `new LUMICE_ResultFrame_{…}`
+     **unconditionally**, so two acquisitions never share an address even when they wrap the
+     identical C++ object. ⇒ *address equality there is always false, hence useless.* And since
+     `LUMICE_ReleaseResultFrame` frees the handle, a later allocation can reuse that address —
+     so an address match can even be accidentally **true** across two genuinely different frames.
+2. **Production-side RAII wrapping is not yet uniform.** ✅ Resolved. The three call sites that
+   hand-rolled their own acquire/release wrapper (`main.cpp` with a named local class, `app.cpp`
+   and `server_poller.cpp` each with an inline anonymous one) now share one:
+   `src/util/result_frame.hpp`, providing `lumice::ResultFramePtr` (sole ownership) and
+   `lumice::SharedResultFramePtr` (the shared shape `server_poller.cpp` needs, because it hands a
+   share to the texture payload it materializes so the payload can point straight at the frame's
+   buffers). It sits under `util/` because the CLI and the GUI both already include from there and
+   `src/gui/` may not include `core/` or `config/`. It stays separate from the test-side
+   `test/support/scoped_result_frame.hpp` on purpose: `src/` must not depend on `test/`, and the
+   test helper answers a different question (a gtest `ASSERT_*` returning mid-case, plus an
+   `err()` accessor to assert on).
 
 ---
 

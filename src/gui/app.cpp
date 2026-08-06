@@ -26,6 +26,7 @@
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "util/path_utils.hpp"
+#include "util/result_frame.hpp"
 
 namespace lumice::gui {
 
@@ -301,7 +302,7 @@ static void RefreshCpuTextureForSave() {
   if (LUMICE_AcquireResultFrame(g_server, &raw_frame) != LUMICE_OK) {
     return;
   }
-  std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+  lumice::ResultFramePtr frame(raw_frame);
 
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_FrameGetRawXyz(frame.get(), xyz_results, 1);
@@ -818,7 +819,7 @@ void CalibrateQualityThreshold() {
       GUI_LOG_WARNING("[Calibration] could not acquire a result frame, using default threshold");
       return;
     }
-    std::unique_ptr<LUMICE_ResultFrame, void (*)(LUMICE_ResultFrame*)> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+    lumice::ResultFramePtr frame(raw_frame);
     LUMICE_FrameGetStats(frame.get(), &stats);
   }
   GUI_LOG_DEBUG("[Calibration] waited {}ms, state={}, sim_ray_num={}", waited_ms,

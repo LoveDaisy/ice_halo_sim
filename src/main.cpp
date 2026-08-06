@@ -21,6 +21,7 @@
 #include "lumice.h"
 #include "util/cpu_info.hpp"
 #include "util/logger.hpp"
+#include "util/result_frame.hpp"
 
 #ifdef _WIN32
 #define STBIW_WINDOWS_UTF8
@@ -41,13 +42,9 @@ struct SceneDeleter {
 };
 using ScenePtr = std::unique_ptr<LUMICE_Scene, SceneDeleter>;
 
-// Same treatment for result frames. The C API's contract is plain acquire/release (that is
-// what a C caller writes); this wrapper is a C++ caller's convenience for getting the
-// release right on every exit path, not something the API requires.
-struct ResultFrameDeleter {
-  void operator()(LUMICE_ResultFrame* frame) const { LUMICE_ReleaseResultFrame(frame); }
-};
-using ResultFramePtr = std::unique_ptr<LUMICE_ResultFrame, ResultFrameDeleter>;
+// Result frames get the same treatment, but from a shared header — util/result_frame.hpp,
+// which the GUI's two call sites use as well. See there for why the wrapper exists at all.
+using lumice::ResultFramePtr;
 
 // Warn (once, on config load) if the last multi-scattering layer has prob > 0.
 // core semantics: the last layer's prob-fail rays would have "continued to the

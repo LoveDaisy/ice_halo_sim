@@ -297,15 +297,24 @@ table's columns, the preset table's columns, or the pinned action row. Command:
 `python scripts/regen_gui_test_refs.py --group defaults_panel_layout`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_defaults_panel.cpp`.
 
-**`--keep-export-png` flag** — When passed to `gui_test`, `CheckAgainstReference` skips
-`std::remove` so the per-run export PNGs at `/tmp/<group tmp_prefix><scene>.png` are preserved
-for collection by the driver script.
+**`--keep-export-png` / `--export-dir` flags** — `--keep-export-png` makes
+`CheckAgainstReference` skip its `std::remove`, so the per-run export PNGs survive for the driver
+to collect. `--export-dir <path>` says where every scratch file this suite writes goes — capture
+PNGs, round-tripped `.lmc`, exported JSON. The driver passes both, and collects
+`<group tmp_prefix><scene>.png` from the directory it just named.
+
+Without `--export-dir`, `gui_test` writes to a **per-process** subdirectory of the platform temp
+directory (`GuiTestTempPath`, `test/gui/test_gui_shared.hpp`). Two consequences worth knowing:
+the suite has no hardcoded `/tmp`, so its scratch paths are valid on Windows; and two `gui_test`
+processes cannot collide on a fixed filename, which is what a sharded correctness pool would
+otherwise do to itself. The group's `tmp_prefix` is now a **filename** prefix only — the
+directory is not part of that contract.
 
 **Reference groups** — the registry is `GROUPS` at the top of
 `scripts/regen_gui_test_refs.py`, currently holding `capture_harness`, `lens_proj`,
 `modal_layout` and `defaults_panel_layout`. A
 group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
-print and its key in `_thresholds.json`), its scenes/modes, and the `/tmp` and reference filename
+print and its key in `_thresholds.json`), its scenes/modes, and the export and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
 are group-agnostic.
 Two constraints when registering one: the key must be unique across groups (PSNR samples are

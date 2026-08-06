@@ -327,9 +327,13 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
 LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
 void LUMICE_SceneDestroy(LUMICE_Scene* scene);
 
-// 结果获取（数组+哨兵模式，返回 LUMICE_ErrorCode）
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+// 结果获取：取帧 → 从帧上读 → 释放帧。帧交出的缓冲区在**该帧**被释放前始终有效，
+// 期间服务端发布多少次快照都不影响——句柄的意义正是持有生命周期的一份真实份额。
+// （数组读取仍是数组+哨兵模式；均返回 LUMICE_ErrorCode）
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
 
 // 状态与控制
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);

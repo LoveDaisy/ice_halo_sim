@@ -108,7 +108,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       // Export with alpha=0 (only bg visible)
       gui::g_state.bg_alpha = 0.0f;
       ctx->Yield(3);  // Let RenderPreviewPanel update params
-      const char* path_a0 = "/tmp/lumice_bg_alpha0.png";
+      const std::string path_a0 = GuiTestTempPath("lumice_bg_alpha0.png").string();
       g_bg_test.export_path = path_a0;
       g_bg_test.export_requested = true;
       ctx->Yield(3);
@@ -121,7 +121,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       g_bg_test.export_requested = false;
       gui::g_state.bg_alpha = 1.0f;
       ctx->Yield(3);  // Let RenderPreviewPanel update params
-      const char* path_a1 = "/tmp/lumice_bg_alpha1.png";
+      const std::string path_a1 = GuiTestTempPath("lumice_bg_alpha1.png").string();
       g_bg_test.export_path = path_a1;
       g_bg_test.export_requested = true;
       ctx->Yield(3);
@@ -132,8 +132,8 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> img0, img1;
       int w0 = 0, h0 = 0, ch0 = 0;
       int w1 = 0, h1 = 0, ch1 = 0;
-      IM_CHECK(lumice::test::LoadPng(path_a0, img0, w0, h0, ch0));
-      IM_CHECK(lumice::test::LoadPng(path_a1, img1, w1, h1, ch1));
+      IM_CHECK(lumice::test::LoadPng(path_a0.c_str(), img0, w0, h0, ch0));
+      IM_CHECK(lumice::test::LoadPng(path_a1.c_str(), img1, w1, h1, ch1));
       IM_CHECK_EQ(w0, w1);
       IM_CHECK_EQ(h0, h1);
       if (w0 == w1 && h0 == h1 && ch0 == ch1) {
@@ -142,8 +142,8 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
         IM_CHECK(psnr < 30.0);  // Should be quite different
       }
 
-      std::remove(path_a0);
-      std::remove(path_a1);
+      std::remove(path_a0.c_str());
+      std::remove(path_a1.c_str());
     };
   }
 
@@ -188,7 +188,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       gui::g_state.bg_alpha = 0.7f;
 
       // Save
-      const char* tmp_path = "/tmp/lumice_bg_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_bg_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -207,7 +207,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.bg_show, true);
       IM_CHECK(std::abs(gui::g_state.bg_alpha - 0.7f) < 0.01f);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -268,7 +268,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_preview_vp.vp_h > 0);
 
       // Export via FBO
-      const char* tmp_path = "/tmp/lumice_bg_contain.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_bg_contain.png").string();
       g_bg_test.export_path = tmp_path;
       g_bg_test.export_requested = true;
       ctx->Yield(2);
@@ -280,7 +280,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       int img_w = 0;
       int img_h = 0;
       int img_ch = 0;
-      bool loaded = lumice::test::LoadPng(tmp_path, img, img_w, img_h, img_ch);
+      bool loaded = lumice::test::LoadPng(tmp_path.c_str(), img, img_w, img_h, img_ch);
       IM_CHECK(loaded);
       IM_CHECK(img_w > 0);
       IM_CHECK(img_h > 0);
@@ -300,7 +300,7 @@ void RegisterBgOverlayTests(ImGuiTestEngine* engine) {
       bool center_nonblack = (img[center_idx] > 5 || img[center_idx + 1] > 5 || img[center_idx + 2] > 5);
       IM_CHECK(center_nonblack);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 }

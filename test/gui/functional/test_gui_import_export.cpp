@@ -170,7 +170,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.layers[0].entries.push_back(extra);
 
       // Save
-      const char* tmp_path = "/tmp/lumice_full_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_full_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -209,7 +209,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded1).height, 3.0f);
       IM_CHECK_EQ(loaded1.proportion, 25.0f);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -244,7 +244,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       cr.face_distance[4] = gui::ShapeDist{ gui::ShapeDistType::kLaplacian, 1.1f, 0.2f };
       cr.face_distance[5] = gui::ShapeDist{ gui::ShapeDistType::kGaussLegacy, 1.3f, 0.25f };
 
-      const char* tmp_path = "/tmp/lumice_shape_rand_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_shape_rand_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -269,7 +269,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // Exactly the five non-uniform fields (height + faces 2/3/4/5) were downgraded and counted.
       IM_CHECK_EQ(gui::TakeShapeDistDowngradeCount(), 5);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -332,7 +332,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(pyr_sg["face_distance"][0].get<int>(), 6);
       IM_CHECK(!pyr_sg.contains("height"));
 
-      const char* tmp_path = "/tmp/lumice_sync_group_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_sync_group_roundtrip.lmc").string();
       IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false));
       gui::DoNew();
       std::vector<unsigned char> tex_data;
@@ -354,7 +354,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         IM_CHECK_EQ(loaded_pyr.face_distance[i].sync_group, 6 - i);
       }
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -472,7 +472,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       gui::g_state.sun.custom_spectrum = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
 
       // (1)+(2) .lmc save/load round-trip.
-      const char* tmp_path = "/tmp/lumice_custom_spectrum_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_custom_spectrum_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
       gui::DoNew();
@@ -488,7 +488,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[0].weight, 0.5f);
       IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[1].wavelength, 550.0f);
       IM_CHECK_EQ(gui::g_state.sun.custom_spectrum[2].weight, 0.7f);
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
 
       // (3) The export path emits an array-form spectrum. Matches core light_config.cpp
       // SpectrumToJson shape ([{wavelength, weight}, ...]).
@@ -523,7 +523,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Save with horizontal (false) — distinguishable from the new production
       // default (true) so the load step below can prove it was actually read.
-      const char* tmp_path = "/tmp/lumice_modal_layout_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_modal_layout_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -537,7 +537,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK(load_ok);
       IM_CHECK_EQ(gui::g_state.modal_layout_vertical, false);  // saved value survives
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -582,7 +582,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       layer.entries.push_back(make_entry(gui::EntryExitParams{ "7", "4" }));
       gui::g_state.layers.push_back(layer);
 
-      const char* tmp_path = "/tmp/lumice_per_type_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_per_type_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -605,7 +605,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(ee.entry_text, std::string("7"));
       IM_CHECK_EQ(ee.exit_text, std::string("4"));
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -659,7 +659,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       }
       gui::g_state.layers.push_back(layer);
 
-      const char* tmp_path = "/tmp/lumice_sop_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_sop_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -678,7 +678,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         // AC1: field-equal at the operator== (text) layer.
         IM_CHECK(loaded == originals[i]);
       }
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -797,7 +797,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ResetTestState();
 
       // 1) Save a .lmc without a baked preview image (save_texture=false).
-      const char* tmp_path = "/tmp/lumice_open_no_preview.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_open_no_preview.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -824,7 +824,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // 4) AC1 assertion: pre-fix this would FAIL (stale dims retained).
       IM_CHECK(!gui::g_preview.HasTexture());
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -863,7 +863,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       const int target_h = 6;
       std::vector<unsigned char> target(target_w * target_h * 3, 0x33);
       gui::g_preview.UpdateCpuTextureData(target.data(), target_w, target_h);
-      const char* tmp_path = "/tmp/lumice_open_with_preview.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_open_with_preview.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true);
       IM_CHECK(save_ok);
 
@@ -892,7 +892,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), target_w);
       IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), target_h);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -905,7 +905,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // 1) Write a valid CLI-shape JSON to tmp (export round-trip).
       std::string json = CoreJson(gui::g_state);
-      const char* tmp_path = "/tmp/lumice_open_json_import.json";
+      const std::string tmp_path = GuiTestTempPath("lumice_open_json_import.json").string();
       bool write_ok = gui::ExportConfigJson(tmp_path, json);
       IM_CHECK(write_ok);
 
@@ -922,7 +922,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       // 4) Assertion.
       IM_CHECK(!gui::g_preview.HasTexture());
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -1108,7 +1108,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
 
       // Prepare a valid CLI-shape JSON config on disk (round-trips through the export path).
       std::string json = CoreJson(gui::g_state);
-      const char* tmp_path = "/tmp/lumice_reset_owner_json_import.json";
+      const std::string tmp_path = GuiTestTempPath("lumice_reset_owner_json_import.json").string();
       IM_CHECK(gui::ExportConfigJson(tmp_path, json));
 
       // Frame A: seed stale GL pixels — the "previous scene still showing" precondition.
@@ -1134,7 +1134,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -1148,7 +1148,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       ResetTestState();
 
       // Write an .lmc file WITHOUT a baked preview — DoOpen hits the kOpenLmcBlank branch.
-      const char* tmp_path = "/tmp/lumice_reset_owner_lmc_blank.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_reset_owner_lmc_blank.lmc").string();
       IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/false));
 
       // Frame A: seed stale GL pixels.
@@ -1171,7 +1171,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0x00);
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0x00);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -1216,7 +1216,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
         baked[i * 3 + 2] = kFreshCyan[2];
       }
       gui::g_preview.UpdateCpuTextureData(baked.data(), baked_w, baked_h);
-      const char* tmp_path = "/tmp/lumice_reset_owner_lmc_baked.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_reset_owner_lmc_baked.lmc").string();
       IM_CHECK(gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, /*save_texture=*/true));
 
       // Frame A: seed stale magenta pixels through the real GL path.
@@ -1244,7 +1244,7 @@ void RegisterImportExportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_g), 0xFF);
       IM_CHECK_EQ(static_cast<int>(g_gl_op.center_b), 0xFF);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 

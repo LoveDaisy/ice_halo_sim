@@ -70,8 +70,9 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(static_cast<int>(g_capture.pixels.size()), g_capture.width * g_capture.height * 4);
 
       // Save to temp file
-      const char* tmp_path = "/tmp/lumice_crystal_test.png";
-      bool saved = lumice::test::SavePng(tmp_path, g_capture.pixels.data(), g_capture.width, g_capture.height, 4);
+      const std::string tmp_path = GuiTestTempPath("lumice_crystal_test.png").string();
+      bool saved =
+          lumice::test::SavePng(tmp_path.c_str(), g_capture.pixels.data(), g_capture.width, g_capture.height, 4);
       IM_CHECK(saved);
 
       // Verify not all black: at least some non-zero pixels
@@ -84,7 +85,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       IM_CHECK(has_nonzero);
 
       // Verify file is non-empty
-      FILE* f = fopen(tmp_path, "rb");
+      FILE* f = fopen(tmp_path.c_str(), "rb");
       IM_CHECK(f != nullptr);
       if (f) {
         fseek(f, 0, SEEK_END);
@@ -94,7 +95,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       }
 
       // Cleanup
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -184,10 +185,10 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
               g_left_panel_capture.height);
 
       // Save to tmp for reference-image generation (uncomment std::remove below to keep).
-      const char* tmp_path = "/tmp/lumice_left_panel_test.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_left_panel_test.png").string();
       auto rgb = lumice::test::StripAlpha(g_left_panel_capture.pixels.data(), g_left_panel_capture.width,
                                           g_left_panel_capture.height);
-      lumice::test::SavePng(tmp_path, rgb.data(), g_left_panel_capture.width, g_left_panel_capture.height, 3);
+      lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_left_panel_capture.width, g_left_panel_capture.height, 3);
 
       const char* ref_path = LUMICE_TEST_REF_DIR "/left_panel_default.jpg";
       std::vector<unsigned char> ref_data;
@@ -197,7 +198,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
       if (!loaded) {
         fprintf(stderr, "[screenshot] left_panel_psnr: reference not found at %s\n", ref_path);
-        fprintf(stderr, "[screenshot] Run test once, then copy %s to %s\n", tmp_path, ref_path);
+        fprintf(stderr, "[screenshot] Run test once, then copy %s to %s\n", tmp_path.c_str(), ref_path);
         // tmp_path intentionally kept: copy it to ref_path per CLAUDE.md workflow
         IM_CHECK(loaded);
         return;
@@ -211,7 +212,7 @@ void RegisterScreenshotTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[screenshot] left_panel_psnr: PSNR = %.2f dB (threshold = %.1f dB)\n", psnr, kPsnrThreshold);
       IM_CHECK(psnr > kPsnrThreshold);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 }
@@ -245,9 +246,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK(g_capture.capture_done);
 
       // Save to /tmp for reference image generation
-      const char* tmp_path = "/tmp/lumice_visual_crystal_pyramid.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_visual_crystal_pyramid.png").string();
       auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
-      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+      lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_capture.width, g_capture.height, 3);
 
       // Load reference and compare
       const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_pyramid_default.jpg";
@@ -256,7 +257,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       bool loaded = lumice::test::LoadPng(ref_path, ref_data, ref_w, ref_h, ref_ch);
       if (!loaded) {
         fprintf(stderr, "[visual] crystal_pyramid: reference not found at %s\n", ref_path);
-        fprintf(stderr, "[visual] Run test once, then copy %s to %s\n", tmp_path, ref_path);
+        fprintf(stderr, "[visual] Run test once, then copy %s to %s\n", tmp_path.c_str(), ref_path);
         IM_CHECK(loaded);
         return;
       }
@@ -269,7 +270,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[visual] crystal_pyramid: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -291,9 +292,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(g_capture.capture_done);
 
-      const char* tmp_path = "/tmp/lumice_visual_crystal_wireframe.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_visual_crystal_wireframe.png").string();
       auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
-      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+      lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_capture.width, g_capture.height, 3);
 
       const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_wireframe.jpg";
       std::vector<unsigned char> ref_data;
@@ -313,7 +314,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[visual] crystal_wireframe: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -335,9 +336,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(g_capture.capture_done);
 
-      const char* tmp_path = "/tmp/lumice_visual_crystal_shaded.png";
+      const std::string tmp_path = GuiTestTempPath("lumice_visual_crystal_shaded.png").string();
       auto rgb = lumice::test::StripAlpha(g_capture.pixels.data(), g_capture.width, g_capture.height);
-      lumice::test::SavePng(tmp_path, rgb.data(), g_capture.width, g_capture.height, 3);
+      lumice::test::SavePng(tmp_path.c_str(), rgb.data(), g_capture.width, g_capture.height, 3);
 
       const char* ref_path = LUMICE_TEST_REF_DIR "/crystal_shaded.jpg";
       std::vector<unsigned char> ref_data;
@@ -357,7 +358,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       fprintf(stderr, "[visual] crystal_shaded: PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr > kPsnrThreshold);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -449,7 +450,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_preview.HasTexture());
 
       // Save with texture
-      const char* tmp_path = "/tmp/lumice_visual_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_visual_roundtrip.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, true);
       IM_CHECK(save_ok);
 
@@ -491,7 +492,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       }
 
       // Cleanup
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -542,7 +543,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), kNewH);
 
       // Step 3: Save with texture
-      const char* tmp_path = "/tmp/lumice_save_dim_test.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_save_dim_test.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, true);
       IM_CHECK(save_ok);
 
@@ -571,7 +572,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       }
 
       // Cleanup
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -677,7 +678,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       // ExportPreviewPng reads gui::g_preview_vp.params, which is refreshed only by the
       // panel render — clear ev_auto first, Yield(1) to bake the new params, then trigger
       // the export. Capture snapshot_intensity for the Phase 5 replay.
-      const char* path_a = "/tmp/lumice_save_visual_A.png";
+      const std::string path_a = GuiTestTempPath("lumice_save_visual_A.png").string();
       g_export_test.Reset();
       g_export_test.export_path = path_a;
       gui::g_state.ev_auto = 0.0f;
@@ -689,7 +690,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK(g_export_test.export_result);
 
       // --- Phase 3: Save ---
-      const char* lmc_path = "/tmp/lumice_save_visual_test.lmc";
+      const std::string lmc_path = GuiTestTempPath("lumice_save_visual_test.lmc").string();
       gui::g_state.current_file_path = lmc_path;
       gui::DoSave();
 
@@ -717,7 +718,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // --- Phase 5: Capture loaded preview (screenshot B) ---
-      const char* path_b = "/tmp/lumice_save_visual_B.png";
+      const std::string path_b = GuiTestTempPath("lumice_save_visual_B.png").string();
       g_export_test.Reset();
       g_export_test.export_path = path_b;
       gui::g_state.ev_auto = 0.0f;
@@ -732,8 +733,8 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> img_a, img_b;
       int wa = 0, ha = 0, ca = 0;
       int wb = 0, hb = 0, cb = 0;
-      IM_CHECK(lumice::test::LoadPng(path_a, img_a, wa, ha, ca));
-      IM_CHECK(lumice::test::LoadPng(path_b, img_b, wb, hb, cb));
+      IM_CHECK(lumice::test::LoadPng(path_a.c_str(), img_a, wa, ha, ca));
+      IM_CHECK(lumice::test::LoadPng(path_b.c_str(), img_b, wb, hb, cb));
       IM_CHECK_EQ(wa, wb);
       IM_CHECK_EQ(ha, hb);
 
@@ -770,9 +771,9 @@ void RegisterVisualTests(ImGuiTestEngine* engine) {
       IM_CHECK(psnr > kPsnrThreshold);
 
       // Cleanup
-      std::remove(path_a);
-      std::remove(path_b);
-      std::remove(lmc_path);
+      std::remove(path_a.c_str());
+      std::remove(path_b.c_str());
+      std::remove(lmc_path.c_str());
     };
   }
 

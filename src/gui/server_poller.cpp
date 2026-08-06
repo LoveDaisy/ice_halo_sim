@@ -6,6 +6,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
+#include "util/result_frame.hpp"
 
 namespace lumice::gui {
 
@@ -314,7 +315,7 @@ void ServerPoller::PollOnce() {
   if (LUMICE_AcquireResultFrame(server, &raw_frame) != LUMICE_OK) {
     return;
   }
-  std::shared_ptr<LUMICE_ResultFrame> frame(raw_frame, &LUMICE_ReleaseResultFrame);
+  lumice::SharedResultFramePtr frame = lumice::MakeSharedResultFrame(raw_frame);
 
   LUMICE_RawXyzResult xyz_results[2]{};
   LUMICE_RenderResult composite_results[2]{};

@@ -136,7 +136,7 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       gui::g_state.sim.max_hits = 12;
 
       // Save
-      const char* tmp_path = "/tmp/lumice_gui_test.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_gui_test.lmc").string();
       bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -162,7 +162,7 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
       IM_CHECK(tex_data.empty());  // save_texture=false
 
       // Cleanup
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -3933,8 +3933,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Set current_file_path so DoSave() doesn't pop a dialog
-      const char* tmp_path = "/tmp/lumice_unsaved_save.lmc";
-      std::remove(tmp_path);  // clean up any stale file from a previous failed run
+      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_save.lmc").string();
+      std::remove(tmp_path.c_str());  // clean up any stale file from a previous failed run
       gui::g_state.current_file_path = tmp_path;
       // Modify state in a verifiable way
       gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
@@ -3962,7 +3962,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPyramid);
       IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).prism_h, 3.5f);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -3980,8 +3980,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_savemod_gate.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_savemod_gate.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       // Force sim_state == kModified via the reconciled base (kDone) + dirty
       // (any struct edit lands here through the field-tier reconciler).
@@ -4017,8 +4017,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_savemod_anyway.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_savemod_anyway.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       gui::g_state.sim_state = gui::GuiState::SimState::kModified;
       gui::g_state.dirty = true;
@@ -4039,7 +4039,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
 
       gui::g_show_save_modified_popup = false;
       gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -4049,8 +4049,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_savemod_bypass.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_savemod_bypass.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       // kIdle: no run has happened yet — nothing "modified" to warn about.
       gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
@@ -4065,7 +4065,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(f.good());
       IM_CHECK(!gui::g_state.dirty);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -4083,8 +4083,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_unsaved_chain_anyway.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_chain_anyway.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
       // sim_state is re-derived every frame by ReconcileSimState (I2) from
@@ -4125,7 +4125,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       // DoNew() reset the document, so the pushed-back entry is gone.
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -4137,8 +4137,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_unsaved_chain_cancel.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_chain_cancel.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
       // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
@@ -4185,8 +4185,8 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      const char* tmp_path = "/tmp/lumice_savemod_escape.lmc";
-      std::remove(tmp_path);
+      const std::string tmp_path = GuiTestTempPath("lumice_savemod_escape.lmc").string();
+      std::remove(tmp_path.c_str());
       gui::g_state.current_file_path = tmp_path;
       gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
       // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
@@ -4225,7 +4225,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(f2.good());
       IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
 
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 
@@ -6140,7 +6140,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
       const auto original = gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id];
 
-      const char* tmp_path = "/tmp/lumice_gui_sop_roundtrip.lmc";
+      const std::string tmp_path = GuiTestTempPath("lumice_gui_sop_roundtrip.lmc").string();
       const bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
       IM_CHECK(save_ok);
 
@@ -6158,7 +6158,7 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_STR_EQ(reloaded.param[0].text.c_str(), "3-5");
       IM_CHECK_STR_EQ(reloaded.param[1].text.c_str(), "entry:2 & exit:4");
       IM_CHECK_STR_EQ(reloaded.param[2].text.c_str(), "3-5 & entry:2");
-      std::remove(tmp_path);
+      std::remove(tmp_path.c_str());
     };
   }
 

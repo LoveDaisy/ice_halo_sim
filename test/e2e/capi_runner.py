@@ -34,6 +34,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -267,16 +268,46 @@ def lib_candidates(root: Path, build_type: str = "Release") -> List[Path]:
     ]
 
 
+def _announce_chosen_lib(path: Path) -> None:
+    """Print which shared library was picked, and how old it is.
+
+    `scripts/build.sh -k` deletes `build/cmake_build/<flavor>` and
+    `build/cmake_install/<flavor>` but NOT the compiler output tree
+    `build/<BUILD_TYPE>/<flavor>/` — and `build/Release/shared/lib/liblumice.dylib`
+    is the FIRST candidate `lib_candidates` returns. So "I cleaned" can be followed
+    by ctypes loading a dylib from before the clean, with nothing on screen saying
+    so: a stale library produces a coherent-looking pass or a failure blamed on the
+    source you are editing.
+
+    This is a read-out, not a guard: it does not decide anything, it just puts the
+    path and mtime where a human comparing them against their last build can see
+    them. Deliberately NOT a freshness check that fails the run — the loader has no
+    reliable "should be newer than X" reference to check against (`scripts/test.sh
+    pr` owns that comparison, and it has the build tree's configured type to go on).
+    Changing `-k` to clean the artifact tree would be the real fix; it is a separate
+    change with its own semantics to settle (it has to guess across
+    `Debug|Release|MinSizeRel`), and `scripts/build.sh --help` now says outright that
+    `-k` leaves this tree alone.
+    """
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    except OSError:
+        mtime = "unknown"
+    print(f"[capi_runner] loading {path} (built {mtime})")
+
+
 def _find_lib() -> Path:
     env_lib = os.environ.get("LUMICE_LIB")
     if env_lib:
         p = Path(env_lib)
         if not p.exists():
             raise FileNotFoundError(f"LUMICE_LIB={env_lib} does not exist")
+        _announce_chosen_lib(p)
         return p
 
     for c in lib_candidates(_project_root()):
         if c.exists():
+            _announce_chosen_lib(c)
             return c
     raise FileNotFoundError(
         "liblumice shared library not found. Build with BUILD_SHARED_LIBS=ON "

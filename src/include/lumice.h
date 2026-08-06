@@ -1161,11 +1161,18 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 // =============== Crystal Kind ===============
 // Coarse crystal classification used for raypath face-number validation.
 // GUI uses this to determine which face numbers are legal for a given crystal.
-// A value matching neither enumerator is treated as LUMICE_CRYSTAL_PYRAMID rather than reported:
-// every entry taking this type (LUMICE_IsLegalFace, LUMICE_IsShapeScalarApplicable,
-// LUMICE_ShapeScalarSyncKeyName) tests for LUMICE_CRYSTAL_PRISM and falls through. That is the
-// contract, not an oversight — but it is a lenient one, so a caller computing a kind rather than
-// writing a literal should validate before calling if it wants a bad value to be visible.
+// A value matching neither enumerator is REJECTED, not guessed at: every entry taking this type
+// (LUMICE_IsLegalFace, LUMICE_IsShapeScalarApplicable, LUMICE_ShapeScalarSyncKeyName) answers its
+// own negative — 0, 0, and NULL respectively. Note this is the same answer those functions give
+// for a legitimate kind paired with an out-of-range face/slot, so it says "no", not "you passed
+// garbage"; a caller computing a kind rather than writing a literal still gains nothing by
+// skipping its own validation.
+// This replaced an earlier lenient contract under which such a value fell through to
+// LUMICE_CRYSTAL_PYRAMID. The fall-through was documented and deliberate, but a caller census
+// found nothing relying on it, and it had a second cost the reject does not: it silently absorbed
+// enum expansion too. The implementations now switch over the enumerators with no `default:`
+// label, so adding a third kind warns (-Wswitch) at each site instead of quietly mapping it onto
+// Pyramid.
 typedef enum LUMICE_CrystalKind_ {
   LUMICE_CRYSTAL_PRISM,    // Basal + prism lateral faces (1,2,3-8)
   LUMICE_CRYSTAL_PYRAMID,  // All faces including upper/lower pyramidal (1,2,3-8,13-18,23-28)

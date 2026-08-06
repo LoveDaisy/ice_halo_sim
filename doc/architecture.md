@@ -328,9 +328,14 @@ LUMICE_ErrorCode LUMICE_SceneFromJsonFile(const char* filename, LUMICE_Scene** o
 LUMICE_ErrorCode LUMICE_CommitScene(LUMICE_Server* server, const LUMICE_Scene* scene, int* out_reused);
 void LUMICE_SceneDestroy(LUMICE_Scene* scene);
 
-// Result retrieval (array + sentinel pattern, returns LUMICE_ErrorCode)
-LUMICE_ErrorCode LUMICE_GetRenderResults(LUMICE_Server* server, LUMICE_RenderResult* out, int max_count);
-LUMICE_ErrorCode LUMICE_GetStatsResults(LUMICE_Server* server, LUMICE_StatsResult* out, int max_count);
+// Result retrieval: acquire a frame, read from it, release it. The buffers a frame hands out
+// stay valid until THAT frame is released, no matter how many snapshots the server publishes
+// meanwhile — that share of the lifetime is what the handle is for.
+// (Array reads keep the array + sentinel pattern; all return LUMICE_ErrorCode.)
+LUMICE_ErrorCode LUMICE_AcquireResultFrame(LUMICE_Server* server, LUMICE_ResultFrame** out_frame);
+LUMICE_ErrorCode LUMICE_FrameGetRender(const LUMICE_ResultFrame* frame, LUMICE_RenderResult* out, int max_count);
+LUMICE_ErrorCode LUMICE_FrameGetStats(const LUMICE_ResultFrame* frame, LUMICE_StatsResult* out);
+void LUMICE_ReleaseResultFrame(LUMICE_ResultFrame* frame);
 
 // State and control
 LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerState* out);

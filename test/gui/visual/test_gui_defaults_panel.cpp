@@ -259,7 +259,8 @@ void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine) {
       IM_CHECK(has_nonzero);
 
       // Tmp filename must match ReferenceGroup.tmp_prefix in scripts/regen_gui_test_refs.py.
-      const std::string tmp_path = std::string("/tmp/lumice_defaults_panel_") + scene.name + ".png";
+      const std::string tmp_path =
+          GuiTestTempPath(std::string("lumice_defaults_panel_") + scene.name + ".png").string();
       const std::string ref_path = ResolveReferencePath(scene.name);
       auto rgb = lumice::test::StripAlpha(g_fullframe_capture.pixels.data(), g_fullframe_capture.width,
                                           g_fullframe_capture.height);

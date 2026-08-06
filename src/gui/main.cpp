@@ -1,5 +1,4 @@
 #include <GLFW/glfw3.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #ifdef _WIN32
@@ -10,7 +9,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -61,34 +59,11 @@ int main(int argc, char** argv) {
   timeBeginPeriod(1);
 #endif
 
-  // Set up the GUI-side log sinks that carry no side effect (independent from
-  // Core's spdlog). GUI logs go through GUI's own spdlog logger; Core logs arrive
-  // via C API callback, registered further down next to LUMICE_CreateServer.
-  //
-  // This runs FIRST, before GLFW / GL / ImGui init, because every failure those
-  // stages can report is itself logged: a sink installed after them would silently
-  // drop exactly the startup diagnostics a user needs. Nothing here depends on a
-  // window, a GL context or an ImGui context — ImGuiLogSink is a plain ring buffer
-  // that the log panel reads later. On Windows it must stay AFTER the FreeConsole
-  // block above, so the stdout sink is built against the final console state.
-  //
-  // The file sink is deliberately NOT created here: it truncates ~/lumice.log on
-  // construction, and it defaults to level=off, so hoisting it would buy no extra
-  // coverage while wiping the previous run's log on every launch that dies before
-  // this point — the launch a user is most likely to be diagnosing.
-  {
-    // ImGui ring buffer sink (shared between GUI logger and Core callback)
-    gui::g_imgui_log_sink = std::make_shared<gui::ImGuiLogSink>();
-
-    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    gui::SetGuiLoggerSinks({ stdout_sink, gui::g_imgui_log_sink });
-    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
-
-    // Flush strategy: warning+ immediately, all levels every 1s
-    // spdlog::err = our warning level (see spdlog_levels.hpp)
-    gui::GetGuiLogger().flush_on(spdlog::level::err);
-    spdlog::flush_every(std::chrono::seconds(1));
-  }
+  // Stage 1 of the GUI's log-sink assembly (independent from Core's spdlog; Core logs arrive via
+  // the C API callback registered further down next to LUMICE_CreateServer). It runs HERE, before
+  // GLFW / GL / ImGui init and after the FreeConsole block above — see gui_logger.hpp, which owns
+  // both stages and the reason the ordering is what it is.
+  gui::InstallEarlyGuiSinks();
 
   // Parse --user-config / --no-user-config before the first MakeNewDocumentState() call further
   // down — that call is the only place personal defaults enter a session. Passing neither flag
@@ -205,33 +180,9 @@ int main(int argc, char** argv) {
   // Create Lumice server.
   gui::g_server = LUMICE_CreateServer();
 
-  // File sink (default level=off, enabled via the GUI checkbox). Constructed here
-  // rather than in the sink block at the top of main() because construction
-  // truncates the file — see the note there. Only the log panel reads
-  // g_file_log_sink / g_log_file_path, and that runs in the frame loop below, so
-  // publishing them this late is not observable.
-  {
-    // The log file lives beside the other per-user Lumice artifacts (see GetUserConfigDir),
-    // not at $HOME — a read-only or multi-user install must not scatter files in the home
-    // directory root. Falls back to a CWD-relative path when no config directory is available,
-    // preserving the previous "degrade, never fail to start" behavior.
-    std::filesystem::path log_path;
-    if (auto config_dir = gui::GetUserConfigDir()) {
-      log_path = *config_dir / "lumice.log";
-    } else {
-      log_path = "lumice.log";
-    }
-    log_path = std::filesystem::absolute(log_path);
-    gui::g_log_file_path = log_path.u8string();
-    gui::g_file_log_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_path.string(), true);
-    gui::g_file_log_sink->set_level(spdlog::level::off);
-
-    auto sinks = gui::GetGuiLogger().sinks();
-    sinks.push_back(gui::g_file_log_sink);
-    gui::SetGuiLoggerSinks(std::move(sinks));
-    // Re-apply: set_formatter clones into each sink, so the new one needs it too.
-    gui::GetGuiLogger().set_formatter(lumice::CreateLumiceFormatter(gui::kGuiLogPattern));
-  }
+  // Stage 2 of the log-sink assembly: the file sink, which cannot be hoisted into stage 1
+  // because constructing it truncates the log file. See gui_logger.hpp.
+  gui::AttachGuiFileSink();
 
   // Bridge Core logs into the GUI ring buffer. Kept here rather than in the sink
   // block at the top of main(): the callback only carries meaning once a server
