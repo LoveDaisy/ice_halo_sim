@@ -417,10 +417,6 @@ struct RenderConfigResimFields {
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
 
-inline bool RenderConfigResimEqual(const RenderConfig& a, const RenderConfig& b) {
-  return RenderConfigResimFields::From(a) == RenderConfigResimFields::From(b);
-}
-
 // Apple Silicon + libc++ only. Layout pins, mirroring the EntryCard pattern (see below).
 // Linux/Windows CI still compiles both structs; this only pins the Apple main-dev platform.
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -1159,7 +1155,12 @@ struct GuiState {
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    RenderConfig renderer;
+    // Deliberately NOT a whole RenderConfig: only the fields RenderConfigResimFields judges are
+    // captured, so Revert restores exactly the set that counts as a change. The T-view fields
+    // (lens_type / fov / elevation / azimuth / roll / visible / front) and exposure_offset are
+    // absent *structurally* — not captured-then-skipped-on-restore, which would leave From and
+    // ApplyTo asymmetric and the omission easy to lose track of.
+    RenderConfigResimFields renderer_resim;
     std::vector<ColorClassConfig> raypath_color;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
@@ -1225,7 +1226,9 @@ struct GuiState {
 // Size bumped from 192 → 216 by task-349.2: added `raypath_color` field
 // (std::vector<ColorClassConfig>) so Revert restores color-class edits that
 // go through MarkStructHardDirty (Revert-completeness fix, plan §3.4).
-static_assert(sizeof(GuiState::ConfigSnapshot) == 216,
+// Size then shrank when the Revert baseline narrowed from a full RenderConfig to
+// RenderConfigResimFields: it now holds exactly the fields that count as a change.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 184,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -1239,7 +1242,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.layers = state.layers;
   s.sun = state.sun;
   s.sim = state.sim;
-  s.renderer = state.renderer;
+  s.renderer_resim = RenderConfigResimFields::From(state.renderer);
   s.raypath_color = state.raypath_color;
   return s;
 }
@@ -1250,7 +1253,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.layers = layers;
   state.sun = sun;
   state.sim = sim;
-  state.renderer = renderer;
+  renderer_resim.ApplyTo(state.renderer);
   state.raypath_color = raypath_color;
 }
 

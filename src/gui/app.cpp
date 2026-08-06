@@ -973,15 +973,16 @@ bool DoRun(bool user_initiated) {
   // NeedsRebuild comparison: RenderConfig::id was removed during the renderer copy-model
   // migration; since `id` was always 1 pre-migration, operator== behavior is strictly looser
   // and cannot produce new false-positive reuse paths.
-  // Renderer comparison uses RenderConfigResimEqual (gui_state.hpp) — same helper used by
-  // gui_state_reconcile.cpp::DiffAgainstCommitBaseline, so this predicate and the reconciler's
-  // resim/dirty verdict stay in lock-step (single source of truth; see T2 plan §3 design 1).
+  // Renderer comparison uses RenderConfigResimFields::Matches (gui_state.hpp) — the same
+  // projection gui_state_reconcile.cpp::DiffAgainstCommitBaseline compares against, so this
+  // predicate and the reconciler's resim/dirty verdict stay in lock-step (single source of
+  // truth; see T2 plan §3 design 1).
   // Excludes all T-view fields (lens_type / fov / elevation / azimuth / roll / visible / front /
   // exposure_offset) because they are client-side reprojection only — the sim renders a fixed
   // full-sky dual-fisheye and the GUI reprojects it (see gui_state.hpp comment). Dragging the
   // view / switching the lens / toggling the hemisphere clip must not cause a poller Stop here.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
-                        !RenderConfigResimEqual(g_state.renderer, g_state.last_committed_state->renderer);
+                        !g_state.last_committed_state->renderer_resim.Matches(g_state.renderer);
 
   // Single handle commit path (327.4 / 399.5): all filter types — including multi-segment
   // raypath / multi-value EE (expanded to N simple + 1 complex) — go through LUMICE_Scene, so

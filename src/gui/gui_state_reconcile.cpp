@@ -105,14 +105,15 @@ void DiffAgainstCommitBaseline(const GuiState& state, GuiEffects& effects) {
   }
   const auto& baseline = *state.last_committed_state;
 
-  // T-struct·soft: re-sim carry-forward. Renderer comparison uses RenderConfigResimEqual
+  // T-struct·soft: re-sim carry-forward. Renderer comparison uses RenderConfigResimFields
   // (defined in gui_state.hpp): it excludes `exposure_offset`, which is a pure display-time
   // field pushed every frame via LUMICE_SetCompositeExposure and never baked into the sim
   // (doc/ev-pipeline-architecture.md §6.4/§6.5). Excluding EV here is what makes dragging the
   // EV slider not falsely flip a finished sim into kModified. app.cpp::DoRun's expect_rebuild
-  // predicate consumes the same helper — single source of truth (see T2 plan §3 design point 1).
+  // predicate compares the same projection, and the baseline stores nothing else — single
+  // source of truth (see T2 plan §3 design point 1).
   if (state.crystals != baseline.crystals || state.layers != baseline.layers || state.sun != baseline.sun ||
-      state.sim != baseline.sim || !RenderConfigResimEqual(state.renderer, baseline.renderer)) {
+      state.sim != baseline.sim || !baseline.renderer_resim.Matches(state.renderer)) {
     effects.need_resim = true;
   }
 
