@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785991307622,
+  "lastUpdate": 1786006347539,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "5710d6cd13a3290e0aaad7d92b4ac9f2a549a332",
-          "message": "Merge pull request #149 from LoveDaisy/worktree-fix-stats-ray-count-u32-overflow\n\nfix(stats): widen ray-count types to 64-bit (Windows u32 overflow) — task-297",
-          "timestamp": "2026-06-26T21:15:50+08:00",
-          "tree_id": "1fcf076eb29b52ca6f7e11c988fee4e7340dbaa5",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5710d6cd13a3290e0aaad7d92b4ac9f2a549a332"
-        },
-        "date": 1782480105215,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 448961,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 599844.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 387377.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 359670.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4786,6 +4738,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 357173.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5a8f8982aa3d6bf634f3f13b6cf53ccc29bce9a4",
+          "message": "Merge pull request #253 from LoveDaisy/refactor/user-defaults-write-surface-closure\n\nrefactor(gui): close the parallel user-defaults write surface (434)",
+          "timestamp": "2026-08-06T16:41:53+08:00",
+          "tree_id": "e39098a9bc1cf37fc4ce2c511b3cc4c9e248608f",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5a8f8982aa3d6bf634f3f13b6cf53ccc29bce9a4"
+        },
+        "date": 1786006346411,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 452681.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 583957,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 609164.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) 6973P-C\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 353361.3,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
