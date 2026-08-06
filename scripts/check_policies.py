@@ -82,7 +82,17 @@ Checks:
      (single owner of the pre-abort trap — call lumice::FatalAbort instead of
      hand-rolling print-then-abort). Scans .cu/.metal too, so a GPU backend
      cannot reopen the side channel; test/ is deliberately out of scope.
-  13. pytest-invocation-marker — a pytest call site (test/CMakeLists.txt's
+  13. user-defaults-single-write-path — the personal-defaults override file has
+     ONE writer under src/: WriteUserDefaultsFile is called from exactly one
+     place (defaults_diff.cpp's WriteActiveOverlayDoc), and kUserDefaultsFileName
+     is named only by the store that owns it (src/gui/user_defaults.*). The rule
+     exists because the file once had two write paths: the defaults panel's move
+     to the copy model changed the callers and copied the implementation, leaving
+     the superseded read-mutate-write wrappers in place — unreachable, and still
+     asserting in a comment that they were the only place a key gets written.
+     Both halves are regex, so neither proves a second path does not exist; the
+     limits are enumerated at the check's own docstring.
+  14. pytest-invocation-marker — a pytest call site (test/CMakeLists.txt's
      add_test, scripts/*.sh, doc/**/*.md and AGENTS.md fenced recipes) that
      names a `.py` target must pass its own `-m`. Without one it inherits
      pyproject.toml's `addopts = ["-m", "not slow"]`, and a slow-only target
@@ -1206,6 +1216,99 @@ def check_no_bare_print() -> list[Violation]:
     return out
 
 
+# --- user-defaults-single-write-path ---------------------------------------
+#
+# The personal-defaults override file has exactly one writer, and the rule exists
+# because it once had two. Moving the defaults panel to the copy model changed the
+# callers and copied the implementation; the superseded read-mutate-write wrappers
+# stayed behind, unreachable from production and still carrying their own "this is
+# the only place that turns a … into a written key" comment. Nothing failed, so
+# nothing surfaced it — the contracts they claimed to protect were simply no longer
+# being asserted about the code that runs.
+USER_DEFAULTS_STORE_HPP = SRC / "gui" / "user_defaults.hpp"
+USER_DEFAULTS_STORE_CPP = SRC / "gui" / "user_defaults.cpp"
+# Both files, not just the .cpp: the constant is DEFINED in the header
+# (user_defaults.hpp's kUserDefaultsFileName), so exempting only the .cpp would make
+# the rule fail on a clean tree.
+USER_DEFAULTS_FILENAME_OWNERS = frozenset({USER_DEFAULTS_STORE_HPP, USER_DEFAULTS_STORE_CPP})
+USER_DEFAULTS_WRITE_CALL = re.compile(r"\bWriteUserDefaultsFile\s*\(")
+# The declaration in the header and the definition in the .cpp, told apart from a
+# call by the leading return type.
+USER_DEFAULTS_WRITE_SIGNATURE = re.compile(r"^\s*bool\s+WriteUserDefaultsFile\s*\(")
+USER_DEFAULTS_FILENAME_SYMBOL = re.compile(r"\bkUserDefaultsFileName\b")
+
+
+def check_user_defaults_single_write_path() -> list[Violation]:
+    """The override file has ONE writer under src/, reached through ONE wrapper.
+
+    Two sub-checks, deliberately one registered rule because they are two faces of
+    the same policy ("there is one write path"), each emitting its own wording so a
+    violation is still attributable:
+
+      A  — WriteUserDefaultsFile() is called from exactly one place in src/
+           (defaults_diff.cpp's WriteActiveOverlayDoc). Signature lines are not
+           calls and are excluded.
+      A' — kUserDefaultsFileName is referenced only by the store itself
+           (user_defaults.hpp defines it, user_defaults.cpp reads and writes
+           through it). Composing that filename anywhere else is how a second
+           writer would be opened WITHOUT going through the wrapper, which A alone
+           cannot see.
+
+    WHAT THIS RULE DOES NOT CLAIM. Both halves are plain regex over comment-stripped
+    lines, the same instrument as no-bare-print, so neither can see: a call reached
+    through a function pointer or std::function; a path built from a hand-written
+    "user_defaults.json" literal or an assembled/macro-pasted one that never names
+    the constant; or a writer opened outside src/ (test/ deliberately has several —
+    the harness seeds override files directly). The rule stops someone from casually
+    adding a second writer. It is NOT evidence that no second write path exists, and
+    reading a green run as that would be the same mistake the deleted wrappers were:
+    a claim of uniqueness that nothing checked.
+    """
+    out: list[Violation] = []
+
+    call_sites: list[tuple[Path, int]] = []
+    signature_sites: list[tuple[Path, int]] = []
+    for path in cxx_sources(SRC):
+        for lineno, _orig, code in code_lines(path):
+            if not USER_DEFAULTS_WRITE_CALL.search(code):
+                continue
+            if USER_DEFAULTS_WRITE_SIGNATURE.match(code):
+                signature_sites.append((path, lineno))
+                continue
+            call_sites.append((path, lineno))
+
+    if len(call_sites) != 1:
+        message = (
+            f"WriteUserDefaultsFile() must have exactly ONE caller under src/ "
+            f"(defaults_diff.cpp's WriteActiveOverlayDoc); found {len(call_sites)}. "
+            "A second writer is a second answer to 'what did the user save' — commit "
+            "the whole document through WriteActiveOverlayDoc instead. See AGENTS.md."
+        )
+        # Nothing to point at when the count is zero, so anchor on the definition
+        # rather than dropping the diagnostic.
+        anchors = call_sites or signature_sites
+        for path, lineno in anchors:
+            out.append(Violation(path, lineno, "user-defaults-single-write-path", message))
+
+    for path in cxx_sources(SRC):
+        if path in USER_DEFAULTS_FILENAME_OWNERS:
+            continue
+        for lineno, _orig, code in code_lines(path):
+            if USER_DEFAULTS_FILENAME_SYMBOL.search(code):
+                out.append(
+                    Violation(
+                        path,
+                        lineno,
+                        "user-defaults-single-write-path",
+                        "kUserDefaultsFileName belongs to the store (src/gui/user_defaults.*). "
+                        "Naming it elsewhere means composing the override file's path outside the "
+                        "one function that owns reading and writing it — route through "
+                        "ReadActiveOverlayDoc / WriteActiveOverlayDoc. See AGENTS.md.",
+                    )
+                )
+    return out
+
+
 # --- pytest-invocation-marker ----------------------------------------------
 #
 # `pyproject.toml`'s `addopts = ["-m", "not slow"]` pins a bare `pytest` to the
@@ -1532,6 +1635,7 @@ CHECKS = [
     check_no_default_constructed_crystal_slots,
     check_gui_test_suite_args_sync,
     check_no_bare_print,
+    check_user_defaults_single_write_path,
     check_pytest_invocation_marker,
 ]
 
@@ -1557,7 +1661,7 @@ def main() -> int:
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
         "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print, "
-        "pytest-invocation-marker)."
+        "user-defaults-single-write-path, pytest-invocation-marker)."
     )
     return 0
 
