@@ -325,6 +325,40 @@ void ServerPoller::PollOnce() {
   // Check if this is genuinely new snapshot data (generation changed)
   bool has_new_snapshot = xyz_results[0].xyz_buffer != nullptr && captured_xyz_generation != last_generation_;
 
+  // Cheap stats read (invariant I4a). Deliberately UNCONDITIONAL — the frame above is already
+  // acquired on every poll regardless of has_new_snapshot, so reading stats off it costs nothing
+  // extra; gating this read behind has_new_snapshot/force_final_upload was a readability bug (the
+  // lifecycle heartbeat above already reads unconditionally per the same invariant), not a cost
+  // tradeoff. See doc/gui-preview-lifecycle-architecture.md §6/§9 (I4).
+  //
+  // has_valid_data is load-bearing here, not belt-and-braces: a restart does NOT clear the
+  // stats a frame carries (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and
+  // leaves the published frame alone — only a new snapshot replaces it), so between a commit
+  // and the new run's first produced batch these are the PREVIOUS run's numbers with a
+  // perfectly healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_,
+  // which the restart did reset, and is the only field here that tells the two apart.
+  //
+  // Reading the stats off the SAME frame as the xyz above removes what used to be a window:
+  // these two reads can no longer straddle a snapshot, so "has_valid_data true" and "these
+  // stats belong to that generation" are now one statement rather than an ordering argument.
+  bool have_new_stats = false;
+  LUMICE_RayCount new_ray_seg = 0;
+  LUMICE_RayCount new_sim_ray = 0;
+  LUMICE_RayCount new_crystal = 0;
+  LUMICE_RayCount new_orientation = 0;
+  unsigned long long new_stats_epoch = 0;
+  LUMICE_StatsResult cached_stats{};
+  LUMICE_FrameGetStats(frame.get(), &cached_stats);
+  if (cached_stats.sim_ray_num > 0 && xyz_results[0].has_valid_data) {
+    have_new_stats = true;
+    new_ray_seg = cached_stats.ray_seg_num;
+    new_sim_ray = cached_stats.sim_ray_num;
+    new_crystal = cached_stats.crystal_num;
+    new_orientation = cached_stats.orientation_num;
+    // Same read window as payload_epoch takes for the texture (see the quality_ok block below).
+    new_stats_epoch = xyz_results[0].epoch;
+  }
+
   // Terminal-frame rescue (invariant I6, "the final frame always reaches the screen" — the
   // blueprint's §7 rule 2 / §9; see doc/gui-preview-lifecycle-architecture.md). The quality gate below
   // suppresses sparse snapshots on the premise that a denser one is still coming; once the run has
@@ -341,43 +375,16 @@ void ServerPoller::PollOnce() {
   const bool force_final_upload =
       lc.lifecycle == LUMICE_LIFECYCLE_COMPLETED && !uploaded_since_resume_ && xyz_results[0].xyz_buffer != nullptr;
 
-  // ---- Prepare candidate stats + texture payload OUTSIDE publish_mutex_ (no prev dependency).
-  bool have_new_stats = false;
-  LUMICE_RayCount new_ray_seg = 0;
-  LUMICE_RayCount new_sim_ray = 0;
-  LUMICE_RayCount new_crystal = 0;
-  LUMICE_RayCount new_orientation = 0;
-  unsigned long long new_stats_epoch = 0;
+  // ---- Prepare candidate texture payload OUTSIDE publish_mutex_ (no prev dependency). Stats are
+  // already computed above (I4a); only the texture payload stays gated on
+  // has_new_snapshot/force_final_upload, since materializing one always requires a genuinely new
+  // or rescued generation.
   std::shared_ptr<const TexturePayload> new_payload;  // non-null only when a fresh texture materialized
 
   if (has_new_snapshot || force_final_upload) {
     // Always consume this generation (same generation data won't improve by waiting). On the
     // force_final_upload-only path this re-assigns the value already stored — idempotent.
     last_generation_ = captured_xyz_generation;
-
-    // Get stats (used independently for status bar display).
-    //
-    // has_valid_data is load-bearing here, not belt-and-braces: a restart does NOT clear the
-    // stats a frame carries (ServerImpl::Stop resets snapshot_dirty_ + has_ever_consumed_ and
-    // leaves the published frame alone — only a new snapshot replaces it), so between a commit
-    // and the new run's first produced batch these are the PREVIOUS run's numbers with a
-    // perfectly healthy-looking sim_ray_num > 0. has_valid_data mirrors has_ever_consumed_,
-    // which the restart did reset, and is the only field here that tells the two apart.
-    //
-    // Reading the stats off the SAME frame as the xyz above removes what used to be a window:
-    // these two reads can no longer straddle a snapshot, so "has_valid_data true" and "these
-    // stats belong to that generation" are now one statement rather than an ordering argument.
-    LUMICE_StatsResult cached_stats{};
-    LUMICE_FrameGetStats(frame.get(), &cached_stats);
-    if (cached_stats.sim_ray_num > 0 && xyz_results[0].has_valid_data) {
-      have_new_stats = true;
-      new_ray_seg = cached_stats.ray_seg_num;
-      new_sim_ray = cached_stats.sim_ray_num;
-      new_crystal = cached_stats.crystal_num;
-      new_orientation = cached_stats.orientation_num;
-      // Same read window as payload_epoch takes for the texture (see the quality_ok block below).
-      new_stats_epoch = xyz_results[0].epoch;
-    }
 
     // Quality gate: skip texture overwrite for sparse snapshots (too few rays = visible flicker).
     // Cold start (sim_ray_num == 0) is allowed through — no "old good texture" to preserve.

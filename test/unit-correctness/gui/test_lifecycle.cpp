@@ -34,6 +34,8 @@
 //  9b. restart_does_not_republish_prior_run_stats — producer end-to-end over the Run->Run edge
 //  10a. restart_does_not_republish_prior_run_pixels  } 9b's texture-channel siblings: the same
 //  10b. restart_window_does_not_republish_prior_run_composite } window, asserted on image content
+//  11. stats_read_unconditional_on_first_gate_closed_poll — I4a: stats read decoupled from
+//      has_new_snapshot/force_final_upload, the same way the lifecycle heartbeat already is.
 //
 // Their five frame-driven siblings stay in test/gui/functional/test_gui_lifecycle.cpp.
 
@@ -891,6 +893,66 @@ TEST(GuiLifecycle, restart_does_not_republish_prior_run_stats) {
   // ... so the gate keeps them off the status bar. Before the fix this combination read as fresh
   // (bundle epoch == committed epoch, rays > 0) and run A's counts were displayed under run B.
   EXPECT_TRUE(!gui::ShouldApplyStats(*sb, epoch_b));
+
+  local.Stop();
+  LUMICE_DestroyServer(server);
+}
+
+// ---- Test 11: I4a — cheap stats are read UNCONDITIONALLY, not gated behind has_new_snapshot ----
+// The bug: LUMICE_FrameGetStats used to sit inside `if (has_new_snapshot || force_final_upload)`
+// (server_poller.cpp), 160 lines from the unconditional lifecycle read the SAME invariant (I4)
+// requires. A poll that legitimately sees BOTH disjuncts false (generation tracker already caught
+// up, terminal rescue already spent) skipped the stats read outright and fell through to the
+// carry-forward branch below. When that poll is also the poller's FIRST EVER poll — no `prev` to
+// carry forward from — the bundle's stats fields stayed at their zero default even though the
+// frame just acquired (unconditionally, a few lines above) carries real, valid, non-zero data.
+//
+// Constructed via two test-only seams because natural traffic cannot reach "gate closed AND no
+// prior publish" on one poller instance: ResetGenerationForTest()'s 0-start always reads the
+// first real generation as new (has_new_snapshot true), and any earlier successful poll that
+// would populate `prev` already carried the correct stats forward on its own — masking exactly
+// the defect this case exists to pin.
+TEST(GuiLifecycle, stats_read_unconditional_on_first_gate_closed_poll) {
+  gui::g_server_poller.Stop();
+  gui::g_server = nullptr;
+
+  LUMICE_Server* server = LUMICE_CreateServer();
+  ASSERT_TRUE(server != nullptr);
+  const bool completed = RunFiniteToCompletion(server);
+  EXPECT_TRUE(completed);
+  if (!completed) {
+    LUMICE_DestroyServer(server);
+    return;
+  }
+
+  // Peek the server's current snapshot generation without touching any poller's own tracker.
+  uint64_t generation = 0;
+  {
+    lumice::test::ScopedResultFrame frame(server);
+    ASSERT_EQ(frame.err(), LUMICE_OK);
+    LUMICE_RawXyzResult xyz[2]{};
+    LUMICE_FrameGetRawXyz(frame.get(), xyz, 1);
+    ASSERT_TRUE(xyz[0].has_valid_data);
+    generation = xyz[0].snapshot_generation;
+  }
+  ASSERT_NE(generation, 0u);
+
+  gui::ServerPoller local;
+  // Close BOTH doors that gate the `if (has_new_snapshot || force_final_upload)` branch:
+  //  - has_new_snapshot: pre-match the tracker to the generation already produced.
+  //  - force_final_upload: pre-arm "already uploaded this resume" so the COMPLETED terminal-frame
+  //    rescue does not open the branch on its own.
+  local.SetGenerationForTest(generation);
+  local.SetUploadedSinceResumeForTest(true);
+
+  // First poll on this instance -> LoadSnapshot() has nothing published to carry forward from.
+  local.PollOnceForTest(server);
+  auto snap = local.LoadSnapshot();
+  ASSERT_TRUE(snap != nullptr);
+  EXPECT_TRUE(snap->valid);
+  // RED on the pre-I4a code: both doors closed AND no `prev` left stats at their zero default.
+  EXPECT_GT(snap->stats_sim_ray_num, 0u);
+  EXPECT_EQ(snap->stats_epoch, CurrentEpoch(server));
 
   local.Stop();
   LUMICE_DestroyServer(server);

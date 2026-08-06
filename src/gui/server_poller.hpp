@@ -213,6 +213,19 @@ class ServerPoller {
   // server's current generation as new (what Start() does, minus the worker thread).
   void ResetGenerationForTest() { last_generation_ = 0; }
 
+  // Test-only: pre-match the generation tracker to an arbitrary value (normally the server's
+  // CURRENT generation) so the next PollOnceForTest() sees has_new_snapshot == false. Needed to
+  // construct the "gate closed" side of invariant I4a on a poller's very first poll — a state
+  // ResetGenerationForTest() cannot reach, since its 0-start always reads the first real
+  // generation as new. Not used in production.
+  void SetGenerationForTest(uint64_t generation) { last_generation_ = generation; }
+
+  // Test-only: pre-arm uploaded_since_resume_ so force_final_upload reads false even under a
+  // COMPLETED lifecycle. Paired with SetGenerationForTest() to close BOTH disjuncts of
+  // `has_new_snapshot || force_final_upload` for a regression test — see
+  // test/unit-correctness/gui/test_lifecycle.cpp's I4a case. Not used in production.
+  void SetUploadedSinceResumeForTest(bool uploaded) { uploaded_since_resume_ = uploaded; }
+
   // Test-only: exposes the private PublishValidReset() seam so a regression test can construct the
   // exact "valid=false snapshot published while under a kRunning intent" observation that used to
   // pull a completed sim back into kSimulating (AC1 activity bug root cause (a), before the
