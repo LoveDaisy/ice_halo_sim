@@ -1094,6 +1094,72 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     };
   }
 
+  {
+    // A Save that could not write must leave the process-wide preset cache exactly as it was.
+    // Otherwise this session resolves one value for the Column button while the next launch reads
+    // the older one off disk, and the user watches their setting "come back" with no event to
+    // attribute it to.
+    //
+    // WHY THIS IS A gui_test AND NOT A PURE UNIT TEST. The contract is not a property of any
+    // single function: it is the ORDER in which CommitCopy composes two of them — write the
+    // document, and only if that succeeded push the changed presets into the cache
+    // (defaults_panel.cpp, the "ORDER IS PART OF THE CONTRACT" comment, which is the only one of
+    // its kind in the repo). Extracting the decision into a pure `ShouldAdopt(bool
+    // write_succeeded, ...)` is perfectly possible, and that is exactly the problem: the unit test
+    // would then assert that `write_succeeded == false` yields no adoptions, i.e. restate the `if`
+    // it was extracted from, while the side that can actually break — does the production call
+    // site really write first, and does it really leave before the adopt loop — moves out of view
+    // and reports as covered. So the case drives the real Save button, twice: once where the write
+    // fails and once where it lands.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "save_failure_leaves_the_preset_cache_untouched");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      const auto dir = FreshOverlayDir("panel_save_fail");
+      std::optional<std::string> before_bytes;
+      {
+        ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+        ResetTestState();
+        ResetUserDefaultsChannels();
+
+        json doc;
+        doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, doc));
+        gui::g_state = gui::MakeNewDocumentState();
+
+        OpenPanelOn(ctx, gui::DefaultsPanelSection::kPresets);
+        ctx->ItemOpen("**/###preset_Column");
+        ctx->Yield(2);
+        ctx->ItemInputValue("**/###preset_std_column", 0.7f);
+        ctx->Yield(3);
+        before_bytes = ReadOverlayBytes(dir);
+      }
+      IM_CHECK(before_bytes.has_value());
+      const auto before_cache = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+      IM_CHECK(before_cache.has_value());
+      IM_CHECK_EQ(*before_cache, 0.3f);
+
+      // No writable directory at all — the same shape as a config directory that has become
+      // read-only between opening the panel and pressing Save.
+      {
+        ScopedUserConfigSource disabled(gui::UserConfigSource::kDisabled);
+        SaveDefaultsPanel(ctx);
+        IM_CHECK_EQ(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn), before_cache);
+        IM_CHECK_EQ(ReadOverlayBytes(dir), before_bytes);
+      }
+
+      // The same button, with somewhere to write again: the edit lands, in the file AND in the
+      // cache. This is what makes the assertions above a claim about the FAILED write rather than
+      // about a click that never reached CommitCopy at all — and it is the half that turns red if
+      // the adopt loop is moved ahead of the write instead of behind it.
+      {
+        ScopedUserConfigSource writable(gui::UserConfigSource::kExplicitDir, dir);
+        SaveDefaultsPanel(ctx);
+        IM_CHECK_EQ(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).value_or(-1.0f), 0.7f);
+        IM_CHECK_EQ(ReadPresetStd(ReadOverlayFile(dir), "column").value_or(-1.0f), 0.7f);
+        CloseDefaultsPanel(ctx);
+      }
+    };
+  }
+
   // RETIRED: copy_ac4_source_follows_copy_section_follows_snapshot.
   //
   // It asserted that a row's Source cell and Revert button tracked the WORKING COPY while its

@@ -117,6 +117,26 @@ bool SeedPresetOverrideOnDisk(const std::filesystem::path& dir, gui::AxisPreset 
   return gui::WriteUserDefaultsFile(dir, doc);
 }
 
+// Drop one preset override the way the panel's Restore button and Save do: erase the key from the
+// working document through its production owner, write the whole document, and only THEN let the
+// process-wide cache follow — disk first, memory second, the order defaults_panel.cpp's CommitCopy
+// calls out as part of the contract.
+//
+// Spelled out here rather than called through one store-side function because there is no longer
+// one: the disk-side revert wrapper this file used to call was a second write path that the panel
+// itself never went through, and the live path composes these three primitives at its own call
+// site. The assertions below are about the DOCUMENT shape the erase leaves behind, which is
+// EraseAxisPresetZenithStdFromDoc's own contract and the half a wholesale rewrite would break.
+bool RestoreOnePresetOnDisk(const std::filesystem::path& dir, gui::AxisPreset preset) {
+  json doc = ReadOverlayDoc(dir);
+  gui::EraseAxisPresetZenithStdFromDoc(doc, preset);
+  if (!gui::WriteUserDefaultsFile(dir, doc)) {
+    return false;
+  }
+  gui::AdoptAxisPresetZenithStdOverrideInMemory(preset, std::nullopt);
+  return true;
+}
+
 }  // namespace
 
 // ================================================================================
@@ -853,7 +873,7 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
     EXPECT_EQ(after_two_writes.value("bg_alpha", 0.0f), 0.42f);
   }
 
-  EXPECT_TRUE(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
+  EXPECT_TRUE(RestoreOnePresetOnDisk(dir, gui::AxisPreset::kColumn));
 
   // Factory again, field by field against the table itself.
   const auto& column = gui::AxisPresetEntryFor(gui::AxisPreset::kColumn);
@@ -873,7 +893,7 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
 
   // Reverting the last preset prunes the now-empty parents, so a hand-opened file does not
   // accumulate `"presets": {"axis": {}}` skeletons.
-  EXPECT_TRUE(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kPlate));
+  EXPECT_TRUE(RestoreOnePresetOnDisk(dir, gui::AxisPreset::kPlate));
   const json pruned = ReadOverlayDoc(dir);
   EXPECT_TRUE(!pruned.contains("presets"));
   EXPECT_EQ(pruned.value("bg_alpha", 0.0f), 0.42f);
@@ -887,16 +907,23 @@ TEST(UserDefaults, preset_without_adjustable_face_is_never_written) {
   const auto dir = FreshOverlayDir("preset_random");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
+  json working = json::object();
   for (const auto preset : { gui::AxisPreset::kRandom, gui::AxisPreset::kCustom }) {
     const auto result = gui::ClampAxisPresetZenithStdForSave(preset, 3.0f);
     EXPECT_TRUE(!result.accepted);         // refused before any caller could commit it
     EXPECT_TRUE(!result.message.empty());  // refused out loud, not silently dropped
     EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(preset).has_value());
-    EXPECT_TRUE(!gui::RevertOneAxisPresetOverride(preset));
+    // Both document mutators are no-ops for these presets, asserted in both directions: a write
+    // must not invent a key, and an erase must not leave a `presets`/`axis` skeleton behind. They
+    // are the primitives the panel's §1 controls call, so this is the store-level defense in the
+    // place the panel would actually hit it.
+    gui::WriteAxisPresetZenithStdToDoc(working, preset, 3.0f);
+    gui::EraseAxisPresetZenithStdFromDoc(working, preset);
+    EXPECT_TRUE(working.empty());
   }
 
-  // Nothing reached the file — RevertOneAxisPresetOverride is a real writer, and it must bail
-  // out for these presets rather than leave an empty `presets` skeleton behind.
+  // Nothing reached the file either.
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, working));
   const json doc = ReadOverlayDoc(dir);
   EXPECT_TRUE(!doc.contains("presets"));
 
@@ -914,31 +941,15 @@ TEST(UserDefaults, preset_without_adjustable_face_is_never_written) {
   EXPECT_EQ(adjustable, 4);  // Column / Plate / Parry / Lowitz
 }
 
-// A failed write must leave the in-memory value alone. Otherwise this session resolves one
-// value while the next launch reads the older one off disk, and the user sees their setting
-// "come back" with no event to attribute it to.
+// MOVED, not retired: "a failed write leaves the in-memory preset value alone" now lives in
+// test/gui/functional/test_gui_defaults_panel.cpp as
+// save_failure_leaves_the_preset_cache_untouched.
 //
-// The write under test is the revert — dropping an override is a file write like any other, and
-// this is the repo's only coverage of what it does when that write cannot happen.
-TEST(UserDefaults, preset_write_failure_leaves_memory_untouched) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("preset_write_fail");
-  {
-    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-    EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
-    gui::MakeNewDocumentState(dir);
-  }
-  const auto seeded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(seeded.has_value());
-  EXPECT_EQ(*seeded, 0.3f);
-
-  // No writable directory at all — the same shape as a read-only config dir.
-  ScopedUserConfigSource disabled(gui::UserConfigSource::kDisabled);
-  EXPECT_TRUE(!gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
-  const auto after_failed_revert = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(after_failed_revert.has_value());
-  EXPECT_EQ(*after_failed_revert, 0.3f);  // a failed revert must not report success in memory
-}
+// It used to be asserted here against a disk-side revert wrapper the panel never called. The
+// contract is not a property of any one function — it is the ORDER in which the panel's Save
+// composes two of them (write the document, and only if that succeeded push the values into the
+// process-wide cache), so the only place it can be observed is the composition itself. See the
+// comment on that case for why it is driven through the real Save button.
 
 // AC4 — a load-time clamp must REACH the user, not merely be counted. 405.2 built the
 // counters; until this task nothing consumed them, so a value silently adjusted at startup
@@ -1046,8 +1057,10 @@ TEST(UserDefaults, json_import_does_not_leak_downgrades_into_the_next_new) {
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
   EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
 
-  // The decisive part: the NEXT New reports its own load, and the file is clean by then.
-  EXPECT_TRUE(gui::RevertOneAxisPresetOverride(gui::AxisPreset::kColumn));
+  // The decisive part: the NEXT New reports its own load, and the file is clean by then. HOW the
+  // file gets cleaned is not the subject here, so it is emptied directly rather than through a
+  // preset-shaped edit.
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, json::object()));
   gui::ClearImportComplexFilterWarning();
   gui::DoNew();
   EXPECT_TRUE(gui::PeekImportComplexFilterWarning().empty());
