@@ -34,6 +34,13 @@
 //   radios disabled  <=>  full_sky
 //   Front  disabled  <=>  full_sky || (!full_sky && is_globe)  ==  full_sky || is_globe
 // which is what the two EXPECT_EQ lines below assert of the registry, cell for cell.
+//
+// What makes `< kLensTypeCount` quantify over the whole enum rather than a prefix of it is not
+// asserted here, because it is already asserted where it belongs: gui_state.hpp pins
+// kLensTypeGlobe == kLensTypeCount - 1 with a static_assert, alongside the two that pin
+// kLensTypeNames and kLensTypePresentationOrder against the same count. That header is included
+// above, so the guarantee this loop rests on is enforced at compile time in this very TU — a
+// runtime case restating it would be strictly weaker than the check already running.
 TEST(VisibilityEnablement, inline_ac2_registry_gate_matches_semantics_for_every_lens) {
   for (int lens = 0; lens < lumice::gui::kLensTypeCount; ++lens) {
     lumice::gui::GuiState state;
@@ -48,13 +55,4 @@ TEST(VisibilityEnablement, inline_ac2_registry_gate_matches_semantics_for_every_
     EXPECT_EQ(visible_c.enabled, !full_sky) << "renderer.visible, lens=" << lens;
     EXPECT_EQ(front_c.enabled, !(full_sky || is_globe)) << "renderer.front, lens=" << lens;
   }
-}
-
-// The set the loop above quantifies over must be the whole enum, not a prefix of it. kLensTypeCount
-// is asserted against kLensTypeNames and kLensTypePresentationOrder in gui_state.hpp; what is NOT
-// asserted anywhere else is that the terminal enumerator is reachable from a `< kLensTypeCount`
-// loop, which is the one property this case's coverage rests on.
-TEST(VisibilityEnablement, inline_ac2_lens_loop_bound_reaches_every_enumerator) {
-  EXPECT_LT(lumice::gui::kLensTypeGlobe, lumice::gui::kLensTypeCount);
-  EXPECT_EQ(lumice::gui::kLensTypeLinear, 0);
 }
