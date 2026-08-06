@@ -645,7 +645,11 @@ TEST(DefaultsDiff, replacing_a_non_object_path_node_is_not_silent) {
 
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
   const auto notices = gui::TakeUserDefaultsDowngradeNotices();
-  EXPECT_EQ(notices.size(), static_cast<size_t>(1));
+  // ASSERT, not EXPECT: the very regression this case exists to catch is "no notice was filed",
+  // and indexing an empty vector on the next line would take this single-process binary down with
+  // a SIGSEGV — hiding every case after it behind a crash instead of a diagnosis. Measured while
+  // red-probing this assertion.
+  ASSERT_EQ(notices.size(), static_cast<size_t>(1));
   EXPECT_TRUE(notices[0].find("renderer") != std::string::npos);
 
   // The write still landed — the notice reports the loss, it does not refuse the edit.
