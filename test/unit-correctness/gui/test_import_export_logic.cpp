@@ -608,14 +608,14 @@ TEST(ImportExport, core_json_empty_render) {
   gui::GuiState loaded;
   bool ok = gui::DeserializeFromJson(json, loaded);
   ASSERT_TRUE(ok);
-  // Default RenderConfig field values (from gui_state.hpp).
+  // What is unique here is the BRANCH: an empty render array must leave the renderer untouched
+  // rather than half-populating it. Stated as "untouched" against a fresh RenderConfig, which
+  // covers all twelve fields instead of the six this used to respell as literals -- and the
+  // six literals had become a second copy of gui_state.hpp's defaults, free to drift from them.
+  // The per-key missing-value defaults themselves are covered by
+  // DeserializeFromJsonMissingKeyDefaults.
   // Warning log path exists but is not asserted automatically; observe via logs manually.
-  ASSERT_EQ(loaded.renderer.lens_type, 0);
-  ASSERT_EQ(loaded.renderer.fov, 90.0f);
-  ASSERT_EQ(loaded.renderer.sim_resolution_index, 1);
-  ASSERT_EQ(loaded.renderer.visible, 2);
-  ASSERT_EQ(loaded.renderer.front, false);
-  ASSERT_EQ(loaded.renderer.opacity, 1.0f);
+  ASSERT_TRUE(loaded.renderer == gui::RenderConfig{});
 }
 
 // Test 4e: legacy "visible": "front" maps to base=full + front=true
@@ -784,20 +784,22 @@ TEST(ImportExport, zenith_nadir_roundtrip) {
   ASSERT_EQ(loaded.zenith_nadir_alpha, 0.42f);
   ASSERT_EQ(loaded.zenith_nadir_radius_px, 12.5f);
 
-  // Legacy file (without these keys) must fall back to defaults — verifies
-  // no exception and no spurious enabled state for users on older .lmc files.
+  // Legacy file (without these keys) must fall back to defaults — verifies no exception and no
+  // spurious enabled state for users on older .lmc files. Only the colour array is asserted here:
+  // it is read through the contains()-guarded read_color3 helper, not a value() fallback, so it is
+  // outside what DeserializeGuiStateJsonMissingKeyDefaults quantifies over. The line toggle, the
+  // alpha and the radius ARE covered there (rows GuiState::show_zenith_nadir_line /
+  // zenith_nadir_alpha / zenith_nadir_radius_px) and were dropped from this case rather than
+  // asserted twice.
   std::string legacy_json = R"({
     "layers": [],
     "renderer": {"lens_type": "linear", "fov": 90.0}
   })";
   gui::GuiState legacy_loaded;
   ASSERT_TRUE(gui::DeserializeGuiStateJson(legacy_json, legacy_loaded));
-  ASSERT_EQ(legacy_loaded.show_zenith_nadir_line, false);
-  ASSERT_EQ(legacy_loaded.zenith_nadir_color[0], 0.8f);
-  ASSERT_EQ(legacy_loaded.zenith_nadir_color[1], 0.2f);
-  ASSERT_EQ(legacy_loaded.zenith_nadir_color[2], 0.2f);
-  ASSERT_EQ(legacy_loaded.zenith_nadir_alpha, 0.6f);
-  ASSERT_EQ(legacy_loaded.zenith_nadir_radius_px, 8.0f);
+  ASSERT_EQ(legacy_loaded.zenith_nadir_color[0], gui::GuiState{}.zenith_nadir_color[0]);
+  ASSERT_EQ(legacy_loaded.zenith_nadir_color[1], gui::GuiState{}.zenith_nadir_color[1]);
+  ASSERT_EQ(legacy_loaded.zenith_nadir_color[2], gui::GuiState{}.zenith_nadir_color[2]);
 }
 
 // Multi-raypath OR, end-to-end.
