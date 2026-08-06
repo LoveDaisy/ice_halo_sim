@@ -132,6 +132,20 @@ def _assert_stats_mirror_matches_header() -> None:
 
 _assert_stats_mirror_matches_header()
 
+
+# Mirrors LUMICE_DrainResult in src/include/lumice.h. Both fields are
+# `unsigned long long`; the current epoch is fully drained iff they are equal.
+class LUMICE_DrainResult(ctypes.Structure):
+    _fields_ = [
+        ("drained_epoch",  ctypes.c_ulonglong),
+        ("current_epoch",  ctypes.c_ulonglong),
+    ]
+
+
+assert ctypes.sizeof(LUMICE_DrainResult) == 16, (
+    "LUMICE_DrainResult size mismatch — verify lumice.h field layout"
+)
+
 # Backend constants (lumice.h:391-392).
 LUMICE_BACKEND_CPU = 0
 LUMICE_BACKEND_METAL = 1
@@ -156,11 +170,11 @@ assert ctypes.sizeof(LUMICE_ServerConfig) == 12, (
 
 
 # LUMICE_ServerState constants (lumice.h)
-# Drain-settle bounds for _read_sample_counts (see the comment there for why the
-# IDLE signal alone is not sufficient). Timeout FAILS the read rather than returning
-# a partial total.
-_STATS_SETTLE_POLL_SEC = 0.1
-_STATS_SETTLE_TIMEOUT_SEC = 30.0
+# Drain-wait bounds for _read_sample_counts: how long to wait for the server's drain
+# signal after it reports IDLE (see the comment there). Timeout FAILS the read rather
+# than returning a partial total.
+_DRAIN_POLL_SEC = 0.01
+_DRAIN_TIMEOUT_SEC = 30.0
 
 _LUMICE_SERVER_IDLE = 0
 _LUMICE_SERVER_RUNNING = 1
@@ -316,6 +330,9 @@ def _load_lib() -> ctypes.CDLL:
     lib.LUMICE_QueryServerState.restype = ctypes.c_int
     lib.LUMICE_QueryServerState.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
 
+    lib.LUMICE_GetDrainStatus.restype = ctypes.c_int
+    lib.LUMICE_GetDrainStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(LUMICE_DrainResult)]
+
     # Result frame: an opaque handle, so it maps to a bare c_void_p and there is no
     # layout to mirror. Only the three value structs the FrameGet* functions fill still
     # have Python mirrors, and their fields are unchanged by the frame API.
@@ -470,59 +487,48 @@ def _read_sample_counts(lib, server) -> tuple:
     point of the split.
     Returns 0 when no stats row is available (no StatsConsumer output yet).
     """
+    # Wait for the CONSUMER to report this epoch drained before reading anything.
+    #
+    # WHY THIS IS NEEDED: the polling loop above waits for LUMICE_SERVER_IDLE, but that
+    # verdict is entirely PRODUCER-side — no simulator busy, no scenes pending, scene
+    # generation done. None of those says the consumer has drained its queue. Meanwhile
+    # crystal_num/orientation_num are running totals frozen at snapshot time, so a read
+    # taken while batches are still queued returns a partial total — exactly what this
+    # function's docstring warns about. It surfaced as an intermittent CI failure on
+    # Linux (orientation_num 19616 vs 20000, a whole number of dispatch grains short).
+    #
+    # LUMICE_GetDrainStatus is the server's own answer to that question, published by the
+    # consumer thread once every batch this epoch will ever produce has been consumed
+    # (see doc/c_api.md). It replaces the "poll until two stats reads agree" heuristic
+    # this function used to carry: that heuristic could only ever guess from the outside
+    # whether more data was coming, and a slow enough producer would have satisfied it
+    # mid-run. Waiting on the signal itself is what makes the read below correct rather
+    # than probably-correct.
+    deadline = time.time() + _DRAIN_TIMEOUT_SEC
+    drain = LUMICE_DrainResult()
+    while True:
+        err = lib.LUMICE_GetDrainStatus(server, ctypes.byref(drain))
+        if err != 0:
+            raise RuntimeError(f"GetDrainStatus failed err={err}")
+        if drain.drained_epoch == drain.current_epoch:
+            break
+        if time.time() > deadline:
+            # Fail loudly. Reading anyway would turn "the epoch never drained" into a
+            # green test carrying a partial total — strictly worse than the failure this
+            # wait exists to prevent.
+            raise RuntimeError(
+                f"epoch {int(drain.current_epoch)} did not drain within "
+                f"{_DRAIN_TIMEOUT_SEC}s after the server reported IDLE "
+                f"(drained_epoch={int(drain.drained_epoch)}). Either the consumer is not "
+                f"draining or the idle predicate fired while production was still running."
+            )
+        time.sleep(_DRAIN_POLL_SEC)
+
     stats = LUMICE_StatsResult()
     with _result_frame(lib, server) as frame:
         err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(stats))
     if err != 0:
         raise RuntimeError(f"FrameGetStats failed err={err}")
-
-    # Wait for the consumer to finish draining before trusting this read.
-    #
-    # WHY THIS IS NEEDED (mechanism, verified by reading the source, not inferred from a
-    # flake): the polling loop above waits for LUMICE_SERVER_IDLE, but ServerImpl's idle
-    # predicate is entirely PRODUCER-side — it checks that no simulator is busy, that no
-    # scenes are pending, and that scene generation is done. None of those says the
-    # CONSUMER has drained the queue. Meanwhile orientation_num/crystal_num are running
-    # totals frozen at snapshot time (StatsConsumer accumulates per batch and
-    # PrepareSnapshot freezes the sum), so a read taken while batches are still queued
-    # returns a partial total — exactly what this function's docstring warns about.
-    #
-    # The pending batches are LATE, not LOST: the data queue is only shut down by Stop()
-    # / Terminate(), so at IDLE the consumer thread is still blocked in Get() and will
-    # consume them. That is what makes waiting converge rather than spin.
-    #
-    # Observed as an intermittent CI failure on Linux (orientation_num 19616 vs 20000 —
-    # a whole multiple of the dispatch grain, i.e. N unconsumed chunks). It is timing,
-    # not a stdlib difference, and it is latent on any platform; Linux scheduling just
-    # exposes it more often.
-    #
-    # ⚠️ This is a TEST-SIDE workaround for a real gap in the completion contract
-    # (IDLE should imply "drained", or a separate drained signal should exist).
-    # Recorded in the backlog; do not let it stand in for fixing the contract.
-    settle_deadline = time.time() + _STATS_SETTLE_TIMEOUT_SEC
-    prev = (int(stats.sim_ray_num), int(stats.crystal_num), int(stats.orientation_num))
-    while True:
-        time.sleep(_STATS_SETTLE_POLL_SEC)
-        probe = LUMICE_StatsResult()
-        with _result_frame(lib, server) as frame:
-            err = lib.LUMICE_FrameGetStats(frame, ctypes.byref(probe))
-        if err != 0:
-            raise RuntimeError(f"FrameGetStats failed err={err}")
-        cur = (int(probe.sim_ray_num), int(probe.crystal_num), int(probe.orientation_num))
-        if cur == prev:
-            stats = probe
-            break
-        prev = cur
-        if time.time() > settle_deadline:
-            # Fail loudly. Returning the last value here would turn "the run never
-            # settled" into a green test carrying a partial total — strictly worse
-            # than the failure this wait exists to prevent.
-            raise RuntimeError(
-                f"stats did not settle within {_STATS_SETTLE_TIMEOUT_SEC}s after the "
-                f"server reported IDLE; last two reads (sim_ray, crystal, orientation) "
-                f"were {prev} then {cur}. Either the consumer is not draining or the "
-                f"idle predicate fired while production was still running."
-            )
 
     # A server holds at most one stats struct, so this is a single value rather than a
     # row array; sim_ray_num == 0 still means "nothing produced yet".

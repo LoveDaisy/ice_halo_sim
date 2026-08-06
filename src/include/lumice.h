@@ -131,6 +131,30 @@ typedef struct LUMICE_SimLifecycleResult_ {
   unsigned long long epoch;
 } LUMICE_SimLifecycleResult;
 
+// {drained_epoch, current_epoch} snapshot of the CONSUMER-side drain contract.
+// The current epoch's data is fully drained iff drained_epoch == current_epoch.
+//
+// Why this is not folded into the lifecycle above: LUMICE_LIFECYCLE_COMPLETED /
+// LUMICE_SERVER_IDLE are derived from producer-side predicates only (no
+// simulator busy, no pending scenes, scene generation done). None of them asks
+// whether the consumer thread has finished draining its queue, so the
+// accumulated statistics (LUMICE_FrameGetStats) can still be a PARTIAL total at
+// the instant the server first reports IDLE — measured as orientation_num 19616
+// vs 20000, a whole number of dispatch grains short. A reader that needs final
+// totals must wait for THIS signal, not for IDLE.
+//   drained_epoch:  highest epoch whose data the consumer has fully drained.
+//                   Monotonic; 0 before any epoch has drained.
+//   current_epoch:  == LUMICE_SimLifecycleResult.epoch, sampled in the same call
+//                   so the two are compared without a second round trip.
+// An infinite run never drains (production never ends), which is the same shape
+// as its lifecycle never reaching COMPLETED. Stopping a server does NOT publish
+// a drain: LUMICE_StopServer discards whatever is still queued, so "stopped" is
+// deliberately distinguishable from "drained".
+typedef struct LUMICE_DrainResult_ {
+  unsigned long long drained_epoch;
+  unsigned long long current_epoch;
+} LUMICE_DrainResult;
+
 // Summary of how many raypath-color assignments the CORE dropped for the most
 // recent committed config, because some capacity was exceeded. Used by the GUI
 // to surface a modal warning that coloring will be truncated (the filter /
@@ -1045,6 +1069,16 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 // LUMICE_QueryServerState is a projection of this. After a synchronous commit,
 // call this to read back the just-minted epoch (no commit-signature change).
 LUMICE_ErrorCode LUMICE_GetSimLifecycle(LUMICE_Server* server, LUMICE_SimLifecycleResult* out);
+
+// Read the consumer-side drain status (see LUMICE_DrainResult for the contract).
+// Cheap O(1) atomic read — same cost class as LUMICE_GetSimRayCount: no snapshot,
+// no render, no lock. Safe to call every poll iteration.
+//
+// Intended use: a reader that wants FINAL accumulated totals polls until
+//   out.drained_epoch == out.current_epoch
+// and only then acquires a result frame. Waiting for LUMICE_SERVER_IDLE alone is
+// not sufficient and never was.
+LUMICE_ErrorCode LUMICE_GetDrainStatus(LUMICE_Server* server, LUMICE_DrainResult* out);
 
 // task-gui-feedback-affordances Step 7 (AC1): synchronous readback of the
 // most recent commit's color-classification overflow counters (see the

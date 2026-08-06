@@ -486,22 +486,36 @@ every rerun". Under software rendering that premise is false:
 | Linux + llvmpipe, 12 cores | 5 | 2 | 128 rays |
 | Linux + llvmpipe, 4 cores (runner-like) | 5 | 3 | 128 / 896 / 1024 rays |
 
-The shortfall is always a whole number of 128-ray batches, and the mechanism is visible in
-`server_poller.cpp`: a poll re-reads statistics only when it carries a new snapshot generation
-or takes the terminal-upload rescue (:269, :281), and the poll that observes
-`LUMICE_LIFECYCLE_COMPLETED` self-pauses the poller at its own end (:501-504). The
-"stats deferred by one poll are absorbed by the carry-forward" reasoning at :299 has no next
-poll to be absorbed by when the deferral lands on the last one. Software rendering makes each
-`ctx->Yield()` rasterize a whole frame, so the same scene completes in ~169 frames instead of
-~1200–2000, which compresses the poll sequence until that window is hit routinely — worse with
-fewer cores, hence worse on a CI runner than on a workstation.
+The shortfall is always a whole number of 128-ray batches. The measurements above pre-date a fix
+(tracked in `doc/gui-preview-lifecycle-architecture.md` §9, invariant I3) to the mechanism that
+was originally diagnosed here: a poll re-read statistics only when it carried a new snapshot
+generation or took the terminal-upload rescue, and the poll that observed
+`LUMICE_LIFECYCLE_COMPLETED` self-paused the poller at its own end with no further reconciliation
+— so a shortfall landing on that last poll was never corrected. That structure is now a level
+trigger (drain-aware self-pause guard + a slow idle heartbeat that keeps reconciling), and a
+post-fix white-box probe confirms the poller side of it: sampled mid-run and after completion,
+the displayed count matches the backend's live count exactly, and the backend's `Completed` /
+drain signals agree with the poller's — the poller is not the one going stale.
 
-That is a real defect in what the GUI reports at the end of a run, not a flaky test, and fixing
-it belongs where the lifecycle invariants live (`doc/gui-preview-lifecycle-architecture.md`), not
-here. Until it is fixed, wiring `lens_proj` into a required check would manufacture a ~60%
-false-red rate — which is to say it would rebuild, by hand, the exact habit this section exists
-to end. **When that defect is fixed, adding `lens_proj` to the CI step's `--filter` is the whole
-change**; the harness, the LFS fetch and the "it actually ran" assertion are already in place.
+**And yet the same probe shows the 128-multiple shortfall still there** — in the backend's own
+live count, not just in what the poller displays. That relocates the deficit's root cause
+upstream of the display layer entirely: a completed, fully-drained run's cumulative count can
+still fall short of the configured budget by a whole number of 128-ray dispatch batches, on the
+production/enqueue side, before the poller ever reads it. No display-layer fix — this one
+included — can close a gap that already exists in the number being displayed. Whether this
+independently-discovered shortfall gets its own defect record, and whether the account of the
+original `lens_proj` measurements above should be revised now that the same numeric shape is
+known to have an upstream cause, are both open and awaiting a decision from the doc's owner —
+not something this section resolves on its own.
+
+**Net effect: the mechanism this section originally named is fixed, but `lens_proj` remains
+unblocked from CI only in the sense that its blocker has moved, not closed.** Wiring it into a
+required check today would still manufacture a false-red rate on the same two 5,000,000-ray
+scenes — which is to say the "when that defect is fixed, adding `lens_proj` to the CI step's
+`--filter` is the whole change" claim this section used to make no longer holds as stated; a
+second, upstream defect stands in the way. The harness, the LFS fetch and the "it actually ran"
+assertion are still already in place, so the mechanical part of unblocking remains a one-line
+`--filter` change whenever that second defect is closed.
 
 **Does the gate actually stop you?** Partly, and the honest shape of it matters more than the
 reassuring version. The step runs inside `Ubuntu x86_64`, which *is* in

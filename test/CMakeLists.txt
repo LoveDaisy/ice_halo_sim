@@ -64,10 +64,12 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
-  # Result-frame lifetime guard + the buffer pool underneath it. Physically here rather
-  # than under test/regression-sentinel/ because that layer has no C++ target — it is
-  # pytest-only, and standing one up would be new test infrastructure, not this guard.
+  # Result-frame lifetime guard + the buffer pool underneath it, and the completion/drain
+  # contract next to it. Physically here rather than under test/regression-sentinel/
+  # because that layer has no C++ target — it is pytest-only, and standing one up would be
+  # new test infrastructure, not these guards.
   "${PROJ_TEST_DIR}/unit-correctness/server/test_result_frame_lifetime.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_drain_contract.cpp"
   # util/
   "${PROJ_TEST_DIR}/unit-correctness/util/test_color_space.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_queue.cpp"

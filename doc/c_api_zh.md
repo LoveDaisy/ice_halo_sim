@@ -471,6 +471,62 @@ LUMICE_ErrorCode LUMICE_QueryServerState(LUMICE_Server* server, LUMICE_ServerSta
 - `LUMICE_OK`: 成功，状态写入 `*out`
 - `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
 
+#### LUMICE_GetDrainStatus
+
+读取消费端排空状态：当前世代的数据是否已被完全消费，即累计统计量是否已是终值。
+
+```c
+typedef struct LUMICE_DrainResult_ {
+  unsigned long long drained_epoch;
+  unsigned long long current_epoch;
+} LUMICE_DrainResult;
+
+LUMICE_ErrorCode LUMICE_GetDrainStatus(LUMICE_Server* server, LUMICE_DrainResult* out);
+```
+
+**参数**：
+- `server`: 服务器句柄指针
+- `out`: 输出 `{drained_epoch, current_epoch}` 的指针
+
+**返回值**：
+- `LUMICE_OK`: 成功
+- `LUMICE_ERR_NULL_ARG`: `server` 或 `out` 为 `NULL`
+
+**契约**：当且仅当 `drained_epoch == current_epoch` 时，当前世代已完全排空。
+`current_epoch` 与 `LUMICE_GetSimLifecycle()` 报告的是同一个值，在本调用中一并采样，
+调用方无需再发一次请求去比较。
+
+**为什么等 `LUMICE_SERVER_IDLE` 不够**：`LUMICE_QueryServerState` /
+`LUMICE_GetSimLifecycle` 的判据**全部在生产侧**——没有 simulator 在忙、没有待处理场景、
+场景生成已结束，没有一条询问消费线程是否已把队列排空。统计量
+（`LUMICE_FrameGetStats` → `crystal_num` / `orientation_num` / `sim_ray_num`）是快照时刻
+冻结的累加值，因此在服务器首次报告 IDLE 的瞬间读取，可能拿到**部分总和**——实测
+`orientation_num` 为 19616、期望 20000，恰好差整数个派发单位。任何需要终值的读者都必须
+轮询本调用，而不是那个状态枚举。
+
+**开销**：O(1) 原子读，与 `LUMICE_GetSimRayCount` 同一档——无快照、无渲染、无锁，
+可以每轮轮询都调用。
+
+**边界情况**：
+- 无限运行（`ray_num` 无上限）永远不会排空，与其生命周期永远不会到达 `COMPLETED` 同形。
+- `LUMICE_StopServer()` **不会**发布排空信号。停止会丢弃仍在排队的数据，因此"已停止"
+  与"已排空"保持可区分，而不是被当作一次干净的完成上报。
+- `drained_epoch` 单调且从不重置。新一次提交会让 `current_epoch` 越过它，相等判据自身
+  就会读作"尚未排空"。
+
+**典型用法**：
+
+```c
+LUMICE_DrainResult drain;
+for (;;) {
+    if (LUMICE_GetDrainStatus(server, &drain) != LUMICE_OK) { /* 错误处理 */ }
+    if (drain.drained_epoch == drain.current_epoch) {
+        break;  // 统计量已是终值，可以安全获取 result frame 并读取
+    }
+    sleep_ms(10);
+}
+```
+
 #### LUMICE_StopServer
 
 停止服务器。

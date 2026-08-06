@@ -87,6 +87,13 @@ enum class SimLifecycle { Idle, Running, Completed };  // 均带 epoch
 
 `Completed` = 有限 run 跑完并 drain 干净（含"全被 filter 拒 / 全黑但已收敛"这种 zero-output 完成，见 capi-lifecycle-architecture.md）。`Idle` = 尚未 run 或重置后未产数据。二者对 epoch 的语义天然区分开重启瞬态。
 
+> ⭐ **"drain 干净"这半句是 §9 的 I7，不是修辞**（owner 2026-08-06 定案）。它约束的是
+> **谁有资格宣告终态**：终态谓词必须蕴含消费端已排空，否则宣告之后读到的累加量可能只是部分总和。
+> 落地形态见 I7 条目与其下的补丁追记；机制入口是 `LUMICE_GetDrainStatus`。
+> ⚠️ **这行交叉引用本身是有代价换来的**：这句定义在本文存在了数月却从未被抬进 §9 的可核验清单，
+> 那次转录损失的账单是两个历史缺陷（终帧被质量闸吞掉的卡死、消费端排空前终态被观测到导致部分总和）。
+> **改本节的 `Completed` 语义时必须同步改 I7，反之亦然——两处是同一条契约的两个投影。**
+
 ---
 
 ## 6. 时钟图：三个时钟，再劈一刀
@@ -149,6 +156,7 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 4. **I4 廉价可读**：生命周期 / 计数的可读性不依赖昂贵快照的产生。
 5. **I5 原子快照**：跨线程 handoff 是单个版本化不可变值；消费方永不读半更新字段组合。
 6. **I6 gate 不越权**：任何显示 gate 不得压制生命周期跃迁；终帧无条件上屏。
+7. **I7 完成蕴含排空**：任何向消费方宣告终态的谓词（`SimLifecycle::Completed` / `kIdle`），必须蕴含**该世代的数据已被消费端完全排空**——即终态宣告之后读到的累加量即为终值；且终态之后的销毁路径不得丢弃未消费批次。
 
 其中 **I3、I4 正是当前 bug 违反的两条**——回归测试应直接钉住它们。
 
@@ -220,6 +228,127 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 与 `GuiLifecycle.restart_window_does_not_republish_prior_run_composite`，均断言**像素/合成字节的
 > 内容指纹**而非只断言世代号——只断言号会在时序恰好没撞上时以错误理由变绿。
 
+> **落地补丁（2026-08-06，PR 见 git log）：I3 两个分句此前都不合规。**
+> 同前两条，不是新增不变量，而是补上实现对 I3 的一次合规回归——I3 文本不变。
+>
+> **前半句「观测真相 ≠ 显示状态则 poll 不得停」**：`ServerPoller::PollOnce()` 尾部的自暂停
+> guard 只判 `lifecycle == COMPLETED`。`COMPLETED` 是**生产端**判据（无 simulator 忙、无待生成
+> 场景、生成已结束），它不问消费端是否已把 `data_queue_` 排空；而 `PreviewSnapshot` 的四个统计
+> 计数在本次 poll 无新产出时是从上一份 **carry-forward** 过来的。两者相乘 = 在消费端排空之前
+> 观测到 `COMPLETED` 的那次 poll 会发布一个**部分总和**然后停摆，此后没有任何一次 poll 去纠正它。
+> 实测形态：`orientation_num` 19616 对 20000，短缺恒为 128（dispatch 粒度）的整数倍；
+> Linux + Mesa（尤其 4 核）复现，macOS/Metal 不复现。
+> guard 原注释的论证（「最后一次发布携带 COMPLETED，主线程 reconcile 仍能到 kDone」）本身成立，
+> 但**只覆盖 sim_state 这一路投影**，覆盖不了同一 bundle 里的计数——「我可以不看了吗」必须对
+> bundle 的每个字段都意味着「现在看到的就是真相」。
+>
+> **后半句「允许 idle 降频慢心跳，但不得彻底静默到无法自愈」**：`WorkerLoop` 在自暂停后坐
+> 无超时 `cv_.wait`，**零轮询**；5 个唤醒入口（`Start` / 两处 `WakeForRestart` /
+> 两处 `WakeForRefresh`）**全部由用户动作驱动**。即第二分句完全没有落实。
+>
+> ⭐ **两者合起来才是这条缝的机制层定性**：实现只依赖第一分句（guard 判得准），第二分句给的
+> 安全网是零；而第一分句的前提不成立 ⇒ **guard 判错 + 无网可兜**。换句话说，**自暂停把终态观测
+> 变成了唯一一次机会**——恰恰是在整个设计最要紧的那一次跃迁上，把电平触发退回成了边沿触发，
+> 而 §3 P2 的原话正是「撕裂读、丢帧、时序抖动都不再致命，**因为不存在"唯一的一次机会"**」。
+> 这解释了此前被当成三个独立缺陷分别修过的三次故障：终帧被质量闸吞掉、计数没到终值、
+> 服务端侧同构的 `kIdle` 早报——**不是三个 bug，是一个一次性结构的三种失效方式**。
+> 两半必须一起修：只修 guard 得到「更准但仍是一次性」，只加心跳得到「有网但 guard 仍错」。
+>
+> 修复落点（均在 `src/gui/server_poller.*`，无 C API / core 改动）：
+> - 自暂停判据抽成纯自由函数 `ShouldSelfPause(lc, drain)`，三个条件：`COMPLETED` +
+>   `drain.drained_epoch == lc.epoch`（消费端已排空——`LUMICE_GetDrainStatus`，见
+>   `doc/capi-lifecycle-architecture.md`）+ `drain.current_epoch == lc.epoch`（读 `lc` 之后没有
+>   更新的代被提交）。第三项**不能被第二项蕴含**：`drained_epoch` 单调而 `lc.epoch` 是快照，
+>   commit 之后 `drained == lc.epoch` 仍然成立，少了第三项就会把刚开跑的新一代判成已终态。
+> - 该函数是这个决策的**唯一 owner**，调用点不得再复制其中任何一项。这不是风格要求，是实测：
+>   调用点曾保留一个 `lifecycle == COMPLETED` 前置检查，红态探针把谓词改成恒真时，本该抓它的
+>   端到端否定用例仍然全绿——运行中的仿真根本走不到谓词。决策被劈成两半，测试就只能看见一半。
+> - 自暂停的目的地从 `kPaused` 改为新增的 `kIdleHeartbeat`：worker 在该态用
+>   `cv_.wait_for(kIdleHeartbeatIntervalMs)` 等待，超时即跑一次 `PollOnce()`。心跳复用既有
+>   `PollOnce()` 而不是发明第二条读取路径——无新 generation 时它是 O(1) 的
+>   （`DoSnapshot` 在 `snapshot_dirty_` 为假时直接早退，不做任何 stats/纹理构造），
+>   且必然是安全空操作：`uploaded_since_resume_` 已为真 ⇒ 不触发终帧救援 ⇒ 走 carry-forward ⇒
+>   `texture_serial` 不变 ⇒ 消费端不会重复上传。
+> - **`kPaused` 与 `kIdleHeartbeat` 必须是两个状态**。心跳引入前，「自暂停」与「不再碰
+>   `server_`」是同一件事，所以 `Stop()` 可以对自暂停态直接早退。加了心跳之后这是两个不同的事实：
+>   `Stop()` 的调用方下一行就销毁服务器（`MaybeReconstructServerForBackend` 里
+>   `Stop()` → `LUMICE_DestroyServer`；`DoStop` 里 `Stop()` → `LUMICE_StopServer`），
+>   早退会留下真实 UAF 窗口。故 `Stop()` 现在把 `kIdleHeartbeat` 也收敛到 `kPaused` 并照旧等
+>   `active_`，而 `active_` 的语义相应扩大为「正在执行**任意一次** `PollOnce()`」。
+>   这一条经红态探针坐实：把 `Stop()` 的早退改回只认 `kRunning`，回归用例直接段错误。
+> - `kIdleHeartbeat` 态若观测到 `lifecycle != COMPLETED`，只打一条 `GUI_LOG_WARNING` **探测日志**，
+>   不做任何模式切换。理由：全 GUI 树枚举「能让 lifecycle 离开 COMPLETED」的路径，每一条都紧邻
+>   一次 poller 唤醒或停止，该状态到不了；而心跳**本身**已是电平触发 reconciler，显示收敛不依赖
+>   任何人通知，所谓「恢复全速」只是**速率优化**而非正确性属性。给到不了的状态写恢复分支，得到的
+>   是一个永远跑不到、构造上无法被测试覆盖、却要后人搞懂它在防什么的死分支；写成探测器则真不可达
+>   时零成本，真发生时**能学到东西**。明示接受的代价：若漏了某条路径，症状是「未通知的重启后预览
+>   刷新走心跳速率而非全速」——可见、良性、下次任何唤醒即自愈。
+>
+> `kIdleHeartbeatIntervalMs = 500`（`gui_constants.hpp`）是纯 UX/成本折衷，**无正确性含义**——
+> I3 只要求「不得彻底静默」，没给数字；该值待后续用容器复现配方做一次能耗/自愈延迟实测校准。
+>
+> 回归测试：`gui_unit_test` 的 `GuiLifecycle.self_pause_predicate_truth_table`（6 行纯真值表）、
+> `self_pause_publishes_final_totals`（接线 + 独立交叉核对 `LUMICE_GetDrainStatus`）、
+> `running_sim_never_self_pauses`（guard 恒为真方向的端到端否定）、
+> `idle_heartbeat_ticks_after_self_pause`（I3b + 心跳不 bump `texture_serial`）、
+> `stop_during_idle_heartbeat_quiesces_worker`（Stop 静默契约；`Stop()` 返回**之后**取基线——
+> 契约是「返回后不得再有 tick」，而 `Stop()` 允许在途 tick 跑完）；外加 `gui_test`
+> `gui_lifecycle/gpu_run_reaches_done` 里的 `--fixed-dt` 双时钟断言。
+>
+> **未闭合、明示**：`COMPLETED 但尚未排空` 这个组合没有注入 seam，本机（macOS/Metal）不复现，
+> 因此只由真值表覆盖其逻辑；端到端证据来自 Linux/Mesa 容器复现，不来自本机绿。
+
+> **落地补丁（2026-08-06，PR 见 git log）：I4 两个分句，前半句已合规回归，后半句明示留白。**
+> 同前三条，不是新增不变量，而是补上实现对 I4 的一次合规回归——I4 文本不变。
+>
+> I4 原文管两样东西：「生命周期 / 计数的可读性不依赖昂贵快照的产生」。lifecycle 心跳读取一直在
+> `PollOnce()` 的 gate 之外无条件跑；四个计数字段（`sim_ray_num`/`ray_seg_num`/`crystal_num`/
+> `orientation_num`）的读取此前被同一个 `if (has_new_snapshot || force_final_upload)` 分支圈住
+> ——同一条不变量的两半落在 gate 的两侧，中间隔约 160 行代码，是位置的意外而非设计选择。
+>
+> **前半句（写入不得 gate 在昂贵快照上）**：已合规——统计读取移出该分支，与其上方的 lifecycle
+> 心跳读取对齐；纹理 payload 的物化仍留在分支内（只有真正新/被抢救的世代才需要物化纹理，这部分
+> 本就不属于 I4 管的范围）。移出不增加成本：`PollOnce()` 本就无条件 `AcquireResultFrame()`，帧
+> 早已取到，统计只是从帧上读。
+>
+> **后半句（读取路径本身廉价）**：明示留白，非遗漏。廉价原语 `LUMICE_GetSimRayCount`
+> （`src/server/c_api.cpp`）只暴露 `sim_ray_num` 一个；`ray_seg_num`/`crystal_num`/
+> `orientation_num` 在 C API 上仍无任何廉价读取路径——读它们仍须经 `AcquireResultFrame()` 触发
+> 的帧物化（`DoSnapshot()` 在 `!snapshot_dirty_` 时早退，缓解但不消除该依赖）。留白理由
+> （a04：举证责任在增加的一方）：今天没有任何调用方需要在不取帧的前提下读这三个计数；一旦发布到
+> 公共 C API 面即不可逆（见 `doc/api-layering-and-product-lines.md`），先加后撤的代价远大于按需
+> 再加。**重开条件**：出现真实消费者——需要在不取帧的前提下读这三个计数的调用方。
+>
+> 回归测试：`gui_unit_test` 的 `GuiLifecycle.stats_read_unconditional_on_first_gate_closed_poll`，
+> 钉住前半句唯一可达的可观测缺口——某 poller 实例第一次 poll 恰好门关闭（两个 disjunct 皆假）且
+> 无 `prev` 可 carry-forward，旧代码会让统计字段停在默认构造的 0。
+
+> **落地补丁（2026-08-06）：新增 I7「完成蕴含排空」——owner 已拍板升格，§5 已同步指向它。**
+>
+> 与上面两条追记不同，**这一条是新增不变量，不是补合规回归**。但它新增的只是"清单上的位置"：
+> 完成契约的排空语义早就写在本文档里——**本文 §5** 定义 `Completed` =「有限 run 跑完**并 drain
+> 干净**（含 zero-output 完成）」——却从未被抬进本节「可固化成门禁/测试」的清单。
+>
+> ⚠️ **这是一次转录损失，账单已经付过两次**：语义在设计里存在了数月，却不在任何人核对合规时会看的
+> 地方。两个已知历史缺陷（终帧被质量闸吞掉的卡死、消费端排空前终态被观测到导致部分总和）
+> **可以读成同一处清单缺失的两次代价**。⇒ 记住这条的教训不是"要加 I7"，而是
+> **"设计文本里的语义若没被抬进可核验清单，等于没写"**。
+>
+> **机制（先于规格落地，owner 定案的次序）**：`LUMICE_GetDrainStatus(server, &out)` 返回
+> `{drained_epoch, current_epoch}`，契约「相等 ⟺ 该世代已排空」，由**消费线程**在排空时发布
+> （`ServerImpl::PublishDrainedEpochIfSettled`，见 `doc/capi-lifecycle-architecture.md`）——
+> 而非由生产侧谓词推断。⭐ 刻意**不挂在 `kIdle` 上**：§8 的实现修正已记 `kIdle` 被重载
+> （「从未 run」vs「Stop 后有部分结果」），往一个有书面失败记录的超载信号上挂第三种含义是明知故犯。
+>
+> **消费点**：`ShouldSelfPause` 已把它作为自暂停 guard 的三个条件之一（见上方 I3 补丁）；
+> `test/e2e/capi_runner.py` 已从"等 stats 收敛"的启发式轮询迁移到读该信号。
+>
+> **⛔ 同步义务**：§5 的 `Completed` 语义与本条 I7 是同一条契约的两个投影，改一处必须改另一处。
+>
+> **已知未覆盖**：`Queue::Shutdown()` 仍会丢弃排队中未消费的项，故「IDLE 即拆」是真实丢数据路径。
+> 本轮**明示决定不改**（Stop 契约变更会让停止延迟取决于积压深度，属独立决策），
+> ⇒ I7 后半句"终态之后的销毁路径不得丢弃未消费批次"**在 `Stop()` 路径上尚未落实**。
+
 ---
 
 ## 10. 落地边界：最小核 vs 完整版
@@ -237,7 +366,33 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 - CQS 命令通道 + 乐观 "Stopping…" UI；
 - （激进）后端 push 帧、退化 poll 时钟。
 
-分期理由（a02/a03）：最小核已消除 owner 报告的卡死并守住 I3/I4；完整版是把一堆侧信号统一到 epoch 之下的结构性收敛，收益在于"未来不再长补丁"，可独立于紧急修复推进。
+**落地状态（2026-08-06 核对，逐条据 §9 各条追记）**：
+
+| 不变量 | 状态 | 落地方式 |
+|---|---|---|
+| I1 世代单调 & 丢弃陈旧 | ✅ 合规 | 更早一轮改动（PR 见 git log）落地内容世代闸主体 + §9 2026-08-03 追记补齐诚实前提 |
+| I2 单一纯函数 owner | ✅ 合规 | 更早一轮改动（PR 见 git log），`ReconcileSimState` 落地为唯一纯函数 owner |
+| I3 不停摆前提（两分句） | ✅ 合规 | §9 2026-08-06 追记（drain-aware 自暂停 guard + `kIdleHeartbeat` 慢心跳） |
+| I4 廉价可读（两分句） | 🟡 前半句合规，后半句明示留白 | §9 2026-08-06 追记；三个计数无廉价 C API 路径判「已知已接受，不修」，见该追记的重开条件 |
+| I5 原子快照 | ✅ 合规 | 更早一轮改动（PR 见 git log），`published_` 原子指针交换落地 |
+| I6 gate 不越权 | ✅ 合规 | §9 2026-08-01 追记（终帧无条件上屏救援） |
+
+上表之外，「（激进）后端 push 帧、退化 poll 时钟」**未落地，明示保留为后续 stretch 项**——
+它是一个吞吐/延迟优化方向，不对应任何一条 I1–I7 不变量的合规性，不受本表约束。
+
+**分期理由的更正（2026-08-06）**：本节曾断言"最小核已消除 owner 报告的卡死并**守住 I3/I4**；
+完整版……收益在于'未来不再长补丁'，可独立于紧急修复推进"。**这句话把"先做的"等同于"已达成
+的"，独立核验发现方向恰好相反**：被这里标为"完整版、按需再做"的 I1/I2/I5/I6 四条，全部**先于**
+I3/I4 达成合规（随更早一轮改动与两轮独立补丁，日期见上表与 §9 2026-08-01/2026-08-03 追记）；
+而这里标为"最小核已守住"的 I3/I4，在写下这句话时**实际四格全不合规**——直到这一轮核验才逐条
+补齐 I3a/I3b/I4a，I4b 明示不修。⛔ 不删除本段是刻意的：这条缝已经把同一机制当新问题重新发现过
+两次（§9 2026-08-01/2026-08-03 追记各自记了一次「合规回归」），本段是第三次核验的记录，留着才
+能防第四次。
+两者不是巧合：**§3 P2「电平触发优于边沿触发」的价值主张，恰恰只在"终态那一次观测"上才吃紧**——
+I1/I2/I5/I6 管的是世代号诚实、owner 唯一、交接原子、gate 不越权，这些性质在仿真运行期间随时可
+核，不特别依赖某一次观测；I3/I4 管的正是终态那一次观测本身能不能看见真相。把"先做后做"的排期
+顺序当成"已达成"的证据，在这两条上正好落进了 P2 想防的那个陷阱。机制层的完整定性见 §9「整族的
+机制层定性」。
 
 ---
 

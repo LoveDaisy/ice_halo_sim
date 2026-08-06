@@ -109,6 +109,30 @@ struct PreviewSnapshot {
   bool has_new_texture = false;
 };
 
+// The self-pause predicate (invariant I3a). Pure: no locks, no member access, no server calls —
+// which is the point. "May the poller stop polling?" is the single most consequential decision in
+// the preview lifecycle (stop too early and the terminal truth never reaches the screen), so it is
+// a free function with a truth table rather than a condition buried in PollOnce.
+//
+// Three conditions, and the last two are NOT the same one twice:
+//   1. lc.lifecycle == COMPLETED — the durable terminal edge (infinite runs stay RUNNING; a
+//      transient restart IDLE is not COMPLETED), so this never pauses mid-run.
+//   2. drain.drained_epoch == lc.epoch — the CONSUMER has finished draining this epoch. COMPLETED
+//      alone is a producer-side verdict: it is derived from "no simulator busy, nothing queued to
+//      generate, generation done" and asks nothing about whether the consumer thread has emptied
+//      its queue, so the accumulated statistics can still be a PARTIAL total at the instant
+//      COMPLETED first appears (measured as orientation_num 19616 against 20000 — a whole number
+//      of 128-ray dispatch grains short). Pausing there freezes those partial counts on the status
+//      bar with no later poll to correct them. See LUMICE_DrainResult in the public header.
+//   3. drain.current_epoch == lc.epoch — no NEWER epoch has been committed since `lc` was read at
+//      the top of the poll. The whole function body sits between those two reads, so a
+//      CommitScene + WakeForRestart from the main thread can land in the middle; without this
+//      term the poller could read "epoch N drained" and pause a run that is already on epoch N+1.
+//      Note that condition 2 does not subsume this: drained_epoch is monotonic and lc.epoch is a
+//      snapshot, so `drained == lc.epoch` stays true across a commit that has bumped
+//      current_epoch past both.
+bool ShouldSelfPause(const LUMICE_SimLifecycleResult& lc, const LUMICE_DrainResult& drain);
+
 // Polls the LUMICE server on a background thread (every kPollIntervalMs) and stages
 // results for the main thread to pick up without blocking the UI.
 //
@@ -129,6 +153,13 @@ class ServerPoller {
 
   // Synchronously pause the worker. Returns only after the worker has confirmed
   // it is no longer accessing the server. Safe to call multiple times.
+  //
+  // "No longer accessing the server" is load-bearing, not a nicety: callers destroy the server
+  // immediately afterwards (MaybeReconstructServerForBackend does Stop() then
+  // LUMICE_DestroyServer; DoStop does Stop() then LUMICE_StopServer), so any worker still inside
+  // PollOnce() after this returns is a use-after-free. Both non-terminal states quiesce here —
+  // kRunning (full-speed loop) and kIdleHeartbeat (slow self-heal loop) — and the wait is on
+  // active_, which covers ANY in-flight PollOnce() regardless of which loop issued it.
   void Stop();
 
   // Idempotent: ensure the worker is in kRunning state for a fresh sim generation.
@@ -182,14 +213,45 @@ class ServerPoller {
   // server's current generation as new (what Start() does, minus the worker thread).
   void ResetGenerationForTest() { last_generation_ = 0; }
 
+  // Test-only: pre-match the generation tracker to an arbitrary value (normally the server's
+  // CURRENT generation) so the next PollOnceForTest() sees has_new_snapshot == false. Needed to
+  // construct the "gate closed" side of invariant I4a on a poller's very first poll — a state
+  // ResetGenerationForTest() cannot reach, since its 0-start always reads the first real
+  // generation as new. Not used in production.
+  void SetGenerationForTest(uint64_t generation) { last_generation_ = generation; }
+
+  // Test-only: pre-arm uploaded_since_resume_ so force_final_upload reads false even under a
+  // COMPLETED lifecycle. Paired with SetGenerationForTest() to close BOTH disjuncts of
+  // `has_new_snapshot || force_final_upload` for a regression test — see
+  // test/unit-correctness/gui/test_lifecycle.cpp's I4a case. Not used in production.
+  void SetUploadedSinceResumeForTest(bool uploaded) { uploaded_since_resume_ = uploaded; }
+
   // Test-only: exposes the private PublishValidReset() seam so a regression test can construct the
   // exact "valid=false snapshot published while under a kRunning intent" observation that used to
   // pull a completed sim back into kSimulating (AC1 activity bug root cause (a), before the
   // WakeForRefresh split). Not used in production.
   void PublishValidResetForTest() { PublishValidReset(); }
 
+  // Test-only: how many slow-heartbeat ticks the worker has run since construction. Monotonic;
+  // bumped ONLY by the kIdleHeartbeat branch of WorkerLoop, never by the full-speed poll loop nor
+  // by PollOnceForTest. Two things need to be observable and neither has another cheap signal:
+  // that the heartbeat runs at all after a self-pause (I3b), and that it has stopped after Stop()
+  // returned (the quiescence contract above).
+  uint64_t HeartbeatTickCountForTest() const { return heartbeat_tick_count_.load(std::memory_order_relaxed); }
+
  private:
-  enum class State { kPaused, kRunning, kTerminating };
+  // kPaused and kIdleHeartbeat are BOTH "not polling at full speed", and splitting them is what
+  // makes the heartbeat safe rather than a UAF:
+  //   kPaused         — explicit stop (Stop()). Zero polling, untimed cv_.wait. The worker will
+  //                     not touch server_ again until someone resumes it, which is precisely the
+  //                     guarantee Stop()'s callers destroy the server on.
+  //   kIdleHeartbeat  — self-pause: the poller believes the run reached its terminal state and
+  //                     drained. It keeps polling at kIdleHeartbeatIntervalMs so a wrong belief
+  //                     self-corrects (I3b). Entered ONLY from kRunning, by PollOnce()'s tail.
+  // Before the split, "self-paused" and "not touching the server" were the same state, so Stop()
+  // could early-return on it. With a heartbeat running they are different facts and Stop() must
+  // drive kIdleHeartbeat → kPaused and wait, or it would return while a tick was in flight.
+  enum class State { kPaused, kRunning, kIdleHeartbeat, kTerminating };
 
   void WorkerLoop();
   void PollOnce();
@@ -236,7 +298,12 @@ class ServerPoller {
   std::atomic<State> state_{ State::kPaused };
   std::mutex mutex_;
   std::condition_variable cv_;
-  bool active_{ false };  // True while worker is in the poll loop (not in cv.wait)
+  // True while the worker is executing ANY PollOnce() — the full-speed loop or a single heartbeat
+  // tick. It used to mean "inside the full-speed poll loop", which was the same thing when the
+  // only alternative to polling was total silence; the heartbeat made those two statements
+  // different, and it is this one — "might be dereferencing server_ right now" — that Stop()
+  // needs to wait on.
+  bool active_{ false };
 
   LUMICE_Server* server_{ nullptr };
   // Single versioned immutable handoff (invariant I5). Accessed ONLY via LoadPublished/
@@ -274,6 +341,22 @@ class ServerPoller {
   // every completed poll (which would overwrite a good frame with a sparse one — the very
   // flicker the gate exists to prevent), so it must stay in the condition.
   bool uploaded_since_resume_{ false };
+
+  // Slow-heartbeat tick counter (see HeartbeatTickCountForTest). Atomic only because tests read it
+  // from the main thread while the worker writes it; the worker is its sole writer.
+  std::atomic<uint64_t> heartbeat_tick_count_{ 0 };
+
+  // Probe latch for a state believed unreachable: observing lifecycle != COMPLETED while in
+  // kIdleHeartbeat. A whole-tree enumeration of the paths that can move the lifecycle off
+  // COMPLETED (CommitScene in DoRun, StopServer in DoStop, StopServer in the backend rebuild)
+  // found every one of them immediately preceded or followed by a poller wake/stop, so no such
+  // observation should exist. Rather than write a recovery branch for a state nothing can reach —
+  // untestable by construction, and a permanent puzzle for the next reader — the belief is simply
+  // instrumented: silent and free if it holds, and if it does not, we learn that instead of having
+  // it papered over. Latched per episode (re-armed on the next COMPLETED observation) so a
+  // standing violation logs once rather than twice a second forever.
+  // Worker-thread-only; no synchronization needed.
+  bool heartbeat_unreachable_logged_{ false };
 };
 
 }  // namespace lumice::gui

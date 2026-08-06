@@ -384,6 +384,18 @@ class Server {
   uint64_t CommittedEpoch() const;
 
   /**
+   * @brief Highest epoch the CONSUMER has fully drained.
+   * @return drained_epoch_; the current epoch is drained iff this equals
+   *         CommittedEpoch(). Cheap O(1) atomic read — no snapshot, no lock.
+   * @note Deliberately separate from GetStatus()/GetSimLifecycle(), whose kIdle
+   *       verdict is derived from producer-side predicates only and therefore
+   *       does NOT imply that the accumulators hold this epoch's final totals.
+   *       Never reset: a new epoch outruns it, so the equality test reads
+   *       "not drained yet" without a reset site anyone could forget.
+   */
+  uint64_t DrainedEpoch() const;
+
+  /**
    * @brief Check if server is idle
    * @return true if server is idle (no processing), false if processing
    * @note Convenience method, equivalent to GetStatus() == ServerStatus::kIdle
