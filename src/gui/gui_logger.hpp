@@ -32,6 +32,39 @@ inline void SetGuiLoggerSinks(std::vector<spdlog::sink_ptr> sinks) {
   GetGuiLogger().sinks() = std::move(sinks);
 }
 
+// ---- Sink assembly (two stages, deliberately not one) --------------------------------------
+//
+// The GUI's sinks are installed at two different points in main(), and the split is load-bearing
+// rather than incidental — which is why both halves live here, behind names, instead of as two
+// inline blocks in main() that a reader has to reconstruct the ordering rule from.
+//
+// InstallEarlyGuiSinks() must run FIRST, before GLFW / GL / ImGui init, because every failure
+// those stages can report is itself logged: a sink installed after them silently drops exactly
+// the startup diagnostics a user needs. Nothing it installs depends on a window, a GL context or
+// an ImGui context. On Windows it must still come after the FreeConsole() block, so the stdout
+// sink is built against the final console state.
+//
+// AttachGuiFileSink() must run LATER, and specifically NOT from the early call, because
+// constructing the file sink TRUNCATES the log file. The sink defaults to level=off (the GUI
+// checkbox enables it), so hoisting it would buy no extra coverage while wiping the previous
+// run's log on every launch that dies before this point — the launch a user is most likely to be
+// diagnosing.
+//
+// Splitting them has one cost worth stating: the formatter is applied per sink (set_formatter
+// clones into each), so the second stage must re-apply it. Both stages do that here, so adding a
+// sink or changing kGuiLogPattern is a single-file edit rather than two edits in main() that can
+// drift apart.
+
+// Stage 1: the side-effect-free sinks (ImGui ring buffer + stdout). Publishes g_imgui_log_sink,
+// sets the formatter, and installs the flush strategy.
+void InstallEarlyGuiSinks();
+
+// Stage 2: the file sink. Resolves the log path (beside the other per-user Lumice artifacts,
+// falling back to a CWD-relative path when no config directory is available — degrade, never
+// fail to start), publishes g_file_log_sink / g_log_file_path, appends the sink and re-applies
+// the formatter.
+void AttachGuiFileSink();
+
 inline void SetGuiLogLevel(spdlog::level::level_enum level) {
   GetGuiLogger().set_level(level);
 }
