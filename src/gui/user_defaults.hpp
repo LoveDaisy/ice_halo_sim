@@ -330,6 +330,14 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc);
 // The user's zenith-std override for a built-in axis preset, if any. nullopt means "use the
 // factory value". Prefer EffectiveAxisPresetZenith() below at consumption sites — this raw
 // accessor exists for the tests and for the panel's "is anything saved for this preset" cell.
+//
+// IT CANNOT BE FOLDED INTO EffectiveAxisPresetZenith, and has been mistaken for dead code twice
+// on the assumption that it can. That function returns the COMPOSED AxisDist, in which "nothing
+// stored" and "stored a number that happens to equal the factory value" are indistinguishable —
+// the two produce the same struct. Only this accessor answers the question the panel and the
+// tests actually ask, which is about the OVERRIDE's existence and not about the resulting
+// distribution: the same presence-vs-value distinction DefaultDiffRow::has_saved_override draws
+// for the settings half of the file.
 std::optional<float> GetUserAxisPresetZenithStdOverride(AxisPreset preset);
 
 // --------------------------------------------------------------------------------------------------
