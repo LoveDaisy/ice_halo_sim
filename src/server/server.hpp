@@ -206,6 +206,25 @@ struct CompositeResult {
  *          Copying a ResultFrame is cheap by construction (every pixel payload sits
  *          behind a shared_ptr) — relied upon by ServerImpl::AcquireResultFrame, which
  *          re-stamps the read-time lifecycle fields onto a shallow copy.
+ *
+ *          ⛔ OBJECT IDENTITY IS NOT FRAME IDENTITY. Never substitute a pointer/address
+ *          comparison for a `snapshot_generation_` comparison when asking "is this the
+ *          same frame as last time". Both directions of that inference are wrong, for
+ *          two different reasons at the two layers:
+ *          - C++ (`shared_ptr<const ResultFrame>` from ServerImpl::AcquireResultFrame):
+ *            two acquisitions of ONE unchanged snapshot may return the same object OR
+ *            different objects. The re-stamp path above allocates a fresh ResultFrame
+ *            whenever the read-time fields (`has_valid_data_`, `epoch_`) have moved,
+ *            even though `snapshot_generation_` and every pixel payload are identical.
+ *            => different address does NOT mean new frame.
+ *          - C (`LUMICE_ResultFrame*` from LUMICE_AcquireResultFrame): the C wrapper
+ *            heap-allocates unconditionally on every call, so two acquisitions NEVER
+ *            share an address even when they wrap the very same C++ object.
+ *            => address equality is useless there; it is always false. Worse, an
+ *            address freed by LUMICE_ReleaseResultFrame can be handed back out by a
+ *            later allocation, so an address match can even be accidentally true
+ *            across two genuinely different frames.
+ *          `snapshot_generation_` is the only sameness test.
  */
 struct ResultFrame {
   std::vector<RenderResult> render_results_;
