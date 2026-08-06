@@ -2797,7 +2797,7 @@ TEST(ImportExport, dorevert_preserves_view_fields_but_reverts_crystal_via_owner)
   // The user drags the view (never counted as a change) and edits a crystal (counted).
   ASSERT_FLOAT_EQ(gui::g_state.renderer.elevation, 0.0f);  // premise: the edit below is a change
   gui::g_state.renderer.elevation = 30.0f;
-  gui::g_state.crystals[0].height = committed_height + 1.0f;
+  gui::g_state.crystals[0].height.center = committed_height + 1.0f;
 
   gui::DoRevert();
 

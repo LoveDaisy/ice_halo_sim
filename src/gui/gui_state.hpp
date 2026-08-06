@@ -409,6 +409,9 @@ struct RenderConfigResimFields {
   // Does `live` still agree with this captured baseline on the resim-eligible fields?
   bool Matches(const RenderConfig& live) const { return From(live) == *this; }
 
+  // Value-type equality, kept as free friends so two captured projections can be compared
+  // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
+  // built on top of it, not the only intended consumer.
   friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
     return a.sim_resolution_index == b.sim_resolution_index &&
            std::equal(a.background, a.background + 3, b.background) &&
