@@ -190,7 +190,7 @@ TEST(GuiStateReconcile, effects_truth_table) {
   }
 
   // renderer.exposure_offset is display-time only
-  // (RenderConfigResimEqual excludes it). Mutating EV alone MUST NOT drive re-sim /
+  // (RenderConfigResimFields excludes it). Mutating EV alone MUST NOT drive re-sim /
   // hard-reset / display-push. This is the pin that dragging the EV slider never falsely
   // demotes a finished sim to kModified.
   {
@@ -207,7 +207,7 @@ TEST(GuiStateReconcile, effects_truth_table) {
   // preview shader). Mutating any of them alone MUST NOT drive re-sim / hard-reset / display-push.
   // Before the fix, dragging the view or switching the lens falsely re-triggered the sim
   // (auto-restart in infinite-rays mode; "Configuration changed" in finite mode) because
-  // RenderConfigResimEqual compared these fields. This pin prevents a silent re-add.
+  // the resim projection compared these fields. This pin prevents a silent re-add.
   {
     struct ViewMutator {
       const char* field;
@@ -434,7 +434,7 @@ TEST(GuiStateReconcile, meta_anti_drift) {
   }
 
   // Mutating exposure_offset alone MUST NOT change
-  // GuiEffects — this pins the RenderConfigResimEqual exclusion so a future refactor
+  // GuiEffects — this pins the RenderConfigResimFields exclusion so a future refactor
   // cannot silently re-add EV to the resim diff. Pair to the truth-table pin above.
   {
     GuiState s = MakeBaselineState();

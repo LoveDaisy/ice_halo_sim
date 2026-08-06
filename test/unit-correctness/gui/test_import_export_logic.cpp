@@ -2766,7 +2766,7 @@ TEST(ImportExport, document_switch_leaves_no_stale_status_bar_stats) {
 }
 
 // Revert's field scope must equal the scope of the "did the configuration change" predicate,
-// `RenderConfigResimEqual` (gui_state.hpp) — the repo's declared single source of truth for that
+// `RenderConfigResimFields` (gui_state.hpp) — the repo's declared single source of truth for that
 // question. The two directions are pinned here as a pair because either one alone is satisfiable
 // by a wrong fix:
 //
