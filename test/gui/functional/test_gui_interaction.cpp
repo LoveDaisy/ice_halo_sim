@@ -3628,6 +3628,67 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The user-visible loop behind Revert's field scope, driven end to end through the real
+  // widgets rather than through DoRevert(): change the view, watch Revert stay inert, change a
+  // crystal, watch it arm, click it. What the unit-correctness pair on DoRevert cannot show is
+  // exactly what makes the old behavior surprising — the Revert affordance never offers itself
+  // for a view change, so a Revert that discarded the view was undoing something the UI had
+  // never offered to undo. Both halves are asserted here in one run, off one live top bar.
+  //
+  // The affordance is probed by its disabled flag, not by ItemExists: the top bar always renders
+  // the ⚠ + Revert pair so the toolbar's layout does not shift, and hides it with alpha=0 inside
+  // BeginDisabled (app_panels.cpp). The item therefore exists in every state, and "the user
+  // cannot revert" is expressed by the flag.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "revert_keeps_view_discards_crystal_edit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      gui::g_state.modal_immediate_mode = true;
+      // Linear lens: the view angle inputs are enabled here (see registry_view_applicability).
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+
+      // Stand in for "Run just finished": a commit baseline plus a reconcile base of kDone, so a
+      // later dirty edit surfaces as kModified. run_intent is what makes kDone stick — the
+      // harness main loop re-derives sim_state every frame.
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.committed_epoch = 5;
+      gui::g_state.display_epoch_floor = 0;
+      gui::g_state.dirty = false;
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      ctx->Yield(4);
+
+      const int cid = gui::g_state.layers[0].entries[0].crystal_id;
+      const float committed_h = gui::g_state.crystals[cid].height.center;
+
+      // (1) Change the view through its real input. Revert must NOT arm.
+      ctx->ItemInputValue("**/##Elevation##view_input", 30.0f);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);  // premise: the edit landed
+      IM_CHECK_NE(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK((ctx->ItemInfo("##TopBar/Revert").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+      // (2) Change a crystal through the real edit modal. Revert must arm.
+      gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
+      gui::OpenEditModal(req, gui::g_state);
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##Height##modal_cr_input", committed_h + 1.0f);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Close##edit_modal");  // Immediate mode: single Close button
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h + 1.0f);  // premise
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK((ctx->ItemInfo("##TopBar/Revert").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+      // (3) Click the real Revert button: the crystal edit goes, the view stays.
+      ctx->ItemClick("##TopBar/Revert");
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);
+    };
+  }
+
   // p2_render/registry_display_overlay_domains — the six remaining unconditional sliders.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "registry_display_overlay_domains");
