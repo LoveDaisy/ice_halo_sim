@@ -255,6 +255,22 @@ if(BUILD_GUI)
   target_compile_definitions(gui_unit_test PRIVATE
     LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
     LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
+  # `lumice_obj` (objects), not `lumice` — a NAMED exemption, not an unexamined default.
+  # Measured 2026-08-06 by switching this line to `lumice` and building the shared Release
+  # flavor (the only configuration where it bites: -fvisibility=hidden is set for
+  # Release/MinSizeRel, so liblumice.dylib exports the 53 LUMICE_* C API symbols and nothing
+  # else). It fails to link on exactly four symbols, all from one file:
+  #
+  #   lumice::Rotation::Rotation() / ::Rotation(const float*, float)
+  #   lumice::Rotation::Chain(const Rotation&) / ::Apply(float*, size_t) const
+  #     <- test/unit-correctness/gui/test_render_handedness_guard.cpp
+  #
+  # That is the guard asserting the GUI's preview projection and core's renderer agree on
+  # handedness, and it computes its oracle by calling core's Rotation directly. Being white-box
+  # is what makes it an oracle rather than a second implementation of the thing under test, so
+  # the fix is not to rewrite it against the C API.
+  #
+  # gui_test does NOT need this exemption — it links plain `lumice` (see test/gui/CMakeLists.txt).
   target_link_libraries(gui_unit_test
     PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
   set_target_properties(gui_unit_test PROPERTIES

@@ -44,11 +44,26 @@ target_include_directories(gui_test PRIVATE
     ${PROJ_TEST_DIR}
     ${IMGUI_TE_DIR})
 
-# `lumice_obj` (objects), not `lumice`: the white-box tests reference internal core
-# symbols that a shared `lumice` does not export, and linking the objects keeps exactly
-# one copy of core state in the process. lumice_gui_obj deliberately declares no core
-# dependency of its own — see src/gui/CMakeLists.txt.
-target_link_libraries(gui_test PRIVATE lumice_gui_obj lumice_obj)
+# `lumice`, the public library — not the internal object library. This target used to link
+# `lumice_obj` on the grounds that its white-box tests referenced internal core symbols a shared
+# `lumice` would not export. That stopped being true when the handedness guard moved to
+# test/unit-correctness/gui/ (commit 1526696b), and this line was simply not revisited.
+#
+# Measured 2026-08-06 in the shared Release flavor, the only configuration that can tell the
+# difference (-fvisibility=hidden applies to Release/MinSizeRel, so liblumice.dylib exports the
+# 53 LUMICE_* C API symbols and nothing else):
+#   - gui_test links and runs against it;
+#   - it defines ZERO core-internal symbols of its own (the static flavor defines 11);
+#   - it has ZERO undefined references into lumice that are not C API.
+# So this is the first hard evidence for a question the repo could not previously answer —
+# whether the GUI can live on the C API alone. For gui_test, it can.
+#
+# Keeping it this way makes the boundary load-bearing rather than aspirational: a new GUI test
+# that reaches past the C API now fails to link here instead of silently widening the surface.
+# The one target that genuinely cannot do this is gui_unit_test — see the named exemption at its
+# link line in test/CMakeLists.txt. lumice_gui_obj declares no core dependency of its own; see
+# src/gui/CMakeLists.txt.
+target_link_libraries(gui_test PRIVATE lumice_gui_obj lumice)
 
 target_compile_definitions(gui_test PRIVATE
     IMGUI_ENABLE_TEST_ENGINE
