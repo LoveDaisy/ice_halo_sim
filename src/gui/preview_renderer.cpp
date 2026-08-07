@@ -1049,7 +1049,8 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
 // "one pixel of screen radius is how many radians of view angle?". img_radius is
 // min(vp_w, vp_h)/2 — the same definition ProjectWorldDirToScreen uses, so the gain
 // and the projection that consumes it share one pixel/DPI convention and window
-// resize needs no extra handling.
+// resize needs no extra handling. The table below is that 1:1 law; the returned
+// value is it scaled by kDragSensitivity (see the constant for why).
 //
 //   lens                        forward r(theta)                       dtheta/dr at 0
 //   --------------------------  -------------------------------------  ---------------------------
@@ -1073,8 +1074,25 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
 float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h) {
   constexpr float kPi = 3.14159265358979323846f;
   // Pre-fov-aware sensitivity. Only reachable via the default branch below, which
-  // no caller should hit — app_panels.cpp only drags when !LensIsFullSky.
+  // no caller should hit — app_panels.cpp only drags when !LensIsFullSky. It is the
+  // historical feel value itself, so kDragSensitivity is deliberately NOT applied to it.
   constexpr float kLegacyGainDegPerPixel = 0.3f;
+
+  // How many screen pixels the content moves per dragged pixel. The closed forms below
+  // are the 1:1 law (one pixel of mouse motion, one pixel of content motion at the frame
+  // center); this multiplier re-anchors that law without touching its shape.
+  //
+  // 1:1 is a hard constraint on a touchscreen — the finger is physically on the content —
+  // but on a mouse it is only one candidate anchor, and it lost the owner's drag test:
+  // measured against the historical 0.3 deg/px on a 900 px short side, the 1:1 law is 2.4x
+  // slower at fov=90°, 4.1x at 60°, 8.8x at 30°, and only overtakes it above fov=134° —
+  // i.e. slower everywhere in daily use. 2.5 puts linear at fov=90°/900 px at 0.318 deg/px,
+  // within 6% of the constant people are already used to.
+  //
+  // What this does NOT change is the property the fov-aware law exists for: the screen
+  // displacement per dragged pixel stays constant across each lens's whole FOV range. Only
+  // the value of that constant moves, from 1 to k.
+  constexpr float kDragSensitivity = 2.5f;
 
   if (vp_w <= 0 || vp_h <= 0) {
     return 0.0f;  // degenerate viewport: produce no rotation this frame
@@ -1104,6 +1122,13 @@ float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_
     // unthrottled warning would emit tens of lines per second and bury the very signal it exists
     // to raise. The latch is per type rather than a single global flag so a second unknown type
     // still gets its own line instead of being swallowed by the first one.
+    //
+    // thread_local rather than a bare static, even though every caller today is the ImGui
+    // main loop and a bare static would do: the promise this latch makes is "one line per
+    // lens type per thread", which degrades gracefully (an extra line) if someone ever
+    // calls this off the UI thread, whereas a bare static would be an unsynchronized
+    // read-modify-write and thus a data race. The cost of the choice is that promise's
+    // "per thread" qualifier, stated here rather than left for a reader to infer.
     static thread_local unsigned int warned_lens_types = 0u;
     const bool latchable = lens_type >= 0 && lens_type < static_cast<int>(sizeof(warned_lens_types) * 8);
     const unsigned int bit = latchable ? (1u << lens_type) : 0u;
@@ -1114,7 +1139,7 @@ float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_
     }
     return kLegacyGainDegPerPixel;
   }
-  return rad_per_px * 180.0f / kPi;
+  return rad_per_px * kDragSensitivity * 180.0f / kPi;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {

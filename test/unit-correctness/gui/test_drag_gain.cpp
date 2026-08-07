@@ -11,12 +11,12 @@
 //
 // A note on step size, which is the honest boundary of this design: the gain is a DERIVATIVE
 // (exact at the frame center only, to first order). At the top of a lens's FOV range the
-// angular resolution at the center is enormous — linear at fov=179° is ~21.9 deg per pixel —
-// so a "20 px drag" there is a 438° rotation and no linearization survives it. The probe tests
-// therefore normalize the step to a fixed small ANGLE and assert the ratio is 1; the
-// realistic-drag tests use whole-pixel deltas only where the second-order term is genuinely
-// negligible. Widening either one's tolerance to make an extreme-FOV whole-pixel case pass
-// would be measuring the linearization error, not the gain.
+// angular resolution at the center is enormous — linear at fov=179° is ~54.7 deg per pixel —
+// so a "20 px drag" there is a full revolution and no linearization survives it. The probe
+// tests therefore normalize the step to a fixed small ANGLE; the realistic-drag test uses
+// whole-pixel deltas and states its tolerance as the analytic second-order bound for the
+// angle each case actually sweeps, so the budget follows the sensitivity instead of being a
+// hand-tuned number that silently goes stale when the sensitivity changes.
 
 #include <gtest/gtest.h>
 
@@ -37,6 +37,15 @@ using lumice::gui::ViewProjection;
 
 constexpr float kSentinelLimit = -9000.f;  // any helper output <= this is the sentinel
 constexpr float kPi = 3.14159265358979323846f;
+
+// Screen pixels the content must travel per dragged pixel — the owner-calibrated sensitivity
+// (AC1's revised anchor). Restated here as a literal rather than imported from the production
+// side on purpose: this value is a product decision, so the test's job is to hold it, not to
+// agree with whatever the implementation currently says. Changing kDragSensitivity in
+// preview_renderer.cpp without changing this turns every round trip below red, which is the
+// intended signal. The FOV-independence of the ratio — the actual defect this task fixes — is
+// asserted separately and does not depend on the value.
+constexpr float kExpectedSensitivity = 2.5f;
 
 bool IsSentinel(const std::array<float, 2>& p) {
   return p[0] <= kSentinelLimit && p[1] <= kSentinelLimit;
@@ -153,9 +162,10 @@ const std::vector<Viewport>& Viewports() {
 // between them with roughly an order of magnitude of headroom on each side.
 //
 // The pixel cap is the one place the frame gets a say: at narrow FOV, 0.02 rad is a large
-// fraction of the whole field, so the probe is also held to 40% of img_radius, keeping the
-// projected point comfortably inside the viewport (and inside the fisheye imaging circle)
-// rather than clipping to the sentinel.
+// fraction of the whole field, so the probe is also held to a drag whose RESULTING content
+// displacement is 40% of img_radius, keeping the projected point comfortably inside the
+// viewport (and inside the fisheye imaging circle) rather than clipping to the sentinel.
+// The displacement is kExpectedSensitivity times the drag, hence the division.
 constexpr float kProbeAngleRad = 0.02f;
 constexpr float kProbeFrameFraction = 0.4f;
 
@@ -167,7 +177,7 @@ constexpr float kRoundTripTol = 2e-3f;
 float ProbePixels(float gain_deg_per_px, int vp_w, int vp_h) {
   float gain_rad_per_px = gain_deg_per_px * kPi / 180.0f;
   float img_radius = std::min(static_cast<float>(vp_w), static_cast<float>(vp_h)) * 0.5f;
-  return std::min(kProbeFrameFraction * img_radius, kProbeAngleRad / gain_rad_per_px);
+  return std::min(kProbeFrameFraction * img_radius / kExpectedSensitivity, kProbeAngleRad / gain_rad_per_px);
 }
 
 std::string Label(const LensCase& lc, float fov, const Viewport& vp, float dx, float dy) {
@@ -231,10 +241,11 @@ TEST(DragGain, GlobeReferenceIsMirroredVersusInsideOutLenses) {
 // ---------------------------------------------------------------------------------------
 // AC1 / AC2 / AC3 — the main event. For every draggable lens, across its own full FOV range,
 // on square / landscape / portrait / HiDPI viewports, in both directions on both axes: one
-// pixel of drag moves the content one pixel. Constant across the FOV range is the whole
-// point — the same assertion with the same tolerance holds at fov=1° and at fov=MaxFov.
+// pixel of drag moves the content kExpectedSensitivity pixels. Constant across the FOV range
+// is the whole point — the same assertion with the same tolerance holds at fov=1° and at
+// fov=MaxFov.
 // ---------------------------------------------------------------------------------------
-TEST(DragGain, HorizontalDragMovesContentOnePixelPerPixel) {
+TEST(DragGain, HorizontalDragMovesContentAtFixedPixelRatio) {
   for (const auto& lc : DraggableLenses()) {
     for (float fov : FovLadder(lc)) {
       for (const auto& vp : Viewports()) {
@@ -244,16 +255,19 @@ TEST(DragGain, HorizontalDragMovesContentOnePixelPerPixel) {
         for (float dx : { step, -step }) {
           auto p = RoundTrip(lc, fov, vp, dx, 0.0f);
           ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, dx, 0.0f);
-          // Content follows the cursor: +dx of mouse motion => +dx of screen-x motion.
-          EXPECT_NEAR(p[0] / dx, 1.0f, kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
-          EXPECT_NEAR(p[1], 0.0f, std::abs(dx) * kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
+          // Content follows the cursor: +dx of mouse motion => +k*dx of screen-x motion.
+          // Written as a ratio against the expectation so kRoundTripTol stays a RELATIVE
+          // budget; comparing p[0]/dx against k directly would silently hand it k times
+          // the slack.
+          EXPECT_NEAR(p[0] / (dx * kExpectedSensitivity), 1.0f, kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
+          EXPECT_NEAR(p[1], 0.0f, std::abs(dx) * kExpectedSensitivity * kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
         }
       }
     }
   }
 }
 
-TEST(DragGain, VerticalDragMovesContentOnePixelPerPixel) {
+TEST(DragGain, VerticalDragMovesContentAtFixedPixelRatio) {
   for (const auto& lc : DraggableLenses()) {
     for (float fov : FovLadder(lc)) {
       for (const auto& vp : Viewports()) {
@@ -264,10 +278,10 @@ TEST(DragGain, VerticalDragMovesContentOnePixelPerPixel) {
           auto p = RoundTrip(lc, fov, vp, 0.0f, dy);
           ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, 0.0f, dy);
           // ImGui's mouse y is DOWN-positive, the projection's py is UP-positive, so
-          // content following the cursor means py = -dy. This is also where a globe sign
+          // content following the cursor means py = -k*dy. This is also where a globe sign
           // regression would surface: its elevation update is -= where the others are +=.
-          EXPECT_NEAR(p[1] / dy, -1.0f, kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
-          EXPECT_NEAR(p[0], 0.0f, std::abs(dy) * kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
+          EXPECT_NEAR(p[1] / (dy * kExpectedSensitivity), -1.0f, kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
+          EXPECT_NEAR(p[0], 0.0f, std::abs(dy) * kExpectedSensitivity * kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
         }
       }
     }
@@ -300,21 +314,40 @@ TEST(DragGain, RealisticDragStepsAtModerateFov) {
     { lumice::gui::kLensTypeGlobe, "globe", 90.0f },
   };
   const Viewport vp = { 1280, 720, "1280x720" };
-  // 3% absorbs the second-order term of the widest combo here (linear at fov=150°, where a
-  // 20 px step is 0.25 rad and tan(theta)/theta = 1.021). Every other combo lands well
-  // inside it; this is a linearization budget, not a fudge factor.
-  constexpr float kRelTol = 0.03f;
+
+  // The tolerance is DERIVED per case, not tuned: the gain is a first derivative, so the
+  // round trip is off by each law's second-order term in the swept angle theta. Over the six
+  // laws those terms are theta^2/3 (linear, globe), theta^2/12 (stereographic), theta^2/6
+  // (orthographic), theta^2/24 (equal-area) and exactly 0 (equidistant), so theta^2/3 bounds
+  // them all; 1.5x covers the theta^4 remainder, and a 0.5% floor keeps the near-zero cases
+  // from being pinned tighter than float noise.
+  //
+  // A single hand-tuned constant was what this test used to have, and raising the sensitivity
+  // to k=2.5 multiplied every swept angle by 2.5 and quadrupled these terms — linear at
+  // fov=150° went from 1.5% to 10.3%. A fixed budget would have had to be widened by hand,
+  // which reads identically to widening it to hide a defect. Deriving it removes the choice.
+  auto tolerance_for = [](float gain_deg_per_px, float pixels) {
+    float theta = std::abs(pixels) * gain_deg_per_px * kPi / 180.0f;
+    return std::max(0.005f, 1.5f * theta * theta / 3.0f);
+  };
 
   for (const auto& c : kCombos) {
     LensCase lc = { c.lens_type, c.name, 0.0f };
+    float gain = ComputeDragGainDegPerPixel(c.lens_type, c.fov, vp.w, vp.h);
+    ASSERT_GT(gain, 0.0f) << c.name;
     for (float d : { 5.0f, 20.0f, -5.0f, -20.0f }) {
+      float tol = tolerance_for(gain, d);
+      // The budget must stay well under the effects it has to separate: the smallest defect
+      // this suite is built to catch is a missing factor (>=2x, i.e. 100%).
+      ASSERT_LT(tol, 0.2f) << Label(lc, c.fov, vp, d, 0.0f);
+
       auto px = RoundTrip(lc, c.fov, vp, d, 0.0f);
       ASSERT_FALSE(IsSentinel(px)) << Label(lc, c.fov, vp, d, 0.0f);
-      EXPECT_NEAR(px[0] / d, 1.0f, kRelTol) << Label(lc, c.fov, vp, d, 0.0f);
+      EXPECT_NEAR(px[0] / (d * kExpectedSensitivity), 1.0f, tol) << Label(lc, c.fov, vp, d, 0.0f);
 
       auto py = RoundTrip(lc, c.fov, vp, 0.0f, d);
       ASSERT_FALSE(IsSentinel(py)) << Label(lc, c.fov, vp, 0.0f, d);
-      EXPECT_NEAR(py[1] / d, -1.0f, kRelTol) << Label(lc, c.fov, vp, 0.0f, d);
+      EXPECT_NEAR(py[1] / (d * kExpectedSensitivity), -1.0f, tol) << Label(lc, c.fov, vp, 0.0f, d);
     }
   }
 }
@@ -355,29 +388,32 @@ TEST(DragGain, GovernedByShorterViewportSide) {
 // ---------------------------------------------------------------------------------------
 TEST(DragGain, ClosedFormAnchors) {
   constexpr float kRad2Deg = 180.0f / kPi;
+  // Every anchor is the 1:1 closed form times the sensitivity, so a k that stopped being
+  // applied — or got applied to the legacy fallback too — shows up here as well.
+  constexpr float kK = kExpectedSensitivity;
 
   // linear, fov=90 => half_fov=45°, tan(45°)=1 => 1/img_radius rad/px. img_radius = 400.
-  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 90.0f, 800, 800), kRad2Deg / 400.0f, 1e-5f);
+  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 90.0f, 800, 800), kK * kRad2Deg / 400.0f, 1e-5f);
 
   // fisheye equidistant, fov=180 => half_fov=pi/2 => (pi/2)/img_radius rad/px, i.e. the
   // whole 90° half-field spans exactly img_radius pixels. img_radius = 300.
-  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeEquidist, 180.0f, 800, 600), 90.0f / 300.0f,
+  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeEquidist, 180.0f, 800, 600), kK * 90.0f / 300.0f,
               1e-5f);
 
   // fisheye orthographic, fov=180 => sin(90°)=1 => 1/img_radius rad/px. img_radius = 300.
   EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 800, 600),
-              kRad2Deg / 300.0f, 1e-5f);
+              kK * kRad2Deg / 300.0f, 1e-5f);
 
   // fisheye equal area, fov=180 => 2*sin(45°)=sqrt(2) => sqrt(2)/img_radius rad/px.
   EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 800, 600),
-              std::sqrt(2.0f) * kRad2Deg / 300.0f, 1e-5f);
+              kK * std::sqrt(2.0f) * kRad2Deg / 300.0f, 1e-5f);
 
   // fisheye stereographic, fov=180 => 2*tan(45°)=2 => 2/img_radius rad/px.
   EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeStereographic, 180.0f, 800, 600),
-              2.0f * kRad2Deg / 300.0f, 1e-5f);
+              kK * 2.0f * kRad2Deg / 300.0f, 1e-5f);
 
   // globe, fov=90 => (D-1)*tan(45°) = 3 => 3/img_radius rad/px. img_radius = 300.
-  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeGlobe, 90.0f, 800, 600), 3.0f * kRad2Deg / 300.0f,
+  EXPECT_NEAR(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeGlobe, 90.0f, 800, 600), kK * 3.0f * kRad2Deg / 300.0f,
               1e-4f);
 }
 
@@ -404,8 +440,10 @@ TEST(DragGain, SmallFovLawsConvergeToEquidistant) {
     float reference = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeEquidist, fov, kW, kH);
     ASSERT_GT(reference, 0.0f);
     // The equidistant law IS half_fov / img_radius, exactly and at every FOV — it is the
-    // limit itself, so it is the natural yardstick for the other five.
-    EXPECT_NEAR(reference, (fov * 0.5f) / 300.0f, 1e-6f) << "fov=" << fov;
+    // limit itself, so it is the natural yardstick for the other five. (Scaled by the
+    // sensitivity, like every branch; the five ratios below are unaffected by that scale,
+    // which is why this one line is where k enters this test.)
+    EXPECT_NEAR(reference, kExpectedSensitivity * (fov * 0.5f) / 300.0f, 1e-6f) << "fov=" << fov;
 
     // Every law's departure from the shared limit is second order in half_fov, with 1/3 the
     // largest coefficient among the six (tan(hf)/hf - 1 = hf^2/3, hit by both linear and
@@ -423,14 +461,16 @@ TEST(DragGain, SmallFovLawsConvergeToEquidistant) {
   }
 }
 
-// The 0.3 deg/px the drag used before this became FOV-aware, quantified: at the default
-// 30° linear preview it was ~2.3x too slow, and at fov=1° it was ~180x too fast. That
-// spread is the defect AC1 names, recorded here so a regression to a constant is visible.
+// The 0.3 deg/px the drag used before this became FOV-aware, quantified on this 800x600
+// viewport: at fov=1° the constant was ~72x too fast (0.3 vs 0.0042 deg/px) and at fov=179°
+// ~180x too slow (0.3 vs 54.7). The sensitivity calibration deliberately keeps the two laws
+// close in the mid band — 2.3x apart at the 30° default here — so the SPREAD is what this
+// pins, and it is the defect AC1 names: a regression to any single constant fails one end.
 TEST(DragGain, FovAwareGainSpansTheRangeTheConstantMissed) {
   float narrow = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 1.0f, 800, 600);
   float wide = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 179.0f, 800, 600);
-  EXPECT_LT(narrow, 0.3f / 100.0f);
-  EXPECT_GT(wide, 0.3f * 50.0f);
+  EXPECT_LT(narrow, 0.3f / 50.0f);
+  EXPECT_GT(wide, 0.3f * 100.0f);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -445,6 +485,11 @@ TEST(DragGain, DegenerateViewportProducesNoRotation) {
 // Full-sky lenses never reach the drag branch (app_panels.cpp guards on !LensIsFullSky), so
 // this is the defensive fallback, not a live path: it must stay finite and match the legacy
 // constant rather than return 0 or NaN.
+//
+// Exactly 0.3, NOT 0.3 * kExpectedSensitivity: the fallback IS the historical feel value, and
+// the sensitivity constant exists to bring the closed forms up to it, not to be stacked on top
+// of it. Applying k to this branch too would be a silent 2.5x on the one path that is supposed
+// to change nothing, so the exact compare here is the guard against that.
 TEST(DragGain, FullSkyLensesFallBackToLegacyConstant) {
   for (int lt : lumice::gui::kFullSkyLensTypes) {
     EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lt, 180.0f, 800, 600), 0.3f) << "lens_type " << lt;
