@@ -963,6 +963,148 @@ TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
 }
 
 // ============================================================================
+// Contract 2e — what the apex snap costs.
+//
+// The collapse gate claims a neighbourhood of the apex and snaps the requested
+// truncation onto it, so a height landing inside that neighbourhood yields a
+// solid whose tip is slightly too tall. That is the price of closing the band,
+// and it is only worth paying if it is bounded by the gate's own width — the
+// alternative in the same neighbourhood is not an exact crystal, it is a
+// crystal missing a cone.
+//
+// The bound is stated in inset units, where the gate is defined: the solver's
+// feasibility tolerance divided by the fixed factor √3/4 relating a half-plane
+// offset to an inset. It is written out here rather than read from production,
+// because a test that recomputes the implementation's own expression and
+// compares it to itself asserts nothing.
+//
+// Measured, not assumed: the sweep reports the largest gap it actually snapped
+// away, both as an absolute inset (comparable to the scale-clamped 1.15e-4) and
+// as a fraction of each configuration's own gate width, plus the resulting
+// vertical displacement of the tip.
+// ============================================================================
+
+TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
+  constexpr double kInsetFactor = 0.25 * 1.7320508075688772935;  // √3/4
+  constexpr double kTolCoefficient = 5.0;
+
+  static const double kScales[] = { 0.01, 0.2, 1.0, 20.0, 1000.0 };
+  static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.02 };
+  static const float kAlphas[] = { 0.2f, 5.0f, 28.0f, 60.0f, 89.0f };
+  static const float kPrismH[] = { 0.0f, 0.3f };
+  // Dense enough in 1 − h that some samples land just inside the gate edge,
+  // which is where the bound is actually under test.
+  constexpr int kStepsPerDecade = 32;
+  constexpr int kDecades = 6;
+
+  int snapped = 0;
+  double worst_ratio = 0.0;         // snapped gap / that configuration's gate width
+  double worst_gap_clamped = 0.0;   // largest snapped gap where the scale clamp was active
+  double worst_tip_shift = 0.0;     // tip displacement, relative to the crystal size
+  double worst_gap_fraction = 0.0;  // snapped gap as a fraction of the apex inset
+  std::string worst_label;
+
+  for (double scale : kScales) {
+    for (double ratio : kRatios) {
+      // One opposite pair pulled in (ridge apex) and the regular hexagon are
+      // both covered: ratio == 1.0 degenerates the first family into the
+      // second.
+      float dist[kSideCnt] = {
+        static_cast<float>(scale * ratio), static_cast<float>(scale), static_cast<float>(scale),
+        static_cast<float>(scale * ratio), static_cast<float>(scale), static_cast<float>(scale)
+      };
+      for (float alpha : kAlphas) {
+        for (float prism_h : kPrismH) {
+          for (int side = 0; side < 2; side++) {
+            // The apex inset of this shape, read from a request that reaches
+            // the apex outright. The snap is then detectable exactly: a
+            // truncation below the apex reports its own inset, a snapped one
+            // reports this value. Absence of the basal cap is NOT a usable
+            // signal — at a near-horizontal wedge the cap's own corners merge
+            // under the 3D vertex dedup tolerance, which scales with the tip's
+            // z, so the cap can be gone for reasons that have nothing to do
+            // with this gate.
+            const float apex_h1 = (side == 0) ? 1.0f : 0.0f;
+            const float apex_h3 = (side == 0) ? 0.0f : 1.0f;
+            auto at_apex = ComputeClosedFormPyramid(alpha, alpha, apex_h1, prism_h, apex_h3, dist);
+            const float apex_inset_f = (side == 0) ? at_apex.inset_at_top : at_apex.inset_at_bottom;
+            if (!(apex_inset_f > 0.0f)) {
+              continue;  // degenerate LP — there is no apex to snap onto.
+            }
+            const double apex_inset = static_cast<double>(apex_inset_f);
+
+            for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+              const double t = 1e-2 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+              const float h = static_cast<float>(1.0 - t);
+              const float h1 = (side == 0) ? h : 0.0f;
+              const float h3 = (side == 0) ? 0.0f : h;
+              auto cf = ComputeClosedFormPyramid(alpha, alpha, h1, prism_h, h3, dist);
+
+              const float inset_f = (side == 0) ? cf.inset_at_top : cf.inset_at_bottom;
+              if (inset_f != apex_inset_f) {
+                continue;  // truncated as requested; nothing was snapped away.
+              }
+              // The gap the request asked for and the snap removed.
+              const double gap = (1.0 - static_cast<double>(h)) * apex_inset;
+              snapped++;
+
+              // The gate width at this configuration: the same scale→tolerance
+              // clamp the solver applies, evaluated on the requested cross
+              // section, divided back into inset units.
+              double offset_scale = 0.0;
+              const double m_requested = static_cast<double>(h) * apex_inset;
+              for (int i = 0; i < kSideCnt; i++) {
+                offset_scale =
+                    std::max(offset_scale, std::fabs(kInsetFactor * (static_cast<double>(dist[i]) - m_requested)));
+              }
+              const bool clamp_active = offset_scale <= 1.0;
+              const double gate_width =
+                  kTolCoefficient * static_cast<double>(math::kFloatEps) * std::max(offset_scale, 1.0) / kInsetFactor;
+              const double ratio_of_gate = gap / gate_width;
+              const double a1 = A1FromAlpha(alpha, (side == 0) ? h1 : h3);
+              const double tip_shift = std::max(0.0, a1) * gap;
+
+              if (ratio_of_gate > worst_ratio) {
+                worst_ratio = ratio_of_gate;
+                char buf[224];
+                std::snprintf(buf, sizeof(buf), "scale=%g ratio=%g alpha=%g prism_h=%g %s 1-h=%.3e gap=%.4e", scale,
+                              ratio, static_cast<double>(alpha), static_cast<double>(prism_h),
+                              (side == 0) ? "upper" : "lower", t, gap);
+                worst_label = buf;
+              }
+              if (clamp_active) {
+                worst_gap_clamped = std::max(worst_gap_clamped, gap);
+              }
+              worst_tip_shift = std::max(worst_tip_shift, tip_shift / scale);
+              worst_gap_fraction = std::max(worst_gap_fraction, gap / apex_inset);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const double kClampedGateWidth = kTolCoefficient * static_cast<double>(math::kFloatEps) / kInsetFactor;
+  std::fprintf(stderr,
+               "[apex-snap] snapped=%d worst_gap/gate=%.4f worst_gap(clamped)=%.4e (clamped gate width %.4e) "
+               "worst_gap/apex_inset=%.4e worst_tip_shift/scale=%.4e\n",
+               snapped, worst_ratio, worst_gap_clamped, kClampedGateWidth, worst_gap_fraction, worst_tip_shift);
+  std::fprintf(stderr, "[apex-snap] worst case: %s\n", worst_label.c_str());
+
+  // Anti-vacuous, both directions: the sweep must snap something, and must get
+  // close enough to the gate edge that the bound is genuinely under test rather
+  // than satisfied by samples sitting deep inside it.
+  ASSERT_GT(snapped, 0) << "no configuration took the apex path — the sweep never exercised the snap";
+  EXPECT_GT(worst_ratio, 0.5) << "the closest sample sat at " << worst_ratio
+                              << " of its gate width — the sweep is too coarse to test the bound";
+
+  EXPECT_LE(worst_ratio, 1.0) << "a snapped gap exceeded the gate width that authorised it (" << worst_label
+                              << ") — the inset↔offset conversion in the gate is not the one that bounds the error";
+  EXPECT_LE(worst_gap_clamped, kClampedGateWidth) << "largest snapped gap in the scale-clamped regime was "
+                                                  << worst_gap_clamped << ", above the predicted " << kClampedGateWidth;
+}
+
+// ============================================================================
 // Contract 3 — Degenerate graceful-degradation contract.
 //
 // Replaces the old DegeneratePyramidSweep (which adjudicated cf vs the
