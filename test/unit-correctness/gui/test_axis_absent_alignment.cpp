@@ -100,11 +100,23 @@ void ExpectBothParsersAgreeOnFixedAxis(const std::string& text, const char* labe
   EXPECT_FLOAT_EQ(gui_crystal.azimuth.std, 0.0f);
   EXPECT_FLOAT_EQ(gui_crystal.roll.std, 0.0f);
 
-  // AC2: the same orientation, expressed as core's numbers vs the GUI's. This is the assertion the
-  // task exists for; the two blocks above are its guard rails.
+  // AC2: the same orientation, expressed as core's numbers vs the GUI's. This is the comparison
+  // the task exists for — expected values computed from core's parse, never restated as literals.
+  //
+  // Spread is compared as well as center, and that is not symmetry for its own sake. Measured with
+  // the red-state probe: with the fix reverted, the three center comparisons below stay GREEN. The
+  // old wrong value was kUniform{mean 0, std 360}, whose center coincides with core's — the whole
+  // divergence lives in the spread, so a cross-check on center alone passes over exactly the
+  // defect it was written to catch. The type comparison cannot carry the load either: core says
+  // kNoRandom and the GUI says kGauss-with-std-0 for the same physical thing, so the enums are not
+  // comparable and the pins above have to state the GUI's representation as a literal. That leaves
+  // spread as the one cross-parser quantity that actually goes red here.
   EXPECT_FLOAT_EQ(gui_crystal.zenith.mean, ZenithOfCore(core_axis.latitude_dist));
   EXPECT_FLOAT_EQ(gui_crystal.azimuth.mean, core_axis.azimuth_dist.center);
   EXPECT_FLOAT_EQ(gui_crystal.roll.mean, core_axis.roll_dist.center);
+  EXPECT_FLOAT_EQ(gui_crystal.zenith.std, core_axis.latitude_dist.spread);
+  EXPECT_FLOAT_EQ(gui_crystal.azimuth.std, core_axis.azimuth_dist.spread);
+  EXPECT_FLOAT_EQ(gui_crystal.roll.std, core_axis.roll_dist.spread);
 }
 
 std::string ReadFileOrEmpty(const std::string& path) {
