@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786086322821,
+  "lastUpdate": 1786086325210,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "bc66f2ec2fd37503c13844019d347f39549e4228",
-          "message": "Merge pull request #153 from LoveDaisy/feat/gpu-device-fused-accumulation\n\nfeat(scrum-302): device-fused XYZ accumulation (Metal + CUDA)",
-          "timestamp": "2026-06-28T10:45:30+08:00",
-          "tree_id": "44b7f418587aa18fc23e29305d3eeda8bd8bb3c9",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/bc66f2ec2fd37503c13844019d347f39549e4228"
-        },
-        "date": 1782615129259,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 70.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 85,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c2c5801cbe82410b1423d904c37480dc4ec03185",
           "message": "Merge pull request #154 from LoveDaisy/feat/cuda-async-engine-port\n\nperf(scrum-304): persist CUDA buffers across sessions — CUDA throughput competitive + bench standardized",
           "timestamp": "2026-06-29T09:28:47+08:00",
@@ -13969,6 +13925,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "985357aace8cb86e666f1c4e317f08c847f2af51",
+          "message": "Merge pull request #256 from LoveDaisy/fix/pyramid-closed-form-geometry-defects\n\nfix(core): close the closed-form pyramid's structural geometry defects",
+          "timestamp": "2026-08-07T14:54:11+08:00",
+          "tree_id": "08e78fc2e34f33e8a8b828d75ac37a0294dd0cad",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/985357aace8cb86e666f1c4e317f08c847f2af51"
+        },
+        "date": 1786086324448,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.2,
             "unit": "%"
           }
         ]
