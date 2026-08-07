@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786089131627,
+  "lastUpdate": 1786090775710,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "3c13a634c66560579a93d2b87cccd690510b1c83",
-          "message": "Merge pull request #155 from LoveDaisy/feat/cuda-async-engine\n\nperf(scrum-306): CUDA throughput 37M→~114M (dispatch default + dead-buffer cap)",
-          "timestamp": "2026-06-29T17:22:12+08:00",
-          "tree_id": "0bfd23fcfaa5e3614e447a2936ea2d73bc2879af",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3c13a634c66560579a93d2b87cccd690510b1c83"
-        },
-        "date": 1782725331116,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 380258.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 584579.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 383252.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 322089.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4788,6 +4740,54 @@ window.BENCHMARK_DATA = {
             "value": 345726.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "35c7cd3f1734523f8812d509152a6b3ff8ab2ea7",
+          "message": "Merge pull request #258 from LoveDaisy/fix/preview-drag-gain-fov\n\nfix(gui): scale preview drag by the lens's angular resolution",
+          "timestamp": "2026-08-07T16:10:31+08:00",
+          "tree_id": "91628e3757321fdf8723aac188f3c9c5be6aa3e5",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/35c7cd3f1734523f8812d509152a6b3ff8ab2ea7"
+        },
+        "date": 1786090773647,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 292755.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 590715.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 396578.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 395634.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
