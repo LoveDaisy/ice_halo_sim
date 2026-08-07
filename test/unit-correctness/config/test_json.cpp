@@ -263,6 +263,31 @@ TEST_F(V3TestJson, Crystal_AxisSlotObjectMissingTypeRejected) {
   }
 }
 
+// The shape scalars parse through the same Distribution::from_json, so the narrowing reaches them
+// too. That is stated here as a contract rather than left as a side effect of sharing an entry
+// point: an untested reach is one a later reader would be entitled to "fix" by narrowing it.
+// One entry point, one rule — and the shape scalars had the same accidental behavior for the same
+// reason, so exempting them would only preserve it somewhere less visible.
+TEST_F(V3TestJson, Crystal_ShapeScalarObjectMissingTypeRejected) {
+  auto j = config_json_;
+  auto& j_height = j.at("crystal")[1].at("shape").at("height");
+  ASSERT_TRUE(j_height.is_object()) << "fixture must write this scalar in object form";
+  j_height.erase("type");
+
+  try {
+    (void)j.get<ConfigManager>();
+    FAIL() << "expected std::invalid_argument for a shape.height object with no \"type\"";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("crystal[id=2]"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("\"type\""), std::string::npos) << msg;
+    // No slot name: this layer serves every distribution in the document and does not know which
+    // one it is on. The generic form still shows both legal ways to write it, which is the part
+    // that has to be there.
+    EXPECT_NE(msg.find("\"type\": \"gauss\""), std::string::npos) << msg;
+  }
+}
+
 // A present `axis` has always required `zenith`; only the message changes. It used to come from
 // nlohmann (`[json.exception.out_of_range.403] key 'zenith' not found`), which names neither the
 // crystal nor a way forward.

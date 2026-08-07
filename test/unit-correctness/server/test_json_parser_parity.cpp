@@ -589,6 +589,16 @@ TEST(JsonParserParity, AxisKeysAbsentStillAgreeOnUniform360) {
 
 // --- crystal.shape ---
 
+// Both parsers share one distribution entry point with the axis slots, so the missing-`type`
+// narrowing reaches the shape scalars as well. Pinned on both sides, because "the check is
+// shared" is a claim about two separate implementations here, not one.
+TEST(JsonParserParity, ShapeScalarObjectWithoutTypeIsRejected) {
+  const std::string text =
+      WrapCrystal(R"({ "id": 1, "type": "prism", "shape": { "height": { "mean": 1.0, "std": 0.2 } } })");
+  EXPECT_FALSE(ParseWithCore(text).ok) << "core must reject a shape.height object with no \"type\"";
+  EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
 TEST(JsonParserParity, PrismHeightOmitted) {
   BothParsed p;
   ASSERT_TRUE(ParseWithBoth(WrapCrystal(R"({ "id": 1, "type": "prism", "shape": {} })"), &p));
