@@ -69,14 +69,13 @@
 ```json
 {
   "zenith": 30.0,
-  "azimuth": { "type": "uniform", "mean": 0.0, "std": 360.0 },
-  "roll": { "type": "uniform", "mean": 0.0, "std": 360.0 }
+  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
 }
 ```
 
 （`mean`/`std` 是所有分布类型统一的落盘键名；对 `uniform` 而言，它们分别是区间中点和
-**完整**宽度，不是统计学意义上的均值/标准差——区间是 `[mean - std/2, mean + std/2]`。
-因此「转满一圈」写作 `mean: 0, std: 360`，而不是 `mean: 180`。）
+**完整**宽度，不是统计学意义上的均值/标准差。）
 
 `zenith` 没有这种兜底：只要写了 `axis`，`zenith` 就是必填的——见下方
 [必填字段验证](#必填字段验证)。
@@ -576,6 +575,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "max_hits": 7,
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1}
       ]
@@ -806,6 +806,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 999}
         ]
@@ -824,6 +825,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
@@ -842,6 +844,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 {
   "scattering": [
     {
+      "prob": 0,
       "crystal": [1, 2, 3],
       "proportion": [10, 20, 30],
       "filter": [1, 2, -1]
@@ -855,6 +858,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1, "proportion": 10, "filter": 1},
         {"crystal": 2, "proportion": 20, "filter": 2},
@@ -954,6 +958,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
@@ -1145,6 +1150,7 @@ number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribu
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]

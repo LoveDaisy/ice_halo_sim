@@ -71,14 +71,13 @@ uniformly over 0-360°. For example, writing only `"axis": {"zenith": 30}` is eq
 ```json
 {
   "zenith": 30.0,
-  "azimuth": { "type": "uniform", "mean": 0.0, "std": 360.0 },
-  "roll": { "type": "uniform", "mean": 0.0, "std": 360.0 }
+  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
 }
 ```
 
 (`mean`/`std` are the on-disk keys for every distribution type; for `uniform` they hold the
-interval midpoint and full width, not a statistical mean/standard-deviation — the interval is
-`[mean - std/2, mean + std/2]`. A full turn is therefore `mean: 0, std: 360`, not `mean: 180`.)
+interval midpoint and full width, not a statistical mean/standard-deviation.)
 
 `zenith` has no such fallback: if `axis` is written at all, `zenith` is required — see
 [Required Field Validation](#required-field-validation) below.
@@ -836,6 +835,7 @@ The render configuration defines the renderer parameters.
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 999}  // Error: crystal ID 999 does not exist
         ]
@@ -854,6 +854,7 @@ The render configuration defines the renderer parameters.
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}  // Correct: references a defined crystal
         ]
@@ -872,6 +873,7 @@ The render configuration defines the renderer parameters.
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"proportion": 50}  // Error: missing "crystal" field
       ]
@@ -885,6 +887,7 @@ The render configuration defines the renderer parameters.
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1, "proportion": 50}  // Correct: crystal ID specified
       ]
@@ -977,7 +980,7 @@ The render configuration defines the renderer parameters.
     "ray_num": 1000000,
     "max_hits": 7,
     "scattering": [
-      { "entries": [{"crystal": 1}] }
+      { "prob": 0, "entries": [{"crystal": 1}] }
     ]
   }
 }
@@ -1145,6 +1148,7 @@ number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribu
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
