@@ -876,6 +876,106 @@ TEST(ParseConfigApi, MissingCrystalSection) {
 }
 
 
+// `prob` must be rejected HERE, not only by core's ParseScatteringInfo. This parser is what the
+// CLI actually runs, and it hands core a re-serialized document (ConfigToJson writes `prob`
+// unconditionally from the parsed struct), so a check that lives only in core would never see the
+// missing key — it would already have been filled in with the struct's zero. Deleting this test's
+// counterpart branch in c_api.cpp makes this red while core's own test stays green, which is the
+// whole reason both exist.
+TEST(ParseConfigApi, ScatteringMissingProbRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  ASSERT_FALSE(root["scene"]["scattering"].empty());
+  root["scene"]["scattering"][0].erase("prob");
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+}
+
+
+// An `axis` slot written as an object must name its `type`, and it must be rejected HERE, not only
+// by core's from_json. This parser is what the CLI actually runs, and core only ever sees this
+// parser's output re-encoded by ConfigToJson — which writes `type` unconditionally from the
+// struct, so the missing key would already have been filled in before core looked. Deleting the
+// counterpart branch in c_api.cpp makes this red while core's own test stays green, which is the
+// whole reason both exist (the `prob` narrowing established the pattern).
+//
+// One case per slot: before this narrowing each slot silently produced a different wrong answer,
+// so they are not interchangeable evidence.
+TEST(ParseConfigApi, AxisSlotObjectMissingTypeRejected) {
+  for (const char* slot : { "zenith", "azimuth", "roll" }) {
+    SCOPED_TRACE(slot);
+    auto root = nlohmann::json::parse(MakeFullConfigJson());
+    ASSERT_TRUE(root["crystal"][0]["axis"][slot].is_object());
+    root["crystal"][0]["axis"][slot].erase("type");
+
+    ConfigScratch config{};
+    ConfigScratchGuard config_guard(config);
+    EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+  }
+}
+
+TEST(ParseConfigApi, AxisWithoutZenithRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["crystal"][0]["axis"].erase("zenith");
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+}
+
+// Both rejections again, this time through the whole public commit path a GUI drives
+// (SceneFromJson -> CommitScene) rather than the internal parser alone. The point is that the
+// document is turned away with an error code and the process survives — the failure mode this
+// guards against is a throw escaping somewhere along the way, which a return-code assertion on
+// ParseConfigString by itself cannot see.
+//
+// It reports MISSING_FIELD, not INVALID_CONFIG: the handle path parses the user's text at
+// SceneFromJson and hands core only the ConfigToJson re-encoding of what it accepted. Core's own
+// throw for these two documents is therefore structurally unreachable from here — ConfigToJson
+// always emits `type` — which is the same asymmetry that makes the c_api.cpp half mandatory.
+TEST(AxisSlotCommit, MalformedAxisIsRejectedNotCrash) {
+  struct Case {
+    const char* label;
+    nlohmann::json (*mutate)(nlohmann::json);
+  };
+  const Case cases[] = {
+    { "zenith object without type",
+      [](nlohmann::json root) {
+        root["crystal"][0]["axis"]["zenith"].erase("type");
+        return root;
+      } },
+    { "azimuth object without type",
+      [](nlohmann::json root) {
+        root["crystal"][0]["axis"]["azimuth"].erase("type");
+        return root;
+      } },
+    { "roll object without type",
+      [](nlohmann::json root) {
+        root["crystal"][0]["axis"]["roll"].erase("type");
+        return root;
+      } },
+    { "axis without zenith",
+      [](nlohmann::json root) {
+        root["crystal"][0]["axis"].erase("zenith");
+        return root;
+      } },
+  };
+
+  for (const auto& c : cases) {
+    SCOPED_TRACE(c.label);
+    auto root = c.mutate(nlohmann::json::parse(MakeFullConfigJson()));
+    root["scene"]["ray_num"] = 100;  // keep the commit finite
+
+    auto* server = LUMICE_CreateServer();
+    ASSERT_NE(server, nullptr);
+    EXPECT_EQ(CommitJsonConfig(server, root.dump().c_str()), LUMICE_ERR_MISSING_FIELD);
+    LUMICE_StopServer(server);
+    LUMICE_DestroyServer(server);
+  }
+}
+
+
 TEST(ParseConfigApi, FileNotFound) {
   LUMICE_Scene* scene = nullptr;
   EXPECT_EQ(LUMICE_SceneFromJsonFile("/tmp/nonexistent_lumice_config_12345.json", &scene), LUMICE_ERR_FILE_NOT_FOUND);

@@ -52,15 +52,35 @@ The crystal configuration defines the crystal shapes and orientation distributio
 
 #### axis (Orientation Distribution) Defaults
 
-If the `axis` field is absent, the following defaults are used:
+There are two different "missing" cases here, and they produce different behavior —
+do not treat one as a shorthand for the other.
+
+**`axis` entirely absent** — the crystal takes one fixed orientation, no randomization at all:
 
 ```json
 {
-  "zenith": 90.0,    // horizontal orientation
+  "zenith": 0.0,
   "azimuth": 0.0,
   "roll": 0.0
 }
 ```
+
+**`axis` present but `azimuth` / `roll` omitted** — the omitted axis rotates freely and
+uniformly over 0-360°. For example, writing only `"axis": {"zenith": 30}` is equivalent to:
+
+```json
+{
+  "zenith": 30.0,
+  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
+}
+```
+
+(`mean`/`std` are the on-disk keys for every distribution type; for `uniform` they hold the
+interval midpoint and full width, not a statistical mean/standard-deviation.)
+
+`zenith` has no such fallback: if `axis` is written at all, `zenith` is required — see
+[Required Field Validation](#required-field-validation) below.
 
 #### prism (Hexagonal Prism) Type
 
@@ -539,7 +559,7 @@ Each scattering configuration entry has the following structure:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `prob` | float | no | 0.0 | Multi-scattering probability |
+| `prob` | float | yes | - | Multi-scattering probability. Was optional and silently defaulted to `0.0`; omitting it is now an error. To keep the old behavior, write `"prob": 0` explicitly. |
 | `entries` | object array | yes | - | Array of crystal entries |
 
 **Entry object fields**:
@@ -784,8 +804,17 @@ The render configuration defines the renderer parameters.
 - `crystal`: `id`, `type`, `shape` are required
 - `filter`: `id`, `type` are required
 - `scene`: `light_source`, `ray_num`, `max_hits`, `scattering` are required
+- `scene.scattering[]`: `prob` is required (no default — missing `prob` is rejected; there is
+  no implicit fallback to 0, so a config that wants the historical no-multi-scattering behavior
+  must write `"prob": 0` explicitly)
 - `scene.scattering[].entries[]`: `crystal` is required
 - `render`: `id`, `resolution` are required
+- `crystal[].axis`, if present at all, requires `zenith`; `azimuth` and `roll` may each be
+  omitted independently (see [axis Defaults](#axis-orientation-distribution-defaults) above)
+- Any distribution slot written as an object — `axis.{zenith,azimuth,roll}`, and the shape
+  scalars `height` / `prism_h` / `upper_h` / `lower_h` / `face_distance[]` — requires `type`.
+  A distribution slot may instead be written as a bare number for a fixed value (e.g.
+  `"zenith": 30`), which needs no `type`.
 ### Type Validation
 
 - `crystal[].type` must be "prism" or "pyramid"
@@ -806,6 +835,7 @@ The render configuration defines the renderer parameters.
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 999}  // Error: crystal ID 999 does not exist
         ]
@@ -824,6 +854,7 @@ The render configuration defines the renderer parameters.
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}  // Correct: references a defined crystal
         ]
@@ -842,6 +873,7 @@ The render configuration defines the renderer parameters.
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"proportion": 50}  // Error: missing "crystal" field
       ]
@@ -855,6 +887,7 @@ The render configuration defines the renderer parameters.
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1, "proportion": 50}  // Correct: crystal ID specified
       ]
@@ -947,7 +980,7 @@ The render configuration defines the renderer parameters.
     "ray_num": 1000000,
     "max_hits": 7,
     "scattering": [
-      { "entries": [{"crystal": 1}] }
+      { "prob": 0, "entries": [{"crystal": 1}] }
     ]
   }
 }
@@ -976,6 +1009,105 @@ further from `1.0`, or widen the spread between the `face_distance` entries. On 
 shipped tolerance binding this path is not expected to fire at all (a 413,280-point
 sweep across the near-apex band never triggered it); if you do see it, you have found
 an edge case narrower than the ones already closed, and the same two remedies apply.
+
+### 7. Missing `prob` in a Scattering Layer
+
+**Description**: A `scene.scattering[]` layer is missing the required `prob` field. There is no
+implicit default — this used to silently fall back to `0.0`, but that fallback has been removed.
+
+**Error message**:
+```text
+scene.scattering[0] is missing required field "prob" (multi-scattering probability). The
+historical default was 0.0; add "prob": 0 explicitly to keep that behavior.
+```
+
+**Incorrect example**:
+```json
+{
+  "scattering": [
+    {
+      // Error: missing "prob"
+      "entries": [{"crystal": 1}]
+    }
+  ]
+}
+```
+
+**Correct example**:
+```json
+{
+  "scattering": [
+    {
+      "prob": 0,  // Correct: explicit even if you want the old no-multi-scattering behavior
+      "entries": [{"crystal": 1}]
+    }
+  ]
+}
+```
+
+### 8. Distribution Object Missing `type`
+
+**Description**: A distribution slot (`axis.zenith` / `axis.azimuth` / `axis.roll`, or a shape
+scalar such as `height`, `prism_h`, `upper_h`, `lower_h`, or an entry of `face_distance[]`) is
+written as a JSON object but omits `type`. A bare number needs no `type`; an object does.
+
+**Error message** (axis slots name themselves; shape scalars share one generic message that does
+not name the field):
+```text
+axis.zenith is a distribution object with no "type". Write axis.zenith either as a bare number
+for a fixed angle (e.g. "zenith": 20) or as an object naming the distribution (e.g. "zenith":
+{"type": "gauss", "mean": 20, "std": 5}).
+```
+```text
+distribution object is missing required key "type". Write either a bare number (e.g. 20) or an
+object naming the distribution (e.g. {"type": "gauss", "mean": 20, "std": 5}).
+```
+
+**Incorrect example**:
+```json
+{
+  "axis": {
+    "zenith": { "mean": 20, "std": 5 }  // Error: missing "type"
+  }
+}
+```
+
+**Correct example**:
+```json
+{
+  "axis": {
+    "zenith": { "type": "gauss", "mean": 20, "std": 5 }  // Correct
+  }
+}
+```
+
+### 9. `axis` Present but Missing `zenith`
+
+**Description**: Once `axis` is written at all, `zenith` is required — there is no default for
+it in that case. (Omit `axis` entirely to get the default fixed orientation instead; see
+[axis Defaults](#axis-orientation-distribution-defaults) above.)
+
+**Error message**:
+```text
+axis is present but has no "zenith", which is required whenever `axis` is written at all (omit
+`axis` entirely to get the default orientation instead). Write axis.zenith either as a bare
+number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribution (e.g.
+"zenith": {"type": "gauss", "mean": 20, "std": 5}).
+```
+
+**Incorrect example**:
+```json
+{
+  "axis": { "azimuth": 0 }  // Error: "axis" is present but "zenith" is missing
+}
+```
+
+**Correct example**:
+```json
+{
+  "axis": { "zenith": 30, "azimuth": 0 }  // Correct
+}
+```
 
 ## Configuration Best Practices
 
@@ -1016,6 +1148,7 @@ an edge case narrower than the ones already closed, and the same two remedies ap
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]

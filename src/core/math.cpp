@@ -8,6 +8,8 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 #include "core/lat_lut.hpp"
 #include "core/shared/lat_path_selection.hpp"
@@ -594,9 +596,25 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
     dist.type = DistributionType::kNoRandom;
     obj.get_to(dist.center);
   } else if (obj.is_object()) {
-    if (obj.contains("type")) {
-      obj.at("type").get_to(dist.type);
+    // "type" is required. It used to be optional, in which case the object kept whatever type the
+    // destination already carried — so the SAME written form meant different things depending on
+    // who called in: an axis `zenith` slot stayed kNoRandom and dropped "std" outright, while
+    // `azimuth` / `roll` stayed kUniform/360 and dropped what "mean" was asking for. No commit
+    // ever chose that; it fell out of "overwrite only the keys that are present". The ruling was
+    // to delete the implicit default rather than write it down, so there is nothing left for a
+    // downstream parser to mirror differently.
+    //
+    // The check reaches the shape scalars (height / prism_h / upper_h / lower_h / face_distance[])
+    // as well, since they parse through this same function. That is the intended scope, not a
+    // miss to be narrowed later: one entry point, one rule. Measured over this repo's corpus
+    // before landing — 68 configs, 149 crystals — no object-shaped slot of either kind omits
+    // "type", so nothing in tree changes how it loads.
+    if (!obj.contains("type")) {
+      throw std::invalid_argument(
+          "distribution object is missing required key \"type\". Write either a bare number "
+          "(e.g. 20) or an object naming the distribution (e.g. {\"type\": \"gauss\", \"mean\": 20, \"std\": 5}).");
     }
+    obj.at("type").get_to(dist.type);
     if (obj.contains("mean")) {
       obj.at("mean").get_to(dist.center);
     }
@@ -624,6 +642,33 @@ const char* AxisScalarKeyName(int slot) {
   return kAxisScalarKeys[slot];
 }
 
+std::string FormatAxisSlotHint(const std::string& slot_key) {
+  return "Write axis." + slot_key + " either as a bare number for a fixed angle (e.g. \"" + slot_key +
+         "\": 20) or as an object naming the distribution (e.g. \"" + slot_key +
+         "\": {\"type\": \"gauss\", \"mean\": 20, \"std\": 5}).";
+}
+
+namespace {
+
+// Parse one slot of a crystal's `axis` object.
+//
+// The missing-"type" rejection already lives in from_json(Distribution&), but that function serves
+// the shape scalars too and therefore cannot know which slot it is on. This narrows a published
+// contract, and a hand-written config outside this repo cannot be enumerated — the message is the
+// only migration guidance its author will ever get — so the check is repeated here, where the slot
+// name is known, to say WHICH slot and how to write it. The one in Distribution::from_json stays:
+// it is the backstop for every other caller.
+void ParseAxisSlot(const nlohmann::json& axis, const char* slot_key, Distribution& dist) {
+  const auto& slot = axis.at(slot_key);
+  if (slot.is_object() && !slot.contains("type")) {
+    throw std::invalid_argument(std::string("axis.") + slot_key + " is a distribution object with no \"type\". " +
+                                FormatAxisSlotHint(slot_key));
+  }
+  slot.get_to(dist);
+}
+
+}  // namespace
+
 void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
   // Zenith: internal latitude → external zenith (zenith center = 90 - latitude center).
   // Must handle kNoRandom (serialized as number) vs others (serialized as object).
@@ -640,7 +685,19 @@ void to_json(nlohmann::json& obj, const AxisDistribution& axis) {
 }
 
 void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
-  obj.at(AxisScalarKeyName(kAxisScalarZenith)).get_to(axis.latitude_dist);
+  // A present `axis` requires `zenith`; this has always been so, but it used to be enforced by
+  // .at() alone, whose "[json.exception.out_of_range.403] key 'zenith' not found" names neither
+  // the crystal nor a way forward. Only the message changes here — the document is rejected
+  // exactly as before.
+  const char* zenith_key = AxisScalarKeyName(kAxisScalarZenith);
+  if (!obj.contains(zenith_key)) {
+    throw std::invalid_argument(
+        std::string("axis is present but has no \"") + zenith_key +
+        "\", which is required whenever `axis` is written at all (omit `axis` entirely to get the "
+        "default orientation instead). " +
+        FormatAxisSlotHint(zenith_key));
+  }
+  ParseAxisSlot(obj, zenith_key, axis.latitude_dist);
   axis.latitude_dist.center = 90.0f - axis.latitude_dist.center;
 
   axis.azimuth_dist.type = DistributionType::kUniform;
@@ -650,13 +707,16 @@ void from_json(const nlohmann::json& obj, AxisDistribution& axis) {
   axis.roll_dist.center = 0.0f;
   axis.roll_dist.spread = 360.0f;
 
+  // These two seeds answer "what if the KEY is absent" — deliberate since 2022, 47 slots in this
+  // repo rely on it, and it is untouched here. What is gone is the second, accidental job they
+  // used to do: standing in as the `type` of a slot that was written but left typeless.
   const char* azimuth_key = AxisScalarKeyName(kAxisScalarAzimuth);
   if (obj.contains(azimuth_key)) {
-    obj.at(azimuth_key).get_to(axis.azimuth_dist);
+    ParseAxisSlot(obj, azimuth_key, axis.azimuth_dist);
   }
   const char* roll_key = AxisScalarKeyName(kAxisScalarRoll);
   if (obj.contains(roll_key)) {
-    obj.at(roll_key).get_to(axis.roll_dist);
+    ParseAxisSlot(obj, roll_key, axis.roll_dist);
   }
 }
 

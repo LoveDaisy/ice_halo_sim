@@ -232,6 +232,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_panel_registry.cpp"
@@ -253,9 +254,16 @@ if(BUILD_GUI)
   # (test/e2e/configs/raypath_color_three_arcs.json) rather than an inline string literal, so it
   # breaks when the shipped fixture and the GUI importer drift apart. gui_test defines the same
   # path for the cases that stayed there.
+  #
+  # LUMICE_TEST_FIXTURE_DIR: the absent-`axis` cross-parser oracle reads v3_config.json off disk as
+  # its drift sentinel. Not routed through the existing repo_root_dir argv the other corpus-reading
+  # tests use — add_test(NAME "LumiceGuiUnitTest") below passes no positional arguments, so that
+  # variable is empty in this binary and the tests reading it must skip; a compile definition is
+  # what makes the fixture unconditionally reachable here.
   target_compile_definitions(gui_unit_test PRIVATE
     LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
-    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs")
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs"
+    LUMICE_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/test/fixtures")
   # `lumice_obj` (objects), not `lumice` — a NAMED exemption, not an unexamined default.
   # Measured 2026-08-06 by switching this line to `lumice` and building the shared Release
   # flavor (the only configuration where it bites: -fvisibility=hidden is set for

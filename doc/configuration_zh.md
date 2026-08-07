@@ -51,15 +51,34 @@
 
 #### axis（方向分布）默认值
 
-如果 `axis` 字段不存在，使用以下默认值：
+这里有两种不同的"缺失"，行为并不相同——不要把其中一种当成另一种的简写。
+
+**`axis` 整个字段不存在** ⇒ 晶体取一个固定朝向，完全不随机：
 
 ```json
 {
-  "zenith": 90.0,    // 水平方向
+  "zenith": 0.0,
   "azimuth": 0.0,
   "roll": 0.0
 }
 ```
+
+**`axis` 存在但省略了 `azimuth` / `roll`** ⇒ 被省略的那个轴在 0–360° 内均匀自由旋转。
+例如只写 `"axis": {"zenith": 30}` 等价于：
+
+```json
+{
+  "zenith": 30.0,
+  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
+}
+```
+
+（`mean`/`std` 是所有分布类型统一的落盘键名；对 `uniform` 而言，它们分别是区间中点和
+**完整**宽度，不是统计学意义上的均值/标准差。）
+
+`zenith` 没有这种兜底：只要写了 `axis`，`zenith` 就是必填的——见下方
+[必填字段验证](#必填字段验证)。
 
 #### prism（六棱柱）类型
 
@@ -502,7 +521,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `prob` | 浮点数 | 否 | 0.0 | 多散射概率 |
+| `prob` | 浮点数 | 是 | - | 多散射概率。此前为可选、缺省时静默取 `0.0`；现在省略该字段会报错。若要保持旧行为，请显式写 `"prob": 0`。 |
 | `entries` | 对象数组 | 是 | - | 散射条目数组 |
 
 **entries 条目字段说明**：
@@ -556,6 +575,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "max_hits": 7,
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1}
       ]
@@ -756,8 +776,15 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 - `crystal`: `id`, `type`, `shape` 必填
 - `filter`: `id`, `type` 必填
 - `scene`: `light_source`, `ray_num`, `max_hits`, `scattering` 必填
+- `scene.scattering[]`: `prob` 必填（没有默认值——缺失 `prob` 会被拒绝；不存在隐式回落到 0，
+  想保留旧的"不做多次散射"行为必须显式写 `"prob": 0`）
 - `scene.scattering[].entries[]`: `crystal` 必填
 - `render`: `id`, `resolution` 必填
+- `crystal[].axis` 只要存在就要求 `zenith`；`azimuth` 与 `roll` 可以各自独立省略
+  （见上方 [axis（方向分布）默认值](#axis方向分布默认值)）
+- 任何写成对象的分布槽——`axis.{zenith,azimuth,roll}`，以及形状标量
+  `height` / `prism_h` / `upper_h` / `lower_h` / `face_distance[]` 中的任一项——都要求 `type`。
+  分布槽也可以写成一个裸数字表示固定值（如 `"zenith": 30`），此时不需要 `type`。
 ### 类型验证
 
 - `crystal[].type` 必须是 "prism" 或 "pyramid"
@@ -779,6 +806,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 999}
         ]
@@ -797,6 +825,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "scene": {
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
@@ -815,6 +844,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 {
   "scattering": [
     {
+      "prob": 0,
       "crystal": [1, 2, 3],
       "proportion": [10, 20, 30],
       "filter": [1, 2, -1]
@@ -828,6 +858,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 {
   "scattering": [
     {
+      "prob": 0,
       "entries": [
         {"crystal": 1, "proportion": 10, "filter": 1},
         {"crystal": 2, "proportion": 20, "filter": 2},
@@ -927,6 +958,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
@@ -980,6 +1012,104 @@ entries.
 你真的看到它，说明你撞上了一个比已收窄窗口更极端的边缘情况，同样的两条建议依然
 适用。
 
+### 8. scattering 层缺少 `prob`
+
+**错误描述**：`scene.scattering[]` 的某一层缺少必填字段 `prob`。这里没有隐式默认值——
+历史上会静默回落到 `0.0`，但这个回落已经被移除。
+
+**报错原文**：
+```text
+scene.scattering[0] is missing required field "prob" (multi-scattering probability). The
+historical default was 0.0; add "prob": 0 explicitly to keep that behavior.
+```
+
+**错误示例**：
+```json
+{
+  "scattering": [
+    {
+      // 错误：缺少 "prob"
+      "entries": [{"crystal": 1}]
+    }
+  ]
+}
+```
+
+**正确示例**：
+```json
+{
+  "scattering": [
+    {
+      "prob": 0,  // 正确：即使想保留旧的不做多次散射行为，也要显式写出来
+      "entries": [{"crystal": 1}]
+    }
+  ]
+}
+```
+
+### 9. 分布对象缺少 `type`
+
+**错误描述**：分布槽（`axis.zenith` / `axis.azimuth` / `axis.roll`，或形状标量如 `height`、
+`prism_h`、`upper_h`、`lower_h`、`face_distance[]` 中的某一项）写成了 JSON 对象却省略了
+`type`。裸数字不需要 `type`；对象需要。
+
+**报错原文**（axis 三槽会自报槽名；形状标量共用一条不点名字段的通用消息）：
+```text
+axis.zenith is a distribution object with no "type". Write axis.zenith either as a bare number
+for a fixed angle (e.g. "zenith": 20) or as an object naming the distribution (e.g. "zenith":
+{"type": "gauss", "mean": 20, "std": 5}).
+```
+```text
+distribution object is missing required key "type". Write either a bare number (e.g. 20) or an
+object naming the distribution (e.g. {"type": "gauss", "mean": 20, "std": 5}).
+```
+
+**错误示例**：
+```json
+{
+  "axis": {
+    "zenith": { "mean": 20, "std": 5 }  // 错误：缺少 "type"
+  }
+}
+```
+
+**正确示例**：
+```json
+{
+  "axis": {
+    "zenith": { "type": "gauss", "mean": 20, "std": 5 }  // 正确
+  }
+}
+```
+
+### 10. `axis` 存在但缺少 `zenith`
+
+**错误描述**：只要写了 `axis`，就必须写 `zenith`——此时它没有默认值。
+（想要默认的固定朝向，应整个省略 `axis`；见上方
+[axis（方向分布）默认值](#axis方向分布默认值)。）
+
+**报错原文**：
+```text
+axis is present but has no "zenith", which is required whenever `axis` is written at all (omit
+`axis` entirely to get the default orientation instead). Write axis.zenith either as a bare
+number for a fixed angle (e.g. "zenith": 20) or as an object naming the distribution (e.g.
+"zenith": {"type": "gauss", "mean": 20, "std": 5}).
+```
+
+**错误示例**：
+```json
+{
+  "axis": { "azimuth": 0 }  // 错误："axis" 存在但缺少 "zenith"
+}
+```
+
+**正确示例**：
+```json
+{
+  "axis": { "zenith": 30, "azimuth": 0 }  // 正确
+}
+```
+
 ## 配置最佳实践
 
 ### 性能优化建议
@@ -1020,6 +1150,7 @@ entries.
     "max_hits": 7,
     "scattering": [
       {
+        "prob": 0,
         "entries": [
           {"crystal": 1}
         ]
