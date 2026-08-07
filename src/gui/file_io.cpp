@@ -802,6 +802,25 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
       c.azimuth = ParseAxisDist(ax[azimuth_key], crystal_label, azimuth_key);
     if (ax.contains(roll_key))
       c.roll = ParseAxisDist(ax[roll_key], crystal_label, roll_key);
+  } else {
+    // `axis` omitted ENTIRELY (not the same case as a present `axis` missing a slot, handled
+    // above). Core's AxisDistribution() default constructor (math.cpp) is one fixed orientation —
+    // zenith/azimuth/roll all kNoRandom at 0, consuming no RNG — not a full-sphere spin. Leaving
+    // the three slots at CrystalConfig{}'s own default here (kUniform 0/360) inverted core's
+    // answer for every crystal that omits `axis`, examples/config_example.json's crystal 1
+    // included: the same file rendered one thing from the CLI and another from the GUI. That
+    // default is right where it comes from — a NEW crystal in the editor — and wrong as a stand-in
+    // for a value the document declined to state, which only core gets to define.
+    //
+    // AxisDistType has no kNoRandom counterpart for an axis slot, so the fixed value is spelled
+    // the way ParseAxisDist's own bare-number branch already spells one: kGauss with std=0.
+    // zenith, not latitude: core stores latitude (default 90 == zenith 0), the GUI stores zenith
+    // itself, so the literal here is 0 on all three. Pinned by AxisAbsentAlignment.*, which
+    // compares against core's parse rather than against these literals.
+    constexpr AxisDist kCoreAlignedFixedAxis{ AxisDistType::kGauss, 0.0f, 0.0f };
+    c.zenith = kCoreAlignedFixedAxis;
+    c.azimuth = kCoreAlignedFixedAxis;
+    c.roll = kCoreAlignedFixedAxis;
   }
 
   return c;
