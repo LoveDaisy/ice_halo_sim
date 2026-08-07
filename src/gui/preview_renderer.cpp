@@ -1100,8 +1100,18 @@ float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_
     // bare assert: assert compiles out, and a new lens type that is draggable but
     // missing from this switch would otherwise silently fall back to the old,
     // fov-blind feel with nothing to notice it by.
-    GUI_LOG_WARNING("ComputeDragGainDegPerPixel: no drag-gain law for lens_type {}; falling back to {} deg/px",
-                    lens_type, kLegacyGainDegPerPixel);
+    // Warn once per lens type, not once per frame: this is called from the drag handler, so an
+    // unthrottled warning would emit tens of lines per second and bury the very signal it exists
+    // to raise. The latch is per type rather than a single global flag so a second unknown type
+    // still gets its own line instead of being swallowed by the first one.
+    static thread_local unsigned int warned_lens_types = 0u;
+    const bool latchable = lens_type >= 0 && lens_type < static_cast<int>(sizeof(warned_lens_types) * 8);
+    const unsigned int bit = latchable ? (1u << lens_type) : 0u;
+    if (!latchable || (warned_lens_types & bit) == 0u) {
+      warned_lens_types |= bit;
+      GUI_LOG_WARNING("ComputeDragGainDegPerPixel: no drag-gain law for lens_type {}; falling back to {} deg/px",
+                      lens_type, kLegacyGainDegPerPixel);
+    }
     return kLegacyGainDegPerPixel;
   }
   return rad_per_px * 180.0f / kPi;
