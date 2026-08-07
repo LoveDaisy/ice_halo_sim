@@ -985,8 +985,19 @@ TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
 // ============================================================================
 
 TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
-  constexpr double kInsetFactor = 0.25 * 1.7320508075688772935;  // √3/4
+  // √3/4 — a mathematical constant, restated rather than imported because it
+  // cannot drift; nobody decides its value.
+  constexpr double kInsetFactor = 0.25 * 1.7320508075688772935;
+  // The gate-width formula below is deliberately re-derived here instead of
+  // calling GapToleranceForScale: a test that computes its expectation with the
+  // production expression proves only that the expression equals itself. The
+  // coefficient, though, is a tuned number someone may change on purpose, and a
+  // stale copy of it would leave this test quietly measuring a gate that no
+  // longer exists. So the formula stays independent and only the constant is
+  // pinned to production's.
   constexpr double kTolCoefficient = 5.0;
+  static_assert(kTolCoefficient == lumice::kClosedFormGapToleranceCoefficient,
+                "test's gate-width coefficient drifted from GapToleranceForScale's");
 
   static const double kScales[] = { 0.01, 0.2, 1.0, 20.0, 1000.0 };
   static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.02 };

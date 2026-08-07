@@ -90,7 +90,7 @@ double CrossSectionScale(const double r_side_dist[kClosedFormPrismSideCnt]) {
 // second copy of this expression elsewhere re-opens a band on that axis where
 // neither answer applies and a whole cone is dropped in silence.
 double GapToleranceForScale(double scale) {
-  return 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  return kClosedFormGapToleranceCoefficient * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
 }
 
 // SolveHexCrossSection — the 2D half-plane intersection over the six fixed

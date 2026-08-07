@@ -182,6 +182,19 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 //   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
 constexpr int kClosedFormPyramidFaceCnt = 20;
 constexpr int kClosedFormPyramidSideCnt = 6;
+// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * max(scale, 1)`
+// (geo3d_closedform.cpp), which is the single tolerance the apex-collapse gate
+// and the cross-section existence test are both derived from. Named here, in the
+// header, for one reason: a test that re-derives the gate width independently —
+// deliberately, so it is not verifying the production expression with the
+// production expression — still needs its own copy of this number to be provably
+// the same number. It can static_assert against this symbol and keep its own
+// formula. A tuned coefficient is exactly the kind of value someone changes on
+// purpose later, and a silently stale copy would downgrade such a test from
+// "checks the real boundary" to "checks a boundary that no longer exists"
+// without any signal. Mathematical constants (√3/4 and friends) need no such
+// binding — they do not drift, because nobody decides them.
+constexpr double kClosedFormGapToleranceCoefficient = 5.0;
 // Global vertex pool upper bound. Sized to accommodate:
 //   - 6 adjacent-direction pairs × up to 4 z-events (basal cut / shoulder ×2 /
 //     basal cut or apex) = 24 baseline vertices
