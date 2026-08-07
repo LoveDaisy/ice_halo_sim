@@ -86,7 +86,11 @@ static_assert((kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) - 
 static_assert(1.0 - (kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) < 1e-15, "kHexVtx[4] not unit");
 
 // Coarse-grained structural branches walked by the shared 2D cross-section
-// solver. Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
+// solver, plus one branch the pyramid evaluator records about itself
+// (kClosedFormPathTagApexRescueDegraded — see its comment; it shares this
+// bitfield because it shares path_tag_union, and a caller inspecting "which
+// branches did this solve walk" wants both in one place).
+// Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
 // the tags of every invocation into ClosedFormPyramidResult::path_tag_union.
 // Tests use the union to assert that specialized configurations
 // (shoulder / apex / face-drop) walk the SAME set of branches as regular
@@ -100,6 +104,15 @@ enum ClosedFormHexPathTag : uint16_t {
   kClosedFormPathTagBounded = 1u << 2,           // ≥3 present directions bounded a polygon
   kClosedFormPathTagAllDirsPresent = 1u << 3,    // all 6 directions bound a face
   kClosedFormPathTagEmpty = 1u << 4,             // feasible region empty
+  // A cone's truncation cross section came back empty while the apex-collapse
+  // gate said the cone was NOT at its apex — the two decisions disagreed about
+  // an input that must belong to exactly one of them. The pyramid evaluator
+  // sets this (the only bit here it owns), logs a warning naming the input, and
+  // falls through to the apex path so the cone degrades to its tip rather than
+  // vanishing. Both gates are derived from one tolerance, so this is meant to
+  // be unreachable; the bit exists so a change that unbinds them is caught by a
+  // test rather than by a user with a crystal that quietly lost a cone.
+  kClosedFormPathTagApexRescueDegraded = 1u << 5,
 };
 
 // ============================================================================
@@ -169,6 +182,19 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 //   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
 constexpr int kClosedFormPyramidFaceCnt = 20;
 constexpr int kClosedFormPyramidSideCnt = 6;
+// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * max(scale, 1)`
+// (geo3d_closedform.cpp), which is the single tolerance the apex-collapse gate
+// and the cross-section existence test are both derived from. Named here, in the
+// header, for one reason: a test that re-derives the gate width independently —
+// deliberately, so it is not verifying the production expression with the
+// production expression — still needs its own copy of this number to be provably
+// the same number. It can static_assert against this symbol and keep its own
+// formula. A tuned coefficient is exactly the kind of value someone changes on
+// purpose later, and a silently stale copy would downgrade such a test from
+// "checks the real boundary" to "checks a boundary that no longer exists"
+// without any signal. Mathematical constants (√3/4 and friends) need no such
+// binding — they do not drift, because nobody decides them.
+constexpr double kClosedFormGapToleranceCoefficient = 5.0;
 // Global vertex pool upper bound. Sized to accommodate:
 //   - 6 adjacent-direction pairs × up to 4 z-events (basal cut / shoulder ×2 /
 //     basal cut or apex) = 24 baseline vertices

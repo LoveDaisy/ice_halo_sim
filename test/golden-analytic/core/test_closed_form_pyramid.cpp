@@ -34,13 +34,19 @@
 // these invariants at CI time, so pool drift is caught by CI, not by review.
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
+#include <map>
 #include <memory>
+#include <sstream>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "core/geo3d.hpp"
@@ -48,6 +54,7 @@
 #include "core/math.hpp"
 #include "golden-analytic/core/closed_form_samples_generated.hpp"
 #include "golden-analytic/core/pyramid_topology_golden_generated.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 namespace {
@@ -396,13 +403,24 @@ TEST(ClosedFormPyramid, TopologyMatchesGoldenConstants) {
 //   (b) Supported faces: every present face carries ≥3 coplanar body vertices,
 //       so a "present" plane is a genuine supporting polygon, not a floating
 //       coefficient.
+//   (c) Strict polygon membership: every entry of a present face's OWN vertex
+//       list (face_vtx[slot]) lies on that face's plane. (b) searches the whole
+//       body for suitable vertices and therefore cannot see a polygon that
+//       lists a vertex belonging to some other face; (c) reads the polygon cf
+//       actually publishes. This is the form consumers depend on —
+//       simulator.cpp's BuildEntrySubTris fans face_vtx into entry triangles,
+//       so an off-plane entry places sampled entry points off the surface.
 //
-// NOTE (why not "every face_vtx entry lies on its own plane"): cf deliberately
-// over-associates apex-line-degenerate endpoints with all six cone faces
-// (geo3d_closedform.cpp appends the apex point to every 8+i / 14+i slot even
-// where the point is not on that cone's plane), so face_vtx is not a strict
-// on-plane list. (b) instead counts on-plane vertices from the full body set,
-// which is robust to that over-association.
+// (c) replaces a NOTE that an earlier revision of this file carried, which
+// declared the check un-assertable because cf "deliberately over-associates"
+// apex-line-degenerate endpoints with all six cone faces. That was a defect
+// being read as a design: when the hexagon is irregular the apex LP maximum
+// degenerates from a point to a segment, and each endpoint of that segment is
+// tight on only a SUBSET of the six cone planes. Appending it to all six put
+// polygon entries far off their own stated plane, broke the Euler
+// characteristic and left non-manifold edges. EnumerateApexPoints now reports
+// which cone planes actually pass through each apex point and the emitters
+// filter on it, so (c) is a strict invariant, not an aspiration.
 //
 // The well-conditioned pool is used (each entry is ≥50× off production's merge
 // boundary, so platform rounding can never flip a decision).
@@ -415,6 +433,7 @@ TEST(ClosedFormPyramid, VertexPlaneSelfConsistency) {
   constexpr double kRelTol = 1e-4;
   double worst_halfspace = 0.0;                 // max positive signed distance of any vertex to any present plane
   int min_on_plane = kClosedFormPyramidMaxVtx;  // min coplanar-vertex count over all present faces
+  double worst_polygon_off_plane = 0.0;         // max |signed distance| of a face_vtx entry to its OWN plane
 
   for (size_t si = 0; si < std::size(test_support::kPyramidWellConditionedSamples); si++) {
     const auto& p = test_support::kPyramidWellConditionedSamples[si];
@@ -448,10 +467,652 @@ TEST(ClosedFormPyramid, VertexPlaneSelfConsistency) {
       min_on_plane = std::min(min_on_plane, on_plane);
       EXPECT_GE(on_plane, 3) << "wc#" << si << " slot " << slot << ": present face has only " << on_plane
                              << " coplanar body vertices (< 3) — plane is not a genuine supporting polygon";
+
+      // (c) Every entry of this face's own published polygon lies on this
+      //     face's plane.
+      for (int k = 0; k < cf.face_vtx_cnt[slot]; k++) {
+        const int vi = cf.face_vtx[slot][k];
+        const double off = (a * cf.vtx[vi * 3 + 0] + b * cf.vtx[vi * 3 + 1] + c * cf.vtx[vi * 3 + 2] + d) / norm;
+        worst_polygon_off_plane = std::max(worst_polygon_off_plane, std::fabs(off));
+        EXPECT_LE(std::fabs(off), tol) << "wc#" << si << " slot " << slot << ": face_vtx[" << k << "] = vtx " << vi
+                                       << " is " << std::fabs(off) << " off its own plane (tol " << tol
+                                       << ") — the published polygon is not an on-plane list";
+      }
     }
   }
-  std::fprintf(stderr, "[vertex-plane self-consistency] worst_halfspace=%.3e min_on_plane=%d\n", worst_halfspace,
-               min_on_plane);
+  std::fprintf(stderr,
+               "[vertex-plane self-consistency] worst_halfspace=%.3e min_on_plane=%d worst_polygon_off_plane=%.3e\n",
+               worst_halfspace, min_on_plane, worst_polygon_off_plane);
+}
+
+// ============================================================================
+// Contract 2b — Structural validity of the emitted polyhedron, over a
+// parameter SCAN rather than a single shape.
+//
+// Contract 2 runs one fixed pool; the defects this contract guards against
+// live in parameter COMBINATIONS (irregular hexagon × apex-reaching height ×
+// absent prism section × one-sided cone), so a scan is the assertion's
+// substance, not decoration. Every case below is a legal crystal, and cf must
+// emit a closed solid for each: the published polygons are the only thing
+// downstream consumers (simulator.cpp's BuildEntrySubTris entry sampling,
+// crystal.cpp's mesh population) ever read, so a polygon set that is not a
+// closed 2-manifold is a live wrong-physics condition, not cosmetics.
+//
+// Four assertions per case, all on cf's own output, all judged against the
+// sample's characteristic length rather than an absolute epsilon
+// (doc/numerical-robustness.md §2):
+//   1. every face_vtx entry lies on its own face's plane;
+//   2. V − E + F == 2 (Euler characteristic of a sphere);
+//   3. every polygon edge is shared by exactly 2 present faces (2-manifold);
+//   4. every present face has non-zero area relative to the characteristic
+//      area (a "present" face that bounds nothing is not present).
+// ============================================================================
+
+struct ScanCase {
+  const char* label;
+  float upper_alpha;
+  float lower_alpha;
+  float h1;  // upper_h
+  float h2;  // prism_h
+  float h3;  // lower_h
+  float dist[kSideCnt];
+};
+
+// Census of cf's published polygon set: the vertex/edge/face counts an Euler
+// and manifold check needs, plus the worst on-plane deviation and smallest
+// face area. Reads face_vtx / face_present only — no re-derivation of the
+// topology from the planes, which is the point: the contract is about what cf
+// publishes, not about what could be recomputed from its coefficients.
+struct StructuralCensus {
+  int v = 0;                     // vertices referenced by ≥1 present face
+  int e = 0;                     // distinct undirected polygon edges
+  int f = 0;                     // present faces
+  int non_manifold_edges = 0;    // edges NOT shared by exactly 2 present faces
+  double worst_off_plane = 0.0;  // max |signed distance| of a face_vtx entry to its own plane
+  double min_face_area = std::numeric_limits<double>::infinity();
+};
+
+StructuralCensus TakeStructuralCensus(const ClosedFormPyramidResult& cf) {
+  StructuralCensus census;
+  std::map<std::pair<int, int>, int> edge_use;
+  std::vector<bool> referenced(static_cast<size_t>(std::max(cf.vtx_cnt, 1)), false);
+
+  for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+    if (!cf.face_present[slot]) {
+      continue;
+    }
+    census.f++;
+    const int m = cf.face_vtx_cnt[slot];
+    const double a = cf.plane_coef[slot * 4 + 0];
+    const double b = cf.plane_coef[slot * 4 + 1];
+    const double c = cf.plane_coef[slot * 4 + 2];
+    const double d = cf.plane_coef[slot * 4 + 3];
+    const double norm = std::sqrt(a * a + b * b + c * c);
+    for (int k = 0; k < m; k++) {
+      const int va = cf.face_vtx[slot][k];
+      const int vb = cf.face_vtx[slot][(k + 1) % m];
+      referenced[static_cast<size_t>(va)] = true;
+      edge_use[std::make_pair(std::min(va, vb), std::max(va, vb))]++;
+      if (norm > 0.0) {
+        const double off = (a * cf.vtx[va * 3 + 0] + b * cf.vtx[va * 3 + 1] + c * cf.vtx[va * 3 + 2] + d) / norm;
+        census.worst_off_plane = std::max(census.worst_off_plane, std::fabs(off));
+      }
+    }
+    census.min_face_area = std::min(census.min_face_area, FacePolygonArea(cf, slot));
+  }
+  for (int i = 0; i < cf.vtx_cnt; i++) {
+    if (referenced[static_cast<size_t>(i)]) {
+      census.v++;
+    }
+  }
+  census.e = static_cast<int>(edge_use.size());
+  for (const auto& [edge, use_cnt] : edge_use) {
+    (void)edge;
+    if (use_cnt != 2) {
+      census.non_manifold_edges++;
+    }
+  }
+  return census;
+}
+
+TEST(ClosedFormPyramid, StructuralValidityParamScan) {
+  // Same loose relative on-plane tolerance as Contract 2 — well above float
+  // round-off of an O(1)-coordinate three-plane intersection, far below any
+  // real feature separation.
+  constexpr double kRelTol = 1e-4;
+  // Non-zero-area floor, the mirror of DegenerateContractSafe's kNearZeroFrac:
+  // there a face at/below this fraction of the characteristic area counts as
+  // gracefully collapsed; here every present face must stay ABOVE it.
+  constexpr double kMinAreaFrac = 1e-6;
+
+  // Regular / M-crystal (the reported irregular shape) / mildly irregular /
+  // phase-rotated irregular hexagons, crossed with prism_h ∈ {0, 0.3},
+  // upper_h & lower_h ∈ {0, 0.5, 1.0} and one-sided vs two-sided cones.
+  // Wedge angles are swapped in the last case so the tight-plane criterion
+  // cannot be passing by coincidence on one particular pair of slopes.
+  static const ScanCase kCases[] = {
+    { "regular/prism0/apex-up", 28.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "regular/prism.3/apex-up", 28.0f, 28.0f, 1.0f, 0.3f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "regular/prism0/trunc-up", 28.0f, 28.0f, 0.5f, 0.0f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "M/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "M/prism.3/apex-up", 17.0f, 28.0f, 1.0f, 0.3f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "mild-irregular/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 0.9f, 1.0f, 1.0f, 0.9f, 1.0f, 1.0f } },
+    { "M/prism0/apex-both", 17.0f, 28.0f, 1.0f, 0.0f, 1.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "regular/prism0/apex-down", 28.0f, 28.0f, 0.0f, 0.0f, 1.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "M/prism.3/trunc-both", 17.0f, 28.0f, 0.5f, 0.3f, 0.5f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "rot-irregular/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 1.0f, 0.2f, 1.0f, 1.0f, 0.2f, 1.0f } },
+    { "M/prism0/apex-up/wedge-swap", 28.0f, 17.0f, 1.0f, 0.0f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+  };
+
+  for (const ScanCase& sc : kCases) {
+    auto cf = ComputeClosedFormPyramid(sc.upper_alpha, sc.lower_alpha, sc.h1, sc.h2, sc.h3, sc.dist);
+
+    PyramidSample s;
+    s.upper_alpha = sc.upper_alpha;
+    s.lower_alpha = sc.lower_alpha;
+    s.h1 = sc.h1;
+    s.h2 = sc.h2;
+    s.h3 = sc.h3;
+    for (int i = 0; i < kSideCnt; i++) {
+      s.dist[i] = sc.dist[i];
+    }
+    const double char_len = ProductionCharLen(s);
+    const double tol = kRelTol * char_len;
+    const double char_area = char_len * char_len;
+
+    const StructuralCensus census = TakeStructuralCensus(cf);
+
+    // EXPECT + continue rather than ASSERT: an ASSERT here returns from the
+    // whole TEST body and would hide every later case in the scan behind the
+    // first empty one — exactly the coverage loss this contract exists to
+    // prevent.
+    EXPECT_GT(census.f, 0) << sc.label << ": no present face at all — cf emitted nothing for a legal crystal";
+    if (census.f == 0) {
+      // Report the empty case in its own shape. The full diagnostic line below
+      // would print min_area as `inf` here (no present face ever lowers the
+      // running minimum), which reads as a runaway value rather than as what it
+      // is: cf emitted nothing at all. This case is not hypothetical — it is
+      // the signature of the vanishing-pyramid defect tracked separately, so
+      // the line a future reader greps for should say so plainly.
+      std::fprintf(stderr, "[structural-scan] %-30s EMPTY — cf emitted no present face\n", sc.label);
+      continue;
+    }
+
+    std::fprintf(stderr,
+                 "[structural-scan] %-30s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d off_plane=%.3e min_area=%.3e\n",
+                 sc.label, census.v, census.e, census.f, census.v - census.e + census.f, census.non_manifold_edges,
+                 census.worst_off_plane, census.min_face_area);
+
+    // (1) Every published polygon entry lies on its own face's plane.
+    EXPECT_LE(census.worst_off_plane, tol)
+        << sc.label << ": a face_vtx entry is " << census.worst_off_plane << " off its own plane (tol " << tol << ")";
+    // (2) Closed surface of genus 0.
+    EXPECT_EQ(census.v - census.e + census.f, 2)
+        << sc.label << ": V−E+F = " << (census.v - census.e + census.f) << " (V=" << census.v << " E=" << census.e
+        << " F=" << census.f << ") — the emitted polygon set is not a closed sphere-like surface";
+    // (3) 2-manifold: every edge borders exactly two faces.
+    EXPECT_EQ(census.non_manifold_edges, 0) << sc.label << ": " << census.non_manifold_edges
+                                            << " polygon edge(s) are not shared by exactly 2 present faces";
+    // (4) A present face must actually bound area.
+    EXPECT_GT(census.min_face_area, kMinAreaFrac * char_area)
+        << sc.label << ": smallest present-face area " << census.min_face_area << " ≤ " << kMinAreaFrac
+        << " × char_area=" << char_area << " — a face is marked present but bounds nothing";
+  }
+}
+
+// ============================================================================
+// Contract 2c — the near-apex height window.
+//
+// upper_h / lower_h approaching 1 walks a cone's truncation plane onto its
+// apex. Two decisions partition that axis: "does a cross-section polygon still
+// exist" (the 2D solver's feasibility tolerance) and "has the apex collapsed"
+// (the gate that switches the emitter to direct apex enumeration). Choose the
+// two independently and the band between them belongs to neither: the whole
+// cone is dropped without a word, the crystal comes out as an open prism, and
+// every consumer downstream keeps running on it. The scan below is what makes
+// that band an assertion rather than a code-reading exercise.
+//
+// It walks 1 − h from 1e-3 down to 1e-9 (eight points per decade) for the
+// regular hexagon and for one whose apex degenerates to a ridge, with and
+// without a prism section, on each cone side independently. The lower side is
+// not assumed to mirror the upper one — it is scanned.
+//
+// The assertions differ from StructuralValidityParamScan in exactly one place,
+// and the difference removes an inapplicable proxy rather than rigor: that
+// scan's minimum-area floor is a fixed fraction of the characteristic area,
+// which near the apex asserts "this crystal is not close to its apex" rather
+// than "this polygon is valid" — the top cap's area genuinely tends to zero as
+// h → 1. What replaces it is stronger where it counts: every one of the six
+// cone faces on the coned side must be PRESENT, which is exactly the property
+// a vanishing cone destroys.
+// ============================================================================
+
+// Number of present faces among the six-slot band starting at base_slot
+// (8 = upper cone, 14 = lower cone).
+int PresentFaceCountInBand(const ClosedFormPyramidResult& cf, int base_slot) {
+  int n = 0;
+  for (int i = 0; i < kSideCnt; i++) {
+    if (cf.face_present[base_slot + i]) {
+      n++;
+    }
+  }
+  return n;
+}
+
+TEST(ClosedFormPyramid, NearApexHeightWindowStructuralValidity) {
+  // Same loose relative on-plane tolerance as the other structural contracts.
+  constexpr double kRelTol = 1e-4;
+  // 1 − h sweep: eight points per decade from 1e-3 to 1e-9. The tail below
+  // ~6e-8 is where float32 rounds h to exactly 1.0f; it is scanned rather than
+  // trimmed, because "the window closes again once the input rounds onto the
+  // apex" is a property of the float32 grid and not of the solver — widening h
+  // to double would move that edge, so the scan should be able to see it.
+  constexpr int kStepsPerDecade = 8;
+  constexpr int kDecades = 6;
+
+  struct Shape {
+    const char* label;
+    float upper_alpha;
+    float lower_alpha;
+    float dist[kSideCnt];
+  };
+  // "regular": the apex is a single point where all six cone planes concur.
+  // "ridge": one opposite pair pulled in, so the apex degenerates to a segment.
+  // The two collapse modes shrink the cross section at different rates (a point
+  // contracts isotropically, a ridge contracts into a sliver), so neither one
+  // stands in for the other.
+  static const Shape kShapes[] = {
+    { "regular", 28.0f, 28.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "ridge", 17.0f, 28.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+  };
+  static const float kPrismH[] = { 0.0f, 0.3f };
+
+  int checked = 0;
+  std::vector<std::string> failures;
+
+  for (const Shape& sh : kShapes) {
+    for (float prism_h : kPrismH) {
+      for (int side = 0; side < 2; side++) {
+        const char* side_label = (side == 0) ? "upper" : "lower";
+        const int cone_base_slot = (side == 0) ? 8 : 14;
+        // Per-group tally, printed unconditionally: on a green run it states
+        // the window was walked and found closed; on a red one it states how
+        // wide the open band is and where it sits, which is the diagnostic a
+        // reader needs and which 200-plus individual failure lines bury.
+        int group_bad = 0;
+        double bad_t_hi = 0.0;
+        double bad_t_lo = 0.0;
+        for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+          const double t = 1e-3 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+          const float h = static_cast<float>(1.0 - t);
+          const float h1 = (side == 0) ? h : 0.0f;
+          const float h3 = (side == 0) ? 0.0f : h;
+
+          auto cf = ComputeClosedFormPyramid(sh.upper_alpha, sh.lower_alpha, h1, prism_h, h3, sh.dist);
+
+          PyramidSample s;
+          s.upper_alpha = sh.upper_alpha;
+          s.lower_alpha = sh.lower_alpha;
+          s.h1 = h1;
+          s.h2 = prism_h;
+          s.h3 = h3;
+          for (int i = 0; i < kSideCnt; i++) {
+            s.dist[i] = sh.dist[i];
+          }
+          const double tol = kRelTol * ProductionCharLen(s);
+
+          const StructuralCensus census = TakeStructuralCensus(cf);
+          const int cone_faces = PresentFaceCountInBand(cf, cone_base_slot);
+          checked++;
+
+          const bool ok = census.f > 0 && cone_faces == kSideCnt && census.worst_off_plane <= tol &&
+                          census.v - census.e + census.f == 2 && census.non_manifold_edges == 0 &&
+                          census.min_face_area > 0.0;
+          if (!ok) {
+            if (group_bad == 0) {
+              bad_t_hi = t;
+            }
+            bad_t_lo = t;
+            group_bad++;
+            char buf[320];
+            std::snprintf(buf, sizeof(buf),
+                          "%s/prism%.1f/%s 1-h=%.3e: cone_faces=%d/6 V=%d E=%d F=%d chi=%d non_manifold=%d "
+                          "off_plane=%.3e (tol %.3e) min_area=%.3e",
+                          sh.label, static_cast<double>(prism_h), side_label, t, cone_faces, census.v, census.e,
+                          census.f, census.v - census.e + census.f, census.non_manifold_edges, census.worst_off_plane,
+                          tol, census.min_face_area);
+            failures.emplace_back(buf);
+          }
+        }
+        if (group_bad == 0) {
+          std::fprintf(stderr, "[near-apex-window] %-8s prism=%.1f %-5s: %2d/%2d heights valid\n", sh.label,
+                       static_cast<double>(prism_h), side_label, kStepsPerDecade * kDecades + 1,
+                       kStepsPerDecade * kDecades + 1);
+        } else {
+          std::fprintf(stderr, "[near-apex-window] %-8s prism=%.1f %-5s: %2d/%2d INVALID, 1-h in [%.3e, %.3e]\n",
+                       sh.label, static_cast<double>(prism_h), side_label, group_bad, kStepsPerDecade * kDecades + 1,
+                       bad_t_lo, bad_t_hi);
+        }
+      }
+    }
+  }
+
+  std::fprintf(stderr, "[near-apex-window] checked=%d failed=%zu\n", checked, failures.size());
+  for (size_t i = 0; i < failures.size() && i < 8; i++) {
+    std::fprintf(stderr, "[near-apex-window] %s\n", failures[i].c_str());
+  }
+  EXPECT_TRUE(failures.empty()) << failures.size() << " of " << checked
+                                << " near-apex heights produced a structurally invalid solid (first: "
+                                << (failures.empty() ? std::string("-") : failures.front()) << ")";
+}
+
+// ============================================================================
+// Contract 2d — the apex-rescue degradation must stay unreachable, and must
+// announce itself if it ever becomes reachable again.
+//
+// "A cone's truncation cross section is empty while the collapse gate says the
+// cone is not at its apex" is the state that used to swallow a whole cone in
+// silence. Both decisions now read one tolerance, so no legal input should be
+// able to reach it — and this sweep is what makes "should" checkable, over
+// shape patterns (which faces are pulled in), overall scale, spread ratio,
+// wedge angle, prism height, height approaching 1 from 1e-2 down to 1e-7, and
+// both cone sides.
+//
+// Two things keep the sweep from being a sentinel with no teeth, which this
+// file has been burned by before:
+//   • an anti-vacuous counter — the sweep must actually land in the near-apex
+//     regime (configurations whose top cap is gone while the requested height
+//     is below 1, i.e. the apex path was taken) many times over, or a green
+//     result means only that the sweep never went where the defect lives;
+//   • the first offending configuration, if one is ever found, is re-run under
+//     a log capture and the captured text is reported — so the failure names
+//     the input AND proves the warning that accompanies the degradation
+//     actually reaches the log.
+//
+// Detection power was measured by inverting the gate back to the absolute
+// epsilon it replaced; scripts/verify_apex_rescue_warning_detection_power.sh
+// re-runs that experiment on demand.
+// ============================================================================
+
+// Captures everything the global logger emits for the lifetime of the object.
+// RAII rather than a manual remove_sink, because GetSharedSink() is a
+// process-wide singleton: an early return with the sink still attached would
+// leave later tests in this binary writing into a destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
+
+  ~LogCapture() { GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
+TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
+  // Which of the six face distances are pulled in — the apex is a point when
+  // none are, a ridge for an opposite pair, and something else again for an
+  // adjacent pair or a three-fold pattern. Each shrinks the near-apex cross
+  // section along a different number of axes.
+  struct Pattern {
+    const char* label;
+    int pulled_in[kSideCnt];
+  };
+  static const Pattern kPatterns[] = {
+    { "none", { 0, 0, 0, 0, 0, 0 } },       { "opposite-pair", { 1, 0, 0, 1, 0, 0 } },
+    { "single", { 1, 0, 0, 0, 0, 0 } },     { "adjacent-pair", { 1, 1, 0, 0, 0, 0 } },
+    { "three-fold", { 1, 0, 1, 0, 1, 0 } }, { "five", { 1, 1, 1, 1, 1, 0 } },
+  };
+  // Overall size spans the range real crystals use and four decades past it in
+  // both directions: the tolerance this test is about is scale-clamped, so
+  // whether a configuration sits above or below the clamp changes which end of
+  // the binding is doing the work.
+  static const double kScales[] = { 0.01, 0.05, 0.2, 1.0, 5.0, 20.0, 100.0, 1000.0 };
+  static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.05, 0.01, 0.002 };
+  static const float kAlphas[] = { 0.2f, 5.0f, 28.0f, 60.0f, 89.0f };
+  static const float kPrismH[] = { 0.0f, 0.3f, 2.0f };
+  constexpr int kStepsPerDecade = 8;
+  constexpr int kDecades = 5;
+
+  int swept = 0;
+  int apex_path_taken = 0;
+  int degraded = 0;
+  std::string first_offender;
+  float offender_args[5] = {};  // alpha, h1, h2, h3 + scale, for the capture re-run
+  float offender_dist[kSideCnt] = {};
+
+  for (const Pattern& pat : kPatterns) {
+    for (double scale : kScales) {
+      for (double ratio : kRatios) {
+        float dist[kSideCnt];
+        for (int i = 0; i < kSideCnt; i++) {
+          dist[i] = static_cast<float>(scale * (pat.pulled_in[i] != 0 ? ratio : 1.0));
+        }
+        for (float alpha : kAlphas) {
+          for (float prism_h : kPrismH) {
+            for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+              const double t = 1e-2 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+              const float h = static_cast<float>(1.0 - t);
+              for (int side = 0; side < 2; side++) {
+                const float h1 = (side == 0) ? h : 0.0f;
+                const float h3 = (side == 0) ? 0.0f : h;
+                auto cf = ComputeClosedFormPyramid(alpha, alpha, h1, prism_h, h3, dist);
+                swept++;
+                // The apex path is what the collapse gate switches to; its
+                // signature is the coned side's basal cap being gone even
+                // though a truncation below the apex was requested.
+                if (!cf.face_present[side == 0 ? 0 : 1]) {
+                  apex_path_taken++;
+                }
+                if ((cf.path_tag_union & kClosedFormPathTagApexRescueDegraded) != 0) {
+                  degraded++;
+                  if (first_offender.empty()) {
+                    char buf[256];
+                    std::snprintf(buf, sizeof(buf), "%s scale=%g ratio=%g alpha=%g prism_h=%g %s 1-h=%.3e", pat.label,
+                                  scale, ratio, static_cast<double>(alpha), static_cast<double>(prism_h),
+                                  (side == 0) ? "upper" : "lower", t);
+                    first_offender = buf;
+                    offender_args[0] = alpha;
+                    offender_args[1] = h1;
+                    offender_args[2] = prism_h;
+                    offender_args[3] = h3;
+                    for (int i = 0; i < kSideCnt; i++) {
+                      offender_dist[i] = dist[i];
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  std::fprintf(stderr, "[apex-rescue] swept=%d apex_path_taken=%d degraded=%d\n", swept, apex_path_taken, degraded);
+
+  // Anti-vacuous: a sweep that never reaches the apex path cannot say anything
+  // about a degradation that only exists there.
+  EXPECT_GT(apex_path_taken, swept / 100) << "the sweep barely ever took the apex path (" << apex_path_taken << " of "
+                                          << swept << ") — it is not exercising the regime the degradation lives in";
+
+  if (degraded > 0) {
+    // Re-run the first offender alone, under a log capture, so the failure
+    // reports the input AND the warning the degradation is required to emit.
+    std::string text;
+    {
+      LogCapture capture;
+      ComputeClosedFormPyramid(offender_args[0], offender_args[0], offender_args[1], offender_args[2], offender_args[3],
+                               offender_dist);
+      text = capture.Text();
+    }
+    EXPECT_NE(text.find("no cross-section"), std::string::npos)
+        << "the apex-rescue degradation fired without logging a warning naming the input — captured log was: " << text;
+    std::fprintf(stderr, "[apex-rescue] first offender: %s\n[apex-rescue] captured log: %s\n", first_offender.c_str(),
+                 text.c_str());
+  }
+  EXPECT_EQ(degraded, 0) << degraded << " of " << swept
+                         << " legal shapes reached the apex-rescue degradation — the collapse gate and the "
+                            "cross-section feasibility test no longer agree on where the apex starts. First: "
+                         << first_offender;
+}
+
+// ============================================================================
+// Contract 2e — what the apex snap costs.
+//
+// The collapse gate claims a neighbourhood of the apex and snaps the requested
+// truncation onto it, so a height landing inside that neighbourhood yields a
+// solid whose tip is slightly too tall. That is the price of closing the band,
+// and it is only worth paying if it is bounded by the gate's own width — the
+// alternative in the same neighbourhood is not an exact crystal, it is a
+// crystal missing a cone.
+//
+// The bound is stated in inset units, where the gate is defined: the solver's
+// feasibility tolerance divided by the fixed factor √3/4 relating a half-plane
+// offset to an inset. It is written out here rather than read from production,
+// because a test that recomputes the implementation's own expression and
+// compares it to itself asserts nothing.
+//
+// Measured, not assumed: the sweep reports the largest gap it actually snapped
+// away, both as an absolute inset (comparable to the scale-clamped 1.15e-4) and
+// as a fraction of each configuration's own gate width, plus the resulting
+// vertical displacement of the tip.
+// ============================================================================
+
+TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
+  // √3/4 — a mathematical constant, restated rather than imported because it
+  // cannot drift; nobody decides its value.
+  constexpr double kInsetFactor = 0.25 * 1.7320508075688772935;
+  // The gate-width formula below is deliberately re-derived here instead of
+  // calling GapToleranceForScale: a test that computes its expectation with the
+  // production expression proves only that the expression equals itself. The
+  // coefficient, though, is a tuned number someone may change on purpose, and a
+  // stale copy of it would leave this test quietly measuring a gate that no
+  // longer exists. So the formula stays independent and only the constant is
+  // pinned to production's.
+  constexpr double kTolCoefficient = 5.0;
+  static_assert(kTolCoefficient == lumice::kClosedFormGapToleranceCoefficient,
+                "test's gate-width coefficient drifted from GapToleranceForScale's");
+
+  static const double kScales[] = { 0.01, 0.2, 1.0, 20.0, 1000.0 };
+  static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.02 };
+  static const float kAlphas[] = { 0.2f, 5.0f, 28.0f, 60.0f, 89.0f };
+  static const float kPrismH[] = { 0.0f, 0.3f };
+  // Dense enough in 1 − h that some samples land just inside the gate edge,
+  // which is where the bound is actually under test.
+  constexpr int kStepsPerDecade = 32;
+  constexpr int kDecades = 6;
+
+  int snapped = 0;
+  double worst_ratio = 0.0;         // snapped gap / that configuration's gate width
+  double worst_gap_clamped = 0.0;   // largest snapped gap where the scale clamp was active
+  double worst_tip_shift = 0.0;     // tip displacement, relative to the crystal size
+  double worst_gap_fraction = 0.0;  // snapped gap as a fraction of the apex inset
+  std::string worst_label;
+
+  for (double scale : kScales) {
+    for (double ratio : kRatios) {
+      // One opposite pair pulled in (ridge apex) and the regular hexagon are
+      // both covered: ratio == 1.0 degenerates the first family into the
+      // second.
+      float dist[kSideCnt] = {
+        static_cast<float>(scale * ratio), static_cast<float>(scale), static_cast<float>(scale),
+        static_cast<float>(scale * ratio), static_cast<float>(scale), static_cast<float>(scale)
+      };
+      for (float alpha : kAlphas) {
+        for (float prism_h : kPrismH) {
+          for (int side = 0; side < 2; side++) {
+            // The apex inset of this shape, read from a request that reaches
+            // the apex outright. The snap is then detectable exactly: a
+            // truncation below the apex reports its own inset, a snapped one
+            // reports this value. Absence of the basal cap is NOT a usable
+            // signal — at a near-horizontal wedge the cap's own corners merge
+            // under the 3D vertex dedup tolerance, which scales with the tip's
+            // z, so the cap can be gone for reasons that have nothing to do
+            // with this gate.
+            const float apex_h1 = (side == 0) ? 1.0f : 0.0f;
+            const float apex_h3 = (side == 0) ? 0.0f : 1.0f;
+            auto at_apex = ComputeClosedFormPyramid(alpha, alpha, apex_h1, prism_h, apex_h3, dist);
+            const float apex_inset_f = (side == 0) ? at_apex.inset_at_top : at_apex.inset_at_bottom;
+            if (!(apex_inset_f > 0.0f)) {
+              continue;  // degenerate LP — there is no apex to snap onto.
+            }
+            const double apex_inset = static_cast<double>(apex_inset_f);
+
+            for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+              const double t = 1e-2 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+              const float h = static_cast<float>(1.0 - t);
+              const float h1 = (side == 0) ? h : 0.0f;
+              const float h3 = (side == 0) ? 0.0f : h;
+              auto cf = ComputeClosedFormPyramid(alpha, alpha, h1, prism_h, h3, dist);
+
+              const float inset_f = (side == 0) ? cf.inset_at_top : cf.inset_at_bottom;
+              if (inset_f != apex_inset_f) {
+                continue;  // truncated as requested; nothing was snapped away.
+              }
+              // The gap the request asked for and the snap removed.
+              const double gap = (1.0 - static_cast<double>(h)) * apex_inset;
+              snapped++;
+
+              // The gate width at this configuration: the same scale→tolerance
+              // clamp the solver applies, evaluated on the requested cross
+              // section, divided back into inset units.
+              double offset_scale = 0.0;
+              const double m_requested = static_cast<double>(h) * apex_inset;
+              for (int i = 0; i < kSideCnt; i++) {
+                offset_scale =
+                    std::max(offset_scale, std::fabs(kInsetFactor * (static_cast<double>(dist[i]) - m_requested)));
+              }
+              const bool clamp_active = offset_scale <= 1.0;
+              const double gate_width =
+                  kTolCoefficient * static_cast<double>(math::kFloatEps) * std::max(offset_scale, 1.0) / kInsetFactor;
+              const double ratio_of_gate = gap / gate_width;
+              const double a1 = A1FromAlpha(alpha, (side == 0) ? h1 : h3);
+              const double tip_shift = std::max(0.0, a1) * gap;
+
+              if (ratio_of_gate > worst_ratio) {
+                worst_ratio = ratio_of_gate;
+                char buf[224];
+                std::snprintf(buf, sizeof(buf), "scale=%g ratio=%g alpha=%g prism_h=%g %s 1-h=%.3e gap=%.4e", scale,
+                              ratio, static_cast<double>(alpha), static_cast<double>(prism_h),
+                              (side == 0) ? "upper" : "lower", t, gap);
+                worst_label = buf;
+              }
+              if (clamp_active) {
+                worst_gap_clamped = std::max(worst_gap_clamped, gap);
+              }
+              worst_tip_shift = std::max(worst_tip_shift, tip_shift / scale);
+              worst_gap_fraction = std::max(worst_gap_fraction, gap / apex_inset);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const double kClampedGateWidth = kTolCoefficient * static_cast<double>(math::kFloatEps) / kInsetFactor;
+  std::fprintf(stderr,
+               "[apex-snap] snapped=%d worst_gap/gate=%.4f worst_gap(clamped)=%.4e (clamped gate width %.4e) "
+               "worst_gap/apex_inset=%.4e worst_tip_shift/scale=%.4e\n",
+               snapped, worst_ratio, worst_gap_clamped, kClampedGateWidth, worst_gap_fraction, worst_tip_shift);
+  std::fprintf(stderr, "[apex-snap] worst case: %s\n", worst_label.c_str());
+
+  // Anti-vacuous, both directions: the sweep must snap something, and must get
+  // close enough to the gate edge that the bound is genuinely under test rather
+  // than satisfied by samples sitting deep inside it.
+  ASSERT_GT(snapped, 0) << "no configuration took the apex path — the sweep never exercised the snap";
+  EXPECT_GT(worst_ratio, 0.5) << "the closest sample sat at " << worst_ratio
+                              << " of its gate width — the sweep is too coarse to test the bound";
+
+  EXPECT_LE(worst_ratio, 1.0) << "a snapped gap exceeded the gate width that authorised it (" << worst_label
+                              << ") — the inset↔offset conversion in the gate is not the one that bounds the error";
+  EXPECT_LE(worst_gap_clamped, kClampedGateWidth) << "largest snapped gap in the scale-clamped regime was "
+                                                  << worst_gap_clamped << ", above the predicted " << kClampedGateWidth;
 }
 
 // ============================================================================

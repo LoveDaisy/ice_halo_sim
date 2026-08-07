@@ -8,6 +8,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "util/fatal.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -56,6 +57,41 @@ constexpr uint16_t kPathTagDedupHit = kClosedFormPathTagDedupHit;
 constexpr uint16_t kPathTagBounded = kClosedFormPathTagBounded;
 constexpr uint16_t kPathTagAllDirsPresent = kClosedFormPathTagAllDirsPresent;
 constexpr uint16_t kPathTagEmpty = kClosedFormPathTagEmpty;
+constexpr uint16_t kPathTagApexRescueDegraded = kClosedFormPathTagApexRescueDegraded;
+
+// Magnitude the half-plane offsets are measured against. Its own function, and
+// not an inline loop at each site, because it is the input to
+// GapToleranceForScale below: two call sites reducing "the same" array with two
+// hand-written loops is how a tolerance ends up meaning different things in
+// different places while reading identically.
+double CrossSectionScale(const double r_side_dist[kClosedFormPrismSideCnt]) {
+  double scale = 0.0;
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    scale = std::max(scale, std::fabs(r_side_dist[i]));
+  }
+  return scale;
+}
+
+// Feasibility / dedup tolerance for a cross section of the given scale.
+//
+// Empirically the 9-orders-of-magnitude stable window ends around here — at
+// 4-way concurrencies (a corner where two solve-pairs collapse to the same
+// geometric point), the double-precision residuals between the two candidates
+// are of order 10·kFloatEps, so a pure 1·kFloatEps threshold occasionally fails
+// to merge them. 5·kFloatEps aligns with production's dedup scale
+// (SolveConvexPolyhedronVtxD uses 5e-5·char_len — src/core/math.cpp:807-811)
+// and keeps distinct corners in the well-conditioned regime safely apart
+// (~0.01+ scale at σ = 0.2).
+//
+// SINGLE OWNER, deliberately: this value decides not only "can the solver still
+// separate two corners" but also, through ApexCollapsedAt, "has the cone's
+// cross section shrunk past the point of having a solution at all". Those two
+// questions partition one axis, so they must be answered by one constant. A
+// second copy of this expression elsewhere re-opens a band on that axis where
+// neither answer applies and a whole cone is dropped in silence.
+double GapToleranceForScale(double scale) {
+  return kClosedFormGapToleranceCoefficient * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+}
 
 // SolveHexCrossSection — the 2D half-plane intersection over the six fixed
 // prism directions θᵢ = i·60° with per-direction offset `r_side_dist[i]` (in
@@ -89,24 +125,14 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
 
   double cs[kClosedFormPrismSideCnt];
   double sn[kClosedFormPrismSideCnt];
-  double scale = 0.0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     cs[i] = kHexFaceCos[i];
     sn[i] = kHexFaceSin[i];
-    scale = std::max(scale, std::fabs(r_side_dist[i]));
     if (r_side_dist[i] <= 0.0) {
       tag |= kPathTagAnyDirDegenerate;
     }
   }
-  // Relative feasibility / dedup tolerance. Empirically the 9-orders-of-magnitude
-  // stable window ends around here — at 4-way concurrencies (a corner where
-  // two solve-pairs collapse to the same geometric point), the double-precision
-  // residuals between the two candidates are of order 10·kFloatEps, so a
-  // pure 1·kFloatEps threshold occasionally fails to merge them. 5·kFloatEps
-  // aligns with production's dedup scale (SolveConvexPolyhedronVtxD uses
-  // 5e-5·char_len — src/core/math.cpp:807-811) and keeps distinct corners in
-  // the well-conditioned regime safely apart (~0.01+ scale at σ = 0.2).
-  double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol = GapToleranceForScale(CrossSectionScale(r_side_dist));
 
   struct Corner {
     double x, y;
@@ -295,6 +321,47 @@ struct ApexLPResult {
   double v = 0.0;
 };
 
+// Half-plane offsets of the cone cross section at physical inset `m`, in the
+// units SolveHexCrossSection consumes, plus the scale its tolerance derives
+// from. The eroded-offset formula lives here alone: the apex-collapse gate
+// below must feed GapToleranceForScale the SAME quantity the cross-section
+// solver will see, and it cannot do that from a second hand-written copy of
+// this expression that merely happens to match today.
+double ComputeRSideDistAndScale(const float dist[kClosedFormPrismSideCnt], double m,
+                                double out_r_side_dist[kClosedFormPrismSideCnt]) {
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    out_r_side_dist[i] = kInsetK * (static_cast<double>(dist[i]) - m);
+  }
+  return CrossSectionScale(out_r_side_dist);
+}
+
+// True iff the cone's cross section at physical inset `m` has shrunk past the
+// point where the 2D solver can still resolve it, so the tip must be
+// materialized by direct apex enumeration instead of by intersecting the eroded
+// half planes.
+//
+// Deliberately NOT an independent threshold on `apex_m - m`. "Is there still a
+// cross-section polygon" and "has the apex collapsed" partition the same axis;
+// answering them with two separately chosen constants leaves a band that
+// belongs to neither, and an input landing in it loses its entire cone with no
+// diagnostic — the truncation branch finds nothing to emit and the apex branch
+// never runs. Deriving the gate from the same scale→tolerance map the solver
+// uses, converted from half-plane-offset units back to physical inset by the
+// fixed factor kInsetK, makes that band structurally empty instead of merely
+// narrow. The conversion is exact because the two quantities are related by
+// that one constant: r_side = kInsetK · (dist − m).
+//
+// The gate is slightly conservative — it claims a neighbourhood a little wider
+// than the one where the solver actually fails, which is the correct direction:
+// inside it the tip is snapped onto the apex, an error bounded by the gate
+// width itself, whereas outside it the failure mode is losing the cone.
+bool ApexCollapsedAt(const float dist[kClosedFormPrismSideCnt], double m, double apex_m) {
+  double r_side_dist[kClosedFormPrismSideCnt];
+  const double scale = ComputeRSideDistAndScale(dist, m, r_side_dist);
+  const double gap_tol = GapToleranceForScale(scale) / kInsetK;
+  return (apex_m - m) <= gap_tol;
+}
+
 // Shared 3×3 solver for a direction triple (i, j, k):
 //   [cs_i sn_i 1] [u]   [d_i]
 //   [cs_j sn_j 1] [v] = [d_j]
@@ -339,14 +406,45 @@ bool Solve3x3ForDirTriple(const double cs[kClosedFormPyramidSideCnt], const doub
   return true;
 }
 
+// The cone-face emitters below walk their six slots as a literal `i < 6`
+// (8+i / 14+i), while EnumerateApexPoints builds its tight-face bitmask over
+// kClosedFormPyramidSideCnt directions. Those two counts must agree or the
+// mask's width and the loop that consumes it would drift apart silently —
+// producing not a compile error but a quietly under- or over-read mask. Bind
+// the assumption here, at the one place the bitmask is defined, rather than
+// renaming the literal at each of the nine loops that share it.
+static_assert(kClosedFormPyramidSideCnt == 6,
+              "cone-face emitters and EnumerateApexPoints' tight-face bitmask both hard-code 6 sides");
+
 // Enumerate all triples achieving m within tol of the LP maximum, emitting
 // the distinct (u, v) points. Used to detect and materialize apex degeneracy
 // (LP optimum is a line segment / edge rather than a unique point). Returns
 // the number of distinct points written; out_uv must have capacity for at
 // least 20 (u, v) pairs. All returned points have m physically equal to
 // m_max_phys within tolerance.
+//
+// out_mask[e] is the set of direction indices whose constraint is TIGHT at
+// point e — bit r set iff cos(t_r)·u + sin(t_r)·v + m == dist_scaled[r], i.e.
+// iff cone plane r actually passes through that point. It is a required
+// output, not an optional extra: the caller's whole reason to call this
+// function is the degenerate case, and in the degenerate case "which faces own
+// this point" is NOT "all six". When the hexagon is regular the LP maximum is
+// a single point where all six constraints are tight and the mask is 0b111111;
+// when it is irregular the maximum degenerates to a segment (a roof ridge) and
+// each endpoint is the concurrence of only THREE or FOUR of the cone planes —
+// the remaining ones pass well clear of it. Associating an endpoint with all
+// six regardless puts a vertex on faces whose plane misses it by an O(1)
+// distance, which is not a rounding-scale error: it breaks the polygon's
+// on-plane invariant, the Euler characteristic and the 2-manifold edge count
+// at once, and it feeds simulator.cpp's BuildEntrySubTris entry-face sampling
+// triangles whose interior lies inside the crystal.
+//
+// The tightness test reuses tol_lp, the same scale-relative tolerance this
+// function already applies to the LP-optimality and feasibility tests on the
+// same quantities (doc/numerical-robustness.md rule 2 — no absolute epsilon on
+// a scale-varying geometric quantity).
 int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max_phys, double out_u[20],
-                        double out_v[20]) {
+                        double out_v[20], int out_mask[20]) {
   double cs[kClosedFormPyramidSideCnt];
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
@@ -397,6 +495,13 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
         if (cnt < 20) {
           out_u[cnt] = u;
           out_v[cnt] = v;
+          int tight_mask = 0;
+          for (int r = 0; r < kClosedFormPyramidSideCnt; r++) {
+            if (std::fabs(cs[r] * u + sn[r] * v + m_lp - dist_scaled[r]) <= tol_lp) {
+              tight_mask |= (1 << r);
+            }
+          }
+          out_mask[cnt] = tight_mask;
           cnt++;
         }
       }
@@ -704,6 +809,24 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   double m_apex_lower = has_lower ? apex.m : 0.0;
   double m_at_top = has_upper ? std::min(static_cast<double>(h1) * m_apex_upper, m_apex_upper) : 0.0;
   double m_at_bot = has_lower ? std::min(static_cast<double>(h3) * m_apex_lower, m_apex_lower) : 0.0;
+  // Apex-collapse decision, taken here rather than at the emission site because
+  // a collapsed side's truncation inset IS the apex inset: snapping m before z,
+  // inset_at_* and the basal d are derived from it keeps the whole solid — the
+  // emitted vertices, the plane the basal d describes and the inset the caller
+  // reads back — consistent with the one decision, instead of emitting an apex
+  // tip while still reporting a truncation plane a hair below it.
+  //
+  // The requested truncation is at most one gate width below the apex when this
+  // fires (see ApexCollapsedAt), so the snap moves the tip by at most that, and
+  // it is exactly what an h ≥ 1 request already got from the std::min above.
+  const bool upper_apex_collapsed = has_upper && ApexCollapsedAt(dist, m_at_top, apex.m);
+  const bool lower_apex_collapsed = has_lower && ApexCollapsedAt(dist, m_at_bot, apex.m);
+  if (upper_apex_collapsed) {
+    m_at_top = apex.m;
+  }
+  if (lower_apex_collapsed) {
+    m_at_bot = apex.m;
+  }
   double z_top = has_upper ? (h2_2 + a1 * m_at_top) : h2_2;
   double z_bot = has_lower ? (-h2_2 - a2 * m_at_bot) : -h2_2;
   r.inset_at_top = static_cast<float>(m_at_top);
@@ -765,9 +888,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   auto emit_ring = [&](double m, double z, const int face_slot_of_dir[6], int basal_slot,
                        const int extra_slot_of_dir[6]) -> int {
     double r_side[6];
-    for (int i = 0; i < 6; i++) {
-      r_side[i] = kInsetK * (static_cast<double>(dist[i]) - m);
-    }
+    ComputeRSideDistAndScale(dist, m, r_side);
     uint16_t local_tag = 0;
     HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
     r.path_tag_union |= local_tag;
@@ -800,15 +921,34 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     return xs.corner_cnt;
   };
 
+  // Both cone sides funnel their "the truncation ring came back empty while the
+  // gate said this side is NOT at its apex" case through here. It is meant to
+  // be unreachable: the gate and emit_ring's cross-section test are two
+  // readings of one tolerance (ApexCollapsedAt / GapToleranceForScale). It is
+  // reported anyway, because an unreachable degradation that says nothing is
+  // indistinguishable from a silent one on the day someone unbinds them — and
+  // what this degrades into, a crystal missing a whole cone, traces rays,
+  // renders and reports statistics while looking perfectly healthy. Mark the
+  // path, name the input, and let the caller fall through to the apex emitter
+  // so the cone collapses onto its tip instead of disappearing.
+  auto report_apex_rescue = [&](const char* side, double m_requested) {
+    r.path_tag_union |= kPathTagApexRescueDegraded;
+    LOG_WARNING(
+        "ComputeClosedFormPyramid: {} cone has no cross-section at inset {:.6e} (apex inset {:.6e}), yet is not "
+        "recognised as collapsed; face_distance=[{:.4f}, {:.4f}, {:.4f}, {:.4f}, {:.4f}, {:.4f}]. Degrading that "
+        "cone to a single apex point. To get the truncated shape instead, move upper_h/lower_h away from 1.0 or "
+        "widen the spread between face_distance entries.",
+        side, m_requested, apex.m, static_cast<double>(dist[0]), static_cast<double>(dist[1]),
+        static_cast<double>(dist[2]), static_cast<double>(dist[3]), static_cast<double>(dist[4]),
+        static_cast<double>(dist[5]));
+  };
+
   // Face-slot tables: index by direction i.
   int prism_slot[6] = { 2, 3, 4, 5, 6, 7 };
   int upper_slot[6] = { 8, 9, 10, 11, 12, 13 };
   int lower_slot[6] = { 14, 15, 16, 17, 18, 19 };
 
   // ---- Upper side ----------------------------------------------------------
-  const double kApexEps = 1e-9;
-  const bool upper_apex_collapsed = has_upper && m_at_top >= apex.m - kApexEps;
-  const bool lower_apex_collapsed = has_lower && m_at_bot >= apex.m - kApexEps;
   if (has_upper) {
     // Shoulder ring at z = +h2/2 (m = 0): 4-way concurrence prism_i,
     // prism_{i+1}, upper_cone_i, upper_cone_{i+1}. Every corner is a vertex.
@@ -833,7 +973,10 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     //     as a single point only when the cross-section is empty.
     const int upper_basal_slot = upper_apex_collapsed ? -1 : 0;
     int n_top = emit_ring(m_at_top, z_top, upper_slot, upper_basal_slot, nullptr);
-    if (upper_apex_collapsed) {
+    if (!upper_apex_collapsed && n_top == 0) {
+      report_apex_rescue("upper", m_at_top);
+    }
+    if (upper_apex_collapsed || n_top == 0) {
       // At the apex, the LP maximum may be degenerate: multiple triples
       // achieving the same m_apex give distinct (u, v) points → the "apex"
       // is a line segment (or higher), not a single point. emit_ring uses
@@ -842,10 +985,18 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       // outside its tolerance). Enumerate the LP-max triples directly here
       // so the union of both paths covers apex-line degeneracy.
       double apex_us[20], apex_vs[20];
-      int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs);
+      int apex_mask[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
         int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_top, r.vtx, &vtx_cnt, kDedupTol);
         for (int i = 0; i < 6; i++) {
+          // Only the cone planes that actually pass through this apex point
+          // own it — see EnumerateApexPoints' out_mask contract. A regular
+          // hexagon sets every bit, so this is a no-op there; an irregular one
+          // has an apex RIDGE whose endpoints belong to a subset of the faces.
+          if ((apex_mask[e] & (1 << i)) == 0) {
+            continue;
+          }
           AppendFaceVtx(&r, 8 + i, idx);
           any_face_present[8 + i] = true;
         }
@@ -885,12 +1036,20 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     // Same shape rules as the upper side (see comment above).
     const int lower_basal_slot = lower_apex_collapsed ? -1 : 1;
     int n_bot = emit_ring(m_at_bot, z_bot, lower_slot, lower_basal_slot, nullptr);
-    if (lower_apex_collapsed) {
+    if (!lower_apex_collapsed && n_bot == 0) {
+      report_apex_rescue("lower", m_at_bot);
+    }
+    if (lower_apex_collapsed || n_bot == 0) {
       double apex_us[20], apex_vs[20];
-      int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs);
+      int apex_mask[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
         int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_bot, r.vtx, &vtx_cnt, kDedupTol);
         for (int i = 0; i < 6; i++) {
+          // See the upper-side note: only the tight cone planes own this point.
+          if ((apex_mask[e] & (1 << i)) == 0) {
+            continue;
+          }
           AppendFaceVtx(&r, 14 + i, idx);
           any_face_present[14 + i] = true;
         }
@@ -919,11 +1078,32 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   // If a cone is absent on one side, that side's cap is the shoulder itself
   // acting as the basal face. Emit corners at z = ±h2/2 and associate with
   // the basal slot on that side.
-  if (!has_upper && h2 > math::kFloatEps) {
-    emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/0, nullptr);
+  //
+  // The cap ring's dir->slot map names the side walls the cap's corners are
+  // shared with, and which walls those are depends on whether a prism section
+  // exists. With h2 > 0 the cap sits at z = ±h2/2 between the prism faces.
+  // With h2 == 0 there IS no prism face to attach to: the cap degenerates onto
+  // z = 0, where the only walls meeting it are the OPPOSITE side's cone faces.
+  // Guarding the whole emission on `h2 > kFloatEps` therefore did not skip a
+  // redundant cap, it dropped the only cap the solid had — leaving prism_h == 0
+  // crystals open on their coneless side (a regular hexagonal pyramid came out
+  // with no base at all, and h1 == 0 with h2 == 0 came out with no faces at
+  // all). The z = 0 ring is not a new geometric relation: it is the same ring
+  // the has_upper / has_lower branches already emit at h2 == 0 to bind the
+  // shoulder to both cones, so the vertices coincide and AppendFaceVtx dedups.
+  if (!has_upper) {
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/0, nullptr);
+    } else if (has_lower) {
+      emit_ring(0.0, 0.0, lower_slot, /*basal_slot=*/0, nullptr);
+    }
   }
-  if (!has_lower && h2 > math::kFloatEps) {
-    emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/1, nullptr);
+  if (!has_lower) {
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/1, nullptr);
+    } else if (has_upper) {
+      emit_ring(0.0, 0.0, upper_slot, /*basal_slot=*/1, nullptr);
+    }
   }
   // Pure prism (no cones, no prism section) — nothing to emit; handled by the
   // zero-volume short-circuit above.
