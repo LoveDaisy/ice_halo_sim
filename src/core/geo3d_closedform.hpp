@@ -182,7 +182,7 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 //   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
 constexpr int kClosedFormPyramidFaceCnt = 20;
 constexpr int kClosedFormPyramidSideCnt = 6;
-// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * max(scale, 1)`
+// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * scale`
 // (geo3d_closedform.cpp), which is the single tolerance the apex-collapse gate
 // and the cross-section existence test are both derived from. Named here, in the
 // header, for one reason: a test that re-derives the gate width independently —

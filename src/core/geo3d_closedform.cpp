@@ -90,7 +90,7 @@ double CrossSectionScale(const double r_side_dist[kClosedFormPrismSideCnt]) {
 // second copy of this expression elsewhere re-opens a band on that axis where
 // neither answer applies and a whole cone is dropped in silence.
 double GapToleranceForScale(double scale) {
-  return kClosedFormGapToleranceCoefficient * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  return kClosedFormGapToleranceCoefficient * static_cast<double>(math::kFloatEps) * scale;
 }
 
 // SolveHexCrossSection — the 2D half-plane intersection over the six fixed
@@ -453,7 +453,7 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
     sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
-  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * scale;
   double m_max_lp = m_max_phys * kInsetK;
   int cnt = 0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
@@ -531,7 +531,7 @@ ApexLPResult MaxFeasibleInsetLP(const double dist_scaled[kClosedFormPyramidSideC
     sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
-  double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol = 5.0 * static_cast<double>(math::kFloatEps) * scale;
   ApexLPResult best;
   bool found = false;
 
@@ -619,7 +619,7 @@ int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt]
     sn[i] = kHexFaceSin[i];
     scale = std::max(scale, std::fabs(dist_scaled[i]));
   }
-  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol_lp = 5.0 * static_cast<double>(math::kFloatEps) * scale;
   double tol_phys = tol_lp / kInsetK;
   int cnt = 0;
   for (int i = 0; i < kClosedFormPyramidSideCnt; i++) {
@@ -864,8 +864,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   // implementation) produced O(6·N_events) spurious vertices — visible as
   // shrinking-hexagon layers stacked between shoulder and apex.
   int vtx_cnt = 0;
-  const double kDedupTol =
-      5.0 * static_cast<double>(math::kFloatEps) * std::max({ std::fabs(z_top), std::fabs(z_bot), 1.0 });
+  const double kDedupTol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(std::fabs(z_top), std::fabs(z_bot));
   bool any_face_present[kClosedFormPyramidFaceCnt]{};
 
   // Helper: emit vertex at (u, v, z) and associate with the given face slots.
