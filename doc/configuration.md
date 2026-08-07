@@ -755,7 +755,8 @@ The render configuration defines the renderer parameters.
     the snap logs a warning.
 - **Wedge angle legality**: a cone's wedge angle — `upper_alpha`/`lower_alpha` when set
   directly, or derived from `upper_indices`/`lower_indices` (Miller indices) — must
-  fall strictly inside `(0.1°, 89.9°)`. Outside that range, the cone on that side is
+  fall within `[0.1°, 89.9°]` — both endpoints included, so exactly `0.1` and exactly
+  `89.9` still build a cone. Outside that range, the cone on that side is
   treated as absent, the same as `upper_h`/`lower_h` folding to `0.0` — silently, with
   no warning of its own (the shape still builds fine as long as the rest of the
   crystal — the other side's cone, or the prism band — still gives it enough faces).
