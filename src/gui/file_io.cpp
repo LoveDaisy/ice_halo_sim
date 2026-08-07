@@ -716,7 +716,7 @@ static AxisDist ParseAxisDist(const json& j, const std::string& crystal_label, c
     // For `zenith` this IS a visible change, not just better wording: core's old silent answer
     // there was kNoRandom (a fixed angle), so a typeless zenith that used to open as a fixed value
     // now opens as AxisDist{}.type. `azimuth` and `roll` already defaulted to that same type.
-    if (j.is_object() && !j.contains("type")) {
+    if (!j.contains("type")) {
       a.type = AxisDist{}.type;
       const std::string msg = crystal_label + " axis." + slot_key +
                               " is written as an object with no \"type\"; loaded as " +
