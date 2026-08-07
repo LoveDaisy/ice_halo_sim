@@ -876,6 +876,23 @@ TEST(ParseConfigApi, MissingCrystalSection) {
 }
 
 
+// `prob` must be rejected HERE, not only by core's ParseScatteringInfo. This parser is what the
+// CLI actually runs, and it hands core a re-serialized document (ConfigToJson writes `prob`
+// unconditionally from the parsed struct), so a check that lives only in core would never see the
+// missing key — it would already have been filled in with the struct's zero. Deleting this test's
+// counterpart branch in c_api.cpp makes this red while core's own test stays green, which is the
+// whole reason both exist.
+TEST(ParseConfigApi, ScatteringMissingProbRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  ASSERT_FALSE(root["scene"]["scattering"].empty());
+  root["scene"]["scattering"][0].erase("prob");
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+}
+
+
 TEST(ParseConfigApi, FileNotFound) {
   LUMICE_Scene* scene = nullptr;
   EXPECT_EQ(LUMICE_SceneFromJsonFile("/tmp/nonexistent_lumice_config_12345.json", &scene), LUMICE_ERR_FILE_NOT_FOUND);

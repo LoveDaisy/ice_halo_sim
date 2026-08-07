@@ -1878,11 +1878,26 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       // same crystal/filter reference share one pool slot (identity).
       std::map<int, int> crystal_id_to_pool;
       std::map<int, int> filter_id_to_pool;
-      for (const auto& jlayer : jscattering) {
+      for (size_t layer_idx = 0; layer_idx < jscattering.size(); layer_idx++) {
+        const auto& jlayer = jscattering[layer_idx];
         Layer layer;
-        // NOT Layer{}.probability (0.0f), which is what the GUI-native path uses. Another
-        // undecided divergence: 1.0f here means an absent `prob` loads as "always continue".
-        layer.probability = jlayer.value("prob", 1.0f);
+        // `prob` is required by core, which rejects a config that omits it. The GUI is an editor,
+        // not the engine, so it loads such a file anyway — but at core's own historical value
+        // (0.0f, also Layer{}.probability), never at a value core never used. The user is told,
+        // because a silently substituted probability is a physics change they did not ask for.
+        // SetImportComplexFilterWarning is reused deliberately: it is the import-warning
+        // accumulator, not a complex-filter-specific channel — the name is narrower than the
+        // mechanism, and renaming it is out of scope here.
+        if (jlayer.contains("prob")) {
+          layer.probability = jlayer.at("prob").get<float>();
+        } else {
+          layer.probability = 0.0f;
+          const std::string msg = "Scattering layer " + std::to_string(layer_idx) +
+                                  " is missing \"prob\"; loaded as 0 (the value core used before the "
+                                  "field became required).";
+          GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+          SetImportComplexFilterWarning(msg);
+        }
         if (jlayer.contains("entries") && jlayer["entries"].is_array()) {
           const auto& jentries = jlayer["entries"];
           for (const auto& je : jentries) {

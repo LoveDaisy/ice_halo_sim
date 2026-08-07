@@ -3282,15 +3282,43 @@ TEST(ImportExport, DISABLED_AxisDistTypeFallbackDivergesFromStructDefault) {
             "per-slot defaults (latitude kNoRandom, azimuth/roll kUniform); tracked, not fixed";
 }
 
-// file_io.cpp DeserializeFromJson: absent `prob` falls back to 1.0f. Both oracles say otherwise —
-// Layer{}.probability is 0.0f, and so is core's, since config_manager.cpp value-initializes MsInfo
-// before its contains() check. Not corrected here because the ruling was to REMOVE the default
-// rather than fix it: core is to reject a scattering layer with no `prob` outright, which leaves
-// this loader nothing to fall back to and deletes the divergence instead of relocating it. That is
-// a change to what core accepts, tracked outside this file. Measured at ruling time: 92/92 layers
-// in the repo's config corpus write `prob` explicitly, so nothing in tree reads either value.
-TEST(ImportExport, DISABLED_LegacyProbFallbackDivergesFromStructDefault) {
-  FAIL() << "loader fallback 1.0f != Layer{}.probability (0.0f), and != core's 0.0f; tracked, not fixed";
+// The `prob` divergence this anchor once recorded (loader fell back to 1.0f while both oracles
+// said 0.0f) is resolved: core now rejects a scattering layer with no `prob` outright, so there is
+// no default left to disagree about. The GUI still loads such a file — it is an editor, and a
+// document you cannot open is a document you cannot fix — but at core's own historical 0.0f, and
+// it says so. All three parts are asserted, because "loads" and "loads at the right value" and
+// "tells the user" are three separate ways this could go wrong, and only the first is obvious.
+TEST(ImportExport, LegacyMissingProbLoadsAsZeroWithNotice) {
+  gui::DoNew();
+  gui::ClearImportComplexFilterWarning();
+  gui::GuiState loaded = gui::InitDefaultState();
+
+  // Layer 0 keeps its `prob`; layer 1 omits it. A single-layer document could not
+  // distinguish "reports the right index" from "reports 0 unconditionally".
+  const std::string core_json = R"({
+    "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
+    "filter": [],
+    "scene": {
+      "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+      "scattering": [
+        {"prob": 0.5, "entries": [{"crystal": 1, "proportion": 100.0}]},
+        {"entries": [{"crystal": 1, "proportion": 100.0}]}
+      ]
+    }
+  })";
+
+  const bool ok = gui::DeserializeFromJson(core_json, loaded);
+  ASSERT_TRUE(ok) << "GUI must load a legacy document core would reject";
+  ASSERT_EQ(loaded.layers.size(), 2u);
+  EXPECT_FLOAT_EQ(loaded.layers[0].probability, 0.5f) << "a present `prob` must be read, not defaulted";
+  EXPECT_FLOAT_EQ(loaded.layers[1].probability, 0.0f) << "absent `prob` must load as core's 0.0f, not 1.0f";
+
+  const std::string warning = gui::PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the substitution must be surfaced, not just performed";
+  EXPECT_NE(warning.find("1"), std::string::npos) << "must name the offending layer, got: " << warning;
+  EXPECT_NE(warning.find("prob"), std::string::npos) << "must name the field, got: " << warning;
+
+  gui::ClearImportComplexFilterWarning();
 }
 
 // file_io.cpp ParseCrystal: absent pyramid `upper_h` / `lower_h` fall back to 0.0f while

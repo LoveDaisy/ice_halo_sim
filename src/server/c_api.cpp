@@ -2044,9 +2044,21 @@ static LUMICE_ErrorCode JsonToSceneParams(const nlohmann::json& scene, ConfigScr
     for (int i = 0; i < out->scatter_count; i++) {
       const auto& lj = scat[i];
       auto& layer = out->scattering[i];
-      if (lj.contains("prob")) {
-        layer.probability = lj.at("prob").get<float>();
+      // "prob" is required, mirroring core's ParseScatteringInfo. This must be checked HERE and
+      // not left to core: the CLI reaches core only via this function, which then re-serializes
+      // the parsed struct through ConfigToJson — and that writer emits `prob` unconditionally,
+      // so a missing key would be silently filled in before core ever saw it. Unlike the other
+      // missing-field branches in this function (which report through the return code alone),
+      // this one also logs: the message IS the migration guidance for a contract narrowing.
+      if (!lj.contains("prob")) {
+        LOG_ERROR(
+            "JsonToSceneParams: scene.scattering[{}] is missing required field \"prob\" "
+            "(multi-scattering probability). The historical default was 0.0; add \"prob\": 0 "
+            "explicitly to keep that behavior.",
+            i);
+        return LUMICE_ERR_MISSING_FIELD;
       }
+      layer.probability = lj.at("prob").get<float>();
       if (!lj.contains("entries") || !lj.at("entries").is_array()) {
         return LUMICE_ERR_MISSING_FIELD;
       }

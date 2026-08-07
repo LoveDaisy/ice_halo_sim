@@ -436,6 +436,28 @@ TEST_F(V3TestJson, Scene_GeomClockRejectsOutOfRange) {
   }
 }
 
+// `prob` is required: omitting it used to take MsInfo's value-initialized 0.0f silently, which is
+// how the GUI's legacy loader came to fall back to a different value nobody had agreed on. The
+// ruling was to delete the implicit default rather than write it down, so there is nothing left
+// for a downstream loader to mirror wrongly. Asserting the message content, not just the throw:
+// this narrows a published contract, and a hand-written config outside this repo can only be
+// migrated by what the error says — the layer index and the old value are the migration guidance.
+TEST_F(V3TestJson, Scene_ScatteringMissingProbRejected) {
+  auto j = config_json_;
+  ASSERT_FALSE(j.at("scene").at("scattering").empty());
+  j.at("scene")["scattering"][0].erase("prob");
+
+  try {
+    (void)j.get<ConfigManager>();
+    FAIL() << "expected std::invalid_argument for a scattering layer with no \"prob\"";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("scattering[0]"), std::string::npos) << msg;  // names the layer
+    EXPECT_NE(msg.find("prob"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("0.0"), std::string::npos) << msg;  // states the historical default
+  }
+}
+
 TEST_F(V3TestJson, Scene_GeomClockRoundTrip) {
   // 0 (default) must not emit the key; a non-zero value must round-trip.
   auto manager = config_json_.get<ConfigManager>();

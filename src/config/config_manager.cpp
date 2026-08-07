@@ -95,13 +95,22 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   return render;
 }
 
-static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager& m) {
+static MsInfo ParseScatteringInfo(const nlohmann::json& j_s, const ConfigManager& m, size_t layer_index) {
   static const FilterConfig kDefaultNoneFilter{ kInvalidId, FilterConfig::kSymNone, FilterConfig::kFilterIn,
                                                 NoneFilterParam{} };
   MsInfo ms{};
-  if (j_s.contains("prob")) {
-    j_s.at("prob").get_to(ms.prob_);
+  // "prob" is required. It used to be optional, silently taking MsInfo's value-initialized 0.0f —
+  // an implicit default that was never a written contract, which is exactly how a downstream
+  // loader came to mirror a different value. The message names the layer because a config can
+  // have several, and states the historical default because this is a contract narrowing: a
+  // hand-written config outside this repo cannot be enumerated, so the error is the only
+  // migration guidance its author will ever get.
+  if (!j_s.contains("prob")) {
+    throw std::invalid_argument("scene.scattering[" + std::to_string(layer_index) +
+                                "] is missing required field \"prob\" (multi-scattering probability). "
+                                "The historical default was 0.0; add \"prob\": 0 explicitly to keep that behavior.");
   }
+  j_s.at("prob").get_to(ms.prob_);
 
   for (const auto& j_entry : j_s.at("entries")) {
     IdType crystal_id = j_entry.at("crystal").get<IdType>();
@@ -151,8 +160,9 @@ SceneConfig ParseSceneConfig(const nlohmann::json& j_scene, const ConfigManager&
 
   scene.light_source_ = j_scene.at("light_source").get<LightSourceConfig>();
 
-  for (const auto& j_s : j_scene.at("scattering")) {
-    scene.ms_.emplace_back(ParseScatteringInfo(j_s, m));
+  const auto& j_scattering = j_scene.at("scattering");
+  for (size_t i = 0; i < j_scattering.size(); i++) {
+    scene.ms_.emplace_back(ParseScatteringInfo(j_scattering[i], m, i));
   }
 
   return scene;

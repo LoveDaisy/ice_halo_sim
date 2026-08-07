@@ -1,6 +1,7 @@
 """CLI behavior tests for Lumice."""
 
 import glob
+import json
 import os
 from pathlib import Path
 
@@ -178,3 +179,66 @@ class TestLastLayerProbWarning(LumiceTestCase):
             combined,
             "warning should NOT fire on last-layer prob=0.0 configs",
         )
+
+
+class TestScatteringProbRequired(LumiceTestCase):
+    """`scene.scattering[].prob` is required; the CLI must reject a config omitting it.
+
+    This is the only layer that answers the question the change was actually about.
+    The C++ unit tests each prove one parser rejects the document when called
+    directly; neither proves the binary a user runs does, because the CLI reaches
+    core through the C API, which re-serializes what it parsed. Run the real
+    binary or the claim stays unverified.
+
+    Derived from a real repo config rather than a hand-built minimal one, so the
+    rejected document differs from a working one in exactly the deleted key.
+    """
+
+    def _config_missing_prob(self, layer_index=0):
+        """Copy halo_22.json with one layer's `prob` deleted; return the new path."""
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        with open(cfg) as f:
+            doc = json.load(f)
+        layers = doc["scene"]["scattering"]
+        self.assertGreater(len(layers), layer_index)
+        self.assertIn(
+            "prob",
+            layers[layer_index],
+            "fixture no longer writes `prob`; this test would pass vacuously",
+        )
+        del layers[layer_index]["prob"]
+
+        out = Path(self.output_dir) / "halo_22_missing_prob.json"
+        with open(out, "w") as f:
+            json.dump(doc, f)
+        return out
+
+    def test_cli_rejects_missing_prob(self):
+        tmp_cfg = self._config_missing_prob()
+        result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            f"CLI accepted a config with no `prob`:\nSTDOUT:\n{result.stdout}\n"
+            f"STDERR:\n{result.stderr}",
+        )
+        # No images: "reports an error" and "produces nothing" are separate claims.
+        self.assertEqual(glob.glob(os.path.join(self.output_dir, "img_*.jpg")), [])
+
+    def test_error_message_is_actionable(self):
+        """The message is the migration guidance — assert its three load-bearing parts.
+
+        A config outside this repo cannot be enumerated, so whoever wrote one has
+        only this text to go on: which layer, that `prob` is the field, and what
+        to write to keep the old behavior. A bare "parse error" is not enough.
+        """
+        tmp_cfg = self._config_missing_prob()
+        result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+        # Warnings/errors go through spdlog, which writes to stdout here; check both.
+        combined = result.stdout + result.stderr
+        context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertIn("scattering[0]", combined, "must name the offending layer" + context)
+        self.assertIn("prob", combined, "must name the field" + context)
+        self.assertIn('"prob": 0', combined, "must state the migration write-up" + context)

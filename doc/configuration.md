@@ -539,7 +539,7 @@ Each scattering configuration entry has the following structure:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `prob` | float | no | 0.0 | Multi-scattering probability |
+| `prob` | float | yes | - | Multi-scattering probability. Was optional and silently defaulted to `0.0`; omitting it is now an error. To keep the old behavior, write `"prob": 0` explicitly. |
 | `entries` | object array | yes | - | Array of crystal entries |
 
 **Entry object fields**:
