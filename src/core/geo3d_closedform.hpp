@@ -86,7 +86,11 @@ static_assert((kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) - 
 static_assert(1.0 - (kHexVtxCos[4] * kHexVtxCos[4] + kHexVtxSin[4] * kHexVtxSin[4]) < 1e-15, "kHexVtx[4] not unit");
 
 // Coarse-grained structural branches walked by the shared 2D cross-section
-// solver. Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
+// solver, plus one branch the pyramid evaluator records about itself
+// (kClosedFormPathTagApexRescueDegraded — see its comment; it shares this
+// bitfield because it shares path_tag_union, and a caller inspecting "which
+// branches did this solve walk" wants both in one place).
+// Recorded per invocation as a bitmask; the pyramid evaluator OR-unions
 // the tags of every invocation into ClosedFormPyramidResult::path_tag_union.
 // Tests use the union to assert that specialized configurations
 // (shoulder / apex / face-drop) walk the SAME set of branches as regular
@@ -100,6 +104,15 @@ enum ClosedFormHexPathTag : uint16_t {
   kClosedFormPathTagBounded = 1u << 2,           // ≥3 present directions bounded a polygon
   kClosedFormPathTagAllDirsPresent = 1u << 3,    // all 6 directions bound a face
   kClosedFormPathTagEmpty = 1u << 4,             // feasible region empty
+  // A cone's truncation cross section came back empty while the apex-collapse
+  // gate said the cone was NOT at its apex — the two decisions disagreed about
+  // an input that must belong to exactly one of them. The pyramid evaluator
+  // sets this (the only bit here it owns), logs a warning naming the input, and
+  // falls through to the apex path so the cone degrades to its tip rather than
+  // vanishing. Both gates are derived from one tolerance, so this is meant to
+  // be unreachable; the bit exists so a change that unbinds them is caught by a
+  // test rather than by a user with a crystal that quietly lost a cone.
+  kClosedFormPathTagApexRescueDegraded = 1u << 5,
 };
 
 // ============================================================================

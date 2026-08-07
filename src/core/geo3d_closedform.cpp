@@ -8,6 +8,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "util/fatal.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -56,6 +57,7 @@ constexpr uint16_t kPathTagDedupHit = kClosedFormPathTagDedupHit;
 constexpr uint16_t kPathTagBounded = kClosedFormPathTagBounded;
 constexpr uint16_t kPathTagAllDirsPresent = kClosedFormPathTagAllDirsPresent;
 constexpr uint16_t kPathTagEmpty = kClosedFormPathTagEmpty;
+constexpr uint16_t kPathTagApexRescueDegraded = kClosedFormPathTagApexRescueDegraded;
 
 // Magnitude the half-plane offsets are measured against. Its own function, and
 // not an inline loop at each site, because it is the input to
@@ -919,6 +921,28 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     return xs.corner_cnt;
   };
 
+  // Both cone sides funnel their "the truncation ring came back empty while the
+  // gate said this side is NOT at its apex" case through here. It is meant to
+  // be unreachable: the gate and emit_ring's cross-section test are two
+  // readings of one tolerance (ApexCollapsedAt / GapToleranceForScale). It is
+  // reported anyway, because an unreachable degradation that says nothing is
+  // indistinguishable from a silent one on the day someone unbinds them — and
+  // what this degrades into, a crystal missing a whole cone, traces rays,
+  // renders and reports statistics while looking perfectly healthy. Mark the
+  // path, name the input, and let the caller fall through to the apex emitter
+  // so the cone collapses onto its tip instead of disappearing.
+  auto report_apex_rescue = [&](const char* side, double m_requested) {
+    r.path_tag_union |= kPathTagApexRescueDegraded;
+    LOG_WARNING(
+        "ComputeClosedFormPyramid: {} cone has no cross-section at inset {:.6e} (apex inset {:.6e}), yet is not "
+        "recognised as collapsed; face_distance=[{:.4f}, {:.4f}, {:.4f}, {:.4f}, {:.4f}, {:.4f}]. Degrading that "
+        "cone to a single apex point. To get the truncated shape instead, move upper_h/lower_h away from 1.0 or "
+        "widen the spread between face_distance entries.",
+        side, m_requested, apex.m, static_cast<double>(dist[0]), static_cast<double>(dist[1]),
+        static_cast<double>(dist[2]), static_cast<double>(dist[3]), static_cast<double>(dist[4]),
+        static_cast<double>(dist[5]));
+  };
+
   // Face-slot tables: index by direction i.
   int prism_slot[6] = { 2, 3, 4, 5, 6, 7 };
   int upper_slot[6] = { 8, 9, 10, 11, 12, 13 };
@@ -949,7 +973,10 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     //     as a single point only when the cross-section is empty.
     const int upper_basal_slot = upper_apex_collapsed ? -1 : 0;
     int n_top = emit_ring(m_at_top, z_top, upper_slot, upper_basal_slot, nullptr);
-    if (upper_apex_collapsed) {
+    if (!upper_apex_collapsed && n_top == 0) {
+      report_apex_rescue("upper", m_at_top);
+    }
+    if (upper_apex_collapsed || n_top == 0) {
       // At the apex, the LP maximum may be degenerate: multiple triples
       // achieving the same m_apex give distinct (u, v) points → the "apex"
       // is a line segment (or higher), not a single point. emit_ring uses
@@ -1009,7 +1036,10 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     // Same shape rules as the upper side (see comment above).
     const int lower_basal_slot = lower_apex_collapsed ? -1 : 1;
     int n_bot = emit_ring(m_at_bot, z_bot, lower_slot, lower_basal_slot, nullptr);
-    if (lower_apex_collapsed) {
+    if (!lower_apex_collapsed && n_bot == 0) {
+      report_apex_rescue("lower", m_at_bot);
+    }
+    if (lower_apex_collapsed || n_bot == 0) {
       double apex_us[20], apex_vs[20];
       int apex_mask[20];
       int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs, apex_mask);

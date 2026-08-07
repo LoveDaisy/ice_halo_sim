@@ -807,6 +807,162 @@ TEST(ClosedFormPyramid, NearApexHeightWindowStructuralValidity) {
 }
 
 // ============================================================================
+// Contract 2d — the apex-rescue degradation must stay unreachable, and must
+// announce itself if it ever becomes reachable again.
+//
+// "A cone's truncation cross section is empty while the collapse gate says the
+// cone is not at its apex" is the state that used to swallow a whole cone in
+// silence. Both decisions now read one tolerance, so no legal input should be
+// able to reach it — and this sweep is what makes "should" checkable, over
+// shape patterns (which faces are pulled in), overall scale, spread ratio,
+// wedge angle, prism height, height approaching 1 from 1e-2 down to 1e-7, and
+// both cone sides.
+//
+// Two things keep the sweep from being a sentinel with no teeth, which this
+// file has been burned by before:
+//   • an anti-vacuous counter — the sweep must actually land in the near-apex
+//     regime (configurations whose top cap is gone while the requested height
+//     is below 1, i.e. the apex path was taken) many times over, or a green
+//     result means only that the sweep never went where the defect lives;
+//   • the first offending configuration, if one is ever found, is re-run under
+//     a log capture and the captured text is reported — so the failure names
+//     the input AND proves the warning that accompanies the degradation
+//     actually reaches the log.
+//
+// Detection power was measured by inverting the gate back to the absolute
+// epsilon it replaced; scripts/verify_apex_rescue_warning_detection_power.sh
+// re-runs that experiment on demand.
+// ============================================================================
+
+// Captures everything the global logger emits for the lifetime of the object.
+// RAII rather than a manual remove_sink, because GetSharedSink() is a
+// process-wide singleton: an early return with the sink still attached would
+// leave later tests in this binary writing into a destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) { GetSharedSink()->add_sink(sink_); }
+
+  ~LogCapture() { GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
+TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
+  // Which of the six face distances are pulled in — the apex is a point when
+  // none are, a ridge for an opposite pair, and something else again for an
+  // adjacent pair or a three-fold pattern. Each shrinks the near-apex cross
+  // section along a different number of axes.
+  struct Pattern {
+    const char* label;
+    int pulled_in[kSideCnt];
+  };
+  static const Pattern kPatterns[] = {
+    { "none", { 0, 0, 0, 0, 0, 0 } },       { "opposite-pair", { 1, 0, 0, 1, 0, 0 } },
+    { "single", { 1, 0, 0, 0, 0, 0 } },     { "adjacent-pair", { 1, 1, 0, 0, 0, 0 } },
+    { "three-fold", { 1, 0, 1, 0, 1, 0 } }, { "five", { 1, 1, 1, 1, 1, 0 } },
+  };
+  // Overall size spans the range real crystals use and four decades past it in
+  // both directions: the tolerance this test is about is scale-clamped, so
+  // whether a configuration sits above or below the clamp changes which end of
+  // the binding is doing the work.
+  static const double kScales[] = { 0.01, 0.05, 0.2, 1.0, 5.0, 20.0, 100.0, 1000.0 };
+  static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.05, 0.01, 0.002 };
+  static const float kAlphas[] = { 0.2f, 5.0f, 28.0f, 60.0f, 89.0f };
+  static const float kPrismH[] = { 0.0f, 0.3f, 2.0f };
+  constexpr int kStepsPerDecade = 8;
+  constexpr int kDecades = 5;
+
+  int swept = 0;
+  int apex_path_taken = 0;
+  int degraded = 0;
+  std::string first_offender;
+  float offender_args[5] = {};  // alpha, h1, h2, h3 + scale, for the capture re-run
+  float offender_dist[kSideCnt] = {};
+
+  for (const Pattern& pat : kPatterns) {
+    for (double scale : kScales) {
+      for (double ratio : kRatios) {
+        float dist[kSideCnt];
+        for (int i = 0; i < kSideCnt; i++) {
+          dist[i] = static_cast<float>(scale * (pat.pulled_in[i] != 0 ? ratio : 1.0));
+        }
+        for (float alpha : kAlphas) {
+          for (float prism_h : kPrismH) {
+            for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+              const double t = 1e-2 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+              const float h = static_cast<float>(1.0 - t);
+              for (int side = 0; side < 2; side++) {
+                const float h1 = (side == 0) ? h : 0.0f;
+                const float h3 = (side == 0) ? 0.0f : h;
+                auto cf = ComputeClosedFormPyramid(alpha, alpha, h1, prism_h, h3, dist);
+                swept++;
+                // The apex path is what the collapse gate switches to; its
+                // signature is the coned side's basal cap being gone even
+                // though a truncation below the apex was requested.
+                if (!cf.face_present[side == 0 ? 0 : 1]) {
+                  apex_path_taken++;
+                }
+                if ((cf.path_tag_union & kClosedFormPathTagApexRescueDegraded) != 0) {
+                  degraded++;
+                  if (first_offender.empty()) {
+                    char buf[256];
+                    std::snprintf(buf, sizeof(buf), "%s scale=%g ratio=%g alpha=%g prism_h=%g %s 1-h=%.3e", pat.label,
+                                  scale, ratio, static_cast<double>(alpha), static_cast<double>(prism_h),
+                                  (side == 0) ? "upper" : "lower", t);
+                    first_offender = buf;
+                    offender_args[0] = alpha;
+                    offender_args[1] = h1;
+                    offender_args[2] = prism_h;
+                    offender_args[3] = h3;
+                    for (int i = 0; i < kSideCnt; i++) {
+                      offender_dist[i] = dist[i];
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  std::fprintf(stderr, "[apex-rescue] swept=%d apex_path_taken=%d degraded=%d\n", swept, apex_path_taken, degraded);
+
+  // Anti-vacuous: a sweep that never reaches the apex path cannot say anything
+  // about a degradation that only exists there.
+  EXPECT_GT(apex_path_taken, swept / 100) << "the sweep barely ever took the apex path (" << apex_path_taken << " of "
+                                          << swept << ") — it is not exercising the regime the degradation lives in";
+
+  if (degraded > 0) {
+    // Re-run the first offender alone, under a log capture, so the failure
+    // reports the input AND the warning the degradation is required to emit.
+    std::string text;
+    {
+      LogCapture capture;
+      ComputeClosedFormPyramid(offender_args[0], offender_args[0], offender_args[1], offender_args[2], offender_args[3],
+                               offender_dist);
+      text = capture.Text();
+    }
+    EXPECT_NE(text.find("no cross-section"), std::string::npos)
+        << "the apex-rescue degradation fired without logging a warning naming the input — captured log was: " << text;
+    std::fprintf(stderr, "[apex-rescue] first offender: %s\n[apex-rescue] captured log: %s\n", first_offender.c_str(),
+                 text.c_str());
+  }
+  EXPECT_EQ(degraded, 0) << degraded << " of " << swept
+                         << " legal shapes reached the apex-rescue degradation — the collapse gate and the "
+                            "cross-section feasibility test no longer agree on where the apex starts. First: "
+                         << first_offender;
+}
+
+// ============================================================================
 // Contract 3 — Degenerate graceful-degradation contract.
 //
 // Replaces the old DegeneratePyramidSweep (which adjudicated cf vs the
