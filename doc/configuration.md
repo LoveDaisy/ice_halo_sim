@@ -124,8 +124,8 @@ dropped and contributes zero energy) rather than silently accepted.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `prism_h` | value/distribution | yes | - | Prism segment height ratio |
-| `upper_h` | value/distribution | no | 0.0 | Upper pyramid segment relative height (0.0-1.0) |
-| `lower_h` | value/distribution | no | 0.0 | Lower pyramid segment relative height (0.0-1.0) |
+| `upper_h` | value/distribution | no | 0.0 | Upper pyramid segment relative height — see [Pyramid Shape Legality](#pyramid-shape-legality) below |
+| `lower_h` | value/distribution | no | 0.0 | Lower pyramid segment relative height — see [Pyramid Shape Legality](#pyramid-shape-legality) below |
 | `upper_indices` | integer array | no | [1,0,1] | Miller indices for the upper pyramid segment |
 | `lower_indices` | integer array | no | [1,0,1] | Miller indices for the lower pyramid segment |
 | `face_distance` | array | no | [1,1,1,1,1,1] | Distance ratios for 6 faces |
@@ -730,9 +730,52 @@ The render configuration defines the renderer parameters.
 ### Value Range Validation
 
 - Angle values are typically between -180 and 180 degrees (may exceed in certain cases)
-- `crystal[].shape.upper_h` and `lower_h` should be between 0.0 and 1.0
+- `crystal[].shape.upper_h` and `lower_h` are not clamped to `[0.0, 1.0]`: negative
+  values fold to their absolute value before use, and any value `>= 1.0` reaches the
+  same full-apex result as exactly `1.0` — it is not an error. See [Pyramid Shape
+  Legality](#pyramid-shape-legality) below for what each range actually produces.
 - `render[].opacity` should be between 0.0 and 1.0
 - `render[].background` and `ray_color` color values should be between 0.0 and 1.0
+
+### Pyramid Shape Legality
+
+- **`upper_h` / `lower_h` boundaries**:
+  - `0.0` (or any value that folds to `0.0`): that side has no cone at all — it is
+    capped by a basal face instead (see the `prism_h == 0.0` cases below for how that
+    cap attaches when there is no straight prism band either).
+  - `(0.0, 1.0)`: the cone is truncated below its apex (a frustum), and that side gets
+    a basal face at the truncation plane.
+  - `>= 1.0`: the cone reaches its full apex — no basal face on that side. A value
+    above `1.0` is not an error; it clamps to the same result as exactly `1.0`.
+  - A narrow band of `upper_h`/`lower_h` values immediately below `1.0` (on the order
+    of `1e-4` wide) snaps to the exact full apex rather than the fractional height
+    technically requested. This is intentional: it replaces a former defect where
+    crystals landing in that band silently lost the cone entirely. See [Common
+    Configuration Errors](#common-configuration-errors) below for the one case where
+    the snap logs a warning.
+- **Wedge angle legality**: a cone's wedge angle — `upper_alpha`/`lower_alpha` when set
+  directly, or derived from `upper_indices`/`lower_indices` (Miller indices) — must
+  fall strictly inside `(0.1°, 89.9°)`. Outside that range, the cone on that side is
+  treated as absent, the same as `upper_h`/`lower_h` folding to `0.0` — silently, with
+  no warning of its own (the shape still builds fine as long as the rest of the
+  crystal — the other side's cone, or the prism band — still gives it enough faces).
+- **`prism_h == 0.0` (no straight prism band)** is legal in every combination of
+  cones:
+  - *one side has a cone, the other does not*: legal. The cone-less side's basal cap
+    is built directly from the corners of the cone-bearing side's wall ring — there is
+    no prism wall to attach it to instead.
+  - *both sides have a cone*: legal — a bipyramid with no straight band. The two cones
+    meet at a single ring; neither side gets a basal cap (a basal cap only exists on a
+    side that has no cone).
+  - *neither side has a cone*: zero-volume. The crystal is dropped and contributes
+    zero energy, same as any other degenerate shape — this is the only one of the
+    three combinations that is not a legal solid.
+- **Irregular `face_distance` can turn an apex into a ridge, not a point** — this is
+  legal geometry, not a degenerate input. When the six `face_distance` values are not
+  all equal, the search that locates a cone's apex can have a *tied* maximum along a
+  line segment instead of a single point, so the "tip" is a two-endpoint ridge. Each
+  endpoint belongs only to the subset of the six cone faces whose planes actually pass
+  through it — not all six.
 
 ### Required Field Validation
 
@@ -908,6 +951,30 @@ The render configuration defines the renderer parameters.
   }
 }
 ```
+
+### 6. Reading the Apex-Rescue Warning
+
+**Description**: `upper_h` or `lower_h` landed close enough to `1.0` that the solver
+snapped that cone to its exact full apex instead of building the fractional height
+requested. The resulting crystal is still a valid solid — this is not a rejection —
+but the message is worth reading, because it means the request landed on the
+tolerance boundary between "truncated" and "full apex" (see [Pyramid Shape
+Legality](#pyramid-shape-legality) above).
+
+**What it looks like** (from `src/core/geo3d_closedform.cpp`):
+```
+ComputeClosedFormPyramid: <upper|lower> cone has no cross-section at inset <m>
+(apex inset <apex_m>), yet is not recognised as collapsed; face_distance=[...].
+Degrading that cone to a single apex point. To get the truncated shape instead,
+move upper_h/lower_h away from 1.0 or widen the spread between face_distance
+entries.
+```
+
+**How to respond**: follow the message's own suggestion — move `upper_h`/`lower_h`
+further from `1.0`, or widen the spread between the `face_distance` entries. On the
+shipped tolerance binding this path is not expected to fire at all (a 413,280-point
+sweep across the near-apex band never triggered it); if you do see it, you have found
+an edge case narrower than the ones already closed, and the same two remedies apply.
 
 ## Configuration Best Practices
 
