@@ -39,8 +39,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "core/geo3d.hpp"
@@ -396,13 +399,24 @@ TEST(ClosedFormPyramid, TopologyMatchesGoldenConstants) {
 //   (b) Supported faces: every present face carries ≥3 coplanar body vertices,
 //       so a "present" plane is a genuine supporting polygon, not a floating
 //       coefficient.
+//   (c) Strict polygon membership: every entry of a present face's OWN vertex
+//       list (face_vtx[slot]) lies on that face's plane. (b) searches the whole
+//       body for suitable vertices and therefore cannot see a polygon that
+//       lists a vertex belonging to some other face; (c) reads the polygon cf
+//       actually publishes. This is the form consumers depend on —
+//       simulator.cpp's BuildEntrySubTris fans face_vtx into entry triangles,
+//       so an off-plane entry places sampled entry points off the surface.
 //
-// NOTE (why not "every face_vtx entry lies on its own plane"): cf deliberately
-// over-associates apex-line-degenerate endpoints with all six cone faces
-// (geo3d_closedform.cpp appends the apex point to every 8+i / 14+i slot even
-// where the point is not on that cone's plane), so face_vtx is not a strict
-// on-plane list. (b) instead counts on-plane vertices from the full body set,
-// which is robust to that over-association.
+// (c) replaces a NOTE that an earlier revision of this file carried, which
+// declared the check un-assertable because cf "deliberately over-associates"
+// apex-line-degenerate endpoints with all six cone faces. That was a defect
+// being read as a design: when the hexagon is irregular the apex LP maximum
+// degenerates from a point to a segment, and each endpoint of that segment is
+// tight on only a SUBSET of the six cone planes. Appending it to all six put
+// polygon entries far off their own stated plane, broke the Euler
+// characteristic and left non-manifold edges. EnumerateApexPoints now reports
+// which cone planes actually pass through each apex point and the emitters
+// filter on it, so (c) is a strict invariant, not an aspiration.
 //
 // The well-conditioned pool is used (each entry is ≥50× off production's merge
 // boundary, so platform rounding can never flip a decision).
@@ -415,6 +429,7 @@ TEST(ClosedFormPyramid, VertexPlaneSelfConsistency) {
   constexpr double kRelTol = 1e-4;
   double worst_halfspace = 0.0;                 // max positive signed distance of any vertex to any present plane
   int min_on_plane = kClosedFormPyramidMaxVtx;  // min coplanar-vertex count over all present faces
+  double worst_polygon_off_plane = 0.0;         // max |signed distance| of a face_vtx entry to its OWN plane
 
   for (size_t si = 0; si < std::size(test_support::kPyramidWellConditionedSamples); si++) {
     const auto& p = test_support::kPyramidWellConditionedSamples[si];
@@ -448,10 +463,189 @@ TEST(ClosedFormPyramid, VertexPlaneSelfConsistency) {
       min_on_plane = std::min(min_on_plane, on_plane);
       EXPECT_GE(on_plane, 3) << "wc#" << si << " slot " << slot << ": present face has only " << on_plane
                              << " coplanar body vertices (< 3) — plane is not a genuine supporting polygon";
+
+      // (c) Every entry of this face's own published polygon lies on this
+      //     face's plane.
+      for (int k = 0; k < cf.face_vtx_cnt[slot]; k++) {
+        const int vi = cf.face_vtx[slot][k];
+        const double off = (a * cf.vtx[vi * 3 + 0] + b * cf.vtx[vi * 3 + 1] + c * cf.vtx[vi * 3 + 2] + d) / norm;
+        worst_polygon_off_plane = std::max(worst_polygon_off_plane, std::fabs(off));
+        EXPECT_LE(std::fabs(off), tol) << "wc#" << si << " slot " << slot << ": face_vtx[" << k << "] = vtx " << vi
+                                       << " is " << std::fabs(off) << " off its own plane (tol " << tol
+                                       << ") — the published polygon is not an on-plane list";
+      }
     }
   }
-  std::fprintf(stderr, "[vertex-plane self-consistency] worst_halfspace=%.3e min_on_plane=%d\n", worst_halfspace,
-               min_on_plane);
+  std::fprintf(stderr,
+               "[vertex-plane self-consistency] worst_halfspace=%.3e min_on_plane=%d worst_polygon_off_plane=%.3e\n",
+               worst_halfspace, min_on_plane, worst_polygon_off_plane);
+}
+
+// ============================================================================
+// Contract 2b — Structural validity of the emitted polyhedron, over a
+// parameter SCAN rather than a single shape.
+//
+// Contract 2 runs one fixed pool; the defects this contract guards against
+// live in parameter COMBINATIONS (irregular hexagon × apex-reaching height ×
+// absent prism section × one-sided cone), so a scan is the assertion's
+// substance, not decoration. Every case below is a legal crystal, and cf must
+// emit a closed solid for each: the published polygons are the only thing
+// downstream consumers (simulator.cpp's BuildEntrySubTris entry sampling,
+// crystal.cpp's mesh population) ever read, so a polygon set that is not a
+// closed 2-manifold is a live wrong-physics condition, not cosmetics.
+//
+// Four assertions per case, all on cf's own output, all judged against the
+// sample's characteristic length rather than an absolute epsilon
+// (doc/numerical-robustness.md §2):
+//   1. every face_vtx entry lies on its own face's plane;
+//   2. V − E + F == 2 (Euler characteristic of a sphere);
+//   3. every polygon edge is shared by exactly 2 present faces (2-manifold);
+//   4. every present face has non-zero area relative to the characteristic
+//      area (a "present" face that bounds nothing is not present).
+// ============================================================================
+
+struct ScanCase {
+  const char* label;
+  float upper_alpha;
+  float lower_alpha;
+  float h1;  // upper_h
+  float h2;  // prism_h
+  float h3;  // lower_h
+  float dist[kSideCnt];
+};
+
+// Census of cf's published polygon set: the vertex/edge/face counts an Euler
+// and manifold check needs, plus the worst on-plane deviation and smallest
+// face area. Reads face_vtx / face_present only — no re-derivation of the
+// topology from the planes, which is the point: the contract is about what cf
+// publishes, not about what could be recomputed from its coefficients.
+struct StructuralCensus {
+  int v = 0;                     // vertices referenced by ≥1 present face
+  int e = 0;                     // distinct undirected polygon edges
+  int f = 0;                     // present faces
+  int non_manifold_edges = 0;    // edges NOT shared by exactly 2 present faces
+  double worst_off_plane = 0.0;  // max |signed distance| of a face_vtx entry to its own plane
+  double min_face_area = std::numeric_limits<double>::infinity();
+};
+
+StructuralCensus TakeStructuralCensus(const ClosedFormPyramidResult& cf) {
+  StructuralCensus census;
+  std::map<std::pair<int, int>, int> edge_use;
+  std::vector<bool> referenced(static_cast<size_t>(std::max(cf.vtx_cnt, 1)), false);
+
+  for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+    if (!cf.face_present[slot]) {
+      continue;
+    }
+    census.f++;
+    const int m = cf.face_vtx_cnt[slot];
+    const double a = cf.plane_coef[slot * 4 + 0];
+    const double b = cf.plane_coef[slot * 4 + 1];
+    const double c = cf.plane_coef[slot * 4 + 2];
+    const double d = cf.plane_coef[slot * 4 + 3];
+    const double norm = std::sqrt(a * a + b * b + c * c);
+    for (int k = 0; k < m; k++) {
+      const int va = cf.face_vtx[slot][k];
+      const int vb = cf.face_vtx[slot][(k + 1) % m];
+      referenced[static_cast<size_t>(va)] = true;
+      edge_use[std::make_pair(std::min(va, vb), std::max(va, vb))]++;
+      if (norm > 0.0) {
+        const double off = (a * cf.vtx[va * 3 + 0] + b * cf.vtx[va * 3 + 1] + c * cf.vtx[va * 3 + 2] + d) / norm;
+        census.worst_off_plane = std::max(census.worst_off_plane, std::fabs(off));
+      }
+    }
+    census.min_face_area = std::min(census.min_face_area, FacePolygonArea(cf, slot));
+  }
+  for (int i = 0; i < cf.vtx_cnt; i++) {
+    if (referenced[static_cast<size_t>(i)]) {
+      census.v++;
+    }
+  }
+  census.e = static_cast<int>(edge_use.size());
+  for (const auto& [edge, use_cnt] : edge_use) {
+    (void)edge;
+    if (use_cnt != 2) {
+      census.non_manifold_edges++;
+    }
+  }
+  return census;
+}
+
+TEST(ClosedFormPyramid, StructuralValidityParamScan) {
+  // Same loose relative on-plane tolerance as Contract 2 — well above float
+  // round-off of an O(1)-coordinate three-plane intersection, far below any
+  // real feature separation.
+  constexpr double kRelTol = 1e-4;
+  // Non-zero-area floor, the mirror of DegenerateContractSafe's kNearZeroFrac:
+  // there a face at/below this fraction of the characteristic area counts as
+  // gracefully collapsed; here every present face must stay ABOVE it.
+  constexpr double kMinAreaFrac = 1e-6;
+
+  // Regular / M-crystal (the reported irregular shape) / mildly irregular /
+  // phase-rotated irregular hexagons, crossed with prism_h ∈ {0, 0.3},
+  // upper_h & lower_h ∈ {0, 0.5, 1.0} and one-sided vs two-sided cones.
+  // Wedge angles are swapped in the last case so the tight-plane criterion
+  // cannot be passing by coincidence on one particular pair of slopes.
+  static const ScanCase kCases[] = {
+    { "regular/prism0/apex-up", 28.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "regular/prism.3/apex-up", 28.0f, 28.0f, 1.0f, 0.3f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "regular/prism0/trunc-up", 28.0f, 28.0f, 0.5f, 0.0f, 0.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "M/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "M/prism.3/apex-up", 17.0f, 28.0f, 1.0f, 0.3f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "mild-irregular/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 0.9f, 1.0f, 1.0f, 0.9f, 1.0f, 1.0f } },
+    { "M/prism0/apex-both", 17.0f, 28.0f, 1.0f, 0.0f, 1.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "regular/prism0/apex-down", 28.0f, 28.0f, 0.0f, 0.0f, 1.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "M/prism.3/trunc-both", 17.0f, 28.0f, 0.5f, 0.3f, 0.5f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+    { "rot-irregular/prism0/apex-up", 17.0f, 28.0f, 1.0f, 0.0f, 0.0f, { 1.0f, 0.2f, 1.0f, 1.0f, 0.2f, 1.0f } },
+    { "M/prism0/apex-up/wedge-swap", 28.0f, 17.0f, 1.0f, 0.0f, 0.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+  };
+
+  for (const ScanCase& sc : kCases) {
+    auto cf = ComputeClosedFormPyramid(sc.upper_alpha, sc.lower_alpha, sc.h1, sc.h2, sc.h3, sc.dist);
+
+    PyramidSample s;
+    s.upper_alpha = sc.upper_alpha;
+    s.lower_alpha = sc.lower_alpha;
+    s.h1 = sc.h1;
+    s.h2 = sc.h2;
+    s.h3 = sc.h3;
+    for (int i = 0; i < kSideCnt; i++) {
+      s.dist[i] = sc.dist[i];
+    }
+    const double char_len = ProductionCharLen(s);
+    const double tol = kRelTol * char_len;
+    const double char_area = char_len * char_len;
+
+    const StructuralCensus census = TakeStructuralCensus(cf);
+    std::fprintf(stderr,
+                 "[structural-scan] %-30s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d off_plane=%.3e min_area=%.3e\n",
+                 sc.label, census.v, census.e, census.f, census.v - census.e + census.f, census.non_manifold_edges,
+                 census.worst_off_plane, census.min_face_area);
+
+    // EXPECT + continue rather than ASSERT: an ASSERT here returns from the
+    // whole TEST body and would hide every later case in the scan behind the
+    // first empty one — exactly the coverage loss this contract exists to
+    // prevent.
+    EXPECT_GT(census.f, 0) << sc.label << ": no present face at all — cf emitted nothing for a legal crystal";
+    if (census.f == 0) {
+      continue;
+    }
+
+    // (1) Every published polygon entry lies on its own face's plane.
+    EXPECT_LE(census.worst_off_plane, tol)
+        << sc.label << ": a face_vtx entry is " << census.worst_off_plane << " off its own plane (tol " << tol << ")";
+    // (2) Closed surface of genus 0.
+    EXPECT_EQ(census.v - census.e + census.f, 2)
+        << sc.label << ": V−E+F = " << (census.v - census.e + census.f) << " (V=" << census.v << " E=" << census.e
+        << " F=" << census.f << ") — the emitted polygon set is not a closed sphere-like surface";
+    // (3) 2-manifold: every edge borders exactly two faces.
+    EXPECT_EQ(census.non_manifold_edges, 0) << sc.label << ": " << census.non_manifold_edges
+                                            << " polygon edge(s) are not shared by exactly 2 present faces";
+    // (4) A present face must actually bound area.
+    EXPECT_GT(census.min_face_area, kMinAreaFrac * char_area)
+        << sc.label << ": smallest present-face area " << census.min_face_area << " ≤ " << kMinAreaFrac
+        << " × char_area=" << char_area << " — a face is marked present but bounds nothing";
+  }
 }
 
 // ============================================================================
