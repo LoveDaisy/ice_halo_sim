@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786060888242,
+  "lastUpdate": 1786060890235,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7bd4807017bdde3f3cb961988b4ab9991eeec42b",
-          "message": "Merge pull request #152 from LoveDaisy/feat/cuda-multi-ci-correctness\n\nfix(gpu): CUDA full multi-CI correctness + device-side recombine shuffle (Metal+CUDA)",
-          "timestamp": "2026-06-27T21:44:16+08:00",
-          "tree_id": "afa0020517cdb071aab346c7fde6ef574372c0f9",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7bd4807017bdde3f3cb961988b4ab9991eeec42b"
-        },
-        "date": 1782568237040,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 64.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 85.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 101.7,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "bc66f2ec2fd37503c13844019d347f39549e4228",
           "message": "Merge pull request #153 from LoveDaisy/feat/gpu-device-fused-accumulation\n\nfeat(scrum-302): device-fused XYZ accumulation (Metal + CUDA)",
           "timestamp": "2026-06-28T10:45:30+08:00",
@@ -13969,6 +13925,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 91.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "559b976cfc69c740bfbb7bcf1a4c9f0bac592e3c",
+          "message": "Merge pull request #255 from LoveDaisy/feat/gui-rules-as-data\n\nMake three GUI rules queryable data, and replace the grid tests they forced",
+          "timestamp": "2026-08-07T07:52:53+08:00",
+          "tree_id": "e263eeb0da176a674de554034f5744e15cc45bf6",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/559b976cfc69c740bfbb7bcf1a4c9f0bac592e3c"
+        },
+        "date": 1786060889733,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.2,
             "unit": "%"
           }
         ]
