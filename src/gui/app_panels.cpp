@@ -1181,16 +1181,22 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       ImGuiIO& io = ImGui::GetIO();
       if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
+        // Sensitivity is the lens's angular resolution at the frame center, so one pixel of
+        // drag moves the content one pixel whatever the FOV and viewport are. A fixed deg/px
+        // was ~180x too fast at fov=1° and ~70x too slow at fov=179°. vp_w/vp_h are
+        // framebuffer pixels (set above from the DPI scale), the same units
+        // ProjectWorldDirToScreen works in, which is what makes this DPI-correct for free.
+        float gain = ComputeDragGainDegPerPixel(rc.lens_type, rc.fov, g_preview_vp.vp_w, g_preview_vp.vp_h);
         // Globe is outside-in: u_view_matrix * (0,0,D) yields camera world
         // position, so +az/+el move the camera and the sphere drifts in the
         // opposite direction. Flip both signs so a right/down drag moves the
         // sphere right/down, matching the inside-out lenses' feel.
         if (rc.lens_type == kLensTypeGlobe) {
-          rc.azimuth += delta.x * 0.3f;
-          rc.elevation -= delta.y * 0.3f;
+          rc.azimuth += delta.x * gain;
+          rc.elevation -= delta.y * gain;
         } else {
-          rc.azimuth -= delta.x * 0.3f;
-          rc.elevation += delta.y * 0.3f;
+          rc.azimuth -= delta.x * gain;
+          rc.elevation += delta.y * gain;
         }
         // Wrap azimuth into [-180, 180] so dragging past the slider's clamp
         // boundary continues seamlessly instead of getting pinned at ±180.

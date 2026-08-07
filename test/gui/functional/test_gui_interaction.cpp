@@ -2952,7 +2952,21 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     }
   };
 
-  // T1: Globe drag direction. dx=+60 px @ 0.3 sensitivity → az ≈ +18°.
+  // Degrees the handler should produce for a given pixel delta, read off the live viewport.
+  //
+  // These five cases own the WIRING — sign, wrap, clamp — not the sensitivity law; that law
+  // is ComputeDragGainDegPerPixel's, and it is covered against the projection pipeline in
+  // gui_unit_test (test/unit-correctness/gui/test_drag_gain.cpp). So the expected magnitude
+  // is sourced from the same function the handler calls rather than restated as a literal.
+  // The literals these cases used to carry (±18° for a 60 px drag) were the old fixed
+  // 0.3 deg/px in disguise, which is why making the gain FOV-aware turned four of them red:
+  // they were pinning a constant none of them was about.
+  // static so the captureless TestFunc lambdas below can reach it, same as s_trackball_upload_done.
+  static const auto trackball_expected_deg = [](int lens_type, float fov, float pixels) {
+    return pixels * gui::ComputeDragGainDegPerPixel(lens_type, fov, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h);
+  };
+
+  // T1: Globe drag direction — a rightward drag must raise azimuth.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_trackball");
     t->GuiFunc = trackball_gui_func;
@@ -2969,18 +2983,20 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 0.0f;
       ctx->Yield(2);
 
+      float expected = trackball_expected_deg(gui::kLensTypeGlobe, 60.0f, 60.0f);
+      IM_CHECK_GT(expected, 1.0f);  // guard: a degenerate viewport would make the check vacuous
       ctx->ItemDragWithDelta("**/##preview_interact", ImVec2(60.0f, 0.0f));
       ctx->Yield(2);
 
-      IM_CHECK_GT(gui::g_state.renderer.azimuth, 17.0f);
-      IM_CHECK_LT(gui::g_state.renderer.azimuth, 19.0f);
+      IM_CHECK_GT(gui::g_state.renderer.azimuth, expected - 1.0f);
+      IM_CHECK_LT(gui::g_state.renderer.azimuth, expected + 1.0f);
       IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation), 0.5f);
       IM_CHECK_LT(std::fabs(gui::g_state.renderer.roll), 0.001f);
     };
   }
 
-  // T2: non-Globe drag direction is opposite (sign flip in app_panels.cpp:780).
-  // dx=+60 px → az ≈ -18° on FisheyeEquidist.
+  // T2: non-Globe drag direction is opposite (sign flip in app_panels.cpp's else branch):
+  // the same rightward drag must LOWER azimuth on FisheyeEquidist.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_fisheye_trackball");
     t->GuiFunc = trackball_gui_func;
@@ -2997,18 +3013,24 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 0.0f;
       ctx->Yield(2);
 
+      float expected = -trackball_expected_deg(gui::kLensTypeFisheyeEquidist, 60.0f, 60.0f);
+      IM_CHECK_LT(expected, -1.0f);  // guard: a degenerate viewport would make the check vacuous
       ctx->ItemDragWithDelta("**/##preview_interact", ImVec2(60.0f, 0.0f));
       ctx->Yield(2);
 
-      IM_CHECK_GT(gui::g_state.renderer.azimuth, -19.0f);
-      IM_CHECK_LT(gui::g_state.renderer.azimuth, -17.0f);
+      IM_CHECK_GT(gui::g_state.renderer.azimuth, expected - 1.0f);
+      IM_CHECK_LT(gui::g_state.renderer.azimuth, expected + 1.0f);
       IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation), 0.5f);
       IM_CHECK_LT(std::fabs(gui::g_state.renderer.roll), 0.001f);
     };
   }
 
-  // T3: az wrap across +180°. Start az=170, drag dx=+200 → 170 + 60 = 230 →
-  // wrap by -360 → -130. Validates app_panels.cpp:783-789.
+  // T3: az wrap across +180°. Start az=170 and drag right far enough to overshoot 180, which
+  // must wrap by -360 into the negative half rather than pin at +180.
+  //
+  // The overshoot is asserted as a precondition, not assumed: if the gain ever shrinks enough
+  // that 200 px no longer clears the remaining 10°, this case would stop exercising the wrap
+  // and quietly keep passing on an unwrapped value.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_trackball_az_wrap");
     t->GuiFunc = trackball_gui_func;
@@ -3025,17 +3047,21 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 0.0f;
       ctx->Yield(2);
 
+      float expected_raw = 170.0f + trackball_expected_deg(gui::kLensTypeGlobe, 60.0f, 200.0f);
+      IM_CHECK_GT(expected_raw, 180.0f);  // precondition: the drag really does cross the seam
       ctx->ItemDragWithDelta("**/##preview_interact", ImVec2(200.0f, 0.0f));
       ctx->Yield(2);
 
-      IM_CHECK_GT(gui::g_state.renderer.azimuth, -131.0f);
-      IM_CHECK_LT(gui::g_state.renderer.azimuth, -129.0f);
+      IM_CHECK_LT(gui::g_state.renderer.azimuth, 0.0f);  // wrapped, not pinned at +180
+      IM_CHECK_GT(gui::g_state.renderer.azimuth, expected_raw - 360.0f - 1.0f);
+      IM_CHECK_LT(gui::g_state.renderer.azimuth, expected_raw - 360.0f + 1.0f);
     };
   }
 
-  // T4: Globe el clamps at ±89° (tighter than non-Globe ±90°). Globe formula
-  // is `el -= dy * 0.3` (app_panels.cpp:778), so dy=-1000 drives +300 toward
-  // the upper limit — far past +89, which std::min collapses to exactly 89.
+  // T4: Globe el clamps at ±89° (tighter than non-Globe ±90°). Globe's elevation update is
+  // `el -= dy * gain`, so an upward drag drives elevation positive; the delta below is sized
+  // to overshoot +89 by a wide margin, and the overshoot is asserted rather than assumed so
+  // the case cannot decay into "never reached the limit, therefore never violated it".
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_globe_trackball_el_clamp");
     t->GuiFunc = trackball_gui_func;
@@ -3052,6 +3078,7 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 0.0f;
       ctx->Yield(2);
 
+      IM_CHECK_GT(trackball_expected_deg(gui::kLensTypeGlobe, 60.0f, 1000.0f), 89.0f);
       ctx->ItemDragWithDelta("**/##preview_interact", ImVec2(0.0f, -1000.0f));
       ctx->Yield(2);
 
@@ -3060,9 +3087,13 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // T5: non-Globe el clamps at ±90° (looser limit branch in app_panels.cpp:792).
-  // Non-Globe formula is `el += dy * 0.3` (app_panels.cpp:781), so dy=+1000
-  // drives +300 toward +90.
+  // T5: non-Globe el clamps at ±90° (the looser limit branch). Non-Globe's update is
+  // `el += dy * gain`, so a downward drag drives elevation positive.
+  //
+  // FOV is 360° (FisheyeEquidist's MaxFov) rather than 60°: the gain is now proportional to
+  // half_fov, and at 60° a 1000 px drag only reaches ~75°, which never touches the clamp.
+  // Same overshoot precondition as T4 — the assertion that this case is still exercising a
+  // clamp at all, rather than passing because the value stayed in range on its own.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_render", "lens_fisheye_trackball_el_clamp");
     t->GuiFunc = trackball_gui_func;
@@ -3073,12 +3104,13 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       IM_CHECK(gui::g_preview.HasTexture());
 
       gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
-      gui::g_state.renderer.fov = 60.0f;
+      gui::g_state.renderer.fov = 360.0f;
       gui::g_state.renderer.azimuth = 0.0f;
       gui::g_state.renderer.elevation = 0.0f;
       gui::g_state.renderer.roll = 0.0f;
       ctx->Yield(2);
 
+      IM_CHECK_GT(trackball_expected_deg(gui::kLensTypeFisheyeEquidist, 360.0f, 1000.0f), 90.0f);
       ctx->ItemDragWithDelta("**/##preview_interact", ImVec2(0.0f, 1000.0f));
       ctx->Yield(2);
 
