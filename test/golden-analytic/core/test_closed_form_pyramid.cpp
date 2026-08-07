@@ -34,6 +34,7 @@
 // these invariants at CI time, so pool drift is caught by CI, not by review.
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
 #include <cmath>
@@ -43,6 +44,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -51,6 +54,7 @@
 #include "core/math.hpp"
 #include "golden-analytic/core/closed_form_samples_generated.hpp"
 #include "golden-analytic/core/pyramid_topology_golden_generated.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 namespace {
@@ -654,6 +658,152 @@ TEST(ClosedFormPyramid, StructuralValidityParamScan) {
         << sc.label << ": smallest present-face area " << census.min_face_area << " ≤ " << kMinAreaFrac
         << " × char_area=" << char_area << " — a face is marked present but bounds nothing";
   }
+}
+
+// ============================================================================
+// Contract 2c — the near-apex height window.
+//
+// upper_h / lower_h approaching 1 walks a cone's truncation plane onto its
+// apex. Two decisions partition that axis: "does a cross-section polygon still
+// exist" (the 2D solver's feasibility tolerance) and "has the apex collapsed"
+// (the gate that switches the emitter to direct apex enumeration). Choose the
+// two independently and the band between them belongs to neither: the whole
+// cone is dropped without a word, the crystal comes out as an open prism, and
+// every consumer downstream keeps running on it. The scan below is what makes
+// that band an assertion rather than a code-reading exercise.
+//
+// It walks 1 − h from 1e-3 down to 1e-9 (eight points per decade) for the
+// regular hexagon and for one whose apex degenerates to a ridge, with and
+// without a prism section, on each cone side independently. The lower side is
+// not assumed to mirror the upper one — it is scanned.
+//
+// The assertions differ from StructuralValidityParamScan in exactly one place,
+// and the difference removes an inapplicable proxy rather than rigor: that
+// scan's minimum-area floor is a fixed fraction of the characteristic area,
+// which near the apex asserts "this crystal is not close to its apex" rather
+// than "this polygon is valid" — the top cap's area genuinely tends to zero as
+// h → 1. What replaces it is stronger where it counts: every one of the six
+// cone faces on the coned side must be PRESENT, which is exactly the property
+// a vanishing cone destroys.
+// ============================================================================
+
+// Number of present faces among the six-slot band starting at base_slot
+// (8 = upper cone, 14 = lower cone).
+int PresentFaceCountInBand(const ClosedFormPyramidResult& cf, int base_slot) {
+  int n = 0;
+  for (int i = 0; i < kSideCnt; i++) {
+    if (cf.face_present[base_slot + i]) {
+      n++;
+    }
+  }
+  return n;
+}
+
+TEST(ClosedFormPyramid, NearApexHeightWindowStructuralValidity) {
+  // Same loose relative on-plane tolerance as the other structural contracts.
+  constexpr double kRelTol = 1e-4;
+  // 1 − h sweep: eight points per decade from 1e-3 to 1e-9. The tail below
+  // ~6e-8 is where float32 rounds h to exactly 1.0f; it is scanned rather than
+  // trimmed, because "the window closes again once the input rounds onto the
+  // apex" is a property of the float32 grid and not of the solver — widening h
+  // to double would move that edge, so the scan should be able to see it.
+  constexpr int kStepsPerDecade = 8;
+  constexpr int kDecades = 6;
+
+  struct Shape {
+    const char* label;
+    float upper_alpha;
+    float lower_alpha;
+    float dist[kSideCnt];
+  };
+  // "regular": the apex is a single point where all six cone planes concur.
+  // "ridge": one opposite pair pulled in, so the apex degenerates to a segment.
+  // The two collapse modes shrink the cross section at different rates (a point
+  // contracts isotropically, a ridge contracts into a sliver), so neither one
+  // stands in for the other.
+  static const Shape kShapes[] = {
+    { "regular", 28.0f, 28.0f, { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f } },
+    { "ridge", 17.0f, 28.0f, { 0.2f, 1.0f, 1.0f, 0.2f, 1.0f, 1.0f } },
+  };
+  static const float kPrismH[] = { 0.0f, 0.3f };
+
+  int checked = 0;
+  std::vector<std::string> failures;
+
+  for (const Shape& sh : kShapes) {
+    for (float prism_h : kPrismH) {
+      for (int side = 0; side < 2; side++) {
+        const char* side_label = (side == 0) ? "upper" : "lower";
+        const int cone_base_slot = (side == 0) ? 8 : 14;
+        // Per-group tally, printed unconditionally: on a green run it states
+        // the window was walked and found closed; on a red one it states how
+        // wide the open band is and where it sits, which is the diagnostic a
+        // reader needs and which 200-plus individual failure lines bury.
+        int group_bad = 0;
+        double bad_t_hi = 0.0;
+        double bad_t_lo = 0.0;
+        for (int step = 0; step <= kStepsPerDecade * kDecades; step++) {
+          const double t = 1e-3 * std::pow(10.0, -static_cast<double>(step) / kStepsPerDecade);
+          const float h = static_cast<float>(1.0 - t);
+          const float h1 = (side == 0) ? h : 0.0f;
+          const float h3 = (side == 0) ? 0.0f : h;
+
+          auto cf = ComputeClosedFormPyramid(sh.upper_alpha, sh.lower_alpha, h1, prism_h, h3, sh.dist);
+
+          PyramidSample s;
+          s.upper_alpha = sh.upper_alpha;
+          s.lower_alpha = sh.lower_alpha;
+          s.h1 = h1;
+          s.h2 = prism_h;
+          s.h3 = h3;
+          for (int i = 0; i < kSideCnt; i++) {
+            s.dist[i] = sh.dist[i];
+          }
+          const double tol = kRelTol * ProductionCharLen(s);
+
+          const StructuralCensus census = TakeStructuralCensus(cf);
+          const int cone_faces = PresentFaceCountInBand(cf, cone_base_slot);
+          checked++;
+
+          const bool ok = census.f > 0 && cone_faces == kSideCnt && census.worst_off_plane <= tol &&
+                          census.v - census.e + census.f == 2 && census.non_manifold_edges == 0 &&
+                          census.min_face_area > 0.0;
+          if (!ok) {
+            if (group_bad == 0) {
+              bad_t_hi = t;
+            }
+            bad_t_lo = t;
+            group_bad++;
+            char buf[320];
+            std::snprintf(buf, sizeof(buf),
+                          "%s/prism%.1f/%s 1-h=%.3e: cone_faces=%d/6 V=%d E=%d F=%d chi=%d non_manifold=%d "
+                          "off_plane=%.3e (tol %.3e) min_area=%.3e",
+                          sh.label, static_cast<double>(prism_h), side_label, t, cone_faces, census.v, census.e,
+                          census.f, census.v - census.e + census.f, census.non_manifold_edges, census.worst_off_plane,
+                          tol, census.min_face_area);
+            failures.emplace_back(buf);
+          }
+        }
+        if (group_bad == 0) {
+          std::fprintf(stderr, "[near-apex-window] %-8s prism=%.1f %-5s: %2d/%2d heights valid\n", sh.label,
+                       static_cast<double>(prism_h), side_label, kStepsPerDecade * kDecades + 1,
+                       kStepsPerDecade * kDecades + 1);
+        } else {
+          std::fprintf(stderr, "[near-apex-window] %-8s prism=%.1f %-5s: %2d/%2d INVALID, 1-h in [%.3e, %.3e]\n",
+                       sh.label, static_cast<double>(prism_h), side_label, group_bad, kStepsPerDecade * kDecades + 1,
+                       bad_t_lo, bad_t_hi);
+        }
+      }
+    }
+  }
+
+  std::fprintf(stderr, "[near-apex-window] checked=%d failed=%zu\n", checked, failures.size());
+  for (size_t i = 0; i < failures.size() && i < 8; i++) {
+    std::fprintf(stderr, "[near-apex-window] %s\n", failures[i].c_str());
+  }
+  EXPECT_TRUE(failures.empty()) << failures.size() << " of " << checked
+                                << " near-apex heights produced a structurally invalid solid (first: "
+                                << (failures.empty() ? std::string("-") : failures.front()) << ")";
 }
 
 // ============================================================================

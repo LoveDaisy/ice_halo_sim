@@ -57,6 +57,40 @@ constexpr uint16_t kPathTagBounded = kClosedFormPathTagBounded;
 constexpr uint16_t kPathTagAllDirsPresent = kClosedFormPathTagAllDirsPresent;
 constexpr uint16_t kPathTagEmpty = kClosedFormPathTagEmpty;
 
+// Magnitude the half-plane offsets are measured against. Its own function, and
+// not an inline loop at each site, because it is the input to
+// GapToleranceForScale below: two call sites reducing "the same" array with two
+// hand-written loops is how a tolerance ends up meaning different things in
+// different places while reading identically.
+double CrossSectionScale(const double r_side_dist[kClosedFormPrismSideCnt]) {
+  double scale = 0.0;
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    scale = std::max(scale, std::fabs(r_side_dist[i]));
+  }
+  return scale;
+}
+
+// Feasibility / dedup tolerance for a cross section of the given scale.
+//
+// Empirically the 9-orders-of-magnitude stable window ends around here — at
+// 4-way concurrencies (a corner where two solve-pairs collapse to the same
+// geometric point), the double-precision residuals between the two candidates
+// are of order 10·kFloatEps, so a pure 1·kFloatEps threshold occasionally fails
+// to merge them. 5·kFloatEps aligns with production's dedup scale
+// (SolveConvexPolyhedronVtxD uses 5e-5·char_len — src/core/math.cpp:807-811)
+// and keeps distinct corners in the well-conditioned regime safely apart
+// (~0.01+ scale at σ = 0.2).
+//
+// SINGLE OWNER, deliberately: this value decides not only "can the solver still
+// separate two corners" but also, through ApexCollapsedAt, "has the cone's
+// cross section shrunk past the point of having a solution at all". Those two
+// questions partition one axis, so they must be answered by one constant. A
+// second copy of this expression elsewhere re-opens a band on that axis where
+// neither answer applies and a whole cone is dropped in silence.
+double GapToleranceForScale(double scale) {
+  return 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+}
+
 // SolveHexCrossSection — the 2D half-plane intersection over the six fixed
 // prism directions θᵢ = i·60° with per-direction offset `r_side_dist[i]` (in
 // the SAME units the caller uses: for prism, r_side_dist[i] = (√3/4)·dist[i];
@@ -89,24 +123,14 @@ HexCrossSection SolveHexCrossSection(const double r_side_dist[kClosedFormPrismSi
 
   double cs[kClosedFormPrismSideCnt];
   double sn[kClosedFormPrismSideCnt];
-  double scale = 0.0;
   for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
     cs[i] = kHexFaceCos[i];
     sn[i] = kHexFaceSin[i];
-    scale = std::max(scale, std::fabs(r_side_dist[i]));
     if (r_side_dist[i] <= 0.0) {
       tag |= kPathTagAnyDirDegenerate;
     }
   }
-  // Relative feasibility / dedup tolerance. Empirically the 9-orders-of-magnitude
-  // stable window ends around here — at 4-way concurrencies (a corner where
-  // two solve-pairs collapse to the same geometric point), the double-precision
-  // residuals between the two candidates are of order 10·kFloatEps, so a
-  // pure 1·kFloatEps threshold occasionally fails to merge them. 5·kFloatEps
-  // aligns with production's dedup scale (SolveConvexPolyhedronVtxD uses
-  // 5e-5·char_len — src/core/math.cpp:807-811) and keeps distinct corners in
-  // the well-conditioned regime safely apart (~0.01+ scale at σ = 0.2).
-  double tol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(scale, 1.0);
+  double tol = GapToleranceForScale(CrossSectionScale(r_side_dist));
 
   struct Corner {
     double x, y;
@@ -294,6 +318,47 @@ struct ApexLPResult {
   double u = 0.0;
   double v = 0.0;
 };
+
+// Half-plane offsets of the cone cross section at physical inset `m`, in the
+// units SolveHexCrossSection consumes, plus the scale its tolerance derives
+// from. The eroded-offset formula lives here alone: the apex-collapse gate
+// below must feed GapToleranceForScale the SAME quantity the cross-section
+// solver will see, and it cannot do that from a second hand-written copy of
+// this expression that merely happens to match today.
+double ComputeRSideDistAndScale(const float dist[kClosedFormPrismSideCnt], double m,
+                                double out_r_side_dist[kClosedFormPrismSideCnt]) {
+  for (int i = 0; i < kClosedFormPrismSideCnt; i++) {
+    out_r_side_dist[i] = kInsetK * (static_cast<double>(dist[i]) - m);
+  }
+  return CrossSectionScale(out_r_side_dist);
+}
+
+// True iff the cone's cross section at physical inset `m` has shrunk past the
+// point where the 2D solver can still resolve it, so the tip must be
+// materialized by direct apex enumeration instead of by intersecting the eroded
+// half planes.
+//
+// Deliberately NOT an independent threshold on `apex_m - m`. "Is there still a
+// cross-section polygon" and "has the apex collapsed" partition the same axis;
+// answering them with two separately chosen constants leaves a band that
+// belongs to neither, and an input landing in it loses its entire cone with no
+// diagnostic — the truncation branch finds nothing to emit and the apex branch
+// never runs. Deriving the gate from the same scale→tolerance map the solver
+// uses, converted from half-plane-offset units back to physical inset by the
+// fixed factor kInsetK, makes that band structurally empty instead of merely
+// narrow. The conversion is exact because the two quantities are related by
+// that one constant: r_side = kInsetK · (dist − m).
+//
+// The gate is slightly conservative — it claims a neighbourhood a little wider
+// than the one where the solver actually fails, which is the correct direction:
+// inside it the tip is snapped onto the apex, an error bounded by the gate
+// width itself, whereas outside it the failure mode is losing the cone.
+bool ApexCollapsedAt(const float dist[kClosedFormPrismSideCnt], double m, double apex_m) {
+  double r_side_dist[kClosedFormPrismSideCnt];
+  const double scale = ComputeRSideDistAndScale(dist, m, r_side_dist);
+  const double gap_tol = GapToleranceForScale(scale) / kInsetK;
+  return (apex_m - m) <= gap_tol;
+}
 
 // Shared 3×3 solver for a direction triple (i, j, k):
 //   [cs_i sn_i 1] [u]   [d_i]
@@ -742,6 +807,24 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   double m_apex_lower = has_lower ? apex.m : 0.0;
   double m_at_top = has_upper ? std::min(static_cast<double>(h1) * m_apex_upper, m_apex_upper) : 0.0;
   double m_at_bot = has_lower ? std::min(static_cast<double>(h3) * m_apex_lower, m_apex_lower) : 0.0;
+  // Apex-collapse decision, taken here rather than at the emission site because
+  // a collapsed side's truncation inset IS the apex inset: snapping m before z,
+  // inset_at_* and the basal d are derived from it keeps the whole solid — the
+  // emitted vertices, the plane the basal d describes and the inset the caller
+  // reads back — consistent with the one decision, instead of emitting an apex
+  // tip while still reporting a truncation plane a hair below it.
+  //
+  // The requested truncation is at most one gate width below the apex when this
+  // fires (see ApexCollapsedAt), so the snap moves the tip by at most that, and
+  // it is exactly what an h ≥ 1 request already got from the std::min above.
+  const bool upper_apex_collapsed = has_upper && ApexCollapsedAt(dist, m_at_top, apex.m);
+  const bool lower_apex_collapsed = has_lower && ApexCollapsedAt(dist, m_at_bot, apex.m);
+  if (upper_apex_collapsed) {
+    m_at_top = apex.m;
+  }
+  if (lower_apex_collapsed) {
+    m_at_bot = apex.m;
+  }
   double z_top = has_upper ? (h2_2 + a1 * m_at_top) : h2_2;
   double z_bot = has_lower ? (-h2_2 - a2 * m_at_bot) : -h2_2;
   r.inset_at_top = static_cast<float>(m_at_top);
@@ -803,9 +886,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   auto emit_ring = [&](double m, double z, const int face_slot_of_dir[6], int basal_slot,
                        const int extra_slot_of_dir[6]) -> int {
     double r_side[6];
-    for (int i = 0; i < 6; i++) {
-      r_side[i] = kInsetK * (static_cast<double>(dist[i]) - m);
-    }
+    ComputeRSideDistAndScale(dist, m, r_side);
     uint16_t local_tag = 0;
     HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
     r.path_tag_union |= local_tag;
@@ -844,9 +925,6 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   int lower_slot[6] = { 14, 15, 16, 17, 18, 19 };
 
   // ---- Upper side ----------------------------------------------------------
-  const double kApexEps = 1e-9;
-  const bool upper_apex_collapsed = has_upper && m_at_top >= apex.m - kApexEps;
-  const bool lower_apex_collapsed = has_lower && m_at_bot >= apex.m - kApexEps;
   if (has_upper) {
     // Shoulder ring at z = +h2/2 (m = 0): 4-way concurrence prism_i,
     // prism_{i+1}, upper_cone_i, upper_cone_{i+1}. Every corner is a vertex.
