@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -228,6 +230,79 @@ TEST_F(V3TestJson, Crystal_PyramidSimple) {
   CHECK_DISTRIBUTION(axis.azimuth_dist, DistributionType::kUniform, 0, 360);
 }
 
+
+// An `axis` slot written as an object must name its `type`. It used to be optional, and the
+// answer it silently produced depended on which slot you were in: `zenith` kept the constructor's
+// kNoRandom and threw "std" away, `azimuth` / `roll` kept the uniform-360 seed and threw away what
+// "mean" was asking for. All three slots are pinned separately for exactly that reason — the three
+// wrong answers were different, so one case could not have covered the others.
+//
+// Asserting the message, not merely the throw: this narrows a published contract, and a config
+// written outside this repo can only be migrated by what the error tells its author. Crystal 3 of
+// the fixture carries all three slots in object form.
+TEST_F(V3TestJson, Crystal_AxisSlotObjectMissingTypeRejected) {
+  for (const char* slot : { "zenith", "azimuth", "roll" }) {
+    SCOPED_TRACE(slot);
+    auto j = config_json_;
+    auto& j_axis = j.at("crystal")[2].at("axis");
+    ASSERT_TRUE(j_axis.at(slot).is_object()) << "fixture must write this slot in object form";
+    j_axis.at(slot).erase("type");
+
+    try {
+      (void)j.get<ConfigManager>();
+      FAIL() << "expected std::invalid_argument for an axis." << slot << " object with no \"type\"";
+    } catch (const std::invalid_argument& e) {
+      const std::string msg = e.what();
+      EXPECT_NE(msg.find("crystal[id=3]"), std::string::npos) << msg;              // which crystal
+      EXPECT_NE(msg.find(std::string("axis.") + slot), std::string::npos) << msg;  // which slot
+      EXPECT_NE(msg.find("\"type\""), std::string::npos) << msg;                   // what is missing
+      // Both legal ways to write it — the migration guidance, not decoration.
+      EXPECT_NE(msg.find(std::string("\"") + slot + "\": 20"), std::string::npos) << msg;
+      EXPECT_NE(msg.find("\"type\": \"gauss\""), std::string::npos) << msg;
+    }
+  }
+}
+
+// A present `axis` has always required `zenith`; only the message changes. It used to come from
+// nlohmann (`[json.exception.out_of_range.403] key 'zenith' not found`), which names neither the
+// crystal nor a way forward.
+TEST_F(V3TestJson, Crystal_AxisWithoutZenithRejectedWithOwnMessage) {
+  auto j = config_json_;
+  auto& j_axis = j.at("crystal")[2].at("axis");
+  ASSERT_TRUE(j_axis.contains("zenith"));
+  j_axis.erase("zenith");
+
+  try {
+    (void)j.get<ConfigManager>();
+    FAIL() << "expected std::invalid_argument for an `axis` object with no \"zenith\"";
+  } catch (const nlohmann::json::out_of_range& e) {
+    FAIL() << "still nlohmann's raw key-not-found, which is what this test exists to replace: " << e.what();
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("crystal[id=3]"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("zenith"), std::string::npos) << msg;
+    // Says how to opt out of `axis` altogether, since that — not a zenith value — is what an
+    // author who wrote a partial `axis` most likely wanted.
+    EXPECT_NE(msg.find("omit `axis`"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("\"type\": \"gauss\""), std::string::npos) << msg;
+  }
+}
+
+// The seeds that answer "azimuth / roll KEY absent" are deliberate (2022) and 47 slots in this
+// repo's corpus rely on them. Deleting the accidental second job they used to do — standing in as
+// the `type` of a slot that WAS written but left typeless — must not touch them. Positive
+// evidence, because "we did not edit those lines" is not evidence.
+TEST_F(V3TestJson, Crystal_AxisKeysAbsentStillSeedUniform360) {
+  auto j = config_json_;
+  auto& j_axis = j.at("crystal")[2].at("axis");
+  j_axis.erase("azimuth");
+  j_axis.erase("roll");
+
+  auto m = j.get<ConfigManager>();
+  const auto& axis = m.crystals_.at(3).axis_;
+  CHECK_DISTRIBUTION(axis.azimuth_dist, DistributionType::kUniform, 0, 360);
+  CHECK_DISTRIBUTION(axis.roll_dist, DistributionType::kUniform, 0, 360);
+}
 
 // Helper to create a minimal pyramid CrystalConfig JSON
 nlohmann::json MakePyramidJson(int id, std::array<int, 3> upper_idx, std::array<int, 3> lower_idx) {

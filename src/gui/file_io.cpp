@@ -699,26 +699,43 @@ static ShapeDist ParseShapeDist(const json& j, float default_center) {
   return d;
 }
 
-static AxisDist ParseAxisDist(const json& j) {
+// `crystal_label` and `slot_key` only ever reach a warning message; they say WHICH slot of WHICH
+// crystal was rewritten on the way in, which is the whole point of surfacing it at all.
+static AxisDist ParseAxisDist(const json& j, const std::string& crystal_label, const char* slot_key) {
   AxisDist a;
   if (j.is_number()) {
     a.type = AxisDistType::kGauss;
     a.mean = j.get<float>();
     a.std = 0.0f;
   } else if (j.is_object()) {
-    // NOT derived from AxisDist{}.type (kUniform): both arms of this parser have always fallen
-    // back to gauss, a divergence with no written reason. It is reached from both parse entry
-    // points, so changing it moves how every existing document loads; the literal stays until
-    // that is decided (DISABLED_ contract anchor in test_import_export_logic.cpp).
-    auto t = j.value("type", "gauss");
-    a.type = ParseAxisDistType(t);
+    // `type` is required by core, which rejects an axis slot written as an object without it. The
+    // GUI is an editor, not the engine, so it loads such a document anyway — but at AxisDist's own
+    // default, and it says so. The old "gauss" literal is gone: it matched neither this struct nor
+    // either of core's two former pre-seeds, and there is no longer a core default to mirror.
+    //
+    // For `zenith` this IS a visible change, not just better wording: core's old silent answer
+    // there was kNoRandom (a fixed angle), so a typeless zenith that used to open as a fixed value
+    // now opens as AxisDist{}.type. `azimuth` and `roll` already defaulted to that same type.
+    if (j.is_object() && !j.contains("type")) {
+      a.type = AxisDist{}.type;
+      const std::string msg = crystal_label + " axis." + slot_key +
+                              " is written as an object with no \"type\"; loaded as " +
+                              AxisDistTypeToString(AxisDist{}.type) +
+                              " (core rejects this document outright now that \"type\" is required).";
+      GUI_LOG_WARNING("[FileIO] ParseAxisDist: {}", msg);
+      SetImportComplexFilterWarning(msg);
+    } else {
+      a.type = ParseAxisDistType(j.at("type").get<std::string>());
+    }
     a.mean = j.value("mean", AxisDist{}.mean);
     a.std = j.value("std", AxisDist{}.std);
   }
   return a;
 }
 
-static CrystalConfig ParseCrystal(const json& j) {
+// `crystal_label` names this crystal in any import warning raised while parsing it — "crystal
+// id=3" where the document numbers its crystals, or a positional stand-in where it does not.
+static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_label) {
   CrystalConfig c;
   c.name = j.value("name", CrystalConfig{}.name);
 
@@ -780,11 +797,11 @@ static CrystalConfig ParseCrystal(const json& j) {
     const char* azimuth_key = LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_AZIMUTH);
     const char* roll_key = LUMICE_AxisScalarKeyName(LUMICE_AXIS_SCALAR_ROLL);
     if (ax.contains(zenith_key))
-      c.zenith = ParseAxisDist(ax[zenith_key]);
+      c.zenith = ParseAxisDist(ax[zenith_key], crystal_label, zenith_key);
     if (ax.contains(azimuth_key))
-      c.azimuth = ParseAxisDist(ax[azimuth_key]);
+      c.azimuth = ParseAxisDist(ax[azimuth_key], crystal_label, azimuth_key);
     if (ax.contains(roll_key))
-      c.roll = ParseAxisDist(ax[roll_key]);
+      c.roll = ParseAxisDist(ax[roll_key], crystal_label, roll_key);
   }
 
   return c;
@@ -1749,7 +1766,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   if (root.contains("crystal") && root["crystal"].is_array()) {
     for (auto& jc : root["crystal"]) {
       int id = jc.value("id", 0);
-      crystal_map[id] = ParseCrystal(jc);
+      crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
     }
   }
 
@@ -2266,7 +2283,11 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
           EntryCard entry;
           if (je.contains("crystal")) {
             entry.crystal_id = static_cast<int>(state.crystals.size());
-            state.crystals.push_back(ParseCrystal(je["crystal"]));
+            // The GUI-native form inlines each crystal in its entry and carries no id, so the
+            // warning names it by where it sits instead.
+            state.crystals.push_back(ParseCrystal(je["crystal"], "layer " + std::to_string(state.layers.size()) +
+                                                                     " entry " + std::to_string(layer.entries.size()) +
+                                                                     "'s crystal"));
           } else {
             // No inline crystal — provide a default slot so entry stays valid.
             entry.crystal_id = static_cast<int>(state.crystals.size());
@@ -2290,7 +2311,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     if (root["crystals"].is_array()) {
       for (auto& jc : root["crystals"]) {
         int id = jc.value("id", 0);
-        crystal_map[id] = ParseCrystal(jc);
+        crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
       }
     }
     std::map<int, FilterConfig> filter_map;

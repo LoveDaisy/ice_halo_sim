@@ -526,8 +526,65 @@ TEST(JsonParserParity, AxisPresentZenithOnly) {
 TEST(JsonParserParity, AxisPresentWithoutZenithIsRejected) {
   const std::string text =
       WrapCrystal(R"({ "id": 1, "type": "prism", "shape": { "height": 1.0 }, "axis": { "roll": 0 } })");
-  EXPECT_FALSE(ParseWithCore(text).ok) << "core is expected to require axis.zenith";
+  const auto core = ParseWithCore(text);
+  EXPECT_FALSE(core.ok) << "core is expected to require axis.zenith";
+  // The rejection is old; the message is not. It used to be nlohmann's raw
+  // "[json.exception.out_of_range.403] key 'zenith' not found", which names neither the crystal
+  // nor a way forward.
+  EXPECT_EQ(core.error.find("out_of_range.403"), std::string::npos)
+      << "expected this repo's own diagnosis, got nlohmann's: " << core.error;
+  EXPECT_NE(core.error.find("crystal[id=1]"), std::string::npos) << core.error;
+  EXPECT_NE(core.error.find("zenith"), std::string::npos) << core.error;
   EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
+// An axis slot written as an object must name its `type`, in BOTH parsers. Both are required: the
+// CLI reaches core only through the C API's parser, which re-serializes what it parsed via
+// ConfigToJson — and that writer always emits `type`, so a check living only in core would never
+// see the missing key. Landing the core half alone leaves core's own test green while the CLI goes
+// on accepting the document, which is precisely how the `prob` narrowing nearly shipped half-done.
+//
+// One case per slot, not one case: before this narrowing the three slots silently produced three
+// DIFFERENT wrong answers (zenith kept kNoRandom, azimuth/roll kept uniform-360), so the slots are
+// not interchangeable evidence for one another.
+TEST(JsonParserParity, AxisSlotObjectWithoutTypeIsRejected) {
+  for (const char* slot : { "zenith", "azimuth", "roll" }) {
+    SCOPED_TRACE(slot);
+    // `zenith` is always present so the failure under test is the missing `type`, never a missing
+    // `zenith` — for that slot the two collapse onto the same object.
+    std::string axis = R"("zenith": { "type": "gauss", "mean": 90, "std": 1 })";
+    const std::string typeless = std::string("\"") + slot + R"(": { "mean": 20, "std": 5 })";
+    if (std::string(slot) == "zenith") {
+      axis = typeless;
+    } else {
+      axis += ", " + typeless;
+    }
+    const std::string text =
+        WrapCrystal(R"({ "id": 1, "type": "prism", "shape": { "height": 1.0 }, "axis": { )" + axis + " } }");
+
+    const auto core = ParseWithCore(text);
+    EXPECT_FALSE(core.ok) << "core must reject an axis." << slot << " object with no \"type\"";
+    EXPECT_NE(core.error.find(std::string("axis.") + slot), std::string::npos) << core.error;
+    EXPECT_FALSE(CapiAcceptsEndToEnd(text)) << "the C API parser must reject it too, or the CLI still accepts it";
+  }
+}
+
+// The other half of the same edit: deleting the typeless-object fallback must not disturb the
+// deliberate seed for an ABSENT azimuth / roll key, which 47 slots in this repo's corpus rely on.
+// AxisPresentZenithOnly above already pins core's values; this pins that both parsers still agree
+// on them, which is the property that would break if only one of the two had been narrowed.
+TEST(JsonParserParity, AxisKeysAbsentStillAgreeOnUniform360) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(
+      WrapCrystal(
+          R"({ "id": 1, "type": "prism", "shape": { "height": 1.0 }, "axis": { "zenith": { "type": "gauss", "mean": 90, "std": 1 } } })"),
+      &p));
+  const auto& axis = OnlyCrystal(p.via_capi).axis_;
+  EXPECT_EQ(axis, OnlyCrystal(p.core).axis_);
+  EXPECT_EQ(axis.azimuth_dist.type, lumice::DistributionType::kUniform);
+  EXPECT_FLOAT_EQ(axis.azimuth_dist.spread, 360.0f);
+  EXPECT_EQ(axis.roll_dist.type, lumice::DistributionType::kUniform);
+  EXPECT_FLOAT_EQ(axis.roll_dist.spread, 360.0f);
 }
 
 // --- crystal.shape ---

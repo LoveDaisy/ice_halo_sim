@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -336,6 +337,20 @@ enum AxisScalar : int {
 //!   These three strings are core's schema. A layer that misspells one silently
 //!   drops the field rather than reporting an error, so no layer spells them out.
 const char* AxisScalarKeyName(int slot);
+
+//! @brief The "here is how to write this axis slot" guidance appended to every
+//!   rejection of a malformed `axis.<slot>` distribution.
+//!
+//! @details `slot_key` is the bare JSON key ("zenith" / "azimuth" / "roll"), as
+//!   returned by AxisScalarKeyName; the returned text spells both legal forms
+//!   with that key, so the reader can paste it.
+//!
+//!   This lives in core, and the C API's own parser calls it, because the two
+//!   parsers reject the same documents and their messages are the only migration
+//!   guidance an out-of-tree hand-written config will ever get. Two independently
+//!   written copies of that guidance would drift, and the drift would be invisible
+//!   — nothing compares the two strings. Pure: no throw, no IO.
+std::string FormatAxisSlotHint(const std::string& slot_key);
 
 
 namespace detail {

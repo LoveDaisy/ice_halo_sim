@@ -242,3 +242,114 @@ class TestScatteringProbRequired(LumiceTestCase):
         self.assertIn("scattering[0]", combined, "must name the offending layer" + context)
         self.assertIn("prob", combined, "must name the field" + context)
         self.assertIn('"prob": 0', combined, "must state the migration write-up" + context)
+
+
+class TestAxisSlotTypeRequired(LumiceTestCase):
+    """A crystal's `axis` slot written as an object must name its `type`.
+
+    Same reason the `prob` suite above exists at this layer: the C++ unit tests
+    each prove one parser rejects the document when called directly, and neither
+    proves the binary a user runs does. The CLI reaches core only through the C
+    API, which re-serializes what it parsed — so a check landed in core alone
+    would leave core's own test green while the CLI went on accepting the file.
+    Run the real binary or the claim stays unverified.
+
+    Derived from a real repo config, so the rejected document differs from a
+    working one in exactly the deleted key.
+    """
+
+    def _config_axis_slot_without_type(self, slot):
+        """Copy halo_22.json with crystal 0's `axis.<slot>.type` deleted."""
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        with open(cfg) as f:
+            doc = json.load(f)
+        axis = doc["crystal"][0]["axis"]
+        self.assertIn(
+            "type",
+            axis.get(slot, {}),
+            f"fixture no longer writes axis.{slot}.type; this test would pass vacuously",
+        )
+        del axis[slot]["type"]
+
+        out = Path(self.output_dir) / f"halo_22_axis_{slot}_no_type.json"
+        with open(out, "w") as f:
+            json.dump(doc, f)
+        return out
+
+    def _config_axis_without_zenith(self):
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest(f"{cfg} not found")
+        with open(cfg) as f:
+            doc = json.load(f)
+        axis = doc["crystal"][0]["axis"]
+        self.assertIn("zenith", axis, "fixture no longer writes axis.zenith")
+        del axis["zenith"]
+
+        out = Path(self.output_dir) / "halo_22_axis_no_zenith.json"
+        with open(out, "w") as f:
+            json.dump(doc, f)
+        return out
+
+    def test_cli_rejects_axis_slot_without_type(self):
+        """Both slots the fixture writes, separately.
+
+        Before this narrowing the slots produced *different* wrong answers —
+        `zenith` kept a fixed angle and discarded `std`, `azimuth` kept a
+        360-degree sweep and discarded what `mean` asked for — so one slot is not
+        evidence for the other.
+        """
+        for slot in ("zenith", "azimuth"):
+            with self.subTest(slot=slot):
+                tmp_cfg = self._config_axis_slot_without_type(slot)
+                result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+                self.assertNotEqual(
+                    result.returncode,
+                    0,
+                    f"CLI accepted an axis.{slot} object with no `type`:\n"
+                    f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
+                )
+                # "reports an error" and "produces nothing" are separate claims.
+                self.assertEqual(glob.glob(os.path.join(self.output_dir, "img_*.jpg")), [])
+
+    def test_cli_rejects_axis_without_zenith(self):
+        tmp_cfg = self._config_axis_without_zenith()
+        result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            f"CLI accepted an `axis` with no `zenith`:\n"
+            f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
+        )
+        self.assertEqual(glob.glob(os.path.join(self.output_dir, "img_*.jpg")), [])
+
+    def test_error_message_is_actionable(self):
+        """The message is the migration guidance — assert its load-bearing parts.
+
+        A config outside this repo cannot be enumerated, so whoever wrote one has
+        only this text to go on: which crystal, which slot, and both legal ways to
+        write it. A bare "parse error" is not enough.
+        """
+        tmp_cfg = self._config_axis_slot_without_type("azimuth")
+        result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+        combined = result.stdout + result.stderr
+        context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertIn("crystal[id=1]", combined, "must name the offending crystal" + context)
+        self.assertIn("axis.azimuth", combined, "must name the offending slot" + context)
+        self.assertIn('"azimuth": 20', combined, "must show the bare-number form" + context)
+        self.assertIn('"type": "gauss"', combined, "must show the object form" + context)
+
+    def test_missing_zenith_message_is_actionable(self):
+        """The old text here was nlohmann's raw `out_of_range.403`, which names
+        neither the crystal nor a way forward. The document is rejected exactly as
+        before; only the message changed, so that is what is asserted."""
+        tmp_cfg = self._config_axis_without_zenith()
+        result = self.run_lumice(["-f", str(tmp_cfg), "-o", self.output_dir])
+        combined = result.stdout + result.stderr
+        context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertNotIn("out_of_range.403", combined, "still nlohmann's raw message" + context)
+        self.assertIn("crystal[id=1]", combined, "must name the offending crystal" + context)
+        self.assertIn("zenith", combined, "must name the missing slot" + context)
+        self.assertIn("omit `axis`", combined, "must say how to opt out of `axis`" + context)

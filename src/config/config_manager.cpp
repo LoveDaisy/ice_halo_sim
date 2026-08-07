@@ -173,7 +173,16 @@ void from_json(const nlohmann::json& j, ConfigManager& m) {
   // Crystals
   for (const auto& j_crystal : j.at("crystal")) {
     IdType id = j_crystal.at("id").get<IdType>();
-    m.crystals_.emplace(id, j_crystal.get<CrystalConfig>());
+    // The parsers below know which FIELD they rejected but not which crystal it belonged to — the
+    // id is only in scope here, and an ADL-dispatched from_json takes no extra argument to carry
+    // it down. So the id is prepended on the way out instead. Only our own std::invalid_argument
+    // is relabelled: nlohmann's exceptions pass through untouched, keeping every other
+    // malformed-config path exactly as it was.
+    try {
+      m.crystals_.emplace(id, j_crystal.get<CrystalConfig>());
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument("crystal[id=" + std::to_string(id) + "]: " + e.what());
+    }
   }
 
   // Filters (two passes: simple first, then complex)

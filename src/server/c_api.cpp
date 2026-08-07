@@ -1467,15 +1467,18 @@ static LUMICE_ErrorCode JsonToDistribution(const nlohmann::json& j, LUMICE_Distr
   if (!j.is_object()) {
     return LUMICE_ERR_INVALID_VALUE;
   }
-  // Each key is independently optional: core applies `if (contains(k)) get_to(...)` per key.
+  // "type" is required, mirroring core's Distribution::from_json. This must be rejected HERE and
+  // not left to core: the CLI reaches core only through this parser, whose output is re-serialized
+  // by ConfigToJson — and that writer emits `type` unconditionally from the struct, so the missing
+  // key would already have been filled in before core ever saw it. A check living only in core
+  // would leave core's own test green while the CLI silently accepted the document.
+  //
+  // Reporting is by return code alone, as everywhere else in this function; the three axis call
+  // sites in JsonToCrystal add the LOG_ERROR that carries the migration guidance, because only
+  // they know which crystal and which slot. This one cannot: the shape scalars parse through here
+  // too, and it has no way to tell them apart.
   if (!j.contains("type")) {
-    if (j.contains("mean")) {
-      out->center = j.at("mean").get<float>();
-    }
-    if (j.contains("std")) {
-      out->spread = j.at("std").get<float>();
-    }
-    return LUMICE_OK;
+    return LUMICE_ERR_MISSING_FIELD;
   }
   auto type_str = j.at("type").get<std::string>();
   // Defensive: tolerate an explicit {"type":"no_random", ...} object on the READ side even though
@@ -1632,15 +1635,35 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
   cr->roll = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 0.0f, 0.0f };
   if (cj.contains("axis")) {
     const auto& axis = cj.at("axis");
+    // The three rejections below log, unlike the rest of this function: each narrows a published
+    // contract, and a hand-written config outside this repo cannot be enumerated, so the message
+    // IS the migration guidance its author gets. It names the crystal, the slot, and both legal
+    // ways to write it. The "how to write it" half comes from core (FormatAxisSlotHint) rather
+    // than being spelled again here — core's parser rejects the same documents, and two copies of
+    // that guidance would drift with nothing comparing them.
     const char* zenith_key = ns::AxisScalarKeyName(ns::kAxisScalarZenith);
     if (!axis.contains(zenith_key)) {
+      LOG_ERROR(
+          "JsonToCrystal: crystal[id={}].axis is present but has no \"{}\", which is required "
+          "whenever `axis` is written at all (omit `axis` entirely to get the default orientation "
+          "instead). {}",
+          cr->id, zenith_key, ns::FormatAxisSlotHint(zenith_key));
       return LUMICE_ERR_MISSING_FIELD;
     }
     // Core reads the zenith key into its latitude slot and then flips it (latitude = 90 - zenith),
     // unconditionally — so a zenith object that omits `mean` inherits the latitude default 90,
     // which is zenith 90 on this side of the flip (NOT zenith 0).
+    // Turns a bare LUMICE_ERR_MISSING_FIELD from JsonToDistribution — which is only ever the
+    // absent "type" — into the same guidance core throws, with this crystal and this slot named.
+    auto report_slot = [cr](const char* slot_key, LUMICE_ErrorCode err) {
+      if (err == LUMICE_ERR_MISSING_FIELD) {
+        LOG_ERROR("JsonToCrystal: crystal[id={}].axis.{} is a distribution object with no \"type\". {}", cr->id,
+                  slot_key, ns::FormatAxisSlotHint(slot_key));
+      }
+    };
     cr->zenith = LUMICE_Distribution{ LUMICE_DIST_NO_RANDOM, 90.0f, 0.0f };
     if (auto err = JsonToDistribution(axis.at(zenith_key), &cr->zenith); err != LUMICE_OK) {
+      report_slot(zenith_key, err);
       return err;
     }
     cr->azimuth = LUMICE_Distribution{ LUMICE_DIST_UNIFORM, 0.0f, 360.0f };
@@ -1648,12 +1671,14 @@ static LUMICE_ErrorCode JsonToCrystal(const nlohmann::json& cj, LUMICE_CrystalPa
     const char* azimuth_key = ns::AxisScalarKeyName(ns::kAxisScalarAzimuth);
     if (axis.contains(azimuth_key)) {
       if (auto err = JsonToDistribution(axis.at(azimuth_key), &cr->azimuth); err != LUMICE_OK) {
+        report_slot(azimuth_key, err);
         return err;
       }
     }
     const char* roll_key = ns::AxisScalarKeyName(ns::kAxisScalarRoll);
     if (axis.contains(roll_key)) {
       if (auto err = JsonToDistribution(axis.at(roll_key), &cr->roll); err != LUMICE_OK) {
+        report_slot(roll_key, err);
         return err;
       }
     }
