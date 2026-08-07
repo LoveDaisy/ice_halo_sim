@@ -231,6 +231,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_drag_gain.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"

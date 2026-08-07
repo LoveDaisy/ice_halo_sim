@@ -839,6 +839,8 @@ static void WorldToView(const ViewProjection& vp, const float world_dir[3], floa
 constexpr float kBehindCameraEps = 1e-5f;
 
 // Linear pinhole: behind-camera ⇒ sentinel; otherwise standard perspective divide.
+// SYNC: ComputeDragGainDegPerPixel's kLensTypeLinear branch is this formula's
+// hand-derived d(theta)/d(r) at theta=0 — changing r(theta) here needs that branch rechecked.
 static std::array<float, 2> ProjectLinear(const float view_dir[3], float half_fov, float img_radius) {
   if (view_dir[2] >= -kBehindCameraEps) {
     return kProjectSentinel;
@@ -852,6 +854,9 @@ static std::array<float, 2> ProjectLinear(const float view_dir[3], float half_fo
 // Forward equation for the single-hemisphere fisheye family (lens=1..3, 8).
 // fisheye_type matches the shader's `fisheyeInverse(... int type)` switch:
 // 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic.
+// SYNC: ComputeDragGainDegPerPixel's four single-fisheye branches are these
+// r_norm(theta) laws' hand-derived d(theta)/d(r) at theta=0 — changing any of them
+// here needs the matching branch rechecked.
 static std::array<float, 2> ProjectFisheye(const float view_dir[3], float half_fov, float img_radius,
                                            int fisheye_type) {
   if (view_dir[2] > kBehindCameraEps) {
@@ -959,6 +964,9 @@ static std::array<float, 2> ProjectRectangular(const float world_dir[3], float s
 // hemisphere visible to the camera satisfies eye_dir.z > 1/kGlobeCameraD.
 // Math is line-for-line equivalent to overlay_labels.cpp::WorldDirToPixel's
 // globe branch — kGlobeCameraD is the single source of truth (gui_constants.hpp).
+// SYNC: ComputeDragGainDegPerPixel's kLensTypeGlobe branch is this formula's
+// hand-derived d(theta)/d(r) at theta=0 — changing the camera model here needs that
+// branch rechecked.
 static std::array<float, 2> ProjectGlobe(const float eye_dir[3], float half_fov, float img_radius) {
   if (eye_dir[2] <= 1.0f / kGlobeCameraD) {
     return kProjectSentinel;
@@ -1032,6 +1040,71 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
     return kProjectSentinel;
   }
   return out;
+}
+
+// See declaration in preview_renderer.hpp for contract.
+//
+// Each branch is the reciprocal of the corresponding forward projection's radial
+// derivative dr/dtheta evaluated at theta = 0 (the frame center), i.e. it answers
+// "one pixel of screen radius is how many radians of view angle?". img_radius is
+// min(vp_w, vp_h)/2 — the same definition ProjectWorldDirToScreen uses, so the gain
+// and the projection that consumes it share one pixel/DPI convention and window
+// resize needs no extra handling.
+//
+//   lens                        forward r(theta)                       dtheta/dr at 0
+//   --------------------------  -------------------------------------  ---------------------------
+//   kLensTypeLinear             r = focal*tan(theta),                   tan(hf) / R
+//                               focal = R/tan(hf)          (ProjectLinear)
+//   kLensTypeFisheyeEqualArea   r/R = sin(theta/2)/sin(hf/2)   (ProjectFisheye, type 0)
+//                                                                       2*sin(hf/2) / R
+//   kLensTypeFisheyeEquidist    r/R = theta/hf                 (ProjectFisheye, type 1)
+//                                                                       hf / R   (exact for all theta)
+//   kLensTypeFisheyeStereogr.   r/R = tan(theta/2)/tan(hf/2)   (ProjectFisheye, type 2)
+//                                                                       2*tan(hf/2) / R
+//   kLensTypeFisheyeOrthogr.    r/R = sin(theta)/sin(hf)       (ProjectFisheye, type 3)
+//                                                                       sin(hf) / R
+//   kLensTypeGlobe              r = focal*x_eye/(D - z_eye)    (ProjectGlobe)
+//                                                                       (D-1)*tan(hf) / R
+//   (hf = half_fov in radians, R = img_radius, D = kGlobeCameraD)
+//
+// LUMICE_MaxFov() keeps every expression finite over each lens's legal FOV range
+// (linear caps at 179°, short of tan's pole at 180°; globe at 90°), so no extra
+// numerical guard is needed beyond the degenerate-viewport check.
+float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h) {
+  constexpr float kPi = 3.14159265358979323846f;
+  // Pre-fov-aware sensitivity. Only reachable via the default branch below, which
+  // no caller should hit — app_panels.cpp only drags when !LensIsFullSky.
+  constexpr float kLegacyGainDegPerPixel = 0.3f;
+
+  if (vp_w <= 0 || vp_h <= 0) {
+    return 0.0f;  // degenerate viewport: produce no rotation this frame
+  }
+  float img_radius = std::min(static_cast<float>(vp_w), static_cast<float>(vp_h)) * 0.5f;
+  float half_fov = fov_deg * 0.5f * kPi / 180.0f;
+
+  float rad_per_px = 0.0f;
+  if (lens_type == kLensTypeLinear) {
+    rad_per_px = std::tan(half_fov) / img_radius;
+  } else if (lens_type == kLensTypeFisheyeEqualArea) {
+    rad_per_px = 2.0f * std::sin(half_fov * 0.5f) / img_radius;
+  } else if (lens_type == kLensTypeFisheyeEquidist) {
+    rad_per_px = half_fov / img_radius;
+  } else if (lens_type == kLensTypeFisheyeStereographic) {
+    rad_per_px = 2.0f * std::tan(half_fov * 0.5f) / img_radius;
+  } else if (lens_type == kLensTypeFisheyeOrthographic) {
+    rad_per_px = std::sin(half_fov) / img_radius;
+  } else if (lens_type == kLensTypeGlobe) {
+    rad_per_px = (kGlobeCameraD - 1.0f) * std::tan(half_fov) / img_radius;
+  } else {
+    // Full-sky (or a newly added) lens type. A release-visible warning rather than a
+    // bare assert: assert compiles out, and a new lens type that is draggable but
+    // missing from this switch would otherwise silently fall back to the old,
+    // fov-blind feel with nothing to notice it by.
+    GUI_LOG_WARNING("ComputeDragGainDegPerPixel: no drag-gain law for lens_type {}; falling back to {} deg/px",
+                    lens_type, kLegacyGainDegPerPixel);
+    return kLegacyGainDegPerPixel;
+  }
+  return rad_per_px * 180.0f / kPi;
 }
 
 void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params) {

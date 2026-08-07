@@ -186,6 +186,18 @@ void BuildViewMatrix(float elevation_deg, float azimuth_deg, float roll_deg, flo
 // / rectangularInverse) in preview_renderer.cpp.
 std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const float world_dir[3], int vp_w, int vp_h);
 
+// Preview drag sensitivity: how many degrees of azimuth/elevation one pixel of
+// mouse motion should produce, so that content under the cursor moves roughly
+// 1:1 with the cursor at the center of the frame, for any lens/FOV/viewport.
+//
+// This is the analytic inverse of the forward projections' angular resolution at
+// theta=0 — see the derivation table in the definition (preview_renderer.cpp).
+// Returns 0 for a degenerate viewport (vp_w <= 0 || vp_h <= 0), and the historical
+// constant 0.3 deg/px for a lens type that has no drag interaction (full-sky).
+// Isotropic by construction: azimuth and elevation share one scalar, because the
+// radial projection laws are rotationally symmetric about the optical axis.
+float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h);
+
 // Build a ViewProjection from the renderer sub-state of GuiState.
 // roll is wrapped through EffectiveRollForLens so that lens types that ignore
 // roll (e.g. dual-fisheye) always see 0° — mirrors app_panels.cpp:742-747.
