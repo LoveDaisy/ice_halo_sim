@@ -345,8 +345,29 @@ bool Solve3x3ForDirTriple(const double cs[kClosedFormPyramidSideCnt], const doub
 // the number of distinct points written; out_uv must have capacity for at
 // least 20 (u, v) pairs. All returned points have m physically equal to
 // m_max_phys within tolerance.
+//
+// out_mask[e] is the set of direction indices whose constraint is TIGHT at
+// point e — bit r set iff cos(t_r)·u + sin(t_r)·v + m == dist_scaled[r], i.e.
+// iff cone plane r actually passes through that point. It is a required
+// output, not an optional extra: the caller's whole reason to call this
+// function is the degenerate case, and in the degenerate case "which faces own
+// this point" is NOT "all six". When the hexagon is regular the LP maximum is
+// a single point where all six constraints are tight and the mask is 0b111111;
+// when it is irregular the maximum degenerates to a segment (a roof ridge) and
+// each endpoint is the concurrence of only THREE or FOUR of the cone planes —
+// the remaining ones pass well clear of it. Associating an endpoint with all
+// six regardless puts a vertex on faces whose plane misses it by an O(1)
+// distance, which is not a rounding-scale error: it breaks the polygon's
+// on-plane invariant, the Euler characteristic and the 2-manifold edge count
+// at once, and it feeds simulator.cpp's BuildEntrySubTris entry-face sampling
+// triangles whose interior lies inside the crystal.
+//
+// The tightness test reuses tol_lp, the same scale-relative tolerance this
+// function already applies to the LP-optimality and feasibility tests on the
+// same quantities (doc/numerical-robustness.md rule 2 — no absolute epsilon on
+// a scale-varying geometric quantity).
 int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], double m_max_phys, double out_u[20],
-                        double out_v[20]) {
+                        double out_v[20], int out_mask[20]) {
   double cs[kClosedFormPyramidSideCnt];
   double sn[kClosedFormPyramidSideCnt];
   double scale = 0.0;
@@ -397,6 +418,13 @@ int EnumerateApexPoints(const double dist_scaled[kClosedFormPyramidSideCnt], dou
         if (cnt < 20) {
           out_u[cnt] = u;
           out_v[cnt] = v;
+          int tight_mask = 0;
+          for (int r = 0; r < kClosedFormPyramidSideCnt; r++) {
+            if (std::fabs(cs[r] * u + sn[r] * v + m_lp - dist_scaled[r]) <= tol_lp) {
+              tight_mask |= (1 << r);
+            }
+          }
+          out_mask[cnt] = tight_mask;
           cnt++;
         }
       }
@@ -842,10 +870,18 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       // outside its tolerance). Enumerate the LP-max triples directly here
       // so the union of both paths covers apex-line degeneracy.
       double apex_us[20], apex_vs[20];
-      int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs);
+      int apex_mask[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
         int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_top, r.vtx, &vtx_cnt, kDedupTol);
         for (int i = 0; i < 6; i++) {
+          // Only the cone planes that actually pass through this apex point
+          // own it — see EnumerateApexPoints' out_mask contract. A regular
+          // hexagon sets every bit, so this is a no-op there; an irregular one
+          // has an apex RIDGE whose endpoints belong to a subset of the faces.
+          if ((apex_mask[e] & (1 << i)) == 0) {
+            continue;
+          }
           AppendFaceVtx(&r, 8 + i, idx);
           any_face_present[8 + i] = true;
         }
@@ -887,10 +923,15 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     int n_bot = emit_ring(m_at_bot, z_bot, lower_slot, lower_basal_slot, nullptr);
     if (lower_apex_collapsed) {
       double apex_us[20], apex_vs[20];
-      int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs);
+      int apex_mask[20];
+      int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
         int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_bot, r.vtx, &vtx_cnt, kDedupTol);
         for (int i = 0; i < 6; i++) {
+          // See the upper-side note: only the tight cone planes own this point.
+          if ((apex_mask[e] & (1 << i)) == 0) {
+            continue;
+          }
           AppendFaceVtx(&r, 14 + i, idx);
           any_face_present[14 + i] = true;
         }
@@ -919,11 +960,32 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   // If a cone is absent on one side, that side's cap is the shoulder itself
   // acting as the basal face. Emit corners at z = ±h2/2 and associate with
   // the basal slot on that side.
-  if (!has_upper && h2 > math::kFloatEps) {
-    emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/0, nullptr);
+  //
+  // The cap ring's dir->slot map names the side walls the cap's corners are
+  // shared with, and which walls those are depends on whether a prism section
+  // exists. With h2 > 0 the cap sits at z = ±h2/2 between the prism faces.
+  // With h2 == 0 there IS no prism face to attach to: the cap degenerates onto
+  // z = 0, where the only walls meeting it are the OPPOSITE side's cone faces.
+  // Guarding the whole emission on `h2 > kFloatEps` therefore did not skip a
+  // redundant cap, it dropped the only cap the solid had — leaving prism_h == 0
+  // crystals open on their coneless side (a regular hexagonal pyramid came out
+  // with no base at all, and h1 == 0 with h2 == 0 came out with no faces at
+  // all). The z = 0 ring is not a new geometric relation: it is the same ring
+  // the has_upper / has_lower branches already emit at h2 == 0 to bind the
+  // shoulder to both cones, so the vertices coincide and AppendFaceVtx dedups.
+  if (!has_upper) {
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/0, nullptr);
+    } else if (has_lower) {
+      emit_ring(0.0, 0.0, lower_slot, /*basal_slot=*/0, nullptr);
+    }
   }
-  if (!has_lower && h2 > math::kFloatEps) {
-    emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/1, nullptr);
+  if (!has_lower) {
+    if (h2 > math::kFloatEps) {
+      emit_ring(0.0, -h2_2, prism_slot, /*basal_slot=*/1, nullptr);
+    } else if (has_upper) {
+      emit_ring(0.0, 0.0, upper_slot, /*basal_slot=*/1, nullptr);
+    }
   }
   // Pure prism (no cones, no prism section) — nothing to emit; handled by the
   // zero-volume short-circuit above.
