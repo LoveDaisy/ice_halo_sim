@@ -71,13 +71,14 @@ uniformly over 0-360°. For example, writing only `"axis": {"zenith": 30}` is eq
 ```json
 {
   "zenith": 30.0,
-  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
-  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
+  "azimuth": { "type": "uniform", "mean": 0.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 0.0, "std": 360.0 }
 }
 ```
 
 (`mean`/`std` are the on-disk keys for every distribution type; for `uniform` they hold the
-interval midpoint and full width, not a statistical mean/standard-deviation.)
+interval midpoint and full width, not a statistical mean/standard-deviation — the interval is
+`[mean - std/2, mean + std/2]`. A full turn is therefore `mean: 0, std: 360`, not `mean: 180`.)
 
 `zenith` has no such fallback: if `axis` is written at all, `zenith` is required — see
 [Required Field Validation](#required-field-validation) below.

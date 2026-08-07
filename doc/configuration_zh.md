@@ -69,13 +69,14 @@
 ```json
 {
   "zenith": 30.0,
-  "azimuth": { "type": "uniform", "mean": 180.0, "std": 360.0 },
-  "roll": { "type": "uniform", "mean": 180.0, "std": 360.0 }
+  "azimuth": { "type": "uniform", "mean": 0.0, "std": 360.0 },
+  "roll": { "type": "uniform", "mean": 0.0, "std": 360.0 }
 }
 ```
 
 （`mean`/`std` 是所有分布类型统一的落盘键名；对 `uniform` 而言，它们分别是区间中点和
-**完整**宽度，不是统计学意义上的均值/标准差。）
+**完整**宽度，不是统计学意义上的均值/标准差——区间是 `[mean - std/2, mean + std/2]`。
+因此「转满一圈」写作 `mean: 0, std: 360`，而不是 `mean: 180`。）
 
 `zenith` 没有这种兜底：只要写了 `axis`，`zenith` 就是必填的——见下方
 [必填字段验证](#必填字段验证)。
