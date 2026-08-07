@@ -339,6 +339,16 @@ bool Solve3x3ForDirTriple(const double cs[kClosedFormPyramidSideCnt], const doub
   return true;
 }
 
+// The cone-face emitters below walk their six slots as a literal `i < 6`
+// (8+i / 14+i), while EnumerateApexPoints builds its tight-face bitmask over
+// kClosedFormPyramidSideCnt directions. Those two counts must agree or the
+// mask's width and the loop that consumes it would drift apart silently —
+// producing not a compile error but a quietly under- or over-read mask. Bind
+// the assumption here, at the one place the bitmask is defined, rather than
+// renaming the literal at each of the nine loops that share it.
+static_assert(kClosedFormPyramidSideCnt == 6,
+              "cone-face emitters and EnumerateApexPoints' tight-face bitmask both hard-code 6 sides");
+
 // Enumerate all triples achieving m within tol of the LP maximum, emitting
 // the distinct (u, v) points. Used to detect and materialize apex degeneracy
 // (LP optimum is a line segment / edge rather than a unique point). Returns

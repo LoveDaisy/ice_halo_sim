@@ -617,10 +617,6 @@ TEST(ClosedFormPyramid, StructuralValidityParamScan) {
     const double char_area = char_len * char_len;
 
     const StructuralCensus census = TakeStructuralCensus(cf);
-    std::fprintf(stderr,
-                 "[structural-scan] %-30s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d off_plane=%.3e min_area=%.3e\n",
-                 sc.label, census.v, census.e, census.f, census.v - census.e + census.f, census.non_manifold_edges,
-                 census.worst_off_plane, census.min_face_area);
 
     // EXPECT + continue rather than ASSERT: an ASSERT here returns from the
     // whole TEST body and would hide every later case in the scan behind the
@@ -628,8 +624,20 @@ TEST(ClosedFormPyramid, StructuralValidityParamScan) {
     // prevent.
     EXPECT_GT(census.f, 0) << sc.label << ": no present face at all — cf emitted nothing for a legal crystal";
     if (census.f == 0) {
+      // Report the empty case in its own shape. The full diagnostic line below
+      // would print min_area as `inf` here (no present face ever lowers the
+      // running minimum), which reads as a runaway value rather than as what it
+      // is: cf emitted nothing at all. This case is not hypothetical — it is
+      // the signature of the vanishing-pyramid defect tracked separately, so
+      // the line a future reader greps for should say so plainly.
+      std::fprintf(stderr, "[structural-scan] %-30s EMPTY — cf emitted no present face\n", sc.label);
       continue;
     }
+
+    std::fprintf(stderr,
+                 "[structural-scan] %-30s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d off_plane=%.3e min_area=%.3e\n",
+                 sc.label, census.v, census.e, census.f, census.v - census.e + census.f, census.non_manifold_edges,
+                 census.worst_off_plane, census.min_face_area);
 
     // (1) Every published polygon entry lies on its own face's plane.
     EXPECT_LE(census.worst_off_plane, tol)
