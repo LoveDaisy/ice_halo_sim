@@ -1012,7 +1012,35 @@ entries.
 你真的看到它，说明你撞上了一个比已收窄窗口更极端的边缘情况，同样的两条建议依然
 适用。
 
-### 8. scattering 层缺少 `prob`
+### 8. 读懂"面被丢弃"警告
+
+**错误描述**：晶体上有一个面窄到几何求解器已经分辨不出来了——通常是某个侧面，
+它的两个界定角点之间只差晶体自身尺寸的几倍 `1e-5`。求解器在遍历横截面时确实碰到了
+这个面，却没能在它上面留下 3 个互异顶点，于是这个面被丢弃。与上面的"顶点吸附"不同，
+这次的产出**不是**合法实体：被丢弃那个面旁边的各个面仍然保留着本该由它封口的边，
+于是曲面上留了一个洞。
+
+下游没有任何东西会拦下这样的晶体——合法性检查只数存在的面数，不检验它们是否构成
+闭合曲面——所以这条警告是你唯一能拿到的信号。光线照样会在剩下的面上折射，这一轮
+仿真也照样会给出统计结果。
+
+**日志长这样**（源自 `src/core/geo3d_closedform.cpp`）：
+```
+ComputeClosedFormPyramid: face slot(s) [13] were reached by the emitter but kept
+fewer than 3 distinct vertices, so they are dropped and the surface they bounded is
+left open; face_distance=[...], upper_h_inset=..., lower_h_inset=... This crystal has
+a face thinner than the solver can resolve. To get a well-formed solid instead, widen
+the spread between the face_distance entries around the offending face, or move
+upper_h/lower_h away from that face's collapse height.
+```
+
+**该怎么改**：日志里的 slot 编号就指名了出问题的面——`0`/`1` 是上下两个基面，
+`2`–`7` 是六个棱面，`8`–`13` 是上锥六个面，`14`–`19` 是下锥六个面，其中第 `i` 项与
+`face_distance[i]` 共用方向 `i`。把该方向附近的 `face_distance` 各分量差距拉开，
+让这个面要么明确存在、要么干净地不存在，而不是卡在分辨率边界上。如果这个面不是在
+肩部、而是在锥面中途才收缩掉，调整 `upper_h`/`lower_h` 同样有效。
+
+### 9. scattering 层缺少 `prob`
 
 **错误描述**：`scene.scattering[]` 的某一层缺少必填字段 `prob`。这里没有隐式默认值——
 历史上会静默回落到 `0.0`，但这个回落已经被移除。
@@ -1047,7 +1075,7 @@ historical default was 0.0; add "prob": 0 explicitly to keep that behavior.
 }
 ```
 
-### 9. 分布对象缺少 `type`
+### 10. 分布对象缺少 `type`
 
 **错误描述**：分布槽（`axis.zenith` / `axis.azimuth` / `axis.roll`，或形状标量如 `height`、
 `prism_h`、`upper_h`、`lower_h`、`face_distance[]` 中的某一项）写成了 JSON 对象却省略了
@@ -1082,7 +1110,7 @@ object naming the distribution (e.g. {"type": "gauss", "mean": 20, "std": 5}).
 }
 ```
 
-### 10. `axis` 存在但缺少 `zenith`
+### 11. `axis` 存在但缺少 `zenith`
 
 **错误描述**：只要写了 `axis`，就必须写 `zenith`——此时它没有默认值。
 （想要默认的固定朝向，应整个省略 `axis`；见上方
