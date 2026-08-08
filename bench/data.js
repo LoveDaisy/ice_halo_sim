@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786149839012,
+  "lastUpdate": 1786149842361,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4806,54 +4806,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "85c35073907dd5ea3eb9e9bf64bdcb20be8d0ac9",
-          "message": "Merge pull request #156 from LoveDaisy/fix/randomsample-nomatch-entry-leak\n\nfix(geo3d): RandomSample no-match fallback for MSVC 77H light leak (curr_p==0.0 → entry-face bug)",
-          "timestamp": "2026-06-30T14:48:02+08:00",
-          "tree_id": "31d7f3bcd82d107a3ecd3e02f1be0e8105ec0277",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/85c35073907dd5ea3eb9e9bf64bdcb20be8d0ac9"
-        },
-        "date": 1782802423185,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 680332.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1194690.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 670099.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 613953.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "270ec637801ed3a00639faf6e210e2a2a239c19a",
           "message": "Merge pull request #157 from LoveDaisy/feat/cuda-windows-validation\n\nCUDA on Windows: validation (#309) + delivery cluster (#310)",
           "timestamp": "2026-07-01T09:10:33+08:00",
@@ -9578,6 +9530,54 @@ window.BENCHMARK_DATA = {
             "value": 763813.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "f1fab1851731a56919ca3ade95ffca37f3ea8d01",
+          "message": "build(deps): bump Jimver/cuda-toolkit from 0.2.35 to 0.2.36\n\nBumps [Jimver/cuda-toolkit](https://github.com/jimver/cuda-toolkit) from 0.2.35 to 0.2.36.\n- [Release notes](https://github.com/jimver/cuda-toolkit/releases)\n- [Commits](https://github.com/jimver/cuda-toolkit/compare/v0.2.35...v0.2.36)\n\n---\nupdated-dependencies:\n- dependency-name: Jimver/cuda-toolkit\n  dependency-version: 0.2.36\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>",
+          "timestamp": "2026-08-08T08:35:42+08:00",
+          "tree_id": "e00d185b3a3bebca6b8e9c131180275191f5fc28",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f1fab1851731a56919ca3ade95ffca37f3ea8d01"
+        },
+        "date": 1786149841764,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 813890.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1172942,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 766668.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 1048152.5,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V45 96-Core Processor                \\nCores: 4"
           }
         ]
       }
