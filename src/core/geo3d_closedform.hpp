@@ -113,6 +113,23 @@ enum ClosedFormHexPathTag : uint16_t {
   // be unreachable; the bit exists so a change that unbinds them is caught by a
   // test rather than by a user with a crystal that quietly lost a cone.
   kClosedFormPathTagApexRescueDegraded = 1u << 5,
+  // A face slot was reached by the vertex emitter — some cross-section corner or
+  // apex point named it as one of the planes it lies on — but ended up with
+  // fewer than 3 distinct vertices in the shared pool, so it is dropped while the
+  // faces beside it keep the edges it was supposed to close. What that leaves is
+  // an OPEN surface: Euler characteristic off 2, edges bordered by one face
+  // instead of two. The pyramid evaluator sets this (the second of the two bits
+  // here it owns) and logs a warning naming the input and the slots.
+  //
+  // It is meant to be unreachable: every tolerance deciding "are these two
+  // corners the same point" is now lateral and derived from GapToleranceForScale
+  // over the cross section the corners actually live in, which is the same ruler
+  // the 2D solver used to decide how many corners there are. The bit exists
+  // because the alternative to a diagnostic here is the worst failure this
+  // evaluator has: a crystal that is not a closed solid, which
+  // IsValidClosedFormPyramid (a present-face count, nothing more) admits, and
+  // which then traces rays and reports statistics while looking healthy.
+  kClosedFormPathTagClaimedFaceDropped = 1u << 6,
 };
 
 // ============================================================================

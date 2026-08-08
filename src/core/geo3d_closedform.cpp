@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
@@ -58,6 +59,7 @@ constexpr uint16_t kPathTagBounded = kClosedFormPathTagBounded;
 constexpr uint16_t kPathTagAllDirsPresent = kClosedFormPathTagAllDirsPresent;
 constexpr uint16_t kPathTagEmpty = kClosedFormPathTagEmpty;
 constexpr uint16_t kPathTagApexRescueDegraded = kClosedFormPathTagApexRescueDegraded;
+constexpr uint16_t kPathTagClaimedFaceDropped = kClosedFormPathTagClaimedFaceDropped;
 
 // Magnitude the half-plane offsets are measured against. Its own function, and
 // not an inline loop at each site, because it is the input to
@@ -362,6 +364,21 @@ bool ApexCollapsedAt(const float dist[kClosedFormPrismSideCnt], double m, double
   return (apex_m - m) <= gap_tol;
 }
 
+// Merge tolerance for 3D vertices that live in the cross-section plane at
+// physical inset `m`, in the units those vertices' (u, v) are expressed in.
+//
+// One helper rather than the two-call combination spelled out at each site: the
+// point of this tolerance is that every consumer is holding THE SAME ruler as
+// SolveHexCrossSection, which resolves a cross section's corners with exactly
+// GapToleranceForScale(CrossSectionScale(r_side_dist)). Written out by hand at
+// each site, one copy drifts and the two answers ("how many corners are there"
+// and "are these two corners the same 3D point") start contradicting each other
+// again — which is the defect this helper exists to close.
+double LateralMergeTol(const float dist[kClosedFormPrismSideCnt], double m) {
+  double r_side_dist[kClosedFormPrismSideCnt];
+  return GapToleranceForScale(ComputeRSideDistAndScale(dist, m, r_side_dist));
+}
+
 // Shared 3×3 solver for a direction triple (i, j, k):
 //   [cs_i sn_i 1] [u]   [d_i]
 //   [cs_j sn_j 1] [v] = [d_j]
@@ -586,6 +603,11 @@ struct ConeDeathEvent {
   double z;
   double u;
   double v;
+  // Physical inset this event sits at. Carried rather than re-derived from z by
+  // the caller: the caller would have to invert z = ±h2/2 ± a·m with the same
+  // a it passed in, and a second inversion of a relation the producer already
+  // has in hand is how the two ends of one quantity drift apart.
+  double m_phys;
   int i, j, k;  // killing triple; upper_cone_slot = 8+i etc.
 };
 
@@ -652,7 +674,7 @@ int EnumerateConeDeathEvents(const double dist_scaled[kClosedFormPyramidSideCnt]
           continue;
         }
         double z = upper_side ? (h2_2 + a * m_phys) : (-h2_2 - a * m_phys);
-        out_events[cnt++] = { z, u, v, i, j, k };
+        out_events[cnt++] = { z, u, v, m_phys, i, j, k };
       }
     }
   }
@@ -864,12 +886,34 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   // implementation) produced O(6·N_events) spurious vertices — visible as
   // shrinking-hexagon layers stacked between shoulder and apex.
   int vtx_cnt = 0;
-  const double kDedupTol = 5.0 * static_cast<double>(math::kFloatEps) * std::max(std::fabs(z_top), std::fabs(z_bot));
+  // Every tolerance below is LATERAL — it measures a distance in the plane of a
+  // cross section, in the units that cross section's own solver measured its
+  // corners in. There used to be one global scalar here instead, derived from
+  // max(|z_top|, |z_bot|), serving both the vertex pool and a z-boundary test.
+  // Scaling a vertex-merge radius by a Z magnitude is what let a cone 1e5 tall
+  // set a merge radius of ~6 for a truncation cap whose corners are ~1 apart:
+  // the cap was merged to a single point, dropped below three vertices, and the
+  // user's truncated pyramid came out as a full one without a word. The two
+  // questions ("are these corners one point" and "is this z-event a boundary
+  // one") live on different axes, and one number cannot answer both in the right
+  // unit.
+  //
+  // Merge tolerance for the apex insertion sites. The cross section AT the apex
+  // has zero width by construction (for a regular hexagon every direction is
+  // tight there, so the local scale is exactly 0), which makes a local tolerance
+  // structurally unusable at those sites. What is being asked there is not "are
+  // these distinct corners" but "did two of the 20 direction triples solve the
+  // same point twice", whose residual scales with the (u, v) magnitudes — i.e.
+  // with the crystal's own lateral size, the m = 0 cross section.
+  const double kApexMergeTol = LateralMergeTol(dist, 0.0);
   bool any_face_present[kClosedFormPyramidFaceCnt]{};
 
   // Helper: emit vertex at (u, v, z) and associate with the given face slots.
-  auto emit_vtx = [&](double u, double v, double z, const int* face_slots, int n_slots) {
-    int idx = InsertOrFindVertex(u, v, z, r.vtx, &vtx_cnt, kDedupTol);
+  // `tol` is passed rather than captured: every call site sits at a different
+  // inset and therefore holds a different lateral ruler, and an implicit capture
+  // is what let one global ruler silently serve sites it did not fit.
+  auto emit_vtx = [&](double u, double v, double z, double tol, const int* face_slots, int n_slots) {
+    int idx = InsertOrFindVertex(u, v, z, r.vtx, &vtx_cnt, tol);
     for (int s = 0; s < n_slots; s++) {
       AppendFaceVtx(&r, face_slots[s], idx);
       any_face_present[face_slots[s]] = true;
@@ -887,7 +931,11 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   auto emit_ring = [&](double m, double z, const int face_slot_of_dir[6], int basal_slot,
                        const int extra_slot_of_dir[6]) -> int {
     double r_side[6];
-    ComputeRSideDistAndScale(dist, m, r_side);
+    // One scale, two consumers: SolveHexCrossSection decides how many corners
+    // this cross section HAS from it, and the 3D pool decides whether two of
+    // those corners are the same point from it. Same m, same array, same
+    // GapToleranceForScale — so the second decision cannot overturn the first.
+    const double lateral_tol = GapToleranceForScale(ComputeRSideDistAndScale(dist, m, r_side));
     uint16_t local_tag = 0;
     HexCrossSection xs = SolveHexCrossSection(r_side, &local_tag);
     r.path_tag_union |= local_tag;
@@ -915,7 +963,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       if (basal_slot >= 0) {
         slots[n_slots++] = basal_slot;
       }
-      emit_vtx(xs.corner_x[k], xs.corner_y[k], z, slots, n_slots);
+      emit_vtx(xs.corner_x[k], xs.corner_y[k], z, lateral_tol, slots, n_slots);
     }
     return xs.corner_cnt;
   };
@@ -957,9 +1005,13 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       emit_ring(0.0, h2_2, prism_slot, /*basal_slot=*/-1, upper_slot);
     } else {
       // No prism section — the "shoulder" is just the interface between
-      // upper and lower cones at z=0. Associate corners with both cone
-      // slot sets.
-      emit_ring(0.0, 0.0, upper_slot, /*basal_slot=*/-1, lower_slot);
+      // upper and lower cones at z=0. Associate corners with both cone slot
+      // sets — but only with a lower set that exists. Naming the lower cone's
+      // six slots when there is no lower cone marks them as reached by the
+      // emitter, and "reached but under-populated" is precisely the signature
+      // the diagnostic at the end of this function fires on, so an absent cone
+      // would report itself as a dropped face on every coneless crystal.
+      emit_ring(0.0, 0.0, upper_slot, /*basal_slot=*/-1, has_lower ? lower_slot : nullptr);
     }
     // Top layer at z=z_top. Two mutually-exclusive shapes with the same
     // emission code, differing only in whether the basal face is present:
@@ -987,7 +1039,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       int apex_mask[20];
       int apex_n = EnumerateApexPoints(dist_scaled, m_at_top, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
-        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_top, r.vtx, &vtx_cnt, kDedupTol);
+        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_top, r.vtx, &vtx_cnt, kApexMergeTol);
         for (int i = 0; i < 6; i++) {
           // Only the cone planes that actually pass through this apex point
           // own it — see EnumerateApexPoints' out_mask contract. A regular
@@ -1003,7 +1055,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       if (apex_n == 0 && n_top == 0) {
         // Fallback: neither ring nor apex-enum found anything. Insert the
         // canonical apex from MaxFeasibleInsetLP.
-        int idx = InsertOrFindVertex(apex.u, apex.v, z_top, r.vtx, &vtx_cnt, kDedupTol);
+        int idx = InsertOrFindVertex(apex.u, apex.v, z_top, r.vtx, &vtx_cnt, kApexMergeTol);
         for (int i = 0; i < 6; i++) {
           AppendFaceVtx(&r, 8 + i, idx);
           any_face_present[8 + i] = true;
@@ -1014,16 +1066,26 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     ConeDeathEvent evs[20];
     int n = EnumerateConeDeathEvents(dist_scaled, m_at_top, h2_2, a1, /*upper_side=*/true, evs);
     for (int e = 0; e < n; e++) {
-      // Skip events at the shoulder or truncation (already handled). Reuse
-      // kDedupTol (scaled by |z_top|/|z_bot|) rather than a fixed absolute
-      // literal — z is solved via an independent Cramer path from z_top/h2_2,
-      // so its absolute error scales with the same extreme-wedge magnitudes
-      // kDedupTol already accounts for.
-      if (std::fabs(evs[e].z - h2_2) < kDedupTol || std::fabs(evs[e].z - z_top) < kDedupTol) {
-        continue;
-      }
+      // No second boundary filter here. Whether an event is "really" the
+      // shoulder or the truncation is a question about the inset it sits at, and
+      // EnumerateConeDeathEvents already answers it in inset units, with the
+      // lateral tolerance the rest of this evaluator uses: it emits only
+      // m_phys ∈ (tol_phys, m_max − tol_phys]. A second filter used to re-ask it
+      // here in Z units, against 5·kFloatEps·max(|z_top|, |z_bot|); converted
+      // back to inset units that band is (that value)/a, which for a shallow
+      // cone (a1 = 0.082 measured) is 4.7x the inset gate's own width, so the
+      // wider ruler won and swallowed genuine interior events. What that costs is not
+      // an extra vertex: the corner these events kill is where a sliver face
+      // closes, so dropping one leaves that face's polygon open and the surface
+      // non-manifold, on the shallow cone only, while the steep cone opposite it
+      // closes correctly from the same event set.
+      //
+      // Duplicates need no filter either — the event's vertex goes through the
+      // same pool as every ring corner, so one that really does coincide with a
+      // shoulder/truncation corner merges into it and contributes its cone slots
+      // to that existing vertex, which is what the surface needs anyway.
       int slots[3] = { 8 + evs[e].i, 8 + evs[e].j, 8 + evs[e].k };
-      emit_vtx(evs[e].u, evs[e].v, evs[e].z, slots, 3);
+      emit_vtx(evs[e].u, evs[e].v, evs[e].z, LateralMergeTol(dist, evs[e].m_phys), slots, 3);
     }
   }
 
@@ -1043,7 +1105,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
       int apex_mask[20];
       int apex_n = EnumerateApexPoints(dist_scaled, m_at_bot, apex_us, apex_vs, apex_mask);
       for (int e = 0; e < apex_n; e++) {
-        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_bot, r.vtx, &vtx_cnt, kDedupTol);
+        int idx = InsertOrFindVertex(apex_us[e], apex_vs[e], z_bot, r.vtx, &vtx_cnt, kApexMergeTol);
         for (int i = 0; i < 6; i++) {
           // See the upper-side note: only the tight cone planes own this point.
           if ((apex_mask[e] & (1 << i)) == 0) {
@@ -1054,7 +1116,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
         }
       }
       if (apex_n == 0 && n_bot == 0) {
-        int idx = InsertOrFindVertex(apex.u, apex.v, z_bot, r.vtx, &vtx_cnt, kDedupTol);
+        int idx = InsertOrFindVertex(apex.u, apex.v, z_bot, r.vtx, &vtx_cnt, kApexMergeTol);
         for (int i = 0; i < 6; i++) {
           AppendFaceVtx(&r, 14 + i, idx);
           any_face_present[14 + i] = true;
@@ -1064,12 +1126,9 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     ConeDeathEvent evs[20];
     int n = EnumerateConeDeathEvents(dist_scaled, m_at_bot, h2_2, a2, /*upper_side=*/false, evs);
     for (int e = 0; e < n; e++) {
-      // See the upper-side kDedupTol note above.
-      if (std::fabs(evs[e].z + h2_2) < kDedupTol || std::fabs(evs[e].z - z_bot) < kDedupTol) {
-        continue;
-      }
+      // See the upper-side note above on why there is no z-domain filter here.
       int slots[3] = { 14 + evs[e].i, 14 + evs[e].j, 14 + evs[e].k };
-      emit_vtx(evs[e].u, evs[e].v, evs[e].z, slots, 3);
+      emit_vtx(evs[e].u, evs[e].v, evs[e].z, LateralMergeTol(dist, evs[e].m_phys), slots, 3);
     }
   }
 
@@ -1111,8 +1170,47 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
 
   // A face is "present" only if it has ≥ 3 distinct vertices in its polygon
   // (bounds a 2D polygon on its plane).
+  //
+  // The two conjuncts are not two spellings of one condition. any_face_present
+  // says an emitter CLAIMED this face — some cross-section corner or apex point
+  // named it as one of the planes it lies on. The count says the 3D pool kept
+  // enough distinct vertices to bound a polygon on it. A face that is claimed
+  // and then comes up short is the signature of every defect in this family: the
+  // corner separation the 2D solver resolved was below what the 3D pool, or the
+  // event enumeration feeding it, could keep apart, so the polygon set loses a
+  // face while its neighbours keep the edges that face was supposed to close —
+  // an open, non-manifold surface that IsValidClosedFormPyramid (which counts
+  // present faces and nothing else) passes straight through into a simulation.
+  //
+  // Not silently. Mark the path and name the input, on the same reasoning as
+  // report_apex_rescue above: the tolerances feeding this are now all lateral and
+  // all derived from one function, so a claimed face coming up short is meant to
+  // be unreachable — and an unreachable degradation that says nothing is
+  // indistinguishable from a silent one on the day someone unbinds them.
+  int underpopulated[kClosedFormPyramidFaceCnt];
+  int underpopulated_cnt = 0;
   for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
     r.face_present[slot] = any_face_present[slot] && r.face_vtx_cnt[slot] >= 3;
+    if (any_face_present[slot] && r.face_vtx_cnt[slot] < 3) {
+      underpopulated[underpopulated_cnt++] = slot;
+    }
+  }
+  if (underpopulated_cnt > 0) {
+    r.path_tag_union |= kPathTagClaimedFaceDropped;
+    char slot_list[kClosedFormPyramidFaceCnt * 4 + 1];
+    int written = 0;
+    for (int e = 0; e < underpopulated_cnt && written < static_cast<int>(sizeof(slot_list)) - 4; e++) {
+      written += std::snprintf(slot_list + written, sizeof(slot_list) - static_cast<size_t>(written), "%s%d",
+                               e == 0 ? "" : ",", underpopulated[e]);
+    }
+    LOG_WARNING(
+        "ComputeClosedFormPyramid: face slot(s) [{}] were reached by the emitter but kept fewer than 3 distinct "
+        "vertices, so they are dropped and the surface they bounded is left open; face_distance=[{:.4f}, {:.4f}, "
+        "{:.4f}, {:.4f}, {:.4f}, {:.4f}], upper_h_inset={:.6e}, lower_h_inset={:.6e}. This crystal has a face thinner "
+        "than the solver can resolve. To get a well-formed solid instead, widen the spread between the face_distance "
+        "entries around the offending face, or move upper_h/lower_h away from that face's collapse height.",
+        slot_list, static_cast<double>(dist[0]), static_cast<double>(dist[1]), static_cast<double>(dist[2]),
+        static_cast<double>(dist[3]), static_cast<double>(dist[4]), static_cast<double>(dist[5]), m_at_top, m_at_bot);
   }
   // If a face isn't present, zero its vtx list.
   for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
