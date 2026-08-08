@@ -41,11 +41,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
-#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -1716,7 +1714,6 @@ TEST(ClosedFormPyramid, CommittedPoolsPublishNoNewOpenSurfaces) {
   std::fprintf(stderr, "[open-surface-ratchet] evaluated=%d open=%d (ceiling %d)%s\n", evaluated, open_cnt,
                kOpenSurfaceCeiling, open_list.c_str());
 }
-
 
 }  // namespace
 }  // namespace lumice
