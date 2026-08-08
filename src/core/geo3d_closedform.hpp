@@ -1,7 +1,11 @@
-// Closed-form hex-crystal geometry — parallel implementation of the geometry
-// generation used by the golden-analytic tests and benches. Does NOT touch the
-// production path (FillHexCrystalCoef / SolveConvexPolyhedronVtxD / Crystal);
-// swap-in belongs to a later subtask.
+// Closed-form hex-crystal geometry. This IS the production geometry factory for
+// the prism and pyramid families: Crystal::MakePrismClosedForm /
+// MakePyramidClosedForm (crystal.cpp) call the two entry points below, and
+// Crystal::CreatePrism / CreatePyramid funnel into those. A tolerance changed
+// here changes what every simulation traces, not only what a golden-analytic
+// test compares. (This header used to say the opposite — "does NOT touch the
+// production path ... swap-in belongs to a later subtask" — which stopped being
+// true when the swap-in landed.)
 //
 // The hex-crystal family (prism + pyramid) is characterised by six fixed
 // horizontal normal directions θᵢ = i·60°: the prism is the degenerate case
@@ -183,7 +187,11 @@ struct ClosedFormPrismResult {
 // (corner_cnt = 0, every face_present = false), aligning with
 // FillHexCrystalCoef's zero-volume early exit.
 //
-// This function does not consult the production path.
+// It solves the geometry outright rather than calling FillHexCrystalCoef and
+// SolveConvexPolyhedronVtxD — that is what "closed form" means here, and it is
+// why a golden-analytic test comparing the two is comparing two independent
+// derivations. It is not, however, off the production path: see the note at the
+// top of this header.
 ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 
 // ============================================================================
