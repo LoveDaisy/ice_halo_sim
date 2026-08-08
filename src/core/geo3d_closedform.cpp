@@ -364,6 +364,22 @@ bool ApexCollapsedAt(const float dist[kClosedFormPrismSideCnt], double m, double
   return (apex_m - m) <= gap_tol;
 }
 
+// The inset one cone side actually truncates at, once ApexCollapsedAt has ruled
+// on it: the apex inset when collapsed, the requested one otherwise.
+//
+// A function rather than an if that overwrites the requested value in place, so
+// the caller's effective inset can be a `const` initialized AFTER the ruling.
+// The whole height/plane/inset chain below it — z, inset_at_*, the basal d, and
+// every emit_ring call — must read the post-snap value; written as an in-place
+// overwrite, that requirement lives in the order the statements happen to sit
+// in, and a comment cannot stop the next reader from inserting a use above the
+// overwrite. Resolved through here, the effective value has no name before the
+// ruling, so reading one early is a compile error rather than a silent wrong
+// answer.
+double ResolveTruncationInset(bool collapsed, double requested_m, double apex_m) {
+  return collapsed ? apex_m : requested_m;
+}
+
 // Merge tolerance for 3D vertices that live in the cross-section plane at
 // physical inset `m`, in the units those vertices' (u, v) are expressed in.
 //
@@ -827,12 +843,15 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   if (has_upper || has_lower) {
     apex = MaxFeasibleInsetLP(dist_scaled);
   }
-  double m_apex_upper = has_upper ? apex.m : 0.0;
-  double m_apex_lower = has_lower ? apex.m : 0.0;
-  double m_at_top = has_upper ? std::min(static_cast<double>(h1) * m_apex_upper, m_apex_upper) : 0.0;
-  double m_at_bot = has_lower ? std::min(static_cast<double>(h3) * m_apex_lower, m_apex_lower) : 0.0;
+  const double m_apex_upper = has_upper ? apex.m : 0.0;
+  const double m_apex_lower = has_lower ? apex.m : 0.0;
+  // The truncation each side ASKS for, from its height fraction. Named apart
+  // from the effective inset below because the two differ exactly when the apex
+  // collapses, and report_apex_rescue needs this one.
+  const double m_requested_top = has_upper ? std::min(static_cast<double>(h1) * m_apex_upper, m_apex_upper) : 0.0;
+  const double m_requested_bot = has_lower ? std::min(static_cast<double>(h3) * m_apex_lower, m_apex_lower) : 0.0;
   // Apex-collapse decision, taken here rather than at the emission site because
-  // a collapsed side's truncation inset IS the apex inset: snapping m before z,
+  // a collapsed side's truncation inset IS the apex inset: resolving m before z,
   // inset_at_* and the basal d are derived from it keeps the whole solid — the
   // emitted vertices, the plane the basal d describes and the inset the caller
   // reads back — consistent with the one decision, instead of emitting an apex
@@ -841,16 +860,16 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
   // The requested truncation is at most one gate width below the apex when this
   // fires (see ApexCollapsedAt), so the snap moves the tip by at most that, and
   // it is exactly what an h ≥ 1 request already got from the std::min above.
-  const bool upper_apex_collapsed = has_upper && ApexCollapsedAt(dist, m_at_top, apex.m);
-  const bool lower_apex_collapsed = has_lower && ApexCollapsedAt(dist, m_at_bot, apex.m);
-  if (upper_apex_collapsed) {
-    m_at_top = apex.m;
-  }
-  if (lower_apex_collapsed) {
-    m_at_bot = apex.m;
-  }
-  double z_top = has_upper ? (h2_2 + a1 * m_at_top) : h2_2;
-  double z_bot = has_lower ? (-h2_2 - a2 * m_at_bot) : -h2_2;
+  const bool upper_apex_collapsed = has_upper && ApexCollapsedAt(dist, m_requested_top, apex.m);
+  const bool lower_apex_collapsed = has_lower && ApexCollapsedAt(dist, m_requested_bot, apex.m);
+  // The EFFECTIVE insets. Everything downstream — z_top/z_bot, inset_at_*,
+  // plane_coef[3,7], every emit_ring and apex enumeration below — reads these,
+  // and they exist only from here on, after the decision (see
+  // ResolveTruncationInset).
+  const double m_at_top = ResolveTruncationInset(upper_apex_collapsed, m_requested_top, apex.m);
+  const double m_at_bot = ResolveTruncationInset(lower_apex_collapsed, m_requested_bot, apex.m);
+  const double z_top = has_upper ? (h2_2 + a1 * m_at_top) : h2_2;
+  const double z_bot = has_lower ? (-h2_2 - a2 * m_at_bot) : -h2_2;
   r.inset_at_top = static_cast<float>(m_at_top);
   r.inset_at_bottom = static_cast<float>(m_at_bot);
   // Basal d values, matching FillHexCrystalCoef's convention (d = -z_top for
@@ -1025,7 +1044,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     const int upper_basal_slot = upper_apex_collapsed ? -1 : 0;
     int n_top = emit_ring(m_at_top, z_top, upper_slot, upper_basal_slot, nullptr);
     if (!upper_apex_collapsed && n_top == 0) {
-      report_apex_rescue("upper", m_at_top);
+      report_apex_rescue("upper", m_requested_top);
     }
     if (upper_apex_collapsed || n_top == 0) {
       // At the apex, the LP maximum may be degenerate: multiple triples
@@ -1098,7 +1117,7 @@ ClosedFormPyramidResult ComputeClosedFormPyramidInner(double a1, double a2, floa
     const int lower_basal_slot = lower_apex_collapsed ? -1 : 1;
     int n_bot = emit_ring(m_at_bot, z_bot, lower_slot, lower_basal_slot, nullptr);
     if (!lower_apex_collapsed && n_bot == 0) {
-      report_apex_rescue("lower", m_at_bot);
+      report_apex_rescue("lower", m_requested_bot);
     }
     if (lower_apex_collapsed || n_bot == 0) {
       double apex_us[20], apex_vs[20];
