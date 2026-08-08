@@ -1,7 +1,11 @@
-// Closed-form hex-crystal geometry — parallel implementation of the geometry
-// generation used by the golden-analytic tests and benches. Does NOT touch the
-// production path (FillHexCrystalCoef / SolveConvexPolyhedronVtxD / Crystal);
-// swap-in belongs to a later subtask.
+// Closed-form hex-crystal geometry. This IS the production geometry factory for
+// the prism and pyramid families: Crystal::MakePrismClosedForm /
+// MakePyramidClosedForm (crystal.cpp) call the two entry points below, and
+// Crystal::CreatePrism / CreatePyramid funnel into those. A tolerance changed
+// here changes what every simulation traces, not only what a golden-analytic
+// test compares. (This header used to say the opposite — "does NOT touch the
+// production path ... swap-in belongs to a later subtask" — which stopped being
+// true when the swap-in landed.)
 //
 // The hex-crystal family (prism + pyramid) is characterised by six fixed
 // horizontal normal directions θᵢ = i·60°: the prism is the degenerate case
@@ -113,6 +117,23 @@ enum ClosedFormHexPathTag : uint16_t {
   // be unreachable; the bit exists so a change that unbinds them is caught by a
   // test rather than by a user with a crystal that quietly lost a cone.
   kClosedFormPathTagApexRescueDegraded = 1u << 5,
+  // A face slot was reached by the vertex emitter — some cross-section corner or
+  // apex point named it as one of the planes it lies on — but ended up with
+  // fewer than 3 distinct vertices in the shared pool, so it is dropped while the
+  // faces beside it keep the edges it was supposed to close. What that leaves is
+  // an OPEN surface: Euler characteristic off 2, edges bordered by one face
+  // instead of two. The pyramid evaluator sets this (the second of the two bits
+  // here it owns) and logs a warning naming the input and the slots.
+  //
+  // It is meant to be unreachable: every tolerance deciding "are these two
+  // corners the same point" is now lateral and derived from GapToleranceForScale
+  // over the cross section the corners actually live in, which is the same ruler
+  // the 2D solver used to decide how many corners there are. The bit exists
+  // because the alternative to a diagnostic here is the worst failure this
+  // evaluator has: a crystal that is not a closed solid, which
+  // IsValidClosedFormPyramid (a present-face count, nothing more) admits, and
+  // which then traces rays and reports statistics while looking healthy.
+  kClosedFormPathTagClaimedFaceDropped = 1u << 6,
 };
 
 // ============================================================================
@@ -166,7 +187,11 @@ struct ClosedFormPrismResult {
 // (corner_cnt = 0, every face_present = false), aligning with
 // FillHexCrystalCoef's zero-volume early exit.
 //
-// This function does not consult the production path.
+// It solves the geometry outright rather than calling FillHexCrystalCoef and
+// SolveConvexPolyhedronVtxD — that is what "closed form" means here, and it is
+// why a golden-analytic test comparing the two is comparing two independent
+// derivations. It is not, however, off the production path: see the note at the
+// top of this header.
 ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 
 // ============================================================================
@@ -182,7 +207,7 @@ ClosedFormPrismResult ComputeClosedFormPrism(float h, const float dist[6]);
 //   slot 14+i → lower cone face i (face_number 23+i, i = 0..5)
 constexpr int kClosedFormPyramidFaceCnt = 20;
 constexpr int kClosedFormPyramidSideCnt = 6;
-// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * max(scale, 1)`
+// Multiplier in GapToleranceForScale's `coefficient * kFloatEps * scale`
 // (geo3d_closedform.cpp), which is the single tolerance the apex-collapse gate
 // and the cross-section existence test are both derived from. Named here, in the
 // header, for one reason: a test that re-derives the gate width independently —

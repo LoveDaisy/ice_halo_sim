@@ -1010,7 +1010,40 @@ shipped tolerance binding this path is not expected to fire at all (a 413,280-po
 sweep across the near-apex band never triggered it); if you do see it, you have found
 an edge case narrower than the ones already closed, and the same two remedies apply.
 
-### 7. Missing `prob` in a Scattering Layer
+### 7. Reading the Dropped-Face Warning
+
+**Description**: One of the crystal's faces came out thinner than the geometry solver
+can resolve — typically a side face whose two bounding corners are a few times
+`1e-5` apart relative to the crystal's own size. The solver reached that face while
+walking the cross sections, but could not keep three distinct vertices on it, so the
+face is dropped. Unlike the apex-rescue case above, the result is **not** a valid
+solid: the faces beside the dropped one keep the edges it was supposed to close, so
+the surface has a hole in it.
+
+Nothing downstream rejects such a crystal — the legality check counts present faces
+and does not test whether they form a closed surface — so this warning is the only
+signal you get. Rays traced through it will refract at the remaining faces and the
+run will report statistics as usual.
+
+**What it looks like** (from `src/core/geo3d_closedform.cpp`):
+```
+ComputeClosedFormPyramid: face slot(s) [13] were reached by the emitter but kept
+fewer than 3 distinct vertices, so they are dropped and the surface they bounded is
+left open; face_distance=[...], upper_h_inset=..., lower_h_inset=... This crystal has
+a face thinner than the solver can resolve. To get a well-formed solid instead, widen
+the spread between the face_distance entries around the offending face, or move
+upper_h/lower_h away from that face's collapse height.
+```
+
+**How to respond**: the slot numbers in the message name the offending faces — slots
+`0`/`1` are the two basal faces, `2`–`7` the six prism sides, `8`–`13` the upper cone
+faces, `14`–`19` the lower cone faces, each `i`-th entry sharing direction `i` with
+the corresponding `face_distance[i]`. Widen the spread between the `face_distance`
+entries around that direction so the face is either comfortably present or cleanly
+absent, rather than sitting on the resolution boundary. Moving `upper_h`/`lower_h`
+also helps when the face collapses partway up a cone rather than at the shoulder.
+
+### 8. Missing `prob` in a Scattering Layer
 
 **Description**: A `scene.scattering[]` layer is missing the required `prob` field. There is no
 implicit default — this used to silently fall back to `0.0`, but that fallback has been removed.
@@ -1045,7 +1078,7 @@ historical default was 0.0; add "prob": 0 explicitly to keep that behavior.
 }
 ```
 
-### 8. Distribution Object Missing `type`
+### 9. Distribution Object Missing `type`
 
 **Description**: A distribution slot (`axis.zenith` / `axis.azimuth` / `axis.roll`, or a shape
 scalar such as `height`, `prism_h`, `upper_h`, `lower_h`, or an entry of `face_distance[]`) is
@@ -1081,7 +1114,7 @@ object naming the distribution (e.g. {"type": "gauss", "mean": 20, "std": 5}).
 }
 ```
 
-### 9. `axis` Present but Missing `zenith`
+### 10. `axis` Present but Missing `zenith`
 
 **Description**: Once `axis` is written at all, `zenith` is required — there is no default for
 it in that case. (Omit `axis` entirely to get the default fixed orientation instead; see

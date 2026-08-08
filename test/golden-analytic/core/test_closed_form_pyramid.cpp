@@ -869,9 +869,10 @@ TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
     { "three-fold", { 1, 0, 1, 0, 1, 0 } }, { "five", { 1, 1, 1, 1, 1, 0 } },
   };
   // Overall size spans the range real crystals use and four decades past it in
-  // both directions: the tolerance this test is about is scale-clamped, so
-  // whether a configuration sits above or below the clamp changes which end of
-  // the binding is doing the work.
+  // both directions. The tolerance this test is about is relative to the cross
+  // section's own size, so the agreement between the collapse gate and the
+  // feasibility test is a claim about every size equally — a sweep confined to
+  // one decade could only ever confirm it at that decade.
   static const double kScales[] = { 0.01, 0.05, 0.2, 1.0, 5.0, 20.0, 100.0, 1000.0 };
   static const double kRatios[] = { 1.0, 0.9, 0.5, 0.2, 0.05, 0.01, 0.002 };
   static const float kAlphas[] = { 0.2f, 5.0f, 28.0f, 60.0f, 89.0f };
@@ -979,9 +980,12 @@ TEST(ClosedFormPyramid, ApexRescueDegradationNeverFiresOnLegalShapes) {
 // compares it to itself asserts nothing.
 //
 // Measured, not assumed: the sweep reports the largest gap it actually snapped
-// away, both as an absolute inset (comparable to the scale-clamped 1.15e-4) and
-// as a fraction of each configuration's own gate width, plus the resulting
-// vertical displacement of the tip.
+// away as a fraction of each configuration's own gate width, alongside the
+// absolute worst case and the resulting vertical displacement of the tip. The
+// gate width is proportional to the cross section's own size, so there is no
+// one absolute ceiling to compare against — 5·kFloatEps/(√3/4) ≈ 1.15e-4 is the
+// width at unit offset scale and nothing more. The bound that holds everywhere
+// is the ratio one.
 // ============================================================================
 
 TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
@@ -1010,7 +1014,7 @@ TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
 
   int snapped = 0;
   double worst_ratio = 0.0;         // snapped gap / that configuration's gate width
-  double worst_gap_clamped = 0.0;   // largest snapped gap where the scale clamp was active
+  double worst_gap = 0.0;           // largest snapped gap in absolute inset units
   double worst_tip_shift = 0.0;     // tip displacement, relative to the crystal size
   double worst_gap_fraction = 0.0;  // snapped gap as a fraction of the apex inset
   std::string worst_label;
@@ -1068,9 +1072,8 @@ TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
                 offset_scale =
                     std::max(offset_scale, std::fabs(kInsetFactor * (static_cast<double>(dist[i]) - m_requested)));
               }
-              const bool clamp_active = offset_scale <= 1.0;
               const double gate_width =
-                  kTolCoefficient * static_cast<double>(math::kFloatEps) * std::max(offset_scale, 1.0) / kInsetFactor;
+                  kTolCoefficient * static_cast<double>(math::kFloatEps) * offset_scale / kInsetFactor;
               const double ratio_of_gate = gap / gate_width;
               const double a1 = A1FromAlpha(alpha, (side == 0) ? h1 : h3);
               const double tip_shift = std::max(0.0, a1) * gap;
@@ -1083,9 +1086,7 @@ TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
                               (side == 0) ? "upper" : "lower", t, gap);
                 worst_label = buf;
               }
-              if (clamp_active) {
-                worst_gap_clamped = std::max(worst_gap_clamped, gap);
-              }
+              worst_gap = std::max(worst_gap, gap);
               worst_tip_shift = std::max(worst_tip_shift, tip_shift / scale);
               worst_gap_fraction = std::max(worst_gap_fraction, gap / apex_inset);
             }
@@ -1095,11 +1096,11 @@ TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
     }
   }
 
-  const double kClampedGateWidth = kTolCoefficient * static_cast<double>(math::kFloatEps) / kInsetFactor;
   std::fprintf(stderr,
-               "[apex-snap] snapped=%d worst_gap/gate=%.4f worst_gap(clamped)=%.4e (clamped gate width %.4e) "
+               "[apex-snap] snapped=%d worst_gap/gate=%.4f worst_gap=%.4e (gate width at unit offset scale %.4e) "
                "worst_gap/apex_inset=%.4e worst_tip_shift/scale=%.4e\n",
-               snapped, worst_ratio, worst_gap_clamped, kClampedGateWidth, worst_gap_fraction, worst_tip_shift);
+               snapped, worst_ratio, worst_gap, kTolCoefficient * static_cast<double>(math::kFloatEps) / kInsetFactor,
+               worst_gap_fraction, worst_tip_shift);
   std::fprintf(stderr, "[apex-snap] worst case: %s\n", worst_label.c_str());
 
   // Anti-vacuous, both directions: the sweep must snap something, and must get
@@ -1111,8 +1112,6 @@ TEST(ClosedFormPyramid, ApexSnapDeviationStaysWithinTheGateWidth) {
 
   EXPECT_LE(worst_ratio, 1.0) << "a snapped gap exceeded the gate width that authorised it (" << worst_label
                               << ") — the inset↔offset conversion in the gate is not the one that bounds the error";
-  EXPECT_LE(worst_gap_clamped, kClampedGateWidth) << "largest snapped gap in the scale-clamped regime was "
-                                                  << worst_gap_clamped << ", above the predicted " << kClampedGateWidth;
 }
 
 // ============================================================================
@@ -1272,6 +1271,448 @@ TEST(ClosedFormPyramid, SpecialisedConfigurationsAgreeAndNoSpecialCaseBranches) 
         << b.label << " batch triggered path-tag bits absent from the regular batch " << "(batch=0x" << std::hex
         << batch_union << " regular=0x" << regular_union << std::dec << ") — check for special-case branches";
   }
+}
+
+// ============================================================================
+// Contract 2f — two named shapes that must keep all twenty faces.
+//
+// Both are ordinary crystals: every face distance positive, every wedge angle
+// well inside the legal range, no parameter near an endpoint. They are here
+// because a scale-floored tolerance (a `max(scale, 1)` that compares a
+// dimensioned half-plane offset against the pure number 1) used to drop ONE
+// upper cone face on each of them, silently: the surface came out open
+// (V − E + F = 1) with three non-manifold edges, and every consumer downstream
+// kept running on it.
+//
+// The assertions are the structural ones the rest of this file already uses,
+// pinned to these two inputs so the specific regression cannot come back
+// unnoticed. They are stated as full topology (closed surface, 2-manifold, all
+// twenty slots present) rather than "slot 11 is present", because the defect is
+// a whole face going missing, not a particular index.
+// ============================================================================
+
+struct NamedDefectSample {
+  const char* label;
+  float upper_alpha;
+  float lower_alpha;
+  float h1;
+  float h2;
+  float h3;
+  float dist[kSideCnt];
+};
+
+TEST(ClosedFormPyramid, NamedOrdinaryShapesKeepEveryFace) {
+  // Six-decimal values as sampled; feeding the rounded decimals back in
+  // reproduces the defect, so these are a parameter REGION rather than a
+  // knife-edge coincidence.
+  static const NamedDefectSample kSamples[] = {
+    { "t24365",
+      75.2224f,
+      73.8216f,
+      0.7390f,
+      0.4669f,
+      0.1608f,
+      { 0.545105f, 1.037084f, 0.743922f, 0.552757f, 0.167164f, 0.591390f } },
+    { "t8457",
+      78.7637f,
+      45.6552f,
+      0.3811f,
+      0.0045f,
+      0.5277f,
+      { 0.778984f, 1.310429f, 0.745357f, 0.345724f, 1.666781f, 1.576542f } },
+  };
+
+  for (const NamedDefectSample& s : kSamples) {
+    auto cf = ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist);
+    const StructuralCensus census = TakeStructuralCensus(cf);
+
+    std::fprintf(stderr, "[named-defect] %-8s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d present=0x%05x\n", s.label,
+                 census.v, census.e, census.f, census.v - census.e + census.f, census.non_manifold_edges,
+                 PackFacePresent(cf));
+
+    // EXPECT rather than ASSERT: one sample failing must not hide the other.
+    EXPECT_EQ(census.f, kClosedFormPyramidFaceCnt)
+        << s.label << ": only " << census.f << " of " << kClosedFormPyramidFaceCnt
+        << " faces are present — an ordinary crystal lost a face (present mask 0x" << std::hex << PackFacePresent(cf)
+        << std::dec << ")";
+    EXPECT_EQ(census.v - census.e + census.f, 2)
+        << s.label << ": V−E+F = " << (census.v - census.e + census.f) << " (V=" << census.v << " E=" << census.e
+        << " F=" << census.f << ") — the emitted polygon set is not a closed sphere-like surface";
+    EXPECT_EQ(census.non_manifold_edges, 0)
+        << s.label << ": " << census.non_manifold_edges << " polygon edge(s) are not shared by exactly 2 present faces";
+  }
+}
+
+// ============================================================================
+// Contract 2g — scale invariance.
+//
+// Every tolerance in the closed form is supposed to be relative to the size of
+// the thing it measures. Multiplying all the LENGTH inputs by a power of two is
+// the sharpest available test of that claim: powers of two multiply and divide
+// exactly in binary floating point, so the scaled input describes a strictly
+// similar solid — not an approximately similar one. A relative tolerance must
+// therefore return a bit-identical combinatorial answer at every scale, and any
+// difference is attributable to a scale-dependent threshold with no
+// alternative explanation (input rounding cannot produce one).
+//
+// h1 / h3 are deliberately NOT scaled: they are fractions of their cone's
+// height, not lengths. dist[] and h2 are.
+//
+// What is compared is combinatorics only — which faces are present, how many
+// vertices bound each of them, and which solver branches were walked. Vertex
+// coordinates are not compared: those are floats and scale exactly, but the
+// contract under test is about decisions, not arithmetic.
+//
+// The check is an all-pairs equality expressed against one member of the set;
+// which member holds that role is arbitrary and carries no assumption that any
+// particular scale is the correct one.
+// ============================================================================
+
+// Combinatorial fingerprint used by the scale-invariance check.
+struct CombinatorialSignature {
+  uint32_t face_present_mask = 0;
+  int face_vtx_cnt[kClosedFormPyramidFaceCnt]{};
+  uint16_t path_tag_union = 0;
+
+  bool operator==(const CombinatorialSignature& o) const {
+    if (face_present_mask != o.face_present_mask || path_tag_union != o.path_tag_union) {
+      return false;
+    }
+    for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+      if (face_vtx_cnt[slot] != o.face_vtx_cnt[slot]) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+CombinatorialSignature TakeCombinatorialSignature(const ClosedFormPyramidResult& cf) {
+  CombinatorialSignature sig;
+  sig.face_present_mask = PackFacePresent(cf);
+  sig.path_tag_union = cf.path_tag_union;
+  for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+    sig.face_vtx_cnt[slot] = cf.face_present[slot] ? cf.face_vtx_cnt[slot] : 0;
+  }
+  return sig;
+}
+
+TEST(ClosedFormPyramid, CombinatoricsAreInvariantUnderUniformScaling) {
+  // Thirteen octaves, 1/64 … 64 around the pools' native size. Powers of two
+  // only — see the header note: this is what makes a divergence attributable.
+  constexpr int kMinExp = -6;
+  constexpr int kMaxExp = 6;
+
+  struct Pool {
+    const char* label;
+    const test_support::PyramidDirectSample* samples;
+    size_t n;
+  };
+  const Pool kPools[] = {
+    { "well-conditioned", test_support::kPyramidWellConditionedSamples,
+      std::size(test_support::kPyramidWellConditionedSamples) },
+    { "degenerate-sigma030", test_support::kPyramidDegenerateSigma030Samples,
+      std::size(test_support::kPyramidDegenerateSigma030Samples) },
+    { "degenerate-sigma050", test_support::kPyramidDegenerateSigma050Samples,
+      std::size(test_support::kPyramidDegenerateSigma050Samples) },
+    { "flat-tail-alpha89", test_support::kPyramidFlatTailAlpha89Samples,
+      std::size(test_support::kPyramidFlatTailAlpha89Samples) },
+  };
+
+  int compared = 0;
+  int divergent = 0;
+  std::string first_offender;
+
+  for (const Pool& pool : kPools) {
+    int pool_divergent = 0;
+    for (size_t i = 0; i < pool.n; i++) {
+      const test_support::PyramidDirectSample& s = pool.samples[i];
+
+      auto eval = [&s](int exp) {
+        const float k = std::ldexp(1.0f, exp);
+        float dist[kSideCnt];
+        for (int d = 0; d < kSideCnt; d++) {
+          dist[d] = s.dist[d] * k;
+        }
+        return ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2 * k, s.h3, dist);
+      };
+
+      const CombinatorialSignature ref = TakeCombinatorialSignature(eval(0));
+      for (int exp = kMinExp; exp <= kMaxExp; exp++) {
+        if (exp == 0) {
+          continue;
+        }
+        const CombinatorialSignature sig = TakeCombinatorialSignature(eval(exp));
+        compared++;
+        if (!(sig == ref)) {
+          divergent++;
+          pool_divergent++;
+          if (first_offender.empty()) {
+            // Name the first field that differs — a mask/tag pair that reads
+            // identical means the divergence is in a per-face vertex count, and
+            // a message that stopped at the mask would look like a bug in the
+            // message rather than a real difference.
+            int slot_diff = -1;
+            for (int slot = 0; slot < kClosedFormPyramidFaceCnt; slot++) {
+              if (sig.face_vtx_cnt[slot] != ref.face_vtx_cnt[slot]) {
+                slot_diff = slot;
+                break;
+              }
+            }
+            char buf[288];
+            std::snprintf(buf, sizeof(buf),
+                          "%s #%zu at 2^%d: present 0x%05x vs 0x%05x, tags 0x%04x vs 0x%04x, first differing "
+                          "face_vtx_cnt slot %d (%d vs %d)",
+                          pool.label, i, exp, sig.face_present_mask, ref.face_present_mask, sig.path_tag_union,
+                          ref.path_tag_union, slot_diff, slot_diff < 0 ? -1 : sig.face_vtx_cnt[slot_diff],
+                          slot_diff < 0 ? -1 : ref.face_vtx_cnt[slot_diff]);
+            first_offender = buf;
+          }
+        }
+      }
+    }
+    std::fprintf(stderr, "[scale-invariance] %-20s samples=%3zu divergent=%d\n", pool.label, pool.n, pool_divergent);
+  }
+
+  // Anti-vacuous: a run that compared nothing would report zero divergences for
+  // the wrong reason.
+  ASSERT_GT(compared, 0) << "no scaled comparison ran — the sample pools are empty";
+  EXPECT_EQ(divergent, 0) << divergent << " of " << compared
+                          << " uniformly-scaled evaluations changed their combinatorial answer — a tolerance in the "
+                             "closed form is not relative to the quantity it measures. First: "
+                          << first_offender;
+}
+
+// ============================================================================
+// Contract 2d — the truncation cap must survive every legal upper_h.
+//
+// A truncated pyramid (upper_h < 1) has a top cap. Losing it does not produce a
+// broken solid — it produces a perfectly well-formed DIFFERENT one, the full
+// pyramid the user did not ask for, with no diagnostic anywhere. That is what
+// makes it worth its own contract: none of the structural invariants above can
+// see it, because nothing about the result is invalid.
+//
+// The failure it guards was a 3D vertex-merge radius scaled by |z|. A cone's tip
+// height carries the wedge slope a = (√3/4)/tan(alpha), so a near-horizontal
+// wedge inflates it without bound while the cap's corners stay ~dist apart:
+// at alpha = 0.2° the radius reached 6.2 against a corner spacing of 0.5 and
+// swallowed the cap whole. The ratio is what matters, and it is scale-free —
+// both terms are linear in dist — so the scan crosses dist deliberately: the
+// window is NOT confined to large crystals, and a scan that only tried
+// dist = 1000 would have left the impression that it was.
+//
+// Assertion per cell: the cap is present, and no face the emitter reached was
+// dropped for lack of distinct vertices. The second half is what makes this a
+// contract about silence rather than about one cap — a future change that keeps
+// the cap by coarsening some other face away fails here.
+// ============================================================================
+
+TEST(ClosedFormPyramid, TruncationCapSurvivesEveryLegalUpperH) {
+  // alpha spans the near-horizontal wedges where the defect lived (0.2° is one
+  // tick above production's 0.1° floor) up to a slope where it never appeared.
+  static const double kAlphas[] = { 0.2, 1.0, 5.0, 28.0 };
+  // 1 − upper_h from 1e-1 down to 1e-3: the observed window opened at 1e-3 for
+  // alpha ≤ 1° and the partial merge (cap present but corners already fused)
+  // showed at 1e-2.
+  static const double kUpperH[] = { 0.9, 0.99, 0.999 };
+  // The repo's own working scale and the large one the defect was first seen at.
+  static const double kDists[] = { 1.0, 1000.0 };
+  // With and without a prism section: the same over-wide radius also merged the
+  // two shoulder rings of a 0.3-tall prism into one when |z_top| was large.
+  static const double kPrismH[] = { 0.0, 0.3 };
+
+  int checked = 0;
+  for (double prism_h : kPrismH) {
+    for (double alpha : kAlphas) {
+      for (double d : kDists) {
+        for (double h1 : kUpperH) {
+          float dist[kSideCnt];
+          for (int i = 0; i < kSideCnt; i++) {
+            dist[i] = static_cast<float>(d);
+          }
+          auto cf = ComputeClosedFormPyramid(static_cast<float>(alpha), static_cast<float>(alpha),
+                                             static_cast<float>(h1), static_cast<float>(prism_h), 0.0f, dist);
+          checked++;
+          const std::string where = "alpha=" + std::to_string(alpha) + " upper_h=" + std::to_string(h1) +
+                                    " dist=" + std::to_string(d) + " prism_h=" + std::to_string(prism_h);
+          EXPECT_TRUE(cf.face_present[0])
+              << where
+              << ": upper_h < 1 was requested but the top cap (slot 0) is absent — the user asked for a "
+                 "truncated pyramid and got a full one, silently";
+          EXPECT_EQ(cf.path_tag_union & kClosedFormPathTagClaimedFaceDropped, 0u)
+              << where
+              << ": a face the emitter reached kept fewer than 3 distinct vertices on a well-conditioned "
+                 "regular hexagon";
+          // The prism section must survive too: its two shoulder rings are only
+          // prism_h apart in z, which an over-wide merge radius fuses.
+          if (prism_h > 0.0) {
+            EXPECT_EQ(PresentFaceCountInBand(cf, 2), kSideCnt)
+                << where << ": " << PresentFaceCountInBand(cf, 2)
+                << " of 6 prism faces present — the prism section was merged away";
+          }
+        }
+      }
+    }
+  }
+  // Anti-vacuous: a scan that evaluated nothing would report no failure.
+  EXPECT_EQ(checked, 48) << "the cap scan did not cover its full matrix";
+}
+
+// ============================================================================
+// Contract 2e — named near-degenerate samples must publish a CLOSED surface.
+//
+// Both entries are individual regressions caught by full-population scans, and
+// both are near-degenerate in the same specific way: one prism face is a sliver
+// a few times 1e-5 wide, resolvable by the cross-section solver but only just.
+// Such a sliver has to be closed at each end by a micro triangle on the cone
+// above and below it. Emit the sliver and drop one of those triangles and the
+// surface is left open — a crystal that is not a solid, which
+// IsValidClosedFormPyramid admits because it counts present faces and nothing
+// else, and which then traces rays and reports statistics looking healthy.
+//
+// The parameters are written as hex float literals because they came from a
+// std::mt19937 sweep whose distributions are not portable across standard
+// libraries: re-running the generator here would sample a different crystal on a
+// different platform and silently stop testing what this pins.
+// ============================================================================
+
+TEST(ClosedFormPyramid, NamedSliverSamplesPublishAClosedSurface) {
+  struct NamedSliver {
+    const char* label;
+    float upper_alpha;
+    float lower_alpha;
+    float h1;
+    float h2;
+    float h3;
+    float dist[kSideCnt];
+    // Face count below which "fixed" would mean "coarsened away instead".
+    int min_faces;
+  };
+  static const NamedSliver kSamples[] = {
+    // Upper cone a1 = 0.082 against lower a2 = 1.83 on one shared event set:
+    // the shallow side dropped its closing triangle, the steep side kept its.
+    // Before: V=15 E=27 F=13, χ=1, 3 non-manifold edges. The floor of 12 is
+    // above the 11 faces the coarse merge that preceded it produced, so a
+    // regression that "fixes" this by fusing the sliver away fails here.
+    { "t10298",
+      0x1.3d1c3p+6f,
+      0x1.a96456p+3f,
+      0x1.355cfp-4f,
+      0x1.5e83p-1f,
+      0x1.425d5p-2f,
+      { 0x1.12ed04p+0f, 0x1.bb359p-3f, 0x1.64033ep+0f, 0x1.b27f3p-5f, 0x1.70c03cp+0f, 0x1.b716a6p-1f },
+      12 },
+    // Two more from the same sweep, each with the sliver on a different pair of
+    // directions and a different pair of wedge slopes, so the contract is not
+    // pinned to one accident of geometry. Before: F=19 and F=16, both χ=1 with
+    // 3 non-manifold edges.
+    { "t16868",
+      0x1.d85e52p+5f,
+      0x1.051516p+6f,
+      0x1.7be862p-1f,
+      0x1.00e57ep-1f,
+      0x1.c654ecp-1f,
+      { 0x1.87b452p-3f, 0x1.008a38p-1f, 0x1.225f76p-1f, 0x1.1fcfe6p+0f, 0x1.0817a2p+0f, 0x1.013f6ap-1f },
+      19 },
+    { "t27140",
+      0x1.9e5b38p+5f,
+      0x1.3674dcp+6f,
+      0x1.1a669ap-2f,
+      0x1.8e3636p-1f,
+      0x1.acb562p-1f,
+      { 0x1.37ffc2p-3f, 0x1.c52d94p+0f, 0x1.e217aap-1f, 0x1.051f68p+1f, 0x1.19415cp+0f, 0x1.2664b2p+0f },
+      16 },
+  };
+
+  for (const NamedSliver& s : kSamples) {
+    auto cf = ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist);
+    const StructuralCensus c = TakeStructuralCensus(cf);
+    const int chi = c.v - c.e + c.f;
+    std::fprintf(stderr, "[named-sliver] %-8s V=%2d E=%2d F=%2d chi=%3d non_manifold=%2d tags=0x%04x\n", s.label, c.v,
+                 c.e, c.f, chi, c.non_manifold_edges, cf.path_tag_union);
+    ASSERT_GT(c.f, 0) << s.label << ": cf emitted nothing";
+    EXPECT_EQ(chi, 2) << s.label << ": V−E+F = " << chi << " (V=" << c.v << " E=" << c.e << " F=" << c.f
+                      << ") — the published polygon set is not a closed surface";
+    EXPECT_EQ(c.non_manifold_edges, 0) << s.label << ": " << c.non_manifold_edges
+                                       << " polygon edge(s) are not shared by exactly 2 present faces";
+    EXPECT_GE(c.f, s.min_faces) << s.label << ": only " << c.f << " faces present (floor " << s.min_faces
+                                << ") — the surface closed by coarsening the sliver away rather than by emitting the "
+                                   "faces that bound it";
+    EXPECT_EQ(cf.path_tag_union & kClosedFormPathTagClaimedFaceDropped, 0u)
+        << s.label << ": a face the emitter reached was dropped for lack of distinct vertices";
+  }
+}
+
+// ============================================================================
+// Contract 2f — no committed sample may publish an open surface SILENTLY, and
+// the number that still publish one at all may not grow.
+//
+// Two separate claims, and the weaker one is deliberate. The strong claim —
+// every sample is a closed 2-manifold — is not true today and this task did not
+// make it true: 4 of the committed samples still come out open, all of them in
+// the two degenerate pools, which are built by construction to sit below
+// production's own merge tolerance. What IS enforced is that the count cannot
+// climb back: it was 37 before the merge tolerances were made lateral, and a
+// change that reintroduces a mismatched ruler shows up here as a jump, not as a
+// number nobody was watching.
+//
+// The ratchet is a ceiling, not an equality, for one reason: lowering it is the
+// goal, and a test that fails when someone improves the evaluator teaches people
+// to stop improving it. Lower the constant when you lower the count.
+// ============================================================================
+
+TEST(ClosedFormPyramid, CommittedPoolsPublishNoNewOpenSurfaces) {
+  // Measured on this commit: f895#2, deg030#1, deg050#0, deg050#19. Was 37
+  // before the vertex-merge tolerances stopped being derived from |z|.
+  constexpr int kOpenSurfaceCeiling = 4;
+
+  struct Pool {
+    const char* label;
+    const test_support::PyramidDirectSample* p;
+    size_t n;
+  };
+  const Pool kPools[] = {
+    { "wc", test_support::kPyramidWellConditionedSamples, std::size(test_support::kPyramidWellConditionedSamples) },
+    { "f85", test_support::kPyramidFlatTailAlpha85Samples, std::size(test_support::kPyramidFlatTailAlpha85Samples) },
+    { "f87", test_support::kPyramidFlatTailAlpha87Samples, std::size(test_support::kPyramidFlatTailAlpha87Samples) },
+    { "f875", test_support::kPyramidFlatTailAlpha875Samples, std::size(test_support::kPyramidFlatTailAlpha875Samples) },
+    { "f88", test_support::kPyramidFlatTailAlpha88Samples, std::size(test_support::kPyramidFlatTailAlpha88Samples) },
+    { "f89", test_support::kPyramidFlatTailAlpha89Samples, std::size(test_support::kPyramidFlatTailAlpha89Samples) },
+    { "f895", test_support::kPyramidFlatTailAlpha895Samples, std::size(test_support::kPyramidFlatTailAlpha895Samples) },
+    { "deg030", test_support::kPyramidDegenerateSigma030Samples,
+      std::size(test_support::kPyramidDegenerateSigma030Samples) },
+    { "deg050", test_support::kPyramidDegenerateSigma050Samples,
+      std::size(test_support::kPyramidDegenerateSigma050Samples) },
+  };
+
+  int evaluated = 0;
+  int open_cnt = 0;
+  std::string open_list;
+  for (const Pool& pool : kPools) {
+    for (size_t i = 0; i < pool.n; i++) {
+      PyramidSample s = MakeSample(pool.p[i]);
+      auto cf = ComputeClosedFormPyramid(s.upper_alpha, s.lower_alpha, s.h1, s.h2, s.h3, s.dist);
+      const StructuralCensus c = TakeStructuralCensus(cf);
+      evaluated++;
+      if (c.f == 0) {
+        continue;  // empty result — a separate contract's business, not this one
+      }
+      const bool open = (c.v - c.e + c.f != 2) || (c.non_manifold_edges != 0);
+      if (!open) {
+        continue;
+      }
+      open_cnt++;
+      open_list += " " + std::string(pool.label) + "#" + std::to_string(i);
+    }
+  }
+  // Anti-vacuous: a run that evaluated nothing would report zero open surfaces.
+  ASSERT_GT(evaluated, 500) << "the pool sweep evaluated " << evaluated << " samples — the pools are not being read";
+  EXPECT_LE(open_cnt, kOpenSurfaceCeiling)
+      << open_cnt << " committed samples publish an open surface (ceiling " << kOpenSurfaceCeiling << "):" << open_list
+      << ". A tolerance deciding whether two corners are one point is no longer measuring the cross section those "
+         "corners live in.";
+  std::fprintf(stderr, "[open-surface-ratchet] evaluated=%d open=%d (ceiling %d)%s\n", evaluated, open_cnt,
+               kOpenSurfaceCeiling, open_list.c_str());
 }
 
 }  // namespace

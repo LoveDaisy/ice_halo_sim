@@ -241,8 +241,17 @@ inline constexpr PyramidTopologyGolden kPyramidFlatTailAlpha89Topology[40] = {
   { 20, 0xffffcu, 0x1fu }, { 22, 0xffffeu, 0x1fu }, { 22, 0xffffdu, 0x1fu }, { 22, 0xffffeu, 0x1fu },
   { 22, 0xffffdu, 0x1fu }, { 20, 0xffffcu, 0x1fu }, { 22, 0xffffeu, 0x1fu }, { 24, 0xfffffu, 0x0cu },
 };
+// Entry #2 carries kClosedFormPathTagClaimedFaceDropped (0x40) on top of the
+// 0x0f its generation run recorded. Hand-edited, one field of one entry, rather
+// than regenerated: nothing about that sample's geometry moved. Its vtx_cnt (23)
+// and face_present mask (0xfdfff — slot 13 absent) are byte-identical before and
+// after, and its published polygon set was already an open surface
+// (V=23 E=41 F=19, χ=1, 3 edges bordered by one face) when this snapshot was
+// taken. The only change is that the evaluator now says so: the bit is a
+// diagnostic the evaluator did not have when this file was generated, and this
+// sample is one of the two in the committed pools that trips it.
 inline constexpr PyramidTopologyGolden kPyramidFlatTailAlpha895Topology[40] = {
-  { 22, 0xffffdu, 0x1fu }, { 24, 0xfffffu, 0x0du }, { 23, 0xfdfffu, 0x0fu }, { 22, 0xffffeu, 0x1fu },
+  { 22, 0xffffdu, 0x1fu }, { 24, 0xfffffu, 0x0du }, { 23, 0xfdfffu, 0x4fu }, { 22, 0xffffeu, 0x1fu },
   { 24, 0xfffffu, 0x0cu }, { 22, 0xffffeu, 0x1fu }, { 22, 0xffffeu, 0x1fu }, { 22, 0xffffeu, 0x1fu },
   { 20, 0xffffcu, 0x1fu }, { 22, 0xffffdu, 0x1fu }, { 20, 0xffffcu, 0x1fu }, { 22, 0xffffdu, 0x1fu },
   { 22, 0xffffdu, 0x1fu }, { 22, 0xffffdu, 0x1fu }, { 20, 0xffffcu, 0x1fu }, { 20, 0xffffcu, 0x1fu },
