@@ -9,12 +9,17 @@ state, because a corpus with JSON payloads embedded as `R"(...)"` literals is ex
 or `/*` inside string content would otherwise be misread as a real comment marker.
 
 Domain is defined by FILE PATH, not by CMake target membership: every tracked `.cpp`/`.hpp`
-under `test/gui/` and `test/unit-correctness/gui/`. This is a deliberate choice, not an
-oversight -- GUI test cases are split across three CMake targets (`gui_test`, `gui_unit_test`,
-`unit_correctness_test`; see `test/CMakeLists.txt`), and a target-scoped denominator has twice
-silently dropped files that live in `test/unit-correctness/gui/` but link into
-`unit_correctness_test` rather than `gui_unit_test`. Counting by path sidesteps that failure
-mode entirely: it does not matter which target compiles a file, only where it sits.
+under `test/gui/`, `test/unit-correctness/gui/` and `test/composition-correctness/gui/`. This is
+a deliberate choice, not an oversight -- GUI test cases are split across four CMake targets
+(`gui_test`, `gui_unit_test`, `unit_correctness_test`, `composition_correctness_test`; see
+`test/CMakeLists.txt`), and a target-scoped denominator has twice silently dropped files that
+live in `test/unit-correctness/gui/` but link into `unit_correctness_test` rather than
+`gui_unit_test`. Counting by path sidesteps that failure mode entirely: it does not matter which
+target compiles a file, only where it sits.
+
+A directory added here is a directory the suite-size AC is measured over. Leaving a new GUI test
+directory out does not read as "not counted yet" downstream -- it reads as a smaller suite, which
+is the one direction of error a reduction target cannot detect on its own.
 
 Usage:
     python3 scripts/count_gui_test_lines.py                  # total + per-directory subtotal
@@ -35,13 +40,13 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The two directories that hold the GUI test suite's sources, by filesystem location. Kept as a
-# literal pair (matching the equivalent list in count_gui_test_cases.py) rather than derived from
-# CMake, because the domain is explicitly NOT "whatever some target's source list says" -- see the
-# module docstring.
+# The directories that hold the GUI test suite's sources, by filesystem location. Kept as a
+# literal list rather than derived from CMake, because the domain is explicitly NOT "whatever some
+# target's source list says" -- see the module docstring.
 DOMAIN_DIRS = [
     os.path.join("test", "gui"),
     os.path.join("test", "unit-correctness", "gui"),
+    os.path.join("test", "composition-correctness", "gui"),
 ]
 DOMAIN_EXTS = (".cpp", ".hpp")
 

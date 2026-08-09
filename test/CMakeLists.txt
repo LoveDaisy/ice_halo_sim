@@ -215,7 +215,7 @@ set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analyt
 # same test/unit-correctness/gui/ directory as unit_correctness_test's, and it carries the same
 # LABEL — the split is a LINK boundary (these cases call into file_io.cpp / user_defaults.cpp),
 # not a layer or subsystem boundary. Sharing the label is what lets the existing
-# `ctest -L "unit-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
+# `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
 # up with no change. See doc/testing-architecture.md §5 for why this is a second target rather
 # than a second layer, and for the naming rule that lets it keep a link-derived name.
 #
@@ -297,6 +297,54 @@ if(BUILD_GUI)
 endif()
 
 # --------------------------------------------------------------------------------------------------
+# composition_correctness_test — composition-correctness layer, gui subsystem.
+#
+# A LAYER of its own, not a third link-variant of the unit layer. The unit layer answers "does this
+# one src/gui unit compute the right answer"; this one answers "do these two-or-more units, wired
+# together the way the app wires them, produce the right observable result". The distinction is not
+# stylistic: 173 cases / 5285 lines were measured to already be making cross-unit claims while
+# living in a bucket named for single-unit ones, which is what made "is this suite too big" an
+# unanswerable question — a claim's home has to say what kind of claim it is.
+#
+# Hence its OWN CTest LABEL (`composition-correctness`), not a shared `unit-correctness`. Layer
+# identity lives in the label: reusing the unit layer's label would make this layer non-existent to
+# every selector in the repo, which is the same failure the label was introduced to end.
+#
+# Link shape mirrors gui_unit_test exactly (lumice_gui_obj + lumice_obj, imgui_te_stubs.cpp for the
+# ImGuiTestEngineHook_* symbols lumice_gui_obj's PUBLIC IMGUI_ENABLE_TEST_ENGINE demands, no window,
+# no GL context, no test engine) — see that target's comment above for why each piece is there. What
+# it does NOT share is a process: gui_unit_test_env.cpp is compiled in here as well, because the
+# personal-defaults isolation it installs is per-process. Leaving it out would silently resolve
+# user-config lookups to the real OS config directory of whatever machine runs the suite.
+if(BUILD_GUI)
+  add_executable(composition_correctness_test
+    "${PROJ_TEST_DIR}/test_main.cpp"
+    "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_placeholder_skeleton.cpp")
+  target_include_directories(composition_correctness_test
+    PRIVATE ${PROJ_TEST_DIR})
+  # Same three definitions gui_unit_test carries, for the same reasons (see its block above):
+  # source-scan gates that read app.cpp off disk, the shipped e2e config fixtures, and the
+  # test/fixtures corpus. add_test() below passes no positional arguments, so a compile definition
+  # is what makes these paths reachable at all in this binary.
+  target_compile_definitions(composition_correctness_test PRIVATE
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs"
+    LUMICE_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/test/fixtures")
+  # `lumice_obj`, not `lumice` — the same named exemption gui_unit_test documents above: a
+  # composition chain that cross-checks the GUI against core's own primitives needs the internal
+  # symbols that liblumice.dylib's -fvisibility=hidden does not export.
+  target_link_libraries(composition_correctness_test
+    PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
+  set_target_properties(composition_correctness_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
+
+  add_test(NAME "LumiceCompositionCorrectnessTest" COMMAND composition_correctness_test)
+  set_tests_properties("LumiceCompositionCorrectnessTest" PROPERTIES LABELS "composition-correctness")
+endif()
+
+# --------------------------------------------------------------------------------------------------
 # CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)
 #
 # Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
@@ -310,7 +358,7 @@ endif()
 # `pytest` to the fast subset. Without an explicit `-m`, these two invocations
 # collect zero tests and pytest exits 5 ("no tests collected"), which ctest
 # reports as a hard FAILURE — on every platform, since both carry the `parity`
-# label that `ctest -L "unit-correctness|parity|golden-analytic"` selects.
+# label that `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` selects.
 # Where these two actually run, which is not where a reader assumes:
 #
 # This find_program gates the whole block, and CI's four build-matrix jobs never install

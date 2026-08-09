@@ -116,7 +116,7 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
+        run: ctest --test-dir build --output-on-failure -L "unit-correctness|composition-correctness|parity|golden-analytic"
 
       # gui_unit_test is the first test target that only exists on some matrix entries (it is
       # inside `if(BUILD_GUI)`), which makes "green" and "ran" separable in a way they were not

@@ -17,12 +17,13 @@ The rule, stated so it can be argued with:
     subset with no ImGui dependency links into unit_correctness_test instead — the
     non-GUI unit-test binary. Both target source lists are parsed out of the CMakeLists
     that define them.
-  * gui_unit_test and unit_correctness_test: every `TEST(...)`/`TEST_F(...)` in a
-    target's sources, plus every `TEST_P(...)` body expanded by the number of rows its
-    `INSTANTIATE_TEST_SUITE_P` generator instantiates (Range/Values; a generator whose
-    size is not literal at the call site raises rather than guessing). Gtest registers
-    one case per macro/instantiation, so the static count and the runtime list agree
-    exactly — `--selfcheck` asserts that rather than assuming it, for BOTH targets.
+  * gui_unit_test, unit_correctness_test and composition_correctness_test: every
+    `TEST(...)`/`TEST_F(...)` in a target's sources, plus every `TEST_P(...)` body
+    expanded by the number of rows its `INSTANTIATE_TEST_SUITE_P` generator instantiates
+    (Range/Values; a generator whose size is not literal at the call site raises rather
+    than guessing). Gtest registers one case per macro/instantiation, so the static count
+    and the runtime list agree exactly — `--selfcheck` asserts that rather than assuming
+    it, for ALL THREE gtest-style targets.
   * gui_test: every `IM_REGISTER_TEST(engine, ...)` call SITE, except that a site
     inside a registration LOOP registers one case per row of the table the loop walks,
     so it counts as that table's length. Counting call sites alone undercounts; that is
@@ -52,19 +53,27 @@ membership rule that was supposed to prevent exactly this kind of gap. This vers
 adds a third counter, `unit_correctness_test_gui=`, scoped to that target's sources
 filtered down to the `unit-correctness/gui/` subdirectory (the rest of that target's
 sources — core/config/server/util/backend — are out of scope for a GUI-suite counter).
-`total=` now sums all three; earlier callers that assumed `total == gui_test +
+`total=` sums every counter below; earlier callers that assumed `total == gui_test +
 gui_unit_test` will see a jump the size of the previously-missing subset. That jump is
 the bug being fixed, not a new one — see the module-level note in
 `count_gui_test_lines.py` for the file-domain half of the same fix.
+
+Fourth counter (composition_correctness_test): the composition-correctness layer's gui
+target, added when that layer was created. It gets its own counter for the same reason it
+gets its own CTest LABEL — a layer that is not in the denominator is a layer whose growth
+is invisible to the one number this repo reports suite size with. The lesson is the same
+one the third counter above records, so it is applied at layer-creation time here instead
+of being rediscovered later as a gap.
 
 Usage
   python3 scripts/count_gui_test_cases.py                # today's baseline
   python3 scripts/count_gui_test_cases.py --selfcheck    # + verify vs the binaries
   python3 scripts/count_gui_test_cases.py --json         # machine-readable
 
-Downstream contract: the four `key=value` lines `gui_test=`, `gui_unit_test=`,
-`unit_correctness_test_gui=`, `total=` are the output, in that order, on stdout.
-Anything else (per-file breakdown, warnings) goes to stderr or behind `--verbose`.
+Downstream contract: the five `key=value` lines `gui_test=`, `gui_unit_test=`,
+`unit_correctness_test_gui=`, `composition_correctness_test=`, `total=` are the output, in
+that order, on stdout. Anything else (per-file breakdown, warnings) goes to stderr or
+behind `--verbose`.
 """
 
 from __future__ import annotations
@@ -83,6 +92,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # unconditionally in the same file.
 UNIT_CORRECTNESS_CMAKE = os.path.join("test", "CMakeLists.txt")
 GUI_UNIT_TEST_CMAKE = os.path.join("test", "CMakeLists.txt")
+COMPOSITION_CORRECTNESS_CMAKE = os.path.join("test", "CMakeLists.txt")
 GUI_TEST_CMAKE = os.path.join("test", "gui", "CMakeLists.txt")
 
 # Sources of unit_correctness_test that are actually GUI cases: filtered by this path
@@ -559,7 +569,7 @@ def _selfcheck_target(root: str, target: str, static_names: set[tuple[str, str]]
 
 
 def selfcheck(root: str) -> int:
-    """Verify both TARGET-rule counters against their binaries' own case lists.
+    """Verify every gtest-style TARGET-rule counter against its binary's own case list.
 
     unit_correctness_test is checked against its FULL name set (every source in the target, not
     just the GUI subset) because that is what `--gtest_list_tests` reports for that binary --
@@ -569,9 +579,12 @@ def selfcheck(root: str) -> int:
     """
     gui_unit_names = extract_case_names(root, GUI_UNIT_TEST_CMAKE, "gui_unit_test")
     unit_correctness_names = extract_case_names(root, UNIT_CORRECTNESS_CMAKE, "unit_correctness_test")
+    composition_names = extract_case_names(
+        root, COMPOSITION_CORRECTNESS_CMAKE, "composition_correctness_test")
     rc1 = _selfcheck_target(root, "gui_unit_test", gui_unit_names)
     rc2 = _selfcheck_target(root, "unit_correctness_test", unit_correctness_names)
-    return rc1 or rc2
+    rc3 = _selfcheck_target(root, "composition_correctness_test", composition_names)
+    return rc1 or rc2 or rc3
 
 
 def main() -> int:
@@ -600,8 +613,9 @@ def main() -> int:
     parser.add_argument(
         "--selfcheck",
         action="store_true",
-        help="also run the built gui_unit_test and unit_correctness_test binaries' "
-        "--gtest_list_tests and fail on any disagreement with the static parse",
+        help="also run the built gui_unit_test, unit_correctness_test and "
+        "composition_correctness_test binaries' --gtest_list_tests and fail on any "
+        "disagreement with the static parse",
     )
     args = parser.parse_args()
 
@@ -610,6 +624,7 @@ def main() -> int:
     if args.rule == "dirwalk":
         gui_total, unit_total, walk_files = count_dirwalk(root)
         unit_correctness_gui_total = 0
+        composition_total = 0
         if args.verbose:
             print("dirwalk rule (superseded; directory membership, unexpanded sites):", file=sys.stderr)
             for name, count in walk_files:
@@ -622,6 +637,11 @@ def main() -> int:
         gui_total, gui_files = count_gui_test(root)
         unit_correctness_gui_total, unit_correctness_gui_files = count_gtest_style_target(
             root, UNIT_CORRECTNESS_CMAKE, "unit_correctness_test", path_filter=GUI_SUBDIR_FRAGMENT)
+        # No path_filter: unlike unit_correctness_test, every source of this target is a GUI
+        # composition source. Its non-case sources (test_main.cpp, imgui_te_stubs.cpp,
+        # gui_unit_test_env.cpp) carry no TEST macros, so they contribute zero either way.
+        composition_total, composition_files = count_gtest_style_target(
+            root, COMPOSITION_CORRECTNESS_CMAKE, "composition_correctness_test")
         if args.verbose:
             print("gui_unit_test (TEST/TEST_F per source):", file=sys.stderr)
             for name, count in unit_files:
@@ -633,20 +653,25 @@ def main() -> int:
             print("unit_correctness_test's unit-correctness/gui/ subset (TEST/TEST_F per source):", file=sys.stderr)
             for name, count in unit_correctness_gui_files:
                 print(f"  {count:4d}  {name}", file=sys.stderr)
+            print("composition_correctness_test (TEST/TEST_F per source):", file=sys.stderr)
+            for name, count in composition_files:
+                print(f"  {count:4d}  {name}", file=sys.stderr)
 
-    total = gui_total + unit_total + unit_correctness_gui_total
+    total = gui_total + unit_total + unit_correctness_gui_total + composition_total
 
     if args.json:
         print(json.dumps({
             "gui_test": gui_total,
             "gui_unit_test": unit_total,
             "unit_correctness_test_gui": unit_correctness_gui_total,
+            "composition_correctness_test": composition_total,
             "total": total,
         }))
     else:
         print(f"gui_test={gui_total}")
         print(f"gui_unit_test={unit_total}")
         print(f"unit_correctness_test_gui={unit_correctness_gui_total}")
+        print(f"composition_correctness_test={composition_total}")
         print(f"total={total}")
 
     if args.selfcheck:
