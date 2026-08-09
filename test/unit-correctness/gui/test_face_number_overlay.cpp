@@ -405,8 +405,14 @@ TEST(FaceNumberOverlay, EveryFaceNormalPointsAwayFromTheCrystalCentre) {
 
   for (const CrystalCase& c : kCases) {
     LUMICE_CrystalMesh mesh{};
-    ASSERT_TRUE(lumice::gui::BuildCrystalMeshData(c.cfg, lumice::gui::kPreviewFixedSampleSeed, &mesh)) << c.name;
-    ASSERT_GT(mesh.face_count, 0) << c.name;
+    if (!lumice::gui::BuildCrystalMeshData(c.cfg, lumice::gui::kPreviewFixedSampleSeed, &mesh)) {
+      ADD_FAILURE() << c.name << ": mesh build failed";
+      continue;  // no mesh to inspect for this crystal; the rest still get checked
+    }
+    if (mesh.face_count <= 0) {
+      ADD_FAILURE() << c.name << ": mesh has no faces";
+      continue;
+    }
 
     // Centroid over the GL-frame vertex buffer, already swapped and AABB-normalized by the builder.
     float centroid[3] = {};
@@ -423,7 +429,10 @@ TEST(FaceNumberOverlay, EveryFaceNormalPointsAwayFromTheCrystalCentre) {
     const int n = AggregateFaceLabelsFromTopology(
         mesh.vertices, mesh.vertex_count, mesh.face_count, mesh.face_numbers_by_face, mesh.face_vtx_offsets,
         mesh.face_vtx_counts, mesh.face_vtx_pool, mesh.face_normals, labels, kMaxFaceLabels);
-    ASSERT_GT(n, 0) << c.name;
+    if (n <= 0) {
+      ADD_FAILURE() << c.name << ": no face labels aggregated";
+      continue;
+    }
 
     for (int i = 0; i < n; ++i) {
       float dot = 0.0f;

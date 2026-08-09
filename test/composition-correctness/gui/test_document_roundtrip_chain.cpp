@@ -227,7 +227,10 @@ TEST(DocumentRoundtripChain, ANonUniformShapeDistIsDowngradedAndCountedAndAUnifo
 
     TakeShapeDistDowngradeCount();  // discard anything a previous case in this binary left behind
     GuiState after = MinimalDocument();
-    ASSERT_TRUE(DeserializeGuiStateJson(SerializeGuiStateJson(before), after));
+    if (!DeserializeGuiStateJson(SerializeGuiStateJson(before), after)) {
+      ADD_FAILURE() << "family " << static_cast<int>(family) << ": round trip failed to deserialize";
+      continue;  // no loaded document to inspect for this family; the rest still get checked
+    }
 
     EXPECT_EQ(static_cast<int>(after.crystals.at(0).height.type), static_cast<int>(ShapeDistType::kUniform))
         << "a non-uniform family survived into a GuiState the GUI cannot edit";

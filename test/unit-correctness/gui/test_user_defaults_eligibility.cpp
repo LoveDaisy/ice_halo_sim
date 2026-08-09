@@ -79,7 +79,7 @@ TEST(UserDefaultsEligibility, GovernanceUnionIsDisjointAndComplete) {
 TEST(UserDefaultsEligibility, EveryGovernedFieldResolvesToADeterminateVerdict) {
   for (const auto& name : AllGovernedFieldNames()) {
     const EligibilityVerdict verdict = ResolveDefaultEligibility(name);
-    ASSERT_NE(verdict.eligibility, DefaultEligibility::kUnregistered) << name << " resolved to kUnregistered";
+    EXPECT_NE(verdict.eligibility, DefaultEligibility::kUnregistered) << name << " resolved to kUnregistered";
     if (verdict.eligibility == DefaultEligibility::kEligible) {
       EXPECT_EQ(verdict.reason, IneligibleReason::kNone) << name << " is eligible but carries a reason";
     } else {
@@ -173,7 +173,10 @@ TEST(UserDefaultsEligibility, UnserializedViewFieldsAreAllRegisteredAsView) {
   for (const char* name : kUnserializedViewFields) {
     const auto* found = std::find_if(std::begin(kFieldTierTable), std::end(kFieldTierTable),
                                      [name](const FieldTierEntry& e) { return std::string_view(e.name) == name; });
-    ASSERT_NE(found, std::end(kFieldTierTable)) << name << " is not a registered GuiState field";
+    if (found == std::end(kFieldTierTable)) {
+      ADD_FAILURE() << name << " is not a registered GuiState field";
+      continue;  // no entry to check the tier of; the rest still get checked
+    }
     EXPECT_EQ(found->tier, FieldTier::kView) << name;
   }
 }
@@ -217,8 +220,9 @@ TEST(UserConfigDir, EachPlatformDerivesItsDirectoryOrReportsNone) {
   for (const Case& c : kCases) {
     if (c.expected.empty()) {
       EXPECT_FALSE(c.resolved.has_value()) << c.name;
+    } else if (!c.resolved.has_value()) {
+      ADD_FAILURE() << c.name << ": expected a resolved directory";
     } else {
-      ASSERT_TRUE(c.resolved.has_value()) << c.name;
       EXPECT_EQ(*c.resolved, c.expected) << c.name;
     }
   }

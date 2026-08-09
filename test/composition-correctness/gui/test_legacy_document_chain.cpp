@@ -314,7 +314,10 @@ TEST(LegacyDocumentChain, GuiNativeLegacyShapesStillOpen) {
     SCOPED_TRACE(c.name);
     DoNew();
     GuiState loaded;
-    ASSERT_TRUE(DeserializeGuiStateJson(c.doc, loaded)) << "a document this project once wrote no longer parses";
+    if (!DeserializeGuiStateJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.name << ": a document this project once wrote no longer parses";
+      continue;  // nothing loaded for this row; the rest still get checked
+    }
     c.expect(loaded);
   }
 }
@@ -324,7 +327,10 @@ TEST(LegacyDocumentChain, CoreJsonLegacyShapesStillOpen) {
     SCOPED_TRACE(c.name);
     DoNew();
     GuiState loaded = InitDefaultState();
-    ASSERT_TRUE(DeserializeFromJson(c.doc, loaded)) << "a document the CLI once wrote no longer parses";
+    if (!DeserializeFromJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.name << ": a document the CLI once wrote no longer parses";
+      continue;
+    }
     c.expect(loaded);
   }
 }

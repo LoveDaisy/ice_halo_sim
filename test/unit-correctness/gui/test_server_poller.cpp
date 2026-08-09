@@ -277,8 +277,14 @@ TEST_F(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResu
 
   for (const ResumeCase& c : kCases) {
     if (c.rerun) {
-      ASSERT_TRUE(srv.Run()) << c.name;
-      ASSERT_GT(ArmGateAboveAchieved(local.get(), srv), 0u) << c.name;
+      if (!srv.Run()) {
+        ADD_FAILURE() << c.name << ": server failed to re-run";
+        continue;  // no fresh run to resume from; the rest still get checked
+      }
+      if (!(ArmGateAboveAchieved(local.get(), srv) > 0u)) {
+        ADD_FAILURE() << c.name << ": failed to arm the quality gate above achieved";
+        continue;
+      }
       local->WakeForRestart(srv);
     } else {
       local->WakeForRefresh(srv);
@@ -287,7 +293,10 @@ TEST_F(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResu
     local->PollOnceForTest(srv);
 
     Snapshot s = local->LoadSnapshot();
-    ASSERT_TRUE(s != nullptr) << c.name;
+    if (s == nullptr) {
+      ADD_FAILURE() << c.name << ": poll produced no snapshot";
+      continue;
+    }
     EXPECT_EQ(s->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED)) << c.name;
     EXPECT_TRUE(s->payload != nullptr) << c.name;
     EXPECT_NE(s->texture_serial, prev_serial) << c.name;
@@ -327,8 +336,14 @@ TEST_F(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
       gui::g_server_poller.ResetGenerationForTest();
       gui::g_server_poller.PollOnceForTest(srv);
       Snapshot seed = gui::g_server_poller.LoadSnapshot();
-      ASSERT_TRUE(seed != nullptr);
-      ASSERT_TRUE(seed->valid) << "attempt " << attempt;  // premise: valid BEFORE the wake
+      if (seed == nullptr) {
+        ADD_FAILURE() << "attempt " << attempt << ": seed poll produced no snapshot";
+        continue;  // no baseline for this attempt; the rest still get checked
+      }
+      if (!seed->valid) {
+        ADD_FAILURE() << "attempt " << attempt << ": seed snapshot is not valid before the wake";
+        continue;
+      }
       gui::g_server_poller.Stop();
 
       if (restart) {
@@ -337,7 +352,10 @@ TEST_F(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
         gui::g_server_poller.WakeForRefresh(srv);
       }
       Snapshot after = gui::g_server_poller.LoadSnapshot();
-      ASSERT_TRUE(after != nullptr);
+      if (after == nullptr) {
+        ADD_FAILURE() << "attempt " << attempt << ": post-wake poll produced no snapshot";
+        continue;
+      }
       if (restart) {
         restart_cleared += after->valid ? 0 : 1;
       } else {

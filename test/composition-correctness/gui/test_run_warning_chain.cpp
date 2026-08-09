@@ -147,7 +147,10 @@ TEST(RunWarningChain, ARepeatedOverflowReopensOnlyWhenTheUserAsksAgain) {
   for (const Case& c : kCases) {
     SCOPED_TRACE(c.name);
     ScopedAppServer server;
-    ASSERT_TRUE(server.ok());
+    if (!server.ok()) {
+      ADD_FAILURE() << c.name << ": failed to create the app server";
+      continue;  // no server to run against for this row; the rest still get checked
+    }
     c.seed();
 
     DoRun(c.user_initiated);
@@ -159,7 +162,10 @@ TEST(RunWarningChain, ARepeatedOverflowReopensOnlyWhenTheUserAsksAgain) {
     // itself in flight. Driving a real frame instead would put the harness in a fight with the
     // modal's input capture over an invariant that lives entirely in this flag.
     internal_test::ConsumeGuiWarningPending();
-    ASSERT_FALSE(IsGuiWarningPending());
+    if (IsGuiWarningPending()) {
+      ADD_FAILURE() << c.name << ": consuming the pending warning did not clear it";
+      continue;  // the second-run premise is broken for this row; the rest still get checked
+    }
 
     DoRun(c.user_initiated);
     EXPECT_EQ(PeekGuiWarning(), first) << "the same condition produced a different message";

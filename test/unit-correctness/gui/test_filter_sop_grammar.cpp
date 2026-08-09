@@ -135,11 +135,20 @@ TEST(FilterSopAc1, FromLegacyRaypathFansOutToOneRowPerSegment) {
   };
   for (const Case& c : kCases) {
     SumOfProducts sop = FromLegacyRaypath(Rp(c.text));
-    ASSERT_EQ(sop.size(), c.expect_rows.size()) << c.text;
+    if (sop.size() != c.expect_rows.size()) {
+      ADD_FAILURE() << c.text << ": expected " << c.expect_rows.size() << " rows, got " << sop.size();
+      continue;  // no rows to index for this case; the rest still get checked
+    }
     for (size_t i = 0; i < c.expect_rows.size(); ++i) {
       EXPECT_EQ(sop[i].text, c.expect_rows[i]) << c.text << " row " << i;
-      ASSERT_EQ(sop[i].factors.size(), 1u) << c.text << " row " << i;
-      ASSERT_TRUE(std::holds_alternative<RaypathParams>(sop[i].factors[0]));
+      if (sop[i].factors.size() != 1u) {
+        ADD_FAILURE() << c.text << " row " << i << ": expected exactly 1 factor, got " << sop[i].factors.size();
+        continue;  // no single factor to check for this row; the rest still get checked
+      }
+      if (!std::holds_alternative<RaypathParams>(sop[i].factors[0])) {
+        ADD_FAILURE() << c.text << " row " << i << ": factor is not a RaypathParams";
+        continue;
+      }
       EXPECT_EQ(std::get<RaypathParams>(sop[i].factors[0]).raypath_text, sop[i].text);
       // Grammar-conformant: the row text re-parses to the row's factor cache. Not asked of the
       // empty row — the grammar reads "" as no factors at all, while the degenerate SoP has to
@@ -165,15 +174,30 @@ TEST(FilterSopAc1, FromLegacyEntryExitIsSingleRowAllModes) {
   };
   for (const auto& c : cases) {
     SumOfProducts sop = FromLegacyEntryExit(c.ep);
-    ASSERT_EQ(sop.size(), 1u);
+    if (sop.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": expected exactly 1 row, got " << sop.size();
+      continue;  // no row to index for this case; the rest still get checked
+    }
     EXPECT_EQ(sop[0].text, c.expect_text);
-    ASSERT_EQ(sop[0].factors.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<EntryExitParams>(sop[0].factors[0]));
+    if (sop[0].factors.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": expected exactly 1 factor, got " << sop[0].factors.size();
+      continue;
+    }
+    if (!std::holds_alternative<EntryExitParams>(sop[0].factors[0])) {
+      ADD_FAILURE() << c.expect_text << ": factor is not an EntryExitParams";
+      continue;
+    }
     EXPECT_TRUE(std::get<EntryExitParams>(sop[0].factors[0]) == c.ep);
     // The emitted text re-parses to the same EntryExitParams (bijective).
     auto reparsed = ParseSummandText(sop[0].text);
-    ASSERT_EQ(reparsed.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<EntryExitParams>(reparsed[0]));
+    if (reparsed.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": reparse expected exactly 1 factor, got " << reparsed.size();
+      continue;
+    }
+    if (!std::holds_alternative<EntryExitParams>(reparsed[0])) {
+      ADD_FAILURE() << c.expect_text << ": reparsed factor is not an EntryExitParams";
+      continue;
+    }
     EXPECT_TRUE(std::get<EntryExitParams>(reparsed[0]) == c.ep);
   }
 }
@@ -491,7 +515,7 @@ TEST(FilterSopGrammar, ParseLengthSpecReadsEveryShapeAndRejectsTheRest) {
     int mode = 0;
     int min_len = 0;
     int max_len = 0;
-    ASSERT_EQ(detail::ParseLengthSpec(c.text, mode, min_len, max_len), c.accepted) << c.text;
+    EXPECT_EQ(detail::ParseLengthSpec(c.text, mode, min_len, max_len), c.accepted) << c.text;
     if (!c.accepted) {
       continue;
     }

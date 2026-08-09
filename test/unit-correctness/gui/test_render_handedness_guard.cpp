@@ -294,9 +294,15 @@ TEST(RenderHandednessGuard, EverySurfacePutsPositiveAzimuthRightAcrossTheSingleL
     for (const auto& c : kSingleLens) {
       SCOPED_TRACE(testing::Message() << s.name << ", lens " << static_cast<int>(c.t));
       float px = 0.0f;
-      ASSERT_TRUE(s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, kAzOffDeg, &px));
+      if (!s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, kAzOffDeg, &px)) {
+        ADD_FAILURE() << s.name << " lens " << static_cast<int>(c.t) << ": positive-az projection failed";
+        continue;  // this surface/lens has no pixel to compare; the rest still get checked
+      }
       EXPECT_GT(px, 0.0f);  // +az → RIGHT (owner-decided: right = +az)
-      ASSERT_TRUE(s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, -kAzOffDeg, &px));
+      if (!s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, -kAzOffDeg, &px)) {
+        ADD_FAILURE() << s.name << " lens " << static_cast<int>(c.t) << ": negative-az projection failed";
+        continue;
+      }
       EXPECT_LT(px, 0.0f);  // -az → LEFT
     }
   }
@@ -331,7 +337,11 @@ TEST(RenderHandednessGuard, dual_lens_gui_shader) {
                                       << ", y_positive=" << p.y_positive);
       float dx = 0.0f;
       float py = 0.0f;
-      ASSERT_TRUE(DualDiscOffset(c.lens_type, p.hemi_up, p.y_positive, &dx, &py));
+      if (!DualDiscOffset(c.lens_type, p.hemi_up, p.y_positive, &dx, &py)) {
+        ADD_FAILURE() << "lens " << c.lens_type << ", hemi_up=" << p.hemi_up << ", y_positive=" << p.y_positive
+                      << ": projection failed";
+        continue;  // this probe has no offset to compare; the rest still get checked
+      }
       EXPECT_NEAR(dx, p.side * c.r_norm * kDualCircleRadius, 1e-3f);
       EXPECT_NEAR(py, 0.0f, 1e-3f);
     }
@@ -346,9 +356,15 @@ TEST(RenderHandednessGuard, EverySurfacePutsPositiveAzimuthLeftOnTheGlobe) {
   for (const Surface& s : kSurfaces) {
     SCOPED_TRACE(s.name);
     float px = 0.0f;
-    ASSERT_TRUE(s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &px));
+    if (!s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &px)) {
+      ADD_FAILURE() << s.name << ": positive-az globe projection failed";
+      continue;  // this surface has no pixel to compare; the rest still get checked
+    }
     EXPECT_LT(px, 0.0f);  // globe +az → LEFT (opposite of single-lens)
-    ASSERT_TRUE(s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &px));
+    if (!s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &px)) {
+      ADD_FAILURE() << s.name << ": negative-az globe projection failed";
+      continue;
+    }
     EXPECT_GT(px, 0.0f);  // globe -az → RIGHT
   }
 }
@@ -367,9 +383,15 @@ TEST(RenderHandednessGuard, interaction_readback) {
       SCOPED_TRACE(testing::Message() << "lens " << lt << ", az " << az);
       float px = 0.0f;
       float py = 0.0f;
-      ASSERT_TRUE(GuiShaderPxPy(lt, c.fov, kSingleLensViewAz, az, &px, &py));
+      if (!GuiShaderPxPy(lt, c.fov, kSingleLensViewAz, az, &px, &py)) {
+        ADD_FAILURE() << "lens " << lt << ", az " << az << ": gui_shader forward projection failed";
+        continue;  // no pixel to feed the read-back; the rest still get checked
+      }
       float wy = 0.0f;
-      ASSERT_TRUE(GuiReadbackWorldY(lt, c.fov, kSingleLensViewAz, px, py, &wy));
+      if (!GuiReadbackWorldY(lt, c.fov, kSingleLensViewAz, px, py, &wy)) {
+        ADD_FAILURE() << "lens " << lt << ", az " << az << ": interaction read-back failed";
+        continue;
+      }
       // The sign of the recovered world y must follow the sign of the input azimuth.
       EXPECT_GT(wy * az, 0.0f);
     }

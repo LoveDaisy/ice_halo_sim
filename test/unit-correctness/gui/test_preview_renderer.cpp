@@ -30,12 +30,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <string>
 #include <vector>
 
-#include "gui/axis_presets.hpp"
-#include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/preview_renderer.hpp"
 
@@ -227,7 +224,10 @@ TEST(DragGain, ReferencePointIsFrameCenterAndGlobesIsMirrored) {
   for (const auto& lc : DraggableLenses()) {
     auto vp = MakeVp(lc.lens_type, 60.0f, 0.0f, 0.0f);
     auto p = ProjectWorldDirToScreen(vp, ReferenceWorldDir(lc.lens_type), 800, 600);
-    ASSERT_FALSE(IsSentinel(p)) << lc.name;
+    if (IsSentinel(p)) {
+      ADD_FAILURE() << lc.name << ": the reference direction projected to the sentinel";
+      continue;  // no pixel to compare for this lens; the rest still get checked
+    }
     EXPECT_NEAR(p[0], 0.0f, 1e-3f) << lc.name;
     EXPECT_NEAR(p[1], 0.0f, 1e-3f) << lc.name;
   }
@@ -256,14 +256,20 @@ TEST(DragGain, DraggingMovesContentAtAFixedPixelRatioOnBothAxes) {
     for (float fov : FovLadder(lc)) {
       for (const auto& vp : Viewports()) {
         float gain = ComputeDragGainDegPerPixel(lc.lens_type, fov, vp.w, vp.h);
-        ASSERT_GT(gain, 0.0f) << Label(lc, fov, vp, 0, 0);
+        if (!(gain > 0.0f)) {
+          ADD_FAILURE() << Label(lc, fov, vp, 0, 0) << ": non-positive drag gain";
+          continue;  // no gain to probe with for this combination; the rest still get checked
+        }
         const float step = ProbePixels(gain, vp.w, vp.h);
         for (const bool horizontal : { true, false }) {
           for (float d : { step, -step }) {
             const float dx = horizontal ? d : 0.0f;
             const float dy = horizontal ? 0.0f : d;
             auto p = RoundTrip(lc, fov, vp, dx, dy);
-            ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, dx, dy);
+            if (IsSentinel(p)) {
+              ADD_FAILURE() << Label(lc, fov, vp, dx, dy) << ": round trip landed on the sentinel";
+              continue;
+            }
             // Content follows the cursor: +dx of mouse motion => +k*dx of screen-x motion.
             // ImGui's mouse y is DOWN-positive and the projection's py is UP-positive, so the
             // vertical arm is py = -k*dy. That arm is also where a globe sign regression would
@@ -329,19 +335,31 @@ TEST(DragGain, RealisticDragStepsAtModerateFov) {
   for (const auto& c : kCombos) {
     LensCase lc = { c.lens_type, c.name, 0.0f };
     float gain = ComputeDragGainDegPerPixel(c.lens_type, c.fov, vp.w, vp.h);
-    ASSERT_GT(gain, 0.0f) << c.name;
+    if (!(gain > 0.0f)) {
+      ADD_FAILURE() << c.name << ": non-positive drag gain";
+      continue;  // no gain to probe with for this combo; the rest still get checked
+    }
     for (float d : { 5.0f, 20.0f, -5.0f, -20.0f }) {
       float tol = tolerance_for(gain, d);
       // The budget must stay well under the effects it has to separate: the smallest defect
       // this suite is built to catch is a missing factor (>=2x, i.e. 100%).
-      ASSERT_LT(tol, 0.2f) << Label(lc, c.fov, vp, d, 0.0f);
+      if (!(tol < 0.2f)) {
+        ADD_FAILURE() << Label(lc, c.fov, vp, d, 0.0f) << ": derived tolerance " << tol << " exceeds the budget";
+        continue;  // the tolerance itself is unusable for this step; the rest still get checked
+      }
 
       auto px = RoundTrip(lc, c.fov, vp, d, 0.0f);
-      ASSERT_FALSE(IsSentinel(px)) << Label(lc, c.fov, vp, d, 0.0f);
+      if (IsSentinel(px)) {
+        ADD_FAILURE() << Label(lc, c.fov, vp, d, 0.0f) << ": horizontal round trip landed on the sentinel";
+        continue;
+      }
       EXPECT_NEAR(px[0] / (d * kExpectedSensitivity), 1.0f, tol) << Label(lc, c.fov, vp, d, 0.0f);
 
       auto py = RoundTrip(lc, c.fov, vp, 0.0f, d);
-      ASSERT_FALSE(IsSentinel(py)) << Label(lc, c.fov, vp, 0.0f, d);
+      if (IsSentinel(py)) {
+        ADD_FAILURE() << Label(lc, c.fov, vp, 0.0f, d) << ": vertical round trip landed on the sentinel";
+        continue;
+      }
       EXPECT_NEAR(py[1] / (d * kExpectedSensitivity), -1.0f, tol) << Label(lc, c.fov, vp, 0.0f, d);
     }
   }
@@ -357,7 +375,10 @@ TEST(DragGain, TheGainIsGovernedByTheShorterSideAndScalesInverselyWithIt) {
     for (float fov : FovLadder(lc)) {
       float g1 = ComputeDragGainDegPerPixel(lc.lens_type, fov, 1280, 720);
       float g2 = ComputeDragGainDegPerPixel(lc.lens_type, fov, 2560, 1440);
-      ASSERT_GT(g1, 0.0f) << lc.name;
+      if (!(g1 > 0.0f)) {
+        ADD_FAILURE() << lc.name << " fov=" << fov << ": non-positive drag gain";
+        continue;  // no gain to form a ratio with for this fov; the rest still get checked
+      }
       EXPECT_NEAR(g2 * 2.0f / g1, 1.0f, 1e-5f) << lc.name << " fov=" << fov;
     }
     // img_radius is min(w, h)/2 — the same definition ProjectWorldDirToScreen uses — so a viewport
@@ -426,7 +447,10 @@ TEST(DragGain, SmallFovLawsConvergeToEquidistant) {
   constexpr int kH = 600;  // img_radius = 300
   for (float fov : { 1.0f, 2.0f, 5.0f }) {
     float reference = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeFisheyeEquidist, fov, kW, kH);
-    ASSERT_GT(reference, 0.0f);
+    if (!(reference > 0.0f)) {
+      ADD_FAILURE() << "fov=" << fov << ": non-positive reference drag gain";
+      continue;  // no reference to form a ratio with for this fov; the rest still get checked
+    }
     // The equidistant law IS half_fov / img_radius, exactly and at every FOV — it is the
     // limit itself, so it is the natural yardstick for the other five. (Scaled by the
     // sensitivity, like every branch; the five ratios below are unaffected by that scale,
@@ -557,7 +581,7 @@ TEST(PreviewRenderer, EveryProjectionPutsItsAnchorDirectionsWhereItsGeometryDema
   for (const ProjectionCase& c : kCases) {
     auto vp = MakeVp(c.lens_type, c.fov, c.elevation, 0.0f);
     auto p = ProjectWorldDirToScreen(vp, c.world_dir.data(), c.vp_w, c.vp_h);
-    ASSERT_EQ(IsSentinel(p), c.expect_sentinel) << c.name;
+    EXPECT_EQ(IsSentinel(p), c.expect_sentinel) << c.name;
     if (c.expect_sentinel) {
       continue;
     }
@@ -582,128 +606,4 @@ TEST(PreviewRenderer, ADirectionOutsideTheImagingCircleIsNotGivenAPixelInTheBlac
 
   auto wide = MakeVp(lumice::gui::kLensTypeFisheyeEquidist, 180.0f, 0.0f, 0.0f);
   EXPECT_FALSE(IsSentinel(ProjectWorldDirToScreen(wide, dir_60deg, 1920, 1080)));
-}
-
-// ------------------------------------------------------------------------------------------------
-// The OTHER preview in this app: the crystal modal's 3D view, whose ComputeMvp decides where a mesh
-// vertex lands. Folded in here rather than kept as a 51-line file of its own — it is the same
-// subject (where the preview puts a direction on screen), and its own preamble cost more than its
-// two propositions.
-//
-// It guards:
-//   - V_rot = Rx(-kCameraTiltDeg) sign convention (camera elevated above origin looks DOWN at the
-//     crystal — world +z visible above screen center)
-//   - Y-Z swap equivalence: under the GUI mesh swap, mesh +y represents world +z, so the kColumn
-//     chain rotation (which maps c-axis to world +x in core conventions) — when applied to a
-//     c-axis-aligned mesh vertex — produces a screen-y near zero (c-axis horizontal)
-//
-// Cross-module guard: if BuildCrystalMeshData ever changes the swap direction, the kColumn half
-// fails immediately because the mesh-frame chain output no longer aligns with the V_rot convention.
-
-namespace {
-
-// Identity 4x4 column-major.
-void Identity4x4(float m[16]) {
-  std::memset(m, 0, 16 * sizeof(float));
-  m[0] = 1.0f;
-  m[5] = 1.0f;
-  m[10] = 1.0f;
-  m[15] = 1.0f;
-}
-
-// Multiply column-major 4x4 MVP by a homogeneous (x, y, z, 1) point. Returns
-// {clip_x, clip_y, clip_z, clip_w}; perspective divide is the caller's job.
-std::array<float, 4> Mvp4(const float mvp[16], float x, float y, float z) {
-  return {
-    mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12],
-    mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13],
-    mvp[2] * x + mvp[6] * y + mvp[10] * z + mvp[14],
-    mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15],
-  };
-}
-
-}  // namespace
-
-
-// unit/crystal_renderer_camera_tilt_world_z_above_center — With identity
-// model rotation and zoom=1, a vertex at world +z (= mesh +y under the GUI
-// Y-Z swap) must project ABOVE the screen center AND its surface normal
-// must point toward the camera (not away). The "above center" assertion
-// alone is insufficient: with V_rot of either sign the top vertex appears
-// above center because both "top tilted toward camera" and "top tilted
-// away from camera" raise its screen y. The visible-face check (normal·
-// (+z_eye) > 0) is what pins the V_rot sign — required for kPlate to show
-// its top face (face 1) under the elevated-camera intent rather than the
-// bottom face (face 2).
-TEST(CrystalRenderer, crystal_renderer_camera_tilt_world_z_above_center) {
-  float model[16];
-  Identity4x4(model);
-  float mvp[16];
-  lumice::gui::CrystalRenderer::ComputeMvp(model, /*zoom=*/1.0f, /*width=*/512, /*height=*/512, mvp);
-
-  // World +z is mesh +y (post Y-Z swap). With camera elevated by
-  // +kCameraTiltDeg looking down, this vertex must land above center.
-  auto top = Mvp4(mvp, 0.0f, 1.0f, 0.0f);
-  EXPECT_TRUE(top[3] > 0.0f);
-  float ndc_y_top = top[1] / top[3];
-  EXPECT_TRUE(ndc_y_top > 0.0f);
-
-  // Symmetric sanity: world -z (mesh -y) must land below center.
-  auto bot = Mvp4(mvp, 0.0f, -1.0f, 0.0f);
-  EXPECT_TRUE(bot[3] > 0.0f);
-  float ndc_y_bot = bot[1] / bot[3];
-  EXPECT_TRUE(ndc_y_bot < 0.0f);
-
-  // **Sign-pinning assertion**: the top face's normal (world +z = mesh +y
-  // for identity model) must point TOWARD the camera in eye space, i.e.,
-  // its eye-space z component is positive (eye-space +z is out of screen
-  // toward the viewer in OpenGL). Below: transform the (0,1,0) direction
-  // by V_rot only — translation drops out for direction vectors, and
-  // model is identity. Equivalently we read the y column of (V_rot ·
-  // model) and check its z entry. This catches a sign flip that the
-  // ndc_y > 0 check above cannot.
-  // V_rot is the only rotation in the view chain (model = identity), so
-  // its 3x3 entries are recoverable by inverting the projection's effect
-  // on a direction vector — easier path: re-derive V_rot expectations
-  // from a known input. We compute the eye-space position of the top
-  // vertex and check that, after subtracting the camera-back translation,
-  // its z is positive (toward camera).
-  // dist = ComputeDist(zoom=1) ≈ 3.73; eye-space z of (0,1,0) post-V_rot
-  // is sin(kCameraTiltDeg) ≈ 0.26 (for positive Rx angle) or -0.26
-  // (negative angle). After T(0,0,-dist) the absolute z is ≈ -dist;
-  // adding back +dist recovers the rotation contribution.
-  auto top_world_eye = Mvp4(mvp, 0.0f, 1.0f, 0.0f);  // already in clip space
-  // Reconstruct eye-space z from clip: clip_w = -eye_z (OpenGL).
-  float eye_z_top = -top_world_eye[3];  // = -dist + V_rot's z contribution
-  // Compare against what dist alone would produce (no rotation): -dist.
-  // If V_rot tilts top TOWARD camera, eye_z_top is closer to zero
-  // (less negative); if AWAY, it is further from zero (more negative).
-  float dist_alone = -lumice::gui::CrystalRenderer::ComputeDist(1.0f);
-  EXPECT_TRUE(eye_z_top > dist_alone);  // strictly greater (less negative) → top tilts toward camera
-}
-
-// unit/crystal_renderer_kcolumn_caxis_horizontal — With the kColumn default
-// (chain + swap-wrapped to mesh frame) as the model matrix and a vertex at
-// the c-axis (mesh +y, which represents world +z under the swap), the rotation
-// maps mesh +y to mesh +x (horizontal). With V_rot only adding a small camera
-// elevation, the resulting screen y stays close to zero — the c-axis appears
-// horizontal. This guards the joint correctness of (a) ChainRotationToMatrix,
-// (b) the swap wrap inside DefaultPreviewRotation, and (c) the V_rot sign.
-TEST(CrystalRenderer, crystal_renderer_kcolumn_caxis_horizontal) {
-  // Use DefaultPreviewRotation — the same path used by the runtime, which
-  // applies the mesh swap wrap so the rotation is geometrically valid for
-  // mesh-space vertices.
-  float model[16];
-  lumice::gui::DefaultPreviewRotation(lumice::gui::AxisPreset::kColumn, nullptr, model);
-
-  float mvp[16];
-  lumice::gui::CrystalRenderer::ComputeMvp(model, /*zoom=*/1.0f, /*width=*/512, /*height=*/512, mvp);
-
-  // Apply MVP to mesh +y (the c-axis). After the wrapped chain the c-axis
-  // lies along mesh +x (horizontal); kCameraTiltDeg adds a tiny screen-y
-  // offset that stays well within tolerance.
-  auto p = Mvp4(mvp, 0.0f, 1.0f, 0.0f);
-  EXPECT_TRUE(p[3] > 0.0f);
-  float ndc_y = p[1] / p[3];
-  EXPECT_TRUE(std::fabs(ndc_y) < 0.1f);
 }

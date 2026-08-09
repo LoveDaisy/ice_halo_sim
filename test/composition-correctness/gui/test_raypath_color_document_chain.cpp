@@ -245,11 +245,17 @@ TEST(RaypathColorDocumentChain, EveryClassShapeEmitsTheSameBlockUnderBothIntents
     c.setup();
 
     const nlohmann::json exported = nlohmann::json::parse(CoreJson(g_state));
-    ASSERT_TRUE(exported.contains("raypath_color")) << "the class did not reach the exported document at all";
+    if (!exported.contains("raypath_color")) {
+      ADD_FAILURE() << c.name << ": the class did not reach the exported document at all";
+      continue;  // no colour block to check for this row; the rest still get checked
+    }
     c.expect(exported["raypath_color"]);
 
     const nlohmann::json committed = CommitSceneJson(g_state);
-    ASSERT_FALSE(committed.is_null());
+    if (committed.is_null()) {
+      ADD_FAILURE() << c.name << ": CommitSceneJson produced a null document";
+      continue;
+    }
     EXPECT_EQ(committed["raypath_color"], exported["raypath_color"])
         << "the run and the file it was exported from would render differently";
   }

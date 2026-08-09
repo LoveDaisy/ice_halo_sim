@@ -347,7 +347,10 @@ TEST_F(DefaultsDiff, ac5_effective_default_layers_the_saved_override_over_an_unm
   // kAspectPresetJsonNames): the panel must show "fisheye_equal_area", never "1".
   for (const char* key : { "renderer.lens_type", "renderer.visible", "aspect_ratio" }) {
     const gui::DefaultDiffRow* row = FindRow(rows, key);
-    ASSERT_TRUE(row != nullptr);
+    if (row == nullptr) {
+      ADD_FAILURE() << key << ": no row for this enum key";
+      continue;  // no row to check for this key; the rest still get checked
+    }
     EXPECT_TRUE(row->current_value.is_string());
     EXPECT_TRUE(!gui::FormatDiffValue(row->current_value).empty());
   }
@@ -704,7 +707,10 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     EXPECT_TRUE(row_keys.count(expected.key_path) == 1);
     const gui::FieldEditorEntry* entry = gui::FindFieldEditor(expected.key_path);
     if (expected.registered) {
-      ASSERT_TRUE(entry != nullptr);
+      if (entry == nullptr) {
+        ADD_FAILURE() << expected.key_path << ": expected a registered field editor entry";
+        continue;  // no entry to check the kind of; the rest still get checked
+      }
       EXPECT_TRUE(entry->kind == expected.kind);
     } else {
       EXPECT_TRUE(entry == nullptr);

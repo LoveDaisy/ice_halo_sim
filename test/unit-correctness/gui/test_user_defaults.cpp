@@ -561,7 +561,10 @@ TEST_F(UserDefaults, AnOutOfDomainPresetValueIsPulledStrictlyInsideItsDomain) {
     gui::MakeNewDocumentState(DirWith("clamp", doc));
 
     const auto stored = gui::GetUserAxisPresetZenithStdOverride(c.preset);
-    ASSERT_TRUE(stored.has_value()) << c.name;
+    if (!stored.has_value()) {
+      ADD_FAILURE() << c.name << ": no stored override for this preset";
+      continue;  // no value to compare for this row; the rest still get checked
+    }
     EXPECT_EQ(*stored, c.landing) << c.name;
     EXPECT_GT(*stored, c.lower) << c.name;
     EXPECT_LT(*stored, c.upper) << c.name;
@@ -571,7 +574,10 @@ TEST_F(UserDefaults, AnOutOfDomainPresetValueIsPulledStrictlyInsideItsDomain) {
     // — the exact failure family this whole channel exists to end. And the channel is
     // consumed-on-read, like the downgrade counter it mirrors.
     const auto notices = gui::TakeUserDefaultsDowngradeNotices();
-    ASSERT_EQ(notices.size(), static_cast<size_t>(1)) << c.name;
+    if (notices.size() != static_cast<size_t>(1)) {
+      ADD_FAILURE() << c.name << ": expected exactly 1 downgrade notice, got " << notices.size();
+      continue;  // no notice to index for this row; the rest still get checked
+    }
     EXPECT_NE(notices[0].find(c.preset_key), std::string::npos) << c.name;
     EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty()) << c.name;
   }
@@ -608,7 +614,10 @@ TEST_F(UserDefaults, d8_preset_override_does_not_leak_across_calls) {
     EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
     gui::MakeNewDocumentState(dir);
     const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-    ASSERT_TRUE(first.has_value()) << c.name;
+    if (!first.has_value()) {
+      ADD_FAILURE() << c.name << ": no stored override after the first call";
+      continue;  // no value to compare for this row; the rest still get checked
+    }
     EXPECT_EQ(*first, 3.0f) << c.name;
 
     if (c.via_unavailable_config_dir) {
@@ -900,7 +909,7 @@ TEST_F(UserDefaults, ALoadTimeClampTellsTheUserWhichValueItReplacedAndWithWhat) 
     gui::DoNew();
 
     const std::string warning = gui::PeekImportComplexFilterWarning();
-    ASSERT_FALSE(warning.empty()) << c.name;
+    EXPECT_FALSE(warning.empty()) << c.name;
     EXPECT_NE(warning.find(c.preset_label), std::string::npos) << c.name;
     EXPECT_NE(warning.find(c.stored_text), std::string::npos) << c.name;
     // And the value they actually got, not merely that something was wrong.

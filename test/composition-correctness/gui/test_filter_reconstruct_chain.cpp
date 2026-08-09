@@ -117,13 +117,25 @@ TEST(FilterReconstructChain, ExpressibleCompositionsComeBackAsEditableRows) {
     g_state.filters[0] = c.make();
 
     const std::string emitted = CoreJson(g_state);
-    ASSERT_FALSE(emitted.empty());
+    if (emitted.empty()) {
+      ADD_FAILURE() << c.name << ": nothing was emitted at all";
+      continue;  // no document to read back for this row; the rest still get checked
+    }
     GuiState loaded = InitDefaultState();
-    ASSERT_TRUE(DeserializeFromJson(emitted, loaded));
-    ASSERT_TRUE(loaded.layers.at(0).entries.at(0).filter_id.has_value()) << "the filter did not come back at all";
+    if (!DeserializeFromJson(emitted, loaded)) {
+      ADD_FAILURE() << c.name << ": the GUI's own emission failed to re-parse";
+      continue;
+    }
+    if (!loaded.layers.at(0).entries.at(0).filter_id.has_value()) {
+      ADD_FAILURE() << c.name << ": the filter did not come back at all";
+      continue;
+    }
 
     const FilterConfig& f = LoadedFilter(loaded);
-    ASSERT_EQ(f.param.size(), c.expected_rows.size());
+    if (f.param.size() != c.expected_rows.size()) {
+      ADD_FAILURE() << c.name << ": expected " << c.expected_rows.size() << " rows, got " << f.param.size();
+      continue;  // row count is wrong; comparing rows one-by-one below would run out of bounds
+    }
     for (size_t i = 0; i < c.expected_rows.size(); ++i) {
       EXPECT_EQ(f.param[i].text, c.expected_rows[i]) << "row " << i;
     }
@@ -234,9 +246,15 @@ TEST(FilterReconstructChain, UnrepresentableCompositionsAreRefusedLoudly) {
     ClearImportComplexFilterWarning();
     GuiState loaded = InitDefaultState();
 
-    ASSERT_TRUE(DeserializeFromJson(CoreDocWithFilters(c.filters, c.main_id), loaded))
-        << "the document as a whole must still open — an unreadable filter is not an unreadable file";
-    ASSERT_EQ(loaded.layers.size(), 1u);
+    if (!DeserializeFromJson(CoreDocWithFilters(c.filters, c.main_id), loaded)) {
+      ADD_FAILURE() << c.name
+                    << ": the document as a whole must still open — an unreadable filter is not an unreadable file";
+      continue;  // nothing loaded for this row; the rest still get checked
+    }
+    if (loaded.layers.size() != 1u) {
+      ADD_FAILURE() << c.name << ": expected exactly one layer, got " << loaded.layers.size();
+      continue;
+    }
     EXPECT_FALSE(loaded.layers[0].entries.at(0).filter_id.has_value())
         << "an unrepresentable filter was materialized as something else";
     EXPECT_FALSE(PeekImportComplexFilterWarning().empty()) << "the filter vanished with nothing said about it";

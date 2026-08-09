@@ -177,27 +177,42 @@ TEST(CompositePreview, ThePayloadCarriesTheCompositeExactlyWhenTheSceneHasColour
 
   for (const SceneCase& c : kCases) {
     LiveServer srv;
-    ASSERT_TRUE(srv.Run(c.json)) << c.name;
+    if (!srv.Run(c.json)) {
+      ADD_FAILURE() << c.name << ": server failed to run the scene";
+      continue;  // no server to poll for this row; the rest still get checked
+    }
 
     ScopedPoller local;
     auto snap = local.Repoll(srv);
-    ASSERT_TRUE(snap != nullptr) << c.name;
+    if (snap == nullptr) {
+      ADD_FAILURE() << c.name << ": poll produced no snapshot";
+      continue;
+    }
     EXPECT_TRUE(snap->valid) << c.name;
-    ASSERT_TRUE(snap->payload != nullptr) << c.name;
+    if (snap->payload == nullptr) {
+      ADD_FAILURE() << c.name << ": snapshot has no payload";
+      continue;
+    }
     EXPECT_EQ(snap->payload->is_composite, c.expect_composite) << c.name;
     EXPECT_EQ(snap->payload->rgb_buffer != nullptr, c.expect_composite) << c.name;
     // The xyz lane is populated either way — the auto-EV path reads it regardless of colour.
     EXPECT_TRUE(snap->payload->xyz_buffer != nullptr) << c.name;
     // The payload views the frame's pixels rather than owning a copy, so the frame share is what
     // makes every read below defined at all.
-    ASSERT_TRUE(snap->payload->frame != nullptr) << c.name;
+    if (snap->payload->frame == nullptr) {
+      ADD_FAILURE() << c.name << ": payload has no backing frame";
+      continue;
+    }
 
     const size_t pixels = static_cast<size_t>(snap->payload->width) * snap->payload->height;
 
     LUMICE_RawXyzResult xyz[2]{};
     lumice::test::ScopedResultFrame frame_xyz(srv);
     EXPECT_EQ(LUMICE_FrameGetRawXyz(frame_xyz.get(), xyz, 1), LUMICE_OK) << c.name;
-    ASSERT_TRUE(xyz[0].xyz_buffer != nullptr) << c.name;
+    if (xyz[0].xyz_buffer == nullptr) {
+      ADD_FAILURE() << c.name << ": raw xyz frame has no buffer";
+      continue;
+    }
     EXPECT_EQ(xyz[0].img_width, snap->payload->width) << c.name;
     EXPECT_EQ(xyz[0].img_height, snap->payload->height) << c.name;
     EXPECT_EQ(std::memcmp(snap->payload->xyz_buffer, xyz[0].xyz_buffer, pixels * 3 * sizeof(float)), 0) << c.name;
@@ -245,7 +260,10 @@ TEST(CompositePreview, ACompositeAlwaysPairsWithTheXyzOfItsOwnGeneration) {
     EXPECT_EQ(LUMICE_FrameGetRawXyz(frame.get(), xyz, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_EQ(LUMICE_FrameGetComposite(frame.get(), comp, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
     EXPECT_TRUE(xyz[0].xyz_buffer != nullptr);
-    ASSERT_TRUE(comp[0].img_buffer != nullptr);
+    if (comp[0].img_buffer == nullptr) {
+      ADD_FAILURE() << "round " << round << ": composite frame has no buffer";
+      continue;  // no pixels to compare for this round; the rest still get checked
+    }
     EXPECT_GT(xyz[0].snapshot_generation, prev_gen);  // the churn armed a real snapshot
     prev_gen = xyz[0].snapshot_generation;
 
@@ -257,7 +275,10 @@ TEST(CompositePreview, ACompositeAlwaysPairsWithTheXyzOfItsOwnGeneration) {
     LUMICE_RenderResult direct[LUMICE_MAX_RENDER_RESULTS + 1]{};
     lumice::test::ScopedResultFrame frame_direct(srv);
     EXPECT_EQ(LUMICE_FrameGetComposite(frame_direct.get(), direct, LUMICE_MAX_RENDER_RESULTS), LUMICE_OK);
-    ASSERT_TRUE(direct[0].img_buffer != nullptr);
+    if (direct[0].img_buffer == nullptr) {
+      ADD_FAILURE() << "round " << round << ": direct re-read has no buffer";
+      continue;
+    }
     EXPECT_EQ(std::memcmp(comp[0].img_buffer, direct[0].img_buffer, nbytes), 0);
 
     // And one real poll builds this round's payload out of that same frozen snapshot. Driving
@@ -265,10 +286,19 @@ TEST(CompositePreview, ACompositeAlwaysPairsWithTheXyzOfItsOwnGeneration) {
     // payload there is no helper left to call anyway.
     local->PollOnceForTest(srv);
     auto snap = local->LoadSnapshot();
-    ASSERT_TRUE(snap != nullptr);
-    ASSERT_TRUE(snap->payload != nullptr);
+    if (snap == nullptr) {
+      ADD_FAILURE() << "round " << round << ": poll produced no snapshot";
+      continue;
+    }
+    if (snap->payload == nullptr) {
+      ADD_FAILURE() << "round " << round << ": snapshot has no payload";
+      continue;
+    }
     EXPECT_TRUE(snap->payload->is_composite);
-    ASSERT_TRUE(snap->payload->rgb_buffer != nullptr);
+    if (snap->payload->rgb_buffer == nullptr) {
+      ADD_FAILURE() << "round " << round << ": payload has no rgb buffer";
+      continue;
+    }
     EXPECT_EQ(std::memcmp(snap->payload->rgb_buffer, direct[0].img_buffer, nbytes), 0);
   }
 }
@@ -450,7 +480,7 @@ TEST(CompositePreview, HidingAClassReAnchorsTheExposureOverWhatIsLeftInBothCombi
   const Composite restored = ReadComposite(srv);
   EXPECT_EQ(restored.p99, both.p99);
   for (size_t off : probe) {
-    ASSERT_EQ(restored.rgb[off + 2], both.rgb[off + 2]) << "probe offset " << off;
+    EXPECT_EQ(restored.rgb[off + 2], both.rgb[off + 2]) << "probe offset " << off;
   }
 
   // ---- The same edit in dominant mode, on the staging this case already built ----
@@ -486,7 +516,10 @@ TEST(CompositePreview, HidingAClassReAnchorsTheExposureOverWhatIsLeftInBothCombi
   for (const DominantCase& c : kCases) {
     SetClasses(srv, { ClassDisplay{ 1.0f, 0.0f, 0.0f, c.bright_visible }, kBlue }, LUMICE_COLOR_MODE_DOMINANT);
     const Composite comp = ReadComposite(srv);
-    ASSERT_FALSE(comp.rgb.empty()) << c.name;
+    if (comp.rgb.empty()) {
+      ADD_FAILURE() << c.name << ": composite read produced no pixels";
+      continue;  // no pixel to compare for this row; the rest still get checked
+    }
     const uint8_t winner = comp.rgb[probe_off + c.winner_channel];
     const uint8_t loser = comp.rgb[probe_off + c.loser_channel];
     EXPECT_GT(winner, loser) << c.name;

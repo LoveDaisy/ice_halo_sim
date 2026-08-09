@@ -266,7 +266,10 @@ TEST(SceneCommitChain, InlineAlternativesAndSeparateRowsCommitIdentically) {
         composed = &f;
       }
     }
-    ASSERT_NE(composed, nullptr) << "no composition emitted at all";
+    if (composed == nullptr) {
+      ADD_FAILURE() << p.name << ": no composition emitted at all";
+      continue;  // nothing to compare the clause count against for this row; the rest still get checked
+    }
     EXPECT_EQ((*composed)["composition"].size(), p.expected_clauses);
   }
 }
@@ -354,12 +357,18 @@ TEST(SceneCommitChain, EveryExpressibleFilterShapeSurvivesCoresOwnReader) {
     g_state.filters[0] = shape.make();
 
     ScenePtr built = BuildScene(g_state, SceneIntent::kSimCommit);
-    ASSERT_NE(built, nullptr) << "the editor built a filter the commit path refuses";
+    if (built == nullptr) {
+      ADD_FAILURE() << shape.name << ": the editor built a filter the commit path refuses";
+      continue;  // no scene to re-emit for this row; the rest still get checked
+    }
     const nlohmann::json emitted = SceneJson(built.get());
 
     LUMICE_Scene* reparsed_raw = nullptr;
     const std::string text = emitted.dump();
-    ASSERT_EQ(LUMICE_SceneFromJson(text.c_str(), &reparsed_raw), LUMICE_OK) << "core cannot read what the GUI wrote";
+    if (LUMICE_SceneFromJson(text.c_str(), &reparsed_raw) != LUMICE_OK) {
+      ADD_FAILURE() << shape.name << ": core cannot read what the GUI wrote";
+      continue;  // nothing to re-diff for this row; the rest still get checked
+    }
     ScenePtr reparsed(reparsed_raw);
     const nlohmann::json again = SceneJson(reparsed.get());
 

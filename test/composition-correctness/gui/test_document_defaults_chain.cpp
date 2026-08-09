@@ -223,7 +223,10 @@ TEST(DocumentDefaultsChain, GuiNativeAbsentKeyTakesTheOwningStructDefault) {
   for (const MissingKeyCase& c : kGuiNativeCases) {
     SCOPED_TRACE(std::string(c.label) + "  <- " + c.doc);
     GuiState loaded;
-    ASSERT_TRUE(DeserializeGuiStateJson(c.doc, loaded)) << "document failed to parse: " << c.doc;
+    if (!DeserializeGuiStateJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.label << ": document failed to parse: " << c.doc;
+      continue;  // nothing loaded for this row; the rest still get checked
+    }
     c.check(loaded);
   }
 }
@@ -233,7 +236,10 @@ TEST(DocumentDefaultsChain, CoreJsonAbsentKeyTakesTheOwningStructDefault) {
   for (const MissingKeyCase& c : kCoreJsonCases) {
     SCOPED_TRACE(std::string(c.label) + "  <- " + c.doc);
     GuiState loaded;
-    ASSERT_TRUE(DeserializeFromJson(c.doc, loaded)) << "document failed to parse: " << c.doc;
+    if (!DeserializeFromJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.label << ": document failed to parse: " << c.doc;
+      continue;
+    }
     c.check(loaded);
   }
 }
@@ -277,8 +283,14 @@ TEST(DocumentDefaultsChain, TypelessAxisSlotLoadsAsTheStructDefaultAndIsAnnounce
         { { { "prob", 0.5 },
             { "entries", nlohmann::json::array({ { { "crystal", 7 }, { "proportion", 100.0 } } }) } } });
 
-    ASSERT_TRUE(DeserializeFromJson(root.dump(), loaded)) << "GUI must load a document core would reject";
-    ASSERT_FALSE(loaded.crystals.empty());
+    if (!DeserializeFromJson(root.dump(), loaded)) {
+      ADD_FAILURE() << slot << ": GUI must load a document core would reject";
+      continue;  // nothing loaded for this slot; the rest still get checked
+    }
+    if (loaded.crystals.empty()) {
+      ADD_FAILURE() << slot << ": no crystals loaded";
+      continue;
+    }
     const AxisDist& parsed = (std::string(slot) == "zenith")  ? loaded.crystals[0].zenith :
                              (std::string(slot) == "azimuth") ? loaded.crystals[0].azimuth :
                                                                 loaded.crystals[0].roll;
