@@ -1,5 +1,12 @@
-// Pure-CPU unit tests for ComputeDragGainDegPerPixel — the preview drag sensitivity law.
-// No GL context and no ImGui, which is why they live in gui_unit_test rather than gui_test.
+// Where the preview puts a sky direction on screen, and how far the sky moves when the user drags.
+//
+// The two halves of this file are one loop: ProjectWorldDirToScreen decides where a direction
+// lands, and the drag law decides how much the view has to turn per pixel of mouse travel to move
+// that landing point by a fixed amount. The drag cases use the projection as their oracle, so the
+// projection's own anchors are asserted here too rather than in a file that could drift from it.
+//
+// Pure CPU: no GL context and no ImGui, which is why this lives in gui_unit_test rather than
+// gui_test.
 //
 // The contract under test is not "the closed form matches the closed form" (that would be a
 // tautology): it is the end-to-end statement the drag interaction actually owes the user —
@@ -494,4 +501,108 @@ TEST(DragGain, FullSkyLensesFallBackToLegacyConstant) {
   for (int lt : lumice::gui::kFullSkyLensTypes) {
     EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lt, 180.0f, 800, 600), 0.3f) << "lens_type " << lt;
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// ProjectWorldDirToScreen, the forward projection the drag round trips above use as their
+// oracle — and which the overlay's label placement uses for real. Every row below is an
+// anchor whose pixel is derivable in closed form from the shader's own projection law, so a
+// changed formula turns red rather than agreeing with itself.
+//
+// The world frame at elevation = azimuth = roll = 0 puts the camera's forward at (-1, 0, 0),
+// the zenith at (0, 0, -1) and the nadir at (0, 0, +1) — z-down, matching overlay_labels.cpp.
+// Screen coordinates are the projection's own y-up pixel frame, centred on the viewport.
+//
+// The sentinel rows are as load-bearing as the positional ones: a direction the lens cannot
+// show must come back as the sentinel and not as a plausible pixel, or the overlay draws a
+// label for a point that is not on screen.
+// ---------------------------------------------------------------------------------------
+TEST(PreviewRenderer, EveryProjectionPutsItsAnchorDirectionsWhereItsGeometryDemands) {
+  constexpr float kPxEps = 1.0f;  // +-1 px against the analytic expectation
+
+  struct ProjectionCase {
+    const char* name;
+    int lens_type;
+    float fov;
+    float elevation;
+    int vp_w;
+    int vp_h;
+    std::array<float, 3> world_dir;
+    bool expect_sentinel;
+    float px;  // ignored when expect_sentinel
+    float py;
+  };
+  // Directions reused across rows.
+  constexpr std::array<float, 3> kFront = { -1.0f, 0.0f, 0.0f };
+  constexpr std::array<float, 3> kZenith = { 0.0f, 0.0f, -1.0f };
+  constexpr std::array<float, 3> kNadir = { 0.0f, 0.0f, 1.0f };
+
+  const ProjectionCase kCases[] = {
+    // Linear pinhole: forward lands dead centre; the zenith sits exactly on the camera plane
+    // (view_dir.z == 0), which is the perspective singularity rather than a wide angle.
+    { "linear, forward", lumice::gui::kLensTypeLinear, 90.0f, 0.0f, 800, 600, kFront, false, 0.0f, 0.0f },
+    { "linear, the zenith is on the camera plane", lumice::gui::kLensTypeLinear, 90.0f, 0.0f, 800, 600, kZenith, true,
+      0.0f, 0.0f },
+
+    // Equal-area fisheye looking straight up: the zenith is now the optical axis, and the
+    // horizon lands on the imaging circle. img_radius = min(800, 800) / 2 = 400, and the
+    // world forward maps to view (0, -1, 0), i.e. theta = pi/2 at phi = -pi/2 — the bottom of
+    // the image, where r_norm = 1 makes r exactly img_radius.
+    { "fisheye equal-area at the zenith, looking up", lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 90.0f, 800, 800,
+      kZenith, false, 0.0f, 0.0f },
+    { "fisheye equal-area, the horizon on the circle", lumice::gui::kLensTypeFisheyeEqualArea, 180.0f, 90.0f, 800, 800,
+      kFront, false, 0.0f, -400.0f },
+
+    // Equirectangular: latitude maps linearly to py. 800x400 gives scale = 400/pi, so the
+    // poles land at +-(pi/2)(400/pi) = +-200 and the equator at 0.
+    { "rectangular, the zenith", lumice::gui::kLensTypeRectangular, 180.0f, 0.0f, 800, 400, kZenith, false, 0.0f,
+      -200.0f },
+    { "rectangular, the nadir", lumice::gui::kLensTypeRectangular, 180.0f, 0.0f, 800, 400, kNadir, false, 0.0f,
+      200.0f },
+    { "rectangular, the equator ahead", lumice::gui::kLensTypeRectangular, 180.0f, 0.0f, 800, 400, kFront, false, 0.0f,
+      0.0f },
+
+    // Dual fisheye: one disc per hemisphere, so the two poles are the two disc centres.
+    // 800x400 gives circle_radius = 200, hence centres at -+200.
+    { "dual fisheye, the zenith is the left disc centre", lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 0.0f, 800,
+      400, kZenith, false, -200.0f, 0.0f },
+    { "dual fisheye, the nadir is the right disc centre", lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 0.0f, 800,
+      400, kNadir, false, 200.0f, 0.0f },
+
+    // Globe, viewed from outside at distance kGlobeCameraD. Tilting the camera to look upward
+    // brings the zenith to the near pole, dead centre; the nadir is then around the back of the
+    // sphere and must be culled rather than drawn over the front of it.
+    { "globe, the near pole", lumice::gui::kLensTypeGlobe, 30.0f, -90.0f, 800, 800, kZenith, false, 0.0f, 0.0f },
+    { "globe, the far pole is behind the sphere", lumice::gui::kLensTypeGlobe, 30.0f, -90.0f, 800, 800, kNadir, true,
+      0.0f, 0.0f },
+  };
+
+  for (const ProjectionCase& c : kCases) {
+    auto vp = MakeVp(c.lens_type, c.fov, c.elevation, 0.0f);
+    auto p = ProjectWorldDirToScreen(vp, c.world_dir.data(), c.vp_w, c.vp_h);
+    ASSERT_EQ(IsSentinel(p), c.expect_sentinel) << c.name;
+    if (c.expect_sentinel) {
+      continue;
+    }
+    EXPECT_NEAR(p[0], c.px, kPxEps) << c.name;
+    EXPECT_NEAR(p[1], c.py, kPxEps) << c.name;
+  }
+}
+
+// A fisheye narrower than 180 degrees in a non-square viewport leaves black bars: pixels that
+// are inside the rectangle but outside the imaging circle. A direction that lands there is not
+// visible, and the projection has to say so rather than return a pixel in the bar.
+//
+// At elevation = azimuth = roll = 0 the view matrix maps world w to view (-w.y, -w.z, w.x), so
+// a direction 60 degrees off the optical axis is w = (-1/2, -sqrt(3)/2, 0). At fov=90 its
+// r_norm is (pi/3)/(pi/4) = 4/3, outside the circle; at fov=180 it is (pi/3)/(pi/2) = 2/3,
+// comfortably inside. Same direction, same viewport: only the imaging circle moved.
+TEST(PreviewRenderer, ADirectionOutsideTheImagingCircleIsNotGivenAPixelInTheBlackBars) {
+  const float dir_60deg[3] = { -0.5f, -0.86602540378f, 0.0f };
+
+  auto narrow = MakeVp(lumice::gui::kLensTypeFisheyeEquidist, 90.0f, 0.0f, 0.0f);
+  EXPECT_TRUE(IsSentinel(ProjectWorldDirToScreen(narrow, dir_60deg, 1920, 1080)));
+
+  auto wide = MakeVp(lumice::gui::kLensTypeFisheyeEquidist, 180.0f, 0.0f, 0.0f);
+  EXPECT_FALSE(IsSentinel(ProjectWorldDirToScreen(wide, dir_60deg, 1920, 1080)));
 }
