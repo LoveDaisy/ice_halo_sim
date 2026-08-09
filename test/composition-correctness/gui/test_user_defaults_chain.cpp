@@ -74,6 +74,31 @@ const DefaultDiffRow* FindRow(const std::vector<DefaultDiffRow>& rows, const std
 constexpr const char* kProbeKey = "bg_alpha";
 
 // ---------------------------------------------------------------------------------------------
+// E20 (factory document) — what a new document IS, before any personal default has been layered on.
+//
+// MakeNewDocumentState is the one function main.cpp, DoNew() and DoOpen()'s import path all call to
+// produce a fresh document, so it — not whatever global the result was last stored in — is what
+// "the default state" means. Every case above describes a DIFFERENCE from this document; if the
+// document itself came out malformed, those differences would be measured against nothing.
+//
+// The override directory is supplied explicitly and freshly emptied, so this describes the factory
+// document rather than whatever personal defaults exist on the machine running the test.
+TEST(UserDefaultsChain, ANewDocumentIsAWholeDocumentBeforeAnyOverrideIsLayeredOn) {
+  ScopedUserConfigDir scoped("factory_document");
+
+  const GuiState state = MakeNewDocumentState(scoped.dir());
+
+  // ASSERT before indexing: a document with no layer is not a smaller document, it is one the
+  // editor cannot open, and every EXPECT after this line would be reporting on that instead.
+  ASSERT_EQ(state.layers.size(), 1u) << "a new document has exactly one scattering layer";
+  EXPECT_EQ(state.layers[0].entries.size(), 1u) << "that layer has exactly one entry card";
+  EXPECT_FALSE(state.crystals.empty()) << "the entry card references a crystal that must exist";
+  EXPECT_FALSE(state.dirty) << "a document nobody has edited is not modified";
+  EXPECT_EQ(state.sim_state, GuiState::SimState::kIdle) << "nothing has been run yet";
+  EXPECT_TRUE(state.raypath_color.empty()) << "a new document carries no colour classes";
+}
+
+// ---------------------------------------------------------------------------------------------
 // E20 — the closed loop: a row that needs adoption, adopted, reads back as what was adopted.
 //
 // Each step is separately checkable and each has its own way of being wrong, so they are separate

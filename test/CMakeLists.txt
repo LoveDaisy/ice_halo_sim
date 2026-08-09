@@ -233,7 +233,6 @@ if(BUILD_GUI)
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
