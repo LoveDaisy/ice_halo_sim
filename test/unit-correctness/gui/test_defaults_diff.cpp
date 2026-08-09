@@ -1,4 +1,7 @@
-// Defaults diff-engine tests — the pure-logic half of the defaults panel (src/gui/defaults_diff.*).
+// Defaults diff-engine tests — the pure-logic half of the defaults panel (src/gui/defaults_diff.*),
+// together with the two Settings-panel cases that ask about the panel's DATA rather than its UI
+// (which keys the field-editor registry covers, and when the row tint predicate fires). Their 33
+// widget-driving siblings stay in test/gui/functional/test_gui_defaults_panel.cpp.
 //
 // Nothing here renders a frame: every case calls the engine directly and asserts on the returned
 // row set or on the override file it wrote. They live in gui_unit_test rather than in
@@ -16,16 +19,18 @@
 //   AC4 — an array is ONE row, not one row per element
 //   AC5 — "effective default" layers the saved override over factory, and enums read as names
 //   plus factory_value (the LITERAL factory value, which is NOT the effective default once a key
-//   has been saved) and ApplyCheckedRowsToDoc (the panel's one write-back rule)
+//   has been saved), ApplyCheckedRowsToDoc (the panel's one write-back rule), the field-editor
+//   registry's coverage of the real row set, and RowWouldChangeOnSave
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iterator>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -33,6 +38,7 @@
 
 #include "gui/axis_presets.hpp"
 #include "gui/defaults_diff.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state_tiers.hpp"
 #include "gui/user_defaults.hpp"
@@ -77,12 +83,8 @@ gui::GuiState MakeEditedState() {
   return state;
 }
 
-std::filesystem::path OverlayFilePath(const std::filesystem::path& dir) {
-  return dir / gui::kUserDefaultsFileName;
-}
-
 json ReadOverlayFile(const std::filesystem::path& dir) {
-  std::ifstream in(OverlayFilePath(dir));
+  std::ifstream in(dir / gui::kUserDefaultsFileName);
   if (!in.is_open()) {
     return json::object();
   }
@@ -92,6 +94,32 @@ json ReadOverlayFile(const std::filesystem::path& dir) {
     return json::object();
   }
 }
+
+// Every case starts from drained channels and from an override source of its own: the downgrade
+// counter and the notice list are consumed-on-read, so a leftover from a previous case reads as
+// this one's own degradation, and a case left pointing at the machine's real config directory
+// would answer with whatever personal defaults that machine has saved.
+class DefaultsDiff : public ::testing::Test {
+ protected:
+  void SetUp() override { ResetUserDefaultsChannels(); }
+
+  // No override file can exist, and none can be written.
+  void NoUserConfig() { guard_.emplace(gui::UserConfigSource::kDisabled); }
+
+  // A fresh, empty override directory this case owns, optionally seeded with a document.
+  const std::filesystem::path& FreshUserConfig(const char* tag, const json* seed = nullptr) {
+    dir_ = FreshOverlayDir(tag);
+    guard_.emplace(gui::UserConfigSource::kExplicitDir, dir_);
+    if (seed != nullptr) {
+      EXPECT_TRUE(gui::WriteUserDefaultsFile(dir_, *seed));
+    }
+    return dir_;
+  }
+
+ private:
+  std::filesystem::path dir_;
+  std::optional<ScopedUserConfigSource> guard_;
+};
 
 }  // namespace
 
@@ -104,9 +132,12 @@ json ReadOverlayFile(const std::filesystem::path& dir) {
 // permanent proxy: it re-derives the covered set from the SERIALIZER on every run, so a root
 // key that starts being emitted must either land in the exclusion table or show up as rows.
 // A future "special-case this key name" branch inside the walk turns it red.
-TEST(DefaultsDiff, ac1_every_serialized_root_key_is_covered) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+//
+// The leaf level is covered by registry_covers_every_row below rather than by spot checks here: it
+// names every leaf the walk must produce, so a walk taught to stop at "renderer" and emit one
+// opaque row for the whole object — the shape this panel must not have — fails there.
+TEST_F(DefaultsDiff, ac1_every_serialized_root_key_is_covered) {
+  NoUserConfig();
 
   const gui::GuiState state = gui::InitDefaultState();
   const auto rows = gui::BuildDefaultDiffRows(state);
@@ -131,19 +162,6 @@ TEST(DefaultsDiff, ac1_every_serialized_root_key_is_covered) {
       EXPECT_TRUE(covered);
     }
   }
-
-  // Leaf-level spot checks alongside the root-level sweep: the root sweep would still pass if
-  // someone taught the walk to stop at "renderer" and emit one opaque row for the whole
-  // object, which is exactly the shape this panel must not have.
-  EXPECT_TRUE(FindRow(rows, "renderer.lens_type") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "renderer.fov") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "sun.altitude") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "sim.max_hits") != nullptr);
-  // The rename cases (field name != JSON key). If the engine ever resolves eligibility by
-  // literal field name these are the ~18 rows that would silently disappear.
-  EXPECT_TRUE(FindRow(rows, "overlay_grid_alpha") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "overlay_horizon_line") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "aspect_ratio") != nullptr);
 }
 
 // ================================================================================
@@ -154,10 +172,8 @@ TEST(DefaultsDiff, ac1_every_serialized_root_key_is_covered) {
 // state — and this is still the property that guarantees the panel asks it of every row exactly
 // once. Kept unchanged on purpose: it is a statement about the engine, not about the layout.
 // ================================================================================
-TEST(DefaultsDiff, ac2_sections_partition_the_row_set) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_ac2");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+TEST_F(DefaultsDiff, ac2_sections_partition_the_row_set) {
+  FreshUserConfig("diff_ac2");
 
   // Two shapes: an untouched document (§2 empty) and an edited one (§2 populated), so the
   // partition is asserted with each section both empty and non-empty.
@@ -195,9 +211,8 @@ TEST(DefaultsDiff, ac2_sections_partition_the_row_set) {
 // ================================================================================
 // AC3 — namespace 4 never reaches the row set
 // ================================================================================
-TEST(DefaultsDiff, ac3_collection_edits_produce_no_rows) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+TEST_F(DefaultsDiff, ac3_collection_edits_produce_no_rows) {
+  NoUserConfig();
 
   gui::GuiState state = gui::InitDefaultState();
   const std::string before = RowSetDigest(gui::BuildDefaultDiffRows(state));
@@ -231,9 +246,8 @@ TEST(DefaultsDiff, ac3_collection_edits_produce_no_rows) {
 // ================================================================================
 // AC4 — an array is one row
 // ================================================================================
-TEST(DefaultsDiff, ac4_array_edit_produces_exactly_one_row) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+TEST_F(DefaultsDiff, ac4_array_edit_produces_exactly_one_row) {
+  NoUserConfig();
 
   gui::GuiState state = gui::InitDefaultState();
   const auto baseline = gui::BuildDefaultDiffRows(state);
@@ -257,85 +271,92 @@ TEST(DefaultsDiff, ac4_array_edit_produces_exactly_one_row) {
 }
 
 // ================================================================================
-// AC5 — effective default = factory + saved override; enums read as names
+// AC5 — effective default = factory + saved override, and how it differs from the factory value
+//
+// Three questions the panel asks of a row, folded into one case because they are three readings of
+// ONE state transition (a key saved) and split apart they were three copies of the same staging:
+//   - the effective default follows the file, so an already-saved value is not pending adoption
+//   - "source" is presence in the document, not "differs from factory" — a deliberately saved
+//     value equal to factory is still the user's, or they can neither see nor revert it
+//   - factory_value does NOT move with the save, which is why the panel cannot use default_value
+//     for its "differs from factory" filter: that comparison would report "same as factory" for
+//     the one row the user definitely customised
 // ================================================================================
-TEST(DefaultsDiff, ac5_effective_default_layers_the_saved_override) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_ac5");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+TEST_F(DefaultsDiff, ac5_effective_default_layers_the_saved_override_over_an_unmoving_factory_value) {
+  const auto& dir = FreshUserConfig("diff_ac5");
 
+  const float kFactoryAlpha = gui::GuiState{}.bg_alpha;
   gui::GuiState state = gui::InitDefaultState();
   state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
 
-  // State 1: no override file. The effective default is the factory value, so the edited
-  // lens type is a §2 row.
+  // State 1: no override file. The effective default is the factory value, so the edited lens type
+  // is pending adoption and the two default readings agree — the case that makes the confusion
+  // between them possible in the first place.
   {
     const auto rows = gui::BuildDefaultDiffRows(state);
-    const gui::DefaultDiffRow* row = FindRow(rows, "renderer.lens_type");
-    ASSERT_TRUE(row != nullptr);
-    EXPECT_TRUE(gui::RowNeedsAdoption(*row));
-    EXPECT_STREQ(row->default_value.get<std::string>().c_str(), "linear");
-    EXPECT_TRUE(!row->has_saved_override);
+    const gui::DefaultDiffRow* lens = FindRow(rows, "renderer.lens_type");
+    ASSERT_TRUE(lens != nullptr);
+    EXPECT_TRUE(gui::RowNeedsAdoption(*lens));
+    EXPECT_STREQ(lens->default_value.get<std::string>().c_str(), "linear");
+    EXPECT_TRUE(!lens->has_saved_override);
+    const gui::DefaultDiffRow* alpha = FindRow(rows, "bg_alpha");
+    ASSERT_TRUE(alpha != nullptr);
+    EXPECT_TRUE(alpha->factory_value == alpha->default_value);
+    EXPECT_EQ(alpha->factory_value.get<float>(), kFactoryAlpha);
   }
 
-  // State 2: the same value saved as a personal default. Same current value, different
-  // effective default -> the row moves to §3 and is attributed to the user.
-  {
-    json doc;
-    doc["renderer"]["lens_type"] = "fisheye_equal_area";
-    EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+  // State 2: a document saving three keys — the edited lens type (same value, now also the
+  // effective default), a non-factory bg_alpha the document then sits on, and bg_show at exactly
+  // its factory value.
+  const float kSavedAlpha = kFactoryAlpha + 0.25f;
+  json doc;
+  doc["renderer"]["lens_type"] = "fisheye_equal_area";
+  doc["bg_alpha"] = kSavedAlpha;
+  doc["bg_show"] = gui::GuiState{}.bg_show;  // saved, and identical to factory
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+  state.bg_alpha = kSavedAlpha;
 
-    const auto rows = gui::BuildDefaultDiffRows(state);
-    const gui::DefaultDiffRow* row = FindRow(rows, "renderer.lens_type");
-    ASSERT_TRUE(row != nullptr);
-    EXPECT_TRUE(!gui::RowNeedsAdoption(*row));
-    EXPECT_STREQ(row->default_value.get<std::string>().c_str(), "fisheye_equal_area");
-    EXPECT_TRUE(row->has_saved_override);
-  }
+  const auto rows = gui::BuildDefaultDiffRows(state);
+  const gui::DefaultDiffRow* lens = FindRow(rows, "renderer.lens_type");
+  ASSERT_TRUE(lens != nullptr);
+  EXPECT_TRUE(!gui::RowNeedsAdoption(*lens)) << "the saved value became the effective default";
+  EXPECT_STREQ(lens->default_value.get<std::string>().c_str(), "fisheye_equal_area");
+  EXPECT_TRUE(lens->has_saved_override);
+
+  const gui::DefaultDiffRow* alpha = FindRow(rows, "bg_alpha");
+  ASSERT_TRUE(alpha != nullptr);
+  EXPECT_EQ(alpha->default_value.get<float>(), kSavedAlpha);
+  EXPECT_EQ(alpha->factory_value.get<float>(), kFactoryAlpha) << "factory_value moved with the save";
+  // The two filter questions, side by side on ONE row, answering differently: the value differs
+  // from factory, and the row does not need adopting. A panel using default_value for both would
+  // say "no" twice.
+  EXPECT_TRUE(alpha->current_value != alpha->factory_value);
+  EXPECT_TRUE(!gui::RowNeedsAdoption(*alpha));
+
+  // Presence, not value: bg_show was saved at its factory value and is still the user's.
+  const gui::DefaultDiffRow* saved_at_factory = FindRow(rows, "bg_show");
+  ASSERT_TRUE(saved_at_factory != nullptr);
+  EXPECT_TRUE(saved_at_factory->has_saved_override);
+  EXPECT_TRUE(!gui::RowNeedsAdoption(*saved_at_factory));
+  const gui::DefaultDiffRow* untouched = FindRow(rows, "aspect_portrait");
+  ASSERT_TRUE(untouched != nullptr);
+  EXPECT_TRUE(!untouched->has_saved_override);
 
   // Enum readability, one row per name table (kLensTypeJsonNames / kVisibleJsonNames /
   // kAspectPresetJsonNames): the panel must show "fisheye_equal_area", never "1".
-  {
-    const auto rows = gui::BuildDefaultDiffRows(state);
-    for (const char* key : { "renderer.lens_type", "renderer.visible", "aspect_ratio" }) {
-      const gui::DefaultDiffRow* row = FindRow(rows, key);
-      ASSERT_TRUE(row != nullptr);
-      EXPECT_TRUE(row->current_value.is_string());
-      EXPECT_TRUE(!gui::FormatDiffValue(row->current_value).empty());
-    }
+  for (const char* key : { "renderer.lens_type", "renderer.visible", "aspect_ratio" }) {
+    const gui::DefaultDiffRow* row = FindRow(rows, key);
+    ASSERT_TRUE(row != nullptr);
+    EXPECT_TRUE(row->current_value.is_string());
+    EXPECT_TRUE(!gui::FormatDiffValue(row->current_value).empty());
   }
-}
-
-// "Source" is presence in the override document, not "differs from factory". A default the
-// user deliberately saved that happens to equal the factory value is still theirs — otherwise
-// they can neither see nor revert it.
-TEST(DefaultsDiff, ac5_source_tracks_the_file_not_the_value) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_source");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  const gui::GuiState factory = gui::InitDefaultState();
-  json doc;
-  doc["bg_alpha"] = gui::GuiState{}.bg_alpha;  // saved, and identical to factory
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  const auto rows = gui::BuildDefaultDiffRows(factory);
-  const gui::DefaultDiffRow* saved = FindRow(rows, "bg_alpha");
-  ASSERT_TRUE(saved != nullptr);
-  EXPECT_TRUE(!gui::RowNeedsAdoption(*saved));
-  EXPECT_TRUE(saved->has_saved_override);
-
-  const gui::DefaultDiffRow* untouched = FindRow(rows, "bg_show");
-  ASSERT_TRUE(untouched != nullptr);
-  EXPECT_TRUE(!untouched->has_saved_override);
 }
 
 // Display formatting is decoupled from comparison: two values that FORMAT identically at
 // %.6g must still be a §2 row. Otherwise a rounding choice in the panel would decide what
 // gets written to disk.
-TEST(DefaultsDiff, format_is_decoupled_from_comparison) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+TEST_F(DefaultsDiff, format_is_decoupled_from_comparison) {
+  NoUserConfig();
 
   gui::GuiState state = gui::InitDefaultState();
   // 1e-7 relative difference: identical under %.6g, different as doubles.
@@ -361,65 +382,16 @@ TEST(DefaultsDiff, format_is_decoupled_from_comparison) {
   EXPECT_STREQ(gui::FormatDiffValue(json::array({ 0.800000011920929, 0.2, 1.0 })).c_str(), "[0.8, 0.2, 1]");
 }
 
-// factory_value vs default_value. They are equal until the key is saved, and that is exactly
-// why the panel cannot use default_value for its "differs from factory" filter: once a
-// non-factory default IS saved, default_value becomes the saved value, and the comparison
-// would report "same as factory" for the one row the user definitely customised.
-TEST(DefaultsDiff, factory_value_is_not_the_effective_default) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_factory_value");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  const float kFactoryAlpha = gui::GuiState{}.bg_alpha;
-  const float kSavedAlpha = kFactoryAlpha + 0.25f;
-
-  // State 1: nothing saved. The two agree, which is the case that makes the confusion possible.
-  {
-    gui::GuiState state = gui::InitDefaultState();
-    const auto rows = gui::BuildDefaultDiffRows(state);
-    const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
-    ASSERT_TRUE(row != nullptr);
-    EXPECT_TRUE(row->factory_value == row->default_value);
-    EXPECT_EQ(row->factory_value.get<float>(), kFactoryAlpha);
-  }
-
-  // State 2: a non-factory default saved, and the document sitting on it. The effective
-  // default follows the file; factory_value does not move.
-  {
-    json doc;
-    doc["bg_alpha"] = kSavedAlpha;
-    EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-    gui::GuiState state = gui::InitDefaultState();
-    state.bg_alpha = kSavedAlpha;
-    const auto rows = gui::BuildDefaultDiffRows(state);
-    const gui::DefaultDiffRow* row = FindRow(rows, "bg_alpha");
-    ASSERT_TRUE(row != nullptr);
-    EXPECT_EQ(row->default_value.get<float>(), kSavedAlpha);
-    EXPECT_EQ(row->factory_value.get<float>(), kFactoryAlpha);
-    EXPECT_TRUE(row->factory_value != row->default_value);
-    // The two filter questions, side by side on ONE row, answering differently: the value
-    // differs from factory, and the row does not need adopting (it already matches the
-    // effective default). A panel that used default_value for both would say "no" twice.
-    EXPECT_TRUE(row->current_value != row->factory_value);
-    EXPECT_TRUE(!gui::RowNeedsAdoption(*row));
-  }
-}
-
 // ================================================================================
 // The panel's write-back rule: one pass over the row set, driven by the checkbox state
 // ================================================================================
-TEST(DefaultsDiff, apply_checked_rows_adopts_and_removes_in_one_pass) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_checked_rows");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
+TEST_F(DefaultsDiff, apply_checked_rows_adopts_and_removes_in_one_pass) {
   // A document holding one key that will be un-checked, plus a preset subtree the rule must
   // not reach (it produces no row, so it is never named).
   json doc;
   doc["bg_show"] = false;
   doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+  FreshUserConfig("diff_checked_rows", &doc);
 
   const gui::GuiState state = MakeEditedState();
   const auto rows = gui::BuildDefaultDiffRows(state, doc);
@@ -452,9 +424,8 @@ TEST(DefaultsDiff, apply_checked_rows_adopts_and_removes_in_one_pass) {
 // A checked key that the CURRENT state does not serialize (an optional key) is removed rather
 // than written as null — "adopt what I have now" reads the same either way, and a null in the
 // file would be read back as a value.
-TEST(DefaultsDiff, apply_checked_rows_removes_an_absent_optional_key) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+TEST_F(DefaultsDiff, apply_checked_rows_removes_an_absent_optional_key) {
+  NoUserConfig();
 
   const gui::GuiState state = gui::InitDefaultState();
   const json current = json::parse(gui::SerializeGuiStateJson(state));
@@ -510,18 +481,14 @@ TEST(DefaultsDiff, apply_checked_rows_removes_an_absent_optional_key) {
 // Runs the pair together, through the file, rather than asserting on the in-memory document
 // alone: apply_checked_rows_adopts_and_removes_in_one_pass already pins the pure rule, and what
 // is added here is that the document survives the trip to disk unchanged.
-TEST(DefaultsDiff, live_write_back_is_surgical_and_keeps_keys_no_row_names) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("diff_live_write");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
+TEST_F(DefaultsDiff, live_write_back_is_surgical_and_keeps_keys_no_row_names) {
   // A pre-existing document with a preset-library subtree this panel does not own, plus a
   // GuiState key that IS in today's schema (so it produces a row) and one that is not.
   json existing;
   existing["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
   existing["bg_show"] = true;
   existing["a_key_no_current_field_serializes"] = 7;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, existing));
+  const auto& dir = FreshUserConfig("diff_live_write", &existing);
 
   const gui::GuiState state = MakeEditedState();
   const auto rows = gui::BuildDefaultDiffRows(state, existing);
@@ -551,9 +518,8 @@ TEST(DefaultsDiff, live_write_back_is_surgical_and_keeps_keys_no_row_names) {
 
 // No writable config directory (--no-user-config, or an OS that gave us nowhere to write):
 // the write reports failure instead of silently claiming success, and nothing is created.
-TEST(DefaultsDiff, live_write_back_reports_failure_without_a_directory) {
-  ResetUserDefaultsChannels();
-  ScopedUserConfigSource guard(gui::UserConfigSource::kDisabled);
+TEST_F(DefaultsDiff, live_write_back_reports_failure_without_a_directory) {
+  NoUserConfig();
 
   const gui::GuiState state = MakeEditedState();
   json doc;
@@ -577,7 +543,7 @@ TEST(DefaultsDiff, live_write_back_reports_failure_without_a_directory) {
 // keys. Nothing in the code enforced the "no default-able key contains a dot" premise; it held
 // only because someone had checked the field names by eye. This asserts it over the live
 // registry, so a future field named "foo.bar" turns red here instead of corrupting a file.
-TEST(DefaultsDiff, no_default_eligible_key_contains_the_path_separator) {
+TEST_F(DefaultsDiff, no_default_eligible_key_contains_the_path_separator) {
   int checked = 0;
   for (const auto& entry : gui::kFieldTierTable) {
     const auto verdict = gui::ResolveDefaultEligibility(entry.name);
@@ -621,14 +587,14 @@ TEST(DefaultsDiff, no_default_eligible_key_contains_the_path_separator) {
 // Honoring the user's write then means replacing that node — which DISCARDS whatever was
 // there. That is a data loss, and it used to happen with no counter, no notice and no log:
 // the same silent-discard family the scrum's I3 invariant exists to close.
-TEST(DefaultsDiff, replacing_a_non_object_path_node_is_not_silent) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("setbypath_notice");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
+//
+// The negative half is in the same case rather than beside it: a notice that fired on EVERY write
+// would satisfy the positive half while burying the real ones in noise, and the two halves differ
+// only in whether the seeded document is well-formed.
+TEST_F(DefaultsDiff, a_replaced_non_object_path_node_is_reported_and_an_ordinary_write_is_not) {
   json doc;
   doc["renderer"] = 3;  // a scalar where an object belongs
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+  const auto& dir = FreshUserConfig("setbypath_notice", &doc);
 
   const gui::GuiState state = MakeEditedState();
   // Built BEFORE the drain below, deliberately: this is the panel's opening snapshot, and
@@ -636,8 +602,7 @@ TEST(DefaultsDiff, replacing_a_non_object_path_node_is_not_silent) {
   // entitled to report. Draining after it keeps the assertions below about the WRITE and
   // nothing else.
   const auto rows = gui::BuildDefaultDiffRows(state, doc);
-  gui::TakeUserDefaultsDowngradeCount();
-  gui::TakeUserDefaultsDowngradeNotices();
+  ResetUserDefaultsChannels();
 
   json next = doc;
   EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov" }, state));
@@ -653,36 +618,167 @@ TEST(DefaultsDiff, replacing_a_non_object_path_node_is_not_silent) {
   EXPECT_TRUE(notices[0].find("renderer") != std::string::npos);
 
   // The write still landed — the notice reports the loss, it does not refuse the edit.
-  std::ifstream in(dir / gui::kUserDefaultsFileName);
-  EXPECT_TRUE(in.is_open());
-  const json saved = json::parse(in);
+  const json saved = ReadOverlayFile(dir);
   EXPECT_TRUE(saved["renderer"].is_object());
   EXPECT_TRUE(saved["renderer"].contains("fov"));
-
   // Both counters are consumed on read, like every other channel in this family.
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+  EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
+
+  // The negative half: a well-formed document produces NO notice, and the write really did create
+  // the nested object the notice would have described — so a silent zero reads as "no loss to
+  // report" rather than as "no write happened".
+  json quiet = json::object();
+  const auto quiet_rows = gui::BuildDefaultDiffRows(state, quiet);
+  ResetUserDefaultsChannels();
+  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(quiet, quiet_rows, { "renderer.fov", "bg_alpha" }, state));
+  EXPECT_TRUE(gui::WriteActiveOverlayDoc(quiet));
+  EXPECT_TRUE(quiet["renderer"].is_object());
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
   EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
 }
 
-// The negative half of the case above: a well-formed document must produce NO notice. Without
-// this, a notice that fired on every write would still pass the test above while burying the
-// real ones in noise.
-TEST(DefaultsDiff, an_ordinary_write_reports_no_downgrade) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("setbypath_quiet");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+// ================================================================================
+// The Settings panel's two data-only questions (its 33 widget-driving siblings are in
+// test/gui/functional/test_gui_defaults_panel.cpp)
+// ================================================================================
 
-  const gui::GuiState state = MakeEditedState();
-  const auto rows = gui::BuildDefaultDiffRows(state, json::object());
-  gui::TakeUserDefaultsDowngradeCount();
-  gui::TakeUserDefaultsDowngradeNotices();
+// AC3 — coverage as a COUNTABLE deliverable, not "the mechanism works".
+//
+// Every leaf of the serialized document is named below with the control it must be edited
+// with, and the case fails on the first row whose classification disagrees. A count would not
+// do: it passes just as well when two fields swap classes, and it says nothing at all about
+// WHICH field regressed. The two deliberately-unregistered leaves are named here too, so
+// "read-only" is an asserted decision rather than an omission that looks like one.
+TEST_F(DefaultsDiff, registry_covers_every_row) {
+  // The freshly emptied explicit dir is what makes MakeNewDocumentState() deterministic.
+  FreshUserConfig("panel_registry");
 
-  json next = json::object();
-  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov", "bg_alpha" }, state));
-  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
-  // The premise: the write really did create the nested object the notice would have described,
-  // so a silent zero here is "no loss to report" rather than "no write happened".
-  EXPECT_TRUE(next["renderer"].is_object());
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
-  EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
+  using Kind = gui::FieldEditorKind;
+  struct Expected {
+    const char* key_path;
+    bool registered;
+    Kind kind;  // ignored when !registered
+  };
+  // Order follows SerializeGuiStateJson so the two can be read side by side.
+  static const Expected kExpected[] = {
+    { "sun.altitude", true, Kind::kFloatSlider },
+    { "sun.diameter", true, Kind::kFloatSlider },
+    { "sun.spectrum", true, Kind::kCombo },
+    { "sim.ray_num_millions", true, Kind::kFloatSlider },
+    { "sim.max_hits", true, Kind::kIntSlider },
+    { "sim.infinite", true, Kind::kCheckbox },
+    { "renderer.lens_type", true, Kind::kCombo },
+    { "renderer.fov", true, Kind::kFloatSlider },
+    { "renderer.elevation", true, Kind::kFloatSlider },
+    { "renderer.azimuth", true, Kind::kFloatSlider },
+    { "renderer.roll", true, Kind::kFloatSlider },
+    // The named special case: serialized as a VALUE (1024) while its control edits an index.
+    // Registered as editable — the registry translates — rather than left read-only.
+    { "renderer.sim_resolution", true, Kind::kCombo },
+    { "renderer.visible", true, Kind::kCombo },
+    { "renderer.front", true, Kind::kCheckbox },
+    { "renderer.background", true, Kind::kColor },
+    { "renderer.ray_color", true, Kind::kColor },
+    { "renderer.opacity", true, Kind::kFloatSlider },
+    { "renderer.exposure_offset", true, Kind::kFloatSlider },
+    { "aspect_ratio", true, Kind::kCombo },
+    { "aspect_portrait", true, Kind::kCheckbox },
+    { "bg_path", false, Kind::kCheckbox },
+    { "bg_show", true, Kind::kCheckbox },
+    { "bg_alpha", true, Kind::kFloatSlider },
+    { "overlay_horizon_line", true, Kind::kCheckbox },
+    { "overlay_horizon_label", true, Kind::kCheckbox },
+    { "overlay_grid_line", true, Kind::kCheckbox },
+    { "overlay_grid_label", true, Kind::kCheckbox },
+    { "overlay_sun_circles_line", true, Kind::kCheckbox },
+    { "overlay_sun_circles_label", true, Kind::kCheckbox },
+    { "overlay_sun_circle_angles", false, Kind::kCheckbox },
+    { "overlay_horizon_color", true, Kind::kColor },
+    { "overlay_grid_color", true, Kind::kColor },
+    { "overlay_sun_circles_color", true, Kind::kColor },
+    { "overlay_horizon_alpha", true, Kind::kFloatSlider },
+    { "overlay_grid_alpha", true, Kind::kFloatSlider },
+    { "overlay_sun_circles_alpha", true, Kind::kFloatSlider },
+    { "overlay_zenith_nadir_line", true, Kind::kCheckbox },
+    { "overlay_zenith_nadir_color", true, Kind::kColor },
+    { "overlay_zenith_nadir_alpha", true, Kind::kFloatSlider },
+    { "overlay_zenith_nadir_radius_px", true, Kind::kFloatSlider },
+    { "right_panel_collapsed", true, Kind::kCheckbox },
+    { "modal_layout_vertical", true, Kind::kCheckbox },
+  };
+
+  // Against the REAL row set of a factory document, so this cannot drift from what the panel
+  // actually lists: a field added to the serializer makes the row set larger than the table
+  // above and fails here, which is the reminder to classify it.
+  // A local document, not gui::g_state: BuildDefaultDiffRows takes the state it reads as a
+  // parameter, so routing through the global would only add a way for a neighbouring case to
+  // change this one's answer.
+  const auto rows = gui::BuildDefaultDiffRows(gui::MakeNewDocumentState());
+  std::set<std::string> row_keys;
+  for (const auto& row : rows) {
+    row_keys.insert(row.key_path);
+  }
+  EXPECT_EQ(row_keys.size(), std::size(kExpected));
+
+  for (const auto& expected : kExpected) {
+    EXPECT_TRUE(row_keys.count(expected.key_path) == 1);
+    const gui::FieldEditorEntry* entry = gui::FindFieldEditor(expected.key_path);
+    if (expected.registered) {
+      ASSERT_TRUE(entry != nullptr);
+      EXPECT_TRUE(entry->kind == expected.kind);
+    } else {
+      EXPECT_TRUE(entry == nullptr);
+    }
+  }
+
+  // Nothing is registered that the document does not produce: an entry for a key that no longer
+  // exists is dead weight the panel can never reach, and it would silently survive the loop
+  // above.
+  for (const auto& key : gui::RegisteredFieldEditorKeyPaths()) {
+    EXPECT_TRUE(row_keys.count(key) == 1);
+  }
+}
+
+// AC5b — the row tint's predicate, over the four states the issue enumerates.
+//
+// Asserted on the predicate rather than on pixels, deliberately and with the gap named: ImGui
+// keeps a table's per-row background colour only for the row being submitted, so there is no
+// frame-independent handle on "row N was tinted". What binds the predicate to what is PAINTED
+// is the defaults_panel_layout reference group — the pending_changes scene contains tinted rows
+// at a 40 dB floor, so a call site that stopped tinting turns that scene red.
+//
+// The fourth state is the one this whole predicate exists for: a key saved long ago, untouched
+// since. It differs from factory forever, yet Save would not move it, so it must NOT be tinted.
+TEST_F(DefaultsDiff, row_tint_predicate_over_four_states) {
+  gui::DefaultDiffRow row;
+  row.key_path = "probe";
+
+  // (1) nothing saved, nothing adopted — Save writes nothing for this key.
+  row.current_value = 0.5f;
+  row.default_value = 0.5f;
+  row.factory_value = 0.5f;
+  row.has_saved_override = false;
+  EXPECT_TRUE(!gui::RowWouldChangeOnSave(row, /*checked=*/false));
+
+  // (2) the same row, adopted: Save would ADD the key. Tinted even though the value equals the
+  // factory one — presence is a change.
+  EXPECT_TRUE(gui::RowWouldChangeOnSave(row, /*checked=*/true));
+
+  // (3) changed in the GUI, never saved: adopted by default, and Save would write the new
+  // value.
+  row.current_value = 0.9f;
+  EXPECT_TRUE(gui::RowWouldChangeOnSave(row, /*checked=*/true));
+  // ...and un-checking it takes it back to "Save writes nothing", which is also no change.
+  EXPECT_TRUE(!gui::RowWouldChangeOnSave(row, /*checked=*/false));
+
+  // (4) saved earlier, untouched since: differs from factory, equals what is on disk. NOT
+  // tinted — the state that separates this predicate from the "Differs from factory" filter.
+  row.current_value = 0.9f;
+  row.default_value = 0.9f;  // has_saved_override ⇒ default_value IS the stored value
+  row.factory_value = 0.5f;
+  row.has_saved_override = true;
+  EXPECT_TRUE(!gui::RowWouldChangeOnSave(row, /*checked=*/true));
+  // Un-checking it would REMOVE the key from the file — a change.
+  EXPECT_TRUE(gui::RowWouldChangeOnSave(row, /*checked=*/false));
 }
