@@ -309,40 +309,53 @@ TEST(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResume
 // not fabricate a transient valid=false window, because ReconcileSimState reads that window as
 // "no observation yet" and pulls a completed sim back into kSimulating (activity-bug root cause (a),
 // doc/gui-state-governance.md §4 支柱 2).
+//
+// The valid=false publish is a TRANSIENT and the observation of it races the worker, which the wake
+// releases in the same call and which republishes valid=true on its first poll. So the two arms are
+// not symmetric statements and must not be written as one equality:
+//   - refresh is a universal claim — valid must hold at every observation, before and after the
+//     worker settles — so repeating it only strengthens it;
+//   - restart is an existential one — the edge value must be observable at all — so it is asserted
+//     as "seen at least once" across the same repetitions.
+// Measured, not assumed: inserting a 50ms sleep between the wake and the read turns the restart arm
+// red every time, and the flat equality this replaces failed roughly once per twenty full-suite runs
+// under a loaded machine. There is no seam that removes the race — TransitionToRunning notifies the
+// worker before returning — so the shape above is the honest formulation rather than a workaround.
 TEST(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
   DetachGlobals();
   LiveServer srv;
   ASSERT_TRUE(srv.Run());
 
-  struct WakeCase {
-    const char* name;
-    bool restart;
-    bool expect_valid;
-  };
-  const WakeCase kCases[] = {
-    { "WakeForRestart publishes valid=false on the wake edge", true, false },
-    { "WakeForRefresh preserves valid across the wake edge", false, true },
-  };
+  constexpr int kAttempts = 32;
+  int restart_cleared = 0;
 
-  for (const WakeCase& c : kCases) {
-    // Identical baseline for both: a fresh valid=true terminal snapshot, worker paused.
-    gui::g_server_poller.Stop();
-    gui::g_server_poller.ResetGenerationForTest();
-    gui::g_server_poller.PollOnceForTest(srv);
-    Snapshot seed = gui::g_server_poller.LoadSnapshot();
-    ASSERT_TRUE(seed != nullptr) << c.name;
-    ASSERT_TRUE(seed->valid) << c.name;  // premise: the seed is valid BEFORE the wake
-    gui::g_server_poller.Stop();
+  for (int attempt = 0; attempt < kAttempts; ++attempt) {
+    for (bool restart : { true, false }) {
+      // Identical baseline for both arms: a fresh valid=true terminal snapshot, worker paused.
+      gui::g_server_poller.Stop();
+      gui::g_server_poller.ResetGenerationForTest();
+      gui::g_server_poller.PollOnceForTest(srv);
+      Snapshot seed = gui::g_server_poller.LoadSnapshot();
+      ASSERT_TRUE(seed != nullptr);
+      ASSERT_TRUE(seed->valid) << "attempt " << attempt;  // premise: valid BEFORE the wake
+      gui::g_server_poller.Stop();
 
-    if (c.restart) {
-      gui::g_server_poller.WakeForRestart(srv);
-    } else {
-      gui::g_server_poller.WakeForRefresh(srv);
+      if (restart) {
+        gui::g_server_poller.WakeForRestart(srv);
+      } else {
+        gui::g_server_poller.WakeForRefresh(srv);
+      }
+      Snapshot after = gui::g_server_poller.LoadSnapshot();
+      ASSERT_TRUE(after != nullptr);
+      if (restart) {
+        restart_cleared += after->valid ? 0 : 1;
+      } else {
+        // No repetition of this one may ever see an invalid window: that window IS the defect.
+        EXPECT_TRUE(after->valid) << "WakeForRefresh fabricated an invalid window on attempt " << attempt;
+      }
     }
-    Snapshot after = gui::g_server_poller.LoadSnapshot();
-    ASSERT_TRUE(after != nullptr) << c.name;
-    EXPECT_EQ(after->valid, c.expect_valid) << c.name;
   }
+  EXPECT_GT(restart_cleared, 0) << "WakeForRestart never published valid=false in " << kAttempts << " attempts";
 
   DetachGlobals();
 }

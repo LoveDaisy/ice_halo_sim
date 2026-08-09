@@ -5,7 +5,7 @@
 // test/gui/functional/test_gui_overlay_labels.cpp is modal_does_not_leak_to_foreground, because what
 // it asserts is which DRAW LIST the labels land in.
 //
-// The four cc* cases at the bottom are the regression anchors for the placement gaps audited in
+// The last three cases are the regression anchors for the four placement gaps audited in
 // doc/overlay-label-placement.md; their assertion semantics must not be weakened.
 
 #include <gtest/gtest.h>
