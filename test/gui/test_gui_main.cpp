@@ -469,7 +469,7 @@ int main(int argc, char** argv) {
   RegisterLinkedEntriesTests(engine);
   RegisterLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
-  RegisterSamplingDensityStatsTests(engine);
+  RegisterStatusBarTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterSimE2eSmokeTests(engine);

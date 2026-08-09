@@ -250,7 +250,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
-void RegisterSamplingDensityStatsTests(ImGuiTestEngine* engine);
+void RegisterStatusBarTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);
