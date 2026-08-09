@@ -148,6 +148,11 @@ void ResetTestState() {
   gui::g_pending_action = gui::PendingAction::kNone;
   gui::g_show_save_modified_popup = false;
   gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+  // The warning modal's in-flight message is a file-scope string in app_panels.cpp with its own
+  // de-duplication key, so a message left in flight by one case decides whether the next case's
+  // identical warning opens at all. Now that the harness renders the modal, that would also leave
+  // a modal open across cases.
+  gui::ClearGuiWarning();
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see
@@ -178,6 +183,21 @@ void ResetTestState() {
   g_capture.Reset();
   g_export_test.Reset();
   g_bg_test.Reset();
+}
+
+// See the contract note in test_gui_shared.hpp. Unlike its neighbour below, this one needs nothing
+// this TU owns — it lives here only because a shared helper needs one definition and this is where
+// the suite's shared definitions are. Moving it costs nothing but a build-file line.
+bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long long baseline_upload_count, int timeout_ms) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    ctx->Yield();  // let the main thread run SyncFromPoller()
+    if (gui::g_state.texture_upload_count >= baseline_upload_count + 1) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
 }
 
 // See the contract note in test_gui_shared.hpp. Lives here because this TU owns
@@ -463,12 +483,11 @@ int main(int argc, char** argv) {
   RegisterP1InteractionTests(engine);
   RegisterP1SliderBoundaryTests(engine);
   RegisterP2InteractionRenderTests(engine);
-  RegisterP1RunningTests(engine);
   RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
   RegisterLinkedEntriesTests(engine);
-  RegisterLifecycleTests(engine);
+  RegisterRunLifecycleTests(engine);
   RegisterCompositePreviewTests(engine);
   RegisterStatusBarTests(engine);
   RegisterPreviewAnimationTests(engine);
@@ -575,6 +594,13 @@ int main(int argc, char** argv) {
     // any UI-driven gui_test — the existing p2_modal AC4 tests could only
     // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
     gui::RenderSaveModifiedPopup(window);
+    // Same omission, found again from the other end: the generic warning modal was in the
+    // product's frame loop and not in this one, so the only proposition about it that gui_test
+    // could state was about a flag. Its import-specific sibling (RenderImportWarningPopup, also in
+    // src/gui/main.cpp) is deliberately still absent — several suites import configurations that
+    // queue one, and a modal nobody dismisses leaks into whichever case runs next, so adding it
+    // belongs with the rewrite of those suites rather than ahead of it.
+    gui::RenderGuiWarningPopup();
     // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
     // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
     // already paid for twice.

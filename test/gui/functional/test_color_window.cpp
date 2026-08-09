@@ -118,21 +118,6 @@ bool RunToIdleWithData(LUMICE_Server* server, const char* json) {
   return false;
 }
 
-// Polls texture_upload_count until it advances past the baseline, pumping frames so the main
-// thread gets to run SyncFromPoller(). Local copy rather than a shared helper: the sibling copy
-// lives in a TU-private static in another suite, and this one has a single caller.
-bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_upload_count, int timeout_ms) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (std::chrono::steady_clock::now() < deadline) {
-    ctx->Yield();
-    if (gui::g_state.texture_upload_count >= baseline_upload_count + 1) {
-      return true;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  return false;
-}
-
 // Open the Colors window with its geometry pinned, then point ctx at it.
 //
 // The pinning is not cosmetic. ImGui keys a window's position and size by title, so they survive
@@ -1289,7 +1274,7 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.02f;
 
-      const unsigned long baseline_uploads = gui::g_state.texture_upload_count;
+      const unsigned long long baseline_uploads = gui::g_state.texture_upload_count;
       gui::DoRun(/*user_initiated=*/true);
       IM_CHECK(WaitForSimRestartAtLeast(ctx, baseline_uploads, /*timeout_ms=*/8000));
       for (int i = 0; i < 20 && gui::PeekGuiWarning().empty(); ++i) {
@@ -1310,9 +1295,14 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(color_over.color_class_overflow_count, 4);
       IM_CHECK_EQ(color_over.component_overflow_count, 0);
 
+      // Dismiss the modal this warning opened. The harness renders the warning popup (it mirrors
+      // the product's frame loop), and ClearGuiWarning only re-arms the trigger — it does not close
+      // a popup that is already on screen, so an undismissed one would block input for whichever
+      // case runs next.
+      ctx->PopupCloseAll();
       gui::ClearGuiWarning();
       gui::g_state.raypath_color.clear();
-      const unsigned long baseline_uploads2 = gui::g_state.texture_upload_count;
+      const unsigned long long baseline_uploads2 = gui::g_state.texture_upload_count;
       gui::DoRun(/*user_initiated=*/true);
       IM_CHECK(WaitForSimRestartAtLeast(ctx, baseline_uploads2, /*timeout_ms=*/8000));
       for (int i = 0; i < 20; ++i) {

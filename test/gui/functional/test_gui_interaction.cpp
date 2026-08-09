@@ -1,8 +1,6 @@
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <thread>
 
 #include "IconsFontAwesome6.h"      // ICON_FA_* selectors used to match new icon-prefixed button labels
 #include "gui/crystal_preview.hpp"  // BuildCrystalMeshData (core-side sync-group leader oracle)
@@ -21,21 +19,6 @@
 #include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
 // ========== Helpers for interaction tests ==========
-
-// Polls gui::g_state.texture_upload_count until it reaches baseline + 1 (or higher).
-// Returns true on success, false on timeout.
-static bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long baseline_upload_count,
-                                     int timeout_ms = 1500) {
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-  while (std::chrono::steady_clock::now() < deadline) {
-    ctx->Yield();  // allow main thread to call SyncFromPoller()
-    if (gui::g_state.texture_upload_count >= baseline_upload_count + 1) {
-      return true;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  return false;
-}
 
 // AC2 core deliverable evidence (task-classic-params-migration, code-review-01.md merged Major
 // #1): plan.md §4 Step 6 calls out "same filter edit via CommitAllBuffers (Staged OK) vs
@@ -163,45 +146,6 @@ void RegisterP0Tests(ImGuiTestEngine* engine) {
 
       // Cleanup
       std::remove(tmp_path.c_str());
-    };
-  }
-
-  // P0: Run/Stop UI state
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p0_sim", "run_stop_ui");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-
-      // sim_state is DERIVED each frame by ReconcileSimState (the harness main loop calls
-      // SyncFromPoller every Yield), so these scenes drive the INTENT inputs, not sim_state
-      // directly. With no live server observation the reconcile maps intent → sim_state
-      // deterministically (kNone→kIdle, kRunning→kSimulating, kStopped→kDone, kStopped+dirty→kModified).
-
-      // Scene 1: kIdle — "Run" button should exist
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-      gui::g_state.dirty = false;
-      ctx->Yield();
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kIdle));
-      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));
-
-      // Scene 2: kSimulating — "Stop" button should exist
-      gui::g_state.run_intent = gui::RunIntent::kRunning;
-      ctx->Yield();
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kSimulating));
-      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_STOP " Stop"));
-
-      // Scene 3: kDone
-      gui::g_state.run_intent = gui::RunIntent::kStopped;
-      ctx->Yield();
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
-      IM_CHECK(ctx->ItemExists("##TopBar/" ICON_FA_PLAY " Run"));  // Back to Run
-
-      // Scene 4: kModified — Revert button should appear (dirty edit on a completed result)
-      gui::g_state.dirty = true;
-      ctx->Yield();
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
-      IM_CHECK(ctx->ItemExists("##TopBar/Revert"));
-      gui::g_state.dirty = false;
     };
   }
 }
@@ -3471,158 +3415,6 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
       gui::g_preview.ClearBackground();
       gui::g_state.bg_show = false;
       ctx->Yield(2);
-    };
-  }
-}
-
-// ========== task-test-gui-interaction: P1 Running simulation restart tests ==========
-
-// These tests drive a real sim via StartPerfSimulation()/StopPerfSimulation() so that
-// DoRun() has a live g_server to commit to and SyncFromPoller() can produce texture uploads.
-// Restart detection uses the monotonic texture_upload_count as the "AtLeast +1" signal.
-
-
-void RegisterP1RunningTests(ImGuiTestEngine* engine) {
-  // p1_running/crystal_change_triggers_restart (prototype — see plan.md Step 5 ROI decision)
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_running", "crystal_change_triggers_restart");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      StartPerfSimulation();
-
-      // Wait for first batch of sim data
-      auto ray_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (gui::g_state.stats_sim_ray_num == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > ray_timeout) {
-          fprintf(stderr, "[TEST] crystal_change_triggers_restart: timeout waiting for first sim data\n");
-          StopPerfSimulation();
-          IM_CHECK(false);
-          return;
-        }
-      }
-
-      // Wait for first texture upload (so baseline is stable and represents a completed cycle)
-      auto upload_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-      while (gui::g_state.texture_upload_count == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > upload_timeout) {
-          break;  // proceed with baseline=0 — WaitForSimRestartAtLeast will still succeed on the first upload
-        }
-      }
-
-      // Capture baseline — must NOT yield between this and the DoRun call below
-      auto baseline = gui::g_state.texture_upload_count;
-
-      // Act: change a crystal parameter, mark dirty, commit on test thread
-      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height = 2.5f;
-      gui::g_state.dirty = true;
-      gui::DoRun(/*user_initiated=*/true);
-
-      // Assert: a new texture upload happens within timeout
-      bool ok = WaitForSimRestartAtLeast(ctx, baseline, 1500);
-
-      StopPerfSimulation();
-      IM_CHECK(ok);
-    };
-  }
-
-  // p1_running/filter_change_triggers_restart (extension)
-  // Filter changes call MarkStructHardDirty() which raises display_epoch_floor to committed_epoch,
-  // fencing the old generation's textures until DoRun re-commits and mints a newer epoch that
-  // clears the floor. End-to-end exercise of the epoch-keyed anti-flicker gate.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_running", "filter_change_triggers_restart");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-
-      // Pre-register a filter on the first entry so StartPerfSimulation's DoRun commits with it
-      gui::FilterConfig f;
-      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
-      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-
-      StartPerfSimulation();
-
-      // Wait for first sim data
-      auto ray_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (gui::g_state.stats_sim_ray_num == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > ray_timeout) {
-          fprintf(stderr, "[TEST] filter_change_triggers_restart: timeout waiting for first sim data\n");
-          StopPerfSimulation();
-          IM_CHECK(false);
-          return;
-        }
-      }
-
-      // Wait for first texture upload
-      auto upload_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-      while (gui::g_state.texture_upload_count == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > upload_timeout) {
-          break;
-        }
-      }
-
-      auto baseline = gui::g_state.texture_upload_count;
-
-      // Act: change filter raypath, mark filter dirty, commit
-      gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].MutableRaypathText() = "3-1-5-7";
-      gui::g_state.MarkStructHardDirty();
-      gui::DoRun(/*user_initiated=*/true);
-
-      // Filter changes may take slightly longer (epoch-floor fence until re-commit); use 2000ms
-      bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
-
-      StopPerfSimulation();
-      IM_CHECK(ok);
-    };
-  }
-
-  // p1_running/ray_count_infinite_toggle_while_running (extension)
-  // Toggle Infinite off → fixed ray count triggers a full restart.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_running", "ray_count_infinite_toggle_while_running");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      StartPerfSimulation();
-      // StartPerfSimulation sets sim.infinite=true; verify
-      IM_CHECK_EQ(gui::g_state.sim.infinite, true);
-
-      // Wait for initial data + upload
-      auto ray_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-      while (gui::g_state.stats_sim_ray_num == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > ray_timeout) {
-          fprintf(stderr, "[TEST] infinite_toggle_while_running: timeout waiting for first sim data\n");
-          StopPerfSimulation();
-          IM_CHECK(false);
-          return;
-        }
-      }
-      auto upload_timeout = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-      while (gui::g_state.texture_upload_count == 0) {
-        ctx->Yield();
-        if (std::chrono::steady_clock::now() > upload_timeout) {
-          break;
-        }
-      }
-
-      // Drain any pending commits before capturing baseline (guard against race M7)
-      ctx->Yield(3);
-
-      auto baseline = gui::g_state.texture_upload_count;
-
-      // Act: switch off Infinite → fixed ray count
-      gui::g_state.sim.infinite = false;
-      gui::g_state.sim.ray_num_millions = 0.5f;  // small enough that the run can finish
-      gui::g_state.dirty = true;
-      gui::DoRun(/*user_initiated=*/true);
-
-      bool ok = WaitForSimRestartAtLeast(ctx, baseline, 2000);
-
-      StopPerfSimulation();
-      IM_CHECK(ok);
     };
   }
 }

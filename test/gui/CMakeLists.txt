@@ -14,7 +14,7 @@ add_executable(gui_test
     functional/test_filter_editor.cpp
     functional/test_gui_face_number_overlay.cpp
     functional/test_gui_overlay_labels.cpp
-    functional/test_gui_lifecycle.cpp
+    functional/test_run_lifecycle.cpp
     functional/test_gui_composite_preview.cpp
     functional/test_status_bar.cpp
     functional/test_gui_defaults_panel.cpp

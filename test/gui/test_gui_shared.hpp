@@ -214,6 +214,18 @@ std::filesystem::path GuiTestTempPath(const std::string& filename);
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();
+// Pump frames until texture_upload_count has advanced past `baseline_upload_count`, or the
+// wall-clock budget runs out. Returns whether it advanced.
+//
+// The sleep between yields is load-bearing and is why the budget is wall clock rather than a frame
+// count: the poller runs on its own thread, and under --fixed-dt the frame pump would otherwise
+// spin through the whole budget in less real time than one poll interval. That is also what keeps
+// callers in the fast correctness pool instead of the real-timing one.
+//
+// Shared rather than copied: it began as a TU-private static in one suite, was copied into a
+// second with a note saying the sibling was private and this one had a single caller, and the
+// run-lifecycle suite is the third consumer.
+bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long long baseline_upload_count, int timeout_ms = 1500);
 // Drive the main loop's off-screen preview-export hook (g_auto_ev_export, serviced in
 // test_gui_main.cpp) with a caller-built viewport and wait for the FBO readback to land at
 // `path`. Returns false if the readback did not complete within the poll budget or the
@@ -244,12 +256,11 @@ void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterP1InteractionTests(ImGuiTestEngine* engine);
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine);
-void RegisterP1RunningTests(ImGuiTestEngine* engine);
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
-void RegisterLifecycleTests(ImGuiTestEngine* engine);
+void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
 void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
