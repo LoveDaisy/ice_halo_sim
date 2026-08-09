@@ -57,6 +57,19 @@ ColorClassRefConfig PredicateRef(const char* text, int crystal_pool_id = 0, int 
   return ref;
 }
 
+// Everything a config document needs before its `raypath_color` value, so an import case can state
+// only the block it is about. Shared rather than repeated per case: a case that spelled the
+// surrounding document out again would be free to drift into a config the importer treats
+// differently for a reason that has nothing to do with colour.
+const char* const kConfigPrologue = R"({
+    "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
+    "filter": [],
+    "scene": {"light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+              "ray_num": 1000000, "max_hits": 8,
+              "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]},
+    "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
+    "raypath_color": )";
+
 // One case: set the document up, then say what the emitted colour block must look like. The block
 // is read from the EXPORT document; the harness separately asserts the commit document agrees, so
 // each row states its expectation once.
@@ -322,20 +335,12 @@ TEST(RaypathColorDocumentChain, AShippedConfigReachesAFixedPointThroughTheImport
 TEST(RaypathColorDocumentChain, AnOldDocumentKeepsItsOwnSymmetryRatherThanTheEditorsDefault) {
   DoNew();
   GuiState loaded = InitDefaultState();
-  ASSERT_TRUE(DeserializeFromJson(R"({
-    "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
-    "filter": [],
-    "scene": {"light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
-              "ray_num": 1000000, "max_hits": 8,
-              "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]},
-    "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
-    "raypath_color": {"mode": "dominant", "classes": [
+  ASSERT_TRUE(DeserializeFromJson(kConfigPrologue + std::string(R"({"mode": "dominant", "classes": [
       {"color": [1.0, 0.0, 0.0], "match": [
         {"layer": 0, "crystal": 1, "type": "raypath", "raypath": [3, 5]},
         {"layer": 0, "crystal": 1, "type": "raypath", "raypath": [1, 2], "symmetry": "P"}
       ]}
-    ]}
-  })",
+    ]}})"),
                                   loaded));
   ASSERT_EQ(loaded.raypath_color.size(), 1u);
   ASSERT_EQ(loaded.raypath_color[0].match.size(), 2u);
@@ -352,14 +357,7 @@ TEST(RaypathColorDocumentChain, AnOldDocumentKeepsItsOwnSymmetryRatherThanTheEdi
 // Two import shapes with nothing in common but their fragility: a bare array (the wrapper-less form
 // written before the mode existed) and a ref naming a crystal the document does not contain.
 TEST(RaypathColorDocumentChain, ImportToleratesTheOlderWireShapeAndADanglingCrystalRef) {
-  const std::string prologue = R"({
-    "crystal": [{"id": 1, "type": "prism", "prism_h": 1.0}],
-    "filter": [],
-    "scene": {"light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
-              "ray_num": 1000000, "max_hits": 8,
-              "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]},
-    "render": [{"id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180}, "resolution": [512, 256]}],
-    "raypath_color": )";
+  const std::string prologue = kConfigPrologue;
 
   DoNew();
   GuiState bare = InitDefaultState();

@@ -112,6 +112,21 @@ void FreezeIdleWithData(LUMICE_Server* server) {
 
 }  // namespace
 
+// Every case detaches the globals on the way in AND on the way out, and gets a server of its own.
+// The exit half is not symmetry: a case that fails partway through would otherwise hand a running
+// worker and a live g_server to whatever runs next, and the failure would be reported against that
+// one. The server is a member rather than three lines in each body because it is the same server in
+// every case — but the private ScopedPoller deliberately is NOT, since at least one case below
+// depends on constructing it AFTER the run has finished (its gate-timeout clock starts at
+// construction), which a fixture member cannot express.
+class ServerPoller : public ::testing::Test {
+ protected:
+  void SetUp() override { DetachGlobals(); }
+  void TearDown() override { DetachGlobals(); }
+
+  LiveServer srv;
+};
+
 // ---- The terminal completion edge survives a poll that carries no new generation (I3/I4) ----
 //
 // The original dead-state bug's exact interleaving: a mid-run texture drop, then a terminal poll
@@ -123,9 +138,7 @@ void FreezeIdleWithData(LUMICE_Server* server) {
 // and that is faithful rather than lazy: SyncFromPoller() and ReconcileSimState()'s caller take no
 // state argument, so "a single owner reconciles the real global once per frame" IS the design under
 // test. Injecting a local would exercise a path production does not have.
-TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
   ASSERT_TRUE(srv.Run());
 
   const unsigned long long done_epoch = CurrentEpoch(srv);
@@ -214,8 +227,6 @@ TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
     gui::SyncFromPoller();
     EXPECT_EQ(gui::g_state.sim_state, c.expected) << c.name;
   }
-
-  DetachGlobals();
 }
 
 // ---- I6: a COMPLETED run below the quality gate still puts a frame on screen ----
@@ -232,9 +243,7 @@ TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
 // C exercise the two production wake seams that must re-arm the rescue — WakeForRestart (a fresh
 // commit) and WakeForRefresh (a display-time refresh of an already-completed run, the colour /
 // composite-EV push path, which likewise buys exactly one more poll).
-TEST(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResume) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResume) {
   ASSERT_TRUE(srv.Run());
 
   // Constructed AFTER the run, not before: last_quality_pass_time_ starts at construction and the
@@ -305,9 +314,7 @@ TEST(ServerPoller, ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResume
 // red every time, and the flat equality this replaces failed roughly once per twenty full-suite runs
 // under a loaded machine. There is no seam that removes the race — TransitionToRunning notifies the
 // worker before returning — so the shape above is the honest formulation rather than a workaround.
-TEST(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
   ASSERT_TRUE(srv.Run());
 
   constexpr int kAttempts = 32;
@@ -340,8 +347,6 @@ TEST(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
     }
   }
   EXPECT_GT(restart_cleared, 0) << "WakeForRestart never published valid=false in " << kAttempts << " attempts";
-
-  DetachGlobals();
 }
 
 // ---- The two per-resume fields the terminal-rescue case structurally cannot reach ----
@@ -362,9 +367,7 @@ TEST(ServerPoller, WakeForRefreshPreservesValidWhereWakeForRestartClearsIt) {
 // A snapshot the poller has ALREADY consumed must read as new again after a resume, or a
 // display-time refresh re-materializes nothing — the server's generation counter did not move, and
 // force_final_upload is structurally false under IDLE.
-TEST(ServerPoller, ResumeRearmsTheGenerationTracker) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, ResumeRearmsTheGenerationTracker) {
   ASSERT_TRUE(srv.Run());
 
   ScopedPoller local;
@@ -393,9 +396,7 @@ TEST(ServerPoller, ResumeRearmsTheGenerationTracker) {
 // hitting Run again, seconds routinely — is charged against the new run's budget, so its first
 // sparse poll is force-uploaded and the anti-flicker gate is silently disarmed exactly when it is
 // supposed to engage.
-TEST(ServerPoller, ResumeRearmsTheQualityGateClock) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, ResumeRearmsTheQualityGateClock) {
   ASSERT_TRUE(srv.Run());
 
   ScopedPoller local;
@@ -457,9 +458,7 @@ TEST(ServerPoller, ResumeRearmsTheQualityGateClock) {
 // staging that opens the window is the staging for either. The pixel half asserts the CONTENT
 // fingerprint rather than only the stamp — a check on payload_epoch alone would pass for the wrong
 // reason on any run where the timing happened not to line up.
-TEST(ServerPoller, TheRestartWindowRepublishesNeitherThePriorRunsStatsNorItsPixels) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, TheRestartWindowRepublishesNeitherThePriorRunsStatsNorItsPixels) {
   ASSERT_TRUE(srv.Run());
 
   ScopedPoller local;
@@ -525,9 +524,7 @@ TEST(ServerPoller, TheRestartWindowRepublishesNeitherThePriorRunsStatsNorItsPixe
 // publish a composite built from the previous run's lanes, and the window ending must not leave the
 // composite path suppressed. It also covers the fire-gate's mode_changed OR-branch, which reads
 // snap.payload and could otherwise fire an upload on a carried-forward frame.
-TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsComposite) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsComposite) {
   ASSERT_TRUE(srv.Run(kColorSceneJson));
 
   ScopedPoller local;
@@ -583,9 +580,7 @@ TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsComposite) {
 // Neither shows up in the pixel or epoch assertions above: a deep copy compares byte-identical. So
 // pointer identity is the whole assertion here; it is red for a deep copy and green only for a
 // shared pointer.
-TEST(ServerPoller, CarryForwardReusesThePayloadObjectRatherThanCopyingIt) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, CarryForwardReusesThePayloadObjectRatherThanCopyingIt) {
   ASSERT_TRUE(srv.Run());
 
   ScopedPoller local;
@@ -625,9 +620,7 @@ TEST(ServerPoller, CarryForwardReusesThePayloadObjectRatherThanCopyingIt) {
 // prior publish" on one poller instance: the re-arm's 0-start always reads the first real generation
 // as new, and any earlier successful poll would have populated `prev` and carried the correct stats
 // forward on its own — masking exactly the defect this case exists to pin.
-TEST(ServerPoller, StatsAreReadOnAFirstPollWithBothMaterializeDoorsClosed) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, StatsAreReadOnAFirstPollWithBothMaterializeDoorsClosed) {
   ASSERT_TRUE(srv.Run());
 
   // Peek the server's current snapshot generation without touching any poller's own tracker.
@@ -678,9 +671,7 @@ TEST(ServerPoller, StatsAreReadOnAFirstPollWithBothMaterializeDoorsClosed) {
 // The wiring test for the guard: the chain's truth table proves the decision is right, this proves
 // PollOnce feeds it the real signals and that the bundle published under that decision carries the
 // true totals rather than a partial sum. Deterministic because it waits for the drain signal first.
-TEST(ServerPoller, APollAtTheDrainedMomentPublishesFinalTotals) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, APollAtTheDrainedMomentPublishesFinalTotals) {
   ASSERT_TRUE(srv.get() != nullptr);
   ASSERT_EQ(CommitSceneJson(srv, kExactTotalsSceneJson), LUMICE_OK);
   ASSERT_TRUE(WaitForDrained(srv, 30000)) << "epoch never reported drained";
@@ -712,9 +703,7 @@ TEST(ServerPoller, APollAtTheDrainedMomentPublishesFinalTotals) {
 // The guard's other failure mode: always true. An unbounded run never completes and never drains, so
 // the worker must stay in the full-speed loop and no heartbeat tick may ever fire. Runs the REAL
 // worker thread, because "did the worker change cadence" is the property under test.
-TEST(ServerPoller, AnUnboundedRunNeverSelfPauses) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, AnUnboundedRunNeverSelfPauses) {
   ASSERT_TRUE(srv.get() != nullptr);
   ASSERT_EQ(CommitSceneJson(srv, kInfiniteSceneJson), LUMICE_OK);
 
@@ -740,9 +729,7 @@ TEST(ServerPoller, AnUnboundedRunNeverSelfPauses) {
 // that observation retryable, which is the whole difference between a level-triggered reconciler and
 // an edge-triggered one. It also asserts what a tick must NOT do: republish a texture. Each tick is
 // a safe no-op or the preview re-uploads twice a second forever.
-TEST(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
-  DetachGlobals();
-  LiveServer srv;
+TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
   ASSERT_TRUE(srv.get() != nullptr);
   ASSERT_EQ(CommitSceneJson(srv, kFiniteSceneJson), LUMICE_OK);
 
@@ -778,7 +765,7 @@ TEST(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
 // tick-count assertion is the signal that does not depend on one — and it is a genuine assertion
 // rather than a hope that a crash shows up, since "no tick after Stop() returned" IS the contract.
 // It is not, and does not claim to be, proof of memory safety.
-TEST(ServerPoller, StopQuiescesTheHeartbeatBeforeReturning) {
+TEST(ServerPollerShutdown, StopQuiescesTheHeartbeatBeforeReturning) {
   DetachGlobals();
   LUMICE_Server* server = LUMICE_CreateServer();
   ASSERT_TRUE(server != nullptr);

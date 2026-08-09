@@ -386,40 +386,62 @@ TEST_F(DefaultsDiff, format_is_decoupled_from_comparison) {
 // ================================================================================
 // The panel's write-back rule: one pass over the row set, driven by the checkbox state
 // ================================================================================
-TEST_F(DefaultsDiff, apply_checked_rows_adopts_and_removes_in_one_pass) {
-  // A document holding one key that will be un-checked, plus a preset subtree the rule must
-  // not reach (it produces no row, so it is never named).
+TEST_F(DefaultsDiff, apply_checked_rows_adopts_and_removes_in_one_pass_and_survives_the_trip_to_disk) {
+  // A pre-existing document with three kinds of key beside each other: one that will be
+  // un-checked, a preset-library subtree this panel does not own, and a key written by an OLDER
+  // version whose GuiState field has since been removed. The last two produce no row, so the rule
+  // never names them — and both survive for that one structural reason, which is why they are
+  // asserted together. The removed-field key is the case no other test covers, and the one that
+  // would silently start disappearing if the rule were rewritten as "keep the keys we know about".
   json doc;
   doc["bg_show"] = false;
   doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
-  FreshUserConfig("diff_checked_rows", &doc);
+  doc["a_key_no_current_field_serializes"] = 7;
+  const auto& dir = FreshUserConfig("diff_checked_rows", &doc);
 
   const gui::GuiState state = MakeEditedState();
   const auto rows = gui::BuildDefaultDiffRows(state, doc);
   EXPECT_TRUE(!rows.empty());
-  EXPECT_TRUE(FindRow(rows, "bg_show") != nullptr);
-  EXPECT_TRUE(FindRow(rows, "renderer.fov") != nullptr);
+  // The premise the halves below rest on, asserted rather than assumed: of the three extra keys,
+  // one is named by a row and two are not.
+  ASSERT_TRUE(FindRow(rows, "bg_show") != nullptr);
+  ASSERT_TRUE(FindRow(rows, "renderer.fov") != nullptr);
+  ASSERT_TRUE(FindRow(rows, "a_key_no_current_field_serializes") == nullptr);
 
-  // Checked: one key that is NOT in the document. Everything else — including bg_show, which
-  // is — is left out of the set, i.e. un-checked.
+  // Checked: keys that are NOT in the document. Everything else — including bg_show, which is —
+  // is left out of the set, i.e. un-checked.
   json next = doc;
-  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov" }, state));
+  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.fov", "renderer.lens_type", "bg_alpha" }, state));
 
   EXPECT_TRUE(next.contains("renderer"));
   EXPECT_EQ(next["renderer"]["fov"].get<float>(), state.renderer.fov);
   EXPECT_TRUE(!next.contains("bg_show"));  // un-checked -> removed, in the same pass
-  // Untouched by construction rather than by a special case: no row names it.
+  // Untouched by construction rather than by a special case: no row names them.
   EXPECT_EQ(next["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+  EXPECT_EQ(next.value("a_key_no_current_field_serializes", 0), 7);
   // And nothing else was adopted just because it was serialized.
   EXPECT_TRUE(!next.contains("sun"));
-  EXPECT_TRUE(!next.contains("bg_alpha"));
 
-  // Un-checking EVERYTHING is Reset all: every GuiState key goes, the sibling subtree stays.
+  // Now the same document through the pair the panel's Save actually calls, asserted FILE-side:
+  // the trip to disk must change nothing about the outcome above.
+  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
+  const json saved = ReadOverlayFile(dir);
+  EXPECT_STREQ(saved["renderer"]["lens_type"].get<std::string>().c_str(), "fisheye_equal_area");
+  EXPECT_EQ(saved["bg_alpha"].get<float>(), 0.42f);
+  EXPECT_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
+  EXPECT_EQ(saved.value("a_key_no_current_field_serializes", 0), 7);
+  // bg_show, by contrast, HAS a row and was left un-checked, so the same pass removed it. That is
+  // the line separating "not mentioned" from "mentioned and declined".
+  EXPECT_TRUE(!saved.contains("bg_show"));
+  EXPECT_TRUE(!saved.contains("sun"));
+
+  // Un-checking EVERYTHING is Reset all: every GuiState key goes, the keys no row names stay.
   json emptied = doc;
   EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(emptied, rows, {}, state));
   EXPECT_TRUE(!emptied.contains("bg_show"));
-  EXPECT_EQ(emptied.size(), static_cast<size_t>(1));
+  EXPECT_EQ(emptied.size(), static_cast<size_t>(2));
   EXPECT_TRUE(emptied.contains("presets"));
+  EXPECT_TRUE(emptied.contains("a_key_no_current_field_serializes"));
 }
 
 // A checked key that the CURRENT state does not serialize (an optional key) is removed rather
@@ -467,55 +489,11 @@ TEST_F(DefaultsDiff, apply_checked_rows_removes_an_absent_optional_key) {
 // Write-back contract, asserted on the pair the panel's Save actually calls
 // (ApplyCheckedRowsToDoc -> WriteActiveOverlayDoc)
 // ================================================================================
-
-// Surgical writes, asserted FILE-side: what the panel commits must edit the keys its rows name
-// and leave every other key of the document exactly where it was.
 //
-// The sibling "presets" subtree is the first-order case (it belongs to the preset library, and a
-// wholesale rewrite here would delete a user's preset overrides), but it is not the only one: a
-// key written by an OLDER version, whose GuiState field has since been removed, produces no row
-// either. Both survive for the same structural reason — the rule only ever touches keys a row
-// names — so both are asserted here, the second one because it is the case no other test covers
-// and the one that would silently start disappearing if the rule were ever rewritten as
-// "keep the keys we know about".
-//
-// Runs the pair together, through the file, rather than asserting on the in-memory document
-// alone: apply_checked_rows_adopts_and_removes_in_one_pass already pins the pure rule, and what
-// is added here is that the document survives the trip to disk unchanged.
-TEST_F(DefaultsDiff, live_write_back_is_surgical_and_keeps_keys_no_row_names) {
-  // A pre-existing document with a preset-library subtree this panel does not own, plus a
-  // GuiState key that IS in today's schema (so it produces a row) and one that is not.
-  json existing;
-  existing["presets"]["axis"]["column"]["zenith_std"] = 0.3f;
-  existing["bg_show"] = true;
-  existing["a_key_no_current_field_serializes"] = 7;
-  const auto& dir = FreshUserConfig("diff_live_write", &existing);
-
-  const gui::GuiState state = MakeEditedState();
-  const auto rows = gui::BuildDefaultDiffRows(state, existing);
-  // The premise both halves of this case rest on, asserted rather than assumed: one of the two
-  // extra keys is named by a row and the other is not.
-  ASSERT_TRUE(FindRow(rows, "bg_show") != nullptr);
-  ASSERT_TRUE(FindRow(rows, "a_key_no_current_field_serializes") == nullptr);
-
-  json next = existing;
-  EXPECT_TRUE(gui::ApplyCheckedRowsToDoc(next, rows, { "renderer.lens_type", "bg_alpha" }, state));
-  EXPECT_TRUE(gui::WriteActiveOverlayDoc(next));
-
-  const json saved = ReadOverlayFile(dir);
-  EXPECT_STREQ(saved["renderer"]["lens_type"].get<std::string>().c_str(), "fisheye_equal_area");
-  EXPECT_EQ(saved["bg_alpha"].get<float>(), 0.42f);
-  // Untouched keys of both kinds survive: the sibling namespace-2 subtree AND the key no row
-  // names.
-  EXPECT_TRUE(saved.contains("presets"));
-  EXPECT_EQ(saved["presets"]["axis"]["column"]["zenith_std"].get<float>(), 0.3f);
-  EXPECT_EQ(saved.value("a_key_no_current_field_serializes", 0), 7);
-  // bg_show, by contrast, HAS a row and was left un-checked, so the same pass removes it. That
-  // is the line separating "not mentioned" from "mentioned and declined".
-  EXPECT_TRUE(!saved.contains("bg_show"));
-  // A key that was never checked must not be written just because it was serialized.
-  EXPECT_TRUE(!saved.contains("sun"));
-}
+// The surgical-write half runs on the staging the apply case above already builds, and is asserted
+// there: the pure rule and the trip to disk are the same document under one set of checked rows,
+// and staging them separately said the same setup twice. What is left for this section is the
+// state where the pair cannot run at all.
 
 // No writable config directory (--no-user-config, or an OS that gave us nowhere to write):
 // the write reports failure instead of silently claiming success, and nothing is created.

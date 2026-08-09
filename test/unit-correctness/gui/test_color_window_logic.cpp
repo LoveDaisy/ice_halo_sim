@@ -76,7 +76,7 @@ class ColorWindow : public ::testing::Test {
 // reorder that moved entries would silently re-point every lane. Reordering is therefore expressed
 // by rewriting z_order alone — and a delete leaves a hole in that numbering, which
 // LUMICE_SetRaypathColors rejects because it demands a permutation of [0, N).
-TEST_F(ColorWindow, ReorderingRewritesTheLayerNumbersAndNeverMovesTheClasses) {
+TEST_F(ColorWindow, ReorderingAndCompactingRewriteTheLayerNumbersAndNeverMoveTheClasses) {
   gui::ColorClassConfig red;
   red.color[0] = 1.0f;
   red.z_order = 0;
@@ -100,10 +100,10 @@ TEST_F(ColorWindow, ReorderingRewritesTheLayerNumbersAndNeverMovesTheClasses) {
   gui::SwapZOrder(gui::g_state, 99, 100);
   ASSERT_EQ(Classes()[0].z_order, 1);
   ASSERT_EQ(Classes()[1].z_order, 0);
-}
 
-TEST_F(ColorWindow, CompactingPacksTheLayerNumbersWithoutChangingWhatIsOnTop) {
-  // Arbitrary numbers with gaps: the visible order is slot 1, slot 0, slot 2.
+  // Compaction packs the same numbering without changing what is on top. Arbitrary numbers with
+  // gaps: the visible order is slot 1, slot 0, slot 2.
+  gui::DoNew();
   SeedClasses(
       { ClassSpec{ false, true, false, 5 }, ClassSpec{ false, true, false, 2 }, ClassSpec{ false, true, false, 9 } });
   gui::CompactZOrder(gui::g_state);
@@ -222,6 +222,13 @@ TEST_F(ColorWindow, TogglingWholeCrystalNeverDiscardsTheTypedExpression) {
 // Each single-atom row of the filter becomes one ref with the same text; a row the ref format cannot
 // carry is skipped and counted rather than half-imported. The class then owns its refs by value, so
 // editing the filter afterwards does not reach back into it.
+//
+// One filter carrying every row kind, rather than one filter per kind: the kinds are distinguished
+// by their position in the imported class and by the skip count, which a per-kind case with a
+// one-row filter cannot tell apart from a wholesale reject. Both skip reasons are present because
+// they are found in different places — an AND is two factors, whereas the ';' row is a SINGLE factor
+// holding two alternatives, and it is parsed for real rather than given a placeholder factor so the
+// alternative count sees the actual content.
 TEST_F(ColorWindow, ImportingAFilterKeepsTheRowsARefCanCarryAndCountsTheRest) {
   gui::FilterConfig f;
   f.name = "src_filter";
@@ -234,19 +241,26 @@ TEST_F(ColorWindow, ImportingAFilterKeepsTheRowsARefCanCarryAndCountsTheRest) {
   f.param.push_back(gui::SummandText{
       std::string{ "5-7 & entry:2" },
       std::vector<gui::Factor>{ gui::Factor{ gui::RaypathParams{} }, gui::Factor{ gui::EntryExitParams{} } } });
+  // One factor, two alternatives. A row imported here would be dropped again at the next commit,
+  // which is a silent loss.
+  const std::string multi = "1-3;5-7";
+  f.param.push_back(gui::SummandText{ multi, gui::ParseSummandText(multi) });
+  // No text at all means the whole crystal, mirroring the ref's own match_all.
+  f.param.push_back(gui::SummandText{ std::string{}, std::vector<gui::Factor>{ gui::Factor{ gui::RaypathParams{} } } });
 
   int skipped = -1;
   gui::ColorClassConfig cls = gui::BuildClassFromFilter(0, 7, f, skipped);
 
-  ASSERT_EQ(skipped, 1);
+  ASSERT_EQ(skipped, 2);
   // Rows of a filter are OR-ed, so the imported class must be too.
   ASSERT_EQ(cls.combine, LUMICE_COLOR_COMBINE_ANY);
-  ASSERT_EQ(static_cast<int>(cls.match.size()), 2);
+  ASSERT_EQ(static_cast<int>(cls.match.size()), 3);
   ASSERT_EQ(cls.match[0].layer_idx, 0);
   ASSERT_EQ(cls.match[0].crystal_pool_id, 7);
   ASSERT_TRUE(!cls.match[0].match_all);
   ASSERT_EQ(cls.match[0].predicate_text, "3-5");
   ASSERT_EQ(cls.match[1].predicate_text, "1-2-3");
+  ASSERT_TRUE(cls.match[2].match_all);
   // Full symmetry on EVERY imported ref, which is what catches the flag being set once outside the
   // loop rather than per row.
   for (const auto& ref : cls.match) {
@@ -256,39 +270,6 @@ TEST_F(ColorWindow, ImportingAFilterKeepsTheRowsARefCanCarryAndCountsTheRest) {
   // The class owns its refs: editing the source afterwards must not reach it.
   f.param[0].text = "MUTATED";
   ASSERT_EQ(cls.match[0].predicate_text, "3-5");
-}
-
-TEST_F(ColorWindow, ImportingSkipsARowWhoseSingleFactorStillHoldsTwoAlternatives) {
-  // The same ';' case the single-atom check above refuses. Parsed for real rather than given the
-  // placeholder factor the case above uses, so the alternative count sees the actual content — a
-  // row imported here would be dropped again at the next commit, which is a silent loss.
-  gui::FilterConfig f;
-  f.param.clear();
-  const std::string multi = "1-3;5-7";
-  f.param.push_back(gui::SummandText{ multi, gui::ParseSummandText(multi) });
-  f.param.push_back(
-      gui::SummandText{ std::string{ "3-5" }, std::vector<gui::Factor>{ gui::Factor{ gui::RaypathParams{} } } });
-
-  int skipped = -1;
-  gui::ColorClassConfig cls = gui::BuildClassFromFilter(0, 2, f, skipped);
-  ASSERT_EQ(skipped, 1);
-  ASSERT_EQ(static_cast<int>(cls.match.size()), 1);
-  ASSERT_EQ(cls.match[0].predicate_text, "3-5");
-}
-
-// A row with no text at all means the whole crystal, mirroring the ref's own match_all.
-TEST_F(ColorWindow, ImportingAnEmptyRowMeansTheWholeCrystal) {
-  gui::FilterConfig f;
-  f.param.clear();
-  f.param.push_back(gui::SummandText{ std::string{}, std::vector<gui::Factor>{ gui::Factor{ gui::RaypathParams{} } } });
-
-  int skipped = -1;
-  gui::ColorClassConfig cls = gui::BuildClassFromFilter(1, 3, f, skipped);
-  ASSERT_EQ(skipped, 0);
-  ASSERT_EQ(static_cast<int>(cls.match.size()), 1);
-  ASSERT_TRUE(cls.match[0].match_all);
-  ASSERT_EQ(cls.match[0].layer_idx, 1);
-  ASSERT_EQ(cls.match[0].crystal_pool_id, 3);
 }
 
 // ---- Adding or deleting a class must not make the others look unmatched ----

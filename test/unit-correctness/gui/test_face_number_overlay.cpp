@@ -208,15 +208,28 @@ TEST(FaceNumberOverlay, TrianglesWithNoFaceAssignedProduceNoLabel) {
   EXPECT_EQ(labels[0].face_number, 5);
 }
 
-// ---- A label on a face turned away from the camera must not be drawn ----
+// ---- A label on a face turned away from the camera must not be drawn, and lands where it should ----
 //
 // The retired rule was "the normal's eye-space z points at us", which is right only for a face whose
 // centre is on the view axis. The rule that replaced it asks whether the face turns away from the
 // point it actually sits at: dot(n_eye, p_eye) < 0. The off-axis row is the whole reason for the
 // change — under the old rule its label was drawn on the far side of the crystal, floating over
 // geometry that hides it.
-TEST(FaceNumberOverlay, AFaceIsVisibleByItsOwnPositionNotJustItsNormalsDirection) {
+//
+// Every row is cross-checked against the independently re-derived formula above AND carries its own
+// expected verdict, because a pure reference-vs-production comparison is a tautology against a bug
+// that drops V_rot on BOTH sides — the last row exists precisely to be sensitive to that term, being
+// a normal whose verdict the camera tilt alone decides. Four fixed configurations, no randomness: a
+// flaky geometry test teaches people to re-run rather than to look.
+//
+// The rows also answer where the label lands, which is the same call's other output and needs no
+// staging of its own: NDC is Y-up and the screen is Y-down, so a face at the origin must reach the
+// middle of the image rectangle wherever in the window that rectangle sits.
+TEST(FaceNumberOverlay, AFaceIsVisibleByItsOwnPositionAndItsLabelLandsWhereItProjects) {
   lumice::gui::ResetLastCrystalMesh();
+  constexpr float kTilted = 80.0f * lumice::gui::CrystalRenderer::kDeg2Rad;
+  constexpr float kImageX = 100.0f;
+  constexpr float kImageY = 200.0f;
 
   struct CullCase {
     const char* name;
@@ -225,65 +238,15 @@ TEST(FaceNumberOverlay, AFaceIsVisibleByItsOwnPositionNotJustItsNormalsDirection
     Vec3 center;
     Vec3 normal;
     bool expect_front;
+    bool at_image_centre;  // true for a face sitting on the origin, whatever way it faces
   };
   const CullCase kCases[] = {
-    { "facing the camera at the view axis", View::Identity(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, true },
+    { "facing the camera at the view axis", View::Identity(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, true, true },
     // Rotating the crystal by half a turn puts the same face on the back.
-    { "the same face after a half turn", View::FlippedX(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, false },
+    { "the same face after a half turn", View::FlippedX(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, false, true },
     // n_eye.z is +1 here, so the retired rule called this front. p_eye is (0.8, 0, -1.866) and the
     // dot is +0.534, so the face is genuinely turned away.
-    { "off the view axis with a tilted normal", View::Identity(0.5f), 0.5f, { 0.8f, 0, 0 }, { 3, 0, 1 }, false },
-  };
-
-  for (const CullCase& c : kCases) {
-    FaceLabel label = MakeLabel(c.center, c.normal);
-    float sx = 0.0f;
-    float sy = 0.0f;
-    bool front = false;
-    EXPECT_TRUE(ProjectLabelToScreen(&label, c.view.rot, c.view.mvp, c.zoom, 10.0f, 20.0f, kViewport, kViewport, &sx,
-                                     &sy, &front))
-        << c.name;
-    EXPECT_EQ(front, c.expect_front) << c.name;
-  }
-}
-
-// The projection itself: NDC is Y-up and the screen is Y-down, so a face at the origin must land at
-// the middle of the image rectangle wherever that rectangle sits in the window.
-TEST(FaceNumberOverlay, AFaceAtTheOriginLandsAtTheCentreOfTheImageRectangle) {
-  lumice::gui::ResetLastCrystalMesh();
-  const View view = View::Identity(2.0f);
-  FaceLabel label = MakeLabel({ 0, 0, 0 }, { 0, 0, 1 });
-
-  float sx = 0.0f;
-  float sy = 0.0f;
-  bool front = false;
-  ASSERT_TRUE(ProjectLabelToScreen(&label, view.rot, view.mvp, /*zoom=*/2.0f, /*image_pos=*/100.0f, 200.0f, kViewport,
-                                   kViewport, &sx, &sy, &front));
-  EXPECT_NEAR(sx, 100.0f + kViewport / 2.0f, 1e-3f);
-  EXPECT_NEAR(sy, 200.0f + kViewport / 2.0f, 1e-3f);
-}
-
-// The cull decision, cross-checked against the independently re-derived formula above. Four fixed
-// configurations, no randomness: a flaky geometry test teaches people to re-run rather than to look.
-// Each row also carries its own expected verdict, because a pure reference-vs-production comparison
-// is a tautology against a bug that drops V_rot on BOTH sides — and the last row exists precisely to
-// be sensitive to that term, being a normal whose verdict the camera tilt alone decides.
-TEST(FaceNumberOverlay, TheCullDecisionMatchesTheRenderersOwnEyeSpaceFormula) {
-  lumice::gui::ResetLastCrystalMesh();
-  constexpr float kTilted = 80.0f * lumice::gui::CrystalRenderer::kDeg2Rad;
-
-  struct ParityCase {
-    const char* name;
-    View view;
-    float zoom;
-    Vec3 center;
-    Vec3 normal;
-    bool expect_front;
-  };
-  const ParityCase kCases[] = {
-    { "identity, on axis", View::Identity(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, true },
-    { "identity, off axis with a tilted normal", View::Identity(0.5f), 0.5f, { 0.8f, 0, 0 }, { 3, 0, 1 }, false },
-    { "half-turned", View::FlippedX(2.0f), 2.0f, { 0, 0, 0 }, { 0, 0, 1 }, false },
+    { "off the view axis with a tilted normal", View::Identity(0.5f), 0.5f, { 0.8f, 0, 0 }, { 3, 0, 1 }, false, false },
     // 80 degrees into the back hemisphere. Without the camera tilt the dot is +0.174*dist and this
     // reads as back; with it the normal reaches 95 degrees from +Z and the dot flips. A production
     // regression that drops V_rot moves only the left-hand side, and the row goes red.
@@ -292,19 +255,24 @@ TEST(FaceNumberOverlay, TheCullDecisionMatchesTheRenderersOwnEyeSpaceFormula) {
       2.0f,
       { 0, 0, 0 },
       { 0.0f, std::sin(kTilted), -std::cos(kTilted) },
+      true,
       true },
   };
 
-  for (const ParityCase& c : kCases) {
+  for (const CullCase& c : kCases) {
     FaceLabel label = MakeLabel(c.center, c.normal);
     float sx = 0.0f;
     float sy = 0.0f;
     bool front = false;
-    EXPECT_TRUE(ProjectLabelToScreen(&label, c.view.rot, c.view.mvp, c.zoom, 0.0f, 0.0f, kViewport, kViewport, &sx, &sy,
-                                     &front))
+    EXPECT_TRUE(ProjectLabelToScreen(&label, c.view.rot, c.view.mvp, c.zoom, kImageX, kImageY, kViewport, kViewport,
+                                     &sx, &sy, &front))
         << c.name;
     EXPECT_EQ(front, ReferenceFrontFacing(c.view.rot, c.zoom, c.center, c.normal)) << c.name;
     EXPECT_EQ(front, c.expect_front) << c.name;
+    if (c.at_image_centre) {
+      EXPECT_NEAR(sx, kImageX + kViewport / 2.0f, 1e-3f) << c.name;
+      EXPECT_NEAR(sy, kImageY + kViewport / 2.0f, 1e-3f) << c.name;
+    }
   }
 }
 
@@ -355,16 +323,11 @@ TEST(FaceNumberOverlay, TheSizeFilterMeasuresAFacesNarrowestWidthNotItsBoundingB
   // than as an error.
   FaceLabel near_degenerate = MakePolygonLabel({ { 0, 0, 0 }, { 0.003f, 0, 0 }, { 0.0015f, 0.4f, 0 } });
   EXPECT_GT(MinWidthRatioOf(near_degenerate, view), 0.0f);
-}
 
-// The same vertex set in a different order is the same face. The filter sorts by angle around the
-// centroid before measuring, so its answer cannot depend on the order the triangles happened to be
-// discovered in — which is not stable across mesh builds.
-TEST(FaceNumberOverlay, TheSizeFilterAnswerDoesNotDependOnVertexOrder) {
-  lumice::gui::ResetLastCrystalMesh();
-  const View view = View::Identity(2.0f);
+  // The same vertex set in a different order is the same face. The filter sorts by angle around the
+  // centroid before measuring, so its answer cannot depend on the order the triangles happened to be
+  // discovered in — which is not stable across mesh builds.
   const Vec3 s[4] = { { -0.3f, -0.3f, 0 }, { 0.3f, -0.3f, 0 }, { 0.3f, 0.3f, 0 }, { -0.3f, 0.3f, 0 } };
-
   const float ccw = MinWidthRatioOf(MakePolygonLabel({ s[0], s[1], s[2], s[3] }), view);
   const float interleaved = MinWidthRatioOf(MakePolygonLabel({ s[2], s[0], s[3], s[1] }), view);
   EXPECT_NEAR(ccw, interleaved, 1e-4f);
