@@ -146,37 +146,12 @@ TEST(FieldEditorChain, EveryShapeScalarSlotReachesADistinctFieldInBothDirections
 // call sites. A comment cannot be checked against its call sites, which is why the numbers were
 // free to drift. Enumerating the table is the cheapest thing that notices.
 
-TEST(FieldEditorChain, EveryShapeScalarSlotHasAUsableDomainAndAScaleThatCanReachIt) {
-  for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_COUNT; ++slot) {
-    const ShapeScalarDomain& domain = ShapeScalarDomainFor(slot);
-    EXPECT_LT(domain.min_value, domain.max_value) << "slot " << slot << " has an unusable domain";
-    EXPECT_NE(domain.fmt, nullptr) << "slot " << slot;
-    EXPECT_NE(std::string(domain.fmt).find('%'), std::string::npos)
-        << "slot " << slot << ": display format '" << domain.fmt << "' is not a format string";
-    // The domain and the scale that traverses it are one answer, not two, and they can contradict
-    // each other: a logarithmic slider cannot reach zero, so a slot whose minimum IS zero and whose
-    // scale is pure log offers a bound the control can never produce. prism_h is the concrete case
-    // — it must allow exactly 0 (a degenerate zero-height prism section) AND stay finely
-    // controllable near 0 over a wide range, which is why it is the one slot on the log-linear
-    // scale rather than the log one.
-    if (domain.min_value == 0.0f) {
-      EXPECT_NE(domain.scale, SliderScale::kLog)
-          << "slot " << slot << " advertises a minimum of 0 on a logarithmic scale, so the bound it "
-          << "shows the user is one the control cannot reach";
-    }
-  }
-
-  // The six face slots share one band today, and that is a deliberate reflection of what the call
-  // site does rather than an accident of the table. Pinning it keeps a future per-face domain an
-  // intentional data edit instead of something that drifts in unnoticed.
-  const ShapeScalarDomain& first = ShapeScalarDomainFor(LUMICE_SHAPE_SCALAR_FACE_0);
-  for (int i = 1; i < 6; ++i) {
-    const ShapeScalarDomain& other = ShapeScalarDomainFor(LUMICE_SHAPE_SCALAR_FACE_0 + i);
-    EXPECT_FLOAT_EQ(other.min_value, first.min_value) << "face slot " << i;
-    EXPECT_FLOAT_EQ(other.max_value, first.max_value) << "face slot " << i;
-    EXPECT_STREQ(other.fmt, first.fmt) << "face slot " << i;
-  }
-}
+// The shape-scalar domain table itself — every slot has a row, the row is the one its call site
+// used to spell, the six face slots share one band, and a log-scaled slot cannot advertise a
+// minimum its own mapping divides by — is a statement about ONE unit and is asserted over its whole
+// domain in test/unit-correctness/gui/test_gui_widget_rules.cpp (ShapeScalarDomain.*). It was also
+// stated here until this wave; the same proposition in two layers is the redundancy this rebuild
+// was told to remove, and its subject is the table, not a collaboration.
 
 }  // namespace
 }  // namespace lumice::gui

@@ -238,17 +238,12 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
   }
 }
 
-TEST(PreviewProjectionChain, DragGainIsDefinedForADegenerateViewportAndForALensWithNoDrag) {
-  // A zero-sized viewport happens during window setup and on a collapsed panel. Returning a
-  // sensible zero rather than dividing by it is what keeps the first frame after a resize from
-  // teleporting the view.
-  EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(LUMICE_LENS_TYPE_LINEAR, 60.0f, 0, 0), 0.0f);
-  EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(LUMICE_LENS_TYPE_LINEAR, 60.0f, 800, 0), 0.0f);
-
-  // A full-sky lens has no drag interaction at all, and answers with the historical constant
-  // rather than with zero — zero would read as "no gain configured" at the call site.
-  EXPECT_GT(ComputeDragGainDegPerPixel(LUMICE_LENS_TYPE_GLOBE, 60.0f, 800, 600), 0.0f);
-}
+// The gain law's own edge cases — a degenerate viewport, and a full-sky lens that has no drag
+// interaction and answers with the historical constant rather than with zero — are statements about
+// ComputeDragGainDegPerPixel alone, and are asserted one layer down in
+// test/unit-correctness/gui/test_preview_renderer.cpp (DragGain.*). What is above is the part that
+// needs the projection as well: that the angular gain, fed back through the projection, actually
+// moves the picture by a constant number of pixels.
 
 // ---------------------------------------------------------------------------------------------
 // E13 (roll half) — the lens types that ignore roll must see zero roll, at every consumer.
@@ -258,28 +253,19 @@ TEST(PreviewProjectionChain, DragGainIsDefinedForADegenerateViewportAndForALensW
 // would draw its markers rotated against an image that is not.
 
 TEST(PreviewProjectionChain, LensTypesThatIgnoreRollSeeZeroRollInTheProjection) {
+  int zeroed = 0;
   for (int lens : { LUMICE_LENS_TYPE_LINEAR, LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA, LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT,
                     LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA, LUMICE_LENS_TYPE_RECTANGULAR, LUMICE_LENS_TYPE_GLOBE }) {
     RenderConfig rc = LensAt(lens, 90.0f, 0.0f);
     rc.roll = 30.0f;
-    const ViewProjection vp = BuildPreviewViewProjFromRenderer(rc);
-    EXPECT_FLOAT_EQ(vp.roll, EffectiveRollForLens(lens, 30.0f))
+    const float effective = EffectiveRollForLens(lens, 30.0f);
+    EXPECT_FLOAT_EQ(BuildPreviewViewProjFromRenderer(rc).roll, effective)
         << "lens " << lens << ": the projection's roll is not the one the lens rule produced";
+    zeroed += (effective == 0.0f) ? 1 : 0;
   }
-}
-
-// And the rule itself has to actually zero SOMETHING, or the normalisation above is a no-op that
-// every consumer could have skipped.
-TEST(PreviewProjectionChain, AtLeastOneLensActuallyDiscardsRoll) {
-  int zeroed = 0;
-  for (int lens : { LUMICE_LENS_TYPE_LINEAR, LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA, LUMICE_LENS_TYPE_FISHEYE_EQUIDISTANT,
-                    LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA, LUMICE_LENS_TYPE_RECTANGULAR, LUMICE_LENS_TYPE_GLOBE }) {
-    if (EffectiveRollForLens(lens, 30.0f) == 0.0f) {
-      ++zeroed;
-    }
-  }
-  EXPECT_GT(zeroed, 0) << "no lens discards roll, so BuildPreviewViewProjFromRenderer's roll "
-                          "normalisation is doing nothing and the case above is vacuous";
+  // And the rule itself has to actually zero SOMETHING, or the normalisation is a no-op that every
+  // consumer could have skipped and the loop above is vacuous.
+  EXPECT_GT(zeroed, 0) << "no lens discards roll";
 }
 
 }  // namespace

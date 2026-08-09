@@ -198,18 +198,16 @@ TEST(SceneCommitChain, MultiSegmentRaypathBecomesChildFiltersPlusOneComposition)
   // than [[0],[1]] — the core encoder's form, which the GUI's own emitter once disagreed with.
   EXPECT_EQ(filters[2]["composition"], nlohmann::json({ 0, 1 }));
   EXPECT_EQ(scene["scene"]["scattering"][0]["entries"][0]["filter"].get<int>(), 2);
-}
 
-// The other direction of the same statement: one alternative must NOT be promoted to a composition.
-// A gratuitous complex filter is not wrong, but it is a different document than the one written.
-TEST(SceneCommitChain, ASingleSegmentRaypathStaysASingleFilter) {
+  // The other direction of the same statement: one alternative must NOT be promoted to a
+  // composition. A gratuitous complex filter is not wrong, but it is a different document than the
+  // one written.
   SeedOneEntryDocument();
   g_state.filters[0].SetRaypath(RaypathParams{ "3-1-5" });
-
-  const nlohmann::json filters = nlohmann::json::parse(CoreJson(g_state))["filter"];
-  ASSERT_EQ(filters.size(), 1u);
-  EXPECT_EQ(filters[0]["type"].get<std::string>(), "raypath");
-  EXPECT_EQ(filters[0]["raypath"].size(), 3u);
+  const nlohmann::json single = nlohmann::json::parse(CoreJson(g_state))["filter"];
+  ASSERT_EQ(single.size(), 1u);
+  EXPECT_EQ(single[0]["type"].get<std::string>(), "raypath");
+  EXPECT_EQ(single[0]["raypath"].size(), 3u);
 }
 
 // An entry/exit filter compared against a hand-written reference object rather than field by field:

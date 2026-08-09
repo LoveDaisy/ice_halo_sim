@@ -133,10 +133,13 @@ TEST(FilterReconstructChain, ExpressibleCompositionsComeBackAsEditableRows) {
   }
 }
 
-// A composition whose clause holds more than one term is an AND, and the editor expresses it as one
-// row with several factors. This was once refused outright; refusing a shape the editor can show is
-// how an imported filter silently becomes no filter.
-TEST(FilterReconstructChain, AnAndClauseBecomesOneRowWithSeveralFactors) {
+// Two composition shapes the editor CAN express, both loaded through the same skeleton. A clause
+// holding more than one term is an AND, expressed as one row with several factors — once refused
+// outright, and refusing a shape the editor can show is how an imported filter silently becomes no
+// filter. An empty raypath is the match-all wildcard and can sit beside a real one as separate
+// alternatives — treating the empty array as "no filter" instead would drop the wildcard row and
+// narrow the filter to the other alternative.
+TEST(FilterReconstructChain, AnAndClauseBecomesOneRowAndAMatchAllAlternativeSurvivesBesideARealOne) {
   DoNew();
   ClearImportComplexFilterWarning();
   GuiState loaded = InitDefaultState();
@@ -170,29 +173,22 @@ TEST(FilterReconstructChain, AnAndClauseBecomesOneRowWithSeveralFactors) {
       { "composition", { { 0, 1 } } } },
   };
   EXPECT_EQ(nlohmann::json::parse(CoreJson(loaded))["filter"], expected);
-}
 
-// An empty raypath is the match-all wildcard, and it can sit beside a real one as separate
-// alternatives. Treating the empty array as "no filter" instead would drop the wildcard row and
-// narrow the filter to the other alternative.
-TEST(FilterReconstructChain, AMatchAllAlternativeSurvivesBesideARealOne) {
-  DoNew();
-  ClearImportComplexFilterWarning();
-  GuiState loaded = InitDefaultState();
+  GuiState wildcard = InitDefaultState();
   ASSERT_TRUE(
       DeserializeFromJson(CoreDocWithFilters(R"([{"id": 1, "type": "raypath", "action": "filter_in", "raypath": []},
                              {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
                              {"id": 3, "type": "complex", "action": "filter_in", "composition": [[1], [2]]}])",
                                              3),
-                          loaded));
+                          wildcard));
 
-  ASSERT_TRUE(loaded.layers.at(0).entries.at(0).filter_id.has_value());
-  const FilterConfig& f = LoadedFilter(loaded);
-  ASSERT_EQ(f.param.size(), 2u);
-  ASSERT_EQ(f.param[0].factors.size(), 1u);
-  ASSERT_TRUE(std::holds_alternative<RaypathParams>(f.param[0].factors[0]));
-  EXPECT_TRUE(std::get<RaypathParams>(f.param[0].factors[0]).raypath_text.empty());
-  EXPECT_EQ(f.param[1].text, std::string("3-5"));
+  ASSERT_TRUE(wildcard.layers.at(0).entries.at(0).filter_id.has_value());
+  const FilterConfig& w = LoadedFilter(wildcard);
+  ASSERT_EQ(w.param.size(), 2u);
+  ASSERT_EQ(w.param[0].factors.size(), 1u);
+  ASSERT_TRUE(std::holds_alternative<RaypathParams>(w.param[0].factors[0]));
+  EXPECT_TRUE(std::get<RaypathParams>(w.param[0].factors[0]).raypath_text.empty());
+  EXPECT_EQ(w.param[1].text, std::string("3-5"));
   EXPECT_TRUE(PeekImportComplexFilterWarning().empty());
 }
 
@@ -390,11 +386,9 @@ TEST(FilterReconstructChain, TheLiveClauseCountIsTheSameArithmeticTheCommitEnfor
   // On overflow the expansion is replaced by a bounded stand-in, so the reported count is that
   // stand-in's, not the 6561 that was never built.
   EXPECT_EQ(summary.clause_count, 1u);
-}
 
-// Where the offending filter is, in the words the dialog uses. Indices are 1-based on screen; an
-// unnamed filter drops the name clause instead of showing an empty pair of quotes.
-TEST(FilterReconstructChain, TheOverflowLocatorReadsAsAPlaceInTheDocument) {
+  // And where the offending filter is, in the words the dialog uses. Indices are 1-based on screen;
+  // an unnamed filter drops the name clause instead of showing an empty pair of quotes.
   FilterOverflowInfo named;
   named.layer_index = 2;
   named.entry_index = 0;

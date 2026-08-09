@@ -220,7 +220,7 @@ std::vector<float> FovLadder(const LensCase& lc) {
 // center at the identity pose, and globe really is the one that needs (+1,0,0). If this
 // flips, the round-trip assertions are measuring the wrong thing.
 // ---------------------------------------------------------------------------------------
-TEST(DragGain, ReferencePointIsFrameCenter) {
+TEST(DragGain, ReferencePointIsFrameCenterAndGlobesIsMirrored) {
   for (const auto& lc : DraggableLenses()) {
     auto vp = MakeVp(lc.lens_type, 60.0f, 0.0f, 0.0f);
     auto p = ProjectWorldDirToScreen(vp, ReferenceWorldDir(lc.lens_type), 800, 600);
@@ -228,18 +228,14 @@ TEST(DragGain, ReferencePointIsFrameCenter) {
     EXPECT_NEAR(p[0], 0.0f, 1e-3f) << lc.name;
     EXPECT_NEAR(p[1], 0.0f, 1e-3f) << lc.name;
   }
-}
 
-TEST(DragGain, GlobeReferenceIsMirroredVersusInsideOutLenses) {
+  // ...and the asymmetry that choice rests on, both ways round: globe cannot show the inside-out
+  // lenses' front direction (eye_dir.z = -1), and linear cannot show globe's.
   const float front[3] = { -1.0f, 0.0f, 0.0f };
   const float back[3] = { 1.0f, 0.0f, 0.0f };
-
-  // Globe: the inside-out lenses' front direction is NOT visible (eye_dir.z = -1).
   auto globe = MakeVp(lumice::gui::kLensTypeGlobe, 60.0f, 0.0f, 0.0f);
   EXPECT_TRUE(IsSentinel(ProjectWorldDirToScreen(globe, front, 800, 600)));
   EXPECT_FALSE(IsSentinel(ProjectWorldDirToScreen(globe, back, 800, 600)));
-
-  // Linear: the mirror image of the above.
   auto linear = MakeVp(lumice::gui::kLensTypeLinear, 60.0f, 0.0f, 0.0f);
   EXPECT_FALSE(IsSentinel(ProjectWorldDirToScreen(linear, front, 800, 600)));
   EXPECT_TRUE(IsSentinel(ProjectWorldDirToScreen(linear, back, 800, 600)));
@@ -252,43 +248,32 @@ TEST(DragGain, GlobeReferenceIsMirroredVersusInsideOutLenses) {
 // is the whole point — the same assertion with the same tolerance holds at fov=1° and at
 // fov=MaxFov.
 // ---------------------------------------------------------------------------------------
-TEST(DragGain, HorizontalDragMovesContentAtFixedPixelRatio) {
+TEST(DragGain, DraggingMovesContentAtAFixedPixelRatioOnBothAxes) {
   for (const auto& lc : DraggableLenses()) {
     for (float fov : FovLadder(lc)) {
       for (const auto& vp : Viewports()) {
         float gain = ComputeDragGainDegPerPixel(lc.lens_type, fov, vp.w, vp.h);
         ASSERT_GT(gain, 0.0f) << Label(lc, fov, vp, 0, 0);
-        float step = ProbePixels(gain, vp.w, vp.h);
-        for (float dx : { step, -step }) {
-          auto p = RoundTrip(lc, fov, vp, dx, 0.0f);
-          ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, dx, 0.0f);
-          // Content follows the cursor: +dx of mouse motion => +k*dx of screen-x motion.
-          // Written as a ratio against the expectation so kRoundTripTol stays a RELATIVE
-          // budget; comparing p[0]/dx against k directly would silently hand it k times
-          // the slack.
-          EXPECT_NEAR(p[0] / (dx * kExpectedSensitivity), 1.0f, kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
-          EXPECT_NEAR(p[1], 0.0f, std::abs(dx) * kExpectedSensitivity * kRoundTripTol) << Label(lc, fov, vp, dx, 0.0f);
-        }
-      }
-    }
-  }
-}
-
-TEST(DragGain, VerticalDragMovesContentAtFixedPixelRatio) {
-  for (const auto& lc : DraggableLenses()) {
-    for (float fov : FovLadder(lc)) {
-      for (const auto& vp : Viewports()) {
-        float gain = ComputeDragGainDegPerPixel(lc.lens_type, fov, vp.w, vp.h);
-        ASSERT_GT(gain, 0.0f) << Label(lc, fov, vp, 0, 0);
-        float step = ProbePixels(gain, vp.w, vp.h);
-        for (float dy : { step, -step }) {
-          auto p = RoundTrip(lc, fov, vp, 0.0f, dy);
-          ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, 0.0f, dy);
-          // ImGui's mouse y is DOWN-positive, the projection's py is UP-positive, so
-          // content following the cursor means py = -k*dy. This is also where a globe sign
-          // regression would surface: its elevation update is -= where the others are +=.
-          EXPECT_NEAR(p[1] / (dy * kExpectedSensitivity), -1.0f, kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
-          EXPECT_NEAR(p[0], 0.0f, std::abs(dy) * kExpectedSensitivity * kRoundTripTol) << Label(lc, fov, vp, 0.0f, dy);
+        const float step = ProbePixels(gain, vp.w, vp.h);
+        for (const bool horizontal : { true, false }) {
+          for (float d : { step, -step }) {
+            const float dx = horizontal ? d : 0.0f;
+            const float dy = horizontal ? 0.0f : d;
+            auto p = RoundTrip(lc, fov, vp, dx, dy);
+            ASSERT_FALSE(IsSentinel(p)) << Label(lc, fov, vp, dx, dy);
+            // Content follows the cursor: +dx of mouse motion => +k*dx of screen-x motion.
+            // ImGui's mouse y is DOWN-positive and the projection's py is UP-positive, so the
+            // vertical arm is py = -k*dy. That arm is also where a globe sign regression would
+            // surface: its elevation update is -= where the others are +=.
+            //
+            // Written as a ratio against the expectation so kRoundTripTol stays a RELATIVE
+            // budget; comparing p/d against k directly would silently hand it k times the slack.
+            const float along = horizontal ? p[0] : p[1];
+            const float across = horizontal ? p[1] : p[0];
+            EXPECT_NEAR(along / (d * kExpectedSensitivity), horizontal ? 1.0f : -1.0f, kRoundTripTol)
+                << Label(lc, fov, vp, dx, dy);
+            EXPECT_NEAR(across, 0.0f, std::abs(d) * kExpectedSensitivity * kRoundTripTol) << Label(lc, fov, vp, dx, dy);
+          }
         }
       }
     }
@@ -364,7 +349,7 @@ TEST(DragGain, RealisticDragStepsAtModerateFov) {
 // proportional to framebuffer pixels. Doubling the DPI doubles the pixel delta of the same
 // physical hand motion and halves the gain, so the rotation — the feel — is unchanged.
 // ---------------------------------------------------------------------------------------
-TEST(DragGain, ScalesInverselyWithFramebufferPixels) {
+TEST(DragGain, TheGainIsGovernedByTheShorterSideAndScalesInverselyWithIt) {
   for (const auto& lc : DraggableLenses()) {
     for (float fov : FovLadder(lc)) {
       float g1 = ComputeDragGainDegPerPixel(lc.lens_type, fov, 1280, 720);
@@ -372,19 +357,12 @@ TEST(DragGain, ScalesInverselyWithFramebufferPixels) {
       ASSERT_GT(g1, 0.0f) << lc.name;
       EXPECT_NEAR(g2 * 2.0f / g1, 1.0f, 1e-5f) << lc.name << " fov=" << fov;
     }
-  }
-}
-
-// img_radius is min(w, h)/2 — the same definition ProjectWorldDirToScreen uses — so a
-// viewport that is wide but the same height gives the same gain, and the short side is what
-// governs. Pinning this keeps the two from drifting apart into a non-square mismatch.
-TEST(DragGain, GovernedByShorterViewportSide) {
-  for (const auto& lc : DraggableLenses()) {
-    float wide = ComputeDragGainDegPerPixel(lc.lens_type, 60.0f, 2000, 720);
+    // img_radius is min(w, h)/2 — the same definition ProjectWorldDirToScreen uses — so a viewport
+    // that is wide but the same height gives the same gain, and the short side is what governs.
+    // Pinning this keeps the two from drifting apart into a non-square mismatch.
     float square = ComputeDragGainDegPerPixel(lc.lens_type, 60.0f, 720, 720);
-    float tall = ComputeDragGainDegPerPixel(lc.lens_type, 60.0f, 720, 2000);
-    EXPECT_FLOAT_EQ(wide, square) << lc.name;
-    EXPECT_FLOAT_EQ(tall, square) << lc.name;
+    EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lc.lens_type, 60.0f, 2000, 720), square) << lc.name;
+    EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lc.lens_type, 60.0f, 720, 2000), square) << lc.name;
   }
 }
 
@@ -473,31 +451,27 @@ TEST(DragGain, SmallFovLawsConvergeToEquidistant) {
 // ~180x too slow (0.3 vs 54.7). The sensitivity calibration deliberately keeps the two laws
 // close in the mid band — 2.3x apart at the 30° default here — so the SPREAD is what this
 // pins, and it is the defect AC1 names: a regression to any single constant fails one end.
-TEST(DragGain, FovAwareGainSpansTheRangeTheConstantMissed) {
+TEST(DragGain, TheEdgesOfTheGainLawSpanTheRangeDegradeSafelyAndKeepTheLegacyFallback) {
   float narrow = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 1.0f, 800, 600);
   float wide = ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 179.0f, 800, 600);
   EXPECT_LT(narrow, 0.3f / 50.0f);
   EXPECT_GT(wide, 0.3f * 100.0f);
-}
 
-// ---------------------------------------------------------------------------------------
-// Degenerate inputs.
-// ---------------------------------------------------------------------------------------
-TEST(DragGain, DegenerateViewportProducesNoRotation) {
+  // Degenerate viewports happen during window setup and on a collapsed panel: answering with a
+  // sensible zero rather than dividing by it is what keeps the first frame after a resize from
+  // teleporting the view.
   EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 60.0f, 0, 600), 0.0f);
   EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 60.0f, 800, 0), 0.0f);
   EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lumice::gui::kLensTypeLinear, 60.0f, -1, -1), 0.0f);
-}
 
-// Full-sky lenses never reach the drag branch (app_panels.cpp guards on !LensIsFullSky), so
-// this is the defensive fallback, not a live path: it must stay finite and match the legacy
-// constant rather than return 0 or NaN.
-//
-// Exactly 0.3, NOT 0.3 * kExpectedSensitivity: the fallback IS the historical feel value, and
-// the sensitivity constant exists to bring the closed forms up to it, not to be stacked on top
-// of it. Applying k to this branch too would be a silent 2.5x on the one path that is supposed
-// to change nothing, so the exact compare here is the guard against that.
-TEST(DragGain, FullSkyLensesFallBackToLegacyConstant) {
+  // Full-sky lenses never reach the drag branch (app_panels.cpp guards on !LensIsFullSky), so this
+  // is the defensive fallback, not a live path: it must stay finite and match the legacy constant
+  // rather than return 0 or NaN.
+  //
+  // Exactly 0.3, NOT 0.3 * kExpectedSensitivity: the fallback IS the historical feel value, and the
+  // sensitivity constant exists to bring the closed forms up to it, not to be stacked on top of it.
+  // Applying k to this branch too would be a silent 2.5x on the one path that is supposed to change
+  // nothing, so the exact compare here is the guard against that.
   for (int lt : lumice::gui::kFullSkyLensTypes) {
     EXPECT_FLOAT_EQ(ComputeDragGainDegPerPixel(lt, 180.0f, 800, 600), 0.3f) << "lens_type " << lt;
   }

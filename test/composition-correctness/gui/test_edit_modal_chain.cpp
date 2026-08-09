@@ -27,107 +27,14 @@ namespace lumice::gui {
 namespace {
 
 // ---------------------------------------------------------------------------------------------
-// E17 — the commit gate and the tooltip beside it are two consumers of ONE verdict.
+// E17 — the commit gate, the row/spectrum caps and the value clamps are single-unit rules of
+// edit_modal_rules.hpp, and they are asserted over their whole domain one layer down, in
+// test/unit-correctness/gui/test_gui_widget_rules.cpp (EditModalRules.*). They lived here as well
+// until this wave; two layers stating the same proposition is the redundancy this rebuild was told
+// to remove, and the unit layer is the one whose subject they are — it pins the tooltip's exact
+// wording, which is what the gate and its message have to agree on.
 //
-// A disabled button whose tooltip disagrees with why it is disabled is worse than no tooltip: the
-// user follows the sentence, fixes what it names, and the button stays dead.
-
-TEST(EditModalChain, TheCommitGateAndItsTooltipAgreeOnEveryValidationState) {
-  struct Case {
-    LUMICE_RaypathValidationState state;
-    const char* message;
-    bool expect_blocked;
-    // The phrasing the tooltip must and must not carry. "Still typing" is not an error, and saying
-    // so is the difference between a state every half-typed raypath passes through and a state the
-    // user thinks they have got wrong.
-    const char* expect_phrase;
-    const char* forbid_phrase;
-  };
-  const Case kCases[] = {
-    // Blank rows validate as valid and are stripped at commit time; resolving "empty means no
-    // filter" in this gate instead would make an untouched row un-committable.
-    { LUMICE_RAYPATH_VALID, "", false, nullptr, nullptr },
-    { LUMICE_RAYPATH_INCOMPLETE, "", true, "finish typing", "invalid" },
-    { LUMICE_RAYPATH_INVALID, "Face 13 is not legal on this crystal type", true, nullptr, nullptr },
-    // An invalid row whose validator produced no message still has to say something; the fallback
-    // is what stops the tooltip from being "Row 3: ".
-    { LUMICE_RAYPATH_INVALID, "", true, "invalid", nullptr },
-  };
-
-  for (const Case& c : kCases) {
-    GuiValidationResult v;
-    v.state = c.state;
-    v.message = c.message;
-
-    const bool blocked = SummandRowBlocksCommit(v.state);
-    const std::string tooltip = SummandRowOkTooltip(/*row_index=*/2, v);
-
-    EXPECT_EQ(blocked, c.expect_blocked) << "state " << static_cast<int>(c.state);
-    // The tooltip is non-empty exactly when the row blocks. Either direction of disagreement is a
-    // user-visible dead end: a silent disabled button, or a warning next to a button that works.
-    EXPECT_EQ(!tooltip.empty(), blocked) << "state " << static_cast<int>(c.state) << " tooltip='" << tooltip << "'";
-    if (blocked) {
-      EXPECT_NE(tooltip.find("Row 3"), std::string::npos)
-          << "the tooltip does not name the row it is about, so a user with 40 rows cannot act on it";
-    }
-    if (c.expect_phrase != nullptr) {
-      EXPECT_NE(tooltip.find(c.expect_phrase), std::string::npos) << "got: " << tooltip;
-    }
-    if (c.forbid_phrase != nullptr) {
-      EXPECT_EQ(tooltip.find(c.forbid_phrase), std::string::npos) << "got: " << tooltip;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------------------------
-// E17 (row-count half) — the caps and the delete rule are boundary conditions, so they are checked
-// at their boundaries rather than in the middle where any off-by-one still passes.
-
-TEST(EditModalChain, TheRowCapsAndTheDeleteRuleHoldAtTheirBoundaries) {
-  EXPECT_FALSE(AtSummandRowCap(kMaxSummandRows - 1));
-  EXPECT_TRUE(AtSummandRowCap(kMaxSummandRows));
-  EXPECT_TRUE(AtSummandRowCap(kMaxSummandRows + 1));
-  // The cap is a UI budget, not the ABI limit, and it must stay above the pre-widening hard cap —
-  // a change that quietly walked it back to 16 would undo the widening with nothing to notice.
-  EXPECT_GT(kMaxSummandRows, 16u);
-
-  // An empty list has no way back to being a filter, so the editor keeps one row the user can
-  // blank instead. A delete button live on the last row is a one-way door out of the editor.
-  EXPECT_FALSE(CanDeleteSummandRow(0));
-  EXPECT_FALSE(CanDeleteSummandRow(1));
-  EXPECT_TRUE(CanDeleteSummandRow(2));
-
-  // The spectrum's own pair, and the invariant behind the first one: spectrum_index == custom
-  // implies a non-empty buffer, so committing an empty one leaves a document that names a spectrum
-  // with nothing in it.
-  EXPECT_TRUE(SpectrumCommitBlocked(0));
-  EXPECT_FALSE(SpectrumCommitBlocked(1));
-  EXPECT_FALSE(AtSpectrumRowCap(kSpectrumHardMax - 1));
-  EXPECT_TRUE(AtSpectrumRowCap(kSpectrumHardMax));
-}
-
-// ---------------------------------------------------------------------------------------------
-// E17 (clamp half) — the seed for a newly added row and the sanitize pass on OK must clamp the same
-// way, or "Add row" proposes a value the commit then silently moves.
-
-TEST(EditModalChain, SpectrumClampsAreIdempotentAndCoverBothEnds) {
-  const float kInputs[] = { -1e6f,  0.0f, 379.0f, kSpectrumWavelengthMinNm, 550.0f, kSpectrumWavelengthMaxNm,
-                            781.0f, 1e6f };
-  for (float nm : kInputs) {
-    const float once = ClampSpectrumWavelengthNm(nm);
-    EXPECT_GE(once, kSpectrumWavelengthMinNm) << "input " << nm;
-    EXPECT_LE(once, kSpectrumWavelengthMaxNm) << "input " << nm;
-    // Idempotence is what makes "seed then sanitize" a no-op for an untouched row. Without it a
-    // row the user never edited would move on every OK.
-    EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(once), once) << "input " << nm;
-  }
-
-  // Weights are amplitudes. A negative one is not a dim row — it is a row that removes light from
-  // the others, which is not a state the editor has any way to show.
-  EXPECT_FLOAT_EQ(ClampSpectrumWeight(-1.0f), 0.0f);
-  EXPECT_FLOAT_EQ(ClampSpectrumWeight(0.0f), 0.0f);
-  EXPECT_FLOAT_EQ(ClampSpectrumWeight(2.5f), 2.5f);
-}
+// What is left in this file is the part no single unit can answer.
 
 // ---------------------------------------------------------------------------------------------
 // E19 — the crystal preview rebuilds when, and only when, the crystal it draws has changed.

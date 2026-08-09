@@ -194,6 +194,12 @@ TEST(EditModalRules, SpectrumValuesAreHeldToTheVisibleBand) {
   EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(550.0f), 550.0f);
   EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(kSpectrumWavelengthMaxNm), kSpectrumWavelengthMaxNm);
   EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(900.0f), kSpectrumWavelengthMaxNm);
+  // Idempotence is what makes "seed then sanitize" a no-op for an untouched row. Without it a row
+  // the user never edited would move on every OK.
+  for (float nm : { -1e6f, 0.0f, 379.0f, kSpectrumWavelengthMinNm, 550.0f, kSpectrumWavelengthMaxNm, 781.0f, 1e6f }) {
+    const float once = ClampSpectrumWavelengthNm(nm);
+    EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(once), once) << "input " << nm;
+  }
   // A negative weight would subtract light rather than dim the row.
   EXPECT_FLOAT_EQ(ClampSpectrumWeight(-1.0f), 0.0f);
   EXPECT_FLOAT_EQ(ClampSpectrumWeight(0.0f), 0.0f);
@@ -316,13 +322,11 @@ std::vector<float> MakeXyz(int w, int h, const std::vector<float>& y_values) {
 // P99 over the 4 nonzero coarse Y values:
 //   sorted = {14, 22, 46, 54}; idx = floor(4 * 0.99) = 3 -> y_vals[3] = 54.
 // Returned value = 54 / (f^2 = 4) = 13.5.
-TEST(EvAuto, ComputeP99YBoxSumExact4x4Factor2) {
+TEST(EvAuto, ComputeP99YBoxSumsCoarselyAndFallsBackWhenItCannot) {
   std::vector<float> y = { 1.0f, 2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
                            9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f };
   std::vector<float> xyz = MakeXyz(4, 4, y);
-
-  float p99 = ComputeP99Y(xyz.data(), 4, 4, 2);
-  EXPECT_FLOAT_EQ(p99, 13.5f);
+  EXPECT_FLOAT_EQ(ComputeP99Y(xyz.data(), 4, 4, 2), 13.5f);
 
   // Sanity: the helper itself returns the raw coarse sums.
   std::vector<float> coarse = DownsampleBoxSumY(xyz.data(), 4, 4, 2);
@@ -331,28 +335,16 @@ TEST(EvAuto, ComputeP99YBoxSumExact4x4Factor2) {
   EXPECT_FLOAT_EQ(coarse[1], 22.0f);  // top-right
   EXPECT_FLOAT_EQ(coarse[2], 46.0f);  // bottom-left
   EXPECT_FLOAT_EQ(coarse[3], 54.0f);  // bottom-right
-}
 
-// T3 — all-zero input on the coarse path returns 0.0f (matches fine-path empty case).
-TEST(EvAuto, ComputeP99YAllZeroCoarseReturnsZero) {
-  std::vector<float> y(8 * 8, 0.0f);
-  std::vector<float> xyz = MakeXyz(8, 8, y);
+  // T3 — all-zero input on the coarse path returns 0.0f (matches the fine-path empty case).
+  std::vector<float> zeros = MakeXyz(8, 8, std::vector<float>(8 * 8, 0.0f));
+  EXPECT_FLOAT_EQ(ComputeP99Y(zeros.data(), 8, 8, 8), 0.0f);
 
-  EXPECT_FLOAT_EQ(ComputeP99Y(xyz.data(), 8, 8, 8), 0.0f);
-}
-
-// T4 — wc=0 guard: when f exceeds dimensions, DownsampleBoxSumY collapses to
-// {} and ComputeP99Y falls back to the fine path without crashing.
-TEST(EvAuto, ComputeP99YWcZeroGuardFallsBackToFine) {
-  std::vector<float> xyz = MakeXyz(1, 1, { 7.5f });
-
-  // f=8 with 1x1 image -> wc = hc = 0 -> empty coarse -> fine fallback.
-  float p99 = ComputeP99Y(xyz.data(), 1, 1, 8);
-  // Fine path on a single positive Y returns that value.
-  EXPECT_FLOAT_EQ(p99, 7.5f);
-
-  // Helper must report empty so the fallback branch in ComputeP99Y is exercised.
-  EXPECT_TRUE(DownsampleBoxSumY(xyz.data(), 1, 1, 8).empty());
+  // T4 — wc=0 guard: f=8 on a 1x1 image gives wc = hc = 0, so DownsampleBoxSumY collapses to {} and
+  // ComputeP99Y falls back to the fine path (which on a single positive Y returns that value).
+  std::vector<float> tiny = MakeXyz(1, 1, { 7.5f });
+  EXPECT_FLOAT_EQ(ComputeP99Y(tiny.data(), 1, 1, 8), 7.5f);
+  EXPECT_TRUE(DownsampleBoxSumY(tiny.data(), 1, 1, 8).empty());
 }
 
 constexpr float kEpsilon = 1e-4f;
@@ -362,38 +354,33 @@ constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
 // its branches are reachable without a full ImGui frame. Pushing when nothing changed re-bakes the
 // composite every frame; not pushing when it did leaves the picture at the previous exposure.
 
-TEST(CompositeExposurePush, OffToOffNeverPushes) {
-  EXPECT_FALSE(ShouldPushCompositeExposure(/*composite_active=*/false, /*last_composite_active=*/false,
-                                           /*ev_total=*/1.0f, /*last_pushed_ev=*/1.0f, kEpsilon));
-  EXPECT_FALSE(ShouldPushCompositeExposure(false, false, 2.0f, kNan, kEpsilon));
-}
-
-TEST(CompositeExposurePush, OffToOnAlwaysForcesPushEvenWithSameEv) {
-  // plan-review Minor #2: composite just went live; last_pushed_ev happens to
-  // equal ev_total (a stale value from a prior composite-off period) — the
-  // edge condition alone must still force the push.
-  EXPECT_TRUE(ShouldPushCompositeExposure(/*composite_active=*/true, /*last_composite_active=*/false,
-                                          /*ev_total=*/1.0f, /*last_pushed_ev=*/1.0f, kEpsilon));
-}
-
-TEST(CompositeExposurePush, OnToOnPushesWhenValueChanges) {
-  EXPECT_TRUE(ShouldPushCompositeExposure(/*composite_active=*/true, /*last_composite_active=*/true,
-                                          /*ev_total=*/1.5f, /*last_pushed_ev=*/1.0f, kEpsilon));
-}
-
-TEST(CompositeExposurePush, OnToOnSuppressesWhenValueUnchanged) {
-  EXPECT_FALSE(ShouldPushCompositeExposure(/*composite_active=*/true, /*last_composite_active=*/true,
-                                           /*ev_total=*/1.0f, /*last_pushed_ev=*/1.0f, kEpsilon));
-  // Within epsilon of the last pushed value still counts as unchanged.
-  EXPECT_FALSE(ShouldPushCompositeExposure(true, true, 1.0f + kEpsilon * 0.5f, 1.0f, kEpsilon));
-}
-
-TEST(CompositeExposurePush, OnToOnPushesOnFirstEverPushRegardlessOfEv) {
-  // last_pushed_ev == NaN models "no push has happened yet" — must push even
-  // when composite was already active on a prior frame (e.g. edge already
-  // consumed) so the very first bake isn't silently skipped.
-  EXPECT_TRUE(ShouldPushCompositeExposure(/*composite_active=*/true, /*last_composite_active=*/true,
-                                          /*ev_total=*/0.0f, /*last_pushed_ev=*/kNan, kEpsilon));
+TEST(CompositeExposurePush, TheGuardPushesOnTheEdgeOnAChangeAndOnTheFirstBakeAndNeverOtherwise) {
+  struct Case {
+    const char* name;
+    bool active;
+    bool was_active;
+    float ev_total;
+    float last_pushed_ev;
+    bool expect_push;
+  };
+  const Case kCases[] = {
+    { "composite off, nothing to bake", false, false, 1.0f, 1.0f, false },
+    { "composite off and never pushed", false, false, 2.0f, kNan, false },
+    // plan-review Minor #2: composite just went live and last_pushed_ev happens to equal ev_total
+    // (a stale value from a prior composite-off period) — the edge alone must still force a push.
+    { "the edge into composite, same ev", true, false, 1.0f, 1.0f, true },
+    { "already on, ev moved", true, true, 1.5f, 1.0f, true },
+    { "already on, ev unchanged", true, true, 1.0f, 1.0f, false },
+    { "already on, ev within epsilon", true, true, 1.0f + kEpsilon * 0.5f, 1.0f, false },
+    // NaN models "no push has happened yet" — the very first bake must not be skipped just because
+    // the edge was already consumed on a prior frame.
+    { "already on, first ever push", true, true, 0.0f, kNan, true },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_EQ(ShouldPushCompositeExposure(c.active, c.was_active, c.ev_total, c.last_pushed_ev, kEpsilon),
+              c.expect_push)
+        << c.name;
+  }
 }
 
 using lumice::gui::slider_mapping::kLogLinearTSwitch;
@@ -500,87 +487,65 @@ using lumice::gui::MonitorRect;
 using lumice::gui::ResolveAspectFit;
 using lumice::gui::SelectMonitorIndexByCenter;
 
-// AC2 core path: 1080p laptop workarea ≈ 1920×900 after menubar/Dock.
-// Default (1600, 980) height must be clamped to 900 - 50 = 850.
-TEST(WindowSizingTest, ClampsHeightOnConstrained1080p) {
-  auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 1920, 900);
-  EXPECT_EQ(w, 1600);
-  EXPECT_EQ(h, 850);
-}
-
-// High-DPI dev monitor (e.g. MacBook 2880×1800 workarea): default size fits,
-// no clamp should happen.
-TEST(WindowSizingTest, NoClampOnHighResDisplay) {
-  auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 2880, 1800);
-  EXPECT_EQ(w, 1600);
-  EXPECT_EQ(h, 980);
-}
-
-// Small 1366×768 laptop: both width and height must clamp.
-TEST(WindowSizingTest, ClampsBothWidthAndHeight) {
-  auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 1366, 768);
-  EXPECT_EQ(w, 1316);  // 1366 - 50
-  EXPECT_EQ(h, 718);   // 768 - 50
-}
-
-// Pathological tiny workarea: floor must hold at kMinWindow{Width,Height}
-// rather than shrinking below the documented minimum.
-TEST(WindowSizingTest, FloorsAtMinWindowSize) {
-  auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 800, 600);
-  EXPECT_EQ(w, kMinWindowWidth);
-  EXPECT_EQ(h, kMinWindowHeight);
-}
-
-// Boundary: workarea - margin == desired → no clamp change.
-TEST(WindowSizingTest, ExactBoundaryNoChange) {
-  auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, 1650, 1030);
-  EXPECT_EQ(w, 1600);
-  EXPECT_EQ(h, 980);
+// The startup window size, over the workareas that decide it. A 50px margin comes off each
+// dimension before the desired size is honoured, and kMinWindow{Width,Height} is a floor beneath
+// that — a workarea small enough to push through it must not shrink the window below the documented
+// minimum.
+TEST(WindowSizingTest, TheDesiredSizeIsClampedToTheWorkareaAndFlooredAtTheMinimum) {
+  struct Case {
+    const char* name;
+    int work_w;
+    int work_h;
+    int expect_w;
+    int expect_h;
+  };
+  const Case kCases[] = {
+    // 1080p laptop workarea ≈ 1920×900 after menubar/Dock: only the height clamps (900 - 50).
+    { "constrained 1080p", 1920, 900, 1600, 850 },
+    { "high-DPI dev monitor", 2880, 1800, 1600, 980 },
+    { "1366x768 laptop, both dimensions", 1366, 768, 1316, 718 },
+    { "pathologically small workarea", 800, 600, kMinWindowWidth, kMinWindowHeight },
+    // workarea - margin == desired, so nothing moves.
+    { "exact boundary", 1650, 1030, 1600, 980 },
+  };
+  for (const Case& c : kCases) {
+    auto [w, h] = ClampWindowSizeToWorkarea(1600, 980, c.work_w, c.work_h);
+    EXPECT_EQ(w, c.expect_w) << c.name;
+    EXPECT_EQ(h, c.expect_h) << c.name;
+  }
 }
 
 // ========== Monitor selection (multi-monitor aspect ratio fix) ==========
 
-TEST(MonitorSelectionTest, EmptyListReturnsNegative) {
-  EXPECT_EQ(SelectMonitorIndexByCenter(100, 100, nullptr, 0), -1);
-}
-
-TEST(MonitorSelectionTest, SingleMonitorCenterInside) {
-  constexpr MonitorRect kRects[] = { { 0, 0, 1920, 1080 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(960, 540, kRects, 1), 0);
-}
-
-TEST(MonitorSelectionTest, SingleMonitorCenterOutside) {
-  constexpr MonitorRect kRects[] = { { 0, 0, 1920, 1080 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(2000, 500, kRects, 1), -1);
-}
-
-TEST(MonitorSelectionTest, DualMonitorPrimaryCenter) {
-  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(1200, 700, kRects, 2), 0);
-}
-
-TEST(MonitorSelectionTest, DualMonitorSecondaryCenter) {
-  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(3500, 500, kRects, 2), 1);
-}
-
-// Window straddles the seam between monitors; center point wins.
-TEST(MonitorSelectionTest, CrossMonitorCenterPicksByCenter) {
-  constexpr MonitorRect kRects[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
-  // Window x=2400, w=400 → center x = 2600 ∈ secondary.
-  EXPECT_EQ(SelectMonitorIndexByCenter(2600, 200, kRects, 2), 1);
-}
-
-// Left/top edge is inclusive.
-TEST(MonitorSelectionTest, BoundaryLeftEdgeInclusive) {
-  constexpr MonitorRect kRects[] = { { 100, 200, 300, 400 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(100, 200, kRects, 1), 0);
-}
-
-// Right/bottom edge is exclusive — prevents adjacent monitors double-claiming.
-TEST(MonitorSelectionTest, BoundaryRightEdgeExclusive) {
-  constexpr MonitorRect kRects[] = { { 100, 200, 300, 400 } };
-  EXPECT_EQ(SelectMonitorIndexByCenter(400, 200, kRects, 1), -1);
+// Which monitor a window belongs to is decided by its CENTER point, so a window straddling the seam
+// lands on exactly one. The rectangle's left/top edge is inclusive and its right/bottom edge
+// exclusive, which is what stops two adjacent monitors from both claiming a point on the seam.
+TEST(MonitorSelectionTest, TheCenterPointPicksExactlyOneMonitorWithHalfOpenBounds) {
+  constexpr MonitorRect kSingle[] = { { 0, 0, 1920, 1080 } };
+  constexpr MonitorRect kDual[] = { { 0, 0, 2560, 1440 }, { 2560, 0, 1920, 1080 } };
+  constexpr MonitorRect kOffset[] = { { 100, 200, 300, 400 } };
+  struct Case {
+    const char* name;
+    int cx;
+    int cy;
+    const MonitorRect* rects;
+    int count;
+    int expect_index;
+  };
+  const Case kCases[] = {
+    { "no monitors at all", 100, 100, nullptr, 0, -1 },
+    { "inside the only monitor", 960, 540, kSingle, 1, 0 },
+    { "outside the only monitor", 2000, 500, kSingle, 1, -1 },
+    { "inside the primary", 1200, 700, kDual, 2, 0 },
+    { "inside the secondary", 3500, 500, kDual, 2, 1 },
+    // A window at x=2400 w=400 has its center at 2600, in the secondary.
+    { "straddling the seam, center wins", 2600, 200, kDual, 2, 1 },
+    { "left/top edge is inclusive", 100, 200, kOffset, 1, 0 },
+    { "right/bottom edge is exclusive", 400, 200, kOffset, 1, -1 },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_EQ(SelectMonitorIndexByCenter(c.cx, c.cy, c.rects, c.count), c.expect_index) << c.name;
+  }
 }
 
 // ========== Aspect-fit clamp detection (screen-too-small feedback) ==========
@@ -593,57 +558,45 @@ namespace {
 constexpr float kCollapsedStripWidth = 20.0f;  // Mirror app.cpp's local constant.
 }
 
-// Wide work area easily accommodates 2:1 — no clamp.
-TEST(AspectFitTest, FitsWithoutClampOnWideMonitor) {
-  AspectFitResult fit = ResolveAspectFit(/*current_win_w=*/1600, /*ratio=*/2.0f,
-                                         /*work_w=*/2880, /*work_h=*/1800, kLeftPanelWidth, kRightPanelWidth,
-                                         kTopBarHeight, kStatusBarHeight);
-  EXPECT_FALSE(fit.was_clamped);
-  EXPECT_FLOAT_EQ(fit.requested_preview_ratio, 2.0f);
-  EXPECT_LT(std::abs(fit.achieved_preview_ratio - 2.0f) / 2.0f, kAspectClampTolerance);
-}
-
-// 1280×720 picking 2:1 → preview region cannot reach 2:1 because chrome
-// (panels + topbar + statusbar) eats too much; was_clamped must fire.
-TEST(AspectFitTest, ClampsOnSmallScreen2x1) {
-  AspectFitResult fit = ResolveAspectFit(/*current_win_w=*/1280, /*ratio=*/2.0f,
-                                         /*work_w=*/1280, /*work_h=*/720, kLeftPanelWidth, kRightPanelWidth,
-                                         kTopBarHeight, kStatusBarHeight);
-  EXPECT_TRUE(fit.was_clamped);
-  // Achieved preview ratio should be much smaller than 2:1 — sanity-check
-  // it stays in a plausible band rather than asserting an exact value, since
-  // the recalc_w gate behavior matters more than the precise numerics.
-  EXPECT_LT(fit.achieved_preview_ratio, 2.0f);
-  EXPECT_GT(fit.achieved_preview_ratio, 0.5f);
-  EXPECT_FLOAT_EQ(fit.requested_preview_ratio, 2.0f);
-}
-
-// 16:9 on a 1280×720 monitor: depending on chrome the achieved ratio may or
-// may not exceed the 5% tolerance. We assert numerically that the helper does
-// not silently misreport — was_clamped must mirror the actual deviation.
-TEST(AspectFitTest, ClampsOnSmallScreen16x9) {
-  constexpr float kRatio = 16.0f / 9.0f;
-  AspectFitResult fit = ResolveAspectFit(/*current_win_w=*/1280, /*ratio=*/kRatio,
-                                         /*work_w=*/1280, /*work_h=*/720, kLeftPanelWidth, kRightPanelWidth,
-                                         kTopBarHeight, kStatusBarHeight);
-  // Whatever the answer, was_clamped and the deviation must agree.
-  float deviation = std::abs(fit.achieved_preview_ratio - kRatio) / kRatio;
-  EXPECT_EQ(fit.was_clamped, deviation >= kAspectClampTolerance);
-  EXPECT_FLOAT_EQ(fit.requested_preview_ratio, kRatio);
-}
-
-// Portrait 2:1 → 0.5 ratio. With wide work area the preview-w shrinks; this
-// path is chosen for coverage of the ratio < 1 branch (height-driven).
-TEST(AspectFitTest, PortraitRatio) {
-  AspectFitResult fit = ResolveAspectFit(/*current_win_w=*/1600, /*ratio=*/0.5f,
-                                         /*work_w=*/2880, /*work_h=*/1800, kLeftPanelWidth, kRightPanelWidth,
-                                         kTopBarHeight, kStatusBarHeight);
-  EXPECT_FLOAT_EQ(fit.requested_preview_ratio, 0.5f);
-  // Achieved ratio is what the helper computes from the post-clamp
-  // target_w/target_h; for portrait+wide-monitor it should still be ≤
-  // requested (preview_h grows past the screen if anything, not preview_w).
-  float deviation = std::abs(fit.achieved_preview_ratio - 0.5f) / 0.5f;
-  EXPECT_EQ(fit.was_clamped, deviation >= kAspectClampTolerance);
+// The reported ratio and the clamp flag must agree, on every workarea. Only the wide-monitor row
+// pins a polarity outright (2:1 fits, so nothing may be clamped) and only the small-screen 2:1 row
+// pins that it must NOT fit; the rest assert the invariant that matters — was_clamped mirrors the
+// actual deviation, so the helper can never silently misreport — because the precise numerics of
+// the recalc_w gate matter less than never lying about them.
+TEST(AspectFitTest, TheClampFlagAlwaysMirrorsTheDeviationItReports) {
+  struct Case {
+    const char* name;
+    int win_w;
+    float ratio;
+    int work_w;
+    int work_h;
+    int expect_clamped;  // -1 = derive it from the deviation
+  };
+  const Case kCases[] = {
+    { "wide monitor easily fits 2:1", 1600, 2.0f, 2880, 1800, 0 },
+    // 1280x720 picking 2:1: the preview region cannot reach it, because the chrome (panels + top
+    // bar + status bar) eats too much.
+    { "small screen cannot fit 2:1", 1280, 2.0f, 1280, 720, 1 },
+    { "small screen, 16:9", 1280, 16.0f / 9.0f, 1280, 720, -1 },
+    // Portrait: the ratio < 1 branch is height-driven, so preview_h grows past the screen if
+    // anything rather than preview_w.
+    { "portrait on a wide monitor", 1600, 0.5f, 2880, 1800, -1 },
+  };
+  for (const Case& c : kCases) {
+    AspectFitResult fit = ResolveAspectFit(c.win_w, c.ratio, c.work_w, c.work_h, kLeftPanelWidth, kRightPanelWidth,
+                                           kTopBarHeight, kStatusBarHeight);
+    EXPECT_FLOAT_EQ(fit.requested_preview_ratio, c.ratio) << c.name;
+    const float deviation = std::abs(fit.achieved_preview_ratio - c.ratio) / c.ratio;
+    EXPECT_EQ(fit.was_clamped, deviation >= kAspectClampTolerance) << c.name;
+    if (c.expect_clamped >= 0) {
+      EXPECT_EQ(fit.was_clamped, c.expect_clamped != 0) << c.name;
+    }
+    if (c.expect_clamped == 1) {
+      // Sanity band rather than an exact value: what matters is that it stayed plausible.
+      EXPECT_LT(fit.achieved_preview_ratio, c.ratio) << c.name;
+      EXPECT_GT(fit.achieved_preview_ratio, 0.5f) << c.name;
+    }
+  }
 }
 
 // Collapsed panels → less chrome → small monitor can now fit 2:1 closer.

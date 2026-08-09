@@ -71,29 +71,25 @@ TEST(RunLifecycleChain, StatsApplyKeysOnTheStatsOwnEpochNotTheBundleEpoch) {
     { "fresh but empty stats", 7, 7, 0, 7, false },
   };
 
+  PreviewSnapshot fresh;
   for (const StatsCase& c : kCases) {
     PreviewSnapshot snap = MakeSnapshot(c.bundle_epoch, LUMICE_LIFECYCLE_RUNNING);
     snap.stats_epoch = c.stats_epoch;
     snap.stats_sim_ray_num = c.rays;
     snap.stats_ray_seg_num = c.rays;
     EXPECT_EQ(ShouldApplyStats(snap, c.committed_epoch), c.expect_applied) << c.name;
+    if (c.expect_applied) {
+      fresh = snap;
+    }
   }
-}
 
-// The property behind the table, stated so a future change to the gate cannot satisfy the rows
-// above by accident: two snapshots identical except for stats_epoch must decide differently. If
-// they ever decide the same, the stamp has stopped being load-bearing whatever the table says.
-TEST(RunLifecycleChain, StatsEpochIsTheOnlyFieldThatDecidesTheCarriedForwardCase) {
-  PreviewSnapshot fresh = MakeSnapshot(9, LUMICE_LIFECYCLE_RUNNING);
-  fresh.stats_epoch = 9;
-  fresh.stats_sim_ray_num = 4242;
-  fresh.stats_ray_seg_num = 4242;
-
+  // The property behind the table, stated so a future change to the gate cannot satisfy the rows
+  // above by accident: two snapshots identical except for stats_epoch must decide differently. If
+  // they ever decide the same, the stamp has stopped being load-bearing whatever the table says.
   PreviewSnapshot carried = fresh;
-  carried.stats_epoch = 8;
-
-  EXPECT_TRUE(ShouldApplyStats(fresh, 9));
-  EXPECT_FALSE(ShouldApplyStats(carried, 9));
+  carried.stats_epoch = fresh.stats_epoch - 1;
+  EXPECT_TRUE(ShouldApplyStats(fresh, fresh.epoch));
+  EXPECT_FALSE(ShouldApplyStats(carried, fresh.epoch));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -382,22 +378,17 @@ TEST(RunLifecycleChain, SimStateIsAFunctionOfIntentEpochAndObservation) {
     const PreviewSnapshot* snap_ptr = c.have_snapshot ? &snap : nullptr;
     EXPECT_EQ(ReconcileSimState(c.intent, c.committed_epoch, snap_ptr, c.dirty), c.expected) << c.name;
   }
-}
 
-// The property behind the demotion column, stated so a future change cannot satisfy those rows by
-// accident: an edit is only news about a result that EXISTS. Demoting kSimulating would tell the
-// user their running simulation is already invalid; demoting kIdle would put a "modified" badge on a
-// document that has never run.
-TEST(RunLifecycleChain, DirtyDemotesAFinishedResultAndOnlyAFinishedResult) {
-  const RunIntent kDemotable[] = { RunIntent::kLoaded, RunIntent::kStopped, RunIntent::kRunCompleted };
-  const RunIntent kNotDemotable[] = { RunIntent::kNone, RunIntent::kRunning, RunIntent::kStopping };
-
-  for (RunIntent intent : kDemotable) {
+  // The property behind the demotion column, stated so a future change cannot satisfy those rows by
+  // accident: an edit is only news about a result that EXISTS. Demoting kSimulating would tell the
+  // user their running simulation is already invalid; demoting kIdle would put a "modified" badge
+  // on a document that has never run.
+  for (RunIntent intent : { RunIntent::kLoaded, RunIntent::kStopped, RunIntent::kRunCompleted }) {
     EXPECT_EQ(ReconcileSimState(intent, 3, nullptr, true), GuiState::SimState::kModified)
         << "intent " << static_cast<int>(intent);
   }
-  for (RunIntent intent : kNotDemotable) {
-    PreviewSnapshot running = MakeSnapshot(3, LUMICE_LIFECYCLE_RUNNING);
+  PreviewSnapshot running = MakeSnapshot(3, LUMICE_LIFECYCLE_RUNNING);
+  for (RunIntent intent : { RunIntent::kNone, RunIntent::kRunning, RunIntent::kStopping }) {
     EXPECT_EQ(ReconcileSimState(intent, 3, &running, true), ReconcileSimState(intent, 3, &running, false))
         << "intent " << static_cast<int>(intent);
   }
@@ -460,29 +451,29 @@ TEST(RunLifecycleChain, CompositeUploadFiresOnADisplayFlipThatProducesNoNewSnaps
               c.expect_fire)
         << c.name;
   }
-}
 
-// On a scene with no colour classes the composite gate must collapse to the plain upload gate: with
-// no composite payload the effective mode is always non-composite, so the mode-change term is
-// structurally unreachable and no flip can slip an extra upload through. This is what keeps the
-// zero-colour path free of any cost from the feature.
-TEST(RunLifecycleChain, WithNoCompositePayloadTheCompositeGateIsThePlainUploadGate) {
-  const PreviewSnapshot snap = MakeConsumedSnapshot(/*is_composite=*/false);
+  // On a scene with no colour classes the same gate must collapse to the plain upload gate: with no
+  // composite payload the effective mode is always non-composite, so the mode-change term is
+  // structurally unreachable and no flip can slip an extra upload through. This is what keeps the
+  // zero-colour path free of any cost from the feature.
+  const PreviewSnapshot plain = MakeConsumedSnapshot(/*is_composite=*/false);
   for (unsigned long long last_serial : { 0ull, 10ull }) {
     for (bool show_composite : { false, true }) {
-      EXPECT_EQ(ShouldFireCompositeUpload(snap, last_serial, /*display_epoch_floor=*/4, show_composite,
+      EXPECT_EQ(ShouldFireCompositeUpload(plain, last_serial, /*display_epoch_floor=*/4, show_composite,
                                           /*last_uploaded_as_composite=*/false),
-                ShouldUploadPayload(snap, last_serial, /*display_epoch_floor=*/4))
+                ShouldUploadPayload(plain, last_serial, /*display_epoch_floor=*/4))
           << "last_serial=" << last_serial << " show_composite=" << show_composite;
     }
   }
 }
 
-// Opening the Colours window turns the composite view on only when there is no user preference to
-// respect yet — i.e. when no classes exist. Once they do, the remembered choice wins. And the toggle
-// itself is negation and nothing more, which is what lets the two write sites (the top-bar button
-// and the window's checkbox) share one asserted meaning.
-TEST(RunLifecycleChain, OpeningTheColoursWindowDefaultsTheViewOnOnlyWithNothingToRemember) {
+// What the user's two write sites (the top-bar button and the Colours window's checkbox) mean, and
+// what the mode they set folds together with. Opening the window turns the composite view on only
+// when there is no preference to respect yet — i.e. when no classes exist; once they do, the
+// remembered choice wins. The toggle itself is negation and nothing more, which is what lets the two
+// write sites share one asserted meaning. And the effective upload mode is that preference ANDed
+// with what the server actually produced.
+TEST(RunLifecycleChain, TheColourViewPreferenceIsSetInOnePlaceAndFoldedWithServerAvailability) {
   EXPECT_TRUE(ShouldDefaultEnableColorsOnOpen(/*no_color_classes=*/true));
   EXPECT_FALSE(ShouldDefaultEnableColorsOnOpen(/*no_color_classes=*/false));
 
@@ -492,24 +483,14 @@ TEST(RunLifecycleChain, OpeningTheColoursWindowDefaultsTheViewOnOnlyWithNothingT
   EXPECT_TRUE(s.show_composite_preview);
   ToggleCompositePreview(s);
   EXPECT_FALSE(s.show_composite_preview);
-}
 
-TEST(RunLifecycleChain, CompositeUploadModeFoldsServerAvailabilityWithUserPreference) {
-  struct Case {
-    bool payload_is_composite;
-    bool show_composite_preview;
-    bool expected;
-  };
-  const Case kCases[] = {
-    { true, true, true },
-    // Asked for, not produced: falling back to the xyz view is the honest answer, not an empty one.
-    { false, true, false },
-    { true, false, false },
-    { false, false, false },
-  };
-  for (const Case& c : kCases) {
-    EXPECT_EQ(ShouldUseCompositeUpload(c.payload_is_composite, c.show_composite_preview), c.expected)
-        << "payload_is_composite=" << c.payload_is_composite << " show_composite_preview=" << c.show_composite_preview;
+  for (bool payload_is_composite : { false, true }) {
+    for (bool show_composite_preview : { false, true }) {
+      // Asked for but not produced falls back to the xyz view — the honest answer, not an empty one.
+      EXPECT_EQ(ShouldUseCompositeUpload(payload_is_composite, show_composite_preview),
+                payload_is_composite && show_composite_preview)
+          << "payload_is_composite=" << payload_is_composite << " show=" << show_composite_preview;
+    }
   }
 }
 

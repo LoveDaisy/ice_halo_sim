@@ -339,10 +339,11 @@ TEST(LegacyDocumentChain, TheKeysWrittenToDiskAreSpelledTheWayReadersExpect) {
   cr.upper_alpha = 33.0f;
   cr.lower_alpha = 22.0f;
   cr.zenith = AxisDist{ AxisDistType::kGauss, 12.0f, 1.0f };
+  const auto crystal_of = [](const std::string& text) {
+    return nlohmann::json::parse(text)["layers"][0]["entries"][0]["crystal"];
+  };
 
-  const nlohmann::json doc = nlohmann::json::parse(SerializeGuiStateJson(g_state));
-  const nlohmann::json& crystal = doc["layers"][0]["entries"][0]["crystal"];
-
+  const nlohmann::json crystal = crystal_of(SerializeGuiStateJson(g_state));
   EXPECT_TRUE(crystal["shape"].contains("upper_wedge_angle"));
   EXPECT_TRUE(crystal["shape"].contains("lower_wedge_angle"));
   EXPECT_NEAR(crystal["shape"]["upper_wedge_angle"].get<float>(), 33.0f, 1e-3f);
@@ -355,22 +356,13 @@ TEST(LegacyDocumentChain, TheKeysWrittenToDiskAreSpelledTheWayReadersExpect) {
     EXPECT_TRUE(crystal["axis"].contains(slot)) << slot;
   }
   EXPECT_NEAR(crystal["axis"]["zenith"]["mean"].get<float>(), 12.0f, 1e-3f);
-}
 
-// A crystal with no grouping must emit no `sync_group` key at all, so every file written before the
-// key existed keeps its exact wire form. Both directions: asserting absence alone would pass just
-// as happily on a writer that never emits the key.
-TEST(LegacyDocumentChain, SyncGroupKeyAppearsOnlyWhenSomethingIsGrouped) {
-  DoNew();
-  CrystalConfig& cr = CrystalOf(g_state, g_state.layers.at(0).entries.at(0));
-  cr.type = CrystalType::kPrism;
-  const auto shape_of = [](const std::string& doc) {
-    return nlohmann::json::parse(doc)["layers"][0]["entries"][0]["crystal"]["shape"];
-  };
-
-  EXPECT_FALSE(shape_of(SerializeGuiStateJson(g_state)).contains("sync_group"));
+  // A crystal with no grouping must emit no `sync_group` key at all, so every file written before
+  // the key existed keeps its exact wire form. Both directions: asserting absence alone would pass
+  // just as happily on a writer that never emits the key.
+  EXPECT_FALSE(crystal["shape"].contains("sync_group"));
   cr.face_distance[3].sync_group = 1;
-  EXPECT_TRUE(shape_of(SerializeGuiStateJson(g_state)).contains("sync_group"));
+  EXPECT_TRUE(crystal_of(SerializeGuiStateJson(g_state))["shape"].contains("sync_group"));
 }
 
 // The overlay split must survive the write, not just the read: a writer that collapsed the two
