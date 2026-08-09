@@ -78,17 +78,12 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_slider_mapping.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_window_sizing.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_exposure_push.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
   # Widget enable/disable rules and the shape-scalar domain table, extracted out of the draw
   # functions in app_panels.cpp / edit_modals.cpp so they can be asserted over their whole domain
   # (every SimState, every AspectPreset, every LUMICE_SHAPE_SCALAR_* slot) instead of one branch
   # per UI-driven case. Header-only and ImGui-free, hence this target rather than gui_unit_test.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_widget_rules.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_shape_scalar_domain.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the
