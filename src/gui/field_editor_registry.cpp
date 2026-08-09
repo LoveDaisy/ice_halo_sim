@@ -300,10 +300,10 @@ FieldEditorEntry LensTypeField() {
 // registry that could not express "serialized value != bound value" would have to leave every such
 // field read-only, and this is the field that proves it can.
 FieldEditorEntry SimResolutionField() {
-  static const char* const kLabels[] = { "512", "1024", "2048", "4096" };
-  static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kSimResolutionCount,
-                "resolution labels must cover kSimResolutions");
-  return ComboField([](GuiState& state) { return &state.renderer.sim_resolution_index; }, kLabels, kSimResolutionCount);
+  // Labels come from gui_state.hpp, shared with the View panel's own combo — a second copy here
+  // would be a second answer to "what does index 1 mean".
+  return ComboField([](GuiState& state) { return &state.renderer.sim_resolution_index; }, kSimResolutionLabels,
+                    kSimResolutionCount);
 }
 
 // The preset illuminants ONLY. The main UI's combo carries a seventh item ("Custom...") that opens

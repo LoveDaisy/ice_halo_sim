@@ -8,6 +8,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/app.hpp"
+#include "gui/aspect_ratio_rules.hpp"
 #include "gui/color_window.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
@@ -19,6 +20,8 @@
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
+#include "gui/sim_state_rules.hpp"
+#include "gui/sun_circle_rules.hpp"
 #include "imgui.h"
 
 // =============================================================================
@@ -144,9 +147,9 @@ void RenderTopBar(float window_width) {
   // Run/Stop — fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on
   // toggle. `busy` widens the file-op gates below: New/Open/Save/backend-toggle stay disabled while
   // the backend is still draining an async Stop (kStopping), not just while simulating.
-  bool simulating = (g_state.sim_state == SimState::kSimulating);
-  bool stopping = (g_state.sim_state == SimState::kStopping);
-  bool busy = simulating || stopping;
+  bool simulating = IsSimulating(g_state.sim_state);
+  bool stopping = IsStopping(g_state.sim_state);
+  bool busy = IsBusy(g_state.sim_state);
   const auto& style = ImGui::GetStyle();
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
@@ -181,11 +184,11 @@ void RenderTopBar(float window_width) {
   // Revert area — always rendered for stable layout, hidden when not modified.
   // Alpha=0 + BeginDisabled: invisible and non-interactive, but still occupies layout space.
   // The hidden area intercepts clicks, which is harmless in this horizontal toolbar context.
-  bool modified = (g_state.sim_state == SimState::kModified);
+  bool modified = IsModified(g_state.sim_state);
   if (!modified) {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
-    ImGui::BeginDisabled();
   }
+  ImGui::BeginDisabled(!modified);
   ImGui::SameLine();
   ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
   // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
@@ -204,8 +207,8 @@ void RenderTopBar(float window_width) {
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
     DoRevert();
   }
+  ImGui::EndDisabled();
   if (!modified) {
-    ImGui::EndDisabled();
     ImGui::PopStyleVar();
   }
 
@@ -216,9 +219,7 @@ void RenderTopBar(float window_width) {
   // File operations — New/Open disabled while busy (simulating OR async Stop draining); Save menu
   // itself stays enabled so read-only exports (Screenshot / Dual Fisheye Equal Area /
   // Equirectangular / Config JSON) remain reachable.
-  if (busy) {
-    ImGui::BeginDisabled();
-  }
+  ImGui::BeginDisabled(busy);
   if (ImGui::Button("New")) {
     CheckUnsavedAndDo(PendingAction::kNew);
   }
@@ -226,9 +227,7 @@ void RenderTopBar(float window_width) {
   if (ImGui::Button("Open")) {
     CheckUnsavedAndDo(PendingAction::kOpen);
   }
-  if (busy) {
-    ImGui::EndDisabled();
-  }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   {
     if (ImGui::Button("Save")) {
@@ -237,18 +236,14 @@ void RenderTopBar(float window_width) {
     if (ImGui::BeginPopup("SaveMenu")) {
       bool no_texture = !g_preview.HasTexture();
       bool has_server = g_server != nullptr && g_state.sim_state != GuiState::SimState::kIdle;
-      if (busy) {
-        ImGui::BeginDisabled();
-      }
+      ImGui::BeginDisabled(busy);
       if (ImGui::MenuItem("Save")) {
         DoSave();
       }
       if (ImGui::MenuItem("Save Copy")) {
         DoSaveAs();
       }
-      if (busy) {
-        ImGui::EndDisabled();
-      }
+      ImGui::EndDisabled();
       ImGui::Separator();
       if (ImGui::MenuItem("Screenshot...", nullptr, false, !no_texture)) {
         DoExportPreviewPng();
@@ -362,15 +357,11 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
-    if (composite_empty) {
-      ImGui::BeginDisabled();
-    }
+    ImGui::BeginDisabled(composite_empty);
     if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
-    if (composite_empty) {
-      ImGui::EndDisabled();
-    }
+    ImGui::EndDisabled();
     if (composite_now) {
       ImGui::PopStyleColor(3);
     }
@@ -761,9 +752,8 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Rendering");
-    const char* res_labels[] = { "512", "1024", "2048", "4096" };
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
-    ImGui::Combo("Resolution##display", &r.sim_resolution_index, res_labels, kSimResolutionCount);
+    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
@@ -782,11 +772,8 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     const char* preview_label = kAspectPresetNames[preset_idx];
     if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
       for (int i = 0; i < kAspectPresetCount; i++) {
-        bool is_match_bg = (static_cast<AspectPreset>(i) == AspectPreset::kMatchBg);
-        bool disabled = is_match_bg && !g_preview.HasBackground();
-        if (disabled) {
-          ImGui::BeginDisabled();
-        }
+        bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
+        ImGui::BeginDisabled(disabled);
         bool selected = (i == preset_idx);
         if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
           g_state.aspect_preset = static_cast<AspectPreset>(i);
@@ -795,15 +782,11 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         if (selected) {
           ImGui::SetItemDefaultFocus();
         }
-        if (disabled) {
-          ImGui::EndDisabled();
-        }
+        ImGui::EndDisabled();
       }
       ImGui::EndCombo();
     }
-    bool disable_flip = (g_state.aspect_preset == AspectPreset::kFree || g_state.aspect_preset == AspectPreset::k1x1 ||
-                         g_state.aspect_preset == AspectPreset::kMatchBg);
-    ImGui::BeginDisabled(disable_flip);
+    ImGui::BeginDisabled(AspectFlipDisabled(g_state.aspect_preset));
     const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
     if (ImGui::Button(flip_label)) {
       g_state.aspect_portrait = !g_state.aspect_portrait;
@@ -912,30 +895,20 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         ImGui::OpenPopup("SunCirclesEdit");
       }
       if (ImGui::BeginPopup("SunCirclesEdit")) {
-        bool at_limit = static_cast<int>(g_state.sun_circle_angles.size()) >= kMaxSunCircles;
+        bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
 
         // Preset buttons
         const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
         for (float p : presets) {
-          bool already = false;
-          for (float a : g_state.sun_circle_angles) {
-            if (std::abs(a - p) < 0.01f) {
-              already = true;
-              break;
-            }
-          }
+          const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
           char label[16];
           std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-          if (already || at_limit) {
-            ImGui::BeginDisabled();
-          }
+          ImGui::BeginDisabled(already || at_limit);
           if (ImGui::Button(label)) {
             g_state.sun_circle_angles.push_back(p);
             std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
           }
-          if (already || at_limit) {
-            ImGui::EndDisabled();
-          }
+          ImGui::EndDisabled();
           ImGui::SameLine();
         }
         ImGui::NewLine();
@@ -946,17 +919,13 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
         ImGui::PopItemWidth();
         ImGui::SameLine();
-        if (at_limit) {
-          ImGui::BeginDisabled();
-        }
+        ImGui::BeginDisabled(at_limit);
         if (ImGui::Button("+##add_circle")) {
-          custom_angle = std::max(0.1f, std::min(180.0f, custom_angle));
+          custom_angle = ClampSunCircleAngle(custom_angle);
           g_state.sun_circle_angles.push_back(custom_angle);
           std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
         }
-        if (at_limit) {
-          ImGui::EndDisabled();
-        }
+        ImGui::EndDisabled();
 
         // Current list with delete buttons
         ImGui::Separator();
@@ -1557,15 +1526,14 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
     ImGui::Text("The on-screen preview reflects the previous config, not the current one.");
     ImGui::Separator();
 
-    // "Run first" is only meaningful when there is a live server to run on and
-    // no run is already inflight. Disabled otherwise (matches the top-bar Run
-    // button gating semantics; single-source would be nicer but the top bar's
-    // enable predicate is inlined and not exported).
-    const bool can_run = (g_server != nullptr) && (g_state.sim_state != GuiState::SimState::kSimulating) &&
-                         (g_state.sim_state != GuiState::SimState::kStopping);
-    if (!can_run) {
-      ImGui::BeginDisabled();
-    }
+    // "Run first" is only meaningful when there is a live server to run on and no run is already
+    // inflight. The second half is the SAME "busy" notion the top bar gates New/Open/Save on —
+    // shared through sim_state_rules.hpp rather than restated here, which is what the note that
+    // used to sit at this line ("single-source would be nicer but the top bar's enable predicate
+    // is inlined and not exported") asked for. The two gates are still distinct predicates: this
+    // one additionally requires a live server.
+    const bool can_run = CanRunFromModal(g_server != nullptr, g_state.sim_state);
+    ImGui::BeginDisabled(!can_run);
     if (ImGui::Button("Run first", ImVec2(100, 0))) {
       DoRun(/*user_initiated=*/true);
       g_pending_save_kind = PendingSaveKind::kNone;
@@ -1574,9 +1542,7 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
       g_pending_action = PendingAction::kNone;
       ImGui::CloseCurrentPopup();
     }
-    if (!can_run) {
-      ImGui::EndDisabled();
-    }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Save anyway", ImVec2(120, 0))) {
       switch (g_pending_save_kind) {

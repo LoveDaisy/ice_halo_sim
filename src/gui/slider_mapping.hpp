@@ -3,16 +3,11 @@
 
 // Pure-function slider mapping helpers, shared by panels.cpp (UI) and test code.
 //
-// Three-H-mapping conventions — single source of truth for how Crystal "H"-family
-// sliders map the user-visible value to the underlying [0,1] slider position.
-// Call sites in edit_modals.cpp MUST match one of these rows:
-//
-//   | Type                     | Value range     | Scale          | Rationale                                    |
-//   |--------------------------|-----------------|----------------|----------------------------------------------|
-//   | Prism Height             | [0.01, 100]     | kLog           | Heights span 4 orders of magnitude            |
-//   | Pyramid prism_h          | [0, 100]        | kLogLinear     | Allows 0 + fine control near 0 + wide range   |
-//   | Pyramid upper_h / lower_h| [0, 1]          | kLinear        | Wedge fraction — natural linear unit          |
-//   | Face Distance (per face) | [0, 2]          | kLinear        | Near-unit multiplier; rarely > 2 in practice  |
+// This file owns the MAPPING (how a value becomes a [0,1] slider position). It does NOT own the
+// DOMAIN each shape scalar is mapped over — the table that used to be written out here in prose,
+// with a "call sites in edit_modals.cpp MUST match one of these rows" instruction that nothing
+// could check, is now data in gui/shape_scalar_domain.hpp and is read by the row helper itself.
+// Read that file for which slot gets which range / format / scale.
 //
 // kLinear rows use ImGui::SliderFloat directly; no mapping helper is defined here.
 // The Pyramid prism_h kLogLinear mapping was introduced in tasks.md #145.3; keep

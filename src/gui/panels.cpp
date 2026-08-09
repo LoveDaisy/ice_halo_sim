@@ -17,6 +17,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
+#include "gui/shape_scalar_domain.hpp"
 #include "gui/slider_mapping.hpp"
 #include "imgui.h"
 #include "lumice.h"
@@ -806,8 +807,12 @@ bool RenderSyncCell(const char* label, CrystalConfig& cr, int slot) {
 
 }  // namespace
 
-bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, float center_min, float center_max,
-                             const char* center_fmt, SliderScale center_scale) {
+bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
+  const ShapeScalarDomain& domain = ShapeScalarDomainFor(slot);  // single domain authority
+  const float center_min = domain.min_value;
+  const float center_max = domain.max_value;
+  const char* center_fmt = domain.fmt;
+  const SliderScale center_scale = domain.scale;
   ShapeDist& dist = ShapeScalarAt(cr, slot);  // single mapping authority (gui_state.hpp)
   bool changed = false;
   // No PushID wrapper: the center slider keeps its original `label`-derived id (so existing
