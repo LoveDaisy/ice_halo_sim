@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -80,6 +81,68 @@ const std::vector<FieldProbe>& FieldProbes() {
         }
         return out;
       } },
+    { "crystal.face_distance",
+      // Per face, not one value broadcast: the six faces are independently editable and a writer
+      // that emitted the first one six times round-trips perfectly while silently making every
+      // crystal regular. Face 2 keeps a centre equal to the 1.0 default with a non-zero spread —
+      // the boundary a "did the user change this" check written on the centre alone drops.
+      [](GuiState& s) {
+        CrystalConfig& cr = s.crystals.at(0);
+        for (int i = 0; i < 6; ++i) {
+          cr.face_distance[i] = ShapeDist{ ShapeDistType::kUniform, 0.8f + 0.1f * static_cast<float>(i), 0.05f };
+        }
+        cr.face_distance[2] = ShapeDist{ ShapeDistType::kUniform, 1.0f, 0.15f };
+      },
+      [](const GuiState& s) {
+        std::string out;
+        for (int i = 0; i < 6; ++i) {
+          const ShapeDist& d = s.crystals.at(0).face_distance[i];
+          out += (i ? " " : "") + std::to_string(d.center) + "/" + std::to_string(d.spread);
+        }
+        return out;
+      } },
+    { "crystal.axis_dists",
+      // All three axes, each with its own family and numbers. They share one serializer, so a
+      // single axis would seem to be enough; it is not, because the omit-if-default branch is
+      // per axis and roll is the one whose default makes it the natural candidate to skip.
+      [](GuiState& s) {
+        CrystalConfig& cr = s.crystals.at(0);
+        cr.zenith = AxisDist{ AxisDistType::kGauss, 25.0f, 3.0f };
+        cr.azimuth = AxisDist{ AxisDistType::kUniform, 10.0f, 20.0f };
+        cr.roll = AxisDist{ AxisDistType::kLaplacian, 5.0f, 2.0f };
+      },
+      [](const GuiState& s) {
+        const CrystalConfig& cr = s.crystals.at(0);
+        const auto one = [](const AxisDist& d) {
+          return std::to_string(static_cast<int>(d.type)) + " " + std::to_string(d.mean) + " " + std::to_string(d.std);
+        };
+        return one(cr.zenith) + " | " + one(cr.azimuth) + " | " + one(cr.roll);
+      } },
+    { "entry.proportion",
+      // How much of the population this entry is. Dropping it does not change what is drawn, only
+      // how much of it, which is why nothing on screen says the file came back different.
+      [](GuiState& s) { s.layers.at(0).entries.at(0).proportion = 75.0f; },
+      [](const GuiState& s) { return std::to_string(s.layers.at(0).entries.at(0).proportion); } },
+    { "sun.custom_spectrum",
+      // The discrete spectrum is a list, not a name, and it is the one light-source field whose
+      // absence leaves a perfectly valid document that simulates a different colour of sunlight.
+      [](GuiState& s) {
+        s.sun.spectrum_index = kCustomSpectrumIndex;
+        s.sun.custom_spectrum = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
+      },
+      [](const GuiState& s) {
+        std::string out = std::to_string(s.sun.spectrum_index) + ":";
+        for (const auto& p : s.sun.custom_spectrum) {
+          out += std::to_string(p.wavelength) + "/" + std::to_string(p.weight) + ";";
+        }
+        return out;
+      } },
+    { "view.modal_layout_vertical",
+      // A view preference rather than a simulation input, and stored in the document alongside
+      // them. It is here because "this field is only a preference" is exactly the reasoning under
+      // which a serializer stops writing one.
+      [](GuiState& s) { s.modal_layout_vertical = !GuiState{}.modal_layout_vertical; },
+      [](const GuiState& s) { return std::to_string(static_cast<int>(s.modal_layout_vertical)); } },
     { "filter.raypath_text",
       [](GuiState& s) {
         RaypathParams rp;
@@ -99,6 +162,25 @@ const std::vector<FieldProbe>& FieldProbes() {
         ep.entry_text = "3,4";
         ep.exit_text = "1";
         s.filters.at(0).SetEntryExit(ep);
+      },
+      [](const GuiState& s) {
+        std::string out;
+        for (const SummandText& row : s.filters.at(0).param) {
+          out += "[" + row.text + "]";
+        }
+        return out;
+      } },
+    { "filter.mixed_sum_of_products",
+      // The two probes above each build their rows through a typed setter, so both produce rows of
+      // one kind. A filter authored in the editor can hold rows of BOTH kinds side by side, plus an
+      // AND clause inside one of them — the shape whose reader branch is separate from either
+      // single-kind path.
+      [](GuiState& s) {
+        SumOfProducts sop;
+        for (const char* row : { "entry:3,4 & 7-1", "2-6" }) {
+          sop.push_back(SummandText{ row, ParseSummandText(row) });
+        }
+        s.filters.at(0).param = std::move(sop);
       },
       [](const GuiState& s) {
         std::string out;
@@ -220,8 +302,15 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
 // change invisible; one wired to "count every crystal" would satisfy the first two and put a
 // "distributions were simplified" notice on every file the user opens.
 TEST(DocumentRoundtripChain, ANonUniformShapeDistIsDowngradedAndCountedAndAUniformOneIsNot) {
-  for (const ShapeDistType family : { ShapeDistType::kGauss, ShapeDistType::kUniform }) {
-    const bool expect_downgrade = (family != ShapeDistType::kUniform);
+  // Every family a file can carry, not just one of them: the GUI edits uniform only, and each
+  // non-uniform family is a separate arm of the reader's conversion. kNoRandom is here for the
+  // same reason kUniform is — it must pass through untouched and uncounted, or every file with an
+  // ordinary crystal in it opens under a "your distributions were simplified" notice.
+  for (const ShapeDistType family :
+       { ShapeDistType::kGauss, ShapeDistType::kZigzag, ShapeDistType::kLaplacian, ShapeDistType::kGaussLegacy,
+         ShapeDistType::kUniform, ShapeDistType::kNoRandom }) {
+    const bool editable_here = family == ShapeDistType::kUniform || family == ShapeDistType::kNoRandom;
+    const bool expect_downgrade = !editable_here;
     GuiState before = MinimalDocument();
     before.crystals.at(0).height = ShapeDist{ family, 2.5f, 0.75f };
 
@@ -232,14 +321,122 @@ TEST(DocumentRoundtripChain, ANonUniformShapeDistIsDowngradedAndCountedAndAUnifo
       continue;  // no loaded document to inspect for this family; the rest still get checked
     }
 
-    EXPECT_EQ(static_cast<int>(after.crystals.at(0).height.type), static_cast<int>(ShapeDistType::kUniform))
-        << "a non-uniform family survived into a GuiState the GUI cannot edit";
+    const ShapeDistType expected_type = editable_here ? family : ShapeDistType::kUniform;
+    EXPECT_EQ(static_cast<int>(after.crystals.at(0).height.type), static_cast<int>(expected_type))
+        << "family " << static_cast<int>(family)
+        << ": a family the GUI cannot edit survived, or one it can was converted anyway";
     // The numbers themselves must not move: it is the family that is simplified, not the value.
     EXPECT_FLOAT_EQ(after.crystals.at(0).height.center, 2.5f);
     EXPECT_EQ(TakeShapeDistDowngradeCount() > 0, expect_downgrade)
         << "the document was changed on load with nothing to report it, or the reverse";
     EXPECT_EQ(TakeShapeDistDowngradeCount(), 0) << "the counter did not clear on read, so a notice would never go away";
   }
+}
+
+// E1 — sync_group on the crystal kind whose slots the probe sweep structurally cannot reach, with
+// the emitted KEY NAMES asserted rather than only the round trip.
+//
+// Why this is not covered by the "crystal.sync_group" probe above, and cannot be. That probe runs
+// on MinimalDocument(), whose single crystal is a prism, and the writer is type-gated exactly as
+// the scalars are: a prism emits height + face_distance and never writes prism_h / upper_h /
+// lower_h at all, so the three pyramid-only slots are absent from that document by construction.
+// Adding them to the probe would assert that an inapplicable slot round-trips, which is a claim
+// about nothing.
+//
+// The trap this pins is positional rather than arithmetic. LUMICE_SHAPE_SCALAR_UPPER_H is slot 1
+// and PRISM_H is slot 2 — the reverse of the order the fields appear in CrystalConfig — so a
+// mapping written from the struct's field order instead of from ShapeScalarAt swaps exactly these
+// two and nothing else. Distinct group ids per slot are what make that swap visible; equal ones
+// would round-trip perfectly through the bug.
+//
+// And the key names are asserted against the emitted document, not inferred from the round trip
+// being stable. A round trip is self-consistent even when the GUI writes keys core cannot read:
+// the GUI writer, the core reader and the C API each carry their own spelling of these names with
+// no compile-time link between them, and drift in that spelling is how a hand-authored config
+// silently loses its grouping (the failure mode that produced the "shape/axis key names converge
+// on core's single source" work). Reading tests cover core's side; this covers what the GUI emits.
+TEST(DocumentRoundtripChain, PyramidSyncGroupSlotsSurviveTheDocumentAndKeepTheirKeyNames) {
+  // The parallel-array view of one crystal's ten slots, as a string, so a slot that came back under
+  // the wrong index is reported as the whole array rather than as one field.
+  const auto slots = [](const CrystalConfig& c) {
+    int groups[LUMICE_SHAPE_SCALAR_COUNT] = {};
+    FillSyncGroupArray(c, groups);
+    std::string out;
+    for (int i = 0; i < LUMICE_SHAPE_SCALAR_COUNT; ++i) {
+      out += (i ? " " : "") + std::to_string(groups[i]);
+    }
+    return out;
+  };
+
+  GuiState before = MinimalDocument();
+  {
+    // Scoped, and the expectations below are read back out of `before` by index rather than held as
+    // references: the second crystal is push_back'd into the same vector, which is free to
+    // reallocate and leave any reference taken here dangling.
+    CrystalConfig& prism = before.crystals.at(0);
+    prism.type = CrystalType::kPrism;
+    ShapeScalarAt(prism, LUMICE_SHAPE_SCALAR_HEIGHT).sync_group = 5;
+    for (int i = 0; i < 6; ++i) {
+      ShapeScalarAt(prism, LUMICE_SHAPE_SCALAR_FACE_0 + i).sync_group = (i % 2 == 0) ? 1 : 2;
+    }
+  }
+
+  // A second crystal rather than a second document: the writer walks the pool, and one entry per
+  // kind is what makes "the gate is per crystal" observable instead of "the gate is per file".
+  CrystalConfig pyramid;
+  pyramid.type = CrystalType::kPyramid;
+  ShapeScalarAt(pyramid, LUMICE_SHAPE_SCALAR_PRISM_H).sync_group = 3;
+  ShapeScalarAt(pyramid, LUMICE_SHAPE_SCALAR_UPPER_H).sync_group = 4;
+  ShapeScalarAt(pyramid, LUMICE_SHAPE_SCALAR_LOWER_H).sync_group = 3;
+  for (int i = 0; i < 6; ++i) {
+    ShapeScalarAt(pyramid, LUMICE_SHAPE_SCALAR_FACE_0 + i).sync_group = 6 - i;
+  }
+  EntryCard extra;
+  extra.crystal_id = static_cast<int>(before.crystals.size());
+  extra.filter_id = 0;
+  before.crystals.push_back(pyramid);
+  before.layers.at(0).entries.push_back(extra);
+
+  const std::string json = SerializeGuiStateJson(before);
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(json);
+  } catch (const nlohmann::json::exception& e) {
+    ADD_FAILURE() << "the emitter produced something unparseable: " << e.what();
+    return;
+  }
+
+  // Presence before value, in both arms: without it a writer that emits nothing fails by throwing
+  // out of operator[] instead of naming the expectation that broke.
+  const nlohmann::json& entries = doc["layers"][0]["entries"];
+  ASSERT_EQ(entries.size(), 2u) << "the two-crystal document did not survive as two entries";
+  ASSERT_TRUE(entries[0]["crystal"]["shape"].contains("sync_group"));
+  ASSERT_TRUE(entries[1]["crystal"]["shape"].contains("sync_group"));
+
+  const nlohmann::json& prism_sg = entries[0]["crystal"]["shape"]["sync_group"];
+  EXPECT_EQ(prism_sg["height"].get<int>(), 5);
+  EXPECT_EQ(prism_sg["face_distance"][2].get<int>(), 1);
+  EXPECT_FALSE(prism_sg.contains("prism_h")) << "a slot this crystal kind does not have was written anyway";
+
+  const nlohmann::json& pyr_sg = entries[1]["crystal"]["shape"]["sync_group"];
+  EXPECT_EQ(pyr_sg["prism_h"].get<int>(), 3);
+  EXPECT_EQ(pyr_sg["upper_h"].get<int>(), 4) << "upper_h and prism_h look swapped — a positional mapping";
+  EXPECT_EQ(pyr_sg["lower_h"].get<int>(), 3);
+  EXPECT_EQ(pyr_sg["face_distance"][0].get<int>(), 6);
+  EXPECT_FALSE(pyr_sg.contains("height")) << "a slot this crystal kind does not have was written anyway";
+
+  // ...and back.
+  const std::string expected_prism = slots(before.crystals.at(0));
+  const std::string expected_pyramid = slots(before.crystals.at(1));
+  // Non-vacuous in the way that matters here: the two kinds must not produce the same array, or a
+  // writer that emitted one crystal's groups for both would satisfy the pair.
+  EXPECT_NE(expected_prism, expected_pyramid);
+
+  GuiState after = MinimalDocument();
+  ASSERT_TRUE(DeserializeGuiStateJson(json, after)) << "DeserializeGuiStateJson rejected its own output";
+  ASSERT_EQ(after.layers.at(0).entries.size(), 2u);
+  EXPECT_EQ(slots(CrystalOf(after, after.layers.at(0).entries.at(0))), expected_prism);
+  EXPECT_EQ(slots(CrystalOf(after, after.layers.at(0).entries.at(1))), expected_pyramid);
 }
 
 // E3 — an absent key must leave the documented default in place, and the key's NAME is part of the

@@ -59,6 +59,9 @@ struct SpikeState {
   bool requested = false;
   bool done = false;
   bool readback_ok = false;
+  // GL_FRAMEBUFFER_COMPLETE, or whatever the driver said instead. Recorded rather than asserted on
+  // the render thread, where there is no test context to report through.
+  unsigned int fbo_status = 0;
   int buffer_size = 0;
   bool drawn_region_has_red = false;
   unsigned char far_r = 0;
@@ -85,6 +88,13 @@ void RunSpikeFboImDrawListEndToEnd() {
   glBindRenderbuffer(GL_RENDERBUFFER, rbo);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, kW, kH);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+
+  // Asked before anything is drawn, because this case exists to give a ONE-LINE diagnosis and an
+  // incomplete FBO does not produce one on its own: none of the four calls above returns a status,
+  // and a readback from an incomplete framebuffer can come back "successfully" full of zeroes. That
+  // path ends in "the red rectangle is missing", which reads as an ImGui draw-list regression — the
+  // exact wrong conclusion on a machine whose driver simply refused the RGBA8 renderbuffer.
+  g_spike_state.fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 
   glViewport(0, 0, kW, kH);
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -360,6 +370,10 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       IM_CHECK(expected_h > 0);
 
       const std::string tmp_path = GuiTestTempPath("lumice_export_screenshot.png").string();
+      // Cleared on the way IN as well as on the way out, because IM_CHECK expands to a return: any
+      // assertion below leaves the trailing std::remove unreached, and the next run would then read
+      // a file this case did not write. Same self-healing shape as test_file_ops.cpp's.
+      std::remove(tmp_path.c_str());
       g_export_test.export_path = tmp_path;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -395,6 +409,11 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       SeedSynthPreview(ctx);
 
       const std::string path_a = GuiTestTempPath("lumice_export_twice_1.png").string();
+      const std::string path_b = GuiTestTempPath("lumice_export_twice_2.png").string();
+      // Both cleared up front — see the case above. Here it also removes a way for the case to pass
+      // vacuously: comparing two PNGs left behind by an earlier run would agree perfectly.
+      std::remove(path_a.c_str());
+      std::remove(path_b.c_str());
       g_export_test.export_path = path_a;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -403,7 +422,6 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
 
       g_export_test.export_done = false;
       g_export_test.export_result = false;
-      const std::string path_b = GuiTestTempPath("lumice_export_twice_2.png").string();
       g_export_test.export_path = path_b;
       g_export_test.export_requested = true;
       ctx->Yield(2);
@@ -442,6 +460,15 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       g_spike_state.requested = true;
       ctx->Yield(2);
       IM_CHECK(g_spike_state.done);
+      // Before the pixels: this is the one failure that would otherwise be reported as a missing
+      // rectangle. Named with its status code so the line itself says which way the FBO was
+      // rejected.
+      if (g_spike_state.fbo_status != GL_FRAMEBUFFER_COMPLETE) {
+        IM_ERRORF(
+            "the off-screen framebuffer is not complete (glCheckFramebufferStatus = 0x%04X); "
+            "the pixel assertions below would be about a framebuffer that was never usable",
+            g_spike_state.fbo_status);
+      }
       IM_CHECK(g_spike_state.readback_ok);
       IM_CHECK_EQ(g_spike_state.buffer_size, 256 * 128 * 4);
       IM_CHECK(g_spike_state.drawn_region_has_red);

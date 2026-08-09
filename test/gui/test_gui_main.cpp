@@ -153,6 +153,10 @@ void ResetTestState() {
   // identical warning opens at all. Now that the harness renders the modal, that would also leave
   // a modal open across cases.
   gui::ClearGuiWarning();
+  // Same shape, the import-warning sibling: a queued message left behind by one case would open
+  // its modal on top of whatever the next case is driving. Several suites import configurations
+  // that queue one as a side effect, which is why this is a reset rather than each case's job.
+  gui::ClearImportComplexFilterWarning();
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see
@@ -467,7 +471,6 @@ int main(int argc, char** argv) {
   ImGuiTestEngine_InstallDefaultCrashHandler();
 
   // Register and queue all tests
-  RegisterP0Tests(engine);
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
   RegisterAspectRatioTests(engine);
@@ -475,7 +478,7 @@ int main(int argc, char** argv) {
   RegisterScreenshotTests(engine);
   RegisterVisualTests(engine);
   RegisterBgOverlayTests(engine);
-  RegisterImportExportTests(engine);
+  RegisterFileOpsTests(engine);
   RegisterColorWindowTests(engine);
   RegisterFilterEditorTests(engine);
   RegisterPerfTests(engine);
@@ -488,7 +491,6 @@ int main(int argc, char** argv) {
   RegisterFaceNumberOverlayTests(engine);
   RegisterLinkedEntriesTests(engine);
   RegisterRunLifecycleTests(engine);
-  RegisterCompositePreviewTests(engine);
   RegisterStatusBarTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
@@ -596,11 +598,15 @@ int main(int argc, char** argv) {
     gui::RenderSaveModifiedPopup(window);
     // Same omission, found again from the other end: the generic warning modal was in the
     // product's frame loop and not in this one, so the only proposition about it that gui_test
-    // could state was about a flag. Its import-specific sibling (RenderImportWarningPopup, also in
-    // src/gui/main.cpp) is deliberately still absent — several suites import configurations that
-    // queue one, and a modal nobody dismisses leaks into whichever case runs next, so adding it
-    // belongs with the rewrite of those suites rather than ahead of it.
+    // could state was about a flag.
     gui::RenderGuiWarningPopup();
+    // Its import-specific sibling, absent here for the same reason and added with the rewrite of
+    // the suites that queue one. Two things make that safe now. The message it opens on is a
+    // file-scope string in app_panels.cpp, and ResetTestState() clears it, so an import performed
+    // by one case cannot open a modal in the middle of the next one. What a reset cannot close is
+    // a modal already on screen, so the case that opens this one dismisses it through its own OK
+    // button — an open modal swallows every subsequent ItemClick in the process.
+    gui::RenderImportWarningPopup();
     // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
     // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
     // already paid for twice.

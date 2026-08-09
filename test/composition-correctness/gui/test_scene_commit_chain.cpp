@@ -79,6 +79,62 @@ FilterConfig SopFilter(const std::vector<std::string>& rows) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The two intents: one document, two readers, exactly one field allowed to differ.
+
+// SceneIntent exists to carry a single divergence, and it is worth spelling out because both arms
+// look wrong from the other's side. The GUI's Run path must NOT bake the exposure into the
+// renderer's intensity_factor — the GUI applies EV at display time, and baking it here multiplies
+// it in a second time, which is how a re-run of a coloured composite once came back at 2x. The
+// config-export path MUST bake it: the CLI has no display-time exposure and the exported file has
+// to reproduce the on-screen brightness on its own.
+//
+// The third assertion is the one that keeps this from rotting: the two documents are compared field
+// by field with that one key removed, so a future intent-dependent branch anywhere else in the
+// emitter fails here instead of quietly making the export a different document.
+TEST(SceneCommitChain, OnlyTheExposureDiffersBetweenTheRunAndExportIntents) {
+  for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
+    SeedOneEntryDocument();
+    g_state.renderer.exposure_offset = offset;
+
+    nlohmann::json commit_doc = CommitSceneJson(g_state);
+    if (commit_doc.is_null() || commit_doc["render"].size() != 1u) {
+      // Non-fatal: an offset that fails to commit must not take the remaining offsets' reports
+      // with it, and "which offsets" is what says whether the break is in the arithmetic or in
+      // the commit path.
+      ADD_FAILURE() << "offset " << offset << ": the run intent produced no single-renderer scene";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(commit_doc["render"][0]["intensity_factor"].get<float>(), 1.0f)
+        << "offset " << offset << ": the run path baked an exposure the display path will apply again";
+
+    // The same guard as the commit arm, and needed for the same reason rather than for symmetry's
+    // sake: nlohmann's operator[] auto-vivifies a missing "render" into a null and an out-of-range
+    // [0] into another, after which .get<float>() throws json::type_error. An uncaught throw here
+    // leaves the loop entirely, so the offsets after this one report nothing at all — which is the
+    // half of "an offset that fails must not take the others with it" the commit arm alone cannot
+    // deliver. parse() itself is inside the guard's reach for the same reason: it throws on a
+    // malformed emitter output, and that is a report, not a crash.
+    nlohmann::json export_doc;
+    try {
+      export_doc = nlohmann::json::parse(CoreJson(g_state));
+    } catch (const nlohmann::json::exception& e) {
+      ADD_FAILURE() << "offset " << offset << ": the export intent emitted something unparseable: " << e.what();
+      continue;
+    }
+    if (export_doc.is_null() || export_doc["render"].size() != 1u) {
+      ADD_FAILURE() << "offset " << offset << ": the export intent produced no single-renderer scene";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(export_doc["render"][0]["intensity_factor"].get<float>(), std::pow(2.0f, offset))
+        << "offset " << offset << ": the exported config would open darker than the preview it came from";
+
+    commit_doc["render"][0].erase("intensity_factor");
+    export_doc["render"][0].erase("intensity_factor");
+    EXPECT_EQ(commit_doc, export_doc) << "offset " << offset << ": the intent reached a second field";
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The crystal side: what the user shaped is what gets simulated.
 
 // A configured randomization must arrive at the simulator as a distribution, not as its mean. The

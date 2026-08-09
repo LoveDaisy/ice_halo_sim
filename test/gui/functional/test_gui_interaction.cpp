@@ -1,6 +1,8 @@
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <nlohmann/json.hpp>
 
 #include "IconsFontAwesome6.h"      // ICON_FA_* selectors used to match new icon-prefixed button labels
 #include "gui/crystal_preview.hpp"  // BuildCrystalMeshData (core-side sync-group leader oracle)
@@ -16,9 +18,14 @@
 #include "gui/panels.hpp"         // FilterSummary declaration (also re-exposes gui_state.hpp transitively)
 #include "gui/server_poller.hpp"  // LUMICE_CreateServer/StopServer/DestroyServer (real-commit tests)
 #include "imgui_internal.h"
-#include "test_gui_shared.hpp"  // declares g_enable_log_panel (toggle gate for RenderLogPanel)
+#include "support/scene_json_helpers.hpp"  // CommitSceneJson / PrismFacePlaneOffsets / CountDistinct
+#include "test_gui_shared.hpp"             // declares g_enable_log_panel (toggle gate for RenderLogPanel)
 
 // ========== Helpers for interaction tests ==========
+
+using lumice::test::CommitSceneJson;
+using lumice::test::CountDistinct;
+using lumice::test::PrismFacePlaneOffsets;
 
 // AC2 core deliverable evidence (task-classic-params-migration, code-review-01.md merged Major
 // #1): plan.md §4 Step 6 calls out "same filter edit via CommitAllBuffers (Staged OK) vs
@@ -73,81 +80,6 @@ static Ac2Outcome RunFilterPresenceToggleScenario(ImGuiTestContext* ctx, bool st
     gui::g_state.modal_immediate_mode = false;
   }
   return out;
-}
-
-// P0 tests
-void RegisterP0Tests(ImGuiTestEngine* engine) {
-  // P0: New
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p0_file", "new");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      ResetTestState();
-
-      // Modify state: add an extra entry to first layer, set dirty
-      gui::EntryCard extra;
-      gui::g_state.layers[0].entries.push_back(extra);
-      gui::g_state.dirty = true;
-
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-      IM_CHECK_EQ(gui::g_state.dirty, true);
-
-      // DoNew resets
-      gui::DoNew();
-
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
-      IM_CHECK_EQ(gui::g_state.dirty, false);
-      IM_CHECK_EQ(gui::g_preview.HasTexture(), false);
-    };
-  }
-
-  // P0: Save/Open roundtrip
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p0_file", "save_open_roundtrip");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      IM_UNUSED(ctx);
-      ResetTestState();
-
-      // Modify state via layers model
-      auto& entry0 = gui::g_state.layers[0].entries[0];
-      gui::CrystalOf(gui::g_state, entry0).type = gui::CrystalType::kPyramid;
-      gui::CrystalOf(gui::g_state, entry0).prism_h = 2.0f;
-      gui::CrystalOf(gui::g_state, entry0).upper_h = 0.3f;
-      gui::CrystalOf(gui::g_state, entry0).lower_h = 0.4f;
-      gui::g_state.sun.altitude = 30.0f;
-      gui::g_state.sim.max_hits = 12;
-
-      // Save
-      const std::string tmp_path = GuiTestTempPath("lumice_gui_test.lmc").string();
-      bool save_ok = gui::SaveLmcFile(tmp_path, gui::g_state, gui::g_preview, false);
-      IM_CHECK(save_ok);
-
-      // Reset
-      gui::DoNew();
-      IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type, gui::CrystalType::kPrism);
-
-      // Load
-      std::vector<unsigned char> tex_data;
-      int tex_w = 0;
-      int tex_h = 0;
-      bool load_ok = gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h);
-      IM_CHECK(load_ok);
-
-      // Verify roundtrip
-      auto& loaded_entry = gui::g_state.layers[0].entries[0];
-      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).prism_h, 2.0f);
-      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).upper_h, 0.3f);
-      IM_CHECK_EQ(gui::CrystalOf(gui::g_state, loaded_entry).lower_h, 0.4f);
-      IM_CHECK_EQ(gui::g_state.sun.altitude, 30.0f);
-      IM_CHECK_EQ(gui::g_state.sim.max_hits, 12);
-      IM_CHECK(tex_data.empty());  // save_texture=false
-
-      // Cleanup
-      std::remove(tmp_path.c_str());
-    };
-  }
 }
 
 // P1 tests
@@ -1013,8 +945,8 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Passthrough direction: the Save click reached the background button —
       // the Save menu opened (Save Copy appears as a child). Depends on the
       // topbar Save menu containing a "Save Copy" entry; rename the menu item
-      // and this assertion must be updated (see p1_file/save_menu_structure
-      // for the canonical menu contract).
+      // and this assertion must be updated (functional/test_file_ops.cpp holds
+      // the canonical menu contract).
       IM_CHECK(ctx->ItemExists("**/Save Copy"));
       // Persistence direction: the external click did NOT close the modal.
       IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
@@ -1481,111 +1413,6 @@ void RegisterP1Tests(ImGuiTestEngine* engine) {
       // Core AC3 assertion: with nothing occluding the strip, io.WantCaptureMouse is false
       // at this position, so the click still expands the panel as before this task's change.
       IM_CHECK_EQ(gui::g_state.left_panel_collapsed, false);
-    };
-  }
-
-  // P1: Unsaved Changes Popup
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "unsaved_popup");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Set dirty
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      // Click New — should trigger unsaved popup
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-
-      // Click "Don't Save" in the popup
-      ctx->ItemClick("Unsaved Changes/Don't Save");
-
-      // Verify state was reset
-      IM_CHECK_EQ(gui::g_state.dirty, false);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
-    };
-  }
-
-  // P1: scrum-gui-polish-v9 155.2 + 155.4 — Save popup structure and simulating gating.
-  // 155.4 renamed "Panorama..." → "Dual Fisheye Equal Area..." and added "Equirectangular...".
-  // Asserts the single Save dropdown hosts all 6 actions + Include Texture/Overlay checkboxes,
-  // and that Save/Save Copy disable under simulating while read-only exports stay live.
-  // Uses ItemInfo rather than clicking MenuItem("Save") because DoSave triggers the
-  // native file dialog (blocking, not test-engine-driveable).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "save_menu_structure");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // --- Case 1: not simulating — Save/Save Copy enabled ---
-      // sim_state is reconcile-derived; drive intent (kNone→kIdle) instead of writing sim_state.
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-      ctx->Yield();
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-
-      // All menu items + checkbox present under the popup
-      IM_CHECK(ctx->ItemExists("**/Save Copy"));
-      IM_CHECK(ctx->ItemExists("**/Screenshot..."));
-      IM_CHECK(ctx->ItemExists("**/Dual Fisheye Equal Area..."));
-      IM_CHECK(ctx->ItemExists("**/Equirectangular..."));
-      IM_CHECK(ctx->ItemExists("**/Config JSON..."));
-      IM_CHECK(ctx->ItemExists("**/Include Texture in .lmc"));
-
-      auto copy_info = ctx->ItemInfo("**/Save Copy");
-      IM_CHECK((copy_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-
-      // --- Case 2: simulating — Save/Save Copy disabled, Config JSON still enabled ---
-      gui::g_state.run_intent = gui::RunIntent::kRunning;
-      ctx->Yield();
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-
-      auto copy_info2 = ctx->ItemInfo("**/Save Copy");
-      IM_CHECK((copy_info2.ItemFlags & ImGuiItemFlags_Disabled) != 0);
-      auto cfg_info = ctx->ItemInfo("**/Config JSON...");
-      IM_CHECK((cfg_info.ItemFlags & ImGuiItemFlags_Disabled) == 0);
-
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-      ctx->Yield();
-    };
-  }
-
-  // P1: scrum-gui-polish-v9 155.3 — screenshot_include_overlay toggle and default value.
-  // Does NOT exercise the actual PNG write — that requires driving the main loop between
-  // ImGui_ImplOpenGL3_RenderDrawData and glfwSwapBuffers, which the Test Engine's Yield
-  // timing does not cleanly expose. Pixel-level verification is covered by the manual
-  // smoke documented in plan.md M2.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_file", "screenshot_overlay_toggle");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Default is false (keeps current behaviour: no overlay in Screenshot).
-      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
-
-      // Open Save menu → toggle Include Overlay on.
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Include Overlay in Screenshot");
-      ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, true);
-
-      // Reopen and toggle back off.
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Include Overlay in Screenshot");
-      ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.screenshot_include_overlay, false);
     };
   }
 
@@ -3423,339 +3250,6 @@ void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine) {
 
 
 void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
-  // p2_modal/unsaved_changes_cancel_path — clicking Cancel preserves state
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_changes_cancel_path");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      // Left panel now renders cards directly (no tabs)
-
-      // Add an entry so state differs from default
-      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      // Click New → triggers unsaved popup
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-
-      // Click Cancel
-      ctx->ItemClick("Unsaved Changes/Cancel");
-      ctx->Yield();
-
-      // State preserved: still 2 entries, still dirty, pending action cleared
-      IM_CHECK_EQ(gui::g_state.dirty, true);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
-    };
-  }
-
-  // p2_modal/unsaved_changes_save_path — clicking Save writes file, resets state, performs New
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_changes_save_path");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      // Set current_file_path so DoSave() doesn't pop a dialog
-      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_save.lmc").string();
-      std::remove(tmp_path.c_str());  // clean up any stale file from a previous failed run
-      gui::g_state.current_file_path = tmp_path;
-      // Modify state in a verifiable way
-      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].type = gui::CrystalType::kPyramid;
-      gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].prism_h = 3.5f;
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      // Click New → triggers popup → Save
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-      ctx->ItemClick("Unsaved Changes/Save");
-      ctx->Yield(2);
-
-      // After Save path: DoSave wrote the file (dirty=false), DoNew() resets state, action cleared
-      IM_CHECK_EQ(gui::g_state.dirty, false);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
-
-      // Roundtrip check: the saved file reflects the pre-New prism_h=3.5 pyramid state
-      gui::GuiState loaded;
-      std::vector<unsigned char> tex;
-      int tw = 0;
-      int th = 0;
-      bool load_ok = gui::LoadLmcFile(tmp_path, loaded, tex, tw, th);
-      IM_CHECK(load_ok);
-      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).type, gui::CrystalType::kPyramid);
-      IM_CHECK_EQ(gui::CrystalOf(loaded, loaded.layers[0].entries[0]).prism_h, 3.5f);
-
-      std::remove(tmp_path.c_str());
-    };
-  }
-
-  // task-cleanup-hardening AC4: DoSave under sim_state == kModified must NOT
-  // silently write the stale-preview .lmc + clear Modified. It must front a
-  // popup ("Config modified — Run first / Save anyway / Cancel"). This test
-  // pins the "gate + no side-effect" contract at the call-level (DoSave
-  // returns without touching the file); a second test below covers the
-  // "Save anyway resumes serialization" branch, and a third pins that the
-  // non-kModified path stays silent (regression guard for the pre-353.5
-  // direct-serialize semantics).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_on_kmodified_opens_prompt_no_file_write");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_savemod_gate.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      // Force sim_state == kModified via the reconciled base (kDone) + dirty
-      // (any struct edit lands here through the field-tier reconciler).
-      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
-      gui::g_state.dirty = true;
-
-      // Precondition: no popup pending, no kind pending.
-      IM_CHECK(!gui::g_show_save_modified_popup);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
-
-      gui::DoSave();
-
-      // The gate opened the popup + queued kSave, and the .lmc was NOT touched
-      // (silent serialization would leave the file on disk).
-      IM_CHECK(gui::g_show_save_modified_popup);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
-      std::ifstream f(tmp_path);
-      IM_CHECK(!f.good());
-
-      // dirty stays true (the gate must not clear it — that only happens on
-      // successful serialization).
-      IM_CHECK(gui::g_state.dirty);
-
-      // Cleanup — pretend the popup was resolved by Cancel.
-      gui::g_show_save_modified_popup = false;
-      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
-    };
-  }
-
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_anyway_resumes_serialization");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_savemod_anyway.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      gui::g_state.sim_state = gui::GuiState::SimState::kModified;
-      gui::g_state.dirty = true;
-
-      // Gate opens the popup; then simulate the user pressing "Save anyway"
-      // by calling PerformSave directly (the popup's Save-anyway button body).
-      gui::DoSave();
-      IM_CHECK(gui::g_show_save_modified_popup);
-      gui::PerformSave();
-
-      // File written; dirty cleared. sim_state stays kModified — the popup
-      // deliberately does NOT silently clear it (that would erase the
-      // user-visible "config differs from render" cue for future edits).
-      std::ifstream f(tmp_path);
-      IM_CHECK(f.good());
-      IM_CHECK(!gui::g_state.dirty);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
-
-      gui::g_show_save_modified_popup = false;
-      gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
-      std::remove(tmp_path.c_str());
-    };
-  }
-
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_bypasses_prompt_when_not_kmodified");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_savemod_bypass.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      // kIdle: no run has happened yet — nothing "modified" to warn about.
-      gui::g_state.sim_state = gui::GuiState::SimState::kIdle;
-      gui::g_state.dirty = true;
-
-      gui::DoSave();
-
-      // No popup queued; the file was written directly.
-      IM_CHECK(!gui::g_show_save_modified_popup);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kNone));
-      std::ifstream f(tmp_path);
-      IM_CHECK(f.good());
-      IM_CHECK(!gui::g_state.dirty);
-
-      std::remove(tmp_path.c_str());
-    };
-  }
-
-  // code-review-01 M1: RenderUnsavedPopup's "Save" button must route through
-  // the kModified gate (DoSave) rather than bypassing it — clicking Save
-  // while both dirty and kModified must chain to RenderSaveModifiedPopup, not
-  // silently serialize the stale preview. This drives the real button click
-  // path (unlike save_on_kmodified_opens_prompt_no_file_write, which calls
-  // DoSave() directly), pinning the last-mile button wiring the Pragmatist
-  // review flagged as untested: Unsaved-Save → Save-Modified popup opens →
-  // click "Save anyway" → file written AND the deferred New actually runs.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chains_to_save_modified_popup");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_chain_anyway.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
-      // sim_state is re-derived every frame by ReconcileSimState (I2) from
-      // run_intent, so a direct sim_state write would not survive the Yield()
-      // calls below. kLoaded is the "static loaded result" intent (base=kDone
-      // regardless of server/committed_epoch) — combined with dirty=true it
-      // reconciles to kModified each frame, same as loading a .lmc then editing.
-      gui::g_state.run_intent = gui::RunIntent::kLoaded;
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      // Click New → Unsaved popup → Save. Since sim_state == kModified, this
-      // must NOT write the file yet — it must open Save-Modified instead.
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-      ctx->ItemClick("Unsaved Changes/Save");
-      // DoSave() (invoked by the click handler above) sets
-      // g_show_save_modified_popup mid-frame; RenderSaveModifiedPopup —
-      // called right after RenderUnsavedPopup in both main.cpp and this
-      // harness's GuiFunc — consumes it and opens the popup the same frame.
-      ctx->Yield(3);
-
-      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
-
-      std::ifstream not_yet(tmp_path);
-      IM_CHECK(!not_yet.good());
-      // New must not have run yet — the entry added above is still present.
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-
-      // Click "Save anyway" — the deferred save runs, and so does the New
-      // that was queued by the original Unsaved-Save click.
-      ctx->ItemClick("Save Modified Config/Save anyway");
-      ctx->Yield(2);
-
-      std::ifstream f(tmp_path);
-      IM_CHECK(f.good());
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
-      // DoNew() reset the document, so the pushed-back entry is gone.
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 1);
-
-      std::remove(tmp_path.c_str());
-    };
-  }
-
-  // code-review-01 M1 companion: "Cancel" on the chained Save-Modified popup
-  // must abort the deferred New too (not silently proceed without a save).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "unsaved_save_chain_cancel_aborts_pending_action");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_unsaved_chain_cancel.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
-      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
-      // (not a direct sim_state write) is needed to survive the frame Yield.
-      gui::g_state.run_intent = gui::RunIntent::kLoaded;
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-      ctx->ItemClick("Unsaved Changes/Save");
-      // See the sibling test above for why this hop needs 3 frames.
-      ctx->Yield(3);
-
-      ctx->ItemClick("Save Modified Config/Cancel");
-      ctx->Yield(2);
-
-      // Neither the save nor the New happened.
-      std::ifstream f(tmp_path);
-      IM_CHECK(!f.good());
-      IM_CHECK(gui::g_state.dirty);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-    };
-  }
-
-  // code-review-02 M1 investigated whether RenderSaveModifiedPopup can be
-  // dismissed via Escape, bypassing all three button branches and leaving
-  // g_pending_action / g_pending_save_kind stale for a later, unrelated Save
-  // to misfire on. White-box mechanism check (see the doc comment on
-  // RenderSaveModifiedPopup) found Dear ImGui's NavUpdateCancelRequest()
-  // never routes Escape to ClosePopupToLevel() for a window with
-  // ImGuiWindowFlags_Modal set — which BeginPopupModal always sets — so this
-  // popup (like every modal in this app) cannot be dismissed via Escape at
-  // all. This test drives the real key press against the live popup to pin
-  // that verified fact as a regression guard: if a future Dear ImGui upgrade
-  // ever changes this, the popup will start closing here and the test fails,
-  // flagging that the pending-sentinel leak this review worried about has
-  // become reachable and needs the edge-detect fix reviewers originally asked
-  // for.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "save_modified_popup_escape_is_a_noop");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const std::string tmp_path = GuiTestTempPath("lumice_savemod_escape.lmc").string();
-      std::remove(tmp_path.c_str());
-      gui::g_state.current_file_path = tmp_path;
-      gui::g_state.layers[0].entries.push_back(gui::EntryCard{});
-      // See unsaved_save_chains_to_save_modified_popup above for why kLoaded
-      // (not a direct sim_state write) is needed to survive the frame Yield.
-      gui::g_state.run_intent = gui::RunIntent::kLoaded;
-      gui::g_state.dirty = true;
-      ctx->Yield();
-
-      ctx->ItemClick("##TopBar/New");
-      ctx->Yield(2);
-      ctx->ItemClick("Unsaved Changes/Save");
-      // See the sibling test above for why this hop needs 3 frames.
-      ctx->Yield(3);
-      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
-
-      // Escape must NOT dismiss this modal (see doc comment above).
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-      IM_CHECK(ImGui::IsPopupOpen("Save Modified Config"));
-
-      // Nothing fired, and the queued intent is untouched — consistent with
-      // the popup never having closed.
-      std::ifstream f(tmp_path);
-      IM_CHECK(!f.good());
-      IM_CHECK(gui::g_state.dirty);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNew));
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_save_kind), static_cast<int>(gui::PendingSaveKind::kSave));
-
-      // The popup is still open — resolve it via a real button so the test
-      // doesn't leak an open modal into the next test.
-      ctx->ItemClick("Save Modified Config/Save anyway");
-      ctx->Yield(2);
-      std::ifstream f2(tmp_path);
-      IM_CHECK(f2.good());
-      IM_CHECK_EQ(static_cast<int>(gui::g_pending_action), static_cast<int>(gui::PendingAction::kNone));
-
-      std::remove(tmp_path.c_str());
-    };
-  }
-
   // p2_modal/crystal_modal_open_cancel — open crystal modal, cancel, verify no state change
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "crystal_modal_open_cancel");
@@ -4178,6 +3672,113 @@ void RegisterP2InteractionModalTests(ImGuiTestEngine* engine) {
   // and a snapshot from either end of it looks identical. (A hand-authored config reaching the GUI in
   // exactly this state is normal: canonicalization belongs to core's from_json, on commit, not to the
   // GUI — and group 2 is precisely a grouping the GUI itself cannot build.)
+  // A grouping BUILT BY CLICKING reaches the geometry. That a sync_group already present in a
+  // document survives a save and reaches the simulator is settled off-screen, in
+  // composition-correctness/gui/test_document_roundtrip_chain.cpp and test_scene_commit_chain.cpp;
+  // this case starts from an all-independent crystal and drives the actual widgets — swatch button,
+  // then popup item — the way a user would, then asserts on the mesh the simulator would trace.
+  //
+  // It is parked here rather than owned here. It arrived from a file being retired and sits beside
+  // its six p2_modal sync-group siblings so that whoever empties this file next takes the whole
+  // group in one move; its subject is the edit modal's Sync column, which is where it belongs.
+  // Nothing about it is specific to this translation unit — read the sibling block above for the
+  // group's shared premises, not this file's name.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_built_in_ui_reaches_geometry");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
+      ctx->Yield(2);
+      auto& entry = gui::g_state.layers[0].entries[0];
+
+      ctx->ItemClick("**/Edit##cr");
+      ctx->Yield(4);
+      ctx->ItemOpen("**/Face Distance##modal");
+      ctx->Yield(2);
+
+      // Randomize all six faces first. Without randomization every face keeps the same default
+      // 1.0 and "grouped faces are equal" would hold for a build that ignored sync_group entirely.
+      for (int i = 0; i < 6; ++i) {
+        char rnd_id[64];
+        snprintf(rnd_id, sizeof(rnd_id), "**/##rnd_Face %d##modal_fd", i + 3);
+        ctx->ItemClick(rnd_id);
+        ctx->Yield(2);
+      }
+
+      // Face 3/5/7 (indices 0/2/4) → group 1, Face 4/6/8 (1/3/5) → group 2. Each group is opened
+      // with "+ New group" on its first member and joined via its "###sync_group_N" item after that.
+      const int kGroupMembers[2][3] = { { 3, 5, 7 }, { 4, 6, 8 } };
+      for (int g = 0; g < 2; ++g) {
+        for (int m = 0; m < 3; ++m) {
+          char swatch[64];
+          snprintf(swatch, sizeof(swatch), "**/##sync_Face %d##modal_fd", kGroupMembers[g][m]);
+          ctx->ItemClick(swatch);
+          ctx->Yield(2);
+          if (m == 0) {
+            ctx->ItemClick("**/###sync_new");
+          } else {
+            char item[64];
+            snprintf(item, sizeof(item), "**/###sync_group_%d", g + 1);
+            ctx->ItemClick(item);
+          }
+          ctx->Yield(2);
+        }
+      }
+
+      ctx->ItemClose("**/Face Distance##modal");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(3);
+
+      // The committed entry carries the grouping the clicks described, and the scene handed to core
+      // carries the same array — separate claims, because a grouping can be perfectly correct in
+      // the GUI's own data and still be dropped on the way to the simulator.
+      //
+      // Reported per face rather than asserted fatally: a fatal assert here returns out of the case
+      // on the first disagreeing face, and which faces disagree is what says whether the grouping
+      // was lost or merely mis-assigned.
+      const auto& cr = gui::CrystalOf(gui::g_state, entry);
+      const auto scene_j = CommitSceneJson(gui::g_state);
+      const auto& sg = scene_j["crystal"][0]["shape"]["sync_group"]["face_distance"];
+      for (int i = 0; i < 6; ++i) {
+        const int expected = (i % 2 == 0) ? 1 : 2;
+        if (cr.face_distance[i].sync_group != expected) {
+          IM_ERRORF("face %d: committed sync_group is %d, expected %d", i, cr.face_distance[i].sync_group, expected);
+        }
+        if (cr.face_distance[i].type != gui::ShapeDistType::kUniform) {
+          IM_ERRORF("face %d: randomization was dropped on commit", i);
+        }
+        if (sg[i].get<int>() != expected) {
+          IM_ERRORF("face %d: the scene handed to core says sync_group %d, expected %d", i, sg[i].get<int>(), expected);
+        }
+      }
+
+      // White-box on the geometry: two draws, six faces. The eye cannot verify this symmetry in a
+      // halo image, which is the entire reason the feature exists — so it is asserted on the mesh.
+      LUMICE_CrystalMesh mesh{};
+      IM_CHECK(gui::BuildCrystalMeshData(cr, 12345, &mesh));
+      const auto off = PrismFacePlaneOffsets(mesh);
+      IM_CHECK_EQ(CountDistinct(off, 1e-5f), (size_t)2);
+      IM_CHECK(std::fabs(off[0] - off[2]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[2] - off[4]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[1] - off[3]) <= 1e-5f);
+      IM_CHECK(std::fabs(off[3] - off[5]) <= 1e-5f);
+      // The two groups drew separately: a mesh where all six faces collapsed to one value would
+      // satisfy every equality above.
+      IM_CHECK(std::fabs(off[0] - off[1]) > 1e-5f);
+
+      // Control on the same randomized crystal: ungrouped, the six faces draw six distinct values.
+      // Without it, "2 distinct" would also pass on a build that ignored face_distance randomization.
+      gui::CrystalConfig ungrouped = cr;
+      for (int i = 0; i < 6; ++i) {
+        ungrouped.face_distance[i].sync_group = 0;
+      }
+      LUMICE_CrystalMesh independent{};
+      IM_CHECK(gui::BuildCrystalMeshData(ungrouped, 12345, &independent));
+      IM_CHECK_EQ(CountDistinct(PrismFacePlaneOffsets(independent), 1e-5f), (size_t)6);
+    };
+  }
+
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p2_modal", "sync_group_leader_is_lowest_visible_slot");
     t->TestFunc = [](ImGuiTestContext* ctx) {

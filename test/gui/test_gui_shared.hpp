@@ -241,7 +241,6 @@ void StopPerfSimulation();
 
 // ========== Register function declarations ==========
 
-void RegisterP0Tests(ImGuiTestEngine* engine);
 void RegisterP1Tests(ImGuiTestEngine* engine);
 void RegisterP2Tests(ImGuiTestEngine* engine);
 void RegisterAspectRatioTests(ImGuiTestEngine* engine);
@@ -249,7 +248,7 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine);
 void RegisterScreenshotTests(ImGuiTestEngine* engine);
 void RegisterVisualTests(ImGuiTestEngine* engine);
 void RegisterBgOverlayTests(ImGuiTestEngine* engine);
-void RegisterImportExportTests(ImGuiTestEngine* engine);
+void RegisterFileOpsTests(ImGuiTestEngine* engine);
 void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterFilterEditorTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
@@ -261,7 +260,6 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
-void RegisterCompositePreviewTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
