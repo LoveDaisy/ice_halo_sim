@@ -397,5 +397,31 @@ TEST(SceneCommitChain, EveryFilterShapeHasAnEntryCardSummary) {
             std::string::npos);
 }
 
+// The entry-exit length range has four spellings on the card, and each one is a different reader
+// of the same two numbers: unconstrained hides them, exact prints one, bounded-above prints the
+// bound, and a range prints both. Getting the mode right but the numbers from the wrong field
+// produces a summary that is plausible and wrong, which the card gives the user no way to notice.
+//
+// This arrived from test/gui when the filter editor was rewritten: it had been sitting in a
+// gui_test case whose own signature declared it never touched the GUI, and nothing at this layer
+// covered the four spellings, so retiring it would have dropped them.
+TEST(SceneCommitChain, EveryEntryExitLengthModeHasItsOwnSummarySpelling) {
+  auto summary_for = [](int mode, int min_v, int max_v) {
+    FilterConfig fc;
+    EntryExitParams ee;
+    ee.entry_text = "3";
+    ee.exit_text = "5";
+    ee.length_mode = mode;
+    ee.min_len = min_v;
+    ee.max_len = max_v;
+    fc.SetEntryExit(ee);
+    return FilterSummary(std::optional<FilterConfig>{ fc });
+  };
+  EXPECT_EQ(summary_for(0, 1, 1), "EE:3-5 In PBD");
+  EXPECT_EQ(summary_for(1, 2, 2), "EE:3-5 L=2 In PBD");
+  EXPECT_EQ(summary_for(2, 1, 4), "EE:3-5 L<=4 In PBD");
+  EXPECT_EQ(summary_for(3, 2, 5), "EE:3-5 L=[2,5] In PBD");
+}
+
 }  // namespace
 }  // namespace lumice::gui

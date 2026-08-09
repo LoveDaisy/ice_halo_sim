@@ -239,6 +239,7 @@ void RegisterVisualTests(ImGuiTestEngine* engine);
 void RegisterBgOverlayTests(ImGuiTestEngine* engine);
 void RegisterImportExportTests(ImGuiTestEngine* engine);
 void RegisterColorWindowTests(ImGuiTestEngine* engine);
+void RegisterFilterEditorTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterP1InteractionTests(ImGuiTestEngine* engine);
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);

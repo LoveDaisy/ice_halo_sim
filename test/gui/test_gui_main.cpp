@@ -457,6 +457,7 @@ int main(int argc, char** argv) {
   RegisterBgOverlayTests(engine);
   RegisterImportExportTests(engine);
   RegisterColorWindowTests(engine);
+  RegisterFilterEditorTests(engine);
   RegisterPerfTests(engine);
   // task-test-gui-interaction: user action → state assertion coverage
   RegisterP1InteractionTests(engine);
