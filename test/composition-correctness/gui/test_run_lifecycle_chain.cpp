@@ -409,26 +409,89 @@ TEST(RunLifecycleChain, DirtyDemotesAFinishedResultAndOnlyAFinishedResult) {
 // user toggles the switch and nothing happens until the next simulation batch lands, which on a
 // finished run is never.
 
-TEST(RunLifecycleChain, CompositeUploadFiresOnADisplayFlipThatProducesNoNewSnapshot) {
+// A snapshot the display gate has already consumed once: the serial is spent and no newer
+// generation exists, so nothing but the mode change can re-open the gate.
+PreviewSnapshot MakeConsumedSnapshot(bool is_composite) {
   PreviewSnapshot snap = MakeSnapshot(5, LUMICE_LIFECYCLE_COMPLETED);
   snap.texture_serial = 10;
   auto payload = std::make_shared<TexturePayload>();
   payload->payload_epoch = 5;
   payload->width = 4;
   payload->height = 4;
-  payload->is_composite = true;
+  payload->snapshot_intensity = 1.0f;
+  payload->is_composite = is_composite;
   snap.payload = payload;
+  return snap;
+}
 
-  // Serial already consumed and no new generation: the standard gate says nothing to do.
+// Walk the whole toggle session the user can drive from a finished run: first frame, settle, off,
+// settle, back on, settle. Every "settle" row is as load-bearing as the flip beside it — a gate that
+// fires on the flip but never settles re-uploads every frame for the rest of the session, which
+// costs a texture upload per frame on a run that will never produce another pixel.
+TEST(RunLifecycleChain, CompositeUploadFiresOnADisplayFlipThatProducesNoNewSnapshot) {
+  const PreviewSnapshot snap = MakeConsumedSnapshot(/*is_composite=*/true);
+
+  // The standard gate alone says there is nothing to do at any point in the sequence below; the
+  // mode-change branch is the only thing that can ever fire it.
   EXPECT_FALSE(ShouldUploadPayload(snap, 10, 4));
-  // But the last upload was the non-composite view and the user has just asked for the composite
-  // one, so the branch must still fire.
-  EXPECT_TRUE(ShouldFireCompositeUpload(snap, 10, 4, /*show_composite_preview=*/true,
-                                        /*last_uploaded_as_composite=*/false));
-  // And must NOT fire when the screen already shows what was asked for — otherwise it re-uploads
-  // every frame for the rest of the session.
-  EXPECT_FALSE(ShouldFireCompositeUpload(snap, 10, 4, /*show_composite_preview=*/true,
-                                         /*last_uploaded_as_composite=*/true));
+
+  struct FlipCase {
+    const char* name;
+    unsigned long long last_serial;
+    bool show_composite;
+    bool last_uploaded_as_composite;
+    bool expect_fire;
+  };
+  const FlipCase kCases[] = {
+    // Nothing uploaded yet: the serial-dedup term alone opens the gate.
+    { "the first frame after a run", 0, true, false, true },
+    { "settled on the composite view", 10, true, true, false },
+    // No new poll, so the serial and the floor are unchanged: the toggle is the only input that
+    // moved. If this row were false, the button would visibly do nothing.
+    { "the user switches the view off", 10, false, true, true },
+    { "settled on the xyz view", 10, false, false, false },
+    { "the user switches it back on", 10, true, false, true },
+    { "settled again", 10, true, true, false },
+  };
+
+  for (const FlipCase& c : kCases) {
+    EXPECT_EQ(ShouldFireCompositeUpload(snap, c.last_serial, /*display_epoch_floor=*/4, c.show_composite,
+                                        c.last_uploaded_as_composite),
+              c.expect_fire)
+        << c.name;
+  }
+}
+
+// On a scene with no colour classes the composite gate must collapse to the plain upload gate: with
+// no composite payload the effective mode is always non-composite, so the mode-change term is
+// structurally unreachable and no flip can slip an extra upload through. This is what keeps the
+// zero-colour path free of any cost from the feature.
+TEST(RunLifecycleChain, WithNoCompositePayloadTheCompositeGateIsThePlainUploadGate) {
+  const PreviewSnapshot snap = MakeConsumedSnapshot(/*is_composite=*/false);
+  for (unsigned long long last_serial : { 0ull, 10ull }) {
+    for (bool show_composite : { false, true }) {
+      EXPECT_EQ(ShouldFireCompositeUpload(snap, last_serial, /*display_epoch_floor=*/4, show_composite,
+                                          /*last_uploaded_as_composite=*/false),
+                ShouldUploadPayload(snap, last_serial, /*display_epoch_floor=*/4))
+          << "last_serial=" << last_serial << " show_composite=" << show_composite;
+    }
+  }
+}
+
+// Opening the Colours window turns the composite view on only when there is no user preference to
+// respect yet — i.e. when no classes exist. Once they do, the remembered choice wins. And the toggle
+// itself is negation and nothing more, which is what lets the two write sites (the top-bar button
+// and the window's checkbox) share one asserted meaning.
+TEST(RunLifecycleChain, OpeningTheColoursWindowDefaultsTheViewOnOnlyWithNothingToRemember) {
+  EXPECT_TRUE(ShouldDefaultEnableColorsOnOpen(/*no_color_classes=*/true));
+  EXPECT_FALSE(ShouldDefaultEnableColorsOnOpen(/*no_color_classes=*/false));
+
+  GuiState s;
+  s.show_composite_preview = false;
+  ToggleCompositePreview(s);
+  EXPECT_TRUE(s.show_composite_preview);
+  ToggleCompositePreview(s);
+  EXPECT_FALSE(s.show_composite_preview);
 }
 
 TEST(RunLifecycleChain, CompositeUploadModeFoldsServerAvailabilityWithUserPreference) {
