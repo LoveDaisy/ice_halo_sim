@@ -47,24 +47,31 @@ build() {
         #         outright; it stays here because that wait is bounded by a real
         #         wall-clock deadline, and fixed-dt decouples the test engine's
         #         watchdog (which counts simulated frame time) from that deadline.
-        #       - revert_repushes_server_display_state, zorder_priority_persists_across_rerun
-        #         (task-color-migration code-review round-1 revision): both assert on
-        #         LUMICE_FrameGetComposite() right after a display-time PushDisplayState()
-        #         edit (color edit / z_order swap); the edit only materializes in the
-        #         composite once the background ServerPoller's WakeForRefresh-triggered
-        #         PollOnce() actually runs, which needs real wall-clock time between
-        #         ctx->Yield() calls — fixed-dt (and --no-frame-limit) starve that thread
-        #         the same way they starve save_open_visual_consistency's accumulation.
+        #       - revert_repushes_server_display_state, zorder_priority_persists_across_rerun:
+        #         both assert on LUMICE_FrameGetComposite() right after a display-time
+        #         PushDisplayState() edit (color edit / z_order swap); the edit only
+        #         materializes in the composite once the background ServerPoller's
+        #         WakeForRefresh-triggered PollOnce() actually runs, which needs real
+        #         wall-clock time between ctx->Yield() calls — fixed-dt (and
+        #         --no-frame-limit) starve that thread the same way they starve
+        #         save_open_visual_consistency's accumulation.
+        #       - gpu_color_class_overflow (…_surfaces_async_warning): drives a live GPU
+        #         sim and waits on wall-clock batch accumulation for the async overflow
+        #         tally to appear, which fixed-dt starves.
+        #     These are matched by NAME (the engine's filter tests both name and category),
+        #     so renaming any of them means updating this filter and its twin in
+        #     scripts/regen_gui_test_refs.py — check_policies.py's gui-test-suite-args-sync
+        #     keeps the two literals in step but cannot know the names still resolve.
         echo "Running GUI correctness tests (fixed-dt, fast)..."
         # --no-user-config is redundant with gui_test's own default and stated anyway: it puts the
         # contract in the diff where a reviewer sees it, and it survives someone changing that
         # default. Keep it AFTER --filter — check_policies.py's gui-test-suite-args-sync reads the
         # filter value with a regex anchored on `--fixed-dt --filter "..."`.
-        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade" --no-user-config
+        "$GUI_TEST_BIN" --fixed-dt --filter "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,-zorder_priority_persists_across_rerun,-gpu_color_class_overflow" --no-user-config
         ret=$?
         if [[ $ret == 0 ]]; then
           echo "Running GUI real-timing tests (perf + wall-clock-dependent, isolated)..."
-          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,p2_gpu_color_degrade" --no-user-config
+          "$GUI_TEST_BIN" --filter "perf_test,save_open_visual_consistency,revert_repushes_server_display_state,zorder_priority_persists_across_rerun,gpu_color_class_overflow" --no-user-config
           ret=$?
         fi
       else

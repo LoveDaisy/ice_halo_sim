@@ -212,7 +212,7 @@ def _scene_key(scene: str, mode: str | None) -> str:
 # to import this module (and its numpy/PIL dependency graph) just to reach one string.
 SUITE_FILTER_EXPR = (
     "-perf_test,-save_open_visual_consistency,-revert_repushes_server_display_state,"
-    "-zorder_priority_persists_across_rerun,-p2_gpu_color_degrade"
+    "-zorder_priority_persists_across_rerun,-gpu_color_class_overflow"
 )
 # --no-user-config trails SUITE_FILTER_EXPR, matching scripts/build.sh. A reference image is the
 # one artifact where reading the generating machine's personal defaults would be permanent: the

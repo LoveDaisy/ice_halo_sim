@@ -10,7 +10,7 @@ add_executable(gui_test
     functional/test_gui_preview_animation.cpp
     functional/test_gui_export.cpp
     functional/test_gui_import_export.cpp
-    functional/test_gui_color_window.cpp
+    functional/test_color_window.cpp
     functional/test_gui_face_number_overlay.cpp
     functional/test_gui_overlay_labels.cpp
     functional/test_gui_lifecycle.cpp
