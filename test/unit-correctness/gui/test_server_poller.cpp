@@ -140,6 +140,13 @@ TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
   // has_new_snapshot is false. Reverting the unconditional per-poll `next->lifecycle = lc.lifecycle`
   // carry (gating it on has_new_snapshot instead) makes b->lifecycle stale. Reads are
   // non-destructive atomic loads.
+  //
+  // Poll A is also where I5 is read, off the same staging. Its atomic no-torn-read core is
+  // construction-guaranteed (shared_ptr<const PreviewSnapshot> plus one atomic load/store) and no
+  // test can drive that red without deliberately breaking atomicity; what construction does NOT
+  // give is the producer-side coherence asserted here — on a generation-bearing poll the payload's
+  // own stamp and the stats' own stamp agree with the bundle epoch. On poll B, the carry-forward,
+  // both deliberately LAG it, which is the restart-window family further down.
   {
     ScopedPoller local;
     Snapshot a = local.Repoll(srv);
@@ -148,6 +155,14 @@ TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
     EXPECT_EQ(a->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
     EXPECT_EQ(a->epoch, done_epoch);
     EXPECT_GT(a->stats_sim_ray_num, 0u);  // poll A genuinely carried the generation-bearing frame
+    EXPECT_EQ(a->stats_epoch, done_epoch);
+    EXPECT_TRUE(a->has_new_texture);     // ... and genuinely materialized a texture
+    ASSERT_TRUE(a->payload != nullptr);  // ... so the payload rides in the SAME bundle
+    EXPECT_EQ(a->payload->payload_epoch, done_epoch);
+    EXPECT_NE(a->texture_serial, 0u);  // under a fresh monotonic serial minted for it
+    // Two consecutive loads observe the same whole object: the consumer can never see a
+    // half-swapped value, because there is no reconstruction between reads.
+    EXPECT_EQ(local->LoadSnapshot().get(), a.get());
 
     local->PollOnceForTest(srv);
     Snapshot b = local->LoadSnapshot();
@@ -201,37 +216,6 @@ TEST(ServerPoller, TerminalPollWithNoNewGenerationStillReachesDone) {
   }
 
   DetachGlobals();
-}
-
-// ---- I5: one published value, every field of it from the same generation ----
-//
-// The atomic no-torn-read core is construction-guaranteed (shared_ptr<const PreviewSnapshot> plus
-// one atomic load/store) and no test can drive it red without deliberately breaking atomicity. What
-// IS assertable is the producer-side bundle coherence that construction argument does not cover: on
-// a generation-bearing poll, the payload's own stamp and the stats' own stamp agree with the bundle
-// epoch. (On a carry-forward poll both deliberately LAG it — see the restart cases below.)
-TEST(ServerPoller, AGenerationBearingPollPublishesOneCoherentBundle) {
-  DetachGlobals();
-  LiveServer srv;
-  ASSERT_TRUE(srv.Run());
-  const unsigned long long done_epoch = CurrentEpoch(srv);
-
-  ScopedPoller local;
-  Snapshot s = local.Repoll(srv);
-  ASSERT_TRUE(s != nullptr);
-  EXPECT_TRUE(s->valid);
-  EXPECT_EQ(s->epoch, done_epoch);
-  EXPECT_EQ(s->lifecycle, static_cast<int>(LUMICE_LIFECYCLE_COMPLETED));
-  EXPECT_GT(s->stats_sim_ray_num, 0u);
-  EXPECT_EQ(s->stats_epoch, done_epoch);
-  EXPECT_TRUE(s->has_new_texture);     // this poll genuinely materialized a texture
-  ASSERT_TRUE(s->payload != nullptr);  // ... so the payload rides in the SAME bundle
-  EXPECT_EQ(s->payload->payload_epoch, done_epoch);
-  EXPECT_NE(s->texture_serial, 0u);  // a fresh monotonic serial was minted for it
-
-  // Two consecutive loads observe the same whole object: the consumer can never see a half-swapped
-  // value, because there is no reconstruction between reads.
-  EXPECT_EQ(local->LoadSnapshot().get(), s.get());
 }
 
 // ---- I6: a COMPLETED run below the quality gate still puts a frame on screen ----
@@ -468,39 +452,12 @@ TEST(ServerPoller, ResumeRearmsTheQualityGateClock) {
 // routinely produced fresh data before the poll and the case never entered the branch it existed to
 // check. No sleep, no "at least one hit in N tries".
 
-TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsStats) {
-  DetachGlobals();
-  LiveServer srv;
-  ASSERT_TRUE(srv.Run());
-
-  ScopedPoller local;
-  const unsigned long long epoch_a = CurrentEpoch(srv);
-  Snapshot sa = local.Repoll(srv);
-  ASSERT_TRUE(sa != nullptr);
-  ASSERT_GT(sa->stats_sim_ray_num, 0u);
-  EXPECT_EQ(sa->stats_epoch, epoch_a);               // fresh stats are stamped with the generation that made them
-  EXPECT_TRUE(gui::ShouldApplyStats(*sa, epoch_a));  // ... and are applied
-  const LUMICE_RayCount rays_a = sa->stats_sim_ray_num;
-
-  ASSERT_EQ(CommitSceneJson(srv, kFiniteSceneJson), LUMICE_OK);
-  const unsigned long long epoch_b = CurrentEpoch(srv);
-  ASSERT_NE(epoch_b, epoch_a);  // the restart really did mint a new generation
-  LUMICE_StopServer(srv);
-
-  Snapshot sb = local.Repoll(srv);
-  ASSERT_TRUE(sb != nullptr);
-  EXPECT_EQ(sb->epoch, epoch_b);             // the bundle epoch is the NEW generation's...
-  EXPECT_EQ(sb->stats_sim_ray_num, rays_a);  // ... while the stats riding in it are still run A's,
-  EXPECT_EQ(sb->stats_epoch, epoch_a);       // ... and say so.
-  // So the gate keeps them off the status bar. Before the fix this combination read as fresh
-  // (bundle epoch == committed epoch, rays > 0) and run A's counts were displayed under run B.
-  EXPECT_FALSE(gui::ShouldApplyStats(*sb, epoch_b));
-}
-
-// The pixel channel's sibling. Asserts the CONTENT fingerprint, not only the stamp: a case that
-// checked payload_epoch alone would pass for the wrong reason on any run where the timing happened
-// not to line up.
-TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsPixels) {
+// The stats and pixel channels together, on one staging. They are not two propositions: the same
+// window hands out the same wrong pairing in both, and both are read off the SAME bundle, so the
+// staging that opens the window is the staging for either. The pixel half asserts the CONTENT
+// fingerprint rather than only the stamp — a check on payload_epoch alone would pass for the wrong
+// reason on any run where the timing happened not to line up.
+TEST(ServerPoller, TheRestartWindowRepublishesNeitherThePriorRunsStatsNorItsPixels) {
   DetachGlobals();
   LiveServer srv;
   ASSERT_TRUE(srv.Run());
@@ -510,8 +467,12 @@ TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsPixels) {
   Snapshot sa = local.Repoll(srv);
   ASSERT_TRUE(sa != nullptr);
   ASSERT_TRUE(sa->payload != nullptr);
-  EXPECT_EQ(sa->payload->payload_epoch, epoch_a);
+  ASSERT_GT(sa->stats_sim_ray_num, 0u);
+  EXPECT_EQ(sa->stats_epoch, epoch_a);               // fresh stats are stamped with the generation that made them
+  EXPECT_TRUE(gui::ShouldApplyStats(*sa, epoch_a));  // ... and are applied
+  EXPECT_EQ(sa->payload->payload_epoch, epoch_a);    // same for the pixels riding beside them
   EXPECT_GT(sa->payload->texture_ray_count, 0u);
+  const LUMICE_RayCount rays_a = sa->stats_sim_ray_num;
   const auto pixel_count = [](const gui::TexturePayload& p) {
     return static_cast<size_t>(p.width) * static_cast<size_t>(p.height) * 3;
   };
@@ -519,24 +480,31 @@ TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsPixels) {
   const unsigned long long serial_a = sa->texture_serial;
 
   ASSERT_EQ(CommitSceneJson(srv, kFiniteSceneJson), LUMICE_OK);
-  ASSERT_GT(CurrentEpoch(srv), epoch_a);
+  const unsigned long long epoch_b = CurrentEpoch(srv);
+  ASSERT_NE(epoch_b, epoch_a);  // the restart really did mint a new generation
   LUMICE_StopServer(srv);
 
   Snapshot sb = local.Repoll(srv);
   ASSERT_TRUE(sb != nullptr);
   ASSERT_TRUE(sb->payload != nullptr);
+  EXPECT_EQ(sb->epoch, epoch_b);             // the bundle epoch is the NEW generation's...
+  EXPECT_EQ(sb->stats_sim_ray_num, rays_a);  // ... while the stats riding in it are still run A's,
+  EXPECT_EQ(sb->stats_epoch, epoch_a);       // ... and say so.
+  // So the gate keeps them off the status bar. Before the fix this combination read as fresh
+  // (bundle epoch == committed epoch, rays > 0) and run A's counts were displayed under run B.
+  EXPECT_FALSE(gui::ShouldApplyStats(*sb, epoch_b));
   // The image in the window IS run A's in both worlds — that is the premise of the case, not the
-  // defect. What must not happen is that image being re-published as run B's work.
+  // defect. What must not happen is that image being re-published as run B's work, which is the
+  // defect's exact shape and was RED on all four lines before the fix: the poller materializes a
+  // "fresh" payload out of run A's pixels, stamps it with the new epoch, mints a new serial.
   EXPECT_EQ(PixelFingerprint(sb->payload->xyz_buffer, pixel_count(*sb->payload)), pixels_a);
-  // The defect's exact shape, all four RED before the fix: the poller materializes a "fresh" payload
-  // out of run A's pixels, stamps it with the new epoch, and mints a new serial for it.
   EXPECT_EQ(sb->payload->payload_epoch, epoch_a);  // carried forward, keeping its own generation
   EXPECT_EQ(sb->texture_serial, serial_a);         // carry-forward keeps the serial (anti-flicker)
   EXPECT_FALSE(sb->has_new_texture);
   EXPECT_FALSE(gui::ShouldUploadPayload(*sb, serial_a, /*display_epoch_floor=*/epoch_a));
 
   // The suppression is scoped to the window, not permanent: once a generation actually produces
-  // data, its frame reaches the screen normally.
+  // data, its frame and its counts reach the screen normally.
   ASSERT_EQ(CommitSceneJson(srv, kFiniteSceneJson), LUMICE_OK);
   const unsigned long long epoch_c = CurrentEpoch(srv);
   ASSERT_TRUE(WaitForValidData(srv));
@@ -547,6 +515,8 @@ TEST(ServerPoller, TheRestartWindowDoesNotRepublishThePriorRunsPixels) {
   EXPECT_NE(sc->texture_serial, serial_a);
   EXPECT_TRUE(sc->has_new_texture);
   EXPECT_TRUE(gui::ShouldUploadPayload(*sc, serial_a, /*display_epoch_floor=*/epoch_a));
+  EXPECT_EQ(sc->stats_epoch, epoch_c);
+  EXPECT_TRUE(gui::ShouldApplyStats(*sc, epoch_c));
 }
 
 // The composite channel's sibling — not a courtesy duplicate. The composite payload fields are

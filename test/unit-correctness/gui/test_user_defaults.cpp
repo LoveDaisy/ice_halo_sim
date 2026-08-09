@@ -370,6 +370,16 @@ TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
     disabled_again = gui::MakeNewDocumentState();
   }
   EXPECT_TRUE(SerializesIdentically(disabled, disabled_again));
+
+  // Last, the harness's own baseline, asserted from inside the harness with NO guard in force.
+  // This binary installs kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp;
+  // gui_test does the same from its main()); were that install dropped or flipped, the developer's
+  // real config directory would reach this document instead. It is read through the switch's only
+  // observable effect, since the source enum has no getter by design (one owner). The `overridden`
+  // arm above is this line's detection power: a real file IS reachable through this same call when
+  // the switch says so, so agreeing with `disabled` here is a fact about the baseline, not about
+  // MakeNewDocumentState being inert.
+  EXPECT_TRUE(SerializesIdentically(disabled, gui::MakeNewDocumentState()));
 }
 
 // Two ways of pointing --user-config somewhere unusable. Both must land on the factory document
@@ -408,33 +418,6 @@ TEST_F(UserDefaults, switch_explicit_dir_that_cannot_be_read_degrades_to_the_fac
     EXPECT_EQ(state.renderer.lens_type, factory.renderer.lens_type) << c.name;
     EXPECT_EQ(state.bg_alpha, factory.bg_alpha) << c.name;
     EXPECT_EQ(state.crystals.size(), factory.crystals.size()) << c.name;
-  }
-}
-
-// The harness's own baseline, asserted from inside the harness. This binary installs
-// kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp; gui_test does the
-// same from its main()); if that install were dropped or flipped, this is the case that says so.
-// It reads the switch through its only observable effect — whether a real override file on disk
-// reaches a new document — because the source enum itself has no getter, by design (one owner).
-TEST_F(UserDefaults, switch_harness_baseline_is_isolated) {
-  const auto dir = FreshOverlayDir("switch_baseline");
-  json doc;
-  doc["bg_alpha"] = 0.125f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  // No ScopedUserConfigSource here on purpose: this is the process state the harness install
-  // left behind, i.e. what every other scenario in this binary runs under.
-  const gui::GuiState state = gui::MakeNewDocumentState();
-  const gui::GuiState factory = gui::InitDefaultState();
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-
-  // Detection power for the assertion above: the file IS readable and DOES carry a value
-  // distinguishable from factory — it simply must not be consulted at the baseline.
-  {
-    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-    const gui::GuiState reachable = gui::MakeNewDocumentState();
-    EXPECT_EQ(reachable.bg_alpha, 0.125f);
-    EXPECT_TRUE(reachable.bg_alpha != factory.bg_alpha);
   }
 }
 
@@ -516,6 +499,9 @@ TEST_F(UserDefaults, ABrokenOverrideFileCostsTheDefaultsAndSaysSoWithoutBreaking
     { "a value of the wrong type", R"({"bg_alpha": "not_a_number", "aspect_portrait": true})", false, 1 },
     { "a truncated document", R"({"bg_alpha": 0.5, )", false, 1 },
     { "an array where an object belongs", "[1, 2, 3]", false, 1 },
+    // The preset-library half degrades down the same channel. It is a row rather than a case of
+    // its own because the verdict it needs is the one every row already carries.
+    { "a preset value of the wrong type", R"({"presets": {"axis": {"column": {"zenith_std": "wide"}}}})", false, 1 },
   };
 
   const gui::GuiState factory{};
@@ -530,6 +516,10 @@ TEST_F(UserDefaults, ABrokenOverrideFileCostsTheDefaultsAndSaysSoWithoutBreaking
     EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), c.expect_downgrades) << c.name;
     // Still a usable new document, whatever was thrown away.
     EXPECT_EQ(state.layers.size(), static_cast<size_t>(1)) << c.name;
+    // Nothing here leaves a preset override behind, and a REJECTED value is a drop rather than a
+    // clamp: it is counted, but it must not also arrive as a "we adjusted this for you" notice.
+    EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value()) << c.name;
+    EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty()) << c.name;
   }
 }
 
@@ -645,54 +635,6 @@ TEST_F(UserDefaults, d8_preset_override_does_not_leak_across_calls) {
   }
 }
 
-TEST_F(UserDefaults, d8_malformed_preset_value_degrades) {
-  const auto dir = FreshOverlayDir("d8_bad");
-
-  WriteRawOverlay(dir, R"({"presets": {"axis": {"column": {"zenith_std": "wide"}}}})");
-  gui::MakeNewDocumentState(dir);
-
-  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
-  // A rejected value is a drop, not a clamp — the two channels must not be conflated.
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
-}
-
-// AC1 — the round trip a user actually performs: retune Column to the value the beta user
-// asked for, then confirm a fresh process would read it back. MakeNewDocumentState() is the
-// "restart" here: it is the exact call startup makes, and it re-reads the file from disk.
-TEST_F(UserDefaults, preset_write_round_trips_across_a_reload) {
-  const auto dir = FreshOverlayDir("preset_roundtrip");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
-
-  // On disk under the key 405.2's reader already looks for. Asserted through this file's own
-  // raw reader rather than the production one, so a writer bug and a reader bug cannot cancel.
-  const json doc = ReadOverlayDoc(dir);
-  EXPECT_TRUE(doc.contains("presets"));
-  const auto stored_column = ReadPresetStd(doc, "column");
-  ASSERT_TRUE(stored_column.has_value());
-  EXPECT_EQ(*stored_column, 0.3f);
-
-  // The session picks it up the way startup does.
-  gui::MakeNewDocumentState(dir);
-  const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(loaded.has_value());
-  EXPECT_EQ(*loaded, 0.3f);
-
-  // Drop the in-memory state the way a restart would, then re-resolve from the file.
-  gui::ResetUserAxisPresetOverrides();
-  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
-  gui::MakeNewDocumentState(dir);
-
-  const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(reloaded.has_value());
-  EXPECT_EQ(*reloaded, 0.3f);
-
-  // And that is what pressing the Column button would write into the crystal.
-  EXPECT_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
-}
-
 // AC2 — the core claim of D8, MEASURED rather than reasoned about: a retuned preset is still
 // the same preset to ClassifyAxisPreset, which is what keeps its button highlighted and its
 // preview on the typical-view branch. Four presets, each at a value inside its own domain
@@ -784,11 +726,17 @@ TEST_F(UserDefaults, preset_write_clamps_and_reports_both_states) {
   EXPECT_TRUE(ok.message.empty());
 }
 
-// AC5 — restore one preset to factory: byte-identical to kAxisPresets, key gone from the file
-// (with its empty parents pruned), and NOTHING else disturbed — neither another preset nor the
-// GuiState half of the same file. The last part is what a wholesale rewrite would break.
-TEST_F(UserDefaults, preset_restore_to_factory_is_surgical) {
-  const auto dir = FreshOverlayDir("preset_restore");
+// AC1 + AC5 — the whole life of a preset override on one staging: retune Column to the value the
+// beta user asked for and confirm a fresh process reads it back (AC1), then restore it to factory
+// and confirm the revert was surgical (AC5) — byte-identical to kAxisPresets, key gone from the
+// file with its empty parents pruned, and NOTHING else disturbed, neither the other preset nor the
+// GuiState half of the same file. That last part is what a wholesale rewrite would break.
+//
+// MakeNewDocumentState() is the "restart" throughout: it is the exact call startup makes, and it
+// re-reads the file from disk. Write and revert share one file and one session on purpose — they
+// are one user's sequence, and staging them separately said the same setup twice.
+TEST_F(UserDefaults, preset_override_round_trips_across_a_reload_and_reverting_one_is_surgical) {
+  const auto dir = FreshOverlayDir("preset_lifecycle");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
   // A file that already carries a GuiState default, so the write path has a neighbour to
@@ -801,15 +749,12 @@ TEST_F(UserDefaults, preset_restore_to_factory_is_surgical) {
   // of the document shape the panel's Save also goes through.
   EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
   EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kPlate, 0.5f));
-  // Load them into the session, so the memory-side assertion after the revert below is about a
-  // value that was really there rather than one that never arrived.
-  gui::MakeNewDocumentState(dir);
-  EXPECT_TRUE(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
 
-  // Asserted after the SECOND write, before any revert: the second write must not have taken
-  // the first one with it. Without this line the whole case still passes when the write is a
-  // wholesale rewrite of the presets subtree — measured with exactly that mutation, which is
-  // why the assertion is here and not left implied by the revert checks below.
+  // What LANDED, read through this file's own raw reader rather than the production one so a
+  // writer bug and a reader bug cannot cancel out into a pass. Taken after the SECOND write, which
+  // is also how this says the second write did not take the first one with it: without that, the
+  // whole case still passes when the write is a wholesale rewrite of the presets subtree —
+  // measured with exactly that mutation.
   {
     const json after_two_writes = ReadOverlayDoc(dir);
     const auto kept_column = ReadPresetStd(after_two_writes, "column");
@@ -821,6 +766,25 @@ TEST_F(UserDefaults, preset_restore_to_factory_is_surgical) {
     EXPECT_TRUE(after_two_writes.contains("bg_alpha"));
     EXPECT_EQ(after_two_writes.value("bg_alpha", 0.0f), 0.42f);
   }
+
+  // The session picks the file up the way startup does — which is also what loads the value the
+  // memory-side assertion after the revert is about, so that one is about a value that was really
+  // there rather than one which never arrived.
+  gui::MakeNewDocumentState(dir);
+  const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(*loaded, 0.3f);
+  // ...and that is what pressing the Column button would write into the crystal.
+  EXPECT_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
+
+  // Drop the in-memory state the way a restart would, then re-resolve: the value has to come back
+  // off the disk rather than out of the cache the write left warm.
+  gui::ResetUserAxisPresetOverrides();
+  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
+  gui::MakeNewDocumentState(dir);
+  const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+  ASSERT_TRUE(reloaded.has_value());
+  EXPECT_EQ(*reloaded, 0.3f);
 
   EXPECT_TRUE(RestoreOnePresetOnDisk(dir, gui::AxisPreset::kColumn));
 

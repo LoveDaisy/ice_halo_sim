@@ -404,7 +404,7 @@ TEST(CompositePreview, ExposureRebakesTheCompositeWithoutMovingTheAnchorOrTheRun
 // argmax, so the claim is about WHICH class owns a pixel — and a mode that merely won by one unit
 // would still be a broken picture, hence the second assertion that the winner is clearly lit.
 
-TEST(CompositePreview, AdditiveHidingTheBrightClassBrightensTheDimOneAndRestoringUndoesItExactly) {
+TEST(CompositePreview, HidingAClassReAnchorsTheExposureOverWhatIsLeftInBothCombineModes) {
   LiveServer srv;
   ASSERT_TRUE(srv.Run(kTwoColorSceneJson));
   const RunAnchor anchor = CaptureCompletedRun(srv);
@@ -453,16 +453,8 @@ TEST(CompositePreview, AdditiveHidingTheBrightClassBrightensTheDimOneAndRestorin
     ASSERT_EQ(restored.rgb[off + 2], both.rgb[off + 2]) << "probe offset " << off;
   }
 
-  ExpectNoRestart(srv, anchor);  // visibility toggles are display-time, whatever they repaint
-}
-
-TEST(CompositePreview, DominantHidingTheWinnerHandsThePixelToTheNextClassClearlyLit) {
-  LiveServer srv;
-  ASSERT_TRUE(srv.Run(kTwoColorSceneJson));
-
-  const ClassDisplay kRed{ 1.0f, 0.0f, 0.0f };
-  const ClassDisplay kBlue{ 0.0f, 0.0f, 1.0f };
-
+  // ---- The same edit in dominant mode, on the staging this case already built ----
+  //
   // Solo the dim class to find a pixel it definitely owns: clearly blue, and with no red in it.
   SetClasses(srv, { kRed, ClassDisplay{ 0.0f, 0.0f, 1.0f, /*visible=*/true, /*solo=*/true } },
              LUMICE_COLOR_MODE_DOMINANT);
@@ -500,6 +492,8 @@ TEST(CompositePreview, DominantHidingTheWinnerHandsThePixelToTheNextClassClearly
     EXPECT_GT(winner, loser) << c.name;
     EXPECT_GE(winner, 16) << c.name;
   }
+
+  ExpectNoRestart(srv, anchor);  // visibility toggles are display-time, whatever they repaint
 }
 
 // ---- Re-running the same scene at the same exposure produces the same picture ----
@@ -528,16 +522,15 @@ TEST(CompositePreview, RerunningAtTheSameExposureReproducesTheSamePicture) {
   // different batch boundaries, so ~10-15% run-to-run noise is expected. [0.8, 1.25] tolerates that
   // while ruling out the ~4x the doubling bug produced. The unexposed anchor is the tighter of the
   // two signals, being independent of EV altogether.
-  const std::vector<size_t> every_pixel = [&] {
-    std::vector<size_t> v;
-    v.reserve(first.rgb.size());
-    for (size_t i = 0; i < first.rgb.size(); ++i) {
-      v.push_back(i);
+  const auto MeanByte = [](const Composite& c) {
+    unsigned long long sum = 0;
+    for (uint8_t v : c.rgb) {
+      sum += v;
     }
-    return v;
-  }();
-  const double mean_first = first.MeanChannel(every_pixel, 0);
-  const double mean_rerun = rerun.MeanChannel(every_pixel, 0);
+    return static_cast<double>(sum) / c.rgb.size();
+  };
+  const double mean_first = MeanByte(first);
+  const double mean_rerun = MeanByte(rerun);
   ASSERT_GT(mean_first, 0.0);
   EXPECT_GT(mean_rerun / mean_first, 0.8);
   EXPECT_LT(mean_rerun / mean_first, 1.25);
