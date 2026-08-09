@@ -248,7 +248,6 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
@@ -327,6 +326,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_filter_reconstruct_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_color_document_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_lifecycle_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_warning_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_user_defaults_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_edit_modal_chain.cpp"
