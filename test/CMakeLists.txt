@@ -321,7 +321,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/test_main.cpp"
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
-    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_roundtrip_chain.cpp")
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_roundtrip_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_lifecycle_chain.cpp")
   target_include_directories(composition_correctness_test
     PRIVATE ${PROJ_TEST_DIR})
   # Same three definitions gui_unit_test carries, for the same reasons (see its block above):
