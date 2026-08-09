@@ -16,7 +16,7 @@ add_executable(gui_test
     functional/test_gui_overlay_labels.cpp
     functional/test_run_lifecycle.cpp
     functional/test_status_bar.cpp
-    functional/test_gui_defaults_panel.cpp
+    functional/test_defaults_panel.cpp
     functional/test_gui_sim_smoke.cpp
     visual/test_gui_visual.cpp
     visual/test_gui_render.cpp

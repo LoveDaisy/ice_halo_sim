@@ -289,10 +289,22 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK(ctx->ItemExists(kStopBtn));
     IM_CHECK(!ctx->ItemExists(kRunBtn));
 
-    // Stop is optimistic: the intent flips synchronously on the click and the drain is offloaded,
-    // so this assertion does not depend on how fast the background thread runs.
+    // Stop is optimistic: the intent leaves kRunning on the click itself, without waiting for the
+    // drain. What the click cannot promise is that kStopping is still the value by the time this
+    // line reads it — the drain is offloaded, and when it finishes inside the same click the
+    // poller has already advanced the intent to kStopped. Measured: this assertion, written as
+    // `== kStopping`, fails as `[4] == [3]` under a real-time frame clock and intermittently even
+    // under --fixed-dt, because the two clocks are independent and neither one paces the worker.
+    //
+    // So the claim is stated as what the click actually guarantees. It still fails on the defect it
+    // exists for — a Stop button that queued the intent behind the drain would leave kRunning here,
+    // which neither branch below accepts — and the terminal state is pinned by the DriveUntil that
+    // follows.
     ctx->ItemClick(kStopBtn);
-    IM_CHECK_EQ(static_cast<int>(gui::g_state.run_intent), static_cast<int>(RunIntent::kStopping));
+    {
+      const RunIntent after_click = gui::g_state.run_intent;
+      IM_CHECK(after_click == RunIntent::kStopping || after_click == RunIntent::kStopped);
+    }
 
     gui::JoinPendingStop();
     IM_CHECK(DriveUntil(ctx, [] { return gui::g_state.run_intent == RunIntent::kStopped; }, 10));
