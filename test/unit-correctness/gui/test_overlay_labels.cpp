@@ -10,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cmath>
 #include <string>
 #include <vector>
 
@@ -151,6 +150,12 @@ bool HasGridText(const std::vector<gui::OverlayLabel>& labels, const std::string
 // the edge-sampling loop yields no sample pairs at all for any configuration. Its fix in
 // PixelToWorldDir uses the same dispatch pattern, so this case covers it; the two disc-centre probes
 // further down cover its geometry directly.
+//
+// Both label families are read here, because the dispatch is one switch and a lens dropped from it
+// is dropped for everything drawn through it. The sun-circle half had its own version of the same
+// defect — an interior-label block gated to lens types 0-3 by number, so single orthographic drew no
+// sun-circle labels at all — and it is the stricter of the two: EQUAL counts, since the two lenses
+// share that code path outright, where the grid counts only have to stay within a factor of two.
 TEST(OverlayLabels, SingleOrthographicReachesTheSameLabellingPathAsFisheye) {
   auto ortho = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeFisheyeOrthographic, 0.0f, 0.0f);
   ortho.fov = 60.0f;
@@ -163,24 +168,18 @@ TEST(OverlayLabels, SingleOrthographicReachesTheSameLabellingPathAsFisheye) {
   EXPECT_GT(n_fisheye, 0);
   EXPECT_GE(n_ortho * 2, n_fisheye);
   EXPECT_LE(n_ortho, n_fisheye * 2);
-}
 
-// The same reach, on the sun-circle path rather than the grid: its interior-label block was once
-// gated to lens types 0-3 by number, so single orthographic drew no sun-circle labels at all. Equal
-// counts, not merely non-zero ones — the two lenses share the code path, so anything else means one
-// of them is taking a different branch.
-TEST(OverlayLabels, SingleOrthographicGetsTheSameSunCircleLabelsAsFisheye) {
   const float sun_forward[3] = { -1.0f, 0.0f, 0.0f };  // camera forward at elev=0, az=0
   const float angle = 5.0f;                            // small enough that the circle stays well inside the disc
-  auto ortho = MakeSunOnly(gui::kVisibleFull, sun_forward, &angle, 1);
-  ortho.lens_type = gui::kLensTypeFisheyeOrthographic;
-  ortho.fov = 60.0f;
-  auto fisheye = ortho;
-  fisheye.lens_type = gui::kLensTypeFisheyeEquidist;
+  auto sun_ortho = MakeSunOnly(gui::kVisibleFull, sun_forward, &angle, 1);
+  sun_ortho.lens_type = gui::kLensTypeFisheyeOrthographic;
+  sun_ortho.fov = 60.0f;
+  auto sun_fisheye = sun_ortho;
+  sun_fisheye.lens_type = gui::kLensTypeFisheyeEquidist;
 
-  const int n_ortho = CountInGroup(Compute(ortho, 200.0f, 200.0f), kSunGroup);
-  EXPECT_GT(n_ortho, 0);
-  EXPECT_EQ(n_ortho, CountInGroup(Compute(fisheye, 200.0f, 200.0f), kSunGroup));
+  const int n_sun_ortho = CountInGroup(Compute(sun_ortho, 200.0f, 200.0f), kSunGroup);
+  EXPECT_GT(n_sun_ortho, 0);
+  EXPECT_EQ(n_sun_ortho, CountInGroup(Compute(sun_fisheye, 200.0f, 200.0f), kSunGroup));
 }
 
 // ---- Front mode hides what is behind the camera, and only in front mode ----
@@ -260,22 +259,14 @@ TEST(OverlayLabels, TheGlobeLensHidesLabelsOnTheFarSideOfTheSphere) {
     EXPECT_TRUE(HasGridText(labels, std::string(sign) + "70" + kDeg)) << sign << "70";
     EXPECT_FALSE(HasGridText(labels, std::string(sign) + "80" + kDeg)) << sign << "80";
   }
-}
 
-// The loose companion of the case above: the globe at its own 90-degree maximum must produce fewer
-// labels than a full-hemisphere fisheye at 180. Note what this does NOT cover — at this
-// configuration the globe frustum is a 45-degree cone around +Z, so every sampled direction already
-// satisfies the near-side test and the inequality is secured by the field-of-view difference alone.
-// The case above is what actually pins the cull.
-TEST(OverlayLabels, TheGlobeLensLabelsLessOfTheSkyThanAFullHemisphereFisheye) {
-  auto globe = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeGlobe, 0.0f, 0.0f);
-  globe.fov = 90.0f;
+  // A loose companion, kept as one line rather than as its own case because of what it does NOT
+  // cover: at this configuration the globe frustum is a 45-degree cone around +Z, so every sampled
+  // direction already satisfies the near-side test and the inequality is secured by the
+  // field-of-view difference alone. The rows above are what pin the cull.
   auto fisheye = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeFisheyeEquidist, 0.0f, 0.0f);
   fisheye.fov = 180.0f;
-
-  const int n_globe = CountGrid(globe, 200.0f, 200.0f);
-  EXPECT_GT(n_globe, 0);
-  EXPECT_LT(n_globe, CountGrid(fisheye, 200.0f, 200.0f));
+  EXPECT_LT(CountInGroup(labels, kGridGroup), CountGrid(fisheye, 200.0f, 200.0f));
 }
 
 // ---- Labels are positioned relative to the panel, not the desktop ----
@@ -425,64 +416,20 @@ TEST(OverlayLabels, ALabelIsPulledBackInsideTheViewportOnEveryEdge) {
   }
 }
 
-// ---- The hemisphere boundary curve is nudged onto the visible side ----
+// ---- Two boundary-nudge cases used to sit here, and they are gone rather than moved ----
 //
-// A label placed exactly on the boundary is a coin flip: the shader culls whatever falls on the far
-// side of it, so half of them vanish. The placement shifts the curve three degrees inward first.
-// Asserted by re-deriving the same offset here rather than by reading label text, because latitude
-// and azimuth labels share the "%.0f degrees" format and a text-based case could not tell which
-// source produced a given string.
-TEST(OverlayLabels, TheHemisphereBoundaryCurveIsNudgedOntoTheVisibleSide) {
-  constexpr float kPi = 3.14159265f;
-  const float offset = std::sin(3.0f * kPi / 180.0f);
-
-  struct BoundaryCase {
-    const char* name;
-    float wz_sign;  // upper hemisphere pushes -z, lower pushes +z
-  };
-  const BoundaryCase kCases[] = { { "upper", -1.0f }, { "lower", 1.0f } };
-
-  for (const BoundaryCase& c : kCases) {
-    for (int i = 0; i < 8; ++i) {
-      const float az = -kPi + i * (2.0f * kPi / 8.0f);
-      float wx = -std::cos(az);
-      float wy = -std::sin(az);
-      float wz = c.wz_sign * offset;
-      const float len = std::sqrt(wx * wx + wy * wy + wz * wz);
-      wx /= len;
-      wy /= len;
-      wz /= len;
-      const float altitude_deg = std::asin(-wz) * 180.0f / kPi;
-      // Three degrees onto the visible side: enough to survive the cull, small enough that the label
-      // still reads as sitting on the boundary.
-      EXPECT_NEAR(altitude_deg, -c.wz_sign * 3.0f, 0.5f) << c.name << " sample " << i;
-    }
-  }
-}
-
-// The front-half boundary is a great circle perpendicular to forward, pushed along -forward by the
-// same offset. The shader culls a direction when dot(world, col2) > 0, so every sample on the nudged
-// curve must come out strictly negative.
-TEST(OverlayLabels, TheFrontHemisphereBoundaryCurveLandsInsideTheVisibleHalf) {
-  float view[9];
-  gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
-  constexpr float kPi = 3.14159265f;
-  const float offset = std::sin(3.0f * kPi / 180.0f);
-
-  for (int i = 0; i < 8; ++i) {
-    const float t = i * (2.0f * kPi / 8.0f);
-    const float c = std::cos(t);
-    const float s = std::sin(t);
-    float w[3] = {
-      c * view[0] + s * view[3] - offset * view[6],
-      c * view[1] + s * view[4] - offset * view[7],
-      c * view[2] + s * view[5] - offset * view[8],
-    };
-    const float len = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
-    const float dot_col2 = (w[0] * view[6] + w[1] * view[7] + w[2] * view[8]) / len;
-    EXPECT_LT(dot_col2, 0.0f) << "sample " << i;
-  }
-}
+// They asserted that the hemisphere boundary curve and the front-half boundary curve are pushed
+// three degrees onto the visible side before a label is placed on them. Both built the curve from a
+// `sin(3 degrees)` constant of their own and then asserted arithmetic about it — one recovered the
+// altitude with asin, the other took a dot product against an orthonormal basis — so neither called
+// anything that computes a label, and neither could go red for any change to the code that does.
+//
+// The mechanism they described belongs to the retired boundary-centric placement. Its replacement
+// walks each curve and emits at the entry point of every visible arc, and the only tolerance band
+// left at the front-hemisphere edge is the float-noise `kFrontEps` in overlay_labels.cpp — there is
+// no three-degree offset anywhere in src/gui to be red about. What the curve walk really does at
+// those edges is pinned by the cases that drive it: the front-mode pair above, and the arc-count cap
+// at the bottom of this file.
 
 // ---- The sky's interior latitudes are labelled, not only where curves meet the panel edge ----
 //

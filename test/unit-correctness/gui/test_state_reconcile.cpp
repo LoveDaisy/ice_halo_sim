@@ -53,6 +53,11 @@ GuiState MakeBaselineState() {
 
 struct Row {
   const char* what_changed;
+  // The kFieldTierTable entry this row's mutation belongs to. The structural table is read twice:
+  // once as a truth table over effects, and once as the set of fields the reconciler is claimed to
+  // diff. Two rows may name the same field (a struct with a structural half and a display half),
+  // which is why the second reading collects a set.
+  const char* registry_field;
   void (*mutate)(GuiState&);
   bool resim;
   bool hard_reset;
@@ -64,25 +69,28 @@ struct Row {
 // first, because what is already on screen was accumulated under the old filter and cannot be
 // carried forward.
 const Row kStructuralRows[] = {
-  { "crystals", [](GuiState& s) { s.crystals.emplace_back(); }, true, false, false },
-  { "layers", [](GuiState& s) { s.layers.emplace_back(); }, true, false, false },
-  { "sun", [](GuiState& s) { s.sun.altitude += 1.0f; }, true, false, false },
-  { "sim", [](GuiState& s) { s.sim.ray_num_millions += 1.0f; }, true, false, false },
+  { "crystals", "crystals", [](GuiState& s) { s.crystals.emplace_back(); }, true, false, false },
+  { "layers", "layers", [](GuiState& s) { s.layers.emplace_back(); }, true, false, false },
+  { "sun", "sun", [](GuiState& s) { s.sun.altitude += 1.0f; }, true, false, false },
+  { "sim", "sim", [](GuiState& s) { s.sim.ray_num_millions += 1.0f; }, true, false, false },
   // The one RenderConfig field that IS structural: it changes the grid the simulation renders
   // into. Stated here so the view exclusions below cannot be over-broadened to swallow the
   // whole struct.
-  { "renderer.sim_resolution_index", [](GuiState& s) { s.renderer.sim_resolution_index += 1; }, true, false, false },
-  { "filters", [](GuiState& s) { s.filters.emplace_back(); }, true, true, false },
-  { "raypath_color cardinality", [](GuiState& s) { s.raypath_color.emplace_back(); }, true, true, false },
-  { "raypath_color combine rule", [](GuiState& s) { s.raypath_color[0].combine = 1; }, true, true, false },
+  { "renderer.sim_resolution_index", "renderer", [](GuiState& s) { s.renderer.sim_resolution_index += 1; }, true, false,
+    false },
+  { "filters", "filters", [](GuiState& s) { s.filters.emplace_back(); }, true, true, false },
+  { "raypath_color cardinality", "raypath_color", [](GuiState& s) { s.raypath_color.emplace_back(); }, true, true,
+    false },
+  { "raypath_color combine rule", "raypath_color", [](GuiState& s) { s.raypath_color[0].combine = 1; }, true, true,
+    false },
 };
 
 // Display-only fields: the same rays, shown differently. Re-running would throw away a finished
 // simulation to arrive at the same numbers.
 const Row kDisplayRows[] = {
-  { "a class colour", [](GuiState& s) { s.raypath_color[0].color[0] = 0.5f; }, false, false, true },
-  { "the compositing mode", [](GuiState& s) { s.raypath_color_mode = s.raypath_color_mode == 0 ? 1 : 0; }, false, false,
-    true },
+  { "a class colour", "raypath_color", [](GuiState& s) { s.raypath_color[0].color[0] = 0.5f; }, false, false, true },
+  { "the compositing mode", "raypath_color",
+    [](GuiState& s) { s.raypath_color_mode = s.raypath_color_mode == 0 ? 1 : 0; }, false, false, true },
 };
 
 // Fields that must drive nothing at all.
@@ -96,17 +104,19 @@ const Row kDisplayRows[] = {
 // Exposure is here for the same reason and is worth stating separately: it is the field a user is
 // most likely to be dragging when a long run is nearly finished.
 const Row kInertRows[] = {
-  { "renderer.lens_type", [](GuiState& s) { s.renderer.lens_type = 1; }, false, false, false },
-  { "renderer.fov", [](GuiState& s) { s.renderer.fov = 45.0f; }, false, false, false },
-  { "renderer.elevation", [](GuiState& s) { s.renderer.elevation = 15.0f; }, false, false, false },
-  { "renderer.azimuth", [](GuiState& s) { s.renderer.azimuth = 30.0f; }, false, false, false },
-  { "renderer.roll", [](GuiState& s) { s.renderer.roll = 10.0f; }, false, false, false },
-  { "renderer.visible", [](GuiState& s) { s.renderer.visible = 0; }, false, false, false },
-  { "renderer.front", [](GuiState& s) { s.renderer.front = !s.renderer.front; }, false, false, false },
-  { "renderer.exposure_offset", [](GuiState& s) { s.renderer.exposure_offset = 2.0f; }, false, false, false },
+  { "renderer.lens_type", "renderer", [](GuiState& s) { s.renderer.lens_type = 1; }, false, false, false },
+  { "renderer.fov", "renderer", [](GuiState& s) { s.renderer.fov = 45.0f; }, false, false, false },
+  { "renderer.elevation", "renderer", [](GuiState& s) { s.renderer.elevation = 15.0f; }, false, false, false },
+  { "renderer.azimuth", "renderer", [](GuiState& s) { s.renderer.azimuth = 30.0f; }, false, false, false },
+  { "renderer.roll", "renderer", [](GuiState& s) { s.renderer.roll = 10.0f; }, false, false, false },
+  { "renderer.visible", "renderer", [](GuiState& s) { s.renderer.visible = 0; }, false, false, false },
+  { "renderer.front", "renderer", [](GuiState& s) { s.renderer.front = !s.renderer.front; }, false, false, false },
+  { "renderer.exposure_offset", "renderer", [](GuiState& s) { s.renderer.exposure_offset = 2.0f; }, false, false,
+    false },
   // Not part of the committed snapshot at all, so it cannot participate in the diff even in
   // principle — the legacy wrapper owns it.
-  { "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false, false },
+  { "use_gpu_backend", "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false,
+    false },
 };
 
 void CheckRows(const Row* rows, size_t count) {
@@ -237,30 +247,14 @@ TEST(GuiStateReconcile, ADisplayPushIsSuppressedWhileTheListLengthDisagrees) {
 // The comparison is on names rather than counts on purpose: an equal-size swap — excluding one
 // field while un-excluding another — passes a count and leaves the reconciler testing the wrong
 // fields entirely.
+// The mutations themselves are not repeated here: the structural truth table above already drives
+// every one of them and already asserts that each produces a re-sim, which is exactly the "the
+// reconciler does diff this field" half. What is left for this case is the SET comparison, so the
+// table is read a second time for its registry names rather than re-stated as a second list.
 TEST(GuiStateReconcile, EveryRegisteredStructuralFieldIsActuallyDiffed) {
-  struct Mutator {
-    const char* field;
-    void (*apply)(GuiState&);
-  };
-  const Mutator kMutators[] = {
-    { "crystals", [](GuiState& s) { s.crystals.emplace_back(); } },
-    { "layers", [](GuiState& s) { s.layers.emplace_back(); } },
-    { "sun", [](GuiState& s) { s.sun.altitude += 1.0f; } },
-    { "sim", [](GuiState& s) { s.sim.ray_num_millions += 1.0f; } },
-    { "renderer", [](GuiState& s) { s.renderer.sim_resolution_index += 1; } },
-    { "filters", [](GuiState& s) { s.filters.emplace_back(); } },
-    // The structural half, so this row asserts re-sim like the others; the display half has its
-    // own row in the display table above.
-    { "raypath_color", [](GuiState& s) { s.raypath_color[0].combine = 1; } },
-  };
-
   std::set<std::string> mutated;
-  for (const Mutator& mut : kMutators) {
-    SCOPED_TRACE(mut.field);
-    mutated.insert(mut.field);
-    GuiState s = MakeBaselineState();
-    mut.apply(s);
-    EXPECT_TRUE(ReconcileGuiEffects(s).need_resim) << "registered as structural but the reconciler does not diff it";
+  for (const Row& row : kStructuralRows) {
+    mutated.insert(row.registry_field);
   }
 
   std::set<std::string> registered;
@@ -294,23 +288,16 @@ TEST(GuiStateReconcile, ApplyingEffectsLetsAHardResetTakeOverFromAPlainReRun) {
     uint64_t expect_floor;
     float expect_p99;
   };
+  const auto Effects = [](bool resim, bool hard_reset) {
+    GuiEffects e;
+    e.need_resim = resim;
+    e.need_hard_reset = hard_reset;
+    return e;
+  };
   const Case kCases[] = {
     { "nothing to do", GuiEffects{}, false, 0u, 1.5f },
-    { "re-run only",
-      [] {
-        GuiEffects e;
-        e.need_resim = true;
-        return e;
-      }(),
-      true, 0u, 1.5f },
-    { "hard reset",
-      [] {
-        GuiEffects e;
-        e.need_resim = true;
-        e.need_hard_reset = true;
-        return e;
-      }(),
-      true, 5u, 0.0f },
+    { "re-run only", Effects(true, false), true, 0u, 1.5f },
+    { "hard reset", Effects(true, true), true, 5u, 0.0f },
   };
 
   for (const Case& c : kCases) {
