@@ -1,6 +1,10 @@
 // Composition chain: the preview's lens model, shared by everything drawn on top of it.
 //
-// Units in the chain: app_panels × preview_renderer × gui_state.
+// Units in the chain: app_panels × preview_renderer × overlay_labels × gui_state.
+//
+// overlay_labels is a full member here, not fixture scaffolding: it carries the second, independent
+// implementation of the same lens model (pixel -> direction), and the strongest case below is that
+// the two implementations must invert each other. Neither unit can make that check alone.
 //
 // What the collaboration produces that is observable: where an overlay marker lands on the preview,
 // and how far the image moves when the user drags it. Both are answers to the same question — what
@@ -95,8 +99,11 @@ TEST(PreviewProjectionChain, PixelToDirectionAndDirectionToPixelAreInverses) {
       const float world_dir[3] = { wx, wy, wz };
       const std::array<float, 2> screen =
           ProjectWorldDirToScreen(vp, world_dir, static_cast<int>(kResX), static_cast<int>(kResY));
-      ASSERT_FALSE(IsSentinel(screen)) << lens.name << " at (" << offset[0] << "," << offset[1]
-                                       << "): the inverse produced a direction the forward projection cannot place";
+      if (IsSentinel(screen)) {
+        ADD_FAILURE() << lens.name << " at (" << offset[0] << "," << offset[1]
+                      << "): the inverse produced a direction the forward projection cannot place";
+        continue;  // this combination has no coordinates to compare; the rest still get checked
+      }
       EXPECT_NEAR(screen[0], offset[0], 1.0f) << lens.name << " x";
       EXPECT_NEAR(screen[1], offset[1], 1.0f) << lens.name << " y";
     }
@@ -169,7 +176,10 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
   for (int lens : kLenses) {
     for (float fov : kFovs) {
       const float gain = ComputeDragGainDegPerPixel(lens, fov, kVpW, kVpH);
-      ASSERT_GT(gain, 0.0f) << "lens " << lens << " fov " << fov;
+      if (!(gain > 0.0f)) {
+        ADD_FAILURE() << "lens " << lens << " fov " << fov << ": no drag gain";
+        continue;
+      }
 
       // Turn the angular gain back into a screen distance: take the direction at the centre of the
       // frame, rotate it by one drag-pixel's worth of angle, and ask where that lands. That round
@@ -186,7 +196,10 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
       bool valid = false;
       detail::PixelToWorldDirForTesting(0.0f, 0.0f, static_cast<float>(kVpW), static_cast<float>(kVpH), lens, fov,
                                         view_matrix, &cx, &cy, &cz, &valid);
-      ASSERT_TRUE(valid) << "lens " << lens << " fov " << fov;
+      if (!valid) {
+        ADD_FAILURE() << "lens " << lens << " fov " << fov << ": the frame centre has no direction";
+        continue;
+      }
 
       // Rotate the centre direction by `gain` degrees about an axis perpendicular to it. Any
       // perpendicular will do: the drag law is isotropic by construction.
@@ -195,7 +208,10 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
       float ay = cx;
       float az = 0.0f;
       const float axis_len = std::sqrt(ax * ax + ay * ay + az * az);
-      ASSERT_GT(axis_len, 1e-6f) << "lens " << lens << " fov " << fov;
+      if (!(axis_len > 1e-6f)) {
+        ADD_FAILURE() << "lens " << lens << " fov " << fov << ": no perpendicular to rotate about";
+        continue;
+      }
       ax /= axis_len;
       ay /= axis_len;
       az /= axis_len;
@@ -208,7 +224,10 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
         cz * ct + (ax * cy - ay * cx) * st + az * dot * (1.0f - ct),
       };
       const std::array<float, 2> moved = ProjectWorldDirToScreen(vp, offset_dir, kVpW, kVpH);
-      ASSERT_FALSE(IsSentinel(moved)) << "lens " << lens << " fov " << fov;
+      if (IsSentinel(moved)) {
+        ADD_FAILURE() << "lens " << lens << " fov " << fov << ": one drag-pixel of rotation leaves the frame";
+        continue;
+      }
 
       const float pixels = std::sqrt(moved[0] * moved[0] + moved[1] * moved[1]);
       // The tolerance is wide on purpose: this asserts the invariant (a constant of order one

@@ -249,7 +249,6 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_import_export_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
@@ -321,6 +320,12 @@ if(BUILD_GUI)
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_roundtrip_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_defaults_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_switch_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_legacy_document_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_scene_commit_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_filter_reconstruct_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_color_document_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_lifecycle_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_user_defaults_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
