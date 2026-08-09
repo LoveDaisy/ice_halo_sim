@@ -13,9 +13,14 @@
 // Derived from the src call graph: app.cpp -> server_poller is 10 call sites, and app.hpp exposes
 // the decision points of that collaboration as free predicates precisely so they can be driven
 // without a window, a GL context or a live server.
+//
+// This file owns those decisions over their whole domain. Its sibling,
+// test/unit-correctness/gui/test_server_poller.cpp, owns the other half of the same chain: that a
+// real poll against a real server feeds these predicates the right signals in the first place.
 
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 
 #include "gui/app.hpp"
@@ -173,6 +178,9 @@ TEST(RunLifecycleChain, SelfPauseNeedsCompletionAndADrainedUnsupersededEpoch) {
     // A commit landed while this poll was in flight. drained_epoch is monotonic, so condition 2
     // is still satisfied and only this one catches it.
     { "completed but a newer epoch was committed mid-poll", LUMICE_LIFECYCLE_COMPLETED, 5, 5, 6, false },
+    // Both epochs moved past the completion. Monotonicity means condition 2 stays satisfied here
+    // too, so an implementation reading only drained_epoch pauses a generation that just started.
+    { "completed but both drain numbers are a generation ahead", LUMICE_LIFECYCLE_COMPLETED, 5, 6, 6, false },
     // A transient restart IDLE is not a completion edge.
     { "idle", LUMICE_LIFECYCLE_IDLE, 5, 5, 5, false },
   };
@@ -189,6 +197,99 @@ TEST(RunLifecycleChain, SelfPauseNeedsCompletionAndADrainedUnsupersededEpoch) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// E10 (edit-time half) — which kind of edit raises the fence, and what the user sees either way.
+//
+// The floor is raised by GuiState, read by the upload gate, and the pair of them is what decides
+// between two behaviours the user can tell apart at a glance. A filter change invalidates the
+// picture, so the old generation's frames must be fenced out and the canvas cleared immediately; a
+// crystal scrub does not, so the last frame must stay up or the preview strobes black under the
+// mouse. Neither half proves anything alone: MarkStructHardDirty raising the floor is only
+// meaningful if the gate then rejects, and a gate that rejects is only correct if the other edit
+// leaves the floor alone.
+
+TEST(RunLifecycleChain, AStructuralEditFencesTheOldGenerationAndAScrubDoesNot) {
+  constexpr unsigned long long kGen = 5;
+  // A materialized payload from the OLD generation, non-empty so the content term is satisfied and
+  // the epoch floor is the only thing that can block it.
+  PreviewSnapshot old_snap = MakeSnapshot(kGen, LUMICE_LIFECYCLE_COMPLETED);
+  auto old_payload = std::make_shared<TexturePayload>();
+  old_payload->payload_epoch = kGen;
+  old_payload->texture_ray_count = 100;
+  old_payload->snapshot_intensity = 1.0f;
+  old_snap.payload = old_payload;
+  old_snap.texture_serial = 1;  // unseen; the cursor starts at 0
+
+  struct EditCase {
+    const char* name;
+    bool structural;
+    unsigned long long expect_floor;
+    float expect_intensity;
+    bool expect_old_frame_survives;
+  };
+  const EditCase kCases[] = {
+    { "a filter change invalidates the picture", true, kGen, 0.0f, false },
+    { "a crystal scrub does not", false, 0, 1.0f, true },
+  };
+
+  for (const EditCase& c : kCases) {
+    GuiState st;
+    st.committed_epoch = kGen;
+    st.display_epoch_floor = 0;
+    st.snapshot_intensity = 1.0f;
+    if (c.structural) {
+      st.MarkStructHardDirty();
+    } else {
+      st.MarkDirty();
+    }
+    EXPECT_EQ(st.display_epoch_floor, c.expect_floor) << c.name;
+    EXPECT_EQ(st.snapshot_intensity, c.expect_intensity) << c.name;
+    EXPECT_EQ(ShouldUploadPayload(old_snap, /*last_serial=*/0, st.display_epoch_floor), c.expect_old_frame_survives)
+        << c.name;
+  }
+
+  // And the fence is scoped to the generation that raised it: the next generation's frame clears it,
+  // exactly once. A floor that outlived its generation would freeze the preview permanently.
+  PreviewSnapshot next = MakeSnapshot(kGen + 1, LUMICE_LIFECYCLE_RUNNING);
+  auto next_payload = std::make_shared<TexturePayload>();
+  next_payload->payload_epoch = kGen + 1;
+  next_payload->texture_ray_count = 100;
+  next_payload->snapshot_intensity = 1.0f;
+  next.payload = next_payload;
+  next.texture_serial = 2;
+  EXPECT_TRUE(ShouldUploadPayload(next, /*last_serial=*/1, /*floor=*/kGen));
+  EXPECT_FALSE(ShouldUploadPayload(next, /*last_serial=*/2, /*floor=*/kGen));
+}
+
+// Swapping the compute backend rebuilds the server, and a rebuilt server restarts its epoch
+// authority at 0 — so the new backend's first frame carries a LOW epoch. Carried across the swap, a
+// floor raised by any earlier edit fences that frame out forever and the stale texture sticks on
+// screen: run on CPU, switch to GPU, press Run, nothing happens. Headless on purpose — the defect is
+// pure epoch bookkeeping and independent of which backend is on either side of the swap.
+TEST(RunLifecycleChain, ABackendSwapClearsTheFenceTheOldServersEpochsRaised) {
+  PreviewSnapshot fresh = MakeSnapshot(1, LUMICE_LIFECYCLE_RUNNING);
+  auto payload = std::make_shared<TexturePayload>();
+  payload->payload_epoch = 1;  // the new backend's first commit mints epoch 1
+  payload->texture_ray_count = 100;
+  payload->snapshot_intensity = 1.0f;
+  fresh.payload = payload;
+  fresh.texture_serial = 42;  // the poller's serial is global-monotonic across the swap
+
+  GuiState st;
+  st.committed_epoch = 3;
+  st.display_epoch_floor = 3;
+  st.last_uploaded_texture_serial = 41;
+  st.snapshot_intensity = 1.0f;
+  EXPECT_FALSE(ShouldUploadPayload(fresh, st.last_uploaded_texture_serial, st.display_epoch_floor));
+
+  st.ResetDisplayGenerationForBackendSwap();
+  EXPECT_EQ(st.committed_epoch, 0u);
+  EXPECT_EQ(st.display_epoch_floor, 0u);
+  EXPECT_EQ(st.last_uploaded_texture_serial, 0ull);
+  EXPECT_EQ(st.snapshot_intensity, 0.0f);  // the stale texture is cleared, not left to linger
+  EXPECT_TRUE(ShouldUploadPayload(fresh, st.last_uploaded_texture_serial, st.display_epoch_floor));
+}
+
+// ---------------------------------------------------------------------------------------------
 // E7 — the state the user reads off the screen is a function of intent, epoch and the last
 // observation, and of nothing else.
 //
@@ -196,56 +297,110 @@ TEST(RunLifecycleChain, SelfPauseNeedsCompletionAndADrainedUnsupersededEpoch) {
 // the simulation: some display-time action pokes the field, and the label never comes back. Driving
 // the truth table directly is what keeps that single-writer claim checkable.
 
+// `valid` is a column and not a fixture detail: a valid=false observation is what the poller
+// publishes across a restart wake, and whether that transient counts as "an observation" is exactly
+// what several rows below decide.
 struct ReconcileCase {
   const char* name;
   RunIntent intent;
   uint64_t committed_epoch;
   bool have_snapshot;
+  bool snap_valid;
   unsigned long long snap_epoch;
   int lifecycle;
   bool dirty;
   GuiState::SimState expected;
 };
 
+constexpr int kIdleLc = LUMICE_LIFECYCLE_IDLE;
+constexpr int kRunLc = LUMICE_LIFECYCLE_RUNNING;
+constexpr int kDoneLc = LUMICE_LIFECYCLE_COMPLETED;
+
 TEST(RunLifecycleChain, SimStateIsAFunctionOfIntentEpochAndObservation) {
   const ReconcileCase kCases[] = {
-    { "never run", RunIntent::kNone, 0, false, 0, LUMICE_LIFECYCLE_IDLE, false, GuiState::SimState::kIdle },
-    { "running, no observation yet", RunIntent::kRunning, 3, false, 0, LUMICE_LIFECYCLE_IDLE, false,
+    // --- kNone: never run. No observation and no edit can promote it out of idle.
+    { "never run", RunIntent::kNone, 0, false, true, 0, kIdleLc, false, GuiState::SimState::kIdle },
+    { "never run, edited", RunIntent::kNone, 3, true, true, 3, kRunLc, true, GuiState::SimState::kIdle },
+
+    // --- kLoaded / kStopped: a result exists without this session having produced it. Both are
+    // demotable by an edit, which is the entire difference between them and kStopping below.
+    { "opened a document carrying a result", RunIntent::kLoaded, 0, false, true, 0, kIdleLc, false,
+      GuiState::SimState::kDone },
+    { "opened, then edited", RunIntent::kLoaded, 0, false, true, 0, kIdleLc, true, GuiState::SimState::kModified },
+    { "stopped by the user", RunIntent::kStopped, 7, false, true, 0, kIdleLc, false, GuiState::SimState::kDone },
+    { "stopped, then edited", RunIntent::kStopped, 7, false, true, 0, kIdleLc, true, GuiState::SimState::kModified },
+
+    // --- kRunning: the only intent whose answer depends on what was observed.
+    { "running, no observation yet", RunIntent::kRunning, 3, false, true, 0, kIdleLc, false,
       GuiState::SimState::kSimulating },
-    { "running, backend agrees", RunIntent::kRunning, 3, true, 3, LUMICE_LIFECYCLE_RUNNING, false,
+    { "running, backend agrees", RunIntent::kRunning, 3, true, true, 3, kRunLc, false,
       GuiState::SimState::kSimulating },
     // The completion edge for the epoch the GUI actually committed. This is the transition whose
     // absence reads as "it finished but the UI still says Simulating".
-    { "completed at the committed epoch", RunIntent::kRunning, 3, true, 3, LUMICE_LIFECYCLE_COMPLETED, false,
+    { "completed at the committed epoch", RunIntent::kRunning, 3, true, true, 3, kDoneLc, false,
       GuiState::SimState::kDone },
-    // A completion belonging to a previous generation must not end the current run.
-    { "completed at an older epoch", RunIntent::kRunning, 4, true, 3, LUMICE_LIFECYCLE_COMPLETED, false,
+    { "completed at the committed epoch, edited since", RunIntent::kRunning, 3, true, true, 3, kDoneLc, true,
+      GuiState::SimState::kModified },
+    // A completion belonging to a previous generation must not end the current run. Drop the epoch
+    // term from the freshness test and this row turns green for the wrong reason.
+    { "completed at an older epoch", RunIntent::kRunning, 4, true, true, 3, kDoneLc, false,
       GuiState::SimState::kSimulating },
-    { "stopping", RunIntent::kStopping, 3, true, 3, LUMICE_LIFECYCLE_RUNNING, false, GuiState::SimState::kStopping },
+    // IDLE is not completion — a Stop returns the server to IDLE at the same epoch.
+    { "idle at the committed epoch", RunIntent::kRunning, 3, true, true, 3, kIdleLc, false,
+      GuiState::SimState::kSimulating },
+    // Not yet a real observation, whatever it says.
+    { "invalid observation claiming completion", RunIntent::kRunning, 3, true, false, 3, kDoneLc, false,
+      GuiState::SimState::kSimulating },
+
+    // --- kRunCompleted: the latched natural completion. Load-bearing, because the latch is what
+    // survives the two transients that produced the original "finished run flips back to
+    // Simulating" bug — an invalid observation across a wake, and a stale-epoch one.
+    { "latched completion, no observation", RunIntent::kRunCompleted, 5, false, true, 0, kIdleLc, false,
+      GuiState::SimState::kDone },
+    { "latched completion, invalid observation", RunIntent::kRunCompleted, 5, true, false, 5, kDoneLc, false,
+      GuiState::SimState::kDone },
+    { "latched completion, stale observation", RunIntent::kRunCompleted, 5, true, true, 3, kDoneLc, false,
+      GuiState::SimState::kDone },
+    { "latched completion, a fresh RUNNING observation", RunIntent::kRunCompleted, 5, true, true, 5, kRunLc, false,
+      GuiState::SimState::kDone },
+    { "latched completion, edited since", RunIntent::kRunCompleted, 5, false, true, 0, kIdleLc, true,
+      GuiState::SimState::kModified },
+
+    // --- kStopping: a draining run is not an editable completed result, so unlike every other
+    // terminal-ish intent it is NOT demoted by dirty, and no observation pulls it either way.
+    { "stopping", RunIntent::kStopping, 3, true, true, 3, kRunLc, false, GuiState::SimState::kStopping },
+    { "stopping, edited", RunIntent::kStopping, 7, false, true, 0, kIdleLc, true, GuiState::SimState::kStopping },
+    { "stopping, a fresh completion arrives", RunIntent::kStopping, 7, true, true, 7, kDoneLc, false,
+      GuiState::SimState::kStopping },
+    { "stopping, a fresh completion arrives after an edit", RunIntent::kStopping, 7, true, true, 7, kDoneLc, true,
+      GuiState::SimState::kStopping },
   };
 
   for (const ReconcileCase& c : kCases) {
     PreviewSnapshot snap = MakeSnapshot(c.snap_epoch, c.lifecycle);
+    snap.valid = c.snap_valid;
     const PreviewSnapshot* snap_ptr = c.have_snapshot ? &snap : nullptr;
     EXPECT_EQ(ReconcileSimState(c.intent, c.committed_epoch, snap_ptr, c.dirty), c.expected) << c.name;
   }
 }
 
-// A dirty edit demotes a FINISHED result and nothing else.
-//
-// The asymmetry is the point, and it is easy to get backwards: "the config changed" is only news
-// about a result that exists. Demoting kSimulating would tell the user their running simulation is
-// already invalid; demoting kIdle would put a "modified" badge on a document that has never run.
+// The property behind the demotion column, stated so a future change cannot satisfy those rows by
+// accident: an edit is only news about a result that EXISTS. Demoting kSimulating would tell the
+// user their running simulation is already invalid; demoting kIdle would put a "modified" badge on a
+// document that has never run.
 TEST(RunLifecycleChain, DirtyDemotesAFinishedResultAndOnlyAFinishedResult) {
-  PreviewSnapshot running = MakeSnapshot(3, LUMICE_LIFECYCLE_RUNNING);
-  PreviewSnapshot completed = MakeSnapshot(3, LUMICE_LIFECYCLE_COMPLETED);
+  const RunIntent kDemotable[] = { RunIntent::kLoaded, RunIntent::kStopped, RunIntent::kRunCompleted };
+  const RunIntent kNotDemotable[] = { RunIntent::kNone, RunIntent::kRunning, RunIntent::kStopping };
 
-  EXPECT_EQ(ReconcileSimState(RunIntent::kRunCompleted, 3, &completed, true), GuiState::SimState::kModified);
-  EXPECT_EQ(ReconcileSimState(RunIntent::kLoaded, 3, nullptr, true), GuiState::SimState::kModified);
-
-  EXPECT_EQ(ReconcileSimState(RunIntent::kNone, 3, &running, true), GuiState::SimState::kIdle);
-  EXPECT_EQ(ReconcileSimState(RunIntent::kRunning, 3, &running, true), GuiState::SimState::kSimulating);
-  EXPECT_EQ(ReconcileSimState(RunIntent::kStopping, 3, &running, true), GuiState::SimState::kStopping);
+  for (RunIntent intent : kDemotable) {
+    EXPECT_EQ(ReconcileSimState(intent, 3, nullptr, true), GuiState::SimState::kModified)
+        << "intent " << static_cast<int>(intent);
+  }
+  for (RunIntent intent : kNotDemotable) {
+    PreviewSnapshot running = MakeSnapshot(3, LUMICE_LIFECYCLE_RUNNING);
+    EXPECT_EQ(ReconcileSimState(intent, 3, &running, true), ReconcileSimState(intent, 3, &running, false))
+        << "intent " << static_cast<int>(intent);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
