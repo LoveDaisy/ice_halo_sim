@@ -37,13 +37,21 @@ TEST(EditModalChain, TheCommitGateAndItsTooltipAgreeOnEveryValidationState) {
     LUMICE_RaypathValidationState state;
     const char* message;
     bool expect_blocked;
+    // The phrasing the tooltip must and must not carry. "Still typing" is not an error, and saying
+    // so is the difference between a state every half-typed raypath passes through and a state the
+    // user thinks they have got wrong.
+    const char* expect_phrase;
+    const char* forbid_phrase;
   };
   const Case kCases[] = {
     // Blank rows validate as valid and are stripped at commit time; resolving "empty means no
     // filter" in this gate instead would make an untouched row un-committable.
-    { LUMICE_RAYPATH_VALID, "", false },
-    { LUMICE_RAYPATH_INCOMPLETE, "", true },
-    { LUMICE_RAYPATH_INVALID, "Face 13 is not legal on this crystal type", true },
+    { LUMICE_RAYPATH_VALID, "", false, nullptr, nullptr },
+    { LUMICE_RAYPATH_INCOMPLETE, "", true, "finish typing", "invalid" },
+    { LUMICE_RAYPATH_INVALID, "Face 13 is not legal on this crystal type", true, nullptr, nullptr },
+    // An invalid row whose validator produced no message still has to say something; the fallback
+    // is what stops the tooltip from being "Row 3: ".
+    { LUMICE_RAYPATH_INVALID, "", true, "invalid", nullptr },
   };
 
   for (const Case& c : kCases) {
@@ -62,56 +70,38 @@ TEST(EditModalChain, TheCommitGateAndItsTooltipAgreeOnEveryValidationState) {
       EXPECT_NE(tooltip.find("Row 3"), std::string::npos)
           << "the tooltip does not name the row it is about, so a user with 40 rows cannot act on it";
     }
+    if (c.expect_phrase != nullptr) {
+      EXPECT_NE(tooltip.find(c.expect_phrase), std::string::npos) << "got: " << tooltip;
+    }
+    if (c.forbid_phrase != nullptr) {
+      EXPECT_EQ(tooltip.find(c.forbid_phrase), std::string::npos) << "got: " << tooltip;
+    }
   }
-}
-
-// "Still typing" is not an error, and saying so is the difference between a state every half-typed
-// raypath passes through and a state the user thinks they have got wrong.
-TEST(EditModalChain, AnIncompleteRowIsPhrasedAsUnfinishedRatherThanInvalid) {
-  GuiValidationResult incomplete;
-  incomplete.state = LUMICE_RAYPATH_INCOMPLETE;
-  const std::string tooltip = SummandRowOkTooltip(0, incomplete);
-  EXPECT_NE(tooltip.find("finish typing"), std::string::npos) << "got: " << tooltip;
-  EXPECT_EQ(tooltip.find("invalid"), std::string::npos) << "got: " << tooltip;
-}
-
-// An invalid row whose validator produced no message still has to say something. The fallback is
-// what stops the tooltip from being "Row 3: ".
-TEST(EditModalChain, AnInvalidRowWithNoValidatorMessageStillSaysSomething) {
-  GuiValidationResult invalid;
-  invalid.state = LUMICE_RAYPATH_INVALID;
-  invalid.message.clear();
-  const std::string tooltip = SummandRowOkTooltip(0, invalid);
-  EXPECT_NE(tooltip.find("invalid"), std::string::npos) << "got: " << tooltip;
 }
 
 // ---------------------------------------------------------------------------------------------
 // E17 (row-count half) — the caps and the delete rule are boundary conditions, so they are checked
 // at their boundaries rather than in the middle where any off-by-one still passes.
 
-TEST(EditModalChain, TheAddRowCapIsCheckedAtItsBoundary) {
+TEST(EditModalChain, TheRowCapsAndTheDeleteRuleHoldAtTheirBoundaries) {
   EXPECT_FALSE(AtSummandRowCap(kMaxSummandRows - 1));
   EXPECT_TRUE(AtSummandRowCap(kMaxSummandRows));
   EXPECT_TRUE(AtSummandRowCap(kMaxSummandRows + 1));
   // The cap is a UI budget, not the ABI limit, and it must stay above the pre-widening hard cap —
   // a change that quietly walked it back to 16 would undo the widening with nothing to notice.
   EXPECT_GT(kMaxSummandRows, 16u);
-}
 
-TEST(EditModalChain, TheLastRowCannotBeDeleted) {
   // An empty list has no way back to being a filter, so the editor keeps one row the user can
   // blank instead. A delete button live on the last row is a one-way door out of the editor.
   EXPECT_FALSE(CanDeleteSummandRow(0));
   EXPECT_FALSE(CanDeleteSummandRow(1));
   EXPECT_TRUE(CanDeleteSummandRow(2));
-}
 
-TEST(EditModalChain, AnEmptySpectrumCannotBeCommitted) {
-  // The invariant behind it: spectrum_index == custom implies a non-empty buffer. Committing an
-  // empty one leaves a document that names a spectrum with nothing in it.
+  // The spectrum's own pair, and the invariant behind the first one: spectrum_index == custom
+  // implies a non-empty buffer, so committing an empty one leaves a document that names a spectrum
+  // with nothing in it.
   EXPECT_TRUE(SpectrumCommitBlocked(0));
   EXPECT_FALSE(SpectrumCommitBlocked(1));
-
   EXPECT_FALSE(AtSpectrumRowCap(kSpectrumHardMax - 1));
   EXPECT_TRUE(AtSpectrumRowCap(kSpectrumHardMax));
 }
@@ -131,9 +121,7 @@ TEST(EditModalChain, SpectrumClampsAreIdempotentAndCoverBothEnds) {
     // row the user never edited would move on every OK.
     EXPECT_FLOAT_EQ(ClampSpectrumWavelengthNm(once), once) << "input " << nm;
   }
-}
 
-TEST(EditModalChain, ANegativeSpectrumWeightBecomesZeroRatherThanSubtractingLight) {
   // Weights are amplitudes. A negative one is not a dim row — it is a row that removes light from
   // the others, which is not a state the editor has any way to show.
   EXPECT_FLOAT_EQ(ClampSpectrumWeight(-1.0f), 0.0f);
@@ -147,9 +135,15 @@ TEST(EditModalChain, ANegativeSpectrumWeightBecomesZeroRatherThanSubtractingLigh
 // The hash is the whole mechanism: it decides both halves. Too insensitive and the user edits a
 // parameter while looking at the previous shape; too sensitive and the mesh is rebuilt every frame.
 
-TEST(EditModalChain, EveryEditedShapeScalarChangesTheCrystalParamHash) {
+TEST(EditModalChain, TheCrystalParamHashMovesOnEveryEditAndOnNothingElse) {
   CrystalConfig base;
   const int base_hash = CrystalParamHash(base);
+
+  // Stable first: two default-constructed crystals, and the same object hashed twice — the
+  // per-frame comparison the preview actually makes. Without this the "changes" half below would
+  // be satisfied by a hash that moves every call.
+  EXPECT_EQ(base_hash, CrystalParamHash(CrystalConfig{}));
+  EXPECT_EQ(base_hash, CrystalParamHash(base));
 
   for (int slot = 0; slot < LUMICE_SHAPE_SCALAR_COUNT; ++slot) {
     CrystalConfig edited = base;
@@ -157,19 +151,9 @@ TEST(EditModalChain, EveryEditedShapeScalarChangesTheCrystalParamHash) {
     EXPECT_NE(CrystalParamHash(edited), base_hash)
         << "editing shape scalar " << slot << " leaves the preview showing the previous crystal";
   }
-}
 
-TEST(EditModalChain, AnUneditedCrystalKeepsItsHashSoTheMeshIsNotRebuiltEveryFrame) {
-  CrystalConfig a;
-  CrystalConfig b;
-  EXPECT_EQ(CrystalParamHash(a), CrystalParamHash(b));
-
-  // And the same object hashed twice, which is the per-frame comparison the preview actually makes.
-  EXPECT_EQ(CrystalParamHash(a), CrystalParamHash(a));
-}
-
-TEST(EditModalChain, TheCrystalKindIsPartOfTheHash) {
-  CrystalConfig prism;
+  // The crystal kind is part of it too, and it is not a shape scalar.
+  CrystalConfig prism = base;
   prism.type = CrystalType::kPrism;
   CrystalConfig pyramid = prism;
   pyramid.type = CrystalType::kPyramid;
@@ -196,13 +180,12 @@ TEST(EditModalChain, ShapeRandomizationIsDecidedByDistributionFamilyNotBySpread)
   zero_spread.height = ShapeDist{ ShapeDistType::kUniform, 1.0f, 0.0f };
   EXPECT_TRUE(HasActiveShapeRandomization(zero_spread))
       << "the rule is the family, not the spread; a zero-spread uniform is still not kNoRandom";
-}
 
-// The half that makes this a composition claim rather than a field test: the predicate mirrors the
-// mesh builder's own type branch, so it must ignore exactly the fields that crystal kind does not
-// feed into the mesh. A prism whose pyramid-only heights carry a distribution has nothing varying
-// in its preview, and animating it would spin the mesh builder forever on a field it ignores.
-TEST(EditModalChain, RandomizationOnAFieldTheCrystalKindIgnoresDoesNotAnimateThePreview) {
+  // The half that makes this a composition claim rather than a field test: the predicate mirrors
+  // the mesh builder's own type branch, so it must ignore exactly the fields that crystal kind does
+  // not feed into the mesh. A prism whose pyramid-only heights carry a distribution has nothing
+  // varying in its preview, and animating it would spin the mesh builder forever on a field it
+  // ignores.
   CrystalConfig prism;
   prism.type = CrystalType::kPrism;
   prism.upper_h = ShapeDist{ ShapeDistType::kUniform, 0.2f, 0.1f };

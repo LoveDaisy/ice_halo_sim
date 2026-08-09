@@ -183,38 +183,27 @@ GuiState MinimalDocument() {
 // One loop, one EXPECT per field, deliberately not ASSERT: a fatal assertion on the first bad field
 // would hide every field after it, and "which fields does the serializer drop" is exactly the
 // question this case is asked to answer.
+//
+// The detection-power half is asserted in the same pass rather than beside it, because a probe that
+// cannot fail is not a probe: each probe's mutated readout must differ from the untouched
+// document's, which is the property that makes a dropped field observable instead of accidentally
+// equal to what the reader defaults to.
 TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
   for (const FieldProbe& probe : FieldProbes()) {
     GuiState before = MinimalDocument();
     probe.mutate(before);
     const std::string expected = probe.read(before);
+    EXPECT_NE(expected, probe.read(MinimalDocument()))
+        << "probe " << probe.name << " writes the default value, so it would pass even if the "
+        << "serializer dropped the field entirely";
 
-    const std::string json = SerializeGuiStateJson(before);
     GuiState after = MinimalDocument();
-    const bool ok = DeserializeGuiStateJson(json, after);
-
+    const bool ok = DeserializeGuiStateJson(SerializeGuiStateJson(before), after);
     EXPECT_TRUE(ok) << probe.name << ": DeserializeGuiStateJson rejected its own output";
     if (!ok) {
       continue;
     }
     EXPECT_EQ(probe.read(after), expected) << "field " << probe.name << " did not survive the round trip";
-  }
-}
-
-// E1 (the other half) — a probe that cannot fail is not a probe.
-//
-// Every field above is written to a NON-default value, so a serializer that silently drops the
-// field is caught by the round-trip case. This case is what proves that: it asserts each probe's
-// mutated readout actually differs from the default document's, which is the property that makes a
-// dropped field observable rather than accidentally equal to what the reader defaults to.
-TEST(DocumentRoundtripChain, EveryProbeWritesSomethingOtherThanTheDefault) {
-  for (const FieldProbe& probe : FieldProbes()) {
-    const GuiState untouched = MinimalDocument();
-    GuiState mutated = MinimalDocument();
-    probe.mutate(mutated);
-    EXPECT_NE(probe.read(mutated), probe.read(untouched))
-        << "probe " << probe.name << " writes the default value, so it would pass even if the "
-        << "serializer dropped the field entirely";
   }
 }
 
@@ -225,40 +214,29 @@ TEST(DocumentRoundtripChain, EveryProbeWritesSomethingOtherThanTheDefault) {
 // simulate, which is why file_io keeps a counter for it: the notice it drives is the only thing
 // standing between "your crystals were simplified" and the user never finding out.
 //
-// Two properties, both load-bearing: the conversion happens, and the counter reports it exactly
-// once (it is a Take — reading clears). A counter that never clears makes the notice permanent and
-// trains the user to dismiss it; one that never counts makes the change invisible.
-TEST(DocumentRoundtripChain, NonUniformShapeDistIsDowngradedAndCounted) {
-  GuiState before = MinimalDocument();
-  before.crystals.at(0).height = ShapeDist{ ShapeDistType::kGauss, 2.5f, 0.75f };
-  const std::string json = SerializeGuiStateJson(before);
+// Three properties, all load-bearing: the conversion happens, the counter reports it exactly once
+// (it is a Take — reading clears), and a uniform family is NOT counted. A counter that never clears
+// makes the notice permanent and trains the user to dismiss it; one that never counts makes the
+// change invisible; one wired to "count every crystal" would satisfy the first two and put a
+// "distributions were simplified" notice on every file the user opens.
+TEST(DocumentRoundtripChain, ANonUniformShapeDistIsDowngradedAndCountedAndAUniformOneIsNot) {
+  for (const ShapeDistType family : { ShapeDistType::kGauss, ShapeDistType::kUniform }) {
+    const bool expect_downgrade = (family != ShapeDistType::kUniform);
+    GuiState before = MinimalDocument();
+    before.crystals.at(0).height = ShapeDist{ family, 2.5f, 0.75f };
 
-  TakeShapeDistDowngradeCount();  // discard anything a previous case in this binary left behind
+    TakeShapeDistDowngradeCount();  // discard anything a previous case in this binary left behind
+    GuiState after = MinimalDocument();
+    ASSERT_TRUE(DeserializeGuiStateJson(SerializeGuiStateJson(before), after));
 
-  GuiState after = MinimalDocument();
-  ASSERT_TRUE(DeserializeGuiStateJson(json, after));
-
-  EXPECT_EQ(static_cast<int>(after.crystals.at(0).height.type), static_cast<int>(ShapeDistType::kUniform))
-      << "a non-uniform family survived into a GuiState the GUI cannot edit";
-  // The numbers themselves must not move: it is the family that is simplified, not the value.
-  EXPECT_FLOAT_EQ(after.crystals.at(0).height.center, 2.5f);
-
-  EXPECT_GT(TakeShapeDistDowngradeCount(), 0) << "the document was changed on load with nothing to report it";
-  EXPECT_EQ(TakeShapeDistDowngradeCount(), 0) << "the counter did not clear on read, so the notice would never go away";
-}
-
-TEST(DocumentRoundtripChain, UniformShapeDistIsNotCountedAsADowngrade) {
-  GuiState before = MinimalDocument();
-  before.crystals.at(0).height = ShapeDist{ ShapeDistType::kUniform, 2.5f, 0.75f };
-  const std::string json = SerializeGuiStateJson(before);
-
-  TakeShapeDistDowngradeCount();
-  GuiState after = MinimalDocument();
-  ASSERT_TRUE(DeserializeGuiStateJson(json, after));
-
-  // The negative half. Without it, a counter wired to "count every crystal" would satisfy the case
-  // above and put a "distributions were simplified" notice on every file the user opens.
-  EXPECT_EQ(TakeShapeDistDowngradeCount(), 0);
+    EXPECT_EQ(static_cast<int>(after.crystals.at(0).height.type), static_cast<int>(ShapeDistType::kUniform))
+        << "a non-uniform family survived into a GuiState the GUI cannot edit";
+    // The numbers themselves must not move: it is the family that is simplified, not the value.
+    EXPECT_FLOAT_EQ(after.crystals.at(0).height.center, 2.5f);
+    EXPECT_EQ(TakeShapeDistDowngradeCount() > 0, expect_downgrade)
+        << "the document was changed on load with nothing to report it, or the reverse";
+    EXPECT_EQ(TakeShapeDistDowngradeCount(), 0) << "the counter did not clear on read, so a notice would never go away";
+  }
 }
 
 // E3 — an absent key must leave the documented default in place, and the key's NAME is part of the
@@ -267,27 +245,22 @@ TEST(DocumentRoundtripChain, UniformShapeDistIsNotCountedAsADowngrade) {
 // Two directions, because they fail differently. Renaming the key breaks reading files already on
 // disk while a same-process round trip stays green; dropping the absent-key branch makes a file
 // written by an older build come back with a black horizon line instead of the red one.
-TEST(DocumentRoundtripChain, AbsentOverlayColorKeysKeepTheDefault) {
+TEST(DocumentRoundtripChain, AbsentOverlayColorKeysKeepTheDefaultAndTheKeyNamesAreTheContract) {
   const GuiState defaults;
 
   GuiState loaded = MinimalDocument();
   loaded.horizon_color[0] = 0.0f;
   loaded.grid_color[0] = 0.0f;
-  const bool ok = DeserializeGuiStateJson("{}", loaded);
-
-  EXPECT_TRUE(ok) << "an empty document is a valid document";
+  EXPECT_TRUE(DeserializeGuiStateJson("{}", loaded)) << "an empty document is a valid document";
   EXPECT_EQ(JoinFloats(loaded.horizon_color, 3), JoinFloats(defaults.horizon_color, 3));
   EXPECT_EQ(JoinFloats(loaded.grid_color, 3), JoinFloats(defaults.grid_color, 3));
-}
 
-TEST(DocumentRoundtripChain, OverlayColorKeyNamesAreTheOnDiskContract) {
+  // The other direction. Spelled out rather than referenced through a constant: the job here is to
+  // fail when the key on disk changes, and a shared constant would move with the change.
   GuiState s = MinimalDocument();
   s.horizon_color[0] = 0.125f;
   s.grid_color[0] = 0.375f;
   const std::string json = SerializeGuiStateJson(s);
-
-  // Spelled out rather than referenced through a constant: this test's job is to fail when the key
-  // on disk changes, and a shared constant would move with the change.
   EXPECT_NE(json.find("\"overlay_horizon_color\""), std::string::npos);
   EXPECT_NE(json.find("\"overlay_grid_color\""), std::string::npos);
 }
@@ -329,20 +302,27 @@ TEST(DocumentRoundtripChain, LegacyRaypathSplitsIntoOneRowPerSegment) {
     for (const SummandText& row : sop) {
       EXPECT_EQ(row.factors.size(), 1u) << c.name << ": a legacy segment is exactly one factor";
     }
+    // The same text, read by the multi-segment parser the engine side uses: the segments have to
+    // survive there too, or the editor shows rows the run does not apply. (The degenerate empty
+    // row has no segment to parse, which is why the count is compared only for real text.)
+    const std::vector<std::vector<int>> segments = ParseRaypathTextMultiSegment(c.raypath_text);
+    if (*c.raypath_text != '\0') {
+      EXPECT_EQ(segments.size(), c.expected_rows) << c.name;
+    }
+    for (const std::vector<int>& seg : segments) {
+      EXPECT_FALSE(seg.empty()) << c.name << ": a segment that parsed to nothing would filter nothing";
+    }
   }
-}
 
-TEST(DocumentRoundtripChain, LegacyEntryExitBecomesOneRowWhoseTextReparses) {
+  // An entry/exit pair takes the other legacy translator and becomes a single AND-row.
   EntryExitParams ep;
   ep.entry_text = "3,4";
   ep.exit_text = "1";
   const SumOfProducts sop = FromLegacyEntryExit(ep);
-
   ASSERT_EQ(sop.size(), 1u) << "an entry/exit pair is a single AND-row";
   // The row's text is what the editor shows and what the file stores; the factors are what the
   // engine runs. They have to agree, or the user edits one thing and simulates another.
-  const std::vector<Factor> reparsed = ParseSummandText(sop.front().text);
-  EXPECT_EQ(FormatSummandText(reparsed), sop.front().text);
+  EXPECT_EQ(FormatSummandText(ParseSummandText(sop.front().text)), sop.front().text);
 }
 
 // E4 — face-number validation is crystal-kind sensitive.
@@ -370,14 +350,6 @@ TEST(DocumentRoundtripChain, FaceNumberValidityDependsOnCrystalKind) {
     if (!valid) {
       EXPECT_FALSE(r.message.empty()) << "a rejection the user cannot read is a rejection with no cause";
     }
-  }
-}
-
-TEST(DocumentRoundtripChain, MultiSegmentRaypathTextParsesEverySegment) {
-  const std::vector<std::vector<int>> segments = ParseRaypathTextMultiSegment("3-5; 1-3");
-  EXPECT_EQ(segments.size(), 2u);
-  for (const std::vector<int>& seg : segments) {
-    EXPECT_FALSE(seg.empty()) << "a segment that parsed to nothing would filter nothing";
   }
 }
 
