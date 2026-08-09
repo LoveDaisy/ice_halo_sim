@@ -21,84 +21,57 @@ constexpr AxisDist kRollFull{ AxisDistType::kUniform, 0.0f, 360.0f };
 constexpr AxisDist kRollLockedGauss{ AxisDistType::kGauss, 0.0f, 1.0f };
 constexpr AxisDist kRollLockedUniform{ AxisDistType::kUniform, 0.0f, 9.0f };
 
-// --- Column ---
-TEST(AxisPresetTest, ColumnStrictDefault) {
-  AxisDist z{ AxisDistType::kGauss, 90.0f, 1.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kColumn);
-}
-TEST(AxisPresetTest, ColumnPermissiveLaplacian) {
-  AxisDist z{ AxisDistType::kLaplacian, 90.0f, 9.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kColumn);
-}
+// The classifier, as one table. Every row is the same question — which preset does this
+// (zenith, azimuth, roll) triple read as — and one case per row was one preamble per row.
+//
+// The rows are grouped by what they are for: each preset's strict default (the values its own
+// button writes), a permissive variant inside the same criterion, and the boundary rows, which are
+// where the criteria's STRICT inequalities live and the only place an off-by-a-comparison shows up.
+TEST(AxisPresetTest, EveryTripleClassifiesAsThePresetItsCriterionNames) {
+  struct Case {
+    const char* name;
+    AxisDist zenith;
+    AxisDist roll;
+    AxisPreset expected;
+  };
+  const Case kCases[] = {
+    { "column, strict default", { AxisDistType::kGauss, 90.0f, 1.0f }, kRollFull, AxisPreset::kColumn },
+    { "column, permissive laplacian", { AxisDistType::kLaplacian, 90.0f, 9.0f }, kRollFull, AxisPreset::kColumn },
+    { "plate, strict default", { AxisDistType::kGauss, 0.0f, 1.0f }, kRollFull, AxisPreset::kPlate },
+    { "plate, permissive uniform", { AxisDistType::kUniform, 0.0f, 9.0f }, kRollFull, AxisPreset::kPlate },
+    { "parry, strict default", { AxisDistType::kGauss, 90.0f, 1.0f }, kRollLockedGauss, AxisPreset::kParry },
+    { "parry, permissive laplacian + uniform roll",
+      { AxisDistType::kLaplacian, 90.0f, 9.0f },
+      kRollLockedUniform,
+      AxisPreset::kParry },
+    // The Lowitz button writes kGauss(0, 40) since v11; the classifier still accepts kZigzag so
+    // older .lmc files keep classifying as Lowitz.
+    { "lowitz, button default", { AxisDistType::kGauss, 0.0f, 40.0f }, kRollLockedGauss, AxisPreset::kLowitz },
+    { "lowitz, legacy zigzag", { AxisDistType::kZigzag, 0.0f, 40.0f }, kRollLockedGauss, AxisPreset::kLowitz },
+    { "lowitz, permissive gauss + uniform roll",
+      { AxisDistType::kGauss, 0.0f, 20.0f },
+      kRollLockedUniform,
+      AxisPreset::kLowitz },
+    { "random, everything full uniform", { AxisDistType::kUniform, 0.0f, 360.0f }, kRollFull, AxisPreset::kRandom },
+    { "random with an offset mean is custom",
+      { AxisDistType::kUniform, 30.0f, 360.0f },
+      kRollFull,
+      AxisPreset::kCustom },
+    // zenith mean=90 with std=20 (>=10) fails Column's criterion, and no other matches.
+    { "the custom button's own default",
+      { AxisDistType::kGauss, 90.0f, 20.0f },
+      { AxisDistType::kGauss, 0.0f, 20.0f },
+      AxisPreset::kCustom },
+    // Boundaries: Plate and Column require std < 10, Lowitz requires std > 15, so the bound itself
+    // must NOT match.
+    { "plate's bound, std == 10", { AxisDistType::kGauss, 0.0f, 10.0f }, kRollFull, AxisPreset::kCustom },
+    { "column's bound, std == 10", { AxisDistType::kGauss, 90.0f, 10.0f }, kRollFull, AxisPreset::kCustom },
+    { "lowitz's bound, std == 15", { AxisDistType::kGauss, 0.0f, 15.0f }, kRollLockedGauss, AxisPreset::kCustom },
+  };
 
-// --- Plate ---
-TEST(AxisPresetTest, PlateStrictDefault) {
-  AxisDist z{ AxisDistType::kGauss, 0.0f, 1.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kPlate);
-}
-TEST(AxisPresetTest, PlatePermissiveUniform) {
-  AxisDist z{ AxisDistType::kUniform, 0.0f, 9.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kPlate);
-}
-
-// --- Parry ---
-TEST(AxisPresetTest, ParryStrictDefault) {
-  AxisDist z{ AxisDistType::kGauss, 90.0f, 1.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kParry);
-}
-TEST(AxisPresetTest, ParryPermissiveLaplacianRollUniform) {
-  AxisDist z{ AxisDistType::kLaplacian, 90.0f, 9.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedUniform), AxisPreset::kParry);
-}
-
-// --- Lowitz ---
-// Preset button default: Lowitz 默认 zenith 从 v11 起改为 kGauss（0°, 40°），
-// classifier 仍接受 kZigzag 以兼容老 .lmc 文件（见 LowitzStrictDefault）。
-TEST(AxisPresetTest, LowitzDefaultGauss) {
-  AxisDist z{ AxisDistType::kGauss, 0.0f, 40.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kLowitz);
-}
-TEST(AxisPresetTest, LowitzStrictDefault) {
-  AxisDist z{ AxisDistType::kZigzag, 0.0f, 40.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kLowitz);
-}
-TEST(AxisPresetTest, LowitzPermissiveGaussRollUniform) {
-  AxisDist z{ AxisDistType::kGauss, 0.0f, 20.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedUniform), AxisPreset::kLowitz);
-}
-
-// --- Random ---
-TEST(AxisPresetTest, RandomAllFullUniform) {
-  AxisDist z{ AxisDistType::kUniform, 0.0f, 360.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kRandom);
-}
-TEST(AxisPresetTest, RandomOffsetBecomesCustom) {
-  AxisDist z{ AxisDistType::kUniform, 30.0f, 360.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kCustom);
-}
-
-// --- Custom ---
-TEST(AxisPresetTest, CustomButtonDefault) {
-  AxisDist z{ AxisDistType::kGauss, 90.0f, 20.0f };
-  AxisDist r{ AxisDistType::kGauss, 0.0f, 20.0f };
-  // zenith mean=90 + std=20 (>=10) fails Column strict, no preset matches.
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, r), AxisPreset::kCustom);
-}
-
-// --- Boundary cases (strict inequality) ---
-TEST(AxisPresetTest, BoundaryPlateStdEq10IsCustom) {
-  // Plate requires std < 10.0f; std==10 must NOT match.
-  AxisDist z{ AxisDistType::kGauss, 0.0f, 10.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kCustom);
-}
-TEST(AxisPresetTest, BoundaryLowitzStdEq15IsCustom) {
-  // Lowitz requires std > 15.0f; std==15 must NOT match.
-  AxisDist z{ AxisDistType::kGauss, 0.0f, 15.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollLockedGauss), AxisPreset::kCustom);
-}
-TEST(AxisPresetTest, BoundaryColumnStdEq10IsCustom) {
-  AxisDist z{ AxisDistType::kGauss, 90.0f, 10.0f };
-  EXPECT_EQ(ClassifyAxisPreset(z, kAzFull, kRollFull), AxisPreset::kCustom);
+  for (const Case& c : kCases) {
+    EXPECT_EQ(ClassifyAxisPreset(c.zenith, kAzFull, c.roll), c.expected) << c.name;
+  }
 }
 
 // --- Gauss / GaussLegacy equivalence ---

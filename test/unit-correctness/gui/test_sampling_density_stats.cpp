@@ -10,19 +10,14 @@
 // Tests:
 //  1. ratio_ge_one      — the resampled-per-ray branch, including draws == rays
 //  2. ratio_lt_one      — the barely-sampled branch and its x10^N notation
-//  3. rays_zero         — cold start: no division by zero, no inf/nan text
-//  4. draws_zero        — the SECOND division by zero (rays / draws)
-//  5. cross_backend_note_present — the tooltip caveat is still in the tooltip
-//  6. segment_shows_both_counters — both dimensions reach the segment text
-//
-// Cases 3 and 4 are not symmetric decoration. Case 4 guards `rays / draws` in the ratio < 1 branch,
-// whose "cannot happen" rests on the two-term counter convention in trace_backend.hpp — an
-// invariant owned by a different module, which can therefore change without any signal reaching
-// this file.
+//  3. the two divisions that can be by zero (cold start, and `rays / draws`)
+//  4. cross_backend_note_present — the tooltip caveat is still in the tooltip
+//  5. segment_shows_both_counters — both dimensions reach the segment text
 
 #include <gtest/gtest.h>
 
 #include <string>
+#include <utility>
 
 #include "gui/app.hpp"
 
@@ -91,31 +86,23 @@ TEST(SamplingDensity, ratio_lt_one) {
   EXPECT_STREQ(FormatSamplingDensityCompact(0, 100).c_str(), FormatSamplingDensity(0, 100).c_str());
 }
 
-// ---- Test 3: rays == 0 (cold start) ----
-TEST(SamplingDensity, rays_zero) {
-  const std::string zero_rays = FormatSamplingDensity(42, 0);
-  EXPECT_STREQ(zero_rays.c_str(), "n/a");
-  EXPECT_TRUE(!LooksNumericallyBroken(zero_rays));
-
-  // Both counters zero: still no division, still no inf/nan.
-  const std::string all_zero = FormatSamplingDensity(0, 0);
-  EXPECT_STREQ(all_zero.c_str(), "n/a");
-  EXPECT_TRUE(!LooksNumericallyBroken(all_zero));
-
-  // The whole assembled segment and tooltip stay clean too — a guard in the formatter is worth
-  // nothing if the strings built around it reintroduce the artifact.
-  const std::string segment = FormatSamplingSegment(0, 0, 0);
-  EXPECT_TRUE(!LooksNumericallyBroken(segment));
-  const std::string tooltip = FormatSamplingTooltip(0, 0, 0);
-  EXPECT_TRUE(!LooksNumericallyBroken(tooltip));
-}
-
-// ---- Test 4: draws == 0 with rays > 0 (the second division by zero) ----
-TEST(SamplingDensity, draws_zero) {
-  // Reaching the ratio < 1 branch with draws == 0 would evaluate rays / draws.
-  const std::string no_draws = FormatSamplingDensity(0, 5419520);
-  EXPECT_STREQ(no_draws.c_str(), "n/a");
-  EXPECT_TRUE(!LooksNumericallyBroken(no_draws));
+// ---- Tests 3 and 4: the two divisions that can be by zero ----
+//
+// Not symmetric decoration. rays == 0 is the cold start; draws == 0 guards `rays / draws` in the
+// ratio < 1 branch, whose "cannot happen" rests on the two-term counter convention in
+// trace_backend.hpp — an invariant owned by a different module, which can therefore change without
+// any signal reaching this file. A guard in the formatter is also worth nothing if the strings
+// built around it reintroduce the artifact, so the assembled segment and tooltip are checked too.
+TEST(SamplingDensity, NeitherDivisionCanProduceInfOrNan) {
+  for (const auto& c :
+       { std::pair<LUMICE_RayCount, LUMICE_RayCount>{ 42, 0 }, std::pair<LUMICE_RayCount, LUMICE_RayCount>{ 0, 0 },
+         std::pair<LUMICE_RayCount, LUMICE_RayCount>{ 0, 5419520 } }) {
+    const std::string shown = FormatSamplingDensity(c.first, c.second);
+    EXPECT_STREQ(shown.c_str(), "n/a") << c.first << "/" << c.second;
+    EXPECT_TRUE(!LooksNumericallyBroken(shown)) << c.first << "/" << c.second;
+  }
+  EXPECT_TRUE(!LooksNumericallyBroken(FormatSamplingSegment(0, 0, 0)));
+  EXPECT_TRUE(!LooksNumericallyBroken(FormatSamplingTooltip(0, 0, 0)));
 
   // A run where one dimension reports draws and the other does not: the reporting dimension must
   // still format normally rather than the whole segment collapsing to a placeholder.

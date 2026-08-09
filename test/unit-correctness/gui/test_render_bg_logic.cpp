@@ -29,23 +29,23 @@
 
 namespace gui = lumice::gui;
 
-// Test 5: Old .lmc compat — missing aspect fields default to Free
-TEST(AspectRatio, old_lmc_compat) {
-  // Minimal JSON without aspect fields. Uses legacy renderers=[] shape; legacy branch
-  // finds an empty array and leaves loaded.renderer at default values. This test only
-  // asserts aspect_* fields.
-  std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
+// A legacy .lmc that predates the aspect and background fields must deserialize to the factory
+// values for both — one document, both field groups, because a reader that half-populated the
+// legacy branch would satisfy either half alone. Uses the legacy renderers=[] shape, so the legacy
+// branch finds an empty array and leaves loaded.renderer at its default values.
+TEST(LegacyLmcCompat, AbsentAspectAndBackgroundFieldsTakeTheFactoryValues) {
   gui::GuiState loaded;
-  bool ok = gui::DeserializeGuiStateJson(json, loaded);
-  EXPECT_TRUE(ok);
+  EXPECT_TRUE(gui::DeserializeGuiStateJson(R"({"crystals":[],"renderers":[],"filters":[]})", loaded));
   EXPECT_EQ(loaded.aspect_preset, gui::AspectPreset::kFree);
   EXPECT_EQ(loaded.aspect_portrait, false);
+  EXPECT_TRUE(loaded.bg_path.empty());
+  EXPECT_EQ(loaded.bg_show, false);
+  EXPECT_TRUE(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
 }
 
-// Test 6: Screen bounds — ApplyAspectRatio clamps to workarea
-TEST(AspectRatio, screen_bounds) {
-  // The monitor-workarea query that used to open this case wrote four locals nobody read; what
-  // the case actually asserts is that every preset's ratio is sane, which needs no monitor.
+// Every preset's ratio is sane. The monitor-workarea query that used to open this case wrote four
+// locals nobody read; what it actually asserts needs no monitor.
+TEST(LegacyLmcCompat, EveryAspectPresetReportsAUsableRatio) {
   for (int i = 0; i < gui::kAspectPresetCount; i++) {
     float r = gui::GetAspectRatio(static_cast<gui::AspectPreset>(i));
     EXPECT_TRUE(r >= 0.0f);
@@ -53,22 +53,6 @@ TEST(AspectRatio, screen_bounds) {
       EXPECT_TRUE(r < 100.0f);  // Sanity check
     }
   }
-}
-
-// Test 6: bg/old_lmc_compat — JSON without bg fields gets defaults
-TEST(Bg, old_lmc_compat) {
-  // Empty legacy-format JSON: exercises DeserializeGuiStateJson fallback paths
-  // (crystals/renderers/filters as ID-arrays). With renderers=[], the legacy branch
-  // finds an empty vector and leaves loaded.renderer at default-constructed values;
-  // this test only asserts bg_* fields, so the renderer branch is exercised but not
-  // asserted against.
-  std::string json = R"({"crystals":[],"renderers":[],"filters":[]})";
-  gui::GuiState loaded;
-  bool ok = gui::DeserializeGuiStateJson(json, loaded);
-  EXPECT_TRUE(ok);
-  EXPECT_TRUE(loaded.bg_path.empty());
-  EXPECT_EQ(loaded.bg_show, false);
-  EXPECT_TRUE(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
 }
 
 TEST(Calibration, no_warning_on_startup) {

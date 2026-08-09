@@ -293,16 +293,12 @@ TEST(DocumentDefaultsChain, TypelessAxisSlotLoadsAsTheStructDefaultAndIsAnnounce
 
     ClearImportComplexFilterWarning();
   }
-}
 
-// A scattering layer with no `prob`: same shape as the axis slot above. Layer 0 keeps its `prob` so
-// a report of "layer 1" cannot be a hardcoded 0.
-TEST(DocumentDefaultsChain, LegacyMissingProbLoadsAsZeroAndIsAnnounced) {
+  // The layer-probability half.
   DoNew();
   ClearImportComplexFilterWarning();
-  GuiState loaded = InitDefaultState();
-
-  const std::string core_json = R"({
+  GuiState layers = InitDefaultState();
+  ASSERT_TRUE(DeserializeFromJson(R"({
     "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
     "filter": [],
     "scene": {
@@ -312,21 +308,22 @@ TEST(DocumentDefaultsChain, LegacyMissingProbLoadsAsZeroAndIsAnnounced) {
         {"entries": [{"crystal": 1, "proportion": 100.0}]}
       ]
     }
-  })";
-
-  ASSERT_TRUE(DeserializeFromJson(core_json, loaded)) << "GUI must load a legacy document core would reject";
-  ASSERT_EQ(loaded.layers.size(), 2u);
-  EXPECT_FLOAT_EQ(loaded.layers[0].probability, 0.5f) << "a present `prob` must be read, not defaulted";
-  EXPECT_FLOAT_EQ(loaded.layers[1].probability, 0.0f) << "absent `prob` must load as core's 0.0f, not 1.0f";
-
-  const std::string warning = PeekImportComplexFilterWarning();
-  EXPECT_FALSE(warning.empty()) << "the substitution must be surfaced, not just performed";
-  EXPECT_NE(warning.find("1"), std::string::npos) << "must name the offending layer, got: " << warning;
-  EXPECT_NE(warning.find("prob"), std::string::npos) << "must name the field, got: " << warning;
-
+  })",
+                                  layers))
+      << "GUI must load a legacy document core would reject";
+  ASSERT_EQ(layers.layers.size(), 2u);
+  EXPECT_FLOAT_EQ(layers.layers[0].probability, 0.5f) << "a present `prob` must be read, not defaulted";
+  EXPECT_FLOAT_EQ(layers.layers[1].probability, 0.0f) << "absent `prob` must load as core's 0.0f, not 1.0f";
+  const std::string layer_warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(layer_warning.empty()) << "the substitution must be surfaced, not just performed";
+  EXPECT_NE(layer_warning.find("1"), std::string::npos) << "must name the offending layer, got: " << layer_warning;
+  EXPECT_NE(layer_warning.find("prob"), std::string::npos) << "must name the field, got: " << layer_warning;
   ClearImportComplexFilterWarning();
 }
 
+// A scattering layer with no `prob`: same shape as the axis slot above, and folded into the same
+// case for that reason — one substitution, one announcement, one clear, twice over. Layer 0 keeps
+// its `prob` so a report of "layer 1" cannot be a hardcoded 0.
 // file_io.cpp ParseCrystal: absent pyramid `upper_h` / `lower_h` fall back to 0.0f while
 // CrystalConfig{} defaults both to 0.2f. Unlike the two above, this divergence IS written down at
 // the call site, which says the two fields "deliberately do NOT" take CrystalConfig's default.
