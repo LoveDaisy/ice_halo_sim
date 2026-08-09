@@ -1,16 +1,17 @@
-// Composition chain: the edit modal's commit gate and its crystal preview.
+// Composition chain: the edit modal's crystal preview rebuild trigger.
 //
-// Units in the chain: edit_modals × edit_modal_rules × crystal_preview × gui_state.
+// Units in the chain: crystal_preview × gui_state. (This chain used to include a second half, the
+// commit gate — edit_modals × edit_modal_rules — but that moved to the unit layer in E17 below;
+// edit_modals.cpp is a panel-rendering unit with no call surface a non-ImGui test can drive, so it
+// was never invoked directly here even before that move. Keeping it in this "units in the chain"
+// line after the move made the line describe a chain this file no longer tests.)
 //
-// What the collaboration produces that is observable: whether the OK button is live, what it says
-// when it is not, and whether the 3D preview beside it is showing the crystal currently being
-// edited. The two halves fail in opposite directions and both fail quietly. A commit gate that is
-// stricter than the validator leaves the user with a button that does nothing and no sentence
-// saying what is missing; a preview that does not rebuild leaves them editing one crystal while
-// looking at another.
+// What the collaboration produces that is observable: whether the 3D preview beside the edit modal
+// is showing the crystal currently being edited. A preview that does not rebuild on every edit, or
+// rebuilds on edits that do not touch the fields it draws, leaves the user looking at the wrong
+// crystal.
 //
-// Derived from the src call graph: edit_modals.cpp -> panels is 15 call sites, -> edit_modal_rules
-// is 10 and -> crystal_preview is 8.
+// Derived from the src call graph: edit_modals.cpp -> crystal_preview is 8 call sites.
 
 #include <gtest/gtest.h>
 
@@ -18,9 +19,7 @@
 #include <vector>
 
 #include "gui/crystal_preview.hpp"
-#include "gui/edit_modal_rules.hpp"
 #include "gui/gui_state.hpp"
-#include "gui/raypath_segments.hpp"
 #include "include/lumice.h"
 
 namespace lumice::gui {

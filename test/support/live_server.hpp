@@ -1,5 +1,5 @@
-#ifndef LUMICE_TEST_SUPPORT_GUI_LIVE_SERVER_HPP_
-#define LUMICE_TEST_SUPPORT_GUI_LIVE_SERVER_HPP_
+#ifndef LUMICE_TEST_SUPPORT_LIVE_SERVER_HPP_
+#define LUMICE_TEST_SUPPORT_LIVE_SERVER_HPP_
 
 // Shared live-server harness for the windowless GUI test targets.
 //
@@ -302,4 +302,4 @@ class LiveServer {
 
 }  // namespace lumice::test
 
-#endif  // LUMICE_TEST_SUPPORT_GUI_LIVE_SERVER_HPP_
+#endif  // LUMICE_TEST_SUPPORT_LIVE_SERVER_HPP_

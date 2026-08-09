@@ -124,7 +124,10 @@ void CheckRows(const Row* rows, size_t count) {
     const Row& row = rows[i];
     SCOPED_TRACE(row.what_changed);
     GuiState s = MakeBaselineState();
-    ASSERT_EQ(ReconcileGuiEffects(s), GuiEffects{}) << "the baseline is not quiet, so this row proves nothing";
+    if (ReconcileGuiEffects(s) != GuiEffects{}) {
+      ADD_FAILURE() << row.what_changed << ": the baseline is not quiet, so this row proves nothing";
+      continue;  // no clean baseline to mutate for this row; the rest still get checked
+    }
     row.mutate(s);
     const GuiEffects e = ReconcileGuiEffects(s);
     EXPECT_EQ(e.need_resim, row.resim);

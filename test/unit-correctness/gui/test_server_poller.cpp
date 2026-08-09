@@ -27,7 +27,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/server_poller.hpp"
 #include "lumice.h"
-#include "support/gui_live_server.hpp"
+#include "support/live_server.hpp"
 
 namespace gui = lumice::gui;
 

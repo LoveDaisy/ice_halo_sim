@@ -258,7 +258,10 @@ TEST(ShapeScalarDomain, EverySlotHasANonEmptyDomain) {
     const ShapeScalarDomain& d = ShapeScalarDomainFor(slot);
     EXPECT_LT(d.min_value, d.max_value) << "slot " << slot;
     EXPECT_GE(d.min_value, 0.0f) << "slot " << slot;
-    ASSERT_NE(d.fmt, nullptr) << "slot " << slot;
+    if (d.fmt == nullptr) {
+      ADD_FAILURE() << "slot " << slot << ": fmt is null";
+      continue;  // no format string to inspect for this slot; the rest still get checked
+    }
     EXPECT_EQ(d.fmt[0], '%') << "slot " << slot;
   }
 }

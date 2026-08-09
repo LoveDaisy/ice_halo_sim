@@ -298,10 +298,9 @@ TEST_F(UserDefaults, ac3_sparse_overlay_round_trip) {
 // copies of the same staging; the point is that NONE of them reaches a new document, so they
 // are smuggled together and the document is checked against the seeded contents as a whole.
 //
-// raypath_color is here because of a code-review round 1 Major: it is namespace 4
-// (kCollectionFields) exactly like layers/crystals/filters, but MakeNewDocumentState only
-// cleared the other three, so a hand-edited file could put a colour-class list in every new
-// document.
+// raypath_color is included because it is namespace 4 (kCollectionFields) exactly like
+// layers/crystals/filters, but MakeNewDocumentState only cleared the other three, so a
+// hand-edited file could put a colour-class list in every new document.
 TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   const auto dir = FreshOverlayDir("ineligible");
 
@@ -589,10 +588,10 @@ TEST_F(UserDefaults, AnOutOfDomainPresetValueIsPulledStrictlyInsideItsDomain) {
 // import), so a stale g_axis_overrides slot would keep answering with a deleted override
 // until the process restarts. Both cases below call MakeNewDocumentState() twice against the
 // same directory within a single test case (deliberately not draining the channels between the
-// two calls) to reproduce the same-process, file-changed-underneath scenario. The second one
-// exists because of a round 4 Major on the first: passing an explicit override_dir means `dir`
+// two calls) to reproduce the same-process, file-changed-underneath scenario. The second case
+// covers a distinct branch from the first: passing an explicit override_dir means `dir`
 // is truthy on both calls and never exercises the branch where GetUserConfigDir() ITSELF
-// resolves to nullopt — the previous fix reset g_axis_overrides only inside `if (dir)`, so a
+// resolves to nullopt — the fix resets g_axis_overrides only inside `if (dir)`, so a
 // process whose config directory becomes unavailable mid-run (removed out from under it,
 // permissions revoked, disk full — its own doc comment lists these) would keep answering with
 // the first call's override forever.
@@ -890,8 +889,8 @@ TEST_F(UserDefaults, ALoadTimeClampTellsTheUserWhichValueItReplacedAndWithWhat) 
   };
   const SurfacedCase kCases[] = {
     { "above Column's upper bound", "column", "Column", 25.0f, "25", "9.99999" },
-    // The mirror direction, and not a courtesy duplicate: a review round found the panel's std cell
-    // using a fixed "%.7g" while this notice used adaptive precision. nextafter(10, 0) needs 7
+    // The mirror direction, and not a courtesy duplicate: the panel's std cell renders with a
+    // fixed "%.7g" while this notice uses adaptive precision. nextafter(10, 0) needs 7
     // significant digits and happened to survive the fixed format; nextafter(15, +inf) needs 8 and
     // collapsed to bare "15" under it — printing the clamped value as the very boundary the
     // neighbouring sentence says it must stay above. Only this direction could catch that.
