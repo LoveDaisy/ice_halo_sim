@@ -126,23 +126,19 @@ struct AutoEvExportState {
   }
 };
 
+// The one main-thread request the background suite cannot express any other way: decoding an
+// image file and handing it to GL. It carried its own export fields until the shared
+// RequestAndWaitPreviewExport helper existed; a second, private copy of that protocol is exactly
+// the duplication the helper was promoted to remove.
 struct BgOverlayTestState {
   std::string bg_image_path;
   bool bg_upload_requested = false;
   bool bg_upload_done = false;
-  bool export_requested = false;
-  bool export_done = false;
-  bool export_result = false;
-  std::string export_path;
 
   void Reset() {
     bg_image_path.clear();
     bg_upload_requested = false;
     bg_upload_done = false;
-    export_requested = false;
-    export_done = false;
-    export_result = false;
-    export_path.clear();
   }
 };
 
@@ -243,11 +239,11 @@ void StopPerfSimulation();
 
 void RegisterP1Tests(ImGuiTestEngine* engine);
 void RegisterP2Tests(ImGuiTestEngine* engine);
-void RegisterAspectRatioTests(ImGuiTestEngine* engine);
+void RegisterViewDisplayControlTests(ImGuiTestEngine* engine);
 void RegisterExportPreviewTests(ImGuiTestEngine* engine);
 void RegisterScreenshotTests(ImGuiTestEngine* engine);
 void RegisterVisualTests(ImGuiTestEngine* engine);
-void RegisterBgOverlayTests(ImGuiTestEngine* engine);
+void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine);
 void RegisterFileOpsTests(ImGuiTestEngine* engine);
 void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterFilterEditorTests(ImGuiTestEngine* engine);

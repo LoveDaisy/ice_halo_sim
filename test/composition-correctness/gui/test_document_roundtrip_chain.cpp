@@ -143,6 +143,23 @@ const std::vector<FieldProbe>& FieldProbes() {
       // which a serializer stops writing one.
       [](GuiState& s) { s.modal_layout_vertical = !GuiState{}.modal_layout_vertical; },
       [](const GuiState& s) { return std::to_string(static_cast<int>(s.modal_layout_vertical)); } },
+    { "view.background",
+      // All three background fields in one probe because they are one setting to the user: an
+      // image, whether it is showing, and how far it is faded. Split across three probes, a
+      // serializer that wrote the path and dropped the other two would report two red fields for
+      // one defect; kept together, the readout says which of the three came back wrong.
+      //
+      // The path is a std::filesystem::path and goes through PathToU8/PathFromU8 on the way out
+      // and back, which is the one field here whose round trip is more than a JSON scalar copy.
+      [](GuiState& s) {
+        s.bg_path = "/some/test/path.png";
+        s.bg_show = true;
+        s.bg_alpha = 0.7f;
+      },
+      [](const GuiState& s) {
+        return s.bg_path.string() + " " + std::to_string(static_cast<int>(s.bg_show)) + " " +
+               std::to_string(s.bg_alpha);
+      } },
     { "filter.raypath_text",
       [](GuiState& s) {
         RaypathParams rp;
@@ -286,6 +303,40 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
       continue;
     }
     EXPECT_EQ(probe.read(after), expected) << "field " << probe.name << " did not survive the round trip";
+  }
+}
+
+// E1 — the aspect preset survives under its own name, for every preset and both orientations.
+//
+// Not a row in the probe table above, because a probe carries one value and one value cannot see
+// this field's failure mode. The preset is stored as a STRING (kAspectPresetJsonNames in
+// file_io.cpp) beside an enum, the reader walks that table and returns kFree for anything it does
+// not recognise, and the two are kept in step by nothing but a count static_assert. A row inserted
+// into one table and not the other therefore does two different things depending on where you
+// look: presets before the insertion point still round-trip, presets after it come back as the
+// NEIGHBOUR they were shifted onto or as kFree. A single-value probe lands on one of those
+// outcomes and reports the other two as green.
+//
+// Both orientations are walked in the same loop rather than in a second case: aspect_portrait is a
+// plain bool whose whole reason for existing is to be read together with the preset, and the pair
+// is what ApplyAspectRatio consumes.
+TEST(DocumentRoundtripChain, EveryAspectPresetSurvivesUnderItsOwnJsonNameInBothOrientations) {
+  for (int i = 0; i < kAspectPresetCount; ++i) {
+    const auto preset = static_cast<AspectPreset>(i);
+    for (bool portrait : { false, true }) {
+      GuiState before = MinimalDocument();
+      before.aspect_preset = preset;
+      before.aspect_portrait = portrait;
+
+      GuiState after = MinimalDocument();
+      // EXPECT, not ASSERT: a fatal assert here would return out of the whole loop and hide every
+      // remaining preset, which is precisely the question this case is asked.
+      EXPECT_TRUE(DeserializeGuiStateJson(SerializeGuiStateJson(before), after))
+          << kAspectPresetNames[i] << ": DeserializeGuiStateJson rejected its own output";
+      EXPECT_EQ(static_cast<int>(after.aspect_preset), i) << "preset " << kAspectPresetNames[i] << " came back as "
+                                                          << kAspectPresetNames[static_cast<int>(after.aspect_preset)];
+      EXPECT_EQ(after.aspect_portrait, portrait) << kAspectPresetNames[i] << " orientation";
+    }
   }
 }
 

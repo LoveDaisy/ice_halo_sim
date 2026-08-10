@@ -1,15 +1,18 @@
-// Non-pixel cases lifted out of the render and background VISUAL suites.
+// The aspect-preset and background fields, asked the questions that need no window.
 //
-// Their siblings in test/gui/visual/test_gui_render.cpp and test_gui_bg.cpp compare rendered
-// frames against reference images; these four never look at a pixel, so they belong in the
-// windowless target instead:
-//   AspectRatio.old_lmc_compat / Bg.old_lmc_compat — a legacy .lmc document that predates the
-//     aspect / background fields must deserialize to the factory values for them
-//   AspectRatio.screen_bounds — every preset's ratio is finite and in range
-//   Calibration.no_warning_on_startup — CalibrateQualityThreshold() runs a real 100k-ray sim
-//     through the C API and produces data, so startup never logs "no data produced". A real
-//     simulation is orthogonal to needing a window: gui_unit_test links lumice_obj, so the whole
-//     C API is available here.
+// Three subjects live here, and what unites them is that none of them looks at a pixel:
+//   - a legacy .lmc document that predates the aspect / background fields must deserialize to the
+//     factory values for them;
+//   - each aspect preset reports the ratio its own name promises;
+//   - CalibrateQualityThreshold() runs a real 100k-ray sim through the C API and produces data, so
+//     startup never logs "no data produced". A real simulation is orthogonal to needing a window:
+//     gui_unit_test links lumice_obj, so the whole C API is available here.
+//
+// The questions that DO need a frame are asked elsewhere and are not restated here: whether the
+// background image actually reaches the shader and the exported pixels is
+// test/gui/functional/test_background_overlay.cpp, whether the "screen too small" warning is drawn
+// is test/gui/functional/test_view_display_controls.cpp, and whether either field survives a
+// document round trip is composition-correctness/gui/test_document_roundtrip_chain.cpp.
 
 #include <gtest/gtest.h>
 #include <spdlog/common.h>
@@ -43,15 +46,40 @@ TEST(LegacyLmcCompat, AbsentAspectAndBackgroundFieldsTakeTheFactoryValues) {
   EXPECT_TRUE(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
 }
 
-// Every preset's ratio is sane. The monitor-workarea query that used to open this case wrote four
-// locals nobody read; what it actually asserts needs no monitor.
-TEST(LegacyLmcCompat, EveryAspectPresetReportsAUsableRatio) {
-  for (int i = 0; i < gui::kAspectPresetCount; i++) {
-    float r = gui::GetAspectRatio(static_cast<gui::AspectPreset>(i));
-    EXPECT_TRUE(r >= 0.0f);
-    if (r > 0.0f) {
-      EXPECT_TRUE(r < 100.0f);  // Sanity check
-    }
+// Every preset reports the ratio its own name promises — the exact number, not a sanity band.
+//
+// The band this replaces (0 <= r < 100 for every preset) could not see the failure the pairing
+// actually invites: kAspectPresetNames is a presentation table sitting beside the enum, and a row
+// inserted into one and not the other slides every later preset's ratio by one. A user who picks
+// 3:2 and is handed 4:3 sees a wrong picture with a right-looking label on it, and every value in
+// that shifted table is still inside the band.
+//
+// The two zero rows are as load-bearing as the five numbers: kFree and kMatchBg mean "no fixed
+// ratio", and the whole Display-group aspect path keys off GetAspectRatio() == 0 to say so.
+TEST(AspectPresets, EachPresetReportsTheRatioItsNamePromises) {
+  struct Row {
+    gui::AspectPreset preset;
+    const char* name;
+    float ratio;  // 0 = "no fixed ratio", the sentinel the caller branches on
+  };
+  const Row kRows[] = {
+    { gui::AspectPreset::kFree, "Free", 0.0f },
+    { gui::AspectPreset::k16x9, "16:9", 16.0f / 9.0f },
+    { gui::AspectPreset::k3x2, "3:2", 3.0f / 2.0f },
+    { gui::AspectPreset::k4x3, "4:3", 4.0f / 3.0f },
+    { gui::AspectPreset::k1x1, "1:1", 1.0f },
+    { gui::AspectPreset::k2x1, "2:1", 2.0f },
+    { gui::AspectPreset::kMatchBg, "Match Background", 0.0f },
+  };
+  // A new preset must land a row here rather than pass by not being looked at.
+  static_assert(sizeof(kRows) / sizeof(kRows[0]) == gui::kAspectPresetCount,
+                "every AspectPreset needs a row: a preset with no expected ratio is untested");
+
+  for (const Row& row : kRows) {
+    // The displayed name is checked alongside the ratio because the shift described above moves
+    // the two together; asserting only the ratio would leave "the label says 3:2" unstated.
+    EXPECT_STREQ(gui::kAspectPresetNames[static_cast<int>(row.preset)], row.name);
+    EXPECT_NEAR(gui::GetAspectRatio(row.preset), row.ratio, 1e-4f) << row.name;
   }
 }
 

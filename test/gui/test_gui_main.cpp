@@ -473,11 +473,11 @@ int main(int argc, char** argv) {
   // Register and queue all tests
   RegisterP1Tests(engine);
   RegisterP2Tests(engine);
-  RegisterAspectRatioTests(engine);
+  RegisterViewDisplayControlTests(engine);
   RegisterExportPreviewTests(engine);
   RegisterScreenshotTests(engine);
   RegisterVisualTests(engine);
-  RegisterBgOverlayTests(engine);
+  RegisterBackgroundOverlayTests(engine);
   RegisterFileOpsTests(engine);
   RegisterColorWindowTests(engine);
   RegisterFilterEditorTests(engine);

@@ -17,10 +17,10 @@ add_executable(gui_test
     functional/test_run_lifecycle.cpp
     functional/test_status_bar.cpp
     functional/test_defaults_panel.cpp
+    functional/test_background_overlay.cpp
+    functional/test_view_display_controls.cpp
     functional/test_gui_sim_smoke.cpp
     visual/test_gui_visual.cpp
-    visual/test_gui_render.cpp
-    visual/test_gui_bg.cpp
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
     visual/test_gui_modal_layout.cpp
