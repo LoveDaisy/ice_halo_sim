@@ -126,10 +126,11 @@ struct AutoEvExportState {
   }
 };
 
-// The one main-thread request the background suite cannot express any other way: decoding an
-// image file and handing it to GL. It carried its own export fields until the shared
-// RequestAndWaitPreviewExport helper existed; a second, private copy of that protocol is exactly
-// the duplication the helper was promoted to remove.
+// The one main-thread request the background suite (functional/test_background_overlay.cpp, its
+// only consumer) cannot express any other way: decoding an image file and handing it to GL. It
+// carried its own export fields until the shared RequestAndWaitPreviewExport helper existed, and
+// that suite now exports through the helper; a second, private copy of that protocol is exactly the
+// duplication the helper was promoted to remove.
 struct BgOverlayTestState {
   std::string bg_image_path;
   bool bg_upload_requested = false;

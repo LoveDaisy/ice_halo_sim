@@ -61,7 +61,8 @@ void InstallClampSignal(bool was_clamped) {
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
   // The positive branch: a clamped window on a real preset says so.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display", "a_clamped_aspect_tells_the_user_the_screen_is_too_small");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "a_clamped_aspect_tells_the_user_the_screen_is_too_small");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
@@ -78,7 +79,8 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
   // a branch with no other guard: delete the re-check and every green test still passes, because
   // the only way to reach it is a state the producer is not supposed to leave behind.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display", "a_stale_clamp_signal_stays_silent_on_the_free_preset");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "a_stale_clamp_signal_stays_silent_on_the_free_preset");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       gui::g_state.aspect_preset = gui::AspectPreset::kFree;
@@ -92,7 +94,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
   // The negative branch: same preset as the positive case, signal off. Paired with it deliberately
   // — a warning that is always drawn would pass the positive case on its own.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display", "an_aspect_that_fit_says_nothing");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "an_aspect_that_fit_says_nothing");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       gui::g_state.aspect_preset = gui::AspectPreset::k2x1;
