@@ -203,7 +203,11 @@ TEST(PreviewProjectionChain, DragMovesTheSameScreenDistancePerPixelAcrossFovAndV
 
       // Rotate the centre direction by `gain` degrees about an axis perpendicular to it. Any
       // perpendicular will do: the drag law is isotropic by construction.
-      const float theta = gain * static_cast<float>(M_PI) / 180.0f;
+      // Not `M_PI`: that one is a POSIX extension, and MSVC only defines it when
+      // `_USE_MATH_DEFINES` is set before <cmath> — so using it here builds on the
+      // two Unix legs and breaks the Windows one, which is exactly how it got in.
+      constexpr float kPiF = 3.14159265358979323846f;
+      const float theta = gain * kPiF / 180.0f;
       float ax = -cy;
       float ay = cx;
       float az = 0.0f;
