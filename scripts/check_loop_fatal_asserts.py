@@ -92,28 +92,48 @@ state nothing actually put it in — and reports THAT as a second, third, ... fa
 echoes of the one real cause. Two shapes reproduce this, both found and fixed by hand across
 several rounds of review before this rule existed to catch them mechanically:
 
-  1. `for-loop-nonfatal-cascade`: inside a single `for` loop body, a non-fatal report and a
-     `ctx`-driving call — a literal `ctx->` member call, or a call into a locally-defined
-     ctx-wrapper helper such as this suite's own `FilterTo`/`RowIsChecked` (any function whose
-     body itself calls `ctx->`, discovered per-file rather than off a hardcoded name list) — not
-     shielded by an inner lambda, with no `break`/`continue`/`return` in between. Order within one
-     textual pass of the driving call and the report does not decide this on its own: the loop body
-     runs again next iteration, so a driving call BEFORE the loop's only report is still at risk —
-     it is the first thing the next iteration executes, on whatever error state this iteration's
-     unguarded report left behind (round 23's real miss, reproduced in this rule's own selfcheck
-     fixtures). Mirrors the fatal rule above, one macro family over.
-  2. `lambda-call-cascade`: a named lambda whose body both drives `ctx` and reports non-fatally,
-     called back-to-back two or more times with nothing but whitespace between the calls — the
-     same machine, one level of indirection. The header comment states it plainly: "The trigger is
-     REPETITION, not the `for` keyword." A loop is not required; `verify(a); verify(b);` is exactly
-     as dangerous as a loop calling `verify` once per row.
+  1. `for-loop-nonfatal-cascade`: inside a single `for`- or `while`-loop body, a non-fatal report
+     and a ctx-driving call — a `NAME->` member call for any identifier this file's own signatures
+     bind as an `ImGuiTestContext*` parameter (see `_ctx_param_names`; not a hardcoded `ctx`
+     literal — round 24's real miss was a lambda whose parameter was named `c`), or a call into a
+     locally-defined ctx-wrapper helper such as this suite's own `FilterTo`/`RowIsChecked` (any
+     function whose body itself drives its own `ImGuiTestContext*` parameter, discovered per-file
+     rather than off a hardcoded name list) — not shielded by an inner lambda, with no
+     `break`/`continue`/`return` in between. Order within one textual pass of the driving call and
+     the report does not decide this on its own: the loop body runs again next iteration, so a
+     driving call BEFORE the loop's only report is still at risk — it is the first thing the next
+     iteration executes, on whatever error state this iteration's unguarded report left behind
+     (round 23's real miss, reproduced in this rule's own selfcheck fixtures). Mirrors the fatal
+     rule above, one macro family over — except the fatal rule stays `for`-only by its own
+     documented scope; this half also walks `while`.
+  2. `lambda-call-cascade`: a named lambda whose body both drives a ctx call and reports
+     non-fatally, called back-to-back two or more times with nothing but whitespace between the
+     calls — the same machine, one level of indirection. The header comment states it plainly:
+     "The trigger is REPETITION, not the `for` keyword." A loop is not required; `verify(a);
+     verify(b);` is exactly as dangerous as a loop calling `verify` once per row.
 
 Both are text-only heuristics with the same accepted-gap philosophy as the fatal rule above: a
 non-whitespace statement between two calls (the `if (ctx->IsError()) { return; }` guard this rule
 wants) is read as "something is there" and suppresses the hit, without checking that the something
 IS that guard — proving absence of any short-circuit, not correctness of the one present. A
-`ctx->IsError()` call itself is never counted as a "driving" `ctx->` call (it is the query the
-guard is built from, not an action `IsError()`'s own no-op-on-error prelude would need to protect).
+`NAME->IsError()` call itself is never counted as a "driving" call (it is the query the guard is
+built from, not an action `IsError()`'s own no-op-on-error prelude would need to protect).
+
+Round 24 found two more instances of the same "literal judgment call, walked around by the next
+author" pattern living in this rule's OWN machinery rather than in the code it scans:
+
+  - The wrap-around branch's suggested fix text used to offer `continue` as an option alongside
+    `break`/`return`. It does not work for that branch: a wrap-around hit means the loop wraps
+    around to re-run the driving call at the top of the NEXT iteration regardless of what happens
+    after the report in THIS one, so a `continue` placed after the report is a no-op against this
+    specific cascade — only `break`/`return` actually stop it. `_CascadeHit.wrap_around` now
+    distinguishes the two cases and `_for_cascade_violations_for` gives each its own fix text.
+  - `ctx->` was matched as a literal identifier; a lambda whose `ImGuiTestContext*` parameter is
+    named anything else was invisible to the scan (test_file_ops.cpp's `check` lambda names it
+    `c`). `_ctx_param_names`/`_ctx_call_re` now build the driving-call pattern from every
+    `ImGuiTestContext*` parameter name this file's OWN signatures actually declare — the same
+    registry-over-literal approach `_ctx_wrapper_helper_names` already used for helper functions,
+    now applied to the parameter name itself.
 """
 from __future__ import annotations
 
@@ -140,6 +160,7 @@ SCAN_SUFFIXES = (".cpp", ".hpp")
 SCOPE_PREFIX = "test/"
 
 FOR_RE = re.compile(r"\bfor\s*\(")
+WHILE_RE = re.compile(r"\bwhile\s*\(")
 
 # gtest's fatal family (ASSERT_*) plus this repo's ImGuiTestEngine fatal macro (IM_CHECK and its
 # IM_CHECK_* siblings). Both `return` out of the enclosing function on failure.
@@ -167,21 +188,55 @@ AUTO_LAMBDA_RE = re.compile(r"\b(?:const\s+)?auto\s+(\w+)\s*=\s*" + LAMBDA_RE.pa
 # and set the case's status to Error) but do NOT `return` from the enclosing function on their own.
 NONFATAL_RE = re.compile(r"\b(?:IM_ERRORF|ADD_FAILURE)\s*\(")
 
-# A `ctx->` member call — a potential no-op once the case is already in an error state (see the
-# module docstring's "non-fatal half" section). `ctx->IsError()` itself is excluded: it is the
-# query the short-circuit guard is built from, not a driving action that needs the guard.
-CTX_CALL_RE = re.compile(r"\bctx->(?!IsError\b)")
+# An `ImGuiTestContext*` parameter of ANY lambda or function signature — `[](ImGuiTestContext*
+# NAME)` and `Foo(ImGuiTestContext* NAME, ...)` both match (only the parenthesized parameter list
+# itself; a lambda's leading `[...]` capture list is not part of this pattern). Used to build a
+# PER-FILE set of identifier names that denote a live ImGuiTestContext*, generalizing the
+# historical hardcoded `ctx` literal — round 24's real miss (test_file_ops.cpp's `check` lambda
+# binds the parameter as `c`) is a renamed-parameter instance of the same underlying pattern this
+# whole rule keeps re-encountering: a literal-name judgment call gets walked around by the next
+# author who happens to pick a different name (this rule's own history: it was first written
+# catching one syntactic shape, then extended to non-fatal reports, then to reports the driving
+# call precedes textually, and now to a renamed driving-call parameter — four independent
+# "same real rule, different literal disguise" generalizations of one underlying principle: in a
+# scope that runs more than once, a non-fatal report must be followed by a short-circuit before
+# the context is driven again).
+CTX_PARAM_RE = re.compile(r"\(\s*ImGuiTestContext\s*\*\s*(\w+)\b")
 
 # A statement that could plausibly short-circuit the cascade. Intentionally permissive — this is a
 # text-only scanner that proves the ABSENCE of any such statement, not the correctness of the one
 # present (mirrors LAMBDA_RE's docstring on the same tradeoff).
 CONTROL_FLOW_RE = re.compile(r"\b(break|continue|return)\b")
 
-# The signature shape of a locally-defined ctx-wrapper helper: `ctx` as the first parameter,
-# typed `ImGuiTestContext*`. Matches the call-site's own name, e.g. `RowIsChecked(ImGuiTestContext*
-# ctx, ...)`. Used by `_ctx_wrapper_helper_names` to find helpers whose BODY drives `ctx->` directly
-# — see that function's docstring for why a registry beats a hardcoded name list.
-CTX_HELPER_DEF_RE = re.compile(r"\b(\w+)\s*\(\s*ImGuiTestContext\s*\*\s*ctx\b")
+# The signature shape of a locally-defined ctx-wrapper helper: a named function taking an
+# `ImGuiTestContext*` as its first parameter, under ANY parameter name (generalized from the
+# historical hardcoded `ctx` literal for the same reason as `CTX_PARAM_RE` above). Matches the
+# call-site's own name, e.g. `RowIsChecked(ImGuiTestContext* ctx, ...)`. Used by
+# `_ctx_wrapper_helper_names` to find helpers whose BODY drives that parameter directly — see that
+# function's docstring for why a registry beats a hardcoded name list.
+CTX_HELPER_DEF_RE = re.compile(r"\b(\w+)\s*\(\s*ImGuiTestContext\s*\*\s*\w+\b")
+
+
+def _ctx_param_names(code: str) -> set[str]:
+    """Every distinct identifier this file's own signatures bind as an `ImGuiTestContext*`
+    parameter — `ctx` whenever it appears literally, plus whatever else an author picked (`c`,
+    `tc`, ...). A per-file set beats a hardcoded literal for the same reason
+    `_ctx_wrapper_helper_names` already builds its helper registry from callee bodies rather than a
+    name list: the next rename is always one commit away.
+    """
+    return {m.group(1) for m in CTX_PARAM_RE.finditer(code)}
+
+
+def _ctx_call_re(names: set[str]) -> re.Pattern[str]:
+    """A `NAME->` member-call regex over `names`, excluding `IsError` the same way the historical
+    single-literal `ctx->` pattern did (`IsError` is the query the short-circuit guard is built
+    from, not a driving action that needs the guard). Falls back to the literal `ctx` when a
+    file's signatures contain no `ImGuiTestContext*` parameter at all for `_ctx_param_names` to
+    find — a name-set search that starts from zero candidates would otherwise silently match
+    nothing, which is a worse failure mode than the historical single-literal default.
+    """
+    alt = "|".join(re.escape(n) for n in sorted(names)) if names else "ctx"
+    return re.compile(r"\b(?:" + alt + r")->(?!IsError\b)")
 
 
 def _paren_close(code: str, after_open: int) -> int | None:
@@ -232,19 +287,21 @@ def _brace_close(code: str, open_index: int) -> int | None:
     return None
 
 
-def _ctx_wrapper_helper_names(code: str) -> set[str]:
-    """Names of locally-defined functions that take `ctx` as their first parameter and whose body
-    itself calls `ctx->` directly (e.g. `FilterTo`/`RowIsChecked`/`ToggleRow` in this suite's own
-    per-file test helpers) — the "ctx-wrapper helper" shape. A call to
-    one of these, passing `ctx` as its first argument, drives `ctx` exactly as a literal `ctx->`
-    call would, but is textually invisible to `CTX_CALL_RE` on its own.
+def _ctx_wrapper_helper_names(code: str, ctx_call_re: re.Pattern[str]) -> set[str]:
+    """Names of locally-defined functions that take an `ImGuiTestContext*` as their first
+    parameter and whose body itself drives it directly (e.g. `FilterTo`/`RowIsChecked`/`ToggleRow`
+    in this suite's own per-file test helpers) — the "ctx-wrapper helper" shape. A call to one of
+    these, passing the caller's own ctx variable as its first argument, drives it exactly as a
+    literal `NAME->` call would, but is textually invisible to `ctx_call_re` on its own.
 
-    A registry built from the callee's OWN body (does it call `ctx->`?) is used instead of a
-    hardcoded name list (`FilterTo`/`RowIsChecked`/`ToggleRow`/...): the list would need updating
-    by hand every time this suite's authors write a new per-file wrapper, which is exactly the
-    "next round, a new shape" failure mode this rule's own history warns about. A function that
-    merely accepts `ctx` without driving it (rare, but not impossible) is correctly excluded by the
-    body check.
+    A registry built from the callee's OWN body (does it drive the parameter directly?) is used
+    instead of a hardcoded name list (`FilterTo`/`RowIsChecked`/`ToggleRow`/...): the list would
+    need updating by hand every time this suite's authors write a new per-file wrapper, which is
+    exactly the "next round, a new shape" failure mode this rule's own history warns about. A
+    function that merely accepts the parameter without driving it (rare, but not impossible) is
+    correctly excluded by the body check. `ctx_call_re` is the caller's per-file regex from
+    `_ctx_call_re(_ctx_param_names(code))` — generalized past a hardcoded `ctx` literal the same
+    way this registry itself already is.
     """
     names: set[str] = set()
     for m in CTX_HELPER_DEF_RE.finditer(code):
@@ -262,20 +319,25 @@ def _ctx_wrapper_helper_names(code: str) -> set[str]:
         body_close = _brace_close(code, j)
         if body_close is None:
             continue
-        if CTX_CALL_RE.search(code, j, body_close):
+        if ctx_call_re.search(code, j, body_close):
             names.add(m.group(1))
     return names
 
 
-def _ctx_wrapper_call_starts(code: str, helper_names: set[str]) -> set[int]:
-    """Call-site start positions for `NAME(ctx, ...)` where NAME is a registered ctx-wrapper
-    helper (see `_ctx_wrapper_helper_names`) and `ctx` is literally its first argument — the same
-    driving-call semantics as a `CTX_CALL_RE` match, one level of indirection removed.
+def _ctx_wrapper_call_starts(code: str, helper_names: set[str], ctx_names: set[str]) -> set[int]:
+    """Call-site start positions for `NAME(<ctx-name>, ...)` where NAME is a registered
+    ctx-wrapper helper (see `_ctx_wrapper_helper_names`) and the first argument is one of this
+    file's known `ImGuiTestContext*` identifiers (`ctx_names`, from `_ctx_param_names`) — the same
+    driving-call semantics as a `ctx_call_re` match, one level of indirection removed. Generalized
+    from a literal `ctx` first-argument match for the same reason as the rest of this rule's
+    naming: a caller whose own parameter is named `c` still passes `c`, not `ctx`.
     """
     if not helper_names:
         return set()
+    names = ctx_names if ctx_names else {"ctx"}
     pattern = re.compile(
-        r"\b(?:" + "|".join(re.escape(n) for n in sorted(helper_names)) + r")\s*\(\s*ctx\b"
+        r"\b(?:" + "|".join(re.escape(n) for n in sorted(helper_names)) + r")\s*\(\s*(?:"
+        + "|".join(re.escape(n) for n in sorted(names)) + r")\b"
     )
     return {m.start() for m in pattern.finditer(code)}
 
@@ -333,6 +395,26 @@ def _for_body_opens(code: str) -> dict[int, int]:
     return out
 
 
+def _while_body_opens(code: str) -> dict[int, int]:
+    """Open-brace index -> 1-based line of the `while` keyword, for every `while (...)`
+    immediately (modulo whitespace) followed by a `{` body. Mirrors `_for_body_opens`; used only
+    by the non-fatal-cascade detector (round 23's requirement 1 covers `for` and `while` alike —
+    the fatal-assert rule above stays `for`-only, its own documented scope).
+    """
+    out: dict[int, int] = {}
+    for m in WHILE_RE.finditer(code):
+        open_paren = m.end() - 1
+        close_paren = _paren_close(code, open_paren + 1)
+        if close_paren is None:
+            continue
+        j = close_paren + 1
+        while j < len(code) and code[j] in " \t\r\n":
+            j += 1
+        if j < len(code) and code[j] == "{":
+            out[j] = code.count("\n", 0, m.start()) + 1
+    return out
+
+
 def _lambda_body_opens(code: str) -> set[int]:
     return {m.end() - 1 for m in LAMBDA_RE.finditer(code)}
 
@@ -347,6 +429,8 @@ class _Hit:
 class _CascadeHit:
     lineno: int
     marker_lineno: int
+    loop_kind: str = "for"
+    wrap_around: bool = False
 
 
 def find_violations_in_text(code: str) -> list[_Hit]:
@@ -413,39 +497,51 @@ def find_violations_in_text(code: str) -> list[_Hit]:
 
 
 def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
-    """Shape 1 of the non-fatal half (see module docstring): inside a single `for` loop body, a
-    non-fatal report (IM_ERRORF/ADD_FAILURE) and a `ctx`-driving call (a literal `ctx->` member
-    call, or a call to a locally-defined ctx-wrapper helper — see `_ctx_wrapper_helper_names`),
-    with no `break`/`continue`/`return` in between.
+    """Shape 1 of the non-fatal half (see module docstring): inside a single `for`- or
+    `while`-loop body (round 23's requirement 1 covers both alike; the fatal-assert rule above
+    stays `for`-only, its own separately documented scope), a non-fatal report
+    (IM_ERRORF/ADD_FAILURE) and a ctx-driving call (a `NAME->` member call for any of this file's
+    own `ImGuiTestContext*` parameter names — see `_ctx_param_names` — or a call to a
+    locally-defined ctx-wrapper helper, see `_ctx_wrapper_helper_names`), with no
+    `break`/`continue`/`return` in between.
 
-    `armed` is tracked per `for`-frame on the walk's own stack: a qualifying report call sets it,
-    a qualifying driving call while set is a same-iteration hit, and `break`/`continue` clear only
-    the nearest enclosing `for` while `return` clears every `for` frame up to (not past) the
-    nearest enclosing lambda boundary — the same reach a `return` has in the real function it
-    appears in.
+    `armed` is tracked per loop-frame (`for` or `while`, identically) on the walk's own stack: a
+    qualifying report call sets it, a qualifying driving call while set is a same-iteration hit,
+    and `break`/`continue` clear only the nearest enclosing loop frame while `return` clears every
+    loop frame up to (not past) the nearest enclosing lambda boundary — the same reach a `return`
+    has in the real function it appears in.
 
-    Order within one textual pass is not the whole story: a `for` loop's body runs again next
-    iteration, so a driving call that appears BEFORE the only report in the body is still at risk —
-    it is the first thing the NEXT iteration executes, on a `ctx` the PREVIOUS iteration may have
-    left in an error state. `first_ctx_line` records the first driving call seen in the frame
-    (whichever order it comes in); when the frame's closing `}` is reached still armed with no
-    guard since the last report, and that first driving call is textually earlier than the report
-    that left it armed, a wrap-around hit is reported there. The `<` guard against double-reporting
-    a same-iteration hit already caught by the forward-order check above (round 23's real miss:
-    test/gui/functional/test_defaults_panel.cpp's `reset_all_unchecks_every_row_...` case, where a
-    helper call drives before the loop's own unguarded report, not after).
+    Order within one textual pass is not the whole story: a loop body runs again next iteration,
+    so a driving call that appears BEFORE the only report in the body is still at risk — it is the
+    first thing the NEXT iteration executes, on a ctx the PREVIOUS iteration may have left in an
+    error state. `first_ctx_line` records the first driving call seen in the frame (whichever
+    order it comes in); when the frame's closing `}` is reached still armed with no guard since the
+    last report, and that first driving call is textually earlier than the report that left it
+    armed, a wrap-around hit is reported there (`hit.wrap_around=True` — see
+    `_for_cascade_violations_for` for why its suggested fix differs from a same-iteration hit's).
+    The `<` guard against double-reporting a same-iteration hit already caught by the forward-order
+    check above (round 23's real miss: test/gui/functional/test_defaults_panel.cpp's
+    `reset_all_unchecks_every_row_...` case, where a helper call drives before the loop's own
+    unguarded report, not after; round 24's real miss: test/gui/functional/test_file_ops.cpp's
+    `check` lambda, the identical shape with its ctx parameter renamed to `c` — caught now because
+    `_ctx_param_names` collects `c` instead of assuming the literal `ctx`).
     """
     for_opens = _for_body_opens(code)
+    while_opens = _while_body_opens(code)
     lambda_opens = _lambda_body_opens(code)
     nonfatal_starts = {m.start() for m in NONFATAL_RE.finditer(code)}
-    wrapper_names = _ctx_wrapper_helper_names(code)
-    ctx_starts = {m.start() for m in CTX_CALL_RE.finditer(code)} | _ctx_wrapper_call_starts(
-        code, wrapper_names
+    ctx_names = _ctx_param_names(code)
+    ctx_call_re = _ctx_call_re(ctx_names)
+    wrapper_names = _ctx_wrapper_helper_names(code, ctx_call_re)
+    ctx_starts = {m.start() for m in ctx_call_re.finditer(code)} | _ctx_wrapper_call_starts(
+        code, wrapper_names, ctx_names
     )
     control_flow_starts = {m.start(): m.group(1) for m in CONTROL_FLOW_RE.finditer(code)}
 
     hits: list[_CascadeHit] = []
-    # Each frame: [kind, for_line_or_None, armed, marker_line_or_None, first_ctx_line_or_None]
+    # Each frame: [kind, loop_line_or_None, armed, marker_line_or_None, first_ctx_line_or_None]
+    # kind is "for", "while", "lambda", or "other"; "for" and "while" are treated identically
+    # below except for the string tag a hit records.
     stack: list[list] = []
     state = "code"
     i, n = 0, len(code)
@@ -463,6 +559,8 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
             if c == "{":
                 if i in for_opens:
                     stack.append(["for", for_opens[i], False, None, None])
+                elif i in while_opens:
+                    stack.append(["while", while_opens[i], False, None, None])
                 elif i in lambda_opens:
                     stack.append(["lambda", None, False, None, None])
                 else:
@@ -473,19 +571,21 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
                 if stack:
                     frame = stack.pop()
                     if (
-                        frame[0] == "for"
+                        frame[0] in ("for", "while")
                         and frame[2]
                         and frame[4] is not None
                         and frame[4] < frame[3]
                     ):
-                        hits.append(_CascadeHit(frame[4], frame[3]))
+                        hits.append(
+                            _CascadeHit(frame[4], frame[3], loop_kind=frame[0], wrap_around=True)
+                        )
                 i += 1
                 continue
             if i in nonfatal_starts:
                 for frame in reversed(stack):
                     if frame[0] == "lambda":
                         break
-                    if frame[0] == "for":
+                    if frame[0] in ("for", "while"):
                         frame[2] = True
                         frame[3] = code.count("\n", 0, i) + 1
                         break
@@ -495,11 +595,15 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
                 for frame in reversed(stack):
                     if frame[0] == "lambda":
                         break
-                    if frame[0] == "for":
+                    if frame[0] in ("for", "while"):
                         if frame[4] is None:
                             frame[4] = code.count("\n", 0, i) + 1
                         if frame[2]:
-                            hits.append(_CascadeHit(code.count("\n", 0, i) + 1, frame[3]))
+                            hits.append(
+                                _CascadeHit(
+                                    code.count("\n", 0, i) + 1, frame[3], loop_kind=frame[0]
+                                )
+                            )
                         break
                 i += 1
                 continue
@@ -509,13 +613,13 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
                     for frame in reversed(stack):
                         if frame[0] == "lambda":
                             break
-                        if frame[0] == "for":
+                        if frame[0] in ("for", "while"):
                             frame[2] = False
-                else:  # break / continue: only the nearest enclosing for
+                else:  # break / continue: only the nearest enclosing loop
                     for frame in reversed(stack):
                         if frame[0] == "lambda":
                             break
-                        if frame[0] == "for":
+                        if frame[0] in ("for", "while"):
                             frame[2] = False
                             break
                 i += 1
@@ -540,13 +644,14 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
 
 def find_lambda_call_cascade_in_text(code: str) -> list[_CascadeHit]:
     """Shape 2 of the non-fatal half (see module docstring): a named lambda (`auto NAME = [...]
-    { ... }`) whose body drives `ctx->` and reports non-fatally, called back-to-back two or more
-    times with nothing but whitespace between the calls.
+    { ... }`) whose body drives a ctx call and reports non-fatally, called back-to-back two or
+    more times with nothing but whitespace between the calls.
 
     Deliberately conservative: any non-whitespace text between two calls to the same name — the
     `if (ctx->IsError()) { return; }` guard this rule wants, but also anything else — suppresses
     the hit for that pair, same accepted-gap stance as the rest of this scanner.
     """
+    ctx_call_re = _ctx_call_re(_ctx_param_names(code))
     hits: list[_CascadeHit] = []
     for def_match in AUTO_LAMBDA_RE.finditer(code):
         name = def_match.group(1)
@@ -555,7 +660,7 @@ def find_lambda_call_cascade_in_text(code: str) -> list[_CascadeHit]:
         if body_close is None:
             continue
         body = code[body_open:body_close]
-        if not (CTX_CALL_RE.search(body) and NONFATAL_RE.search(body)):
+        if not (ctx_call_re.search(body) and NONFATAL_RE.search(body)):
             continue
 
         scope_open = _enclosing_scope_open(code, def_match.start())
@@ -608,19 +713,38 @@ LAMBDA_CASCADE_RULE = "lambda-call-cascade"
 
 
 def _for_cascade_violations_for(path: Path, hits: list[_CascadeHit]) -> list[Violation]:
-    return [
-        Violation(
-            path,
-            hit.lineno,
-            FOR_CASCADE_RULE,
-            "ctx-> call left dangling after a non-fatal report at line "
-            f"{hit.marker_lineno} in the same `for` body: once that report fires, this call "
-            "silently no-ops (every ImGuiTestContext action opens with `if (IsError()) return;`) "
-            "and whatever it reports next is an echo of the real failure, not a new one. Add "
-            "`if (ctx->IsError()) { break; }` (or `continue`/`return`) between them.",
+    out: list[Violation] = []
+    for hit in hits:
+        if hit.wrap_around:
+            # The driving call at `hit.lineno` is textually BEFORE the report it is dangling
+            # after (the loop wraps around to run it again next iteration). `continue` placed
+            # after the report does not help here: it jumps to the top of THIS SAME loop body,
+            # which is exactly where the driving call already sits, so it runs unconditionally
+            # either way. Only `break` (stop the loop) or `return` (stop the function) actually
+            # prevent the next iteration's driving call from running on the errored ctx — the
+            # round 24 review's Major #1: this branch's suggested fix used to offer `continue` as
+            # if it were interchangeable with the same-iteration case below, and it is not.
+            fix = (
+                "Add `if (ctx->IsError()) { break; }` (or `return`) between them — `continue` "
+                "does NOT help here: the loop wraps around and re-runs this driving call at the "
+                "top of the next iteration regardless, so `continue` right after the report is a "
+                "no-op against this specific cascade."
+            )
+        else:
+            fix = "Add `if (ctx->IsError()) { break; }` (or `continue`/`return`) between them."
+        out.append(
+            Violation(
+                path,
+                hit.lineno,
+                FOR_CASCADE_RULE,
+                "ctx-> call left dangling after a non-fatal report at line "
+                f"{hit.marker_lineno} in the same `{hit.loop_kind}` body: once that report fires, "
+                "this call silently no-ops (every ImGuiTestContext action opens with `if "
+                f"(IsError()) return;`) and whatever it reports next is an echo of the real "
+                f"failure, not a new one. {fix}",
+            )
         )
-        for hit in hits
-    ]
+    return out
 
 
 def _lambda_cascade_violations_for(path: Path, hits: list[_CascadeHit]) -> list[Violation]:
@@ -852,6 +976,82 @@ TEST(ViewDisplayControls, ReportInsideInlineLambda) {
 }
 """
 
+# Round 24's real miss (test/gui/functional/test_file_ops.cpp, the `check` lambda at
+# lines 385-395): the identical wrap-around shape as
+# `_POSITIVE_FOR_CTX_BEFORE_REPORT_WRAP_AROUND` above, but the lambda's `ImGuiTestContext*`
+# parameter is named `c`, not `ctx` — invisible to a scan hardcoded to the literal `ctx->`.
+# Reproduces the real code (trimmed to the shape that matters) as a known positive per this rule's
+# own G3 discipline: the sample must actually turn red once `_ctx_param_names` is in place, or it
+# does not count as proof of detection power.
+_POSITIVE_FOR_RENAMED_CTX_PARAM_WRAP_AROUND = """
+TEST(FileOps, TopBarSaveMenuGatesMatchRunState) {
+  const auto check = [](ImGuiTestContext* c, const char* scenario, const Item* items, int n) {
+    c->ItemClick("##TopBar/Save");
+    c->SetRef("//$FOCUSED");
+    for (int i = 0; i < n; ++i) {
+      const bool disabled = IsDisabled(c->ItemInfo(items[i].path));
+      if (disabled == items[i].expect_enabled) {
+        IM_ERRORF("%s: '%s' is %s and should not be", scenario, items[i].path,
+                  disabled ? "unreachable" : "reachable");
+      }
+    }
+  };
+}
+"""
+
+_NEGATIVE_FOR_RENAMED_CTX_PARAM_GUARDED = """
+TEST(FileOps, TopBarSaveMenuGatesMatchRunState) {
+  const auto check = [](ImGuiTestContext* c, const char* scenario, const Item* items, int n) {
+    c->ItemClick("##TopBar/Save");
+    c->SetRef("//$FOCUSED");
+    for (int i = 0; i < n; ++i) {
+      const bool disabled = IsDisabled(c->ItemInfo(items[i].path));
+      if (disabled == items[i].expect_enabled) {
+        IM_ERRORF("%s: '%s' is %s and should not be", scenario, items[i].path,
+                  disabled ? "unreachable" : "reachable");
+      }
+      if (c->IsError()) {
+        break;
+      }
+    }
+  };
+}
+"""
+
+# Round 23's requirement 1 covers `while` the same as `for` (the fatal-assert rule above stays
+# `for`-only, its own separately documented scope); these mirror
+# `_POSITIVE_FOR_NONFATAL_CASCADE`/`_NEGATIVE_FOR_NONFATAL_GUARDED` one keyword over.
+_POSITIVE_WHILE_NONFATAL_CASCADE = """
+TEST(ViewDisplayControls, EveryFullSkyLensZeroesTheStoredAngles) {
+  int lens_index = 0;
+  while (lens_index < kFullSkyLensTypeCount) {
+    const int lens = kFullSkyLensTypes[lens_index];
+    if (gui::g_state.renderer.roll != 0.0f) {
+      IM_ERRORF("full-sky lens %d kept a nonzero roll", lens);
+    }
+    ctx->ItemClick("**/Reset##view");
+    ++lens_index;
+  }
+}
+"""
+
+_NEGATIVE_WHILE_NONFATAL_GUARDED = """
+TEST(ViewDisplayControls, EveryFullSkyLensZeroesTheStoredAngles) {
+  int lens_index = 0;
+  while (lens_index < kFullSkyLensTypeCount) {
+    const int lens = kFullSkyLensTypes[lens_index];
+    if (gui::g_state.renderer.roll != 0.0f) {
+      IM_ERRORF("full-sky lens %d kept a nonzero roll", lens);
+    }
+    if (ctx->IsError()) {
+      break;
+    }
+    ctx->ItemClick("**/Reset##view");
+    ++lens_index;
+  }
+}
+"""
+
 _POSITIVE_LAMBDA_CASCADE_RESET_VIEW = """
 TEST(EditModal, reset_view_lands_on_the_same_pose_the_card_thumbnail_uses) {
   auto verify = [&](const char* label) {
@@ -961,6 +1161,46 @@ def _selfcheck_root_relative_path() -> bool:
         return ok
 
 
+def _selfcheck_wrap_around_fix_text() -> bool:
+    """Round 24's Major #1: the wrap-around branch's suggested fix must not offer `continue` (it
+    does not stop the cascade there — see `_for_cascade_violations_for`'s docstring comment), while
+    the same-iteration branch's fix text must keep offering it (it DOES work there; regression
+    guard against overcorrecting the message for every hit).
+    """
+    ok = True
+
+    # The distinguishing substrings are the ENUMERATED options in each branch's fix sentence, not
+    # bare "continue" — the wrap-around branch's message legitimately says the word once, in the
+    # explanation of why `continue` does not help there (that explanation is the point of Major
+    # #1's fix); what must NOT appear is `continue` offered as an option alongside break/return.
+    wrap_hits = find_for_cascade_in_text(strip_comments(_POSITIVE_FOR_CTX_BEFORE_REPORT_WRAP_AROUND))
+    wrap_violations = _for_cascade_violations_for(Path("dummy_wrap.cpp"), wrap_hits)
+    wrap_ok = bool(wrap_violations) and all(
+        "(or `return`)" in v.message and "(or `continue`/`return`)" not in v.message
+        for v in wrap_violations
+    )
+    print(
+        f"[{'ok' if wrap_ok else 'FAIL'}] wrap-around fix text does not offer `continue` as an "
+        f"option (n_violations={len(wrap_violations)})",
+        file=sys.stderr,
+    )
+    ok = ok and wrap_ok
+
+    same_iter_hits = find_for_cascade_in_text(strip_comments(_POSITIVE_FOR_NONFATAL_CASCADE))
+    same_iter_violations = _for_cascade_violations_for(Path("dummy_same.cpp"), same_iter_hits)
+    same_iter_ok = bool(same_iter_violations) and all(
+        "(or `continue`/`return`)" in v.message for v in same_iter_violations
+    )
+    print(
+        f"[{'ok' if same_iter_ok else 'FAIL'}] same-iteration fix text still offers `continue` "
+        f"(n_violations={len(same_iter_violations)})",
+        file=sys.stderr,
+    )
+    ok = ok and same_iter_ok
+
+    return ok
+
+
 def _selfcheck() -> int:
     cases: list[tuple[str, str, bool, object]] = [
         ("known-positive: indexed for, EverySlotHasANonEmptyDomain shape",
@@ -989,6 +1229,16 @@ def _selfcheck() -> int:
          _POSITIVE_FOR_CTX_WRAPPER_HELPER_BEFORE_REPORT, True, find_for_cascade_in_text),
         ("negative: report shielded by an inline lambda inside the for body",
          _NEGATIVE_FOR_REPORT_IN_INLINE_LAMBDA, False, find_for_cascade_in_text),
+        ("known-positive: round-24 real miss, ctx parameter renamed to `c` "
+         "(test_file_ops.cpp's `check` lambda) — proves _ctx_param_names catches a non-`ctx` name",
+         _POSITIVE_FOR_RENAMED_CTX_PARAM_WRAP_AROUND, True, find_for_cascade_in_text),
+        ("negative: the same renamed-parameter shape, guarded by IsError()/break",
+         _NEGATIVE_FOR_RENAMED_CTX_PARAM_GUARDED, False, find_for_cascade_in_text),
+        ("known-positive: while-loop-nonfatal-cascade, same shape as the for-loop case "
+         "(round 23 requirement 1: for/while alike)",
+         _POSITIVE_WHILE_NONFATAL_CASCADE, True, find_for_cascade_in_text),
+        ("negative: while-loop-nonfatal-cascade guarded by IsError()/break",
+         _NEGATIVE_WHILE_NONFATAL_GUARDED, False, find_for_cascade_in_text),
         # -- non-fatal half: lambda-call-cascade -----------------------------
         ("known-positive: round-21 lambda-call-cascade shape 1 "
          "(reset_view_lands_on_the_same_pose_the_card_thumbnail_uses)",
@@ -1017,6 +1267,8 @@ def _selfcheck() -> int:
             file=sys.stderr,
         )
     if not _selfcheck_root_relative_path():
+        failed = True
+    if not _selfcheck_wrap_around_fix_text():
         failed = True
     if failed:
         print(

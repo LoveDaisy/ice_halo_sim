@@ -392,6 +392,9 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
             IM_ERRORF("%s: '%s' is %s and should not be", scenario, items[i].path,
                       disabled ? "unreachable" : "reachable");
           }
+          if (c->IsError()) {
+            break;
+          }
         }
         c->SetRef("");
         c->PopupCloseAll();
