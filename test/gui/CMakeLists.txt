@@ -20,6 +20,7 @@ add_executable(gui_test
     functional/test_defaults_panel.cpp
     functional/test_background_overlay.cpp
     functional/test_entry_management.cpp
+    functional/test_scene_controls.cpp
     functional/test_preview_texture.cpp
     functional/test_view_display_controls.cpp
     functional/test_gui_sim_smoke.cpp

@@ -483,6 +483,7 @@ int main(int argc, char** argv) {
   RegisterColorWindowTests(engine);
   RegisterFilterEditorTests(engine);
   RegisterEditModalTests(engine);
+  RegisterSceneControlTests(engine);
   RegisterPerfTests(engine);
   // task-test-gui-interaction: user action → state assertion coverage
   RegisterP1InteractionTests(engine);

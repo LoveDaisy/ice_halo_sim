@@ -250,6 +250,7 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine);
 void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterFilterEditorTests(ImGuiTestEngine* engine);
 void RegisterEditModalTests(ImGuiTestEngine* engine);
+void RegisterSceneControlTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
 void RegisterP1InteractionTests(ImGuiTestEngine* engine);
 void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
