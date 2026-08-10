@@ -442,7 +442,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     后者含四个**返回 JSON 键名**的函数）。⭐顺序约束 = **产品线决定 API 形状，正式发布则冻结 API**，
     故"先发库再想产品线"是把顺序做反；拆仓同属提前冻结（会把 L1|L2 这道最不该固化的缝宣布为最终答案）。
     含跨树改动实测（近 12 个月已合并代码 PR 中 37% 同时动两棵树，皆为功能纵切）、
-    唯一未守住的边界（`test/gui/CMakeLists.txt:54` 链 `lumice_obj` 而非 `lumice`⇒「GUI 能否只靠 C API 活下来」目前无证据）、
+    那处「唯一未守住的边界」（`gui_test` 曾链 `lumice_obj` 而非 `lumice`）——**2026-08-06 已收口**：`gui_test` 现只链 `lumice`（`test/gui/CMakeLists.txt:73`）⇒ 这是「GUI 能只靠 C API 活下来」的第一份正面证据；余下 `gui_unit_test` / `composition_correctness_test` 链 `lumice_obj` 是 CMake 注释里写明的**具名跨层 oracle 豁免**、
     以及拆仓触发条件（真实外部消费者 / 不同授权策略 / 第二团队；且届时该拆的是 L0 而非 core|gui）。
     考虑发布动态库、设计新产品线、或再次提起拆仓前先读。
 - **GPU / Metal route** (read these before touching the GPU path):

@@ -59,8 +59,13 @@
   commit；能到达它的公开入口只有 `LUMICE_CommitScene`（C API 的 `LUMICE_Config` 值结构体及其三个
   commit 函数已在 v4.12 移除，见 [`doc/c_api_zh.md`](c_api_zh.md)）。
 - `CommitConfig(const std::string&)`: JSON 字符串重载，供 benchmark harness 使用
-- `GetRenderResults()`: 获取渲染结果（非阻塞）
-- `GetStatsResult()`: 获取统计结果（非阻塞）
+- `AcquireResultFrame()`: 获取最新结果帧的一份所有权份额——**结果的唯一入口**。返回
+  `std::shared_ptr<const ResultFrame>`（永不为空），一帧同时承载全部结果种类（mono render /
+  composite / raw XYZ / stats），因此任取其二在构造上必属同一世代。它会先物化待处理的快照，
+  故新鲜度与它取代的那组 per-kind getter 相同；帧内指针在调用方持有份额期间始终有效，
+  因为后续快照发布的是**新**帧而不是覆写这一帧。被它取代的六个 `Get*Results` getter 已在
+  v4.15 移除——所有权不变量与促成它的两次 use-after-free 复发见
+  [`doc/capi-lifecycle-architecture.md`](capi-lifecycle-architecture.md) §9。
 - `IsIdle()`: 检查是否空闲
 - `Stop()` / `Terminate()`: 停止服务器
 
@@ -148,7 +153,9 @@ RenderConsumer / StatsConsumer
     ↓
 RenderResult / StatsResult
     ↓
-GetRenderResults() / GetStatsResult()
+DoSnapshot() 发布一帧不可变 ResultFrame
+    ↓
+AcquireResultFrame()（调用方持有它的一份份额）
 ```
 
 ### 完整流程

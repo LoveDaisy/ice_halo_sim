@@ -725,7 +725,10 @@ layer (`composition-correctness`, §1.2) has been added since, and the two GUI t
 here no longer hold the same cases they held at measurement time. The mechanism this section
 argues for — a rule that stays control flow instead of becoming data forces its test into
 instance shape — is what motivated that rewrite and is unaffected by the count going stale;
-§4.8.1 and §4.8.2 record what changed as a result.
+§4.8.1 and §4.8.2 record what changed as a result. The same applies to the **file names** below:
+`test_gui_interaction.cpp` was the catch-all this rewrite deleted, so a reference to it here
+records where those cases lived when the diagnosis was made, not where to find them today
+(§6's layout table is the current map).
 
 Of the 721 registered cases across `gui_test` and `gui_unit_test`, **23 assert a proposition
 quantified over a set derived from production code** — a field registry, an enum, a capability

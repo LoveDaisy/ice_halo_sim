@@ -20,6 +20,27 @@ cover:
 
 ---
 
+> ⚠️ **Dated-accuracy notice (2026-08-10) — read before trusting §3/§4 as current.**
+>
+> The **accumulate / snapshot** half of this document still describes the live mechanism.
+> The **result-retrieval and publication** half predates v4.15 and was verified stale on the
+> date above:
+>
+> | This document says | Today |
+> |---|---|
+> | `GetRawXyzResults` / `GetRenderResults` / `GetStatsResult` / `GetCompositeResults` are the read entry points | All six getters were removed. One entry point: `ServerImpl::AcquireResultFrame()` (`src/server/server.hpp:348`), C side `LUMICE_AcquireResultFrame` + `LUMICE_FrameGetRawXyz` / `FrameGetRender` / `FrameGetComposite` / `FrameGetStats` |
+> | `snapshot_mutex_` guards `cached_render_results_` / `cached_stats_result_` (§4.1) | Those fields no longer exist (`src/server/server.cpp:229` records their removal). Phase 2 now **assembles a new immutable frame** under `snapshot_mutex_` (`server.cpp:762-773`) and publishes it into `published_frame_` via `atomic_load`/`atomic_store` (`server.cpp:238-248`) |
+> | Two locks (§4.1) | Three: `do_snapshot_mutex_` (`server.cpp:258`) serializes whole snapshot passes and is always taken **before** the other two |
+> | Result lifetime = "valid until the next getter call" | A reader holds a share of an immutable frame; a later snapshot publishes a *new* frame and cannot disturb an outstanding one. See [`doc/capi-lifecycle-architecture.md`](capi-lifecycle-architecture.md) §9 for the invariant and the two use-after-free recurrences the old contract produced |
+>
+> **All `server.cpp:NNN` line references below predate that change too — re-derive before use.**
+> Re-documenting the publish path in this file's own style is a real piece of work (the state
+> machine in §3 and the lock tables in §4 both need re-deriving from the current code), and is
+> deliberately **not** done in this notice rather than guessed at: a plausible-but-wrong
+> invariants doc is worse than a visibly dated one. It is backlogged.
+
+---
+
 ## §1 Overview
 
 The accumulator/consumer subsystem sits between the simulator thread pool and the

@@ -115,15 +115,17 @@ derived GUI-side from `xyz_buffer` (§2.5). C API consumers that need an anchor 
 mono path must compute their own.
 
 > **Composite-path exception (task-345.3)**: `LUMICE_RenderResult::composite_p99_y`
-> IS a C API field, but ONLY on the composite path (`LUMICE_GetCompositeResults` /
-> `LUMICE_GetRawXyzAndCompositeResults`'s `composite_out`). Semantics:
+> IS a C API field, but ONLY on the composite path — today that is
+> `LUMICE_FrameGetComposite(frame, out, max_count)` (before v4.15: `LUMICE_GetCompositeResults`
+> / `LUMICE_GetRawXyzAndCompositeResults`'s `composite_out`; the pairing getter is gone because
+> any two reads off ONE frame are same-generation by construction). Semantics:
 >
 > - **Composite path** — populated with the P99 over the union of NON-ZERO
 >   UNEXPOSED (raw lane) Y values across every participating color class (visible or
 >   solo). This is the anchor the GUI's auto-EV feeds into `ComputeEvAuto` for the
 >   composite display.
-> - **Mono path** (`LUMICE_GetRenderResults`) — always `0`; consumers must ignore it
->   on the mono getter.
+> - **Mono path** (`LUMICE_FrameGetRender`) — always `0`; consumers must ignore it
+>   on the mono read.
 >
 > The carve-out exists because the per-color-class lane data does not cross the C API
 > boundary (`src/gui/` may only see the C API surface), so the GUI cannot derive this
@@ -136,8 +138,17 @@ mono path must compute their own.
 > you touch one, mirror the change in the other file (cross-reference comments in
 > both locations).
 
-**Lifetime**: the `xyz_buffer` pointer is valid until the next
-`LUMICE_GetRawXyzResults()` or `LUMICE_CommitScene()` call.
+**Lifetime**: the `xyz_buffer` pointer is valid **for as long as the caller holds the
+`LUMICE_ResultFrame` it was read out of** — acquire with `LUMICE_AcquireResultFrame`, hand it
+back with `LUMICE_ReleaseResultFrame`, and copy anything you still need before that Release.
+A frame is immutable and separately reference-counted, so a later snapshot publishes a *new*
+frame and cannot disturb this one.
+
+> ⚠️ Before v4.15 this line read "valid until the next `LUMICE_GetRawXyzResults()` or
+> `LUMICE_CommitScene()` call". **Do not write code to that contract** — it is the exact
+> contract the frame model replaced, because it describes when the memory happens to still
+> be there rather than a lifetime the reader controls; two use-after-free recurrences came
+> out of it. See [`doc/capi-lifecycle-architecture.md`](capi-lifecycle-architecture.md) §9.
 
 **Composite EV setter**: `LUMICE_SetCompositeExposure(server, ev_total)` (task-345.3) is
 the display-time counterpart to `LUMICE_SetRaypathColors` — the GUI uses it to push the
@@ -145,7 +156,7 @@ combined manual + auto EV onto the composite bake. `ev_total` is applied as `2^e
 inside the compositor as a single global scalar shared by every color class (per-lane
 renormalization stays structurally excluded — that was the false-color bug from the
 scrum-336 spike). No accumulator reset, no epoch bump; flips `snapshot_dirty_` so the
-next `Get*Results` rebakes the composite. Mono path is untouched.
+next result-frame acquisition rebakes the composite. Mono path is untouched.
 
 ### §2.5 GUI Poller and SyncFromPoller
 
@@ -204,7 +215,7 @@ Two events clear accumulation state:
 1. **`Reset()`** (`render.cpp:609`): zeros `total_intensity_`, `snapshot_intensity_`,
    `effective_pix_`, and `internal_xyz_`. It does **not** zero `snapshot_xyz_`
    (the next `PrepareSnapshot()` memcpys over it) and does **not** deallocate buffers.
-   `has_ever_consumed_ = false` (set in `Stop()`) ensures `GetRawXyzResults()` reports
+   `has_ever_consumed_ = false` (set in `Stop()`) ensures `LUMICE_FrameGetRawXyz` reports
    `has_valid_data = false` until new data arrives, preventing stale snapshot reads.
 
 2. **Consumer destruction**: the `RenderConsumer` destructor releases all buffers via
@@ -355,11 +366,22 @@ intentional. Cross-referenced in the code comments of both call sites.
 
 Regression pins:
 
-- `test/gui/functional/test_gui_import_export.cpp` →
-  `intensity_factor_ignores_exposure_offset_in_gui_run_path` (AC5 mechanism-layer).
-- `test/gui/functional/test_gui_composite_preview.cpp` →
-  `rerun_with_same_ev_produces_identical_composite` (AC1 end-to-end),
-  `display_time_visibility_reanchors_participating_p99` (AC2 display-time re-anchor).
+- `test/composition-correctness/gui/test_scene_commit_chain.cpp` →
+  `SceneCommitChain.OnlyTheExposureDiffersBetweenTheRunAndExportIntents` (AC5 mechanism-layer,
+  `test_scene_commit_chain.cpp:94`).
+  Re-anchored 2026-08-10: this proposition used to be pinned by
+  `test_gui_import_export.cpp::intensity_factor_ignores_exposure_offset_in_gui_run_path`,
+  which the GUI-suite rewrite replaced with the case above — same claim, plus a field-by-field
+  comparison of the two documents with `intensity_factor` removed, so an intent-dependent
+  branch appearing anywhere else also fails it.
+- ⚠️ **Unresolved (2026-08-10)**: this list also named
+  `test_gui_composite_preview.cpp::rerun_with_same_ev_produces_identical_composite` (AC1
+  end-to-end) and `::display_time_visibility_reanchors_participating_p99` (AC2 display-time
+  re-anchor). Neither the file nor those case names exist anywhere under `test/` after the
+  GUI-suite rewrite, and no same-named successor was found. Whether the propositions were
+  re-expressed under other names or the GUI-level end-to-end coverage was dropped **has not
+  been established** — do not read their absence here as either. The mechanism layer below
+  (`test_component_compositor.cpp`) is unaffected and still pins the scale arithmetic.
 
 ### §6.6 Composite-path server-side self-anchor (task-fix-composite-participating-exposure-anchor)
 
@@ -385,7 +407,7 @@ Fix B — **serve-side self-anchor at the compositor**:
 - `CompositeColorClassesLinear` (component_compositor.cpp) reorders internal steps to
   `GatherActiveClasses → ComputeParticipatingP99Y → ParticipatingExposureScale(p99) *
   display_exposure_scale → per-pixel composite`. Every visibility/solo change flips
-  `snapshot_dirty_` and the next `LUMICE_GetCompositeResults` recomputes p99 over the (now
+  `snapshot_dirty_` and the next `LUMICE_FrameGetComposite` read recomputes p99 over the (now
   smaller) active set, so `s` grows, and the remaining classes' pixels brighten in the same
   call — no GUI round-trip needed.
 - **GUI decoupling**: `RenderPreviewPanel` (app_panels.cpp) now pushes only the manual
@@ -410,10 +432,11 @@ Regression pins:
   `ParticipatingExposureScaleGuards`, `ParticipatingExposureScaleFormulaCrossCheck`
   (mechanism-layer independent recomputation, including a `rc_heavy` sibling asserting
   `snapshot_intensity` does not leak into `s`), `EarlyReturnPublishesParticipatingP99`.
-- `test/gui/functional/test_gui_composite_preview.cpp` →
-  `display_time_visibility_reanchors_participating_p99` (AC1 additive-mode pixel-byte gate),
-  `display_time_visibility_reanchors_participating_p99_dominant` (AC1 dominant-mode
-  visibility-flip counterpart).
+- ⚠️ **Unresolved (2026-08-10)**: this list also named
+  `test_gui_composite_preview.cpp::display_time_visibility_reanchors_participating_p99` (AC1
+  additive-mode pixel-byte gate) and its `_dominant` counterpart. Same situation as §6.5's
+  list — file and case names are gone after the GUI-suite rewrite with no same-named
+  successor, and whether the coverage was re-expressed or dropped is **not** established here.
 - CLI e2e: `test/e2e-correctness/test_raypath_color.py` (references regenerated against the
   new anchor; thresholds recalibrated).
 
