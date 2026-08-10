@@ -157,6 +157,47 @@ class ScopedPanel {
   ScopedUserConfigSource guard_;
 };
 
+// A held mouse button that is released even when a check in the middle of a drag returns early.
+//
+// The drag cases below assert WHILE the button is down — that is the whole point of them — and
+// IM_CHECK expands to a `return`, so a plain MouseDown/.../MouseUp pair would skip its own release
+// on exactly the runs that fail. Defence in depth rather than the load-bearing mechanism: the
+// engine already calls ImGuiTestEngine_ClearInput() at the top of every test for this ("Clear ImGui
+// inputs to avoid key/mouse leaks from one test to another", imgui_te_engine.cpp). What the guard
+// adds is that the release happens inside the case that pressed, so the widget under test still
+// sees its release frame and hands its drag scratch back before anything else runs.
+class ScopedMouseDown {
+ public:
+  ScopedMouseDown(ImGuiTestContext* ctx, const ImVec2& pos) : ctx_(ctx) {
+    ctx_->MouseMoveToPos(pos);
+    ctx_->MouseDown(0);
+    ctx_->Yield(2);
+  }
+
+  ScopedMouseDown(const ScopedMouseDown&) = delete;
+  ScopedMouseDown& operator=(const ScopedMouseDown&) = delete;
+
+  ~ScopedMouseDown() { Release(); }
+
+  void MoveTo(const ImVec2& pos) const {
+    ctx_->MouseMoveToPos(pos);
+    ctx_->Yield(2);
+  }
+
+  void Release() {
+    if (released_) {
+      return;
+    }
+    released_ = true;
+    ctx_->MouseUp(0);
+    ctx_->Yield(2);
+  }
+
+ private:
+  ImGuiTestContext* ctx_;
+  bool released_ = false;
+};
+
 // ---------------------------------------------------------------------------------------------
 // Reading the panel.
 // ---------------------------------------------------------------------------------------------
@@ -182,6 +223,20 @@ std::string ValueInputRef(const std::string& key_path) {
 
 std::string ValueWidgetRef(const std::string& key_path) {
   return "**/##value_" + key_path;
+}
+
+// The other half of a slider cell — the bar itself, which is the only one of the two that can be
+// DRAGGED. ValueInputRef reaches the box beside it, and every case that types a number goes through
+// that one; a case about what a drag leaves behind cannot.
+std::string ValueSliderRef(const std::string& key_path) {
+  return "**/##value_" + key_path + "_slider";
+}
+
+// A point `t` of the way across an item, on its vertical centre line. Read off the item's own rect
+// rather than written as coordinates: how wide a value cell is belongs to the table.
+ImVec2 PointAcross(const ImGuiTestItemInfo& info, float t) {
+  return ImVec2(info.RectFull.Min.x + (info.RectFull.Max.x - info.RectFull.Min.x) * t,
+                (info.RectFull.Min.y + info.RectFull.Max.y) * 0.5f);
 }
 
 // The Origin cell, addressed BY THE VALUE IT SHOULD BE SHOWING: that cell's id is the "##" form,
@@ -1701,6 +1756,160 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
                gui::g_state.grid_color[2] != base[2]);
 
       ctx->PopupCloseAll();
+      FilterTo(ctx, "");
+    };
+  }
+
+  {
+    // A float cell's SLIDER lands what the drag left behind — on release, and only then.
+    //
+    // The sibling of the colour case above, and it fails on the OPPOSITE half of the same rule. A
+    // slider does get a trustworthy "the interaction ended" signal out of ImGui, so the release
+    // frame is recognised; what is easy to lose is the VALUE by then. The cell keeps a working copy
+    // so that the frames of a drag never reach the document, and if that copy is refreshed from the
+    // document on every frame it is also refreshed on the release frame — where the slider, having
+    // only reported that it is finished, writes nothing more. The commit then compares the pre-drag
+    // value against itself, finds no change, and drops the whole drag on the floor. The user-visible
+    // shape of that is precise and was the reported bug: the box beside the slider works, and the
+    // slider does not.
+    //
+    // Which is also why the case has to be a real press/move/release rather than the single-frame
+    // ItemInputValue every other value-cell case uses: that helper drives the INPUT BOX, i.e. the
+    // one path that never had the bug.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "a_float_slider_cell_lands_the_drag_on_release");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_float_slider_drag");
+      gui::g_state = gui::MakeNewDocumentState();
+
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+
+      const float base = gui::g_state.zenith_nadir_radius_px;  // 8.0, in a [2, 20] domain
+      const ImGuiTestItemInfo slider = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_radius_px").c_str());
+      // Asked before the drag, so that "this test is not addressing the widget it thinks it is"
+      // reports as itself instead of as "the value did not land" — telling those two apart is the
+      // whole reason this case can be trusted when it goes red.
+      IM_CHECK(slider.ID != 0);
+
+      {
+        ScopedMouseDown drag(ctx, PointAcross(slider, 0.15f));
+        // Pressing an ImGui slider already moves its value to the press position, so a cell that
+        // wrote per frame would have written a different number here — this is not a vacuous
+        // "nothing happened yet" assertion.
+        IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, base);
+
+        drag.MoveTo(PointAcross(slider, 0.85f));
+        // Still held after moving the other way across the bar: a fix that special-cased only the
+        // first frame of a drag would not survive this second look.
+        IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, base);
+
+        drag.Release();
+      }
+      // Released: the drag lands, and it lands where the mouse was — not merely "somewhere else".
+      // 0.85 of the way along [2, 20] is ~17; the bound below is loose enough to survive the grab
+      // rectangle's own width and tight enough that a stale or half-way value fails it.
+      IM_CHECK_NE(gui::g_state.zenith_nadir_radius_px, base);
+      IM_CHECK_GT(gui::g_state.zenith_nadir_radius_px, 12.0f);
+      IM_CHECK_LE(gui::g_state.zenith_nadir_radius_px, 20.0f);
+
+      // The keyboard path is the half that always worked; asserted here so a fix that traded one
+      // for the other cannot pass. Typing after a drag is also the real sequence a user performs.
+      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 5.5f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 5.5f);
+
+      FilterTo(ctx, "");
+    };
+  }
+
+  {
+    // The integer cell says the same thing, and is not covered by the float one: it is a separate
+    // control (SliderInt + InputInt) behind a separate factory, and the two carried the bug
+    // independently rather than through shared code.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "an_int_slider_cell_lands_the_drag_on_release");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_int_slider_drag");
+      gui::g_state = gui::MakeNewDocumentState();
+
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "sim.max_hits");
+
+      const int base = gui::g_state.sim.max_hits;  // 8, in a [1, 64] domain
+      const ImGuiTestItemInfo slider = ctx->ItemInfo(ValueSliderRef("sim.max_hits").c_str());
+      IM_CHECK(slider.ID != 0);
+
+      {
+        ScopedMouseDown drag(ctx, PointAcross(slider, 0.15f));
+        IM_CHECK_EQ(gui::g_state.sim.max_hits, base);
+
+        drag.MoveTo(PointAcross(slider, 0.85f));
+        IM_CHECK_EQ(gui::g_state.sim.max_hits, base);
+
+        drag.Release();
+      }
+      // ~0.85 of [1, 64] is in the mid-fifties.
+      IM_CHECK_NE(gui::g_state.sim.max_hits, base);
+      IM_CHECK_GT(gui::g_state.sim.max_hits, 32);
+      IM_CHECK_LE(gui::g_state.sim.max_hits, 64);
+
+      ctx->ItemInputValue(ValueInputRef("sim.max_hits").c_str(), 12);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.sim.max_hits, 12);
+
+      FilterTo(ctx, "");
+    };
+  }
+
+  {
+    // Two slider cells on screen AT THE SAME TIME each drag on their own, and this is a claim about
+    // the storage rather than about the widgets.
+    //
+    // The working copy a slider cell keeps across the frames of a drag cannot live in one shared
+    // variable per field kind: every visible row of that kind renders on every frame, so the second
+    // row's render would see the first row's "I am being dragged" flag, decline to refresh, take the
+    // first row's in-progress value as its own — and then clear the flag, so the NEXT frame the row
+    // actually being dragged would refresh from the document and lose the drag. The scratch is
+    // therefore keyed per field, and this is the case that would go red if it stopped being.
+    //
+    // Both rows have to be on screen for that to be reachable at all, which is what the shared
+    // "overlay_zenith_nadir" filter buys: it leaves the radius (a [2, 20] float) and the alpha (a
+    // [0, 1] float) rendering side by side.
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "two_slider_cells_do_not_share_one_drag_scratch");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_slider_scratch_keying");
+      gui::g_state = gui::MakeNewDocumentState();
+
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+      FilterTo(ctx, "overlay_zenith_nadir");
+
+      const float alpha_base = gui::g_state.zenith_nadir_alpha;  // 0.6, in [0, 1]
+      const ImGuiTestItemInfo radius = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_radius_px").c_str());
+      IM_CHECK(radius.ID != 0);
+      const ImGuiTestItemInfo alpha = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_alpha").c_str());
+      IM_CHECK(alpha.ID != 0);
+
+      {
+        ScopedMouseDown drag(ctx, PointAcross(radius, 0.9f));
+        drag.MoveTo(PointAcross(radius, 0.75f));
+        drag.Release();
+      }
+      IM_CHECK_GT(gui::g_state.zenith_nadir_radius_px, 12.0f);
+      // The neighbour was rendering throughout and was never touched.
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_alpha, alpha_base);
+      const float radius_landed = gui::g_state.zenith_nadir_radius_px;
+
+      {
+        ScopedMouseDown drag(ctx, PointAcross(alpha, 0.1f));
+        drag.MoveTo(PointAcross(alpha, 0.2f));
+        drag.Release();
+      }
+      // The alpha drag lands its OWN value — a scratch shared with the radius would have offered a
+      // number from the other field's domain, clamped into [0, 1] as 1.0.
+      IM_CHECK_NE(gui::g_state.zenith_nadir_alpha, alpha_base);
+      IM_CHECK_LT(gui::g_state.zenith_nadir_alpha, 0.4f);
+      // ...and does not disturb what the radius already committed.
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, radius_landed);
+
       FilterTo(ctx, "");
     };
   }
