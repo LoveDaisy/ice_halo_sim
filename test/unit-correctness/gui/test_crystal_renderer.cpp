@@ -20,6 +20,7 @@
 #include <cstring>
 
 #include "gui/axis_presets.hpp"
+#include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 
 namespace {
@@ -127,4 +128,54 @@ TEST(CrystalRenderer, crystal_renderer_kcolumn_caxis_horizontal) {
   EXPECT_TRUE(p[3] > 0.0f);
   float ndc_y = p[1] / p[3];
   EXPECT_TRUE(std::fabs(ndc_y) < 0.1f);
+}
+
+// The modal preview's trackball, which is the other half of the same camera: ComputeMvp decides
+// where a vertex lands, ApplyTrackballRotation decides which way the crystal is facing when it gets
+// there. A drag is a Rodrigues rotation about one mesh axis per component, left-multiplied onto the
+// running matrix — dx spins about mesh +y (world +z, a vertical spin), dy tilts about mesh +x
+// (world +x, the camera-right axis). The Y-Z swap is why those two axes are not the ones a reader
+// would name from the world convention.
+//
+// This lives here rather than in gui_test because it needs neither a frame nor an input event: the
+// function is pure arithmetic over a global matrix, and it used to be asserted from a GUI case that
+// opened no window and clicked nothing. Running it in this target means it runs on all three CI
+// platforms rather than on the one that has a display.
+TEST(CrystalRenderer, trackball_drag_rotates_about_the_axis_the_component_names) {
+  auto check_axis = [](const char* label, float dx, float dy, bool about_mesh_x) {
+    for (int i = 0; i < 16; ++i) {
+      lumice::gui::g_crystal_rotation[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    }
+    lumice::gui::ApplyTrackballRotation(dx, dy);
+
+    // The angle law (magnitude x 0.01 rad/px) is mirrored rather than re-derived: what is under
+    // test is the AXIS and the composition order, and a mirrored constant that drifted would show
+    // up as every element disagreeing rather than as a silent pass.
+    const float angle = std::sqrt(dx * dx + dy * dy) * 0.01f;
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    float expected[16] = { 0 };
+    expected[15] = 1.0f;
+    if (about_mesh_x) {
+      // Rx: e1 unchanged; e2 -> (0, c, s); e3 -> (0, -s, c).
+      expected[0] = 1.0f;
+      expected[5] = c;
+      expected[6] = s;
+      expected[9] = -s;
+      expected[10] = c;
+    } else {
+      // Ry: e1 -> (c, 0, -s); e2 unchanged; e3 -> (s, 0, c).
+      expected[0] = c;
+      expected[2] = -s;
+      expected[5] = 1.0f;
+      expected[8] = s;
+      expected[10] = c;
+    }
+    for (int i = 0; i < 16; ++i) {
+      EXPECT_NEAR(lumice::gui::g_crystal_rotation[i], expected[i], 1e-5f) << label << " at index " << i;
+    }
+  };
+
+  check_axis("dx>0 rotates about mesh +y (world +z)", 10.0f, 0.0f, /*about_mesh_x=*/false);
+  check_axis("dy>0 rotates about mesh +x (world +x)", 0.0f, 10.0f, /*about_mesh_x=*/true);
 }
