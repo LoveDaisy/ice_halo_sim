@@ -126,6 +126,15 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
                  bool save_texture);
 
 // Load .lmc binary file. If texture data is present, returns it via tex_data/tex_w/tex_h.
+//
+// All-or-nothing on `state`: on success it is replaced wholesale by the file's document; on
+// failure it is not written at all, so a caller may pass the live document straight in. The two
+// halves of that are one contract — the JSON section is deserialized well before the texture
+// section is even read, and the deserializer clears the document it is given, so deserializing in
+// place would let a failed load leave the caller showing the file it just refused to open.
+//
+// `tex_data`/`tex_w`/`tex_h` carry NO such guarantee: they are cleared on entry and are only
+// meaningful when this returns true. Read them only then.
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 

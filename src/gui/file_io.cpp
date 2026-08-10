@@ -2633,7 +2633,14 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
     return false;
   }
 
-  if (!DeserializeGuiStateJson(json_payload, state)) {
+  // Into a local, not into `state`: DeserializeGuiStateJson opens by clearing the document it is
+  // given, and the texture section below still has three ways to fail. Deserializing in place
+  // would mean a load that reports failure has already replaced the caller's document with the
+  // contents of the file it could not load — while the caller, reading only the false, keeps
+  // showing the previous file's name. `state` is assigned once, at the bottom, after the last
+  // failure branch.
+  GuiState new_state;
+  if (!DeserializeGuiStateJson(json_payload, new_state)) {
     GUI_LOG_ERROR("[LMC] Failed to parse JSON");
     return false;
   }
@@ -2665,6 +2672,9 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
     stbi_image_free(decoded);
   }
 
+  // The single point where the caller's document changes. Every failure branch above returns
+  // before this line, so a false return means `state` was never touched.
+  state = std::move(new_state);
   return true;
 }
 
