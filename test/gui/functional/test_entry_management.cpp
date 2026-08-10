@@ -271,12 +271,18 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const ImGuiTestItemInfo tails[3] = { ctx->ItemInfo("**/+ Crystal##layer_0"),
                                            ctx->ItemInfo("**/+ Crystal##layer_1"),
                                            ctx->ItemInfo("**/+ Crystal##layer_2") };
-      for (int i = 0; i < 3; ++i) {
-        // A clipped item reports id 0, and reading a rectangle off one would compare zeroes and
-        // pass. This is the case's own premise, so it is fatal.
-        IM_CHECK_NE(headers[i].ID, 0u);
-        IM_CHECK_NE(tails[i].ID, 0u);
-      }
+      // A clipped item reports id 0, and reading a rectangle off one would compare zeroes and
+      // pass. This is the case's own premise, so it is fatal — the whole point is to abort before
+      // the order checks below run on garbage rects. Unrolled rather than looped: a fatal assert
+      // inside a `for` body is exactly the shape scripts/check_loop_fatal_asserts.py flags, and
+      // unrolling six fixed checks also gives each its own source line instead of one shared by
+      // all three loop iterations.
+      IM_CHECK_NE(headers[0].ID, 0u);
+      IM_CHECK_NE(tails[0].ID, 0u);
+      IM_CHECK_NE(headers[1].ID, 0u);
+      IM_CHECK_NE(tails[1].ID, 0u);
+      IM_CHECK_NE(headers[2].ID, 0u);
+      IM_CHECK_NE(tails[2].ID, 0u);
 
       const float spacing = ImGui::GetStyle().ItemSpacing.y;
       for (int i = 0; i + 1 < 3; ++i) {
@@ -500,19 +506,21 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         ResetTestState();
         ctx->Yield(2);
         // Per iteration, because IM_ERRORF below is non-fatal but still sets the error status —
-        // after which every ImGuiTestContext call, the trailing Cancel click included, is a no-op.
+        // after which every ImGuiTestContext call would be a no-op, which is why the break below
+        // comes before the trailing Cancel click rather than after it: popup_guard's destructor
+        // closes the modal regardless, so that click has nothing left to do once this iteration
+        // has already failed.
         const ScopedPopups popup_guard(ctx);
         ctx->ItemClick((std::string("**/") + s.button).c_str());
         ctx->Yield(4);
         if (!ctx->ItemExists(s.tab_content)) {
           IM_ERRORF("%s did not land on the tab that owns %s", s.button, s.tab_content);
         }
-        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-        ctx->Yield(2);
-
         if (ctx->IsError()) {
           break;
         }
+        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+        ctx->Yield(2);
       }
     };
   }

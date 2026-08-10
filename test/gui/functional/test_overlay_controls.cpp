@@ -227,6 +227,9 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           IM_ERRORF("%s: clamped to %f, expected the %f maximum", s.input, static_cast<double>(*s.slot),
                     static_cast<double>(s.hi));
         }
+        if (ctx->IsError()) {
+          break;
+        }
         ctx->ItemInputValue(s.input, s.lo - 100.0f);
         ctx->Yield();
         if (*s.slot != s.lo) {

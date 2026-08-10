@@ -826,6 +826,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         if (!ctx->ItemExists(AdoptCheckboxRef(row.key_path).c_str())) {
           IM_ERRORF("row '%s' has no adopt checkbox", row.key_path.c_str());
         }
+        if (ctx->IsError()) {
+          break;
+        }
         if (!ctx->ItemExists(SourceCellRef(row.key_path).c_str())) {
           IM_ERRORF("row '%s' has no source cell", row.key_path.c_str());
         }
@@ -2063,8 +2066,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
           if (!ctx->ItemExists(std_ref.c_str())) {
             IM_ERRORF("preset '%s' is adjustable but offers no std input", entry.label);
           }
+          if (ctx->IsError()) {
+            break;
+          }
           if (!ctx->ItemExists(restore_ref.c_str())) {
             IM_ERRORF("preset '%s' is adjustable but offers no restore button", entry.label);
+          }
+          if (ctx->IsError()) {
+            break;
           }
         } else {
           ++fixed_seen;
@@ -2076,12 +2085,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
             IM_ERRORF("preset '%s' has nothing to tune but offers an input anyway", entry.label);
           }
         }
-        ctx->ItemClose(node_ref.c_str());
-        ctx->Yield(1);
-
+        // Either branch above may have just reported non-fatally; ItemClose/Yield below drive ctx
+        // unconditionally and must not run on top of that (see ctx->IsError() in
+        // test_gui_shared.hpp).
         if (ctx->IsError()) {
           break;
         }
+        ctx->ItemClose(node_ref.c_str());
+        ctx->Yield(1);
       }
       IM_CHECK_EQ(adjustable_seen, 4);  // Column / Plate / Parry / Lowitz
       IM_CHECK_EQ(fixed_seen, 1);       // Random

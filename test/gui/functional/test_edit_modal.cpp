@@ -1128,13 +1128,28 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       verify("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f }, az_full,
              roll_full);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Column", gui::AxisPreset::kColumn, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
              roll_full);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Parry", gui::AxisPreset::kParry, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
              roll_locked);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f }, az_full,
              roll_locked);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Random", gui::AxisPreset::kRandom, az_full, az_full, roll_full);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Custom", gui::AxisPreset::kCustom, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 20.0f }, az_full,
              gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 20.0f });
     };
@@ -1183,13 +1198,28 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       verify("Column", gui::AxisPreset::kColumn, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
              roll_free);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Plate", gui::AxisPreset::kPlate, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 1.0f }, az_full,
              roll_free);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Parry", gui::AxisPreset::kParry, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 1.0f }, az_full,
              roll_locked);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Lowitz", gui::AxisPreset::kLowitz, gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 40.0f }, az_full,
              roll_locked);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Random", gui::AxisPreset::kRandom, az_full, az_full, roll_free);
+      if (ctx->IsError()) {
+        return;
+      }
       verify("Custom", gui::AxisPreset::kCustom, gui::AxisDist{ gui::AxisDistType::kGauss, 90.0f, 20.0f }, az_full,
              gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 20.0f });
     };

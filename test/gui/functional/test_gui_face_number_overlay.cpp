@@ -219,18 +219,29 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(n_old, n_new);
       IM_CHECK_EQ(n_old, mesh.face_count);
 
-      // Both must produce the same set of face_numbers
+      // Both must produce the same set of face_numbers. Reported non-fatally: this compares data
+      // already fully computed above (no ctx-> driving in this loop at all, see IM_UNUSED(ctx)), so
+      // a fatal assert here would only hide every other mismatched face behind the first one found
+      // (see scripts/check_loop_fatal_asserts.py).
       for (int i = 0; i < n_new; ++i) {
         bool found = false;
         for (int j = 0; j < n_old; ++j) {
           if (labels_new[i].face_number == labels_old[j].face_number) {
             found = true;
             // vertex count per face should match
-            IM_CHECK_EQ(labels_new[i].display_polygon_vertex_count, labels_old[j].display_polygon_vertex_count);
+            if (labels_new[i].display_polygon_vertex_count != labels_old[j].display_polygon_vertex_count) {
+              IM_ERRORF("face_number %d: vertex count mismatch new=%d old=%d", labels_new[i].face_number,
+                        labels_new[i].display_polygon_vertex_count, labels_old[j].display_polygon_vertex_count);
+            }
             break;
           }
         }
-        IM_CHECK(found);
+        if (!found) {
+          IM_ERRORF(
+              "face_number %d (from AggregateFaceLabelsFromTopology) not found in "
+              "AggregateFaceLabels' set",
+              labels_new[i].face_number);
+        }
       }
     };
   }

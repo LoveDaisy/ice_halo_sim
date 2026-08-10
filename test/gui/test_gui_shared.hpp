@@ -276,7 +276,9 @@ void StopPerfSimulation();
 // scripts/check_loop_fatal_asserts.py is the mechanical half of the same subject, from the other
 // side: a FATAL assert in a loop body, which ends the whole case at the first bad row without
 // saying so. The two rules point the same way — a table-driven loop reports one row and stops —
-// and this one is the half no script checks today.
+// and the script covers both this non-fatal-cascade half (a for-loop-nonfatal-cascade rule for the
+// `for` shape, a lambda-call-cascade rule for the named-lambda-called-twice-in-a-row shape) and the
+// fatal one.
 
 // Whether the item ImGui submitted is greyed out.
 //
