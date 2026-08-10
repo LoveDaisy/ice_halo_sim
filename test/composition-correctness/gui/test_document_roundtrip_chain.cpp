@@ -306,36 +306,65 @@ TEST(DocumentRoundtripChain, EveryProbedFieldSurvivesJsonRoundTrip) {
   }
 }
 
-// E1 — the aspect preset survives under its own name, for every preset and both orientations.
+// E1 — the aspect preset is spelled on disk the way files already on disk spell it, for every
+// preset and both orientations.
 //
-// Not a row in the probe table above, because a probe carries one value and one value cannot see
-// this field's failure mode. The preset is stored as a STRING (kAspectPresetJsonNames in
-// file_io.cpp) beside an enum, the reader walks that table and returns kFree for anything it does
-// not recognise, and the two are kept in step by nothing but a count static_assert. A row inserted
-// into one table and not the other therefore does two different things depending on where you
-// look: presets before the insertion point still round-trip, presets after it come back as the
-// NEIGHBOUR they were shifted onto or as kFree. A single-value probe lands on one of those
-// outcomes and reports the other two as green.
+// Not a row in the probe table above, and deliberately not a round trip either. The preset is
+// stored as a STRING (kAspectPresetJsonNames in file_io.cpp) beside an enum, and the writer and
+// the reader walk the SAME table — so a table shifted by one agrees with itself, and every preset
+// round-trips perfectly within one process. That is measured rather than reasoned: the round-trip
+// version of this case was written first, and shifting kAspectPresetJsonNames by one row left it
+// green.
 //
-// Both orientations are walked in the same loop rather than in a second case: aspect_portrait is a
-// plain bool whose whole reason for existing is to be read together with the preset, and the pair
-// is what ApplyAspectRatio consumes.
-TEST(DocumentRoundtripChain, EveryAspectPresetSurvivesUnderItsOwnJsonNameInBothOrientations) {
-  for (int i = 0; i < kAspectPresetCount; ++i) {
-    const auto preset = static_cast<AspectPreset>(i);
-    for (bool portrait : { false, true }) {
-      GuiState before = MinimalDocument();
-      before.aspect_preset = preset;
-      before.aspect_portrait = portrait;
+// What a shift does break is every file already on disk, which is why the expected spellings below
+// are literals rather than reads of the table under test. Both directions are needed: the write
+// side pins what lands in the file, and the read side pins what a file carrying that spelling comes
+// back as — separately, because AspectPresetFromString answers an unrecognised name with kFree
+// rather than an error, so a shifted table turns some saved documents into their neighbour and the
+// rest into "Free", with nothing on screen saying so.
+//
+// aspect_portrait rides along in the same loop rather than in a second case: it is a plain bool
+// with no table to misalign, and the pair is what ApplyAspectRatio consumes.
+TEST(DocumentRoundtripChain, EachAspectPresetKeepsItsOnDiskSpellingInBothOrientations) {
+  struct Row {
+    AspectPreset preset;
+    const char* json_name;
+  };
+  const Row kRows[] = {
+    { AspectPreset::kFree, "free" },
+    { AspectPreset::k16x9, "16:9" },
+    { AspectPreset::k3x2, "3:2" },
+    { AspectPreset::k4x3, "4:3" },
+    { AspectPreset::k1x1, "1:1" },
+    { AspectPreset::k2x1, "2:1" },
+    { AspectPreset::kMatchBg, "match_background" },
+  };
+  static_assert(sizeof(kRows) / sizeof(kRows[0]) == kAspectPresetCount,
+                "every AspectPreset needs a row: a preset with no expected spelling is untested");
 
-      GuiState after = MinimalDocument();
+  for (const Row& row : kRows) {
+    const char* label = kAspectPresetNames[static_cast<int>(row.preset)];
+    for (bool portrait : { false, true }) {
       // EXPECT, not ASSERT: a fatal assert here would return out of the whole loop and hide every
       // remaining preset, which is precisely the question this case is asked.
-      EXPECT_TRUE(DeserializeGuiStateJson(SerializeGuiStateJson(before), after))
-          << kAspectPresetNames[i] << ": DeserializeGuiStateJson rejected its own output";
-      EXPECT_EQ(static_cast<int>(after.aspect_preset), i) << "preset " << kAspectPresetNames[i] << " came back as "
-                                                          << kAspectPresetNames[static_cast<int>(after.aspect_preset)];
-      EXPECT_EQ(after.aspect_portrait, portrait) << kAspectPresetNames[i] << " orientation";
+      GuiState before = MinimalDocument();
+      before.aspect_preset = row.preset;
+      before.aspect_portrait = portrait;
+      const nlohmann::json written = nlohmann::json::parse(SerializeGuiStateJson(before));
+      EXPECT_EQ(written.value("aspect_ratio", std::string{}), row.json_name)
+          << label << " was written to disk under the wrong name";
+      EXPECT_EQ(written.value("aspect_portrait", !portrait), portrait) << label << " orientation, write side";
+
+      // Read side: a document carrying this literal spelling, and nothing else changed.
+      nlohmann::json on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+      on_disk["aspect_ratio"] = row.json_name;
+      on_disk["aspect_portrait"] = portrait;
+      GuiState after = MinimalDocument();
+      EXPECT_TRUE(DeserializeGuiStateJson(on_disk.dump(), after)) << row.json_name;
+      EXPECT_EQ(static_cast<int>(after.aspect_preset), static_cast<int>(row.preset))
+          << "a file saying \"" << row.json_name << "\" came back as "
+          << kAspectPresetNames[static_cast<int>(after.aspect_preset)];
+      EXPECT_EQ(after.aspect_portrait, portrait) << row.json_name << " orientation, read side";
     }
   }
 }
