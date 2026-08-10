@@ -97,9 +97,15 @@ lumice::RenderConfig MakeRc(lumice::LensParam::LensType t, float fov_deg, float 
   return cfg;
 }
 
+// The three forwards share one signature so the convention can be asserted over {surface} x {lens}
+// as a rule rather than as one near-identical case per surface. `lens_type` is the GUI integer,
+// which equals the LensParam::LensType enum value (render_config.hpp / gui_constants.hpp share the
+// 0..10 ordering), so one number drives both sides.
+using SurfacePxFn = bool (*)(int lens_type, float fov_deg, float view_az_deg, float world_az_deg, float* px_out);
+
 // Backend forward: returns horizontal pixel offset from image center (>0 RIGHT).
-bool BackendPx(lumice::LensParam::LensType t, float fov_deg, float view_az_deg, float world_az_deg, float* off_out) {
-  auto cfg = MakeRc(t, fov_deg, view_az_deg);
+bool BackendPx(int lens_type, float fov_deg, float view_az_deg, float world_az_deg, float* off_out) {
+  auto cfg = MakeRc(static_cast<lumice::LensParam::LensType>(lens_type), fov_deg, view_az_deg);
   lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
   auto pp = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(kW, kH)));
   WorldDir w = MakeWorldDir(world_az_deg);
@@ -112,8 +118,9 @@ bool BackendPx(lumice::LensParam::LensType t, float fov_deg, float view_az_deg, 
 }
 
 // GUI shader-mirror forward: horizontal pixel offset from viewport center
-// (ProjectWorldDirToScreen already returns center-origin, x-right pixels).
-bool GuiShaderPx(int lens_type, float fov_deg, float view_az_deg, float world_az_deg, float* px_out, float* py_out) {
+// (ProjectWorldDirToScreen already returns center-origin, x-right pixels). Reports py as well as
+// px, because the interaction read-back below has to be fed a full cross-validated pixel.
+bool GuiShaderPxPy(int lens_type, float fov_deg, float view_az_deg, float world_az_deg, float* px_out, float* py_out) {
   lumice::gui::ViewProjection vp;
   vp.lens_type = lens_type;
   vp.fov = fov_deg;
@@ -131,6 +138,11 @@ bool GuiShaderPx(int lens_type, float fov_deg, float view_az_deg, float world_az
   *px_out = p[0];
   *py_out = p[1];
   return true;
+}
+
+bool GuiShaderPx(int lens_type, float fov_deg, float view_az_deg, float world_az_deg, float* px_out) {
+  float py = 0.0f;
+  return GuiShaderPxPy(lens_type, fov_deg, view_az_deg, world_az_deg, px_out, &py);
 }
 
 // GUI interaction/label forward: horizontal pixel offset from viewport center.
@@ -168,9 +180,18 @@ bool GuiReadbackWorldY(int lens_type, float fov_deg, float view_az_deg, float px
   return true;
 }
 
-// Single-lens family (5 types). The GUI lens_type integers equal the
-// LensParam::LensType enum values (render_config.hpp / gui_constants.hpp share
-// the 0..10 ordering), so one enum value drives both sides.
+// The three surfaces the convention is asserted over, named so a red says which one flipped.
+struct Surface {
+  const char* name;
+  SurfacePxFn px;
+};
+constexpr Surface kSurfaces[] = {
+  { "backend", BackendPx },
+  { "gui_shader", GuiShaderPx },
+  { "gui_label", GuiLabelPx },
+};
+
+// Single-lens family (5 types).
 struct LensCase {
   lumice::LensParam::LensType t;
   float fov;
@@ -262,45 +283,28 @@ bool DualDiscOffset(int lens_type, bool hemi_up, bool y_positive, float* dx_out,
 
 }  // namespace
 
-// Surface 1: backend lm_proj::ProjectExitToPixel. Pins the
-// (projection_shared.h:237). Redundant with the golden absolute-column pin,
-// kept here so the GUI-binary cross-check has an in-suite backend anchor.
-TEST(RenderHandednessGuard, single_lens_backend) {
-  for (const auto& c : kSingleLens) {
-    float pos = 0.0f;
-    EXPECT_TRUE(BackendPx(c.t, c.fov, kSingleLensViewAz, kAzOffDeg, &pos));
-    EXPECT_TRUE(pos > 0.0f);  // +az → RIGHT (owner-decided: right = +az)
-    float neg = 0.0f;
-    EXPECT_TRUE(BackendPx(c.t, c.fov, kSingleLensViewAz, -kAzOffDeg, &neg));
-    EXPECT_TRUE(neg < 0.0f);  // -az → LEFT
-  }
-}
-
-// Surface 2: GUI shader mirror ProjectWorldDirToScreen.
-TEST(RenderHandednessGuard, single_lens_gui_shader) {
-  for (const auto& c : kSingleLens) {
-    auto lt = static_cast<int>(c.t);
-    float px = 0.0f;
-    float py = 0.0f;
-    EXPECT_TRUE(GuiShaderPx(lt, c.fov, kSingleLensViewAz, kAzOffDeg, &px, &py));
-    EXPECT_TRUE(px > 0.0f);  // +az → RIGHT (GUI is the reference side)
-    float pxn = 0.0f;
-    float pyn = 0.0f;
-    EXPECT_TRUE(GuiShaderPx(lt, c.fov, kSingleLensViewAz, -kAzOffDeg, &pxn, &pyn));
-    EXPECT_TRUE(pxn < 0.0f);  // -az → LEFT
-  }
-}
-
-// Surface 3: GUI interaction/label forward WorldDirToPixel.
-TEST(RenderHandednessGuard, single_lens_gui_label) {
-  for (const auto& c : kSingleLens) {
-    auto lt = static_cast<int>(c.t);
-    float px = 0.0f;
-    EXPECT_TRUE(GuiLabelPx(lt, c.fov, kSingleLensViewAz, kAzOffDeg, &px));
-    EXPECT_TRUE(px > 0.0f);  // +az → RIGHT
-    float pxn = 0.0f;
-    EXPECT_TRUE(GuiLabelPx(lt, c.fov, kSingleLensViewAz, -kAzOffDeg, &pxn));
-    EXPECT_TRUE(pxn < 0.0f);  // -az → LEFT
+// Surfaces 1-3 over the single-lens family: backend lm_proj::ProjectExitToPixel (which carries the
+// `xy.x = -xy.x` flip at projection_shared.h:237), the GUI shader mirror ProjectWorldDirToScreen,
+// and the GUI interaction/label forward WorldDirToPixel. Quantified over {surface} x {lens} rather
+// than written out per surface: the claim is one convention holding everywhere, and a flip on any
+// single surface fails exactly its own rows. The backend arm is redundant with the golden
+// absolute-column pin and kept anyway, so the GUI-binary cross-check has an in-suite anchor.
+TEST(RenderHandednessGuard, EverySurfacePutsPositiveAzimuthRightAcrossTheSingleLensFamily) {
+  for (const Surface& s : kSurfaces) {
+    for (const auto& c : kSingleLens) {
+      SCOPED_TRACE(testing::Message() << s.name << ", lens " << static_cast<int>(c.t));
+      float px = 0.0f;
+      if (!s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, kAzOffDeg, &px)) {
+        ADD_FAILURE() << s.name << " lens " << static_cast<int>(c.t) << ": positive-az projection failed";
+        continue;  // this surface/lens has no pixel to compare; the rest still get checked
+      }
+      EXPECT_GT(px, 0.0f);  // +az → RIGHT (owner-decided: right = +az)
+      if (!s.px(static_cast<int>(c.t), c.fov, kSingleLensViewAz, -kAzOffDeg, &px)) {
+        ADD_FAILURE() << s.name << " lens " << static_cast<int>(c.t) << ": negative-az projection failed";
+        continue;
+      }
+      EXPECT_LT(px, 0.0f);  // -az → LEFT
+    }
   }
 }
 
@@ -309,64 +313,60 @@ TEST(RenderHandednessGuard, single_lens_gui_label) {
 // test on this surface at all: ProjectDualFisheye and DualFisheyeRNorm were reachable only
 // through the equal-area path that the lens_proj pixel references happen to render.
 TEST(RenderHandednessGuard, dual_lens_gui_shader) {
-  for (const auto& c : kDualLens) {
-    const float expected = c.r_norm * kDualCircleRadius;
-    // Upper (left) disc: +y lands RIGHT of the disc center, -y lands LEFT, both at the
-    // type's own radius. A wrong r_norm formula moves the magnitude; a flipped az
-    // convention moves the side; a flipped hemisphere test moves the probe to the other
-    // disc entirely (an offset of +/-2*circle_radius, far outside the tolerance).
-    float dx = 0.0f;
-    float py = 0.0f;
-    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/true, /*y_positive=*/true, &dx, &py));
-    EXPECT_NEAR(dx, expected, 1e-3f);
-    EXPECT_NEAR(py, 0.0f, 1e-3f);
-    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/true, /*y_positive=*/false, &dx, &py));
-    EXPECT_NEAR(dx, -expected, 1e-3f);
-    EXPECT_NEAR(py, 0.0f, 1e-3f);
+  // Upper (left) disc: +y lands RIGHT of the disc center, -y lands LEFT, both at the type's own
+  // radius. A wrong r_norm formula moves the magnitude; a flipped az convention moves the side; a
+  // flipped hemisphere test moves the probe to the other disc entirely (an offset of
+  // +/-2*circle_radius, far outside the tolerance). The lower (right) disc is the MIRROR of it —
+  // same radius, opposite side — and that pair is what pins the hemisphere sign split: equalizing
+  // the two discs passes both upper rows and fails both lower ones.
+  struct Probe {
+    bool hemi_up;
+    bool y_positive;
+    float side;  // expected sign of the in-disc offset
+  };
+  constexpr Probe kProbes[] = {
+    { true, true, +1.0f },
+    { true, false, -1.0f },
+    { false, true, -1.0f },
+    { false, false, +1.0f },
+  };
 
-    // Lower (right) disc: the MIRROR of the above — same radius, opposite side. This pair
-    // is what pins the hemisphere sign split; equalizing the two discs passes every
-    // assertion above and fails both of these.
-    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/false, /*y_positive=*/true, &dx, &py));
-    EXPECT_NEAR(dx, -expected, 1e-3f);
-    EXPECT_NEAR(py, 0.0f, 1e-3f);
-    ASSERT_TRUE(DualDiscOffset(c.lens_type, /*hemi_up=*/false, /*y_positive=*/false, &dx, &py));
-    EXPECT_NEAR(dx, expected, 1e-3f);
-    EXPECT_NEAR(py, 0.0f, 1e-3f);
+  for (const auto& c : kDualLens) {
+    for (const Probe& p : kProbes) {
+      SCOPED_TRACE(testing::Message() << "lens " << c.lens_type << ", hemi_up=" << p.hemi_up
+                                      << ", y_positive=" << p.y_positive);
+      float dx = 0.0f;
+      float py = 0.0f;
+      if (!DualDiscOffset(c.lens_type, p.hemi_up, p.y_positive, &dx, &py)) {
+        ADD_FAILURE() << "lens " << c.lens_type << ", hemi_up=" << p.hemi_up << ", y_positive=" << p.y_positive
+                      << ": projection failed";
+        continue;  // this probe has no offset to compare; the rest still get checked
+      }
+      EXPECT_NEAR(dx, p.side * c.r_norm * kDualCircleRadius, 1e-3f);
+      EXPECT_NEAR(py, 0.0f, 1e-3f);
+    }
   }
 }
 
 // --- Globe: intentionally OPPOSITE side (LEFT for +az) because globe is an
-// outside-in view (the GUI lens math was aligned to the CLI; backend `-cx`). Pin
-// per surface so equalizing globe with the single-lens family cannot slip
-// through silently. gui_label globe uses WorldDirToPixel's globe branch.
-TEST(RenderHandednessGuard, globe_backend) {
-  float pos = 0.0f;
-  EXPECT_TRUE(BackendPx(lumice::LensParam::kGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &pos));
-  EXPECT_TRUE(pos < 0.0f);  // globe +az → LEFT (opposite of single-lens)
-  float neg = 0.0f;
-  EXPECT_TRUE(BackendPx(lumice::LensParam::kGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &neg));
-  EXPECT_TRUE(neg > 0.0f);  // globe -az → RIGHT
-}
-
-TEST(RenderHandednessGuard, globe_gui_shader) {
-  float px = 0.0f;
-  float py = 0.0f;
-  EXPECT_TRUE(GuiShaderPx(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &px, &py));
-  EXPECT_TRUE(px < 0.0f);  // globe +az → LEFT
-  float pxn = 0.0f;
-  float pyn = 0.0f;
-  EXPECT_TRUE(GuiShaderPx(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &pxn, &pyn));
-  EXPECT_TRUE(pxn > 0.0f);  // globe -az → RIGHT
-}
-
-TEST(RenderHandednessGuard, globe_gui_label) {
-  float px = 0.0f;
-  EXPECT_TRUE(GuiLabelPx(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &px));
-  EXPECT_TRUE(px < 0.0f);  // globe +az → LEFT
-  float pxn = 0.0f;
-  EXPECT_TRUE(GuiLabelPx(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &pxn));
-  EXPECT_TRUE(pxn > 0.0f);  // globe -az → RIGHT
+// outside-in view (the GUI lens math was aligned to the CLI; backend `-cx`). Asserted per surface,
+// same as above, so equalizing globe with the single-lens family cannot slip through silently.
+// gui_label globe uses WorldDirToPixel's globe branch.
+TEST(RenderHandednessGuard, EverySurfacePutsPositiveAzimuthLeftOnTheGlobe) {
+  for (const Surface& s : kSurfaces) {
+    SCOPED_TRACE(s.name);
+    float px = 0.0f;
+    if (!s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, kAzOffDeg, &px)) {
+      ADD_FAILURE() << s.name << ": positive-az globe projection failed";
+      continue;  // this surface has no pixel to compare; the rest still get checked
+    }
+    EXPECT_LT(px, 0.0f);  // globe +az → LEFT (opposite of single-lens)
+    if (!s.px(lumice::gui::kLensTypeGlobe, kGlobeFov, kGlobeViewAz, -kAzOffDeg, &px)) {
+      ADD_FAILURE() << s.name << ": negative-az globe projection failed";
+      continue;
+    }
+    EXPECT_GT(px, 0.0f);  // globe -az → RIGHT
+  }
 }
 
 // --- Interaction read-back: pins the GUI inverse (PixelToWorldDir) az-axis
@@ -378,20 +378,22 @@ TEST(RenderHandednessGuard, globe_gui_label) {
 // control 4c (which flips the input pixel), not the backend controls.
 TEST(RenderHandednessGuard, interaction_readback) {
   for (const auto& c : kSingleLens) {
-    auto lt = static_cast<int>(c.t);
-    // +az: input world y > 0 ⇒ recovered world y must be > 0.
-    float px = 0.0f;
-    float py = 0.0f;
-    EXPECT_TRUE(GuiShaderPx(lt, c.fov, kSingleLensViewAz, kAzOffDeg, &px, &py));
-    float wy = 0.0f;
-    EXPECT_TRUE(GuiReadbackWorldY(lt, c.fov, kSingleLensViewAz, px, py, &wy));
-    EXPECT_TRUE(wy > 0.0f);
-    // -az: input world y < 0 ⇒ recovered world y must be < 0.
-    float pxn = 0.0f;
-    float pyn = 0.0f;
-    EXPECT_TRUE(GuiShaderPx(lt, c.fov, kSingleLensViewAz, -kAzOffDeg, &pxn, &pyn));
-    float wyn = 0.0f;
-    EXPECT_TRUE(GuiReadbackWorldY(lt, c.fov, kSingleLensViewAz, pxn, pyn, &wyn));
-    EXPECT_TRUE(wyn < 0.0f);
+    const auto lt = static_cast<int>(c.t);
+    for (const float az : { kAzOffDeg, -kAzOffDeg }) {
+      SCOPED_TRACE(testing::Message() << "lens " << lt << ", az " << az);
+      float px = 0.0f;
+      float py = 0.0f;
+      if (!GuiShaderPxPy(lt, c.fov, kSingleLensViewAz, az, &px, &py)) {
+        ADD_FAILURE() << "lens " << lt << ", az " << az << ": gui_shader forward projection failed";
+        continue;  // no pixel to feed the read-back; the rest still get checked
+      }
+      float wy = 0.0f;
+      if (!GuiReadbackWorldY(lt, c.fov, kSingleLensViewAz, px, py, &wy)) {
+        ADD_FAILURE() << "lens " << lt << ", az " << az << ": interaction read-back failed";
+        continue;
+      }
+      // The sign of the recovered world y must follow the sign of the input azimuth.
+      EXPECT_GT(wy * az, 0.0f);
+    }
   }
 }

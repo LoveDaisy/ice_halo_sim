@@ -21,7 +21,7 @@
 // test/gui/references/_thresholds.json. This scene renders pixel-identical across runs, so
 // there is no finite PSNR distribution to take mean − 3σ from and the driver reports its
 // deterministic floor instead — the same 40 dB the repo's other deterministic GL
-// comparisons use (screenshot/left_panel_psnr, screenshot/crystal_psnr).
+// comparisons use (visual/left_panel, visual/crystal_preview_prism).
 static constexpr double kPsnrThreshold = 40.0;
 
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
@@ -32,7 +32,7 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
     g_fullframe_capture.Reset();
 
     // Eliminate hover state: a highlighted card baked into the reference would make
-    // every later no-hover run fail (same rationale as screenshot/left_panel_psnr).
+    // every later no-hover run fail (same rationale as visual/left_panel).
     ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
     ctx->Yield(3);
 

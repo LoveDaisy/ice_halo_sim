@@ -43,7 +43,7 @@ pre-registered hard thresholds and anti-drift discipline) and a casual unit asse
 "a gtest TEST()", but they are not the same *kind* of test and must not be maintained by the
 same rules.
 
-**Decision**: the primary axis is **verification purpose** (seven layers, §1). The secondary
+**Decision**: the primary axis is **verification purpose** (eight layers, §1). The secondary
 dimension is **subsystem** (a layer-internal tag, §2). Harness/language is an implementation
 detail of each layer, never the primary axis.
 
@@ -51,9 +51,27 @@ A layer is a **rule-homogeneous unit**: every test in a layer shares the same or
 threshold discipline, and cadence. This is the test that decides layer membership — see the
 `test_gui_perf` case in §1 (performance) and the cross-cutting rule §4.4.
 
+Purpose alone does not fully separate two of the eight layers: `unit-correctness`,
+`composition-correctness`, and the functional/interaction slice of `gui` can all be asked to
+prove the same kind of proposition about `src/gui/` correct. What actually separates them is
+two more axes, orthogonal to each other and to the layer/subsystem split above (§1.7 and §3
+give the full judgment procedure):
+
+- **Chain length** — how many `src/` units must cooperate for the proposition to be provable
+  false: one (`unit-correctness`), several but short of the whole app
+  (`composition-correctness`), or the whole application (`e2e-correctness`).
+- **Mechanical need** — what it takes to falsify the proposition: nothing (a plain function
+  call), a real rendered frame, or a synthesized input event (click/drag/keypress). Only the
+  last two ever require `gui`'s harness.
+
+These two axes were, for a long time, collapsed into one: everything touching `src/gui/` was
+routed by mechanical need alone, which is why `composition-correctness` did not exist as a
+named layer until propositions that needed zero mechanics but spanned multiple units were found
+already living, unlabelled, inside both `unit-correctness` and `gui` (§1.2, §1.7).
+
 ---
 
-## §1 The seven layers
+## §1 The eight layers
 
 Each layer is defined by six fields: **purpose / oracle / threshold convention / run cadence /
 naming convention / physical location**. Cadence values: `CI-fast` (every push, fast leg),
@@ -78,7 +96,35 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   also gets them this layer's every-commit cadence; the e2e job runs on PR/main only and waits
   on a build.
 
-### §1.2 `golden-analytic`
+### §1.2 `composition-correctness`
+
+- **Purpose**: several components, each already correct in isolation, cooperate correctly across
+  a call chain that a single-unit test cannot see — a document round trip, a cross-channel
+  consistency check, a multi-step lifecycle. This is `unit-correctness`'s oracle discipline
+  applied to a proposition that is *about* more than one collaborating unit, not a weaker or
+  looser layer.
+- **Oracle**: the same family as `unit-correctness` — hand-computed expected values, invariants,
+  round-trip identities asserted in the test itself. No statistical threshold, no cross-backend
+  dependency, no live rendering.
+- **Threshold convention**: exact or tight numeric tolerance, same as `unit-correctness`.
+- **Cadence**: `CI-fast` — every commit.
+- **Naming**: `test_<chain-topic>_chain.cpp`; gtest `TEST(<ChainTopic>Chain, <behavior>)`, where
+  `<chain-topic>` names the collaboration (e.g. document round trip, run lifecycle), never a
+  single `src/` file — a chain that spans several units does not compress into one unit's name.
+- **Physical location**: `test/composition-correctness/<subsystem>/`; today populated only by
+  `test/composition-correctness/gui/`.
+- **Membership test (what distinguishes this layer from its two neighbors)**: does falsifying the
+  proposition require **two or more collaborating `src/` units** (not one built only to construct
+  a fixture for the other), **and** does it need **neither a live frame nor a synthesized input
+  event**? Both must hold. Chain length alone does not send a case here — a chain that also needs
+  a rendered frame or a click/drag/keypress belongs to `gui` regardless of how many units it
+  spans (§1.7); a chain that needs the whole running application belongs to `e2e-correctness`
+  (§1.5). See §3 for the full decision procedure and §1.7 for the worked evidence that chain
+  length and mechanical need are independent — 21 cases / 621 lines were found spanning 2–4
+  `src/gui/` units while requiring no runtime mechanics at all, which is what first made this
+  layer's existence undeniable.
+
+### §1.3 `golden-analytic`
 
 - **Purpose**: the pipeline (or a stage of it) reproduces a **closed-form physical truth** —
   an analytic value derived independently of the simulator (e.g. a projection formula, a
@@ -95,7 +141,7 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   in `unit_test` (e.g. the analytic anchor inside `test_metal_trace_parity.cpp`) and possibly
   in `test_projection` / `test_optics`.
 
-### §1.3 `parity-cross-backend`
+### §1.4 `parity-cross-backend`
 
 - **Purpose**: a non-legacy backend (Metal; future CUDA) is statistically equivalent to the
   **legacy CPU** reference for the same scene.
@@ -115,7 +161,7 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   cross-backend equivalent — and confirm each type truly runs on the GPU rather than silently
   falling back to legacy CPU. Both consume the shared battery `test/e2e/_projection_battery.py`.
 
-### §1.4 `e2e-correctness`
+### §1.5 `e2e-correctness`
 
 - **Purpose**: the **whole CLI pipeline** runs end-to-end and produces the right image / output
   for a real config.
@@ -127,7 +173,7 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 - **Naming**: `test_<feature>.py` under `test/e2e/`.
 - **Physical location**: target-state `test/e2e-correctness/`; current `test/e2e/`.
 
-### §1.5 `performance`
+### §1.6 `performance`
 
 - **Purpose**: a backend's **throughput** is at or above baseline — the GPU/single-engine route
   must beat legacy CPU, not merely run.
@@ -149,15 +195,25 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   this layer — their oracle is an absolute frame budget, not a ratio to legacy CPU. They belong
   to `gui` (responsiveness tag). See §4.4.
 
-### §1.6 `gui`
+### §1.7 `gui`
 
-- **Purpose**: the GUI is functionally correct, visually correct, and responsive. Three tags
-  within one layer: **functional** (widget behavior, file ops, interaction), **visual**
-  (rendered output vs reference), **responsiveness** (interactive delivery of the live loop —
+- **Purpose**: **a positive definition, not a residual one** — a proposition belongs here only
+  if falsifying it requires a real rendered frame or a synthesized input event
+  (click/drag/keypress/window op) through the imgui test engine. This is narrower than "anything
+  touching `src/gui/`": a proposition about `src/gui/` code that needs neither belongs to
+  `unit-correctness` (§1.1) or `composition-correctness` (§1.2) instead, by chain length. Two
+  tags within one layer: **functional** (widget behavior and interaction — the widget reads or
+  writes the right state, or reacts correctly to the input event) and **visual** (rendered output
+  vs reference). A third, **responsiveness**, covers interactive delivery of the live loop —
   frame interval, commit→first-upload latency, **and ray-delivery counts such as rays/restart
-  and upload_rays in steady-state / slider-drag scenarios**). The ray-delivery metrics
-  *reflect* throughput but their oracle is the GUI interactive loop, not a legacy-CPU ratio —
-  so they live here, not in `performance` (see §4.4).
+  and upload_rays in steady-state / slider-drag scenarios**. The ray-delivery metrics *reflect*
+  throughput but their oracle is the GUI interactive loop, not a legacy-CPU ratio — so they live
+  here, not in `performance` (see §4.4).
+  Earlier revisions of this layer also carried a **functional** sub-bucket for file
+  I/O propositions ("file ops"); those did not share this layer's oracle (they needed neither a
+  frame nor an input event) and have moved to `unit-correctness` or `composition-correctness` by
+  chain length, same as any other non-mechanical proposition — see §2's name-overlap caution and
+  §3.
 - **Oracle**: the imgui test engine drives the app; **visual** asserts against tracked
   reference images (PSNR, per-scene thresholds in `_thresholds.json`); **responsiveness**
   asserts against absolute frame-latency budgets; **functional** asserts widget/state outcomes.
@@ -165,12 +221,13 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   AGENTS.md lens_proj regen); responsiveness = absolute latency budgets; functional = exact.
 - **Cadence**: `PR`, plus the two reference groups CI runs on every push under `xvfb-run` +
   llvmpipe (§4.6). Requires a display server unless skipped with `LUMICE_SKIP_GUI_TESTS=1`.
-- **Naming**: `test_gui_<aspect>.cpp`; references under `test/gui/references/`.
-- **Physical location**: target-state `test/gui/<tag>/`; current `test/gui/` (+ the
+- **Naming**: `test_<aspect>.cpp` (functional/visual) or `test_gui_<aspect>.cpp` where the
+  historical name predates this convention; references under `test/gui/references/`.
+- **Physical location**: `test/gui/<tag>/` (`functional/`, `visual/`, `responsiveness/`) + the
   pytest-driven `test_metal_gui_acceptance.py`, a gui-layer test that happens to run through
-  the e2e harness — a textbook "layer ≠ directory" case the purpose axis exists to handle).
+  the e2e harness — a textbook "layer ≠ directory" case the purpose axis exists to handle.
 
-### §1.7 `regression-sentinel`
+### §1.8 `regression-sentinel`
 
 - **Purpose**: a specific historical bug does not come back.
 - **Oracle**: the **issue's reproduction scenario** — a sentinel must reproduce the original
@@ -202,7 +259,7 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 
 > **Name-overlap caution**: the `gui` *tag* here is only a layer-internal subsystem label —
 > e.g. a GUI-component unit test lives at `test/unit-correctness/gui/`. It is **not** the same
-> thing as the `gui` *layer* (§1.6, physical `test/gui/`), which spans functional/visual/
+> thing as the `gui` *layer* (§1.7, physical `test/gui/`), which spans functional/visual/
 > responsiveness and is keyed by purpose, not subsystem. Tag ≠ layer despite the shared word.
 >
 > That one directory is compiled by **two** CMake targets, and the split is a LINK boundary, not
@@ -212,6 +269,14 @@ subsystem axis would re-mix unit and perf, which is exactly what we are leaving 
 > same `unit-correctness` LABEL — only the link line differs, so `ctest -L unit-correctness`
 > selects both. `gui_unit_test` creates no window and no GL context; a case that needs a live
 > frame belongs in the `gui` layer (`test/gui/`, target `gui_test`) instead.
+>
+> The `gui` *tag* is not the only other place `src/gui/` propositions land, either: a case that
+> spans ≥2 collaborating units but needs no live frame or input event is `composition-correctness`
+> (§1.2), not `gui` — its own `gui`-subsystem directory is `test/composition-correctness/gui/`.
+> Unlike `unit-correctness`'s `gui` tag, `composition-correctness`'s is **not** split across two
+> CMake targets: `composition_correctness_test` is the only target that compiles it, since every
+> case there already needs `lumice_gui_obj` (there is no header-only-and-therefore-`lumice_obj`-
+> only member of a *chain* the way a single unit's test can be).
 
 How a tag is encoded depends on the layer's physical form (§6): a subdirectory
 (`test/<layer>/<subsystem>/`) for layers with a natural subsystem split, or a CTest
@@ -226,32 +291,52 @@ the physical blueprint in §6 — this tree decides *membership*, §6 decides *p
 
 ```
 1. Is X a historical bug I'm preventing from recurring?
-   → YES → regression-sentinel. Use the issue's repro scenario verbatim. (§1.7)
+   → YES → regression-sentinel. Use the issue's repro scenario verbatim. (§1.8)
    → NO  → continue.
 
 2. Does X need the whole CLI pipeline to run (produces an image / CLI output)?
    (A GUI-app harness driving the whole pipeline — e.g. test_metal_gui_acceptance via
     pytest — is NOT a CLI pipeline; answer NO here and route through step 3.)
    → YES → Is the oracle a reference image / output, or a throughput number?
-            • image/output correctness → e2e-correctness (§1.4)
-            • throughput vs legacy CPU → performance (§1.5)
+            • image/output correctness → e2e-correctness (§1.5)
+            • throughput vs legacy CPU → performance (§1.6)
    → NO  → continue.
 
-3. Is X about the GUI (widget behavior, rendered view, responsiveness)?
-   → YES → gui, pick a tag: functional / visual / responsiveness. (§1.6)
-            (Responsiveness/frame-latency stays here, NOT performance — §4.4.)
+3. Does falsifying X require a live rendered frame, or a synthesized input event
+   (click/drag/keypress/window op) through the imgui test engine?
+   (Ask this about the PROPOSITION, not the code it happens to be written against today — a
+    chain that could be asserted without ever touching `ctx` still answers NO here even if an
+    existing case drives it through the GUI. §1.2's honest-boundary note applies.)
+   → YES → gui, pick a tag: functional (widget behavior, interaction) / visual /
+            responsiveness. (§1.7) (Responsiveness/frame-latency stays here, NOT
+            performance — §4.4.)
    → NO  → continue.
 
-4. Does X compare a non-legacy backend (Metal/CUDA) against legacy CPU?
+4. Does falsifying X require ≥2 collaborating `src/` units acting together — a round trip,
+   a cross-channel consistency check, a multi-step lifecycle? (A unit invoked only to build
+   a fixture for the one actually under test does not count — the proposition must be ABOUT
+   the collaboration, not merely exercise code that happens to call another unit.)
+   → YES → composition-correctness. (§1.2)
+   → NO  → continue.
+
+5. Does X compare a non-legacy backend (Metal/CUDA) against legacy CPU?
    → YES → parity-cross-backend. Oracle = legacy CPU + the full §4.2 battery
-            (correlation alone is insufficient). (§1.3)
+            (correlation alone is insufficient). (§1.4)
    → NO  → continue.
 
-5. Does X assert against a closed-form / analytic physical truth?
-   → YES → golden-analytic. (§1.2)
+6. Does X assert against a closed-form / analytic physical truth?
+   → YES → golden-analytic. (§1.3)
    → NO  → unit-correctness. Tag by subsystem
             (core/backend/server/gui/config/util/scripts). (§1.1)
 ```
+
+Steps 3 and 4 are the mechanical-need axis and the chain-length axis from §1's opening note,
+asked in the order that matches how the old, purpose-collapsed routing used to fail: mechanical
+need first, because that is the question the pre-`composition-correctness` tree already asked
+(§1.7's "Purpose" now answers it *positively* instead of by exclusion) — chain length second,
+so a proposition that clears step 3's NO does not fall straight into `unit-correctness` by
+default the way it used to. Landing in `unit-correctness` now requires clearing step 4's NO too,
+not just failing to be about the GUI.
 
 Then: pick the subsystem tag (§2), and place per §6. *Concrete target / path / marker: see §6.*
 
@@ -277,7 +362,7 @@ A `parity-cross-backend` test therefore must **not** rest on correlation alone. 
 1. **Cross-seed self-consistency** — the backend agrees with itself across RNG seeds (catches
    under-sampling that correlation smooths over).
 2. **Total energy conservation** — emitted energy is accounted for across MS layers.
-3. **Golden / analytic anchor** — at least one configuration with a closed-form answer (§1.2).
+3. **Golden / analytic anchor** — at least one configuration with a closed-form answer (§1.3).
 4. **Human-eye check** — a rendered comparison a human actually looked at.
 5. **Revert counter-check** — confirm the test *fails* when the fix is reverted (proves the
    test has teeth).
@@ -350,7 +435,7 @@ test; "oracle = ratio to legacy CPU" is.**
 
 ### §4.5 Enforcement: the `gui_test` / `gui_unit_test` split is a gate, not a convention
 
-§1.6 and §5 place a `src/gui/` test by whether it needs a live frame. That placement decides
+§1.7 and §5 place a `src/gui/` test by whether it needs a live frame. That placement decides
 whether the test runs in CI at all — `gui_test` needs a display, which only one runner leg
 supplies and only for the reference groups named in §4.6, while `gui_unit_test` links the same
 object library with no window, no GL context and no ImGui test engine, so it runs on every
@@ -621,17 +706,26 @@ push, somewhere else.
 
 The axis `auto_ev` *did* hold exclusively — the display path — turned out not to be exclusive to
 it either. `test_gui_lens_projection.cpp` reads the same `snapshot_intensity` / `ev_auto` state
-and sets exposure through the identical code path the retired `test_gui_auto_ev.cpp` did, and
-`test/unit-correctness/gui/test_ev_auto.cpp` exercises the auto-EV computation itself with four
-deterministic assertions that still run in CI on all three platforms. Once the simulation-axis
-scenes are attributed to `test_smoke.py` and the auto-EV-pipeline scenes to `test_ev_auto.cpp`,
-the only territory `auto_ev` held alone was the zenith/nadir markers and coordinate grid drawn by
+and sets exposure through the identical code path the retired `test_gui_auto_ev.cpp` did, and the
+`EvAuto` suite (`test/unit-correctness/gui/test_gui_widget_rules.cpp`, `unit_correctness_test`
+target) exercises the auto-EV computation itself with deterministic assertions that still run in
+CI on all three platforms. Once the simulation-axis scenes are attributed to `test_smoke.py` and
+the auto-EV-pipeline scenes to the `EvAuto` suite, the only territory `auto_ev` held alone was the
+zenith/nadir markers and coordinate grid drawn by
 `overlayAuxLines()` — one scene's worth. That scene, `overlay_ea`, was kept and migrated into
 `lens_proj` rather than retired with the rest.
 
 ---
 
 ### §4.8 Why the GUI suite is shaped the way it is: a rule that is not data forces instance tests
+
+**Historical diagnosis, kept for the mechanism, not the census.** The numbers immediately below
+describe the suite as measured before the layer split and rewrite recorded in §4.8.2 — a whole
+layer (`composition-correctness`, §1.2) has been added since, and the two GUI targets counted
+here no longer hold the same cases they held at measurement time. The mechanism this section
+argues for — a rule that stays control flow instead of becoming data forces its test into
+instance shape — is what motivated that rewrite and is unaffected by the count going stale;
+§4.8.1 and §4.8.2 record what changed as a result.
 
 Of the 721 registered cases across `gui_test` and `gui_unit_test`, **23 assert a proposition
 quantified over a set derived from production code** — a field registry, an enum, a capability
@@ -760,6 +854,69 @@ evidence and improvement is unlikely; T1 alone gives up six failure classes enti
 placement, concrete widget interaction, filter SOP grammar, color/compositing, malformed-input
 degradation, multi-monitor/window-size) and is not a shippable suite by itself.
 
+#### §4.8.2 The composition-correctness split and its line-count outcome (2026-08-10)
+
+Both `composition-correctness` (§1.2) and the narrowed `gui` (§1.7) came out of following the
+diagnosis above through to a structural conclusion: `functional`'s three-way residual definition
+(widget behavior, file ops, interaction — three unrelated things united only by "not visual, not
+responsiveness") was traced to its cause, `gui` was rewritten as a positive definition, and the
+lines that were already making cross-unit claims while filed under a single-unit layer's name got
+their own layer instead of a longer caveat paragraph.
+
+A separate, harder target ran alongside that split: cut the suite's de-commented line count from a
+21,336-line baseline by 30% (≤14,900 lines), stretch goal 40% (≤12,800). The rewrite reached
+**19,485 lines / 64 files / 556 cases across the three layers now covering `src/gui/`** — an 8.7%
+reduction, short of both figures. This is recorded as **not achieved**, by owner decision, for two
+measured reasons, not by redefining the target or loosening what counts toward it:
+
+1. **The coverage expansion this rewrite paid for was a one-time, non-negotiable cost.** Writing
+   by panel instead of by legacy file surfaced four `src/gui/` units — together roughly a quarter
+   of `src/gui/`'s own line count — that had **zero** unit-level coverage before this rewrite;
+   closing that hole is what grew the suite, not redundant instance tests, and it does not recur.
+2. **What remains of the gap is boilerplate density, not duplicated assertions.** A measured
+   post-rewrite audit of `test/gui/` found roughly two-thirds of its lines are scene setup and
+   fixture staging rather than assertions, with a meaningful share of that staging near-identical
+   across cases — a shape that further compression would have to address by extracting shared
+   fixtures, not by deleting coverage. The owner weighed that extraction against a readability
+   cost (over-extracting fixtures can make an individual case harder to read in isolation) and
+   scoped it out of this rewrite rather than force it under the line-count target.
+
+The rewrite's other structural outcome — a gate closing a defect shape found repeatedly during
+this work — is recorded in §4.9.
+
+### §4.9 Fourth gate: a fatal assert must not sit directly inside a repeatable scope
+
+`scripts/check_loop_fatal_asserts.py` is a **fourth** diff-scoped entry point, alongside
+`check_policies.py` (whole-tree), `check_new_refs.py` (prose) and `check_new_gui_tests.py`
+(AGENTS.md, "Testing and Platform Notes"). Same discipline as the other three: **the checker is
+the rule, not an approximation of it** — 0 hits is the evidence a change is clean, not a
+supplement to a hand-written review checklist. It runs in the CI `new-refs` job on PRs against
+the merge-base and in the pre-commit hook against the staged diff, scanning added lines under
+`test/` (not limited to `test/gui/` — the defect shape is not GUI-specific, only GUI-suite-heavy
+in practice).
+
+**The rule it enforces**: in a scope that executes repeatedly, a non-terminating error report
+must not be followed by code that keeps driving the same test context. Concretely: a `for` loop
+whose body calls a fatal assert (gtest's `ASSERT_*`, or this repo's `IM_CHECK*` from
+ImGuiTestEngine) directly aborts the *enclosing function* on the first failing row — silently
+hiding every row after it, which is a correctness gap in the test rather than a style
+complaint. `IM_ERRORF` (this suite's non-fatal report) has the mirror failure: because it does
+not return, a loop that continues past it keeps driving an already-invalid UI state, producing
+cascading false reds attributed to the wrong row.
+
+This rule generalized four times over the course of the rewrite that introduced it, each
+generalization closing the same rule's next free variable rather than a new, unrelated defect:
+syntactic shape (a fatal assert written directly in a loop body) → fatality (`IM_CHECK*` is
+fatal, `IM_ERRORF` looked safe but shares the failure through non-termination rather than an
+early return) → order (a loop that reports on iteration N and keeps driving on N+1 cascades the
+same way a same-iteration report does — the loop wraps back around) → binding (a rewritten
+lambda that renames its `ImGuiTestContext*` parameter away from the literal identifier the first
+version of the scan matched still drives the context; the scan now binds whatever the enclosing
+lambda's actual parameter name is, never a hardcoded identifier). A checker that stops at the
+first of these generalizations is worse than no checker: a clean scan result is read as "this
+defect shape does not occur here," and a rule with a known-wrong negative case manufactures that
+false confidence on exactly the inputs it was supposed to catch.
+
 ---
 
 ## §5 Physical-layout naming conventions
@@ -769,10 +926,10 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
 - **CMake targets**: target-state introduces purpose-named targets in place of the flat
   `unit_test`. **Naming pattern: `<layer-snake>_test`** (snake_case, matching the existing
   `unit_test` / `integration_test` convention) — e.g. `unit_correctness_test`, `parity_test`,
-  `golden_analytic_test`; the GUI layer's target is `gui_test` (renamed from `LumiceGUITests`
-  in 270.5). Whether targets are split further per subsystem (one `unit_correctness_test` vs
-  `unit_correctness_core_test` + …) is **270.3's call**, but the *pattern* above is fixed here so
-  the naming does not drift.
+  `golden_analytic_test`, `composition_correctness_test`; the GUI layer's target is `gui_test`
+  (renamed from `LumiceGUITests` in 270.5). Whether targets are split further per subsystem (one
+  `unit_correctness_test` vs `unit_correctness_core_test` + …) is **270.3's call**, but the
+  *pattern* above is fixed here so the naming does not drift.
   **Exception, stated as a rule rather than as a list of cases**: when a target exists because of
   a *link* boundary rather than a layer/subsystem boundary, name it after the link dependency
   instead of `<layer-snake>_test`. `gui_test` is the original instance (it is the `gui` layer's
@@ -782,11 +939,15 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
   `lumice_gui_obj` dependency. Layer identity lives in the CTest LABEL, which is where selectors
   read it from anyway, so the target name is free to carry the link fact instead.
 - **CTest LABELS**: target-state adds a purpose-axis label per layer:
-  `unit-correctness`, `golden-analytic`, `parity` (the LABEL is the abbreviated form of the
-  `parity-cross-backend` layer — the full name is verbose for CMake; this is the **only**
-  abbreviated label, do not similarly truncate the others — `unit-correctness` must not become
-  `unit`, which would collide with the legacy mechanism-axis label), `performance`, `gui`,
-  `regression-sentinel`. The current labels are mechanism-axis (`unit` / `integration` / `gui`).
+  `unit-correctness`, `composition-correctness`, `golden-analytic`, `parity` (the LABEL is the
+  abbreviated form of the `parity-cross-backend` layer — the full name is verbose for CMake;
+  this is the **only** abbreviated label, do not similarly truncate the others —
+  `unit-correctness` must not become `unit`, which would collide with the legacy mechanism-axis
+  label, and `composition-correctness` must not become `composition` for the same reason),
+  `performance`, `gui`, `regression-sentinel`. The current labels are mechanism-axis (`unit` /
+  `integration` / `gui`). `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"`
+  is the selector `scripts/test.sh`'s `quick`/`full`/`pr` modes use to pick up all four
+  non-flat layers with no per-target knowledge.
 - **pytest markers**: `slow` (requires shared-lib build; excluded from CI fast path) and
   `heavy` (slow + redundant parity variant; deselected per-PR via `not heavy`) are run-cadence
   markers and stay. Layer/subsystem are expressed via directory + marker in the target state.
@@ -817,27 +978,28 @@ any rename/move/marker-change that misses one turns CI red:
 
 ---
 
-## §6 Existing tests → seven layers (exhaustiveness map)
+## §6 Existing tests → eight layers (exhaustiveness map)
 
-This table proves the seven layers cover the entire existing suite with **no orphans**, and is
+This table proves the eight layers cover the entire existing suite with **no orphans**, and is
 the migration source-of-truth for 270.3–270.7. The **Migration constraint** column flags
 health items that must not be moved/deleted casually.
 
 > Target-state directory rule (resolves the "subdirectory or flat?" ambiguity for 270.3):
-> layers with a **natural subsystem split** (`unit-correctness`, `parity-cross-backend`,
-> `golden-analytic`) use `test/<layer>/<subsystem>/`; layers whose subsystem boundary is
-> fuzzy (`e2e-correctness`, `performance`, `regression-sentinel`) stay **flat** as
-> `test/<layer>/`, with subsystem encoded by marker/label. The `gui` layer uses
+> layers with a **natural subsystem split** (`unit-correctness`, `composition-correctness`,
+> `parity-cross-backend`, `golden-analytic`) use `test/<layer>/<subsystem>/`; layers whose
+> subsystem boundary is fuzzy (`e2e-correctness`, `performance`, `regression-sentinel`) stay
+> **flat** as `test/<layer>/`, with subsystem encoded by marker/label. The `gui` layer uses
 > `test/gui/<tag>/` (functional/visual/responsiveness).
 
 | Layer | Target-state path | Current C++ (unit/integration) | Current e2e (pytest) | Current gui | Migration constraint |
 |-------|-------------------|-------------------------------|----------------------|-------------|----------------------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_axis_presets`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_ev_auto`, `test_proj`(integration), `test_integration_main`; in the second target, `gui_unit_test` (see below): `test_defaults_diff`, `test_smoke`, `test_crystal_renderer`, `test_state_reconcile`, `test_project_world_dir`, `test_render_handedness_guard` (render `right=+az` cross-implementation handedness guard — absolute screen-side, pairs with the `test_projection` golden absolute-column pins; it is the one case that needs `lumice_gui_obj` and `lumice_obj` linked together, which is why `gui_unit_test` is its only possible home), `test_user_defaults`, `test_render_bg_logic`, `test_defaults_panel_registry`, `test_sampling_density_stats`, `test_lifecycle`, `test_face_number_overlay`, `test_overlay_labels`, `test_composite_preview`, `test_interaction_logic`, plus `gui_unit_test_env` (installs this target's personal-defaults isolation baseline before any case runs) | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. This layer's `gui` subsystem directory is shared by **two** CMake targets split on a link boundary (§2): `unit_correctness_test` (`lumice_obj` only) and `gui_unit_test` (also `lumice_gui_obj`, windowless). Both carry LABEL `unit-correctness`, so no `-L` selector changes when a case moves between them — but a file **does** have to move between the two `add_executable` source lists, and `gui_unit_test` only exists under `if(BUILD_GUI)`. |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`, `test_geo3d`, `test_optics`†, `test_crystal`, `test_rng`, `test_queue`, `test_threading_pool`, `test_color_space`, `test_json`, `test_filter`, `test_filter_spec`, `test_config_snapshot`, `test_render_config`, `test_sim_data`, `test_simulator`, `test_cpu_info`, `test_slider_mapping`, `test_window_sizing`, `test_raypath_segments`, `test_reduce_raypath_audit`, `test_c_api`, `test_exit_records`, `test_proj`(integration), `test_integration_main`; `gui` subsystem, first target `unit_correctness_test` (`lumice_obj` only, header-only-reachable): `test_axis_presets`, `test_filter_sop_grammar`, `test_gui_widget_rules`, `test_user_defaults_eligibility`; second target, `gui_unit_test` (see below): `test_defaults_diff`, `test_state_reconcile`, `test_preview_renderer`, `test_export_params`, `test_crystal_renderer`, `test_render_handedness_guard` (render `right=+az` cross-implementation handedness guard — absolute screen-side, pairs with the `test_projection` golden absolute-column pins; it is the one case that needs `lumice_gui_obj` and `lumice_obj` linked together, which is why `gui_unit_test` is its only possible home), `test_axis_absent_alignment`, `test_user_defaults`, `test_render_bg_logic`, `test_sampling_density_stats`, `test_server_poller`, `test_face_number_overlay`, `test_overlay_labels`, `test_composite_preview`, `test_color_window_logic`, plus `gui_unit_test_env` (installs this target's personal-defaults isolation baseline before any case runs) | — | — | `test/unit-correctness/scripts/test_check_new_refs.py` is a pytest member of this layer, run by the `policy` CI job and deliberately outside `testpaths` (§1.1). It is a regression net over a diff parser whose failures are silent — a broken parse reports success — so **do not delete a case for being redundant** without re-running it against the defect it pins. This layer's `gui` subsystem directory is shared by **two** CMake targets split on a link boundary (§2): `unit_correctness_test` (`lumice_obj` only) and `gui_unit_test` (also `lumice_gui_obj`, windowless). Both carry LABEL `unit-correctness`, so no `-L` selector changes when a case moves between them — but a file **does** have to move between the two `add_executable` source lists, and `gui_unit_test` only exists under `if(BUILD_GUI)`. |
+| **composition-correctness** | `test/composition-correctness/<subsystem>/` | `gui` subsystem, single target `composition_correctness_test` (§2's name-overlap caution): `test_document_roundtrip_chain`, `test_document_defaults_chain`, `test_document_switch_chain`, `test_legacy_document_chain`, `test_scene_commit_chain`, `test_filter_reconstruct_chain`, `test_raypath_color_document_chain`, `test_run_lifecycle_chain`, `test_run_warning_chain`, `test_user_defaults_chain`, `test_field_editor_chain`, `test_edit_modal_chain`, `test_preview_projection_chain` | — | — | Newest layer (§1.2); today populated only by the `gui` subsystem. A file name is the chain's topic, never a single `src/` unit's name — see §1.2's naming rule. |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†, analytic segments inside `test_optics`†, `MultiMsContinuationNormalIncidence` (in `test_metal_trace_parity.cpp`, 2-MS analytic anchor) | — | — | †split out only after per-file confirmation of the analytic-truth boundary vs unit-correctness |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `test_gui_lens_projection`, `test_gui_sim_smoke`, `test_gui_visual`, `test_gui_render`, `test_gui_bg`, `test_gui_export`, `test_gui_import_export`, `test_gui_interaction`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_composite_preview`, `test_gui_lifecycle`, `test_gui_sampling_density_stats`, `test_gui_defaults_panel`, **`test_gui_perf` (responsiveness tag)**, `test_gui_main`/`test_screenshot`/`test_gui_shared` (harness) | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_defaults_panel`, `test_gui_lens_projection`, `test_gui_modal_layout`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its
@@ -851,5 +1013,5 @@ double gate (267.3 corr-blind reinforcement), `test_capi_sentinel_overflow.py` a
 `test_ms_filter_leak.py` (issue-repro sentinels), and the legitimate `xfail` in
 `test_metal_batch_invariance.py`.
 
-> **Legacy CPU red line**: legacy CPU is the parity ground truth (§1.3, §4.2) and the perf
-> denominator (§1.5, §4.1). It and its tests are **never** a cleanup target in any layer.
+> **Legacy CPU red line**: legacy CPU is the parity ground truth (§1.4, §4.2) and the perf
+> denominator (§1.6, §4.1). It and its tests are **never** a cleanup target in any layer.

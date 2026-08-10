@@ -78,11 +78,12 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_slider_mapping.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_window_sizing.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_ev_auto.cpp"
-  "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_exposure_push.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
+  # Widget enable/disable rules and the shape-scalar domain table, extracted out of the draw
+  # functions in app_panels.cpp / edit_modals.cpp so they can be asserted over their whole domain
+  # (every SimState, every AspectPreset, every LUMICE_SHAPE_SCALAR_* slot) instead of one branch
+  # per UI-driven case. Header-only and ImGui-free, hence this target rather than gui_unit_test.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_widget_rules.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the
@@ -209,7 +210,7 @@ set_tests_properties("LumiceGoldenAnalyticTest" PROPERTIES LABELS "golden-analyt
 # same test/unit-correctness/gui/ directory as unit_correctness_test's, and it carries the same
 # LABEL — the split is a LINK boundary (these cases call into file_io.cpp / user_defaults.cpp),
 # not a layer or subsystem boundary. Sharing the label is what lets the existing
-# `ctest -L "unit-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
+# `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` selector in CI and scripts/test.sh pick it
 # up with no change. See doc/testing-architecture.md §5 for why this is a second target rather
 # than a second layer, and for the naming rule that lets it keep a link-derived name.
 #
@@ -227,24 +228,19 @@ if(BUILD_GUI)
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_diff.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_smoke.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_state_reconcile.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_project_world_dir.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_drag_gain.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_preview_renderer.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_export_params.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_crystal_renderer.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_defaults_panel_registry.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_visibility_enablement_predicate.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_sampling_density_stats.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_lifecycle.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_server_poller.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_interaction_logic.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_import_export_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
@@ -291,6 +287,66 @@ if(BUILD_GUI)
 endif()
 
 # --------------------------------------------------------------------------------------------------
+# composition_correctness_test — composition-correctness layer, gui subsystem.
+#
+# A LAYER of its own, not a third link-variant of the unit layer. The unit layer answers "does this
+# one src/gui unit compute the right answer"; this one answers "do these two-or-more units, wired
+# together the way the app wires them, produce the right observable result". The distinction is not
+# stylistic: 173 cases / 5285 lines were measured to already be making cross-unit claims while
+# living in a bucket named for single-unit ones, which is what made "is this suite too big" an
+# unanswerable question — a claim's home has to say what kind of claim it is.
+#
+# Hence its OWN CTest LABEL (`composition-correctness`), not a shared `unit-correctness`. Layer
+# identity lives in the label: reusing the unit layer's label would make this layer non-existent to
+# every selector in the repo, which is the same failure the label was introduced to end.
+#
+# Link shape mirrors gui_unit_test exactly (lumice_gui_obj + lumice_obj, imgui_te_stubs.cpp for the
+# ImGuiTestEngineHook_* symbols lumice_gui_obj's PUBLIC IMGUI_ENABLE_TEST_ENGINE demands, no window,
+# no GL context, no test engine) — see that target's comment above for why each piece is there. What
+# it does NOT share is a process: gui_unit_test_env.cpp is compiled in here as well, because the
+# personal-defaults isolation it installs is per-process. Leaving it out would silently resolve
+# user-config lookups to the real OS config directory of whatever machine runs the suite.
+if(BUILD_GUI)
+  add_executable(composition_correctness_test
+    "${PROJ_TEST_DIR}/test_main.cpp"
+    "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_roundtrip_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_defaults_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_switch_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_legacy_document_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_scene_commit_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_filter_reconstruct_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_color_document_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_lifecycle_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_run_warning_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_user_defaults_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_edit_modal_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_preview_projection_chain.cpp")
+  target_include_directories(composition_correctness_test
+    PRIVATE ${PROJ_TEST_DIR})
+  # Same three definitions gui_unit_test carries, for the same reasons (see its block above):
+  # source-scan gates that read app.cpp off disk, the shipped e2e config fixtures, and the
+  # test/fixtures corpus. add_test() below passes no positional arguments, so a compile definition
+  # is what makes these paths reachable at all in this binary.
+  target_compile_definitions(composition_correctness_test PRIVATE
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    LUMICE_E2E_CONFIG_DIR="${CMAKE_SOURCE_DIR}/test/e2e/configs"
+    LUMICE_TEST_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/test/fixtures")
+  # `lumice_obj`, not `lumice` — the same named exemption gui_unit_test documents above: a
+  # composition chain that cross-checks the GUI against core's own primitives needs the internal
+  # symbols that liblumice.dylib's -fvisibility=hidden does not export.
+  target_link_libraries(composition_correctness_test
+    PRIVATE GTest::gtest ${CMAKE_THREAD_LIBS_INIT} lumice_gui_obj lumice_obj)
+  set_target_properties(composition_correctness_test PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:GTest::gtest>")
+
+  add_test(NAME "LumiceCompositionCorrectnessTest" COMMAND composition_correctness_test)
+  set_tests_properties("LumiceCompositionCorrectnessTest" PROPERTIES LABELS "composition-correctness")
+endif()
+
+# --------------------------------------------------------------------------------------------------
 # CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)
 #
 # Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
@@ -304,7 +360,7 @@ endif()
 # `pytest` to the fast subset. Without an explicit `-m`, these two invocations
 # collect zero tests and pytest exits 5 ("no tests collected"), which ctest
 # reports as a hard FAILURE — on every platform, since both carry the `parity`
-# label that `ctest -L "unit-correctness|parity|golden-analytic"` selects.
+# label that `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` selects.
 # Where these two actually run, which is not where a reader assumes:
 #
 # This find_program gates the whole block, and CI's four build-matrix jobs never install

@@ -88,10 +88,17 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       const std::vector<float> baseline = SnapshotPreviewVertices();
 
-      // Sample across ~3 tick intervals; every read must equal the baseline.
+      // Sample across ~3 tick intervals; every read must equal the baseline. Reported non-fatally
+      // so a mismatch at an early tick does not hide whether later ticks also drift (see
+      // scripts/check_loop_fatal_asserts.py).
       for (int i = 0; i < 3; ++i) {
         ctx->Yield(kFramesPastOneTick);
-        IM_CHECK(SnapshotPreviewVertices() == baseline);
+        if (SnapshotPreviewVertices() != baseline) {
+          IM_ERRORF("preview vertices changed at tick %d despite no active randomization", i);
+        }
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");

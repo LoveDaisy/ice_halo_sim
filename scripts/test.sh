@@ -45,7 +45,7 @@ usage() {
   echo "  ./scripts/test.sh <quick|full|pr>"
   echo ""
   echo "SCOPES (each one is a superset of the previous):"
-  echo "  quick:  ctest (unit-correctness|parity|golden-analytic)"
+  echo "  quick:  ctest (unit-correctness|composition-correctness|parity|golden-analytic)"
   echo "          + fast e2e (pytest -n auto)"
   echo "          + gui_test correctness pool (--fixed-dt)"
   echo "  full:   quick + gui_test real-timing pool"
@@ -260,7 +260,7 @@ layer_ctest() {
   # --test-dir instead of cd/pushd: the layer must not leave test.sh in a
   # different working directory than the one the next layer's paths assume.
   run_layer ctest ctest --test-dir build/cmake_build/static \
-    -L "unit-correctness|parity|golden-analytic" --output-on-failure
+    -L "unit-correctness|composition-correctness|parity|golden-analytic" --output-on-failure
   local rc=$?
   if [[ ${rc} -ne 0 ]] && ! grep -q '^BUILD_TEST:[^=]*=ON' "${STATIC_CACHE}"; then
     annotate_last_layer "static tree has BUILD_TEST=OFF — rebuild with ./scripts/build.sh -tgj ${BUILD_TYPE_LOWER}"

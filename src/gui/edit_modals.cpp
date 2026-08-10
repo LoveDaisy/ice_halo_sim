@@ -16,6 +16,7 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/destructive_style.hpp"
+#include "gui/edit_modal_rules.hpp"
 #include "gui/face_number_overlay.hpp"
 #include "gui/file_io.hpp"  // SummarizeSopExpansion (Step 3 AC4 live preview)
 #include "gui/gui_constants.hpp"
@@ -98,7 +99,9 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 // control. Param fits its widest label ("Prism H" / "Upper H" / "Lower A", 7 chars ≈ 48 px) with
 // symmetric ~6 px margins; the 26 px reclaimed from the three of them all goes to the Value slider
 // (vertical layout: 181 → 207 px). Anything that lengthens a header or a row label has to revisit
-// these — sync_column_layout_budget in test_gui_interaction.cpp is what notices.
+// these — `edit_modal/the_fixed_columns_fit_their_text_in_both_layouts` in
+// test/gui/functional/test_edit_modal.cpp is what notices, by comparing each fixed column's
+// ContentMaxXHeadersIdeal against its WorkMaxX rather than against a pixel constant.
 constexpr float kShapeParamColWidth = 52.0f;
 constexpr float kShapeRandColWidth = 29.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
@@ -134,23 +137,9 @@ static AxisDist g_axis_buf[3];  // zenith, azimuth, roll
 // "FilterEditType + Raypath/EntryExit sub-panels + per-type buffers" scheme is
 // gone — every row can independently be raypath, entry-exit, or an AND mix.
 constexpr size_t kSummandRowBufSize = 256;
-// UI soft cap (kMaxSummandRows): prevents unbounded row growth from the "+ Add"
-// button before the real ABI-layer limits kick in. The authoritative overflow
-// gates live in file_io.cpp::BuildScene (ExpandSopToClauses → clauses vec
-// with LUMICE_MAX_CONFIG_CLAUSES cap) and BuildExportJsonOrWarn; those remain
-// the last-word validators. The ABI ceiling is now much higher (v4.9,
-// task-host-abi-cpu-caps: LUMICE_MAX_CONFIG_CLAUSES=4096), but this UI soft
-// cap sits below it — ImGui re-renders every row per frame without
-// virtualization, so several-thousand rows would tank the editor's frame rate.
-// 256 covers real "few-hundred OR summands" use cases with comfortable
-// headroom while staying inside the practical UI budget; a proper virtualized
-// / big-list mode is the task-369.4 D-item's job.
-constexpr size_t kMaxSummandRows = 256;
-// task-host-abi-cpu-caps AC4: compile-time sentinel — the whole point of v4.9 is to let
-// the GUI accept > 16 OR rows without the pre-v4.9 hard cap. If a future change accidentally
-// lowers this back to the historical 16, the intent is lost silently — the assert makes
-// that regression a build-time failure.
-static_assert(kMaxSummandRows > 16, "kMaxSummandRows must stay above the pre-v4.9 cap of 16");
+// The row cap itself (kMaxSummandRows), its rationale and its regression sentinel live in
+// gui/edit_modal_rules.hpp next to the predicates that read it. Lifting the cap properly needs a
+// virtualized / big-list row renderer, which this editor does not have.
 
 struct SummandRowBuf {
   uint64_t uid;
@@ -643,10 +632,11 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
   // Param | Value | Sync | Rand | Spread); the two Pyramid wedge angles are non-randomizable
   // RenderWedgeTableRow rows (Sync/Rand/Spread blank). See gui/slider_mapping.hpp for the
-  // three-H-mapping conventions. Column count is pinned to kShapeTableColumnCount (panels.hpp) so
-  // the TableSetupColumn declarations and the TableNextColumn sequences in the row helpers cannot
-  // drift (ImGui silently misaligns rather than asserting on a mismatch).
-  constexpr float kFaceSpreadMax = 2.0f;
+  // three-H-mapping conventions, and gui/shape_scalar_domain.hpp for each slot's actual range /
+  // format / scale — the rows no longer restate them here. Column count is pinned to
+  // kShapeTableColumnCount (panels.hpp) so the TableSetupColumn declarations and the
+  // TableNextColumn sequences in the row helpers cannot drift (ImGui silently misaligns rather
+  // than asserting on a mismatch).
   const ImGuiTableFlags kTableFlags =
       ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg;
   // Shared column setup: identical fixed widths in the main params table and the Face Distance table
@@ -671,15 +661,11 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     // Slots are named constants, never bare integers or field order — see the SLOT-ORDER TRAP note
     // on ShapeScalarAt (UPPER_H is slot 1, PRISM_H slot 2, the reverse of the rows' visual order).
     if (cr.type == CrystalType::kPrism) {
-      RenderShapeDistTableRow("Height##modal_cr", cr, LUMICE_SHAPE_SCALAR_HEIGHT, 0.01f, 100.0f, "%.2f",
-                              SliderScale::kLog);
+      RenderShapeDistTableRow("Height##modal_cr", cr, LUMICE_SHAPE_SCALAR_HEIGHT);
     } else {
-      RenderShapeDistTableRow("Prism H##modal_cr", cr, LUMICE_SHAPE_SCALAR_PRISM_H, 0.0f, 100.0f, "%.4f",
-                              SliderScale::kLogLinear);
-      RenderShapeDistTableRow("Upper H##modal_cr", cr, LUMICE_SHAPE_SCALAR_UPPER_H, 0.0f, 1.0f, "%.3f",
-                              SliderScale::kLinear);
-      RenderShapeDistTableRow("Lower H##modal_cr", cr, LUMICE_SHAPE_SCALAR_LOWER_H, 0.0f, 1.0f, "%.3f",
-                              SliderScale::kLinear);
+      RenderShapeDistTableRow("Prism H##modal_cr", cr, LUMICE_SHAPE_SCALAR_PRISM_H);
+      RenderShapeDistTableRow("Upper H##modal_cr", cr, LUMICE_SHAPE_SCALAR_UPPER_H);
+      RenderShapeDistTableRow("Lower H##modal_cr", cr, LUMICE_SHAPE_SCALAR_LOWER_H);
       RenderWedgeTableRow("Upper A##modal_cr", &cr.upper_alpha);
       RenderWedgeTableRow("Lower A##modal_cr", &cr.lower_alpha);
     }
@@ -700,8 +686,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
       for (int i = 0; i < 6; i++) {
         char label[32];
         snprintf(label, sizeof(label), "Face %d##modal_fd", i + 3);
-        RenderShapeDistTableRow(label, cr, LUMICE_SHAPE_SCALAR_FACE_0 + i, 0.0f, kFaceSpreadMax, "%.3f",
-                                SliderScale::kLinear);
+        RenderShapeDistTableRow(label, cr, LUMICE_SHAPE_SCALAR_FACE_0 + i);
       }
       ImGui::EndTable();
     }
@@ -830,7 +815,7 @@ static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
 static void RenderSummandRowList() {
   const auto kind = CurrentValidationKind();
   size_t delete_idx = static_cast<size_t>(-1);
-  const bool can_delete_any = g_summand_rows.size() > 1;
+  const bool can_delete_any = CanDeleteSummandRow(g_summand_rows.size());
 
   // Reserve exactly the width the trailing "x" SmallButton needs (glyph + horizontal
   // FramePadding on each side) plus one ItemSpacing for SameLine(). Formula mirrors
@@ -868,16 +853,14 @@ static void RenderSummandRowList() {
     // may not be removed.
     if (can_delete_any) {
       PushDestructiveStyle();
-    } else {
-      ImGui::BeginDisabled();
     }
+    ImGui::BeginDisabled(!can_delete_any);
     if (ImGui::SmallButton(del_id)) {
       delete_idx = i;
     }
+    ImGui::EndDisabled();
     if (can_delete_any) {
       PopDestructiveStyle();
-    } else {
-      ImGui::EndDisabled();
     }
 
     // Per-row inline validation hint (first non-valid across the list is
@@ -909,7 +892,7 @@ static void RenderSummandRowList() {
 
   // Add-row button: capped at kMaxSummandRows (soft UI cap; hard cap enforced by
   // BuildScene / BuildExportJsonOrWarn at the ABI boundary).
-  const bool at_cap = g_summand_rows.size() >= kMaxSummandRows;
+  const bool at_cap = AtSummandRowCap(g_summand_rows.size());
   ImGui::BeginDisabled(at_cap);
   if (ImGui::Button("+ Add OR row##summand_add", ImVec2(140, 0))) {
     SummandRowBuf row{};
@@ -1294,7 +1277,7 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
       bool all_valid = true;
       for (const auto& row : g_summand_rows) {
         const auto v = ValidateSummandText(row.text, kind);
-        if (v.state != LUMICE_RAYPATH_VALID) {
+        if (SummandRowBlocksCommit(v.state)) {
           all_valid = false;
           break;
         }
@@ -1797,24 +1780,17 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       const auto kind = CurrentValidationKind();
       for (size_t i = 0; i < g_summand_rows.size(); ++i) {
         const auto v = ValidateSummandText(g_summand_rows[i].text, kind);
-        if (v.state == LUMICE_RAYPATH_VALID) {
+        if (!SummandRowBlocksCommit(v.state)) {
           continue;
         }
         ok_disabled = true;
-        if (v.state == LUMICE_RAYPATH_INCOMPLETE) {
-          ok_tooltip_storage = "Row " + std::to_string(i + 1) + ": finish typing (incomplete)";
-        } else {
-          const char* msg = v.message.empty() ? "invalid" : v.message.c_str();
-          ok_tooltip_storage = "Row " + std::to_string(i + 1) + ": " + msg;
-        }
+        ok_tooltip_storage = SummandRowOkTooltip(i, v);
         ok_tooltip = ok_tooltip_storage.c_str();
         break;
       }
     }
 
-    if (ok_disabled) {
-      ImGui::BeginDisabled();
-    }
+    ImGui::BeginDisabled(ok_disabled);
     // Use the wider of the two labels for both buttons so the OK/Cancel pair
     // stays visually balanced regardless of glyph-width differences.
     const char* kOkLabel = ICON_FA_CHECK " OK##edit_modal";
@@ -1827,9 +1803,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       g_active_modal = ActiveModal::kNone;
       ImGui::CloseCurrentPopup();
     }
-    if (ok_disabled) {
-      ImGui::EndDisabled();
-    }
+    ImGui::EndDisabled();
     if (ok_disabled && ok_tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("%s", ok_tooltip);
     }
@@ -2001,20 +1975,16 @@ void RenderSpectrumModal(GuiState& state) {
 
   // Add row.
   const int cur_count = static_cast<int>(g_spectrum_edit_buf.size());
-  const bool add_disabled = cur_count >= kSpectrumHardMax;
-  if (add_disabled) {
-    ImGui::BeginDisabled();
-  }
+  const bool add_disabled = AtSpectrumRowCap(cur_count);
+  ImGui::BeginDisabled(add_disabled);
   if (ImGui::Button(ICON_FA_PLUS " Add row")) {
     float next_wl = 550.0f;
     if (!g_spectrum_edit_buf.empty()) {
-      next_wl = std::clamp(g_spectrum_edit_buf.back().wavelength + 40.0f, 380.0f, 780.0f);
+      next_wl = ClampSpectrumWavelengthNm(g_spectrum_edit_buf.back().wavelength + 40.0f);
     }
     g_spectrum_edit_buf.push_back({ next_wl, 1.0f });
   }
-  if (add_disabled) {
-    ImGui::EndDisabled();
-  }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
 
@@ -2029,16 +1999,14 @@ void RenderSpectrumModal(GuiState& state) {
   // Action row: OK / Cancel (dialog-terminating) on the left; Reset (a non-terminating edit action)
   // right-aligned on the same row so it reads as a distinct class and resists being mis-clicked as a
   // third confirm button.
-  const bool ok_disabled = g_spectrum_edit_buf.empty();
-  if (ok_disabled) {
-    ImGui::BeginDisabled();
-  }
+  const bool ok_disabled = SpectrumCommitBlocked(g_spectrum_edit_buf.size());
+  ImGui::BeginDisabled(ok_disabled);
   if (ImGui::Button(ICON_FA_CHECK " OK##spec_ok", ImVec2(80, 0))) {
     // Sanitize obviously-invalid manual input before it reaches the sim: clamp wavelength to the
     // visible band and weight to non-negative.
     for (auto& e : g_spectrum_edit_buf) {
-      e.wavelength = std::clamp(e.wavelength, 380.0f, 780.0f);
-      e.weight = std::max(e.weight, 0.0f);
+      e.wavelength = ClampSpectrumWavelengthNm(e.wavelength);
+      e.weight = ClampSpectrumWeight(e.weight);
     }
     // Single transactional commit of the custom-spectrum state: this is the ONLY site that sets
     // spectrum_index to kCustomSpectrumIndex, keeping the invariant (index==custom ⟹ buf non-empty)
@@ -2049,11 +2017,9 @@ void RenderSpectrumModal(GuiState& state) {
     // reconciler auto-diff (kFieldTierTable → kStructSoft).
     ImGui::CloseCurrentPopup();
   }
-  if (ok_disabled) {
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Need at least one wavelength row before OK.");
-    }
+  ImGui::EndDisabled();
+  if (ok_disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Need at least one wavelength row before OK.");
   }
   ImGui::SameLine();
   if (ImGui::Button(ICON_FA_XMARK " Cancel##spec_cancel", ImVec2(80, 0))) {

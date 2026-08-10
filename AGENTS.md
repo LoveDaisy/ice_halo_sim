@@ -144,15 +144,30 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   (whose numbers, as that section itself flags, were measured on an arm64 proxy for the amd64
   runner this step actually runs on — read the caveat, not just the table).
   Read that before widening the CI filter, and before dispositioning a visual-regression failure.
-  A `src/gui/` test that needs no live frame still should not live there: the
-  `gui_unit_test` target (`test/CMakeLists.txt`, inside `if(BUILD_GUI)`) links `lumice_gui_obj`
-  with **no window, no GL context and no ImGui test engine**, so its cases really do run in CI on
-  every platform that builds the GUI. Its sources sit in `test/unit-correctness/gui/` next to
-  `unit_correctness_test`'s and carry the same `unit-correctness` CTest LABEL — the two targets
-  are split on a *link* boundary (does the case call into `file_io.cpp` / `user_defaults.cpp`?),
-  not a layer boundary, so `ctest -L` and `./scripts/test.sh` need no per-target knowledge.
-  Rule of thumb for a new `src/gui/` test: needs a rendered frame or an `ImGuiTestContext` →
-  `gui_test`; pure logic → `gui_unit_test` (or `unit_correctness_test` if it is header-only).
+  A `src/gui/` test that needs no live frame still should not live in `gui_test` — but "no live
+  frame" now splits two ways, not one. `test/unit-correctness/gui/` (targets
+  `unit_correctness_test` / `gui_unit_test`, see below) holds a proposition about **one**
+  `src/gui/` unit; `test/composition-correctness/gui/` (target `composition_correctness_test`)
+  holds a proposition that needs **two or more** units cooperating — a document round trip, a
+  cross-channel consistency check, a multi-step lifecycle — but still no rendered frame or
+  synthesized input event. Chain length (how many units the proposition needs) and mechanical
+  need (whether it needs a frame or an input event) are independent axes; conflating them is
+  what used to make GUI test suite entropy — see `doc/testing-architecture.md` §1 for the full
+  argument. Rule of thumb for a new `src/gui/` test: needs a rendered frame or an
+  `ImGuiTestContext` → `gui_test`; needs ≥2 collaborating units but no mechanics →
+  `composition_correctness_test`; a single unit's pure logic → `gui_unit_test` (or
+  `unit_correctness_test` if it is header-only).
+  The `gui_unit_test` target (`test/CMakeLists.txt`, inside `if(BUILD_GUI)`) links
+  `lumice_gui_obj` with **no window, no GL context and no ImGui test engine**, so its cases
+  really do run in CI on every platform that builds the GUI. Its sources sit in
+  `test/unit-correctness/gui/` next to `unit_correctness_test`'s and carry the same
+  `unit-correctness` CTest LABEL — the two targets are split on a *link* boundary (does the case
+  call into `file_io.cpp` / `user_defaults.cpp`?), not a layer boundary, so `ctest -L` and
+  `./scripts/test.sh` need no per-target knowledge. `composition_correctness_test` links the same
+  way (`lumice_gui_obj` + `lumice_obj`, no window) but is **not** split across two targets the
+  way `unit-correctness`'s `gui` subsystem is — every case there already needs `lumice_gui_obj`,
+  so there is no header-only half to separate out, and it carries its own CTest LABEL
+  (`composition-correctness`), not `unit-correctness`.
   Design reasoning and the target-naming rule: `doc/testing-architecture.md` §2 and §5.
   That boundary is a **gate, not a rule of thumb**, for cases you add:
   `scripts/check_new_gui_tests.py` is a third, diff-scoped entry point alongside
@@ -180,6 +195,18 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   touch `ctx`, make it drive `ctx` (`ctx->Yield()` is the frame pump); that states the
   dependency and satisfies the gate. If some case truly cannot be written that way, the rule
   is wrong and the rule changes — in the script, never per case.
+- `scripts/check_loop_fatal_asserts.py` is a **fourth** diff-scoped entry point, alongside
+  `check_policies.py`, `check_new_refs.py`, and `check_new_gui_tests.py` above (same "checker is
+  the rule" discipline; CI `new-refs` job on PRs vs merge-base, pre-commit hook on the staged
+  diff). Scope is `test/` broadly, not just `test/gui/`. The rule: in a scope that executes
+  repeatedly, a non-terminating error report (gtest `ASSERT_*` / this repo's fatal `IM_CHECK*`,
+  or the non-fatal `IM_ERRORF`) must not be followed by code that keeps driving the same test
+  context — a fatal assert directly inside a `for` loop body silently hides every row after the
+  first failure, and a non-fatal report followed by continued driving cascades false reds off an
+  already-invalid state. See `doc/testing-architecture.md` §4.9 for the full rule statement and
+  the four defect-shape generalizations (syntax → fatality → loop order → parameter binding) that
+  motivated it — a checker for only the first of those reads a clean scan as "does not occur
+  here" on exactly the inputs it was meant to catch.
 - E2E test layout (purpose-primary; see `doc/testing-architecture.md` §6):
   - `test/e2e-correctness/` — full-stack correctness via CLI/PSNR (smoke, CLI behavior, raypath equivalence) + `references/*.jpg`
   - `test/parity-cross-backend/backend/` — backend-equivalence oracles (Metal exit-seam parity, device-gen default path, cpu_backend route, Metal batch invariance) + C++ siblings from 270.3

@@ -79,7 +79,7 @@ TEST(UserDefaultsEligibility, GovernanceUnionIsDisjointAndComplete) {
 TEST(UserDefaultsEligibility, EveryGovernedFieldResolvesToADeterminateVerdict) {
   for (const auto& name : AllGovernedFieldNames()) {
     const EligibilityVerdict verdict = ResolveDefaultEligibility(name);
-    ASSERT_NE(verdict.eligibility, DefaultEligibility::kUnregistered) << name << " resolved to kUnregistered";
+    EXPECT_NE(verdict.eligibility, DefaultEligibility::kUnregistered) << name << " resolved to kUnregistered";
     if (verdict.eligibility == DefaultEligibility::kEligible) {
       EXPECT_EQ(verdict.reason, IneligibleReason::kNone) << name << " is eligible but carries a reason";
     } else {
@@ -173,52 +173,59 @@ TEST(UserDefaultsEligibility, UnserializedViewFieldsAreAllRegisteredAsView) {
   for (const char* name : kUnserializedViewFields) {
     const auto* found = std::find_if(std::begin(kFieldTierTable), std::end(kFieldTierTable),
                                      [name](const FieldTierEntry& e) { return std::string_view(e.name) == name; });
-    ASSERT_NE(found, std::end(kFieldTierTable)) << name << " is not a registered GuiState field";
+    if (found == std::end(kFieldTierTable)) {
+      ADD_FAILURE() << name << " is not a registered GuiState field";
+      continue;  // no entry to check the tier of; the rest still get checked
+    }
     EXPECT_EQ(found->tier, FieldTier::kView) << name;
   }
 }
 
 // ==================================================================================================
 // AC6 — platform config directories
+//
+// One row per (platform, environment) pair, all three platforms in one table because the claim is
+// the same claim three times: the directory is derived from the environment variable when it says
+// something, and there is NO directory when it does not. An empty variable counts as unset on every
+// platform — the XDG spec says so explicitly, and the other two must not turn "" into a
+// CWD-relative "Lumice" either.
 // ==================================================================================================
+TEST(UserConfigDir, EachPlatformDerivesItsDirectoryOrReportsNone) {
+  using Opt = std::optional<std::string>;
+  const std::filesystem::path kNone;
+  struct Case {
+    const char* name;
+    std::optional<std::filesystem::path> resolved;
+    std::filesystem::path expected;  // empty = expected nullopt
+  };
+  const Case kCases[] = {
+    { "windows %APPDATA%", ComputeWindowsConfigDir(Opt("C:\\Users\\me\\AppData\\Roaming")),
+      std::filesystem::path("C:\\Users\\me\\AppData\\Roaming") / "Lumice" },
+    { "windows, no %APPDATA%", ComputeWindowsConfigDir(std::nullopt), kNone },
+    { "windows, empty %APPDATA%", ComputeWindowsConfigDir(Opt("")), kNone },
+    { "mac $HOME", ComputeMacConfigDir(Opt("/Users/me")),
+      std::filesystem::path("/Users/me") / "Library" / "Application Support" / "Lumice" },
+    { "mac, no $HOME", ComputeMacConfigDir(std::nullopt), kNone },
+    { "mac, empty $HOME", ComputeMacConfigDir(Opt("")), kNone },
+    { "linux prefers $XDG_CONFIG_HOME", ComputeLinuxConfigDir(Opt("/xdg"), Opt("/home/me")),
+      std::filesystem::path("/xdg") / "lumice" },
+    { "linux falls back to $HOME/.config", ComputeLinuxConfigDir(std::nullopt, Opt("/home/me")),
+      std::filesystem::path("/home/me") / ".config" / "lumice" },
+    { "linux, empty $XDG_CONFIG_HOME is unset", ComputeLinuxConfigDir(Opt(""), Opt("/home/me")),
+      std::filesystem::path("/home/me") / ".config" / "lumice" },
+    { "linux, neither variable", ComputeLinuxConfigDir(std::nullopt, std::nullopt), kNone },
+    { "linux, both empty", ComputeLinuxConfigDir(Opt(""), Opt("")), kNone },
+  };
 
-TEST(UserConfigDir, WindowsUsesAppDataSubdirectory) {
-  EXPECT_EQ(*ComputeWindowsConfigDir(std::string("C:\\Users\\me\\AppData\\Roaming")),
-            std::filesystem::path("C:\\Users\\me\\AppData\\Roaming") / "Lumice");
-}
-
-TEST(UserConfigDir, WindowsWithoutAppDataYieldsNullopt) {
-  EXPECT_FALSE(ComputeWindowsConfigDir(std::nullopt).has_value());
-  // An empty %APPDATA% must count as unset, not produce a CWD-relative "Lumice".
-  EXPECT_FALSE(ComputeWindowsConfigDir(std::string("")).has_value());
-}
-
-TEST(UserConfigDir, MacUsesApplicationSupport) {
-  EXPECT_EQ(*ComputeMacConfigDir(std::string("/Users/me")),
-            std::filesystem::path("/Users/me") / "Library" / "Application Support" / "Lumice");
-}
-
-TEST(UserConfigDir, MacWithoutHomeYieldsNullopt) {
-  EXPECT_FALSE(ComputeMacConfigDir(std::nullopt).has_value());
-  EXPECT_FALSE(ComputeMacConfigDir(std::string("")).has_value());
-}
-
-TEST(UserConfigDir, LinuxPrefersXdgConfigHome) {
-  EXPECT_EQ(*ComputeLinuxConfigDir(std::string("/xdg"), std::string("/home/me")),
-            std::filesystem::path("/xdg") / "lumice");
-}
-
-TEST(UserConfigDir, LinuxFallsBackToDotConfigWhenXdgMissingOrEmpty) {
-  EXPECT_EQ(*ComputeLinuxConfigDir(std::nullopt, std::string("/home/me")),
-            std::filesystem::path("/home/me") / ".config" / "lumice");
-  // XDG spec: an empty XDG_CONFIG_HOME is treated exactly as unset.
-  EXPECT_EQ(*ComputeLinuxConfigDir(std::string(""), std::string("/home/me")),
-            std::filesystem::path("/home/me") / ".config" / "lumice");
-}
-
-TEST(UserConfigDir, LinuxWithNeitherVariableYieldsNullopt) {
-  EXPECT_FALSE(ComputeLinuxConfigDir(std::nullopt, std::nullopt).has_value());
-  EXPECT_FALSE(ComputeLinuxConfigDir(std::string(""), std::string("")).has_value());
+  for (const Case& c : kCases) {
+    if (c.expected.empty()) {
+      EXPECT_FALSE(c.resolved.has_value()) << c.name;
+    } else if (!c.resolved.has_value()) {
+      ADD_FAILURE() << c.name << ": expected a resolved directory";
+    } else {
+      EXPECT_EQ(*c.resolved, c.expected) << c.name;
+    }
+  }
 }
 
 // ==================================================================================================
@@ -249,43 +256,53 @@ ParsedUserConfigArg ParseArgs(std::vector<std::string> args) {
   return ParseUserConfigArg(builder.argc(), builder.argv());
 }
 
-TEST(UserConfigArg, NoFlagIsAbsent) {
-  const auto parsed = ParseArgs({ "--fixed-dt", "--filter", "foo" });
-  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kAbsent);
-  EXPECT_FALSE(parsed.missing_value);
-}
+// The whole argv surface as one table. `missing_value` is a column and not an afterthought: a
+// trailing `--user-config` with nothing after it must neither read past argv's end nor be mistaken
+// for "the user did not ask for anything" — main() warns on it — and the last two rows are what
+// makes "the last flag wins" a rule rather than a coincidence of the first three.
+TEST(UserConfigArg, ArgvResolvesToAPresenceAPathAndAMalformedFlagReport) {
+  struct Case {
+    const char* name;
+    std::vector<std::string> args;
+    UserConfigArgPresence presence;
+    const char* explicit_dir;  // nullptr = none expected
+    bool missing_value;
+  };
+  const Case kCases[] = {
+    { "no flag at all", { "--fixed-dt", "--filter", "foo" }, UserConfigArgPresence::kAbsent, nullptr, false },
+    { "the disable flag", { "--no-user-config" }, UserConfigArgPresence::kDisableFlag, nullptr, false },
+    { "the explicit flag with a path",
+      { "--user-config", "/tmp/x" },
+      UserConfigArgPresence::kExplicitFlag,
+      "/tmp/x",
+      false },
+    { "a dangling explicit flag", { "--fixed-dt", "--user-config" }, UserConfigArgPresence::kAbsent, nullptr, true },
+    { "disable after explicit",
+      { "--user-config", "/tmp/x", "--no-user-config" },
+      UserConfigArgPresence::kDisableFlag,
+      nullptr,
+      false },
+    { "explicit after disable",
+      { "--no-user-config", "--user-config", "/tmp/x" },
+      UserConfigArgPresence::kExplicitFlag,
+      "/tmp/x",
+      false },
+    // A dangling flag after a good one leaves the honored value in place but still reports.
+    { "a dangling flag after a good one",
+      { "--no-user-config", "--user-config" },
+      UserConfigArgPresence::kDisableFlag,
+      nullptr,
+      true },
+  };
 
-TEST(UserConfigArg, DisableFlagRecognized) {
-  const auto parsed = ParseArgs({ "--no-user-config" });
-  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kDisableFlag);
-}
-
-TEST(UserConfigArg, ExplicitFlagCapturesPath) {
-  const auto parsed = ParseArgs({ "--user-config", "/tmp/x" });
-  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kExplicitFlag);
-  EXPECT_EQ(parsed.explicit_dir, std::filesystem::path("/tmp/x"));
-}
-
-// A trailing `--user-config` with nothing after it must not read past argv's end, and must not
-// be mistaken for "the user did not ask for anything" — main() warns on missing_value.
-TEST(UserConfigArg, DanglingExplicitFlagIsReportedNotHonored) {
-  const auto parsed = ParseArgs({ "--fixed-dt", "--user-config" });
-  EXPECT_EQ(parsed.presence, UserConfigArgPresence::kAbsent);
-  EXPECT_TRUE(parsed.missing_value);
-}
-
-TEST(UserConfigArg, LastFlagWins) {
-  const auto disable_last = ParseArgs({ "--user-config", "/tmp/x", "--no-user-config" });
-  EXPECT_EQ(disable_last.presence, UserConfigArgPresence::kDisableFlag);
-
-  const auto explicit_last = ParseArgs({ "--no-user-config", "--user-config", "/tmp/x" });
-  EXPECT_EQ(explicit_last.presence, UserConfigArgPresence::kExplicitFlag);
-  EXPECT_EQ(explicit_last.explicit_dir, std::filesystem::path("/tmp/x"));
-
-  // A dangling flag after a good one leaves the honored value in place but still reports.
-  const auto dangling_last = ParseArgs({ "--no-user-config", "--user-config" });
-  EXPECT_EQ(dangling_last.presence, UserConfigArgPresence::kDisableFlag);
-  EXPECT_TRUE(dangling_last.missing_value);
+  for (const Case& c : kCases) {
+    const auto parsed = ParseArgs(c.args);
+    EXPECT_EQ(parsed.presence, c.presence) << c.name;
+    EXPECT_EQ(parsed.missing_value, c.missing_value) << c.name;
+    if (c.explicit_dir != nullptr) {
+      EXPECT_EQ(parsed.explicit_dir, std::filesystem::path(c.explicit_dir)) << c.name;
+    }
+  }
 }
 
 TEST(UserConfigArg, FlagsOutrankTheBinaryDefault) {

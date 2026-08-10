@@ -145,10 +145,25 @@ bool RestoreOnePresetOnDisk(const std::filesystem::path& dir, gui::AxisPreset pr
 
 }  // namespace
 
+// Every case starts from drained channels: the downgrade counter and the notice list are
+// consumed-on-read, so a leftover from a previous case reads as this one's own degradation.
+class UserDefaults : public ::testing::Test {
+ protected:
+  void SetUp() override { ResetUserDefaultsChannels(); }
+
+  // A fresh, empty override directory plus the document to find in it. Staging the precondition is
+  // one statement in every case below; what is under test is always what happens next.
+  static std::filesystem::path DirWith(const char* name, const json& doc) {
+    const auto dir = FreshOverlayDir(name);
+    EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+    return dir;
+  }
+};
+
 // ================================================================================
 // AC2 — `kView \ serialized` recomputed against the real serializer
 // ================================================================================
-TEST(UserDefaults, ac2_kview_difference_set_recomputed) {
+TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
   // Expected JSON root key for each FieldTier::kView field, or nullptr when the field is
   // expected to have NO serialized representation. This table is the recomputation: it is
   // checked in both directions against a real SerializeGuiStateJson output, so a field that
@@ -234,8 +249,7 @@ TEST(UserDefaults, ac2_kview_difference_set_recomputed) {
 // ================================================================================
 // AC3 — sparse round-trip
 // ================================================================================
-TEST(UserDefaults, ac3_sparse_overlay_round_trip) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, ac3_sparse_overlay_round_trip) {
   const auto dir = FreshOverlayDir("ac3");
 
   // A genuinely sparse document: one namespace-1 singleton key, one namespace-1 kView key,
@@ -266,75 +280,57 @@ TEST(UserDefaults, ac3_sparse_overlay_round_trip) {
   // A well-formed file is not a degradation, and an in-domain value is not a clamp.
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
-}
 
-// The most common path of all: no override file yet. It must be a silent no-op, NOT a
-// degradation — counting it would fire the "your defaults were downgraded" notice on every
-// fresh install.
-TEST(UserDefaults, ac3_absent_file_is_not_a_downgrade) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("absent");
-
-  const gui::GuiState state = gui::MakeNewDocumentState(dir);
-  const gui::GuiState factory = gui::InitDefaultState();
-  EXPECT_EQ(state.renderer.lens_type, factory.renderer.lens_type);
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-  EXPECT_EQ(state.crystals.size(), factory.crystals.size());
-  EXPECT_EQ(state.layers.size(), factory.layers.size());
+  // The most common path of all: no override file yet. It must be a silent no-op, NOT a
+  // degradation — counting it would fire the "your defaults were downgraded" notice on every
+  // fresh install.
+  const gui::GuiState untouched = gui::MakeNewDocumentState(FreshOverlayDir("absent"));
+  const gui::GuiState seeded = gui::InitDefaultState();
+  EXPECT_EQ(untouched.renderer.lens_type, seeded.renderer.lens_type);
+  EXPECT_EQ(untouched.bg_alpha, seeded.bg_alpha);
+  EXPECT_EQ(untouched.crystals.size(), seeded.crystals.size());
+  EXPECT_EQ(untouched.layers.size(), seeded.layers.size());
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
 }
 
 // Eligibility must be enforced on the READ path, not merely recorded as metadata: the
-// override file is a text file the user can hand-edit.
-TEST(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
-  ResetUserDefaultsChannels();
+// override file is a text file the user can hand-edit. One case per namespace would be three
+// copies of the same staging; the point is that NONE of them reaches a new document, so they
+// are smuggled together and the document is checked against the seeded contents as a whole.
+//
+// raypath_color is included because it is namespace 4 (kCollectionFields) exactly like
+// layers/crystals/filters, but MakeNewDocumentState only cleared the other three, so a
+// hand-edited file could put a colour-class list in every new document.
+TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   const auto dir = FreshOverlayDir("ineligible");
 
   json doc;
   // namespace 3: an ordinary serializable scalar the deserializer would happily read.
   doc["use_gpu_backend"] = true;
-  // namespace 4: a collection. A hand-edited file must not make New start with someone
-  // else's scene.
+  // namespace 4: collections. A hand-edited file must not make New start with someone
+  // else's scene. Bare-array wire form for raypath_color (DeserializeGuiStateJson accepts it
+  // directly under that key; see file_io.cpp's parse block).
   doc["layers"] = json::array();
   doc["layers"].push_back({ { "prob", 0.5f }, { "entries", json::array() } });
   doc["layers"].push_back({ { "prob", 0.5f }, { "entries", json::array() } });
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  const gui::GuiState state = gui::MakeNewDocumentState(dir);
-  const gui::GuiState factory{};
-  EXPECT_EQ(state.use_gpu_backend, factory.use_gpu_backend);
-  // Seeded contents only: exactly one layer with one entry, one crystal, no filters.
-  EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
-  EXPECT_EQ(state.layers[0].entries.size(), static_cast<size_t>(1));
-  EXPECT_EQ(state.crystals.size(), static_cast<size_t>(1));
-  EXPECT_EQ(state.filters.size(), static_cast<size_t>(0));
-}
-
-// code-review round 1 Major: raypath_color is namespace 4 (kCollectionFields) exactly like
-// layers/crystals/filters, but MakeNewDocumentState only cleared the other three. A
-// hand-edited override file could smuggle a color-class list into every new document.
-TEST(UserDefaults, ac3_raypath_color_cannot_be_smuggled_in) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("raypath_color_smuggle");
-
-  json doc;
-  // Bare-array wire form (DeserializeGuiStateJson accepts it directly under
-  // "raypath_color"; see file_io.cpp's parse block).
   doc["raypath_color"] = json::array();
   doc["raypath_color"].push_back({ { "color", { 1.0f, 0.0f, 0.0f } } });
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
 
   const gui::GuiState state = gui::MakeNewDocumentState(dir);
-  const gui::GuiState factory{};
-  EXPECT_EQ(state.raypath_color.size(), factory.raypath_color.size());
+  EXPECT_EQ(state.use_gpu_backend, gui::GuiState{}.use_gpu_backend);
+  // Seeded contents only: exactly one layer with one entry, one crystal, no filters, no colours.
+  EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
+  EXPECT_EQ(state.layers[0].entries.size(), static_cast<size_t>(1));
+  EXPECT_EQ(state.crystals.size(), static_cast<size_t>(1));
+  EXPECT_EQ(state.filters.size(), static_cast<size_t>(0));
   EXPECT_EQ(state.raypath_color.size(), static_cast<size_t>(0));
 }
 
 // --no-user-config and --user-config <empty dir> must be the same document. Both are "the
 // user has saved nothing", reached by two different routes, and a user who cannot get the
 // same result twice has no way to establish a factory baseline.
-TEST(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
   const auto empty_dir = FreshOverlayDir("switch_empty");
 
   gui::GuiState disabled;
@@ -373,80 +369,61 @@ TEST(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
     disabled_again = gui::MakeNewDocumentState();
   }
   EXPECT_TRUE(SerializesIdentically(disabled, disabled_again));
+
+  // Last, the harness's own baseline, asserted from inside the harness with NO guard in force.
+  // This binary installs kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp;
+  // gui_test does the same from its main()); were that install dropped or flipped, the developer's
+  // real config directory would reach this document instead. It is read through the switch's only
+  // observable effect, since the source enum has no getter by design (one owner). The `overridden`
+  // arm above is this line's detection power: a real file IS reachable through this same call when
+  // the switch says so, so agreeing with `disabled` here is a fact about the baseline, not about
+  // MakeNewDocumentState being inert.
+  EXPECT_TRUE(SerializesIdentically(disabled, gui::MakeNewDocumentState()));
 }
 
-// --user-config pointing at a directory whose file is corrupt: the switch must route into
-// the existing degradation path, not around it.
-TEST(UserDefaults, switch_explicit_dir_with_broken_file_degrades) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("switch_broken");
-  WriteRawOverlay(dir, "{ this is not json");
-
-  gui::GuiState state;
+// Two ways of pointing --user-config somewhere unusable. Both must land on the factory document
+// rather than on a crash: a corrupt file routes into the existing degradation path instead of
+// around it, and a path to a REGULAR FILE (the flag takes a directory, and users point it at the
+// user_defaults.json itself) is survivable — it simply has nothing to read.
+TEST_F(UserDefaults, switch_explicit_dir_that_cannot_be_read_degrades_to_the_factory_document) {
+  const auto broken = FreshOverlayDir("switch_broken");
+  WriteRawOverlay(broken, "{ this is not json");
+  const auto not_a_dir_parent = FreshOverlayDir("switch_not_a_dir");
+  const std::filesystem::path not_a_dir = not_a_dir_parent / "plain_file.txt";
   {
-    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-    state = gui::MakeNewDocumentState();
-  }
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
-  const gui::GuiState factory = gui::InitDefaultState();
-  EXPECT_EQ(state.renderer.lens_type, factory.renderer.lens_type);
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-}
-
-// --user-config <path to a regular file> — the flag takes a DIRECTORY, and a user who points
-// it at the user_defaults.json itself must get a degraded startup, not a crash.
-TEST(UserDefaults, switch_explicit_dir_pointing_at_a_file_is_survivable) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("switch_not_a_dir");
-  const std::filesystem::path file = dir / "plain_file.txt";
-  {
-    std::ofstream out(file, std::ios::trunc);
+    std::ofstream out(not_a_dir, std::ios::trunc);
     out << "not a directory";
   }
 
-  gui::GuiState state;
-  {
-    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, file);
-    state = gui::MakeNewDocumentState();
-  }
+  struct Case {
+    const char* name;
+    std::filesystem::path path;
+    int expect_downgrades;  // a file that parses as nothing is not a degradation to report
+  };
+  const Case kCases[] = {
+    { "a corrupt override file", broken, 1 },
+    { "a path to a regular file", not_a_dir, 0 },
+  };
+
   const gui::GuiState factory = gui::InitDefaultState();
-  EXPECT_EQ(state.renderer.lens_type, factory.renderer.lens_type);
-  EXPECT_EQ(state.crystals.size(), factory.crystals.size());
-}
-
-// The harness's own baseline, asserted from inside the harness. This binary installs
-// kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp; gui_test does the
-// same from its main()); if that install were dropped or flipped, this is the case that says so.
-// It reads the switch through its only observable effect — whether a real override file on disk
-// reaches a new document — because the source enum itself has no getter, by design (one owner).
-TEST(UserDefaults, switch_harness_baseline_is_isolated) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("switch_baseline");
-  json doc;
-  doc["bg_alpha"] = 0.125f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  // No ScopedUserConfigSource here on purpose: this is the process state the harness install
-  // left behind, i.e. what every other scenario in this binary runs under.
-  const gui::GuiState state = gui::MakeNewDocumentState();
-  const gui::GuiState factory = gui::InitDefaultState();
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-
-  // Detection power for the assertion above: the file IS readable and DOES carry a value
-  // distinguishable from factory — it simply must not be consulted at the baseline.
-  {
-    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-    const gui::GuiState reachable = gui::MakeNewDocumentState();
-    EXPECT_EQ(reachable.bg_alpha, 0.125f);
-    EXPECT_TRUE(reachable.bg_alpha != factory.bg_alpha);
+  for (const Case& c : kCases) {
+    ResetUserDefaultsChannels();
+    gui::GuiState state;
+    {
+      ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, c.path);
+      state = gui::MakeNewDocumentState();
+    }
+    EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), c.expect_downgrades) << c.name;
+    EXPECT_EQ(state.renderer.lens_type, factory.renderer.lens_type) << c.name;
+    EXPECT_EQ(state.bg_alpha, factory.bg_alpha) << c.name;
+    EXPECT_EQ(state.crystals.size(), factory.crystals.size()) << c.name;
   }
 }
 
 // ================================================================================
 // AC4 — invariant I1
 // ================================================================================
-TEST(UserDefaults, ac4_file_value_beats_personal_default) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, ac4_file_value_beats_personal_default) {
   const auto dir = FreshOverlayDir("ac4");
 
   // Personal default: X.
@@ -482,30 +459,14 @@ TEST(UserDefaults, ac4_file_value_beats_personal_default) {
   EXPECT_TRUE(gui::DeserializeGuiStateJson(old_doc.dump(), old_loaded));
   EXPECT_EQ(old_loaded.renderer.lens_type, gui::RenderConfig{}.lens_type);
   EXPECT_TRUE(old_loaded.renderer.lens_type != gui::kLensTypeFisheyeEqualArea);
-}
 
-// A real-GUI manual walkthrough ("set a user_defaults.json, start the GUI, observe New picking
-// up the default and .lmc Open unaffected") is a one-time human check that leaves no trace and
-// has to be redone by hand every time this file changes. This test programmatically covers the
-// same assertion pair instead — the two halves already exist separately in
-// ac3_sparse_overlay_round_trip and ac4_file_value_beats_personal_default; this is the pair in
-// one place, self-contained.
-TEST(UserDefaults, m2_new_document_picks_up_personal_default_and_lmc_open_is_unaffected) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("m2_walkthrough");
-
-  json doc;
-  doc["bg_alpha"] = 0.33f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  // "New document picks up the personal default."
-  const gui::GuiState new_doc = gui::MakeNewDocumentState(dir);
-  EXPECT_EQ(new_doc.bg_alpha, 0.33f);
-
-  // "Opening an .lmc is unaffected" — an explicit file that does not mention bg_alpha must
-  // load the FACTORY value, never the personal default that New just picked up in this same
-  // process. DeserializeGuiStateJson is the .lmc/.json load path; it never consults
-  // MakeNewDocumentState() or the personal-default store.
+  // The same pair on a second, differently-shaped key (a root scalar rather than a nested enum),
+  // which is also the programmatic form of the manual walkthrough this feature used to be signed
+  // off by: "set a user_defaults.json, start the GUI, observe New picking up the default and .lmc
+  // Open unaffected". A one-time human check leaves no trace and has to be redone by hand every
+  // time this file changes.
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, json{ { "bg_alpha", 0.33f } }));
+  EXPECT_EQ(gui::MakeNewDocumentState(dir).bg_alpha, 0.33f);
   json lmc_doc = json::parse(gui::SerializeGuiStateJson(gui::InitDefaultState()));
   lmc_doc.erase("bg_alpha");
   gui::GuiState opened;
@@ -517,234 +478,169 @@ TEST(UserDefaults, m2_new_document_picks_up_personal_default_and_lmc_open_is_una
 // ================================================================================
 // AC5 — degradation, never a crash
 // ================================================================================
-TEST(UserDefaults, ac5_unknown_key_is_ignored_silently) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("ac5_unknown");
+// A broken override file must cost the user their personal defaults and nothing else: the app still
+// opens on a usable document, and the fact that something was dropped is reported. The line the
+// rows below draw is between "this build does not understand it" and "nobody could" — a key from a
+// NEWER build is the normal shape of a file that has travelled, so ignoring it is correct and is
+// not a degradation. Everything else is, and the whole overlay goes, including well-formed siblings:
+// a half-applied set of defaults is harder to reason about, and to revert, than none at all.
+TEST_F(UserDefaults, ABrokenOverrideFileCostsTheDefaultsAndSaysSoWithoutBreakingTheDocument) {
+  struct DegradeCase {
+    const char* name;
+    const char* raw;
+    bool expect_bg_alpha_applied;
+    int expect_downgrades;
+  };
+  const DegradeCase kCases[] = {
+    { "a key this build does not know", R"({"totally_unknown_key": 1, "bg_alpha": 0.75})", true, 0 },
+    // bg_alpha is a float, so a string there makes the deserializer throw mid-merge — and the
+    // well-formed sibling beside it goes too.
+    { "a value of the wrong type", R"({"bg_alpha": "not_a_number", "aspect_portrait": true})", false, 1 },
+    { "a truncated document", R"({"bg_alpha": 0.5, )", false, 1 },
+    { "an array where an object belongs", "[1, 2, 3]", false, 1 },
+    // The preset-library half degrades down the same channel. It is a row rather than a case of
+    // its own because the verdict it needs is the one every row already carries.
+    { "a preset value of the wrong type", R"({"presets": {"axis": {"column": {"zenith_std": "wide"}}}})", false, 1 },
+  };
 
-  json doc;
-  doc["totally_unknown_key"] = 1;
-  doc["bg_alpha"] = 0.75f;  // a known key alongside it must still apply
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  const gui::GuiState state = gui::MakeNewDocumentState(dir);
-  EXPECT_EQ(state.bg_alpha, 0.75f);
-  // Forward compatibility: a key this build does not know about is the normal shape of a
-  // file written by a NEWER build. Ignoring it is correct and is not a degradation.
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
-}
-
-TEST(UserDefaults, ac5_wrong_type_degrades_without_partial_apply) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("ac5_type");
-
-  // `bg_alpha` is a float; a string there makes the deserializer throw mid-merge.
-  WriteRawOverlay(dir, R"({"bg_alpha": "not_a_number", "aspect_portrait": true})");
-
-  const gui::GuiState state = gui::MakeNewDocumentState(dir);
   const gui::GuiState factory{};
-  // The WHOLE overlay is discarded, including the well-formed sibling key: a half-applied
-  // set of defaults is harder to reason about (and to revert) than none at all.
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-  EXPECT_EQ(state.aspect_portrait, factory.aspect_portrait);
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
-  // Still a usable new document.
-  EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
-}
+  for (const DegradeCase& c : kCases) {
+    ResetUserDefaultsChannels();
+    const auto dir = FreshOverlayDir("degrade");
+    WriteRawOverlay(dir, c.raw);
 
-TEST(UserDefaults, ac5_invalid_json_degrades) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("ac5_json");
-
-  WriteRawOverlay(dir, R"({"bg_alpha": 0.5, )");  // truncated
-
-  const gui::GuiState state = gui::MakeNewDocumentState(dir);
-  const gui::GuiState factory{};
-  EXPECT_EQ(state.bg_alpha, factory.bg_alpha);
-  EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
-
-  // A JSON scalar / array at the root is also not a usable document.
-  ResetUserDefaultsChannels();
-  WriteRawOverlay(dir, "[1, 2, 3]");
-  const gui::GuiState state2 = gui::MakeNewDocumentState(dir);
-  EXPECT_EQ(state2.bg_alpha, factory.bg_alpha);
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
+    const gui::GuiState state = gui::MakeNewDocumentState(dir);
+    EXPECT_EQ(state.bg_alpha, c.expect_bg_alpha_applied ? 0.75f : factory.bg_alpha) << c.name;
+    EXPECT_EQ(state.aspect_portrait, factory.aspect_portrait) << c.name;
+    EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), c.expect_downgrades) << c.name;
+    // Still a usable new document, whatever was thrown away.
+    EXPECT_EQ(state.layers.size(), static_cast<size_t>(1)) << c.name;
+    // Nothing here leaves a preset override behind, and a REJECTED value is a drop rather than a
+    // clamp: it is counted, but it must not also arrive as a "we adjusted this for you" notice.
+    EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value()) << c.name;
+    EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty()) << c.name;
+  }
 }
 
 // ================================================================================
 // D8 — load-time clamp into the classifier's tolerance domain, with a visible trace
 // ================================================================================
-TEST(UserDefaults, d8_preset_override_clamped_with_notice) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("d8_upper");
+// A stored preset value outside its classifier's domain is pulled back INSIDE it, not onto the
+// boundary: the domains are open, so landing exactly on 10 fails the classifier's strict `< 10` and
+// demotes the preset to Custom — which is the very thing the clamp exists to prevent. Both
+// directions are covered because the domains point opposite ways, and both ends of Column's are
+// because a zero or negative std would otherwise reach the sampler.
+TEST_F(UserDefaults, AnOutOfDomainPresetValueIsPulledStrictlyInsideItsDomain) {
+  constexpr float kInf = std::numeric_limits<float>::infinity();
+  struct ClampCase {
+    const char* name;
+    const char* preset_key;
+    gui::AxisPreset preset;
+    float stored;
+    float lower;    // the domain, open at both ends
+    float upper;    // kInf for a preset whose domain has no upper end
+    float landing;  // the value that must come back — the nearest float strictly inside
+  };
+  const ClampCase kCases[] = {
+    // Hand-edited, or written by a build whose classifier was wider.
+    { "above Column's upper bound", "column", gui::AxisPreset::kColumn, 25.0f, 0.0f,
+      gui::kColumnPlateParryZenithStdUpperBound, std::nextafter(gui::kColumnPlateParryZenithStdUpperBound, 0.0f) },
+    // Zero and below are outside too: Column/Plate/Parry's domain is open at BOTH ends, and a
+    // non-positive std would otherwise reach the sampler.
+    { "below Plate's lower end of zero", "plate", gui::AxisPreset::kPlate, -3.0f, 0.0f,
+      gui::kColumnPlateParryZenithStdUpperBound, std::nextafter(0.0f, kInf) },
+    { "below Lowitz's lower bound", "lowitz", gui::AxisPreset::kLowitz, 5.0f, gui::kLowitzZenithStdLowerBound, kInf,
+      std::nextafter(gui::kLowitzZenithStdLowerBound, kInf) },
+  };
 
-  // Column's domain is (0, 10); 25 is above it (hand-edited, or from a build whose
-  // classifier was wider).
-  json doc;
-  doc["presets"]["axis"]["column"]["zenith_std"] = 25.0f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-  gui::MakeNewDocumentState(dir);
+  for (const ClampCase& c : kCases) {
+    ResetUserDefaultsChannels();
+    json doc;
+    doc["presets"]["axis"][c.preset_key]["zenith_std"] = c.stored;
+    gui::MakeNewDocumentState(DirWith("clamp", doc));
 
-  const auto column = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(column.has_value());
-  // Clamped to the largest float STRICTLY below the bound: landing on 10.0 exactly would
-  // fail the classifier's strict `< 10` and demote the preset to Custom.
-  EXPECT_EQ(*column, std::nextafter(gui::kColumnPlateParryZenithStdUpperBound, 0.0f));
-  EXPECT_TRUE(*column < gui::kColumnPlateParryZenithStdUpperBound);
+    const auto stored = gui::GetUserAxisPresetZenithStdOverride(c.preset);
+    if (!stored.has_value()) {
+      ADD_FAILURE() << c.name << ": no stored override for this preset";
+      continue;  // no value to compare for this row; the rest still get checked
+    }
+    EXPECT_EQ(*stored, c.landing) << c.name;
+    EXPECT_GT(*stored, c.lower) << c.name;
+    EXPECT_LT(*stored, c.upper) << c.name;
 
-  // The clamp must leave a trace naming the key and both values — at load time the user is
-  // not looking at the preset panel, so a silent clamp is indistinguishable from a silent
-  // drop (the exact failure family this system exists to avoid).
-  const auto notices = gui::TakeUserDefaultsDowngradeNotices();
-  EXPECT_EQ(notices.size(), static_cast<size_t>(1));
-  EXPECT_TRUE(notices[0].find("column") != std::string::npos);
-  EXPECT_TRUE(notices[0].find("25") != std::string::npos);
-  // Consumed-on-read, like the shape-dist downgrade counter it mirrors.
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
-}
-
-TEST(UserDefaults, d8_lowitz_clamps_on_the_lower_side) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("d8_lower");
-
-  // Lowitz's domain is (15, inf) — the opposite side from Column/Plate/Parry.
-  json doc;
-  doc["presets"]["axis"]["lowitz"]["zenith_std"] = 5.0f;
-  // Non-positive is outside Column's (0, 10) too — the domain is open at BOTH ends there,
-  // and a zero/negative std would otherwise reach the sampler.
-  doc["presets"]["axis"]["plate"]["zenith_std"] = -3.0f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-  gui::MakeNewDocumentState(dir);
-
-  const auto lowitz = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kLowitz);
-  ASSERT_TRUE(lowitz.has_value());
-  EXPECT_EQ(*lowitz, std::nextafter(gui::kLowitzZenithStdLowerBound, std::numeric_limits<float>::infinity()));
-  EXPECT_TRUE(*lowitz > gui::kLowitzZenithStdLowerBound);
-
-  const auto plate = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kPlate);
-  ASSERT_TRUE(plate.has_value());
-  EXPECT_TRUE(*plate > 0.0f);
-  EXPECT_TRUE(*plate < gui::kColumnPlateParryZenithStdUpperBound);
-
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(2));
+    // The clamp must leave a trace naming the key and the value it replaced. At load time the user
+    // is not looking at the preset panel, so a silent clamp is indistinguishable from a silent drop
+    // — the exact failure family this whole channel exists to end. And the channel is
+    // consumed-on-read, like the downgrade counter it mirrors.
+    const auto notices = gui::TakeUserDefaultsDowngradeNotices();
+    if (notices.size() != static_cast<size_t>(1)) {
+      ADD_FAILURE() << c.name << ": expected exactly 1 downgrade notice, got " << notices.size();
+      continue;  // no notice to index for this row; the rest still get checked
+    }
+    EXPECT_NE(notices[0].find(c.preset_key), std::string::npos) << c.name;
+    EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty()) << c.name;
+  }
 }
 
 // code-review round 2 Major: ApplyAxisPresetOverridesFromJson only ever added/updated slots,
 // never cleared one whose entry disappeared from the file. MakeNewDocumentState() is called
 // repeatedly within one process (main.cpp startup, every DoNew(), every DoOpen() .json
 // import), so a stale g_axis_overrides slot would keep answering with a deleted override
-// until the process restarts. This test calls MakeNewDocumentState() twice against the same
-// directory within a single test case (deliberately not calling ResetUserDefaultsChannels()
-// between the two calls) to reproduce the same-process, file-changed-underneath scenario.
-TEST(UserDefaults, d8_preset_override_does_not_leak_across_calls) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("d8_leak");
+// until the process restarts. Both cases below call MakeNewDocumentState() twice against the
+// same directory within a single test case (deliberately not draining the channels between the
+// two calls) to reproduce the same-process, file-changed-underneath scenario. The second case
+// covers a distinct branch from the first: passing an explicit override_dir means `dir`
+// is truthy on both calls and never exercises the branch where GetUserConfigDir() ITSELF
+// resolves to nullopt — the fix resets g_axis_overrides only inside `if (dir)`, so a
+// process whose config directory becomes unavailable mid-run (removed out from under it,
+// permissions revoked, disk full — its own doc comment lists these) would keep answering with
+// the first call's override forever.
+TEST_F(UserDefaults, d8_preset_override_does_not_leak_across_calls) {
+  struct Case {
+    const char* name;
+    bool via_unavailable_config_dir;
+  };
+  const Case kCases[] = {
+    { "the override disappears from the file", false },
+    { "the config directory becomes unavailable", true },
+  };
 
-  json doc;
-  doc["presets"]["axis"]["column"]["zenith_std"] = 3.0f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-  gui::MakeNewDocumentState(dir);
-  const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(first.has_value());
-  EXPECT_EQ(*first, 3.0f);
+  for (const Case& c : kCases) {
+    ResetUserDefaultsChannels();
+    const auto dir = FreshOverlayDir("d8_leak");
+    json doc;
+    doc["presets"]["axis"]["column"]["zenith_std"] = 3.0f;
+    EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+    gui::MakeNewDocumentState(dir);
+    const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+    if (!first.has_value()) {
+      ADD_FAILURE() << c.name << ": no stored override after the first call";
+      continue;  // no value to compare for this row; the rest still get checked
+    }
+    EXPECT_EQ(*first, 3.0f) << c.name;
 
-  // The user edits the file underneath the running process and removes the override —
-  // no call to ResetUserAxisPresetOverrides() here, matching production (only
-  // ApplyAxisPresetOverridesFromJson's internal reset should apply).
-  json empty_doc = json::object();
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, empty_doc));
-  gui::MakeNewDocumentState(dir);
-  const auto second = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(!second.has_value());
-}
-
-// code-review round 4 Major: the leak test above always passes an explicit override_dir, so
-// `dir` is truthy on both calls and never exercises the branch where GetUserConfigDir() itself
-// (not an explicit override_dir) resolves to nullopt. That is exactly the gap: the previous fix
-// reset g_axis_overrides only inside `if (dir)`, so a process where the FIRST
-// MakeNewDocumentState() call loaded a preset override and a LATER call's GetUserConfigDir()
-// becomes unavailable (its own doc comment says this can happen at runtime — directory removed
-// out from under the process, permissions revoked, disk full) would keep answering with the
-// first call's override forever. This test forces that exact flip via the no-arg production
-// call path (main.cpp / DoNew() / DoOpen() all call MakeNewDocumentState() with no argument).
-TEST(UserDefaults, d8_preset_override_does_not_leak_when_config_dir_becomes_unavailable) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("d8_leak_no_dir");
-
-  json doc;
-  doc["presets"]["axis"]["column"]["zenith_std"] = 3.0f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-  gui::MakeNewDocumentState(dir);
-  const auto first = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(first.has_value());
-  EXPECT_EQ(*first, 3.0f);
-
-  // Same process, same override still loaded — but this call's GetUserConfigDir() now
-  // resolves to nullopt, the no-arg production call path, not an explicit override_dir.
-  //
-  // The kAutoDetect guard is what keeps this test testing what it says. The harness baseline
-  // is kDisabled, and under kDisabled the no-arg path returns nullopt without ever calling
-  // GetUserConfigDir() — the case would still pass (same verdict, by a different route) while
-  // silently no longer exercising "GetUserConfigDir() went unavailable mid-process", the
-  // regression it was written for. Restoring kAutoDetect for this scope re-arms
-  // ScopedNoUserConfigDirEnv, which only has an effect on that branch.
-  {
-    ScopedUserConfigSource auto_detect(gui::UserConfigSource::kAutoDetect);
-    ScopedNoUserConfigDirEnv no_config_dir;
-    gui::MakeNewDocumentState(std::nullopt);
+    if (c.via_unavailable_config_dir) {
+      // The no-arg production call path (main.cpp / DoNew() / DoOpen() all call
+      // MakeNewDocumentState() with no argument), with GetUserConfigDir() forced to nullopt.
+      //
+      // The kAutoDetect guard is what keeps this arm testing what it says. The harness baseline
+      // is kDisabled, and under kDisabled the no-arg path returns nullopt without ever calling
+      // GetUserConfigDir() — the arm would still pass (same verdict, by a different route) while
+      // silently no longer exercising "GetUserConfigDir() went unavailable mid-process", the
+      // regression it was written for. Restoring kAutoDetect for this scope re-arms
+      // ScopedNoUserConfigDirEnv, which only has an effect on that branch.
+      ScopedUserConfigSource auto_detect(gui::UserConfigSource::kAutoDetect);
+      ScopedNoUserConfigDirEnv no_config_dir;
+      gui::MakeNewDocumentState(std::nullopt);
+    } else {
+      // The user edits the file underneath the running process and removes the override — no
+      // call to ResetUserAxisPresetOverrides() here, matching production (only
+      // ApplyAxisPresetOverridesFromJson's internal reset should apply).
+      EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, json::object()));
+      gui::MakeNewDocumentState(dir);
+    }
+    EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value()) << c.name;
   }
-  const auto second = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  EXPECT_TRUE(!second.has_value());
-}
-
-TEST(UserDefaults, d8_malformed_preset_value_degrades) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("d8_bad");
-
-  WriteRawOverlay(dir, R"({"presets": {"axis": {"column": {"zenith_std": "wide"}}}})");
-  gui::MakeNewDocumentState(dir);
-
-  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1);
-  // A rejected value is a drop, not a clamp — the two channels must not be conflated.
-  EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(0));
-}
-
-// AC1 — the round trip a user actually performs: retune Column to the value the beta user
-// asked for, then confirm a fresh process would read it back. MakeNewDocumentState() is the
-// "restart" here: it is the exact call startup makes, and it re-reads the file from disk.
-TEST(UserDefaults, preset_write_round_trips_across_a_reload) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("preset_roundtrip");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
-
-  // On disk under the key 405.2's reader already looks for. Asserted through this file's own
-  // raw reader rather than the production one, so a writer bug and a reader bug cannot cancel.
-  const json doc = ReadOverlayDoc(dir);
-  EXPECT_TRUE(doc.contains("presets"));
-  const auto stored_column = ReadPresetStd(doc, "column");
-  ASSERT_TRUE(stored_column.has_value());
-  EXPECT_EQ(*stored_column, 0.3f);
-
-  // The session picks it up the way startup does.
-  gui::MakeNewDocumentState(dir);
-  const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(loaded.has_value());
-  EXPECT_EQ(*loaded, 0.3f);
-
-  // Drop the in-memory state the way a restart would, then re-resolve from the file.
-  gui::ResetUserAxisPresetOverrides();
-  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
-  gui::MakeNewDocumentState(dir);
-
-  const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
-  ASSERT_TRUE(reloaded.has_value());
-  EXPECT_EQ(*reloaded, 0.3f);
-
-  // And that is what pressing the Column button would write into the crystal.
-  EXPECT_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
 }
 
 // AC2 — the core claim of D8, MEASURED rather than reasoned about: a retuned preset is still
@@ -752,8 +648,7 @@ TEST(UserDefaults, preset_write_round_trips_across_a_reload) {
 // preview on the typical-view branch. Four presets, each at a value inside its own domain
 // (the domains point in opposite directions, so one example would prove nothing about the
 // other side).
-TEST(UserDefaults, preset_identity_survives_retuning) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, preset_identity_survives_retuning) {
   const auto dir = FreshOverlayDir("preset_identity");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
@@ -802,8 +697,7 @@ TEST(UserDefaults, preset_identity_survives_retuning) {
 // Aimed at ClampAxisPresetZenithStdForSave, the single owner of both the clamp and its wording
 // (defaults_panel.cpp is its only production caller). This case is the whole repo's only direct
 // check of that wording, so the message assertions below are load-bearing, not decoration.
-TEST(UserDefaults, preset_write_clamps_and_reports_both_states) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, preset_write_clamps_and_reports_both_states) {
   const auto dir = FreshOverlayDir("preset_write_clamp");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
@@ -840,12 +734,17 @@ TEST(UserDefaults, preset_write_clamps_and_reports_both_states) {
   EXPECT_TRUE(ok.message.empty());
 }
 
-// AC5 — restore one preset to factory: byte-identical to kAxisPresets, key gone from the file
-// (with its empty parents pruned), and NOTHING else disturbed — neither another preset nor the
-// GuiState half of the same file. The last part is what a wholesale rewrite would break.
-TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
-  ResetUserDefaultsChannels();
-  const auto dir = FreshOverlayDir("preset_restore");
+// AC1 + AC5 — the whole life of a preset override on one staging: retune Column to the value the
+// beta user asked for and confirm a fresh process reads it back (AC1), then restore it to factory
+// and confirm the revert was surgical (AC5) — byte-identical to kAxisPresets, key gone from the
+// file with its empty parents pruned, and NOTHING else disturbed, neither the other preset nor the
+// GuiState half of the same file. That last part is what a wholesale rewrite would break.
+//
+// MakeNewDocumentState() is the "restart" throughout: it is the exact call startup makes, and it
+// re-reads the file from disk. Write and revert share one file and one session on purpose — they
+// are one user's sequence, and staging them separately said the same setup twice.
+TEST_F(UserDefaults, preset_override_round_trips_across_a_reload_and_reverting_one_is_surgical) {
+  const auto dir = FreshOverlayDir("preset_lifecycle");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
   // A file that already carries a GuiState default, so the write path has a neighbour to
@@ -858,15 +757,12 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
   // of the document shape the panel's Save also goes through.
   EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kColumn, 0.3f));
   EXPECT_TRUE(SeedPresetOverrideOnDisk(dir, gui::AxisPreset::kPlate, 0.5f));
-  // Load them into the session, so the memory-side assertion after the revert below is about a
-  // value that was really there rather than one that never arrived.
-  gui::MakeNewDocumentState(dir);
-  EXPECT_TRUE(gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
 
-  // Asserted after the SECOND write, before any revert: the second write must not have taken
-  // the first one with it. Without this line the whole case still passes when the write is a
-  // wholesale rewrite of the presets subtree — measured with exactly that mutation, which is
-  // why the assertion is here and not left implied by the revert checks below.
+  // What LANDED, read through this file's own raw reader rather than the production one so a
+  // writer bug and a reader bug cannot cancel out into a pass. Taken after the SECOND write, which
+  // is also how this says the second write did not take the first one with it: without that, the
+  // whole case still passes when the write is a wholesale rewrite of the presets subtree —
+  // measured with exactly that mutation.
   {
     const json after_two_writes = ReadOverlayDoc(dir);
     const auto kept_column = ReadPresetStd(after_two_writes, "column");
@@ -878,6 +774,25 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
     EXPECT_TRUE(after_two_writes.contains("bg_alpha"));
     EXPECT_EQ(after_two_writes.value("bg_alpha", 0.0f), 0.42f);
   }
+
+  // The session picks the file up the way startup does — which is also what loads the value the
+  // memory-side assertion after the revert is about, so that one is about a value that was really
+  // there rather than one which never arrived.
+  gui::MakeNewDocumentState(dir);
+  const auto loaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(*loaded, 0.3f);
+  // ...and that is what pressing the Column button would write into the crystal.
+  EXPECT_EQ(gui::EffectiveAxisPresetZenith(gui::AxisPresetEntryFor(gui::AxisPreset::kColumn)).std, 0.3f);
+
+  // Drop the in-memory state the way a restart would, then re-resolve: the value has to come back
+  // off the disk rather than out of the cache the write left warm.
+  gui::ResetUserAxisPresetOverrides();
+  EXPECT_TRUE(!gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn).has_value());
+  gui::MakeNewDocumentState(dir);
+  const auto reloaded = gui::GetUserAxisPresetZenithStdOverride(gui::AxisPreset::kColumn);
+  ASSERT_TRUE(reloaded.has_value());
+  EXPECT_EQ(*reloaded, 0.3f);
 
   EXPECT_TRUE(RestoreOnePresetOnDisk(dir, gui::AxisPreset::kColumn));
 
@@ -908,8 +823,7 @@ TEST(UserDefaults, preset_restore_to_factory_is_surgical) {
 // AC7 — Random has no adjustable face, so nothing about it may reach the file. Asserted at the
 // STORE, not only at the UI: the UI not drawing an input is the first defense, and a defense
 // that exists only in a widget is one a future refactor removes without noticing.
-TEST(UserDefaults, preset_without_adjustable_face_is_never_written) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, preset_without_adjustable_face_is_never_written) {
   const auto dir = FreshOverlayDir("preset_random");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
@@ -964,80 +878,57 @@ TEST(UserDefaults, preset_without_adjustable_face_is_never_written) {
 // counters; until this task nothing consumed them, so a value silently adjusted at startup
 // was indistinguishable from one that had been dropped. Asserted through the same one-shot
 // warning surface an import degradation uses, from the production DoNew() path.
-TEST(UserDefaults, load_time_clamp_reaches_the_user) {
-  ResetUserDefaultsChannels();
-  gui::ClearImportComplexFilterWarning();
-  const auto dir = FreshOverlayDir("clamp_surfaced");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
+TEST_F(UserDefaults, ALoadTimeClampTellsTheUserWhichValueItReplacedAndWithWhat) {
+  struct SurfacedCase {
+    const char* name;
+    const char* preset_key;
+    const char* preset_label;  // as the warning names it
+    float stored;
+    const char* stored_text;
+    const char* clamped_text;
+  };
+  const SurfacedCase kCases[] = {
+    { "above Column's upper bound", "column", "Column", 25.0f, "25", "9.99999" },
+    // The mirror direction, and not a courtesy duplicate: the panel's std cell renders with a
+    // fixed "%.7g" while this notice uses adaptive precision. nextafter(10, 0) needs 7
+    // significant digits and happened to survive the fixed format; nextafter(15, +inf) needs 8 and
+    // collapsed to bare "15" under it — printing the clamped value as the very boundary the
+    // neighbouring sentence says it must stay above. Only this direction could catch that.
+    { "below Lowitz's lower bound", "lowitz", "Lowitz", 5.0f, "5", "15.000001" },
+  };
 
-  json doc;
-  doc["presets"]["axis"]["column"]["zenith_std"] = 25.0f;  // above Column's (0, 10)
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+  for (const SurfacedCase& c : kCases) {
+    ResetUserDefaultsChannels();
+    gui::ClearImportComplexFilterWarning();
+    json doc;
+    doc["presets"]["axis"][c.preset_key]["zenith_std"] = c.stored;
+    const auto dir = DirWith("clamp_surfaced", doc);
+    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
 
-  gui::DoNew();
+    gui::DoNew();
 
-  const std::string warning = gui::PeekImportComplexFilterWarning();
-  EXPECT_TRUE(!warning.empty());
-  EXPECT_TRUE(warning.find("Column") != std::string::npos);
-  EXPECT_TRUE(warning.find("25") != std::string::npos);
-  // The clamped value itself, so the user learns what they actually got rather than only that
-  // something was wrong.
-  EXPECT_TRUE(warning.find("9.99999") != std::string::npos);
-  gui::ClearImportComplexFilterWarning();
-}
+    const std::string warning = gui::PeekImportComplexFilterWarning();
+    EXPECT_FALSE(warning.empty()) << c.name;
+    EXPECT_NE(warning.find(c.preset_label), std::string::npos) << c.name;
+    EXPECT_NE(warning.find(c.stored_text), std::string::npos) << c.name;
+    // And the value they actually got, not merely that something was wrong.
+    EXPECT_NE(warning.find(c.clamped_text), std::string::npos) << c.name << ": got \"" << warning << "\"";
+    gui::ClearImportComplexFilterWarning();
+  }
 
-// The other clamp direction: Lowitz's domain is a LOWER bound (must stay greater than 15),
-// the mirror image of Column's upper bound above. A prior code-review round found that the
-// §1 panel's std cell used a fixed "%.7g" while this load-time notice (via FormatAxisPresetStd)
-// used adaptive precision — nextafter(10, 0) needs 7 digits and happened to work under the
-// fixed format, but nextafter(15, +inf) needs 8 and collapsed to "15" under it, printing the
-// clamped value as the boundary itself. Column's direction alone could not have caught that:
-// both call sites need exercising on the direction that actually needs the extra digit.
-TEST(UserDefaults, load_time_clamp_reaches_the_user_lowitz_lower_bound) {
-  ResetUserDefaultsChannels();
-  gui::ClearImportComplexFilterWarning();
-  const auto dir = FreshOverlayDir("clamp_surfaced_lowitz");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  json doc;
-  doc["presets"]["axis"]["lowitz"]["zenith_std"] = 5.0f;  // below Lowitz's (15, inf)
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  gui::DoNew();
-
-  const std::string warning = gui::PeekImportComplexFilterWarning();
-  EXPECT_TRUE(!warning.empty());
-  EXPECT_TRUE(warning.find("Lowitz") != std::string::npos);
-  EXPECT_TRUE(warning.find("5") != std::string::npos);
-  // The full clamped value, not the boundary alone: nextafter(15, +inf) needs 8 significant
-  // digits ("15.000001"), so a warning reading bare "15" would mean the display collapsed the
-  // stored value into the very boundary the neighbouring sentence says it must stay above.
-  EXPECT_TRUE(warning.find("15.000001") != std::string::npos);
-  gui::ClearImportComplexFilterWarning();
-}
-
-// The negative half of AC4: a clean override file must produce NO popup. Without this, a
-// notice that fired on every New would satisfy the case above while training the user to
-// dismiss the dialog unread — which is the same as not having one.
-TEST(UserDefaults, a_clean_load_surfaces_nothing) {
-  ResetUserDefaultsChannels();
-  gui::ClearImportComplexFilterWarning();
-  const auto dir = FreshOverlayDir("clamp_quiet");
-  ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
-
-  json doc;
-  doc["presets"]["axis"]["column"]["zenith_std"] = 0.3f;  // inside the domain
-  doc["bg_alpha"] = 0.42f;
-  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
-
-  gui::DoNew();
-  EXPECT_TRUE(gui::PeekImportComplexFilterWarning().empty());
-
-  // A first run with no file at all is the most common case of all, and must be just as quiet.
-  const auto empty_dir = FreshOverlayDir("clamp_quiet_empty");
-  ScopedUserConfigSource empty_guard(gui::UserConfigSource::kExplicitDir, empty_dir);
-  gui::DoNew();
-  EXPECT_TRUE(gui::PeekImportComplexFilterWarning().empty());
+  // The negative half: a clean override file, and a first run with no file at all, must produce
+  // NO popup. Without them, a notice that fired on every New would satisfy the rows above while
+  // training the user to dismiss the dialog unread — which is the same as not having one.
+  json clean;
+  clean["presets"]["axis"]["column"]["zenith_std"] = 0.3f;  // inside the domain
+  clean["bg_alpha"] = 0.42f;
+  for (const auto& quiet_dir : { DirWith("clamp_quiet", clean), FreshOverlayDir("clamp_quiet_empty") }) {
+    ResetUserDefaultsChannels();
+    gui::ClearImportComplexFilterWarning();
+    ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, quiet_dir);
+    gui::DoNew();
+    EXPECT_TRUE(gui::PeekImportComplexFilterWarning().empty()) << quiet_dir;
+  }
 }
 
 // The JSON-import path reads the override file too, but DeserializeFromJson opens with
@@ -1045,8 +936,7 @@ TEST(UserDefaults, a_clean_load_surfaces_nothing) {
 // degradation there would describe a document the user is not getting; leaving the counters
 // filled would misattribute them to the NEXT New. Draining is the only correct handling, and
 // this pins it: the import must leave the channel empty.
-TEST(UserDefaults, json_import_does_not_leak_downgrades_into_the_next_new) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, json_import_does_not_leak_downgrades_into_the_next_new) {
   gui::ClearImportComplexFilterWarning();
   const auto dir = FreshOverlayDir("import_leak");
   ScopedUserConfigSource guard(gui::UserConfigSource::kExplicitDir, dir);
@@ -1078,8 +968,7 @@ TEST(UserDefaults, json_import_does_not_leak_downgrades_into_the_next_new) {
 // ================================================================================
 // bg_path as a personal default
 // ================================================================================
-TEST(UserDefaults, bg_path_default_degrades_when_missing) {
-  ResetUserDefaultsChannels();
+TEST_F(UserDefaults, bg_path_default_degrades_when_missing) {
   const auto dir = FreshOverlayDir("bg");
 
   json doc;
@@ -1113,7 +1002,7 @@ TEST(UserDefaults, bg_path_default_degrades_when_missing) {
 // Structural gate: the degrade step must be wired into every path that can land a non-empty
 // bg_path. Calling the helper directly (above) proves it works; this proves it is reached.
 // Same technique as the reset-primitive single-owner gate in test_gui_import_export.cpp.
-TEST(UserDefaults, bg_degrade_is_wired_into_every_document_path) {
+TEST_F(UserDefaults, bg_degrade_is_wired_into_every_document_path) {
   std::ifstream in(LUMICE_GUI_APP_CPP_PATH);
   EXPECT_TRUE(in.is_open());
   const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());

@@ -148,6 +148,15 @@ void ResetTestState() {
   gui::g_pending_action = gui::PendingAction::kNone;
   gui::g_show_save_modified_popup = false;
   gui::g_pending_save_kind = gui::PendingSaveKind::kNone;
+  // The warning modal's in-flight message is a file-scope string in app_panels.cpp with its own
+  // de-duplication key, so a message left in flight by one case decides whether the next case's
+  // identical warning opens at all. Now that the harness renders the modal, that would also leave
+  // a modal open across cases.
+  gui::ClearGuiWarning();
+  // Same shape, the import-warning sibling: a queued message left behind by one case would open
+  // its modal on top of whatever the next case is driving. Several suites import configurations
+  // that queue one as a side effect, which is why this is a reset rather than each case's job.
+  gui::ClearImportComplexFilterWarning();
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see
@@ -178,6 +187,55 @@ void ResetTestState() {
   g_capture.Reset();
   g_export_test.Reset();
   g_bg_test.Reset();
+}
+
+// See the contract note in test_gui_shared.hpp. Lives here because this is the TU that already
+// includes imgui_internal.h, where ImGuiItemFlags_Disabled is declared.
+bool IsDisabled(const ImGuiTestItemInfo& info) {
+  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
+}
+
+// See the contract note in test_gui_shared.hpp for why this is a destructor rather than three
+// statements at the end of a case body.
+ScopedPopups::~ScopedPopups() {
+  // The gui side first, so the popup stops being submitted: RenderEditModals and
+  // RenderSpectrumModal only call BeginPopupModal while these statics say one is open. One call
+  // covers both — ResetModalState delegates to ResetSpectrumModalStateGlobals. The sun-circles
+  // editor has no statics of its own: it is opened straight from its button and needs only the
+  // stack pop below.
+  gui::ResetModalState();
+  // The two view preferences a case may have flipped to reach a layout, pinned back to the values
+  // ResetTestState() hands every case. Listed so this object is a complete statement of what it
+  // borrowed, not a list of what ResetTestState() happens to miss today.
+  gui::g_state.modal_layout_vertical = false;
+  gui::g_state.modal_immediate_mode = false;
+  // ImGui's own stack is the part nothing else reaches. Level 0 rather than a search for our entry:
+  // by the time a case is leaving, every popup on the stack was opened by it (a sync-group popup
+  // nested inside the modal is the common second one), and restore_focus=false keeps this to a
+  // resize of the stack — the focus path is the only thing in ClosePopupToLevel that would care
+  // that we are running between frames rather than inside one.
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  if (g.OpenPopupStack.Size > 0) {
+    ImGui::ClosePopupToLevel(0, /*restore_focus_to_window_under_popup=*/false);
+  }
+  // One frame for the window to go away with it. Yield is the only ImGuiTestContext call that still
+  // does anything once the case has failed.
+  ctx_->Yield(2);
+}
+
+// See the contract note in test_gui_shared.hpp. Unlike its neighbour below, this one needs nothing
+// this TU owns — it lives here only because a shared helper needs one definition and this is where
+// the suite's shared definitions are. Moving it costs nothing but a build-file line.
+bool WaitForSimRestartAtLeast(ImGuiTestContext* ctx, unsigned long long baseline_upload_count, int timeout_ms) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    ctx->Yield();  // let the main thread run SyncFromPoller()
+    if (gui::g_state.texture_upload_count >= baseline_upload_count + 1) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
 }
 
 // See the contract note in test_gui_shared.hpp. Lives here because this TU owns
@@ -326,7 +384,7 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
   // Lock to non-Retina framebuffer on macOS so framebuffer size == window size
   // (1600x980) regardless of cold/warm start or visible/hidden state. Visual
-  // regression tests (e.g. screenshot/left_panel_psnr) need deterministic
+  // regression tests (e.g. visual/left_panel) need deterministic
   // capture dimensions; without this hint, hidden windows may yield 400x912
   // on one run and 800x1824 on the next.
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
@@ -447,29 +505,26 @@ int main(int argc, char** argv) {
   ImGuiTestEngine_InstallDefaultCrashHandler();
 
   // Register and queue all tests
-  RegisterP0Tests(engine);
-  RegisterP1Tests(engine);
-  RegisterP2Tests(engine);
-  RegisterAspectRatioTests(engine);
+  RegisterViewDisplayControlTests(engine);
   RegisterExportPreviewTests(engine);
-  RegisterScreenshotTests(engine);
-  RegisterVisualTests(engine);
-  RegisterBgOverlayTests(engine);
-  RegisterImportExportTests(engine);
+  RegisterPreviewPixelTests(engine);
+  RegisterPreviewTextureTests(engine);
+  RegisterEntryManagementTests(engine);
+  RegisterBackgroundOverlayTests(engine);
+  RegisterFileOpsTests(engine);
   RegisterColorWindowTests(engine);
+  RegisterFilterEditorTests(engine);
+  RegisterEditModalTests(engine);
+  RegisterSceneControlTests(engine);
+  RegisterShellChromeTests(engine);
+  RegisterLogPanelTests(engine);
+  RegisterOverlayControlTests(engine);
+  RegisterPreviewViewportTests(engine);
   RegisterPerfTests(engine);
-  // task-test-gui-interaction: user action → state assertion coverage
-  RegisterP1InteractionTests(engine);
-  RegisterP1SliderBoundaryTests(engine);
-  RegisterP2InteractionRenderTests(engine);
-  RegisterP1RunningTests(engine);
-  RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
-  RegisterLinkedEntriesTests(engine);
-  RegisterLifecycleTests(engine);
-  RegisterCompositePreviewTests(engine);
-  RegisterSamplingDensityStatsTests(engine);
+  RegisterRunLifecycleTests(engine);
+  RegisterStatusBarTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterSimE2eSmokeTests(engine);
@@ -574,6 +629,17 @@ int main(int argc, char** argv) {
     // any UI-driven gui_test — the existing p2_modal AC4 tests could only
     // exercise DoSave()/PerformSave() directly. Mirrors main.cpp:352.
     gui::RenderSaveModifiedPopup(window);
+    // Same omission, found again from the other end: the generic warning modal was in the
+    // product's frame loop and not in this one, so the only proposition about it that gui_test
+    // could state was about a flag.
+    gui::RenderGuiWarningPopup();
+    // Its import-specific sibling, absent here for the same reason and added with the rewrite of
+    // the suites that queue one. Two things make that safe now. The message it opens on is a
+    // file-scope string in app_panels.cpp, and ResetTestState() clears it, so an import performed
+    // by one case cannot open a modal in the middle of the next one. What a reset cannot close is
+    // a modal already on screen, so the case that opens this one dismisses it through its own OK
+    // button — an open modal swallows every subsequent ItemClick in the process.
+    gui::RenderImportWarningPopup();
     // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
     // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
     // already paid for twice.

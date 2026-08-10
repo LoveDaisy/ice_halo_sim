@@ -57,104 +57,62 @@ void ExpectFactorsRoundTrip(const std::vector<Factor>& factors) {
 // AC1 — express + round-trip arbitrary sum-of-products
 // ===========================================================================
 
-// (a) single raypath factor.
-TEST(FilterSopAc1, SingleRaypathRoundTrip) {
-  std::vector<Factor> factors{ Factor{ Rp("3-5") } };
-  ExpectFactorsRoundTrip(factors);
+// AC1 as one table: any factor list a caller can build must serialize to the canonical text below
+// and parse back to the same factors. One row per shape the grammar has to express — a single
+// raypath, an AND of factors in either order, an EE factor with each length mode, the wildcard
+// entry, and the raypath-breaks-the-EE-run rule — because the assertion is identical for all of
+// them and one case per shape was one preamble per shape.
+TEST(FilterSopAc1, EveryExpressibleFactorListRoundTripsThroughItsCanonicalText) {
+  struct Case {
+    const char* name;
+    std::vector<Factor> factors;
+    const char* canonical_text;
+  };
+  const std::vector<Case> kCases = {
+    { "single raypath", { Factor{ Rp("3-5") } }, "3-5" },
+    // The EE row's canonical text always carries the entry: type anchor, which is what makes the
+    // wildcard (empty facelist) row distinguishable from an empty row at all.
+    { "single entry/exit", { Factor{ Ee("2") } }, "entry:2" },
+    { "wildcard entry", { Factor{ Ee("") } }, "entry:" },
+    // AND of factors, both orders: factor order is preserved across the round trip.
+    { "raypath AND entry/exit", { Factor{ Rp("3-5") }, Factor{ Ee("2") } }, "3-5 & entry:2" },
+    { "entry/exit AND raypath", { Factor{ Ee("2") }, Factor{ Rp("3-5") } }, "entry:2 & 3-5" },
+    // A raypath sandwiched between two EE fragments splits into TWO separate EE factors (the
+    // in-flight EE builder is flushed at each raypath token) rather than merging across it.
+    { "a raypath breaks the EE merge run",
+      { Factor{ Ee("2") }, Factor{ Rp("5") }, Factor{ Ee("", "3") } },
+      "entry:2 & 5 & entry: & exit:3" },
+    // Each length mode decodes to its own spelling.
+    { "EE with a range length",
+      { Factor{ Ee("2", "3", /*mode=*/3, /*min_len=*/2, /*max_len=*/4) } },
+      "entry:2 & exit:3 & len:2-4" },
+    { "EE with a strict length",
+      { Factor{ Ee("2", "", /*mode=*/1, /*min_len=*/3, /*max_len=*/3) } },
+      "entry:2 & len:3" },
+    { "EE with an at-most length",
+      { Factor{ Ee("2", "", /*mode=*/2, /*min_len=*/1, /*max_len=*/5) } },
+      "entry:2 & len:<=5" },
+  };
 
-  auto parsed = ParseSummandText("3-5");
-  ASSERT_EQ(parsed.size(), 1u);
-  ASSERT_TRUE(std::holds_alternative<RaypathParams>(parsed[0]));
-  EXPECT_EQ(std::get<RaypathParams>(parsed[0]).raypath_text, "3-5");
-}
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    EXPECT_EQ(FormatSummandText(c.factors), c.canonical_text);
+    ExpectFactorsRoundTrip(c.factors);
+  }
 
-// (b) multi-summand OR expressed as a SumOfProducts of several rows. Each row is
-// round-tripped independently (the grammar operates per-row; OR lives at the
-// SoP/vector level).
-TEST(FilterSopAc1, MultiSummandOrRoundTrip) {
-  SumOfProducts sop{
+  // OR lives at the SoP/vector level, not in the grammar: each row is round-tripped independently,
+  // and a row's stored canonical text must re-parse to its stored factor cache.
+  const SumOfProducts sop{
     SummandText{ FormatSummandText({ Factor{ Rp("3-5") } }), { Factor{ Rp("3-5") } } },
-    SummandText{ FormatSummandText({ Factor{ Rp("1-3") } }), { Factor{ Rp("1-3") } } },
+    SummandText{ FormatSummandText({ Factor{ Ee("2") } }), { Factor{ Ee("2") } } },
     SummandText{ FormatSummandText({ Factor{ Rp("6-7") } }), { Factor{ Rp("6-7") } } },
   };
-  ASSERT_EQ(sop.size(), 3u);
   for (const auto& row : sop) {
     ExpectFactorsRoundTrip(row.factors);
-    // The stored canonical text must re-parse to the stored factor cache.
     EXPECT_TRUE(ParseSummandText(row.text) == row.factors);
   }
-}
 
-// (c) cross-type OR: one row is a raypath, another is an entry-exit factor.
-TEST(FilterSopAc1, CrossTypeOrRoundTrip) {
-  std::vector<Factor> raypath_row{ Factor{ Rp("3-5") } };
-  std::vector<Factor> ee_row{ Factor{ Ee("2") } };
-
-  ExpectFactorsRoundTrip(raypath_row);
-  ExpectFactorsRoundTrip(ee_row);
-
-  // The EE row's canonical text always carries the entry: type anchor.
-  EXPECT_EQ(FormatSummandText(ee_row), "entry:2");
-}
-
-// (d) AND-of-factors within a single summand: raypath AND entry-exit. Also
-// checks that factor order is preserved across the round-trip.
-TEST(FilterSopAc1, AndOfFactorsRoundTrip) {
-  std::vector<Factor> factors{ Factor{ Rp("3-5") }, Factor{ Ee("2") } };
-  EXPECT_EQ(FormatSummandText(factors), "3-5 & entry:2");
-  ExpectFactorsRoundTrip(factors);
-
-  // Reversed order (EE first, then raypath) must also survive.
-  std::vector<Factor> reversed{ Factor{ Ee("2") }, Factor{ Rp("3-5") } };
-  EXPECT_EQ(FormatSummandText(reversed), "entry:2 & 3-5");
-  ExpectFactorsRoundTrip(reversed);
-}
-
-// A raypath sandwiched between two EE fragments must split into TWO separate EE
-// factors (the in-flight EE builder is flushed at each raypath token), not merge
-// across the raypath. This pins the "same-row EE tokens merge / raypath breaks
-// the run" rule from plan §3.3.
-TEST(FilterSopAc1, RaypathBreaksEeMergeRun) {
-  std::vector<Factor> factors{ Factor{ Ee("2") }, Factor{ Rp("5") }, Factor{ Ee("", "3") } };
-  std::string text = FormatSummandText(factors);
-  EXPECT_EQ(text, "entry:2 & 5 & entry: & exit:3");
-  auto parsed = ParseSummandText(text);
-  ASSERT_EQ(parsed.size(), 3u);
-  EXPECT_TRUE(std::holds_alternative<EntryExitParams>(parsed[0]));
-  EXPECT_TRUE(std::holds_alternative<RaypathParams>(parsed[1]));
-  EXPECT_TRUE(std::holds_alternative<EntryExitParams>(parsed[2]));
-  EXPECT_TRUE(parsed == factors);
-}
-
-// EE factor carrying entry + exit + length constraint round-trips as a single
-// merged factor, and the length spec decodes to the right (mode, min, max).
-TEST(FilterSopAc1, EntryExitWithLengthRoundTrip) {
-  // range mode
-  std::vector<Factor> range_row{ Factor{ Ee("2", "3", /*mode=*/3, /*min_len=*/2, /*max_len=*/4) } };
-  EXPECT_EQ(FormatSummandText(range_row), "entry:2 & exit:3 & len:2-4");
-  ExpectFactorsRoundTrip(range_row);
-
-  // strict mode
-  std::vector<Factor> strict_row{ Factor{ Ee("2", "", /*mode=*/1, /*min_len=*/3, /*max_len=*/3) } };
-  EXPECT_EQ(FormatSummandText(strict_row), "entry:2 & len:3");
-  ExpectFactorsRoundTrip(strict_row);
-
-  // at-most mode
-  std::vector<Factor> atmost_row{ Factor{ Ee("2", "", /*mode=*/2, /*min_len=*/1, /*max_len=*/5) } };
-  EXPECT_EQ(FormatSummandText(atmost_row), "entry:2 & len:<=5");
-  ExpectFactorsRoundTrip(atmost_row);
-}
-
-// Wildcard (empty) entry facelist round-trips thanks to the always-emitted
-// entry: anchor (plan §3 default-state disambiguation).
-TEST(FilterSopAc1, WildcardEntryRoundTrip) {
-  std::vector<Factor> row{ Factor{ Ee("") } };
-  EXPECT_EQ(FormatSummandText(row), "entry:");
-  ExpectFactorsRoundTrip(row);
-}
-
-// Empty text parses to an empty factor list (a "no filter" row).
-TEST(FilterSopAc1, EmptyTextParsesEmpty) {
+  // An empty row is "no filter": no factors at all.
   EXPECT_TRUE(ParseSummandText("").empty());
   EXPECT_TRUE(ParseSummandText("   ").empty());
 }
@@ -163,36 +121,43 @@ TEST(FilterSopAc1, EmptyTextParsesEmpty) {
 // These live under the AC1 umbrella per the task brief (round-trip the legacy
 // shape into a SoP and back through the grammar).
 
-TEST(FilterSopAc1, FromLegacyRaypathSplitsSemicolonIntoRows) {
-  SumOfProducts sop = FromLegacyRaypath(Rp("3-5; 1-3"));
-  ASSERT_EQ(sop.size(), 2u);
-  EXPECT_EQ(sop[0].text, "3-5");
-  EXPECT_EQ(sop[1].text, "1-3");
-  // Each row's factor cache is a single raypath factor equal to its text.
-  for (const auto& row : sop) {
-    ASSERT_EQ(row.factors.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<RaypathParams>(row.factors[0]));
-    EXPECT_EQ(std::get<RaypathParams>(row.factors[0]).raypath_text, row.text);
-    // Grammar-conformant: the row text re-parses to the row's factor cache.
-    EXPECT_TRUE(ParseSummandText(row.text) == row.factors);
+TEST(FilterSopAc1, FromLegacyRaypathFansOutToOneRowPerSegment) {
+  struct Case {
+    const char* text;
+    std::vector<std::string> expect_rows;
+  };
+  const Case kCases[] = {
+    { "3-5; 1-3", { "3-5", "1-3" } },
+    { "3-5", { "3-5" } },
+    // Empty legacy raypath -> the "no filter" degenerate SoP: 1 row holding 1 empty raypath factor,
+    // which is the FilterConfig default state. Zero rows is not a valid filter.
+    { "", { "" } },
+  };
+  for (const Case& c : kCases) {
+    SumOfProducts sop = FromLegacyRaypath(Rp(c.text));
+    if (sop.size() != c.expect_rows.size()) {
+      ADD_FAILURE() << c.text << ": expected " << c.expect_rows.size() << " rows, got " << sop.size();
+      continue;  // no rows to index for this case; the rest still get checked
+    }
+    for (size_t i = 0; i < c.expect_rows.size(); ++i) {
+      EXPECT_EQ(sop[i].text, c.expect_rows[i]) << c.text << " row " << i;
+      if (sop[i].factors.size() != 1u) {
+        ADD_FAILURE() << c.text << " row " << i << ": expected exactly 1 factor, got " << sop[i].factors.size();
+        continue;  // no single factor to check for this row; the rest still get checked
+      }
+      if (!std::holds_alternative<RaypathParams>(sop[i].factors[0])) {
+        ADD_FAILURE() << c.text << " row " << i << ": factor is not a RaypathParams";
+        continue;
+      }
+      EXPECT_EQ(std::get<RaypathParams>(sop[i].factors[0]).raypath_text, sop[i].text);
+      // Grammar-conformant: the row text re-parses to the row's factor cache. Not asked of the
+      // empty row — the grammar reads "" as no factors at all, while the degenerate SoP has to
+      // carry one empty raypath factor for the editor to have a row to show.
+      if (!sop[i].text.empty()) {
+        EXPECT_TRUE(ParseSummandText(sop[i].text) == sop[i].factors) << c.text << " row " << i;
+      }
+    }
   }
-}
-
-TEST(FilterSopAc1, FromLegacyRaypathSingleSegmentIsSingleRow) {
-  SumOfProducts sop = FromLegacyRaypath(Rp("3-5"));
-  ASSERT_EQ(sop.size(), 1u);
-  EXPECT_EQ(sop[0].text, "3-5");
-}
-
-TEST(FilterSopAc1, FromLegacyRaypathEmptyIsSingleEmptyRow) {
-  // Empty legacy raypath → the "no filter" degenerate SoP: 1 row, 1 empty
-  // raypath factor (matches the FilterConfig default state).
-  SumOfProducts sop = FromLegacyRaypath(Rp(""));
-  ASSERT_EQ(sop.size(), 1u);
-  EXPECT_TRUE(sop[0].text.empty());
-  ASSERT_EQ(sop[0].factors.size(), 1u);
-  ASSERT_TRUE(std::holds_alternative<RaypathParams>(sop[0].factors[0]));
-  EXPECT_TRUE(std::get<RaypathParams>(sop[0].factors[0]).raypath_text.empty());
 }
 
 TEST(FilterSopAc1, FromLegacyEntryExitIsSingleRowAllModes) {
@@ -209,15 +174,30 @@ TEST(FilterSopAc1, FromLegacyEntryExitIsSingleRowAllModes) {
   };
   for (const auto& c : cases) {
     SumOfProducts sop = FromLegacyEntryExit(c.ep);
-    ASSERT_EQ(sop.size(), 1u);
+    if (sop.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": expected exactly 1 row, got " << sop.size();
+      continue;  // no row to index for this case; the rest still get checked
+    }
     EXPECT_EQ(sop[0].text, c.expect_text);
-    ASSERT_EQ(sop[0].factors.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<EntryExitParams>(sop[0].factors[0]));
+    if (sop[0].factors.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": expected exactly 1 factor, got " << sop[0].factors.size();
+      continue;
+    }
+    if (!std::holds_alternative<EntryExitParams>(sop[0].factors[0])) {
+      ADD_FAILURE() << c.expect_text << ": factor is not an EntryExitParams";
+      continue;
+    }
     EXPECT_TRUE(std::get<EntryExitParams>(sop[0].factors[0]) == c.ep);
     // The emitted text re-parses to the same EntryExitParams (bijective).
     auto reparsed = ParseSummandText(sop[0].text);
-    ASSERT_EQ(reparsed.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<EntryExitParams>(reparsed[0]));
+    if (reparsed.size() != 1u) {
+      ADD_FAILURE() << c.expect_text << ": reparse expected exactly 1 factor, got " << reparsed.size();
+      continue;
+    }
+    if (!std::holds_alternative<EntryExitParams>(reparsed[0])) {
+      ADD_FAILURE() << c.expect_text << ": reparsed factor is not an EntryExitParams";
+      continue;
+    }
     EXPECT_TRUE(std::get<EntryExitParams>(reparsed[0]) == c.ep);
   }
 }
@@ -240,39 +220,28 @@ TEST(FilterSopAc2, SummandTextComparesTextOnly) {
   EXPECT_TRUE(diff_text_a != diff_text_b);
 }
 
-TEST(FilterSopAc2, IdenticalSopIsEqual) {
+// SoP equality follows the row list: same rows equal, and adding, removing or retexting a row
+// breaks it. One case, because the four are one proposition about the same comparison.
+TEST(FilterSopAc2, SopEqualityFollowsTheRowList) {
   FilterConfig a;
   a.SetRaypath(Rp("3-5"));
   FilterConfig b;
   b.SetRaypath(Rp("3-5"));
   EXPECT_TRUE(a == b);
-}
 
-TEST(FilterSopAc2, AddedOrRowIsNotEqual) {
-  FilterConfig a;
-  a.param = SumOfProducts{ SummandText{ "3-5", { Factor{ Rp("3-5") } } } };
-  FilterConfig b = a;
-  b.param.push_back(SummandText{ "1-3", { Factor{ Rp("1-3") } } });
-  EXPECT_TRUE(a != b);
-}
+  FilterConfig added = a;
+  added.param.push_back(SummandText{ "1-3", { Factor{ Rp("1-3") } } });
+  EXPECT_TRUE(a != added);
 
-TEST(FilterSopAc2, RemovedOrRowIsNotEqual) {
-  FilterConfig a;
-  a.param = SumOfProducts{
-    SummandText{ "3-5", { Factor{ Rp("3-5") } } },
-    SummandText{ "1-3", { Factor{ Rp("1-3") } } },
-  };
-  FilterConfig b = a;
-  b.param.pop_back();
-  EXPECT_TRUE(a != b);
-}
+  FilterConfig removed = added;
+  removed.param.pop_back();
+  EXPECT_TRUE(removed == a) << "removing the added row must restore equality";
+  removed.param.pop_back();
+  EXPECT_TRUE(a != removed);
 
-TEST(FilterSopAc2, ChangedRowTextIsNotEqual) {
-  FilterConfig a;
-  a.param = SumOfProducts{ SummandText{ "3-5 & entry:2", {} } };
-  FilterConfig b = a;
-  b.param[0].text = "3-5 & entry:3";
-  EXPECT_TRUE(a != b);
+  FilterConfig retexted = a;
+  retexted.param[0].text = "3-6";
+  EXPECT_TRUE(a != retexted);
 }
 
 // FilterConfig::operator== must reflect every top-level field plus param.
@@ -384,58 +353,50 @@ TEST(FilterSopModel, NonDegenerateSopIsNotSingleFactor) {
 // Grammar validation — ValidateSummandText + ParseLengthSpec
 // ===========================================================================
 
-TEST(FilterSopGrammar, ValidateEmptyIsValid) {
-  EXPECT_EQ(ValidateSummandText("", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID);
-  EXPECT_EQ(ValidateSummandText("   ", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID);
-}
-
-TEST(FilterSopGrammar, ValidateAcceptsWellFormedRows) {
-  const char* good[] = {
-    "3-5",
-    "3-5 & entry:2",
-    "entry:2 & exit:3",
-    "entry:2 & exit:3 & len:2-4",
-    "entry:",            // wildcard entry anchor
-    "entry: & len:<=5",  // wildcard entry + length
-    "3-5 & entry:2 & exit:4 & len:3",
+// The validator over its accept/reject domain, as one table. Every row is the same question — is
+// this row text well formed for this crystal kind — and one case per rule was one preamble per rule.
+TEST(FilterSopGrammar, ValidateAnswersForEveryWellAndMalformedRowShape) {
+  struct Case {
+    const char* text;
+    LUMICE_CrystalKind kind;
+    LUMICE_RaypathValidationState expected;
   };
-  for (const char* g : good) {
-    EXPECT_EQ(ValidateSummandText(g, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID) << "expected VALID: " << g;
+  const Case kCases[] = {
+    // Blank rows are valid and stripped at commit time.
+    { "", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "   ", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    // Well-formed shapes, including the wildcard entry anchor.
+    { "3-5", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "3-5 & entry:2", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "entry:2 & exit:3", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "entry:2 & exit:3 & len:2-4", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "entry:", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "entry: & len:<=5", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    { "3-5 & entry:2 & exit:4 & len:3", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_VALID },
+    // A dangling or doubled '&' has no factor to bind.
+    { "3-5 &", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "& 3-5", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "3-5 && 2", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    // "foo:2" is neither an EE token nor a valid raypath token.
+    { "foo:2", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    // One EE token of each kind per factor.
+    { "entry:2 & entry:3", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "len:3 & len:4", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    // Face 13 is pyramid-only, both bare and inside an entry: facelist; face 51 is on no crystal.
+    { "13", LUMICE_CRYSTAL_PYRAMID, LUMICE_RAYPATH_VALID },
+    { "13", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "entry:13", LUMICE_CRYSTAL_PYRAMID, LUMICE_RAYPATH_VALID },
+    { "entry:13", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "entry:51", LUMICE_CRYSTAL_PYRAMID, LUMICE_RAYPATH_INVALID },
+    // Length specs: not a number, zero, an inverted range, a zero upper bound.
+    { "len:abc", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "len:0", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "len:5-2", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+    { "len:<=0", LUMICE_CRYSTAL_PRISM, LUMICE_RAYPATH_INVALID },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_EQ(ValidateSummandText(c.text, c.kind).state, c.expected) << "\"" << c.text << "\" kind=" << c.kind;
   }
-}
-
-TEST(FilterSopGrammar, ValidateRejectsDanglingAmpersand) {
-  EXPECT_EQ(ValidateSummandText("3-5 &", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("& 3-5", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("3-5 && 2", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-}
-
-TEST(FilterSopGrammar, ValidateRejectsUnknownPrefix) {
-  // "foo:2" is not an EE token and is not a valid raypath token.
-  EXPECT_EQ(ValidateSummandText("foo:2", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-}
-
-TEST(FilterSopGrammar, ValidateRejectsDuplicateEeToken) {
-  EXPECT_EQ(ValidateSummandText("entry:2 & entry:3", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("len:3 & len:4", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-}
-
-TEST(FilterSopGrammar, ValidateRejectsBadFacePerCrystalKind) {
-  // Face 13 is a pyramid-only face: legal on PYRAMID, illegal on PRISM.
-  EXPECT_EQ(ValidateSummandText("13", LUMICE_CRYSTAL_PYRAMID).state, LUMICE_RAYPATH_VALID);
-  EXPECT_EQ(ValidateSummandText("13", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  // Same rule applies inside an entry: facelist.
-  EXPECT_EQ(ValidateSummandText("entry:13", LUMICE_CRYSTAL_PYRAMID).state, LUMICE_RAYPATH_VALID);
-  EXPECT_EQ(ValidateSummandText("entry:13", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  // Face 51 is outside every crystal's range.
-  EXPECT_EQ(ValidateSummandText("entry:51", LUMICE_CRYSTAL_PYRAMID).state, LUMICE_RAYPATH_INVALID);
-}
-
-TEST(FilterSopGrammar, ValidateRejectsMalformedLengthSpec) {
-  EXPECT_EQ(ValidateSummandText("len:abc", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("len:0", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("len:5-2", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
-  EXPECT_EQ(ValidateSummandText("len:<=0", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
 }
 
 // Regression (code-review-01 Major 2): ValidateSummandText must AGREE with
@@ -532,45 +493,36 @@ TEST(FilterSopGrammar, MidRunEeMergeSkipDoesNotTerminateFactor) {
   EXPECT_EQ(ee.length_mode, 0);  // bad len skipped, no length constraint
 }
 
-TEST(FilterSopGrammar, ParseLengthSpecStrict) {
-  int mode = 0;
-  int min_len = 0;
-  int max_len = 0;
-  ASSERT_TRUE(detail::ParseLengthSpec("3", mode, min_len, max_len));
-  EXPECT_EQ(mode, 1);
-  EXPECT_EQ(min_len, 3);
-  EXPECT_EQ(max_len, 3);
-}
-
-TEST(FilterSopGrammar, ParseLengthSpecAtMost) {
-  int mode = 0;
-  int min_len = 0;
-  int max_len = 0;
-  ASSERT_TRUE(detail::ParseLengthSpec("<=5", mode, min_len, max_len));
-  EXPECT_EQ(mode, 2);
-  EXPECT_EQ(min_len, 1);
-  EXPECT_EQ(max_len, 5);
-}
-
-TEST(FilterSopGrammar, ParseLengthSpecRange) {
-  int mode = 0;
-  int min_len = 0;
-  int max_len = 0;
-  ASSERT_TRUE(detail::ParseLengthSpec("2-4", mode, min_len, max_len));
-  EXPECT_EQ(mode, 3);
-  EXPECT_EQ(min_len, 2);
-  EXPECT_EQ(max_len, 4);
-}
-
-TEST(FilterSopGrammar, ParseLengthSpecRejectsMalformed) {
-  int mode = 0;
-  int min_len = 0;
-  int max_len = 0;
-  EXPECT_FALSE(detail::ParseLengthSpec("", mode, min_len, max_len));
-  EXPECT_FALSE(detail::ParseLengthSpec("0", mode, min_len, max_len));
-  EXPECT_FALSE(detail::ParseLengthSpec("abc", mode, min_len, max_len));
-  EXPECT_FALSE(detail::ParseLengthSpec("5-2", mode, min_len, max_len));  // min > max
-  EXPECT_FALSE(detail::ParseLengthSpec("<=0", mode, min_len, max_len));
+// The length-spec grammar's three accepted shapes and its rejections, as one table. Each row is a
+// spelling and the (mode, min, max) triple it must produce; a rejected spelling produces nothing.
+TEST(FilterSopGrammar, ParseLengthSpecReadsEveryShapeAndRejectsTheRest) {
+  struct Case {
+    const char* text;
+    bool accepted;
+    int mode;  // ignored when !accepted
+    int min_len;
+    int max_len;
+  };
+  const Case kCases[] = {
+    { "3", true, 1, 3, 3 },    // strict N
+    { "<=5", true, 2, 1, 5 },  // at most
+    { "2-4", true, 3, 2, 4 },  // range
+    { "", false, 0, 0, 0 },    { "0", false, 0, 0, 0 },
+    { "abc", false, 0, 0, 0 }, { "5-2", false, 0, 0, 0 },  // min > max
+    { "<=0", false, 0, 0, 0 },
+  };
+  for (const Case& c : kCases) {
+    int mode = 0;
+    int min_len = 0;
+    int max_len = 0;
+    EXPECT_EQ(detail::ParseLengthSpec(c.text, mode, min_len, max_len), c.accepted) << c.text;
+    if (!c.accepted) {
+      continue;
+    }
+    EXPECT_EQ(mode, c.mode) << c.text;
+    EXPECT_EQ(min_len, c.min_len) << c.text;
+    EXPECT_EQ(max_len, c.max_len) << c.text;
+  }
 }
 
 // ===========================================================================
@@ -585,29 +537,26 @@ TEST(FilterSopGrammar, ParseLengthSpecRejectsMalformed) {
 // segments accepts.
 // ===========================================================================
 
-TEST(FilterSopGrammar, ValidateAcceptsSemicolonMultiRaypath) {
-  const char* good[] = {
-    "1-3;3-5",
-    "1-3;3-5 & entry:2",
-    "entry:2 & 1-3;3-5",
-    "1,2;3-5 & entry:2",           // ',' inside a raypath segment + ';' separator
-    "entry:2 & 1-3;3-5 & exit:4",  // ';' raypath sandwiched between EE factors
+TEST(FilterSopGrammar, ASemicolonSeparatesRaypathAlternativesButNeverStandsAlone) {
+  struct Case {
+    const char* text;
+    LUMICE_RaypathValidationState expected;
   };
-  for (const char* g : good) {
-    EXPECT_EQ(ValidateSummandText(g, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID) << "expected VALID: " << g;
-  }
-}
-
-TEST(FilterSopGrammar, ValidateRejectsMalformedSemicolonRaypath) {
-  // Leading / trailing / consecutive ';' are rejected as "Empty raypath
-  // segment" by ValidateRaypathTextMultiSegment. Also cover ';'+'&'
-  // adjacency, which must not accidentally slip through as a valid segment.
-  const char* bad[] = {
-    ";3-5", "3-5;", "3;;5",
-    "3-5; & entry:2",  // ';' immediately before AND separator = trailing ';' in the raypath token
+  const Case kCases[] = {
+    { "1-3;3-5", LUMICE_RAYPATH_VALID },
+    { "1-3;3-5 & entry:2", LUMICE_RAYPATH_VALID },
+    { "entry:2 & 1-3;3-5", LUMICE_RAYPATH_VALID },
+    { "1,2;3-5 & entry:2", LUMICE_RAYPATH_VALID },           // ',' inside a segment + ';' separator
+    { "entry:2 & 1-3;3-5 & exit:4", LUMICE_RAYPATH_VALID },  // sandwiched between EE factors
+    // Leading / trailing / consecutive ';' are an empty raypath segment. The last row covers
+    // ';'+'&' adjacency, which must not slip through as a valid segment.
+    { ";3-5", LUMICE_RAYPATH_INVALID },
+    { "3-5;", LUMICE_RAYPATH_INVALID },
+    { "3;;5", LUMICE_RAYPATH_INVALID },
+    { "3-5; & entry:2", LUMICE_RAYPATH_INVALID },
   };
-  for (const char* b : bad) {
-    EXPECT_EQ(ValidateSummandText(b, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID) << "expected INVALID: " << b;
+  for (const Case& c : kCases) {
+    EXPECT_EQ(ValidateSummandText(c.text, LUMICE_CRYSTAL_PRISM).state, c.expected) << c.text;
   }
 }
 
@@ -638,46 +587,40 @@ TEST(FilterSopGrammar, SemicolonMultiRaypathRoundTrip) {
 // users can see what their row expands to before committing.
 // ===========================================================================
 
-TEST(FilterSopPreview, ExpandsSemicolonAlternatives) {
-  std::vector<Factor> factors{ Factor{ Rp("1-3;3-5") }, Factor{ Ee("2") } };
-  EXPECT_EQ(FormatSummandExpansionPreview(factors), "(1-3 OR 3-5) & entry:2");
-}
+// The preview formatter mirrors the syntactic ';' fan-out and nothing else. EE tokens have their
+// own comma-list expansion semantics downstream (ExpandSopToClauses in file_io.cpp); re-implementing
+// that here would show the user an expansion the commit path does not perform.
+TEST(FilterSopPreview, TheRowPreviewExpandsSemicolonAlternativesAndLeavesEverythingElseVerbatim) {
+  struct Case {
+    const char* name;
+    std::vector<Factor> factors;
+    const char* expected;
+  };
+  const std::vector<Case> kCases = {
+    { "';' alternatives become an OR group", { Factor{ Rp("1-3;3-5") }, Factor{ Ee("2") } }, "(1-3 OR 3-5) & entry:2" },
+    { "a single segment gets no parentheses", { Factor{ Rp("3-5") } }, "3-5" },
+    { "an EE comma list is not re-expanded", { Factor{ Ee("1,2") } }, "entry:1,2" },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_EQ(FormatSummandExpansionPreview(c.factors), c.expected) << c.name;
+  }
+  // With no ';' the preview is byte-identical to the canonical text.
+  EXPECT_EQ(FormatSummandExpansionPreview({ Factor{ Rp("3-5") } }), FormatSummandText({ Factor{ Rp("3-5") } }));
 
-TEST(FilterSopPreview, SingleSegmentRaypathUnchanged) {
-  // No ';' → no parentheses, byte-identical to FormatSummandText output.
-  std::vector<Factor> factors{ Factor{ Rp("3-5") } };
-  EXPECT_EQ(FormatSummandExpansionPreview(factors), "3-5");
-  EXPECT_EQ(FormatSummandExpansionPreview(factors), FormatSummandText(factors));
-}
-
-TEST(FilterSopPreview, EeCommaListNotReexpanded) {
-  // EE tokens have their own comma-list expansion semantics (handled
-  // downstream by ExpandSopToClauses in file_io.cpp); the preview helper
-  // MUST NOT re-implement that expansion — it shows the EE token verbatim.
-  std::vector<Factor> factors{ Factor{ Ee("1,2") } };
-  EXPECT_EQ(FormatSummandExpansionPreview(factors), "entry:1,2");
-}
-
-TEST(FilterSopPreview, SopOverviewListsAllRows) {
+  // The whole-SoP overview lists every row, and renders a blank row as the "match-all" sentinel —
+  // the same convention the pre-334.3 card tooltip used, so migrating panels.cpp onto this helper
+  // is byte-identical for the empty-row case.
   SumOfProducts sop;
   sop.emplace_back(SummandText{ std::string{ "1-3;3-5" }, { Factor{ Rp("1-3;3-5") } } });
   sop.emplace_back(SummandText{ std::string{ "entry:2" }, { Factor{ Ee("2") } } });
-  const std::string preview = FormatSopExpansionPreview(sop);
-  EXPECT_EQ(preview,
+  EXPECT_EQ(FormatSopExpansionPreview(sop),
             "OR of 2 row(s):"
             "\n  (1-3 OR 3-5)"
             "\n  entry:2");
-}
 
-TEST(FilterSopPreview, SopOverviewEmptyRowRenderedAsWildcard) {
-  // A single blank row (no factors) is the "match-all" sentinel; the SoP
-  // overview must show it as "*" — same convention as the pre-334.3 card
-  // tooltip, so migrating panels.cpp to FormatSopExpansionPreview is
-  // byte-identical for the empty-row case.
-  SumOfProducts sop;
-  sop.emplace_back(SummandText{ std::string{}, {} });
-  const std::string preview = FormatSopExpansionPreview(sop);
-  EXPECT_EQ(preview, "OR of 1 row(s):\n  *");
+  SumOfProducts blank;
+  blank.emplace_back(SummandText{ std::string{}, {} });
+  EXPECT_EQ(FormatSopExpansionPreview(blank), "OR of 1 row(s):\n  *");
 }
 
 }  // namespace

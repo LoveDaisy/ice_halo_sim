@@ -583,31 +583,27 @@ def test_signature_rewritten_in_place_is_billed(repo: Repo) -> None:
     assert repo.range_hits(base) == [(GUI_TEST_FILE, FIRST_SIG_LINE)]
 
 
-# --- the real tree, as the worst case ----------------------------------------
-
-REAL_TRAP_FILE = "test/gui/functional/test_gui_lifecycle.cpp"
-
-
-def test_real_lifecycle_suite_treated_as_new_is_accepted(repo: Repo) -> None:
-    """The strongest available false-positive check: real code, read as if new.
-
-    Every invented payload above is a shape someone believed the rule should see.
-    This one is a shape the rule actually has to live with. The file holds cases
-    that open with `IM_UNUSED(ctx)` and go on to use `ctx->Yield()` as a frame
-    pump — the exact spelling that defeats the naive marker-only reading — so
-    copying it in whole and billing every line as added must still produce
-    nothing.
-
-    The second assertion is what keeps this from decaying into a test that passes
-    because there is no longer anything to catch: if those cases are ever moved
-    or rewritten, this fails loudly and gets re-anchored, rather than quietly
-    going vacuous.
-    """
-    body = (REPO / REAL_TRAP_FILE).read_text(encoding="utf-8")
-    assert "IM_UNUSED(ctx)" in body and "ctx->Yield()" in body, (
-        f"{REAL_TRAP_FILE} no longer holds the marked-but-still-used shape this "
-        "test anchors on; re-point it at a file that does."
-    )
-    repo.write(REAL_TRAP_FILE, body)
-    assert repo.hits() == []
-    assert repo.scanned() > 0  # the signatures really were read, not skipped
+# --- why there is no real-tree case here anymore ------------------------------
+#
+# This file used to end with one more test: it copied a real gui_test suite in
+# whole, billed every line as added, and asserted the rule stayed quiet. Its
+# value over the invented payloads above was calibration — those say what
+# someone believed the rule should see, that one said what the rule actually had
+# to live with.
+#
+# The suite it pointed at held the shape that makes the naive reading fail: a
+# case marking `IM_UNUSED(ctx)` and then still using ctx as a frame pump. That
+# shape is no longer anywhere under test/gui, and its absence is not a defect
+# being fixed — the layer's definition now is "a case here must need a real
+# frame or real input", so every case drives ctx and nobody reaches for the
+# mark-unused idiom. With no instance left in the tree there is nothing to
+# calibrate against, so the test was removed rather than re-pointed at a file
+# that does not have the shape.
+#
+# The shape itself stays covered, from both sides, by the pair above:
+#   test_im_unused_with_no_other_mention_is_rejected  (marked, truly unused -> hit)
+#   test_im_unused_but_still_driving_ctx_is_accepted  (marked, still used  -> no hit)
+# Deleting the second would let a marker-only regression pass the first unseen.
+#
+# If the idiom ever comes back into test/gui, re-add a real-tree case anchored
+# on the file that holds it; that is a stronger check than any payload here.

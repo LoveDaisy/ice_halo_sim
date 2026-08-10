@@ -108,9 +108,11 @@ void ShapeTableParamLabel(const char* label);
 // Callers MUST pass a named LUMICE_SHAPE_SCALAR_* constant, never a bare integer: the slot order is
 // NOT CrystalConfig's field order (UPPER_H is slot 1, PRISM_H slot 2 — see the SLOT-ORDER TRAP note
 // in gui_state.hpp), so a positional guess lands one pyramid height's grouping on the other.
+// The center slider's range, format and scale are NOT passed in: they are a property of the slot,
+// read from gui/shape_scalar_domain.hpp. They used to be four arguments spelled out at every call
+// site, which made "what does Prism H allow" a fact about the caller rather than about the field.
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
-bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot, float center_min, float center_max,
-                             const char* center_fmt = "%.3f", SliderScale center_scale = SliderScale::kLinear);
+bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot);
 
 // ---- Axis preset classification ----
 

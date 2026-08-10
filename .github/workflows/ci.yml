@@ -116,7 +116,7 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -L "unit-correctness|parity|golden-analytic"
+        run: ctest --test-dir build --output-on-failure -L "unit-correctness|composition-correctness|parity|golden-analytic"
 
       # gui_unit_test is the first test target that only exists on some matrix entries (it is
       # inside `if(BUILD_GUI)`), which makes "green" and "ran" separable in a way they were not
@@ -934,9 +934,11 @@ jobs:
   #   2. A gui_test case registered by this PR must actually use its
   #      ImGuiTestContext; one that does not belongs in gui_unit_test, which —
   #      unlike gui_test — runs here on every platform.
+  #   3. A `for` loop added by this PR must not fatal-assert directly in its body
+  #      (see check_loop_fatal_asserts.py's docstring for the defect shape).
   #
-  # Neither reads pre-existing content, so the existing body of either kind never
-  # blocks anyone.
+  # None of the three reads pre-existing content, so the existing body of any
+  # kind never blocks anyone.
   new-refs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -954,3 +956,8 @@ jobs:
         run: |
           base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
           python3 scripts/check_new_gui_tests.py --range "$base..HEAD"
+
+      - name: Loop-fatal-assert check (added lines vs merge-base)
+        run: |
+          base=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          python3 scripts/check_loop_fatal_asserts.py --range "$base..HEAD"

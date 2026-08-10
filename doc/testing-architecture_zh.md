@@ -35,15 +35,28 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
 （带预登记硬阈值与反漂移纪律）和一句随手的单元断言都是"一个 gtest `TEST()`"，但它们不是同*种*
 测试，绝不能用同一套规则维护。
 
-**决定**：主轴 = 验证目的（七层，§1）。二维 = **subsystem**（层内 tag，§2）。harness/语言是每层
+**决定**：主轴 = 验证目的（八层，§1）。二维 = **subsystem**（层内 tag，§2）。harness/语言是每层
 的实现细节，永不作主轴。
 
 一层是一个**规则同质单元**：层内每个测试共享同一族 oracle、阈值纪律与节奏。这是判定层归属的判据
 ——见 §1 中 `test_gui_perf` 的案例（performance）与横切规则 §4.4。
 
+purpose 本身不足以完全分开八层中的两层：`unit-correctness`、`composition-correctness`，与
+`gui` 里功能/交互那部分，都可能被要求证明关于 `src/gui/` 同一类命题。真正把它们分开的是另外
+两条轴，彼此正交，也与上面的层/subsystem 划分正交（完整判据见 §1.7 与 §3）：
+
+- **链条长度**——要证伪该命题，需要几个 `src/` 单元协作：一个（`unit-correctness`）、多个但
+  不到整个应用（`composition-correctness`）、或整个应用（`e2e-correctness`）。
+- **机械需求**——证伪该命题需要什么：什么都不需要（一次纯函数调用）、一帧真实渲染、或一次
+  合成的输入事件（点击/拖拽/按键）。只有后两者才需要 `gui` 的 harness。
+
+这两条轴曾长期被塌缩成一条：所有触及 `src/gui/` 的东西都只按机械需求路由——这正是为什么
+`composition-correctness` 直到「不需要任何机械、却跨多个单元」的命题被发现已经无名地散落在
+`unit-correctness` 与 `gui` 两处（§1.2、§1.7）之前，从未作为一个命名层存在过。
+
 ---
 
-## §1 七层
+## §1 八层
 
 每层由六个字段定义：**目的 / oracle / 阈值约定 / 运行节奏 / 命名约定 / 物理位置**。节奏取值：
 `CI-fast`（每次 push 的快速腿）、`PR`（拉取请求）、`nightly`（定时 / 本地 heavy）、`local`（开发者本地跑）。
@@ -57,7 +70,29 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
 - **命名**：`test_<component>.{cpp}`；gtest `TEST(<Component>, <behavior>)`。
 - **物理位置**：目标态 `test/unit-correctness/<subsystem>/`；现状 `unit_test` target。
 
-### §1.2 `golden-analytic`
+### §1.2 `composition-correctness`
+
+- **目的**：若干组件各自独立正确，但要证明它们沿着一条单一单元测试看不见的调用链**协作**正确——
+  文档往返、跨通道一致性检查、多步生命周期。这是 `unit-correctness` 的 oracle 纪律应用在一个
+  *关于*多个协作单元的命题上，不是一层更弱或更松的层。
+- **oracle**：与 `unit-correctness` 同一族——测试内手算的期望值、不变量、round-trip 恒等式。
+  无统计阈值、无跨后端依赖、不需要真实渲染。
+- **阈值约定**：精确或紧容差，与 `unit-correctness` 相同。
+- **节奏**：`CI-fast`——每 commit。
+- **命名**：`test_<chain-topic>_chain.cpp`；gtest `TEST(<ChainTopic>Chain, <behavior>)`，其中
+  `<chain-topic>` 命名的是这次协作本身（如文档往返、运行生命周期），绝不是单一 `src/` 文件名——
+  一条跨多个单元的链条压不进一个单元的名字里。
+- **物理位置**：`test/composition-correctness/<subsystem>/`；今天只有 `test/composition-correctness/gui/`
+  一个 subsystem 被填充。
+- **归属判据（把这层与两个邻层分开的东西）**：证伪该命题是否需要**两个或更多协作的 `src/`
+  单元**（不是一个只为给另一个搭夹具而调用的单元），**且**是否**既不需要真实帧也不需要合成的
+  输入事件**？两条都必须成立。链条长度本身不足以把一个用例送到这里——一条同时还需要渲染帧或
+  点击/拖拽/按键的链条，无论跨多少单元都属于 `gui`（§1.7）；一条需要整个运行中应用的链条属于
+  `e2e-correctness`（§1.5）。完整判定流程见 §3；§1.7 给出这两条轴彼此独立的实测证据——曾发现
+  21 个用例 / 621 行跨 2–4 个 `src/gui/` 单元、却完全不需要任何运行时机械，正是这一发现最先让
+  这一层的存在变得不可否认。
+
+### §1.3 `golden-analytic`
 
 - **目的**：管线（或其某阶段）复现**闭式物理真值**——独立于模拟器导出的解析值（如投影公式、
   有已知解析答案的法向入射续传结果）。
@@ -69,7 +104,7 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
 - **物理位置**：目标态 `test/golden-analytic/<subsystem>/`；现状嵌在 `unit_test`（如
   `test_metal_trace_parity.cpp` 内的解析锚），可能也在 `test_projection` / `test_optics`。
 
-### §1.3 `parity-cross-backend`
+### §1.4 `parity-cross-backend`
 
 - **目的**：非 legacy 后端（Metal；未来 CUDA）在同一场景下与 **legacy CPU** 参考统计等价。
 - **oracle**：**legacy CPU 是 ground truth。** 等价**不可仅凭相关性**断言——相关性已两次掩盖真
@@ -86,7 +121,7 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
   等价，并确认每种类型真走 GPU、不再静默回落 legacy CPU。二者共用共享 battery
   `test/e2e/_projection_battery.py`。
 
-### §1.4 `e2e-correctness`
+### §1.5 `e2e-correctness`
 
 - **目的**：**整条 CLI 管线**端到端运行，对真实 config 产出正确图像 / 输出。
 - **oracle**：tracked 参考图按 **PSNR** 对比；或非图像场景的 CLI 退出码 + 输出形状断言。
@@ -95,7 +130,7 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
 - **命名**：`test/e2e/` 下 `test_<feature>.py`。
 - **物理位置**：目标态 `test/e2e-correctness/`；现状 `test/e2e/`。
 
-### §1.5 `performance`
+### §1.6 `performance`
 
 - **目的**：某后端**吞吐**达到或超过基线——GPU/单引擎路线必须打赢 legacy CPU，而非仅仅能跑。
 - **oracle**：**分母永远是 legacy CPU**（GUI 实走的路径）。`CpuTraceBackend` 仅作 GPU 验证参考，
@@ -113,25 +148,32 @@ purpose 必须为主轴的更深层原因：**不同 purpose 遵循不同规则�
 - **边界注**：GUI 帧延迟 / 响应性测试（`test_gui_perf`）**不**在本层——其 oracle 是绝对帧预算，
   而非对 legacy CPU 的比值。它属于 `gui`（响应 tag）。见 §4.4。
 
-### §1.6 `gui`
+### §1.7 `gui`
 
-- **目的**：GUI 功能正确、视觉正确、响应及时。层内三个 tag：**功能**（控件行为、文件操作、交互）、
-  **视觉**（渲染输出对参考）、**响应**（实时循环的交互交付——帧间隔、commit→首次 upload 延迟、
-  **以及 steady-state / slider-drag 场景下 rays/restart、upload_rays 等光线交付量**）。光线交付量
-  *反映*吞吐，但其 oracle 是 GUI 交互循环、而非对 legacy CPU 的比值——故归此层而非 `performance`
-  （见 §4.4）。
+- **目的**：**一份正定义，不是残差定义**——一个命题属于这里，仅当证伪它需要经 imgui test engine
+  产出一帧真实渲染、或一次合成的输入事件（点击/拖拽/按键/窗口操作）。这比"任何触及 `src/gui/`
+  的东西"窄：一个关于 `src/gui/` 代码、但两者都不需要的命题，应按链条长度归入 `unit-correctness`
+  （§1.1）或 `composition-correctness`（§1.2）。层内两个 tag：**功能**（控件行为与交互——控件是否
+  读写了正确的状态，或对输入事件作出了正确反应）与**视觉**（渲染输出对参考）。第三个 tag
+  **响应**，覆盖实时循环的交互交付——帧间隔、commit→首次 upload 延迟、**以及 steady-state /
+  slider-drag 场景下 rays/restart、upload_rays 等光线交付量**。光线交付量*反映*吞吐，但其 oracle
+  是 GUI 交互循环、而非对 legacy CPU 的比值——故归此层而非 `performance`（见 §4.4）。
+  这一层更早的版本还有一个**功能**子桶专放文件 I/O 命题（"file ops"）；它们并不共享这一层的
+  oracle（既不需要帧也不需要输入事件），现已按链条长度移到了 `unit-correctness` 或
+  `composition-correctness`，与任何其他非机械命题一样——见 §2 的同名警示与 §3。
 - **oracle**：imgui test engine 驱动 app；**视觉**对 tracked 参考图断言（PSNR，每场景阈值在
   `_thresholds.json`）；**响应**对绝对帧延迟预算断言；**功能**断言控件/状态结果。
 - **阈值约定**：视觉 = 每场景 PSNR（N 次随机渲染的 mean−4σ，见 AGENTS.md lens_proj 再生）；响应 =
   绝对延迟预算；功能 = 精确。
 - **节奏**：`PR`，外加 CI 每次 push 在 `xvfb-run` + llvmpipe 下跑的那两个参考图组（§4.6）。
   需要显示服务器，除非用 `LUMICE_SKIP_GUI_TESTS=1` 跳过。
-- **命名**：`test_gui_<aspect>.cpp`；参考图在 `test/gui/references/`。
-- **物理位置**：目标态 `test/gui/<tag>/`；现状 `test/gui/`（+ 由 pytest 驱动的
+- **命名**：`test_<aspect>.cpp`（功能/视觉）；历史命名早于这条约定的仍是 `test_gui_<aspect>.cpp`；
+  参考图在 `test/gui/references/`。
+- **物理位置**：`test/gui/<tag>/`（`functional/`、`visual/`、`responsiveness/`）+ 由 pytest 驱动的
   `test_metal_gui_acceptance.py`，一个恰好走 e2e harness 的 gui 层测试——正是 purpose 主轴要处理的
-  "层 ≠ 目录"典型）。
+  "层 ≠ 目录"典型。
 
-### §1.7 `regression-sentinel`
+### §1.8 `regression-sentinel`
 
 - **目的**：某个特定历史 bug 不再复发。
 - **oracle**：**issue 的复现场景**——哨兵必须复现原始失败，而非人造替身（这是硬规则：回归测试用
@@ -159,7 +201,7 @@ subsystem 是**二级**轴：层*内*的 tag，绝非顶层桶（纯 subsystem �
 | `util` | logger、threading、queue、arguments、color data |
 
 > **同名警示**：此处的 `gui` *tag* 仅是层内 subsystem 标签——例如 GUI 组件的单元测试落在
-> `test/unit-correctness/gui/`。它与 `gui` *层*（§1.6，物理 `test/gui/`）**不是一回事**：后者按
+> `test/unit-correctness/gui/`。它与 `gui` *层*（§1.7，物理 `test/gui/`）**不是一回事**：后者按
 > purpose 跨 功能/视觉/响应，按目的而非 subsystem 归类。词相同，但 tag ≠ 层。
 >
 > 这**一个**目录由**两个** CMake target 编译，而这条分界是**链接边界**，不是层或 subsystem 边界：
@@ -168,6 +210,13 @@ subsystem 是**二级**轴：层*内*的 tag，绝非顶层桶（纯 subsystem �
 > `test_defaults_diff.cpp`）。同目录、同 `unit-correctness` LABEL，只有链接行不同，所以
 > `ctest -L unit-correctness` 两个都选中。`gui_unit_test` 不开窗口、不建 GL 上下文；需要真实出帧的
 > 用例应去 `gui` 层（`test/gui/`，target `gui_test`）。
+>
+> `gui` *tag* 也不是 `src/gui/` 命题唯一还能落脚的另一处：一个跨 ≥2 协作单元、却不需要真实帧或
+> 输入事件的用例是 `composition-correctness`（§1.2），不是 `gui`——它自己的 `gui` subsystem 目录
+> 是 `test/composition-correctness/gui/`。与 `unit-correctness` 的 `gui` tag 不同，
+> `composition-correctness` 的**不**拆成两个 CMake target：`composition_correctness_test` 是唯一
+> 编译它的 target，因为这里的每个用例本来就需要 `lumice_gui_obj`（不存在"链条里只需要 `lumice_obj`
+> 的那一半"这种东西，那是单一单元测试才有的自由度）。
 
 tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem 划分的层用子目录
 （`test/<layer>/<subsystem>/`），对保持扁平的层用 CTest `LABELS` / pytest marker。
@@ -181,31 +230,46 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 
 ```
 1. X 是不是我要防止复发的历史 bug？
-   → 是 → regression-sentinel。原样用 issue 复现场景。(§1.7)
+   → 是 → regression-sentinel。原样用 issue 复现场景。(§1.8)
    → 否 → 继续。
 
 2. X 是否需要整条 CLI 管线运行（产出图像 / CLI 输出）？
    （由 GUI app harness 驱动整管线的测试——如经 pytest 的 test_metal_gui_acceptance——
     不算 CLI 管线；这里答"否"，走第 3 步。）
    → 是 → oracle 是参考图/输出，还是吞吐数字？
-            • 图像/输出正确性 → e2e-correctness (§1.4)
-            • 对 legacy CPU 的吞吐   → performance (§1.5)
+            • 图像/输出正确性 → e2e-correctness (§1.5)
+            • 对 legacy CPU 的吞吐   → performance (§1.6)
    → 否 → 继续。
 
-3. X 是否关于 GUI（控件行为、渲染视图、响应性）？
-   → 是 → gui，选 tag：功能 / 视觉 / 响应。(§1.6)
+3. 证伪 X 是否需要经 imgui test engine 产出一帧真实渲染、或一次合成的输入事件
+   （点击/拖拽/按键/窗口操作）？
+   （问的是这条**命题**本身，不是它今天恰好写成了什么样——一条本可以不碰 `ctx` 就断言的链条，
+    即便某个现存用例经 GUI 驱动它，这里仍答"否"。§1.2 的诚实边界适用。）
+   → 是 → gui，选 tag：功能（控件行为、交互）/ 视觉 / 响应。(§1.7)
             （响应性/帧延迟留在这里，不是 performance——§4.4。）
    → 否 → 继续。
 
-4. X 是否把非 legacy 后端（Metal/CUDA）对 legacy CPU 比较？
-   → 是 → parity-cross-backend。oracle = legacy CPU + §4.2 全套
-            （仅相关性不足）。(§1.3)
+4. 证伪 X 是否需要 ≥2 个协作的 `src/` 单元一起动作——一次往返、一次跨通道一致性检查、
+   一次多步生命周期？（一个只为给真正被测的那个单元搭夹具而调用的单元不算——命题必须
+   是*关于*这次协作本身，而不只是恰好调用了另一个单元。）
+   → 是 → composition-correctness。(§1.2)
    → 否 → 继续。
 
-5. X 是否对闭式 / 解析物理真值断言？
-   → 是 → golden-analytic。(§1.2)
+5. X 是否把非 legacy 后端（Metal/CUDA）对 legacy CPU 比较？
+   → 是 → parity-cross-backend。oracle = legacy CPU + §4.2 全套
+            （仅相关性不足）。(§1.4)
+   → 否 → 继续。
+
+6. X 是否对闭式 / 解析物理真值断言？
+   → 是 → golden-analytic。(§1.3)
    → 否 → unit-correctness。按 subsystem 打 tag（core/backend/server/gui/config/util）。(§1.1)
 ```
+
+第 3、4 步分别是 §1 开篇提到的机械需求轴与链条长度轴，按照与旧的、purpose 被塌缩掉的路由
+曾经失效的方式相反的顺序发问：机械需求先问，因为这正是 `composition-correctness` 出现之前
+那棵树已经在问的问题（§1.7 的"目的"现在给出的是**正面**答案，不再靠排除法）；链条长度后问，
+这样一个第 3 步答"否"的命题就不会像过去那样直接落进 `unit-correctness`。现在要落进
+`unit-correctness`，还必须先过第 4 步的"否"——不能只靠"跟 GUI 无关"。
 
 然后：选 subsystem tag（§2），按 §6 落点。*具体 target / 路径 / marker 见 §6。*
 
@@ -228,7 +292,7 @@ tag 如何编码取决于该层的物理形态（§6）：对有自然 subsystem
 
 1. **跨 seed 自洽**——后端跨 RNG seed 与自身一致（抓相关性抹平掉的欠采样）。
 2. **总能量守恒**——发射能量在 MS 各层被核算。
-3. **golden / 解析锚**——至少一个有闭式答案的配置（§1.2）。
+3. **golden / 解析锚**——至少一个有闭式答案的配置（§1.3）。
 4. **人眼核查**——一份人真正看过的渲染对比。
 5. **revert 反验**——确认把修复 revert 后测试*会失败*（证明测试有牙）。
 
@@ -285,7 +349,7 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 
 ### §4.5 门禁化：`gui_test` / `gui_unit_test` 的分层是闸门，不是约定
 
-§1.6 与 §5 按"是否需要活的帧"来放置一个 `src/gui/` 测试。这个放置决定了该测试**在 CI 里跑不跑**：
+§1.7 与 §5 按"是否需要活的帧"来放置一个 `src/gui/` 测试。这个放置决定了该测试**在 CI 里跑不跑**：
 `gui_test` 需要显示器，只有一条 runner 腿供得上，且只跑 §4.6 点名的那几个参考图组；
 `gui_unit_test` 链接同一个对象库，但无窗口、
 无 GL context、无 ImGui 测试引擎，因而在每个能构建 GUI 的平台上都真跑。仅作为约定，这条分层活不下来——
@@ -485,15 +549,22 @@ push 都测得更严的轴上。
 
 `auto_ev` 唯一独占的那条轴——显示路径——结果也不是它独占的。`test_gui_lens_projection.cpp` 读的是
 同一份 `snapshot_intensity` / `ev_auto` 状态，走的是已退役的 `test_gui_auto_ev.cpp` 当年那条一模一样
-的代码路径来设 exposure，而 `test/unit-correctness/gui/test_ev_auto.cpp` 用四条确定性断言直接验证
-auto-EV 的计算本身，且仍在三平台 CI 上跑。把仿真轴场景记到 `test_smoke.py` 名下、把 auto-EV 管线场景
-记到 `test_ev_auto.cpp` 名下之后，`auto_ev` 唯一独占的领地只剩 `overlayAuxLines()` 画的 zenith/nadir
+的代码路径来设 exposure，而 `EvAuto` 套件（`test/unit-correctness/gui/test_gui_widget_rules.cpp`，
+`unit_correctness_test` target）用确定性断言直接验证 auto-EV 的计算本身，且仍在三平台 CI 上跑。把
+仿真轴场景记到 `test_smoke.py` 名下、把 auto-EV 管线场景记到 `EvAuto` 套件名下之后，`auto_ev` 唯一
+独占的领地只剩 `overlayAuxLines()` 画的 zenith/nadir
 标记与坐标网格——一景的量。那一景，`overlay_ea`，被保留下来并迁入了 `lens_proj`，没有跟着其余场景
 一起退役。
 
 ---
 
 ### §4.8 GUI 套件为何长成这个形状：规则不是数据，测试就只能是实例
+
+**历史诊断，留其机制，不留其户口普查。** 紧接下方的数字，量的是 §4.8.2 记录的分层拆分与重写
+**之前**的套件状态——重写新增了整整一层（`composition-correctness`，§1.2），这里数到的两个
+GUI target 也早已不再持有量数时的那批用例。本节论证的机制——一条规则若停留在控制流而非成为
+数据，就会迫使它的测试长成实例形态——正是促成那次重写的原因，且不因这个计数陈旧而失效；
+§4.8.1 与 §4.8.2 记录了由此带来的实际变化。
 
 `gui_test` 与 `gui_unit_test` 合计 721 个注册用例中，**只有 23 个断言的是一个对「生产代码派生的
 集合」全称量化的命题**——字段注册表、枚举、能力表——因而新增一个字段或一种镜头类型时，它们不必
@@ -595,6 +666,54 @@ T1 原本 20 条候选不变量中：1 条（上述往返恒等式）因结构�
 具体 widget 交互、filter SOP 语法、颜色/合成、非法输入退化、多显示器/窗口尺寸），本身不构成可上线
 的套件。
 
+#### §4.8.2 composition-correctness 拆分及其行数结果（2026-08-10）
+
+`composition-correctness`（§1.2）与收窄后的 `gui`（§1.7）都是把上文诊断贯彻到底得到的结构性
+结论：`functional` 那个三分残差定义（控件行为、文件操作、交互——三件只靠"不是视觉、不是响应"
+拴在一起的不相关的事）被追到了根，`gui` 被重写成正定义，而那些早已在做跨单元断言、却被归档在
+一个单单元层名下的用例，得到了属于自己的一层，而不是一段更长的告诫段落。
+
+与这次拆分同时进行的是一个更硬的目标：把套件的去注释代码行数从 21,336 行的基线压低 30%
+（≤14,900 行），冲刺目标 40%（≤12,800 行）。重写落在了 **19,485 行 / 64 个文件 / 556 个用例，
+分布在现覆盖 `src/gui/` 的三层之上**——降幅 8.7%，两个数字都未达到。这被如实记为**未达成**，
+由 owner 裁决接受，理由有两条，而不是靠重新定义目标或放宽计入口径：
+
+1. **这次重写付出的覆盖扩张成本是一次性的、不可谈判的。** 按面板而非按历史文件重写，暴露出
+   四个 `src/gui/` 单元——合计约占 `src/gui/` 自身代码行数的四分之一——在这次重写之前**零**
+   单元级覆盖；补上这个洞正是套件变大的原因，不是冗余的实例测试，且不会再复发。
+2. **剩下的缺口是样板密度，不是重复断言。** 重写之后对 `test/gui/` 的实测审计发现，大约三分之
+   二的行是场景搭建与夹具准备而非断言，且这些准备工作里有相当一部分跨用例近乎相同——这种形状
+   要继续压缩，得靠提取共享夹具，而不是靠删覆盖。owner 把这项提取工作与一项可读性代价放在一起
+   权衡（过度提取夹具会让单个用例更难独立读懂），并把它划出了本次重写的范围，而不是在行数目标
+   压力下强推。
+
+这次重写的另一个结构性产出——一道关闭了本次工作中反复出现的同一缺陷形状的门禁——记在 §4.9。
+
+### §4.9 第四道门禁：致命断言不得直接坐在可重复执行的作用域里
+
+`scripts/check_loop_fatal_asserts.py` 是继 `check_policies.py`（全树）、`check_new_refs.py`
+（散文）、`check_new_gui_tests.py`（`AGENTS.md`"Testing and Platform Notes"）之后的**第四个**
+diff-scoped 入口。与另外三个同一条纪律：**检查器就是规则，不是规则的近似**——0 命中是改动干净
+的证据，不是对手写评审清单的补充。它在 CI 的 `new-refs` job 里对 PR 相对 merge-base 运行，在
+pre-commit hook 里对暂存 diff 运行，扫描 `test/` 下新增的行（不限于 `test/gui/`——这个缺陷形状
+不是 GUI 专属，只是在 GUI 套件里格外密集）。
+
+**它守的规则**：在一个会重复执行的作用域里，一次非中断式的错误报告之后，不得再有代码继续驱动
+同一个测试上下文。具体说：一个 `for` 循环体里若直接调用致命断言（gtest 的 `ASSERT_*`，或本仓
+ImGuiTestEngine 的 `IM_CHECK*`），会在第一行失败时就中止**整个外层函数**——把它后面每一行的
+结果都悄悄藏起来，这是测试本身的正确性缺口，不是风格问题。`IM_ERRORF`（本套件的非致命报告）
+有一个镜像失效：因为它不返回，循环若在它之后继续跑，就会继续驱动一个已经无效的 UI 状态，把
+假红归咎到错误的那一行。
+
+这条规则在引入它的这次重写过程中泛化了四次，每一次关闭的都是同一条规则的下一个自由度，而不是
+一个新的、不相关的缺陷：句法形状（致命断言直接写在循环体里）→ 致命性（`IM_CHECK*` 是致命的，
+`IM_ERRORF` 看起来安全，实则通过不返回而非提前返回共享同一种失效）→ 顺序（循环在第 N 次报错
+后仍在第 N+1 次继续驱动，与同一次报错内继续驱动一样会级联——循环会绕回来）→ 绑定（一个重写过
+的 lambda 把它的 `ImGuiTestContext*` 参数改了名，脱离了扫描器最初匹配的字面标识符，但它依然在
+驱动这个上下文；扫描器现在绑定的是宿主 lambda 实际的参数名，绝不是硬编码的标识符）。一个停在
+这些泛化之一的检查器，比没有检查器更危险：一次干净的扫描结果会被读作"这里不存在这种缺陷形状"，
+而一条已知有误的阴性对照，恰好就在它本该抓住的输入上，制造了这种虚假的信心。
+
 ---
 
 ## §5 物理布局命名约定
@@ -603,20 +722,24 @@ T1 原本 20 条候选不变量中：1 条（上述往返恒等式）因结构�
 
 - **CMake target**：目标态引入按 purpose 命名的 target 取代扁平 `unit_test`。**命名模式：
   `<layer-snake>_test`**（snake_case，沿用现有 `unit_test` / `integration_test` 约定）——如
-  `unit_correctness_test`、`parity_test`、`golden_analytic_test`；GUI 层的 target 为 `gui_test`
-  （270.5 由 `LumiceGUITests` 重命名而来）。是否再按 subsystem 进一步拆 target（单个
-  `unit_correctness_test` vs `unit_correctness_core_test`+…）由 **270.3 裁定**，但上述*模式*在
-  此固定，防命名漂移。
+  `unit_correctness_test`、`parity_test`、`golden_analytic_test`、`composition_correctness_test`；
+  GUI 层的 target 为 `gui_test`（270.5 由 `LumiceGUITests` 重命名而来）。是否再按 subsystem 进一步
+  拆 target（单个 `unit_correctness_test` vs `unit_correctness_core_test`+…）由 **270.3 裁定**，
+  但上述*模式*在此固定，防命名漂移。
   **例外——写成一般化规则，而非逐个具名的特例清单**：当一个 target 的存在理由是**链接边界**
   而非层/subsystem 边界时，它按链接依赖命名，不套 `<layer-snake>_test`。`gui_test` 是第一个
   实例（它是 `gui` 层的 target，但名字说的是"链 GUI 的那个"）；`gui_unit_test` 是第二个——
   严格套模式应叫 `unit_correctness_gui_test`，那个名字说的是它与 `unit_correctness_test`
   **共有**的层，反而藏起了唯一真正不同的东西：`lumice_gui_obj` 依赖。层身份由 CTest LABEL
   承载（选择器本来就从那里读），所以 target 名可以腾出来表达链接事实。
-- **CTest LABELS**：目标态为每层加 purpose 轴 label：`unit-correctness`、`golden-analytic`、
-  `parity`（该 LABEL 是 `parity-cross-backend` 层名的缩写——全名对 CMake 过长；这是**唯一**缩写
-  label，其余层名**不可**同样截断——`unit-correctness` 不可缩成 `unit`，会与旧机制轴 label 冲突）、
-  `performance`、`gui`、`regression-sentinel`。现状 label 是机制轴（`unit` / `integration` / `gui`）。
+- **CTest LABELS**：目标态为每层加 purpose 轴 label：`unit-correctness`、`composition-correctness`、
+  `golden-analytic`、`parity`（该 LABEL 是 `parity-cross-backend` 层名的缩写——全名对 CMake 过长；
+  这是**唯一**缩写 label，其余层名**不可**同样截断——`unit-correctness` 不可缩成 `unit`，会与旧
+  机制轴 label 冲突，`composition-correctness` 同理不可缩成 `composition`）、`performance`、`gui`、
+  `regression-sentinel`。现状 label 是机制轴（`unit` / `integration` / `gui`）。
+  `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` 是
+  `scripts/test.sh` 的 `quick`/`full`/`pr` 模式用来一次选中这四个非平铺层的选择器，不需要任何
+  per-target 知识。
 - **pytest marker**：`slow`（需 shared-lib 构建；排除出 CI 快路径）与 `heavy`（slow + 冗余 parity
   变体；按 PR 用 `not heavy` 取消选择）是运行节奏 marker，保留。层/subsystem 在目标态用目录 +
   marker 表达。
@@ -644,24 +767,26 @@ T1 原本 20 条候选不变量中：1 条（上述往返恒等式）因结构�
 
 ---
 
-## §6 现存测试 → 七层（exhaustiveness 映射）
+## §6 现存测试 → 八层（exhaustiveness 映射）
 
-下表证明七层覆盖整个现存套件、**无孤儿**，并作为 270.3–270.7 的迁移源。**迁移约束**列标出不可
+下表证明八层覆盖整个现存套件、**无孤儿**，并作为 270.3–270.7 的迁移源。**迁移约束**列标出不可
 随意移动/删除的健康项。
 
 > 目标态目录规则（为 270.3 解决"子目录还是平铺"的歧义）：有**自然 subsystem 划分**的层
-> （`unit-correctness`、`parity-cross-backend`、`golden-analytic`）用 `test/<layer>/<subsystem>/`；
-> subsystem 边界模糊的层（`e2e-correctness`、`performance`、`regression-sentinel`）**平铺**为
-> `test/<layer>/`，subsystem 用 marker/label 编码。`gui` 层用 `test/gui/<tag>/`（功能/视觉/响应）。
+> （`unit-correctness`、`composition-correctness`、`parity-cross-backend`、`golden-analytic`）
+> 用 `test/<layer>/<subsystem>/`；subsystem 边界模糊的层（`e2e-correctness`、`performance`、
+> `regression-sentinel`）**平铺**为 `test/<layer>/`，subsystem 用 marker/label 编码。`gui` 层用
+> `test/gui/<tag>/`（功能/视觉/响应）。
 
 | 层 | 目标态路径 | 现状 C++（unit/integration） | 现状 e2e（pytest） | 现状 gui | 迁移约束 |
 |----|-----------|-------------------------------|---------------------|----------|----------|
-| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`、`test_geo3d`、`test_optics`†、`test_crystal`、`test_rng`、`test_queue`、`test_threading_pool`、`test_color_space`、`test_json`、`test_filter`、`test_filter_spec`、`test_config_snapshot`、`test_render_config`、`test_sim_data`、`test_simulator`、`test_cpu_info`、`test_axis_presets`、`test_slider_mapping`、`test_window_sizing`、`test_raypath_segments`、`test_reduce_raypath_audit`、`test_c_api`、`test_exit_records`、`test_ev_auto`、`test_proj`(integration)、`test_integration_main`、`test_defaults_diff`（在第二个 target `gui_unit_test` 里，见右） | — | — | 本层的 `gui` subsystem 目录由**两个**按链接边界拆开的 CMake target 共用（§2）：`unit_correctness_test`（只链 `lumice_obj`）与 `gui_unit_test`（额外链 `lumice_gui_obj`，无窗口）。两者同挂 LABEL `unit-correctness`，所以用例在两者之间搬家**不需要**改任何 `-L` 选择器——但**需要**在两个 `add_executable` 的源文件列表之间搬，且 `gui_unit_test` 只在 `if(BUILD_GUI)` 门内存在。 |
+| **unit-correctness** | `test/unit-correctness/<subsystem>/` | `test_math`、`test_geo3d`、`test_optics`†、`test_crystal`、`test_rng`、`test_queue`、`test_threading_pool`、`test_color_space`、`test_json`、`test_filter`、`test_filter_spec`、`test_config_snapshot`、`test_render_config`、`test_sim_data`、`test_simulator`、`test_cpu_info`、`test_slider_mapping`、`test_window_sizing`、`test_raypath_segments`、`test_reduce_raypath_audit`、`test_c_api`、`test_exit_records`、`test_proj`(integration)、`test_integration_main`；`gui` subsystem 第一个 target `unit_correctness_test`（只链 `lumice_obj`，header-only 可达）：`test_axis_presets`、`test_filter_sop_grammar`、`test_gui_widget_rules`、`test_user_defaults_eligibility`；第二个 target `gui_unit_test`（见右）：`test_defaults_diff`、`test_state_reconcile`、`test_preview_renderer`、`test_export_params`、`test_crystal_renderer`、`test_render_handedness_guard`（渲染 `right=+az` 跨实现手性 guard——绝对屏侧判据，与 `test_projection` 的 golden 绝对列钉子配对；它是唯一需要 `lumice_gui_obj` 与 `lumice_obj` 一起链接的用例，因而 `gui_unit_test` 是它唯一可能的归宿）、`test_axis_absent_alignment`、`test_user_defaults`、`test_render_bg_logic`、`test_sampling_density_stats`、`test_server_poller`、`test_face_number_overlay`、`test_overlay_labels`、`test_composite_preview`、`test_color_window_logic`，外加 `gui_unit_test_env`（在任何用例跑之前安装本 target 的个人默认值隔离基线） | — | — | 本层的 `gui` subsystem 目录由**两个**按链接边界拆开的 CMake target 共用（§2）：`unit_correctness_test`（只链 `lumice_obj`）与 `gui_unit_test`（额外链 `lumice_gui_obj`，无窗口）。两者同挂 LABEL `unit-correctness`，所以用例在两者之间搬家**不需要**改任何 `-L` 选择器——但**需要**在两个 `add_executable` 的源文件列表之间搬，且 `gui_unit_test` 只在 `if(BUILD_GUI)` 门内存在。 |
+| **composition-correctness** | `test/composition-correctness/<subsystem>/` | `gui` subsystem，单一 target `composition_correctness_test`（§2 的同名警示）：`test_document_roundtrip_chain`、`test_document_defaults_chain`、`test_document_switch_chain`、`test_legacy_document_chain`、`test_scene_commit_chain`、`test_filter_reconstruct_chain`、`test_raypath_color_document_chain`、`test_run_lifecycle_chain`、`test_run_warning_chain`、`test_user_defaults_chain`、`test_field_editor_chain`、`test_edit_modal_chain`、`test_preview_projection_chain` | — | — | 最新的一层（§1.2）；今天只有 `gui` subsystem 被填充。文件名是链条的主题，绝不是某个单一 `src/` 单元的名字——见 §1.2 的命名规则。 |
 | **golden-analytic** | `test/golden-analytic/<subsystem>/` | `test_projection`†、`test_optics` 内闭式段†、`MultiMsContinuationNormalIncidence`（在 `test_metal_trace_parity.cpp`，2-MS 解析锚） | — | — | †逐文件确认"解析真值 vs unit-correctness"边界后才拆出 |
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `--benchmark`） | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `test_gui_lens_projection`、`test_gui_sim_smoke`、`test_gui_visual`、`test_gui_render`、`test_gui_bg`、`test_gui_export`、`test_gui_import_export`、`test_gui_interaction`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_composite_preview`、`test_gui_lifecycle`、`test_gui_sampling_density_stats`、`test_gui_defaults_panel`、**`test_gui_perf`（响应 tag）**、`test_gui_main`/`test_screenshot`/`test_gui_shared`（harness） | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。 |
+| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `functional/`：`test_background_overlay`、`test_color_window`、`test_defaults_panel`、`test_edit_modal`、`test_entry_management`、`test_export`、`test_file_ops`、`test_filter_editor`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_preview_animation`、`test_gui_sim_smoke`、`test_log_panel`、`test_overlay_controls`、`test_preview_texture`、`test_preview_viewport`、`test_run_lifecycle`、`test_scene_controls`、`test_shell_chrome`、`test_status_bar`、`test_view_display_controls`；`visual/`：`test_gui_capture_smoke`、`test_gui_defaults_panel`、`test_gui_lens_projection`、`test_gui_modal_layout`、`test_preview_pixels`；`responsiveness/`：**`test_gui_perf`**；harness（平铺于 `test/gui/`）：`test_gui_main`、`test_screenshot`、`test_gui_shared` | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。`functional/` 不再有一个以 `interaction` 命名的杂物间——它原来的内容现已按上表被驱动的窗口/面板拆开，或者在用例不需要真实帧时移出到 `unit-correctness`/`composition-correctness`（§1.7）。 |
 | **regression-sentinel** | `test/regression-sentinel/`（平铺） | — | `test_capi_sentinel_overflow`、`test_ms_filter_leak`、`test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` 用 issue 复现守真 bug——**勿改场景**。`test_ms_filter_leak` 也与 parity 相关；其**主** purpose 是 sentinel（多 purpose → 按主 purpose 归类）。 |
 
 **多 purpose 裁决规则**：一个测试服务多个 purpose 时，按其**主** purpose 归类（最直接守护其回归的
@@ -672,5 +797,5 @@ parity 相关（次）。
 自洽双门（267.3 corr-blind 补强）、`test_capi_sentinel_overflow.py` 与 `test_ms_filter_leak.py`
 （issue 复现哨兵）、以及 `test_metal_batch_invariance.py` 中合法的 `xfail`。
 
-> **legacy CPU 红线**：legacy CPU 是 parity ground truth（§1.3、§4.2）与 perf 分母（§1.5、§4.1）。
+> **legacy CPU 红线**：legacy CPU 是 parity ground truth（§1.4、§4.2）与 perf 分母（§1.6、§4.1）。
 > 它及其测试在任何层都**绝不**是清理目标。

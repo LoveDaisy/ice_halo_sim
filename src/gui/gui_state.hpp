@@ -325,6 +325,12 @@ static_assert(sizeof(kVisibleNames) / sizeof(*kVisibleNames) == kVisibleCount,
 
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
+// The same four values as the combo shows them. Written once here rather than at each control:
+// the View panel's combo and the defaults panel's registered editor both offer this field, and a
+// second hand-typed label array is how the two come to disagree about what "1024" selects.
+inline const char* const kSimResolutionLabels[] = { "512", "1024", "2048", "4096" };
+static_assert(sizeof(kSimResolutionLabels) / sizeof(*kSimResolutionLabels) == kSimResolutionCount,
+              "kSimResolutionLabels must cover kSimResolutions");
 
 struct RenderConfig {
   int lens_type = 0;  // Index into kLensTypeNames

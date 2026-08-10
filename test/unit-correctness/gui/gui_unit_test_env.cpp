@@ -8,7 +8,8 @@
 //
 // It is not belt-and-braces. Without it the process source stays kAutoDetect (the unset value, see
 // user_defaults.cpp), which resolves to the real OS config directory: pointing HOME at a directory
-// holding a saved bg_alpha turns switch_harness_baseline_is_isolated red, measured. Every future
+// holding a saved bg_alpha turns the harness-baseline arm of test_user_defaults.cpp's
+// switch_disabled_equals_empty_explicit_dir red, measured. Every future
 // case in this binary that calls the no-arg path inherits the same exposure, which is why the fix
 // belongs to the harness rather than to the one case that happened to surface it.
 
