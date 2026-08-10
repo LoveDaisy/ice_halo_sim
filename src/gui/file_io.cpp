@@ -2844,7 +2844,10 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 }
 
 // Thin wrapper over RenderExportToRgba: kept for binary-compatible callers in
-// test/gui/ (test_gui_export, test_gui_visual, test_gui_bg). Consolidated with
+// test/gui/ — functional/test_export.cpp and visual/test_preview_pixels.cpp call
+// it directly, and functional/test_background_overlay.cpp reaches it through the
+// shared RequestAndWaitPreviewExport helper in test/gui/test_gui_main.cpp.
+// Consolidated with
 // the overlay path in DoExportPreviewPng — the FBO+renderer logic lives once, in
 // export_fbo_renderer.cpp.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {

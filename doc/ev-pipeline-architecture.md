@@ -374,14 +374,21 @@ Regression pins:
   which the GUI-suite rewrite replaced with the case above — same claim, plus a field-by-field
   comparison of the two documents with `intensity_factor` removed, so an intent-dependent
   branch appearing anywhere else also fails it.
-- ⚠️ **Unresolved (2026-08-10)**: this list also named
+- Resolved 2026-08-11 — this list also named
   `test_gui_composite_preview.cpp::rerun_with_same_ev_produces_identical_composite` (AC1
   end-to-end) and `::display_time_visibility_reanchors_participating_p99` (AC2 display-time
-  re-anchor). Neither the file nor those case names exist anywhere under `test/` after the
-  GUI-suite rewrite, and no same-named successor was found. Whether the propositions were
-  re-expressed under other names or the GUI-level end-to-end coverage was dropped **has not
-  been established** — do not read their absence here as either. The mechanism layer below
-  (`test_component_compositor.cpp`) is unaffected and still pins the scale arithmetic.
+  re-anchor), and the entry standing here until now recorded that no same-named successor had
+  been found. Both propositions did survive the GUI-suite rewrite, under new names in
+  `test/unit-correctness/gui/test_composite_preview.cpp`:
+  `CompositePreview.RerunningAtTheSameExposureReproducesTheSamePicture` and
+  `CompositePreview.HidingAClassReAnchorsTheExposureOverWhatIsLeftInBothCombineModes`.
+  One difference is worth carrying rather than glossing: the re-run case now asserts a
+  brightness RATIO band ([0.8, 1.25], on both the mean byte and the unexposed anchor) where the
+  old name promised an identical composite. Two independently seeded accumulations reach IDLE at
+  different batch boundaries, so byte-identity was never the property; the band still rules out
+  the ~4x this section's bug produced without calling run-to-run noise a regression. The
+  mechanism layer below (`test_component_compositor.cpp`) is unaffected and still pins the scale
+  arithmetic.
 
 ### §6.6 Composite-path server-side self-anchor (task-fix-composite-participating-exposure-anchor)
 
@@ -432,11 +439,16 @@ Regression pins:
   `ParticipatingExposureScaleGuards`, `ParticipatingExposureScaleFormulaCrossCheck`
   (mechanism-layer independent recomputation, including a `rc_heavy` sibling asserting
   `snapshot_intensity` does not leak into `s`), `EarlyReturnPublishesParticipatingP99`.
-- ⚠️ **Unresolved (2026-08-10)**: this list also named
+- Resolved 2026-08-11 — this list also named
   `test_gui_composite_preview.cpp::display_time_visibility_reanchors_participating_p99` (AC1
-  additive-mode pixel-byte gate) and its `_dominant` counterpart. Same situation as §6.5's
-  list — file and case names are gone after the GUI-suite rewrite with no same-named
-  successor, and whether the coverage was re-expressed or dropped is **not** established here.
+  additive-mode pixel-byte gate) and its `_dominant` counterpart. The GUI-suite rewrite merged
+  the pair into a single case that exercises both combine modes on one staging:
+  `CompositePreview.HidingAClassReAnchorsTheExposureOverWhatIsLeftInBothCombineModes`
+  (`test/unit-correctness/gui/test_composite_preview.cpp`). Both halves stayed pixel-byte
+  assertions and are shaped to the way each mode fails — additive asserts the mean blue byte
+  over an already-blue population rises by at least 1.3x once the bright class is hidden;
+  dominant asserts the argmax at a probed pixel changes hands AND that the new winner is clearly
+  lit (byte >= 16), since winning by one unit over black would still be a broken picture.
 - CLI e2e: `test/e2e-correctness/test_raypath_color.py` (references regenerated against the
   new anchor; thresholds recalibrated).
 

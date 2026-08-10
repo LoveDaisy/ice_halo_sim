@@ -10,7 +10,9 @@ namespace {
 
 // Single choke-point for ImGui internal API use. If ImGui is upgraded, grep this
 // symbol and re-verify against the new ImDrawList API. Verified for v1.91.8-docking
-// (cache commit f6a6076), spike contract test: export/spike_fbo_imdrawlist_end_to_end.
+// (cache commit f6a6076), contract test: gui_test's
+// export/a_self_owned_drawlist_still_reaches_a_bound_fbo, whose body is the original
+// spike probe (RunSpikeFboImDrawListEndToEnd in test/gui/functional/test_export.cpp).
 inline void ResetDrawListForNewFrame(ImDrawList& dl) {
   dl._ResetForNewFrame();  // ImGui internal (underscore-prefixed) API.
 }

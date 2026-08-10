@@ -199,7 +199,8 @@ FieldEditorEntry ColorField(float* (*access)(GuiState&)) {
     // IsItemDeactivatedAfterEdit() (which compares the current item id against *last* frame's active
     // id) never finds a match to call deactivated. The naive `if (!IsItemDeactivatedAfterEdit())
     // return false;` gate therefore never commits at all — verified by driving an actual picker drag
-    // in inline_ac1_color_commits_on_release_not_per_frame. IsItemActive() alone, on the other hand,
+    // in gui_test's defaults_panel/a_colour_cell_commits_on_release_not_per_frame
+    // (test/gui/functional/test_defaults_panel.cpp). IsItemActive() alone, on the other hand,
     // IS set correctly by that same remap while the drag is in progress, so track the active/inactive
     // edge by hand instead of trusting the built-in "after edit" helper.
     static std::unordered_map<const float*, ColorFieldDragState> drag_states;

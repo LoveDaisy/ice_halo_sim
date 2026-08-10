@@ -285,7 +285,9 @@ bool ShouldApplyStats(const PreviewSnapshot& snap, uint64_t committed_epoch);
 // availability (`payload_is_composite`) with the user's display-time preference
 // (`show_composite_preview`) into a single boolean the upload branch consumes. Pure predicate,
 // no globals/GL — mirrors ShouldUploadPayload's testable-contract convention above so the
-// truth-table can be unit-tested headlessly (see test_gui_composite_preview.cpp).
+// truth-table can be unit-tested headlessly (asserted over its whole domain in
+// test/composition-correctness/gui/test_run_lifecycle_chain.cpp; the payload and display-time
+// contracts it feeds are in test/unit-correctness/gui/test_composite_preview.cpp).
 bool ShouldUseCompositeUpload(bool payload_is_composite, bool show_composite_preview);
 
 // task-345.4 fire-branch gate: single predicate that both the SyncFromPoller upload branch AND
@@ -325,8 +327,9 @@ bool ShouldTintColorsButton(bool raypath_color_empty);
 //
 // This sentence is the only thing standing between a user and a false bug report, and plain tooltip
 // prose is exactly what gets deleted by a passing refactor without any signal. Hence: a named
-// constant, asserted by test_gui_sampling_density_stats.cpp to still be present in the assembled
-// tooltip. Reword it freely; deleting it is the thing the test is there to catch.
+// constant, asserted by test/unit-correctness/gui/test_sampling_density_stats.cpp
+// (SamplingDensity.cross_backend_note_present) to still be present in the assembled tooltip.
+// Reword it freely; deleting it is the thing the test is there to catch.
 inline constexpr const char* kSamplingCrossBackendNote =
     "Not comparable across backends: the GPU route reuses one\n"
     "geometry per batch by design, so shape reads lower on GPU.";

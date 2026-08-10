@@ -12,11 +12,14 @@
 // ShouldDefaultEnableColorsOnOpen, ToggleCompositePreview) are asserted over their whole domain in
 // test/composition-correctness/gui/test_run_lifecycle_chain.cpp.
 //
-// Six siblings stay in test/gui/functional/test_gui_composite_preview.cpp: the four
-// *_fences_stale_composite cases (one family pinning the same fence across four document-entry
-// paths — three of them need a GL texture or the harness reset, and splitting a family across two
-// targets leaves the seam unowned), plus zorder_priority_persists_across_rerun and
-// revert_repushes_server_display_state, which pump frames.
+// Six siblings stay in test/gui/, each driving a real frame. Four of them are one family pinning
+// the same staged-composite fence across the four document-entry paths, and they live together in
+// test/gui/functional/test_file_ops.cpp (opening_a_json_config_leaves_nothing_of_the_previous_document,
+// opening_an_lmc_without_a_baked_preview_leaves_nothing_behind,
+// opening_an_lmc_with_a_baked_preview_shows_the_baked_one,
+// a_new_document_leaves_nothing_of_the_previous_one) — splitting a family across two targets leaves
+// the seam unowned. The other two are color_window/zorder_priority_persists_across_rerun and
+// color_window/revert_repushes_server_display_state in test/gui/functional/test_color_window.cpp.
 
 #include <gtest/gtest.h>
 

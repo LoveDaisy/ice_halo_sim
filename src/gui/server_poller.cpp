@@ -247,8 +247,9 @@ void ServerPoller::WorkerLoop() {
 
 // Invariant I3a. See the header for why each of the three terms is load-bearing and why the last
 // two are not the same test twice. Kept free of every member so the decision is exercisable as a
-// truth table (test_lifecycle.cpp, self_pause_predicate_truth_table) rather than only through a
-// live server plus a worker thread plus a race.
+// truth table (test/composition-correctness/gui/test_run_lifecycle_chain.cpp,
+// RunLifecycleChain.SelfPauseNeedsCompletionAndADrainedUnsupersededEpoch) rather than only through
+// a live server plus a worker thread plus a race.
 bool ShouldSelfPause(const LUMICE_SimLifecycleResult& lc, const LUMICE_DrainResult& drain) {
   if (lc.lifecycle != LUMICE_LIFECYCLE_COMPLETED) {
     return false;
@@ -593,8 +594,8 @@ void ServerPoller::PollOnce() {
   // ShouldSelfPause's three terms at the call site, so the predicate would no longer be the sole
   // owner of "may the poller stop polling". That is a measured consequence, not a stylistic
   // preference: with the pre-check in place, a probe that made ShouldSelfPause return true
-  // unconditionally left the end-to-end negative (running_sim_never_self_pauses) GREEN, because a
-  // running sim never reached the predicate at all — the test could not see the defect it exists
+  // unconditionally left the end-to-end negative (ServerPoller.AnUnboundedRunNeverSelfPauses) GREEN,
+  // because a running sim never reached the predicate at all — the test could not see the defect it exists
   // for. Splitting a decision across a call site and its predicate hides exactly this.
   //
   // The kRunning re-check inside the lock is not optional garnish either: a concurrent Stop() may

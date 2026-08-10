@@ -4,13 +4,13 @@
 // feels: which class paints on top, which classes are hidden, whether the "no rays matched" warning
 // is telling the truth, and whether importing a filter produced a class that means the same thing.
 //
-// Its siblings in test_gui_color_window.cpp need a real frame — nine drive the window through an
-// ImGuiTestContext (clicking the eye icon, toggling checkboxes, reading disabled state and glyphs),
-// and four more call gui::RefreshColorClassSignals, whose body reaches ImGui::GetTime(). That last
-// group is the interesting one: those four bodies contain no ImGui call of their own, so a criterion
-// that only greps a test body for `ImGui::` passes them as pure logic — and without a context the
-// result is a segfault, not a failed assertion. A production function's own context requirement is
-// part of the case's requirement.
+// Its siblings in test/gui/functional/test_color_window.cpp need a real frame — most drive the
+// window through an ImGuiTestContext (clicking the eye icon, toggling checkboxes, reading disabled
+// state and glyphs), and three call gui::RefreshColorClassSignals, whose body reaches
+// ImGui::GetTime(). That last group is the interesting one: those bodies contain no ImGui call of
+// their own, so a criterion that only greps a test body for `ImGui::` passes them as pure logic —
+// and without a context the result is a segfault, not a failed assertion. A production function's
+// own context requirement is part of the case's requirement.
 //
 // Two mechanical notes carried over from the IM_* form these cases were translated from:
 //   * IM_CHECK / IM_CHECK_EQ RETURN from the test function when they fail, so ASSERT_*, not

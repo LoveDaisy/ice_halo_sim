@@ -131,7 +131,8 @@ bool SeedPresetOverrideOnDisk(const std::filesystem::path& dir, gui::AxisPreset 
 // ⛔ Do NOT reuse this helper to assert the disk-first ORDER itself. It reproduces that order to
 // build a starting state, so an assertion about ordering made through it would be checking this
 // file's copy of the sequence, not the panel's. The order contract belongs to CommitCopy and is
-// pinned in gui_test (save_failure_leaves_the_preset_cache_untouched) — a second place asserting
+// pinned in gui_test (defaults_panel/a_save_that_could_not_write_leaves_the_preset_cache_alone) —
+// a second place asserting
 // it here is exactly the parallel-implementation shape this task deleted.
 bool RestoreOnePresetOnDisk(const std::filesystem::path& dir, gui::AxisPreset preset) {
   json doc = ReadOverlayDoc(dir);
@@ -865,8 +866,8 @@ TEST_F(UserDefaults, preset_without_adjustable_face_is_never_written) {
 }
 
 // MOVED, not retired: "a failed write leaves the in-memory preset value alone" now lives in
-// test/gui/functional/test_gui_defaults_panel.cpp as
-// save_failure_leaves_the_preset_cache_untouched.
+// test/gui/functional/test_defaults_panel.cpp as
+// defaults_panel/a_save_that_could_not_write_leaves_the_preset_cache_alone.
 //
 // It used to be asserted here against a disk-side revert wrapper the panel never called. The
 // contract is not a property of any one function — it is the ORDER in which the panel's Save
@@ -1001,7 +1002,9 @@ TEST_F(UserDefaults, bg_path_default_degrades_when_missing) {
 
 // Structural gate: the degrade step must be wired into every path that can land a non-empty
 // bg_path. Calling the helper directly (above) proves it works; this proves it is reached.
-// Same technique as the reset-primitive single-owner gate in test_gui_import_export.cpp.
+// Same technique as the reset-primitive single-owner gate, which now lives in
+// test/composition-correctness/gui/test_document_switch_chain.cpp as
+// DocumentSwitchChain.TheResetPrimitivesHaveExactlyOneCallSite.
 TEST_F(UserDefaults, bg_degrade_is_wired_into_every_document_path) {
   std::ifstream in(LUMICE_GUI_APP_CPP_PATH);
   EXPECT_TRUE(in.is_open());

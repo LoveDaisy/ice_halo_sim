@@ -9,7 +9,7 @@
 // their whole domain in test/composition-correctness/gui/test_run_lifecycle_chain.cpp; what is
 // pinned HERE is that PollOnce feeds them the right signals and publishes a coherent bundle.
 //
-// The cases that also need a rendered frame stay in test/gui/functional/test_gui_lifecycle.cpp.
+// The cases that also need a rendered frame stay in test/gui/functional/test_run_lifecycle.cpp.
 //
 // Blueprint invariants covered: I1 (epoch-keyed truth), I3 (level-triggered self-heal — the
 // terminal edge is never lost), I4 (lifecycle and stats readable without an expensive snapshot
