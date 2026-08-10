@@ -99,9 +99,15 @@ void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
   ctx->Yield(3);
 }
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
+// The Colors window one case parks over the cards, closed on every exit path.
+//
+// An object rather than a statement at the end of that case: its assertion is a negative one — the
+// click did NOT reach the card underneath — so the exit that skips a trailing reset is exactly the
+// one where a real regression fired. `color_window_open` is rebuilt by the next case's
+// ResetTestState(); what this buys is that the case gives it back itself.
+struct ScopedColorWindow {
+  ~ScopedColorWindow() { gui::g_state.color_window_open = false; }
+};
 
 }  // namespace
 
@@ -236,13 +242,68 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // P77. The layer list is drawn in index order with a gap between blocks — a claim about the panel
+  // as a whole rather than about any one layer, which is why nothing above covers it. Both halves
+  // are silent when they break: layers presented out of order still carry the right numbers on
+  // their headers, so the scattering ORDER a user reads off the panel would simply be the wrong
+  // one; blocks drawn flush against each other still show every control.
+  //
+  // The gap is measured against ImGui's own ItemSpacing rather than against a pixel constant.
+  // RenderScatteringSection's `ImGui::Spacing()` between layers is a zero-height item, so the
+  // distance from one block's last control to the next block's header is TWO item spacings where
+  // an unseparated list would give one. Halfway between the two is the discriminator, and it
+  // scales with the style instead of pinning this case to one font size.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "the_layers_are_drawn_in_order_and_kept_apart");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield(2);
+      ctx->ItemClick("**/+ Layer");
+      ctx->Yield(3);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 3);  // the premise
+
+      // Header labels are 1-based ("Layer 1"), the ids they carry are 0-based (`##layer_0`). Both
+      // are read: the header is what the user sees, the button is what the id says it belongs to.
+      const ImGuiTestItemInfo headers[3] = { ctx->ItemInfo("**/Layer 1"), ctx->ItemInfo("**/Layer 2"),
+                                             ctx->ItemInfo("**/Layer 3") };
+      const ImGuiTestItemInfo tails[3] = { ctx->ItemInfo("**/+ Crystal##layer_0"),
+                                           ctx->ItemInfo("**/+ Crystal##layer_1"),
+                                           ctx->ItemInfo("**/+ Crystal##layer_2") };
+      for (int i = 0; i < 3; ++i) {
+        // A clipped item reports id 0, and reading a rectangle off one would compare zeroes and
+        // pass. This is the case's own premise, so it is fatal.
+        IM_CHECK_NE(headers[i].ID, 0u);
+        IM_CHECK_NE(tails[i].ID, 0u);
+      }
+
+      const float spacing = ImGui::GetStyle().ItemSpacing.y;
+      for (int i = 0; i + 1 < 3; ++i) {
+        // Order: every control of layer i sits above layer i+1's header.
+        if (tails[i].RectFull.Max.y >= headers[i + 1].RectFull.Min.y) {
+          IM_ERRORF("layer %d's last control (y=%.1f) is not above layer %d's header (y=%.1f)", i,
+                    static_cast<double>(tails[i].RectFull.Max.y), i + 1,
+                    static_cast<double>(headers[i + 1].RectFull.Min.y));
+        }
+        // ...and the blocks are held apart by more than ordinary item spacing.
+        const float gap = headers[i + 1].RectFull.Min.y - tails[i].RectFull.Max.y;
+        if (gap <= spacing * 1.5f) {
+          IM_ERRORF("layers %d and %d are %.1f px apart, no more than one item spacing (%.1f px)", i, i + 1,
+                    static_cast<double>(gap), static_cast<double>(spacing));
+        }
+      }
+    };
+  }
+
   // P74. The probability slider has four states and they are not a gradient: the value decides
   // whether the control is usable, and the position in the stack decides whether a zero is a
   // legitimate end-of-chain or a layer that will receive nothing. Only the LAST layer at zero is
   // disabled — everywhere else the user has to be able to fix it.
   //
-  // Reported per row rather than asserted fatally: which of the four states is wrong is the whole
-  // diagnostic, and a fatal assert would stop at the first.
+  // Reported per row rather than asserted fatally, for the message: which of the four states is
+  // wrong is the whole diagnostic. The sweep still stops at the first one — see the note on
+  // ctx->IsError() in test_gui_shared.hpp for why continuing would report consequences, not causes.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "entry_management", "the_probability_slider_is_disabled_only_on_a_dead_last_layer");
@@ -278,6 +339,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         if (disabled != s.expect_disabled) {
           IM_ERRORF("%s: slider disabled=%d, expected %d", s.name, static_cast<int>(disabled),
                     static_cast<int>(s.expect_disabled));
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
     };
@@ -322,6 +387,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         if (!gui::IsProbZero(gui::g_state.layers[1].probability)) {
           IM_ERRORF("%s: the newly added last layer starts at %f rather than zero", c.name,
                     static_cast<double>(gui::g_state.layers[1].probability));
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
     };
@@ -430,6 +499,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       for (const Shortcut& s : kShortcuts) {
         ResetTestState();
         ctx->Yield(2);
+        // Per iteration, because IM_ERRORF below is non-fatal but still sets the error status —
+        // after which every ImGuiTestContext call, the trailing Cancel click included, is a no-op.
+        const ScopedPopups popup_guard(ctx);
         ctx->ItemClick((std::string("**/") + s.button).c_str());
         ctx->Yield(4);
         if (!ctx->ItemExists(s.tab_content)) {
@@ -437,6 +509,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         }
         ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
         ctx->Yield(2);
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
     };
   }
@@ -449,6 +525,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
       IM_CHECK(!gui::IsEditModalOpen());
 
       ctx->MouseMoveToPos(CardBlankSpot(0));
@@ -477,6 +554,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      // Both halves of what this case borrows: the window it parks over the cards, and the modal
+      // the regression it is looking for would open behind that window.
+      const ScopedColorWindow color_guard;
+      const ScopedPopups popup_guard(ctx);
       IM_CHECK(!gui::IsEditModalOpen());
       const ImVec2 spot = CardBlankSpot(0);
 
@@ -493,9 +574,6 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->MouseClick(0);
       ctx->Yield(4);
       IM_CHECK(!gui::IsEditModalOpen());
-
-      gui::g_state.color_window_open = false;
-      ctx->Yield(2);
     };
   }
 
@@ -509,6 +587,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
 
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
@@ -542,6 +621,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
       const int shared_cid = gui::g_state.layers[0].entries[0].crystal_id;
       gui::EntryCard sibling;
       sibling.crystal_id = shared_cid;
@@ -581,6 +661,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
       AddSecondEntryOnItsOwnSlot(ctx);
 
       ctx->ItemClick("**/Edit##cr");
@@ -602,12 +683,21 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // The prompt is a TextWrapped, i.e. id == 0 and invisible to the item registry. What IS
       // observable is what it does to the layout: the cards move down to make room for it.
       // Compared against the same card's position with pick mode off, on the next frame.
-      const float y_with_prompt = CardWindow(0)->Pos.y;
+      //
+      // Both lookups are checked before use. A missing card window is precisely one of the
+      // regressions this case exists to catch (a prompt that did not get inserted, or a card list
+      // that stopped being submitted), and dereferencing it would take the whole binary down
+      // instead of producing one red case.
+      ImGuiWindow* card_with_prompt = CardWindow(0);
+      IM_CHECK(card_with_prompt != nullptr);
+      const float y_with_prompt = card_with_prompt->Pos.y;
+
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(3);
       IM_CHECK(!gui::g_state.pick_link_source.has_value());
-      const float y_without_prompt = CardWindow(0)->Pos.y;
-      IM_CHECK_GT(y_with_prompt, y_without_prompt);
+      ImGuiWindow* card_without_prompt = CardWindow(0);
+      IM_CHECK(card_without_prompt != nullptr);
+      IM_CHECK_GT(y_with_prompt, card_without_prompt->Pos.y);
     };
   }
 
@@ -623,6 +713,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       auto cancel_by = [ctx](bool by_escape) {
         ResetTestState();
         ctx->Yield(2);
+        // Per call, for the same reason the calls are separate: whichever exit this one takes, the
+        // second call has to start from a closed modal rather than from this one's leftovers.
+        const ScopedPopups popup_guard(ctx);
         AddSecondEntryOnItsOwnSlot(ctx);
         const int cid_before = gui::g_state.layers[0].entries[1].crystal_id;
 
@@ -656,6 +749,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       };
 
       cancel_by(/*by_escape=*/true);
+
+      if (ctx->IsError()) {
+        return;
+      }
       cancel_by(/*by_escape=*/false);
     };
   }
@@ -673,6 +770,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
 
       // The target carries a Column axis, so its default pose is a different matrix from the
       // source's Random one — without that, "the pose was reset" and "the pose was left alone"
@@ -741,6 +839,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
       gui::EntryCard sibling;
       sibling.crystal_id = gui::g_state.layers[0].entries[0].crystal_id;
       gui::g_state.layers[0].entries.push_back(sibling);
@@ -770,6 +869,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
       gui::FilterConfig f;
       f.SetRaypath(gui::RaypathParams{ "3-5" });
       gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);

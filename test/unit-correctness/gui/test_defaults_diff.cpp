@@ -778,8 +778,9 @@ TEST_F(DefaultsDiff, row_tint_predicate_over_four_states) {
 // gui_test cases, one per (lens, expectation) cell somebody thought to write down.
 //
 // This is the WHAT — the semantics of the two registry gates over every lens type. Its sibling
-// `p2_render/visibility_enablement_matrix` in test/gui/functional/test_gui_interaction.cpp is the
-// WHERE — that the widgets app_panels.cpp actually draws carry exactly these values. The split is
+// `view_display_controls/the_visibility_row_is_gated_per_lens_by_two_rules` in
+// test/gui/functional/test_view_display_controls.cpp is the WHERE — that the widgets
+// app_panels.cpp actually draws carry exactly these values. The split is
 // the link boundary AGENTS.md draws: the registry gate is pure logic and evaluates with no ImGui
 // context, so it runs here and therefore on all three CI platforms; "is the real widget greyed"
 // needs a live frame and can only run where gui_test does.

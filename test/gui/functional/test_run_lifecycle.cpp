@@ -42,10 +42,6 @@ const char* const kStoppingBtn = "##TopBar/" ICON_FA_STOP " Stopping...";
 const char* const kRevertBtn = "##TopBar/Revert";
 const char* const kNewBtn = "##TopBar/New";
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
-
 // A live server for the duration of one case, torn down on EVERY exit path. Held by an object
 // because IM_CHECK* expands to `return`, so a failing assertion between creation and a hand-written
 // teardown would otherwise leave a running server and a poller thread for the next registered case
@@ -89,6 +85,23 @@ struct ScopedRunScene {
   ScopedRunScene& operator=(const ScopedRunScene&) = delete;
 
   bool ok() const { return gui::g_server != nullptr; }
+};
+
+// The "a run just finished" latch, for a case that fakes one instead of running it.
+//
+// Same field list as ScopedRunScene's tail above, minus the server such a case deliberately does
+// not create. These four are rebuilt wholesale by the next case's ResetTestState(), so what this
+// object buys is that the case gives back what it borrowed at the same place it took it, on the
+// failing path as well as the passing one — a fatal IM_CHECK returns past anything written below
+// it, and in a case built around run_intent → sim_state the checks that would skip the teardown
+// are the ones a real regression trips.
+struct ScopedRunBaseline {
+  ~ScopedRunBaseline() {
+    gui::g_state.run_intent = RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.display_epoch_floor = 0;
+    gui::g_state.dirty = false;
+  }
 };
 
 // Smallest scene that still produces a real frame: the lowest simulation resolution and a finite
@@ -337,6 +350,69 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
   };
 
+  // P5's field SCOPE, which the case above does not reach: Revert undoes the edits that would
+  // require the simulation to run again, and leaves the ones that only change how the finished
+  // result is displayed. What makes the old behaviour surprising is exactly what is driven here —
+  // the Revert affordance never offers itself for a view change, so a Revert that discarded the
+  // view was undoing something the toolbar had never offered to undo.
+  //
+  // The affordance is read by its disabled flag rather than by ItemExists: the top bar always
+  // submits the warning + Revert pair so its layout does not shift, and hides it with alpha inside
+  // a disabled scope. The item therefore exists in every state, and "the user cannot revert" is the
+  // flag.
+  ImGuiTest* t_scope = IM_REGISTER_TEST(engine, "run_lifecycle", "revert_discards_the_crystal_edit_and_keeps_the_view");
+  t_scope->TestFunc = [](ImGuiTestContext* ctx) {
+    ResetTestState();
+    ctx->Yield(2);
+    // Two things this case borrows and has to give back on every exit: the modal it opens in step
+    // (2), and the finished-run latch it fakes just below.
+    const ScopedPopups popup_guard(ctx);
+    const ScopedRunBaseline baseline_guard;
+
+    gui::g_state.modal_immediate_mode = true;
+    // A rectilinear lens, so the view angle inputs are live here.
+    gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+
+    // Stand in for "a run just finished": a commit baseline plus a reconcile base of kDone, so a
+    // later dirty edit surfaces as kModified. run_intent is what makes kDone stick — the harness
+    // main loop re-derives sim_state every frame.
+    gui::g_state.run_intent = RunIntent::kLoaded;
+    gui::g_state.sim_state = SimState::kDone;
+    gui::g_state.committed_epoch = 5;
+    gui::g_state.display_epoch_floor = 0;
+    gui::g_state.dirty = false;
+    gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+    ctx->Yield(4);
+
+    const int cid = gui::g_state.layers[0].entries[0].crystal_id;
+    const float committed_h = gui::g_state.crystals[cid].height.center;
+
+    // (1) A view change through its real input. Revert must NOT arm.
+    ctx->ItemInputValue("**/##Elevation##view_input", 30.0f);
+    ctx->Yield(4);
+    IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);  // the premise: the edit landed
+    IM_CHECK_NE(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kModified));
+    IM_CHECK(IsDisabled(ctx->ItemInfo(kRevertBtn)));
+
+    // (2) A crystal change through the real edit modal. Revert must arm.
+    gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
+    gui::OpenEditModal(req, gui::g_state);
+    ctx->Yield(4);
+    ctx->ItemInputValue("**/##Height##modal_cr_input", committed_h + 1.0f);
+    ctx->Yield(2);
+    ctx->ItemClick("**/Close##edit_modal");  // Immediate mode: one exit button
+    ctx->Yield(4);
+    IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h + 1.0f);  // premise
+    IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kModified));
+    IM_CHECK(!IsDisabled(ctx->ItemInfo(kRevertBtn)));
+
+    // (3) The real Revert button: the crystal edit goes, the view stays.
+    ctx->ItemClick(kRevertBtn);
+    ctx->Yield(4);
+    IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h);
+    IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);
+  };
+
   // The warning modal fires once per episode and re-arms only when the condition is cleared (P48).
   //
   // The arithmetic behind that — which triggers re-fire on a deliberate Run and which do not — is a
@@ -558,11 +634,19 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     ctx->ItemClick("**/sv");
     ctx->PopupCloseAll();
     scan("color");
+
+    if (ctx->IsError()) {
+      return;
+    }
     IM_CHECK_NE(gui::g_state.raypath_color[0].color[0], 1.0f);  // sanity: the click landed
 
     IM_CHECK(gui::g_state.raypath_color[0].visible);
     ctx->ItemClick("**/" ICON_FA_EYE);
     scan("visible");
+
+    if (ctx->IsError()) {
+      return;
+    }
     IM_CHECK(!gui::g_state.raypath_color[0].visible);
 
     // Solo is Alt+click. Rank 0 now draws the crossed-out eye (visible was just turned off) while
@@ -571,12 +655,20 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     ctx->ItemClick("**/" ICON_FA_EYE_SLASH);
     ctx->KeyUp(ImGuiMod_Alt);
     scan("solo");
+
+    if (ctx->IsError()) {
+      return;
+    }
     IM_CHECK(gui::g_state.raypath_color[0].solo);
 
     const int z0_before = gui::g_state.raypath_color[0].z_order;
     const int z1_before = gui::g_state.raypath_color[1].z_order;
     ctx->ItemClick("**/" ICON_FA_ARROW_DOWN "##down");
     scan("z_order");
+
+    if (ctx->IsError()) {
+      return;
+    }
     IM_CHECK_EQ(gui::g_state.raypath_color[0].z_order, z1_before);
     IM_CHECK_EQ(gui::g_state.raypath_color[1].z_order, z0_before);
 
@@ -584,6 +676,10 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     // transition at all. Establish dominant first, then observe the move back.
     ctx->ComboClick("##ColorMode/dominant");
     scan("mode:dominant");
+
+    if (ctx->IsError()) {
+      return;
+    }
     IM_CHECK_EQ(gui::g_state.raypath_color_mode, 0);
     ctx->ComboClick("##ColorMode/painter");
     scan("mode:painter");

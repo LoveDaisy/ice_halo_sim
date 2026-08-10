@@ -98,10 +98,6 @@ double ColumnMean(const std::vector<unsigned char>& rgb, int w, int h, int chann
   return sum / (h * 3.0);
 }
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
-
 // The aspect cases, indexed by ImGuiTest::ArgVariant. Landscape and portrait are the two sides of
 // the `vp_aspect > bg_aspect` branch in the contain fit, and a transposed width/height would
 // satisfy either one alone.

@@ -24,6 +24,14 @@
 // What a user sees when these break: an OK that silently discards what they typed, a Cancel that
 // does not, a preview showing the previous crystal's pose, a grouped row that snaps back to a
 // different number one frame after they set it, or a column of parameter names reading "Prism…".
+//
+// One convention, applied without exception below rather than case by case: every case that opens
+// the modal declares a `ScopedPopups` (test_gui_shared.hpp) right after its ResetTestState().
+// The rule is "opens the modal", not "opens the modal and has a fatal check before closing it" —
+// the narrower reading would make a reader work out, per case, why this one has a guard and that
+// one does not, and would silently become wrong the day somebody adds an assertion. The guard is
+// what closes the modal when a case leaves early; the ItemClick(OK/Cancel/Close) still written at
+// the end of most bodies is the pass path, and stays because it drives the real control.
 
 #include <cmath>
 #include <cstdio>
@@ -77,6 +85,7 @@ struct CommitOutcome {
 
 CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_filter, bool immediate) {
   ResetTestState();
+  const ScopedPopups popup_guard(ctx);
   gui::g_state.modal_immediate_mode = immediate;
   if (start_with_filter) {
     gui::FilterConfig f;
@@ -158,6 +167,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "staged_opens_a_real_modal_and_immediate_does_not");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
@@ -186,6 +196,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_click_outside_the_immediate_window_reaches_the_top_bar");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -220,6 +231,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "either_exit_tears_the_immediate_window_down_repeatably");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -242,6 +254,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       expect_gone();
 
+      if (ctx->IsError()) {
+        return;
+      }
+
       // Second cycle, closed through the title-bar ×. WindowClose drives ImGui's internal close,
       // the same path the glyph does. Reopening also proves no pending-open / pending-tab flag
       // leaked out of the first cycle.
@@ -262,6 +278,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "closing_immediate_by_button_or_escape_keeps_the_edit");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
@@ -295,6 +312,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_immediate_window_stays_above_the_background_panels");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -326,6 +344,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_immediate_window_keeps_its_no_docking_flag");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -360,6 +379,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_combo_popup_inside_the_modal_asks_to_stay_on_top");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       ctx->ItemClick("**/Edit##ax");
@@ -400,6 +420,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_open_modal_names_its_entry_and_closes_when_it_dies");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       auto expect_closed = [](const char* where) {
@@ -412,6 +433,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       expect_closed("before opening");
 
+      if (ctx->IsError()) {
+        return;
+      }
+
       // Both exits unbind: a Cancel that left the target set would keep a card highlighted with no
       // modal on screen.
       ctx->ItemClick("**/Edit##cr");
@@ -423,11 +448,19 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       expect_closed("after Cancel");
 
+      if (ctx->IsError()) {
+        return;
+      }
+
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(4);
       ctx->ItemClick(kOk);
       ctx->Yield(2);
       expect_closed("after OK");
+
+      if (ctx->IsError()) {
+        return;
+      }
 
       // Routing: a modal opened on the SECOND entry must report that entry, not entry 0. Driven
       // through OpenEditModal with a full request so the assignment path still runs end to end —
@@ -458,6 +491,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_commits_the_buffer_and_cancel_discards_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const gui::CrystalConfig baseline = EntryCrystal();
 
@@ -487,6 +521,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_without_a_change_leaves_the_result_on_screen");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       // "Finite rays just finished". run_intent=kLoaded is what makes kDone stick — the harness
@@ -518,6 +553,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_with_a_change_throws_the_result_away");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       gui::FilterConfig f;
@@ -583,6 +619,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "an_immediate_edit_reaches_the_entry_at_once");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
@@ -608,6 +645,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "an_immediate_crystal_edit_keeps_the_display_a_filter_edit_clears_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
@@ -663,6 +701,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "an_invalid_raypath_never_reaches_the_entry_in_immediate_mode");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -687,6 +726,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         ctx->Yield(2);
         if (raypath_text() != "3-1") {
           IM_ERRORF("typing \"%s\" changed the committed raypath to \"%s\"", rejected, raypath_text().c_str());
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
 
@@ -718,6 +761,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_preview_pane_is_one_widget_shared_by_every_tab");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       ctx->ItemClick("**/Edit##cr");
@@ -740,6 +784,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         if (!ctx->ItemExists("**/##modal_preview_interact")) {
           IM_ERRORF("the preview pane is not reachable from %s", tab);
         }
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
       IM_CHECK(std::memcmp(dragged, gui::g_crystal_rotation, sizeof dragged) == 0);
 
@@ -755,6 +803,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_tab_marks_itself_dirty_only_while_staged");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
 
@@ -819,6 +868,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "switching_commit_mode_keeps_the_tab_and_commits_the_buffer");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
@@ -859,6 +909,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "an_uncommitted_filter_edit_does_not_follow_an_entry_switch");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       gui::g_state.modal_immediate_mode = true;  // the bug is Immediate-mode only
 
@@ -899,6 +950,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "an_uncommitted_crystal_edit_does_not_follow_an_entry_switch");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       gui::g_state.modal_immediate_mode = true;
 
@@ -957,6 +1009,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "opening_another_crystal_snaps_the_preview_to_its_default_pose");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       const gui::AxisDist az_full{ gui::AxisDistType::kUniform, 0.0f, 360.0f };
@@ -996,6 +1049,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       expect_pose("entry 0 on open", expected0);
 
+      if (ctx->IsError()) {
+        return;
+      }
+
       // Drag, so that entry 1 opening on ITS default is distinguishable from a leftover pose.
       gui::ApplyTrackballRotation(60.0f, 0.0f);
       IM_CHECK(std::memcmp(gui::g_crystal_rotation, expected0, sizeof expected0) != 0);
@@ -1004,6 +1061,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::OpenEditModal(req1, gui::g_state);
       ctx->Yield(2);
       expect_pose("entry 1 after a direct card-to-card switch", expected1);
+
+      if (ctx->IsError()) {
+        return;
+      }
 
       // Re-opening the SAME crystal is idempotent: the drag survives. This is what separates the
       // crystal_id judge from an "always reset" fix.
@@ -1030,6 +1091,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       auto verify = [&](const char* label, gui::AxisPreset preset, gui::AxisDist zenith, gui::AxisDist azimuth,
                         gui::AxisDist roll) {
         ResetTestState();
+        const ScopedPopups popup_guard(ctx);
         ctx->Yield(2);
         auto& cr = EntryCrystal();
         cr.zenith = zenith;
@@ -1094,6 +1156,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       auto verify = [&](const char* label, gui::AxisPreset preset, gui::AxisDist zenith, gui::AxisDist azimuth,
                         gui::AxisDist roll) {
         ResetTestState();
+        const ScopedPopups popup_guard(ctx);
         ctx->Yield(2);
         ctx->ItemClick("**/Edit##cr");
         ctx->Yield(3);
@@ -1140,6 +1203,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "an_axis_slider_edit_leaves_the_preview_pose_alone");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       ctx->ItemClick("**/Edit##cr");
       ctx->Yield(3);
@@ -1178,6 +1242,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_distribution_combo_reshapes_the_row_beneath_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       auto& cr = EntryCrystal();
       cr.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 150.0f };  // legal for Gauss (max 180)
       ctx->Yield(2);
@@ -1213,6 +1278,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "switching_crystal_type_swaps_the_row_set");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -1276,6 +1342,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       for (const Row& row : kRows) {
         ResetTestState();
+        const ScopedPopups popup_guard(ctx);
         ctx->Yield(2);
         EntryCrystal().type = row.type;
         ctx->Yield();
@@ -1289,11 +1356,16 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
         const float got =
             (row.type == gui::CrystalType::kPrism) ? EntryCrystal().height.center : EntryCrystal().upper_h.center;
-        // Reported rather than asserted fatally: which row disagrees is the diagnostic, and a fatal
-        // assert would return out of the case and take the remaining rows with it.
+        // Reported rather than asserted fatally, for the message: which row disagrees, and by what,
+        // is the diagnostic. It does not make the sweep finish — see the note on ctx->IsError() in
+        // test_gui_shared.hpp — which is why the loop stops itself below.
         if (std::fabs(got - row.expected) > 1e-6f) {
           IM_ERRORF("%s: typed %f, expected %f, got %f (%s)", row.input, static_cast<double>(row.typed),
                     static_cast<double>(row.expected), static_cast<double>(got), row.why);
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
     };
@@ -1308,6 +1380,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "randomizing_a_row_defaults_to_uniform_and_zeroes_on_release");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;  // so checkbox edits reach g_state every frame
       ctx->Yield(2);
 
@@ -1348,6 +1421,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "each_face_row_randomizes_on_its_own");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -1394,6 +1468,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "reset_all_restores_the_shape_and_only_the_buffer");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       // A non-default baseline, so "back to defaults" has something to differ from.
@@ -1480,6 +1555,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       EntryCrystal().type = gui::CrystalType::kPyramid;
 
+      // Every check below is fatal and every one of them is what a real narrow-layout regression
+      // trips, so the modal this case pops has to be handed back by an object rather than by the
+      // ItemClose/ItemClick pair at the end of the body.
+      const ScopedPopups popup_guard(ctx);
+
       gui::g_state.modal_layout_vertical = false;
       ctx->Yield(2);
       ctx->ItemClick("**/Edit##cr");
@@ -1525,7 +1605,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK(found_pane);  // a renamed pane must fail loudly, not silently skip the check
 
-      // Hand the modal back in its default horizontal form, widths included.
+      // Close the way a user would, which also collapses the Face Distance node — the one piece of
+      // borrowed state the guard cannot hand back, since a tree node's open flag lives in the
+      // modal window's own ImGui storage. Everything else here the guard owns; this path is what
+      // runs when the case passes.
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
       gui::g_state.modal_layout_vertical = false;
@@ -1557,7 +1640,13 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // below are fatal (a wrong window width makes every column measurement meaningless), and a
       // fatal assert inside a loop body would return out of the whole case and take the second
       // layout with it.
+      //
+      // The lambda alone is only half of that, though: a fatal check returns out of THIS CALL, past
+      // the ItemClose/ItemClick at the bottom, and the second call would then be driving a modal the
+      // first one left open. The guard is what makes each call start from a closed modal regardless
+      // of how the previous one ended.
       auto check_layout = [ctx](bool vertical) {
+        const ScopedPopups popup_guard(ctx);
         // Same flag-flip dance as the case above, for the same reason.
         gui::g_state.modal_layout_vertical = !vertical;
         ctx->Yield(2);
@@ -1610,9 +1699,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       };
 
       check_layout(/*vertical=*/false);
+
+      if (ctx->IsError()) {
+        return;
+      }
       check_layout(/*vertical=*/true);
-      gui::g_state.modal_layout_vertical = false;
-      ctx->Yield(2);
     };
   }
 
@@ -1636,6 +1727,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "joining_a_sync_group_snapshots_it_and_edits_propagate");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -1703,6 +1795,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "leaving_a_sync_group_keeps_the_value_it_was_given");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -1756,6 +1849,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "cancel_discards_a_regrouping");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();  // staged: OK/Cancel atomicity is what is under test
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       EntryCrystal().face_distance[0].sync_group = 2;
@@ -1799,6 +1893,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_group_on_the_other_types_scalar_stays_dormant");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       // height is prism-only; give it a group, then edit the crystal as a pyramid.
@@ -1846,6 +1941,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "reselecting_the_current_sync_group_changes_nothing");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       EntryCrystal().face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.6f, 0.3f };
@@ -1906,6 +2002,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "edit_modal", "the_sync_leader_is_the_lowest_slot_not_the_lowest_reachable_row");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       auto& cr = EntryCrystal();
@@ -1979,6 +2076,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_row_without_a_sync_control_is_still_a_full_member");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       // Exactly two members, so the popup's membership label stays inside
@@ -2095,6 +2193,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_guis_sync_leader_is_the_one_core_draws_with");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
@@ -2197,6 +2296,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_sync_group_across_two_ranges_settles_on_the_tighter_one");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       EntryCrystal().type = gui::CrystalType::kPyramid;
@@ -2243,6 +2343,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_sync_group_built_by_clicking_reaches_the_geometry");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
       ctx->Yield(2);
 

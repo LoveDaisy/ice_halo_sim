@@ -33,9 +33,43 @@ const char* const kDiameter = "**/##Diameter_input";
 const char* const kRays = "**/##Rays(M)_input";
 const char* const kMaxHits = "**/##Max hits_input";
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
+// Owns a real server for the length of one case.
+//
+// A fatal assert expands to `return` in the enclosing function, so hand-written teardown at the end
+// of a case body runs only when the case PASSES — and the assertions in the one case that needs a
+// server are exactly the ones a real regression trips. Leaking a live server and its poller thread
+// into the rest of the process turns one honest red into a cascade that buries it. This shape is
+// inherited verbatim from the case's previous home; the guard is the fix.
+struct ScopedServer {
+  ScopedServer() { gui::g_server = LUMICE_CreateServer(); }
+  ~ScopedServer() {
+    gui::g_server_poller.Stop();
+    if (gui::g_server != nullptr) {
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+    }
+    gui::g_state.run_intent = gui::RunIntent::kNone;
+    gui::g_state.committed_epoch = 0;
+    gui::g_state.dirty = false;
+  }
+  bool ok() const { return gui::g_server != nullptr; }
+};
+
+// The run-intent latch, handed back on every exit path, for the one case that fakes a run without
+// a server.
+//
+// `run_intent` is what makes "a run is in flight" stick: the harness main loop re-derives sim_state
+// every frame, so a bare sim_state write is gone by the next one and this is the only way to reach
+// the disabled branch of a control. Unlike the server above, this field IS rebuilt by the next
+// case's ResetTestState() — so what this object buys is not a repair of a leak nothing else
+// reaches, but that the case states what it borrowed and gives it back at the same place. The
+// reason it has to be an object is the same as everywhere else here: the two checks it sits behind
+// are precisely the ones a real regression trips, and a fatal IM_CHECK returns past any teardown
+// written below them.
+struct ScopedRunIntent {
+  ~ScopedRunIntent() { gui::g_state.run_intent = gui::RunIntent::kNone; }
+};
 
 }  // namespace
 
@@ -63,11 +97,17 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       for (const Bound& b : kBounds) {
         ctx->ItemInputValue(b.input, b.typed);
         ctx->Yield();
-        // Reported rather than asserted fatally: which bound moved is the diagnostic, and a fatal
-        // assert would return out of the case and take the remaining bounds with it.
+        // Reported rather than asserted fatally, for the message: which bound moved, to what, is
+        // the diagnostic, and IM_CHECK would print "false is not true". What it does NOT buy is
+        // finishing the sweep — see the note on ctx->IsError() in test_gui_shared.hpp — which is
+        // why the loop stops itself below rather than driving a context that no longer responds.
         if (*b.slot != b.expected) {
           IM_ERRORF("%s: typed %f, expected %f, got %f", b.input, static_cast<double>(b.typed),
                     static_cast<double>(b.expected), static_cast<double>(*b.slot));
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
     };
@@ -103,6 +143,10 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         if (gui::g_state.dirty) {
           IM_ERRORF("typing the out-of-range %f dirtied the document", static_cast<double>(c.typed));
         }
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
     };
   }
@@ -121,8 +165,8 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "an_edit_after_a_run_dirties_the_document_that_same_frame");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      gui::g_server = LUMICE_CreateServer();
-      IM_CHECK(gui::g_server != nullptr);
+      ScopedServer server;
+      IM_CHECK(server.ok());
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.5f;
       gui::DoRun(/*user_initiated=*/true);  // the synchronous commit is what populates the baseline
@@ -133,14 +177,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
 
       ctx->ItemInputValue(kAltitude, gui::g_state.sun.altitude + 5.0f);
       IM_CHECK(gui::g_state.dirty);
-
-      gui::g_server_poller.Stop();
-      LUMICE_StopServer(gui::g_server);
-      LUMICE_DestroyServer(gui::g_server);
-      gui::g_server = nullptr;
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-      gui::g_state.committed_epoch = 0;
-      gui::g_state.dirty = false;
+      // Teardown is the guard's; see ScopedServer for why it cannot be written here.
     };
   }
 
@@ -252,15 +289,12 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       // ...and it is unreachable while a run is in flight, since an in-flight stop still holds the
       // server the switch would rebuild. run_intent is what makes the state stick: the harness main
       // loop re-derives sim_state every frame, so a bare sim_state write is gone by the next one.
+      const ScopedRunIntent intent_guard;
       gui::g_state.run_intent = gui::RunIntent::kRunning;
       ctx->Yield(3);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state),
                   static_cast<int>(gui::GuiState::SimState::kSimulating));  // the premise held
       IM_CHECK(IsDisabled(ctx->ItemInfo("**/Use GPU")));
-      gui::g_state.run_intent = gui::RunIntent::kNone;
-
-      ResetTestState();
-      ctx->Yield(2);
     };
   }
 
@@ -272,6 +306,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "picking_custom_opens_the_editor_without_committing_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const int preset_before = gui::g_state.sun.spectrum_index;
       IM_CHECK_NE(preset_before, gui::kCustomSpectrumIndex);
@@ -308,6 +343,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "the_edit_spectrum_button_appears_only_once_custom_is_committed");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Edit spectrum...##spectrum_edit"));
 
@@ -330,6 +366,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "a_preset_detour_does_not_discard_the_custom_spectrum");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
       const std::vector<gui::WlWeight> authored = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
@@ -373,6 +410,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "spectrum_rows_can_be_edited_added_and_removed");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;
       gui::g_state.sun.custom_spectrum = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
@@ -413,6 +451,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "spectrum_reset_seeds_a_uniform_grid_and_cancel_still_discards");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const std::vector<gui::WlWeight> baseline = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
       gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;

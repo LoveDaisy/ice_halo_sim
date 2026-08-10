@@ -199,8 +199,8 @@ std::string OriginCellRef(const std::string& key_path, const std::string& expect
 // without this they would be unfalsifiable.
 //
 // DebugLabel is a 32-byte truncation, so every use below looks for a prefix or an early substring
-// rather than comparing whole strings. test_gui_interaction.cpp reads it the same way and for the
-// same reason.
+// rather than comparing whole strings. functional/test_edit_modal.cpp reads it the same way and for
+// the same reason.
 std::string DrawnLabel(ImGuiTestContext* ctx, const std::string& ref) {
   const ImGuiTestItemInfo info = ctx->ItemInfo(ref.c_str(), ImGuiTestOpFlags_NoError);
   return info.ID == 0 ? std::string() : std::string(info.DebugLabel);
@@ -208,10 +208,6 @@ std::string DrawnLabel(ImGuiTestContext* ctx, const std::string& ref) {
 
 bool StartsWith(const std::string& s, const char* prefix) {
   return s.rfind(prefix, 0) == 0;
-}
-
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
 }
 
 // Narrow the list to (at most) the rows whose key contains `text`.
@@ -823,8 +819,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       int unchanged_seen = 0;
       for (const auto& row : rows) {
         // One key at a time: nothing is off screen, so "not found" means "not rendered" rather
-        // than "scrolled past". Reported non-fatally so one missing row names itself instead of
-        // ending the sweep at the first gap — which row set is incomplete is the whole question.
+        // than "scrolled past". Reported non-fatally so a missing row names itself rather than
+        // printing "false is not true"; the sweep still ends at the first gap, because the context
+        // stops responding once anything is on record (see ctx->IsError() in test_gui_shared.hpp).
         FilterTo(ctx, row.key_path.c_str());
         if (!ctx->ItemExists(AdoptCheckboxRef(row.key_path).c_str())) {
           IM_ERRORF("row '%s' has no adopt checkbox", row.key_path.c_str());
@@ -836,6 +833,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
           ++changed_seen;
         } else {
           ++unchanged_seen;
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
       // Non-vacuous in both directions: the sweep really did cover rows that differ from the
@@ -1481,6 +1482,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         if (AnyValueWidgetExists(ctx, unregistered)) {
           IM_ERRORF("row '%s' has an editor, but no field editor is registered for it", unregistered);
         }
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       // The positive control, through the same probe: a registered row of the same list DOES carry
@@ -1835,6 +1840,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
           continue;
         }
         baseline[i] = info.RectFull.Min.y;
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       // The premise: the list really does shrink as this is typed, so the row above the action row
@@ -1859,6 +1868,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
             IM_ERRORF("action '%s' moved from y=%.1f to y=%.1f at search prefix '%s'", kActions[i], baseline[i],
                       info.RectFull.Min.y, so_far.c_str());
           }
+
+          if (ctx->IsError()) {
+            break;
+          }
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
 
@@ -2018,10 +2035,11 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       int adjustable_seen = 0;
       int fixed_seen = 0;
-      // Reported per preset rather than asserted fatally: this is a sweep over the library, and
-      // "which preset is wrong" is the entire content of a failure here. A fatal assert would also
-      // leave whichever node it was inspecting unfolded, which the teardown then has to undo for a
-      // case that never reached its own end.
+      // Reported per preset rather than asserted fatally: "which preset is wrong" is the entire
+      // content of a failure here, and a fatal assert would also leave whichever node it was
+      // inspecting unfolded, which the teardown then has to undo for a case that never reached its
+      // own end. It does not let the sweep continue past the first bad preset — the context stops
+      // responding once anything is on record (see ctx->IsError() in test_gui_shared.hpp).
       for (const auto& entry : gui::kAxisPresets) {
         const std::string node_ref = std::string("**/###preset_") + gui::AxisPresetLabel(entry.id);
         if (entry.id == gui::AxisPreset::kCustom) {
@@ -2060,6 +2078,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         }
         ctx->ItemClose(node_ref.c_str());
         ctx->Yield(1);
+
+        if (ctx->IsError()) {
+          break;
+        }
       }
       IM_CHECK_EQ(adjustable_seen, 4);  // Column / Plate / Parry / Lowitz
       IM_CHECK_EQ(fixed_seen, 1);       // Random
@@ -2128,6 +2150,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
           if (!IsDisabled(ctx->ItemInfo(id))) {
             IM_ERRORF("read-only cell %s/%s is enabled — this row cannot be edited here", axis, cell);
           }
+
+          if (ctx->IsError()) {
+            break;
+          }
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
 
@@ -2141,6 +2171,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         }
         if (!IsDisabled(ctx->ItemInfo(id))) {
           IM_ERRORF("read-only cell zenith/%s is enabled — only the std is tunable here", cell);
+        }
+
+        if (ctx->IsError()) {
+          break;
         }
       }
     };

@@ -189,6 +189,40 @@ void ResetTestState() {
   g_bg_test.Reset();
 }
 
+// See the contract note in test_gui_shared.hpp. Lives here because this is the TU that already
+// includes imgui_internal.h, where ImGuiItemFlags_Disabled is declared.
+bool IsDisabled(const ImGuiTestItemInfo& info) {
+  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
+}
+
+// See the contract note in test_gui_shared.hpp for why this is a destructor rather than three
+// statements at the end of a case body.
+ScopedPopups::~ScopedPopups() {
+  // The gui side first, so the popup stops being submitted: RenderEditModals and
+  // RenderSpectrumModal only call BeginPopupModal while these statics say one is open. One call
+  // covers both — ResetModalState delegates to ResetSpectrumModalStateGlobals. The sun-circles
+  // editor has no statics of its own: it is opened straight from its button and needs only the
+  // stack pop below.
+  gui::ResetModalState();
+  // The two view preferences a case may have flipped to reach a layout, pinned back to the values
+  // ResetTestState() hands every case. Listed so this object is a complete statement of what it
+  // borrowed, not a list of what ResetTestState() happens to miss today.
+  gui::g_state.modal_layout_vertical = false;
+  gui::g_state.modal_immediate_mode = false;
+  // ImGui's own stack is the part nothing else reaches. Level 0 rather than a search for our entry:
+  // by the time a case is leaving, every popup on the stack was opened by it (a sync-group popup
+  // nested inside the modal is the common second one), and restore_focus=false keeps this to a
+  // resize of the stack — the focus path is the only thing in ClosePopupToLevel that would care
+  // that we are running between frames rather than inside one.
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  if (g.OpenPopupStack.Size > 0) {
+    ImGui::ClosePopupToLevel(0, /*restore_focus_to_window_under_popup=*/false);
+  }
+  // One frame for the window to go away with it. Yield is the only ImGuiTestContext call that still
+  // does anything once the case has failed.
+  ctx_->Yield(2);
+}
+
 // See the contract note in test_gui_shared.hpp. Unlike its neighbour below, this one needs nothing
 // this TU owns — it lives here only because a shared helper needs one definition and this is where
 // the suite's shared definitions are. Moving it costs nothing but a build-file line.
@@ -471,8 +505,6 @@ int main(int argc, char** argv) {
   ImGuiTestEngine_InstallDefaultCrashHandler();
 
   // Register and queue all tests
-  RegisterP1Tests(engine);
-  RegisterP2Tests(engine);
   RegisterViewDisplayControlTests(engine);
   RegisterExportPreviewTests(engine);
   RegisterPreviewPixelTests(engine);
@@ -484,15 +516,13 @@ int main(int argc, char** argv) {
   RegisterFilterEditorTests(engine);
   RegisterEditModalTests(engine);
   RegisterSceneControlTests(engine);
+  RegisterShellChromeTests(engine);
+  RegisterLogPanelTests(engine);
+  RegisterOverlayControlTests(engine);
+  RegisterPreviewViewportTests(engine);
   RegisterPerfTests(engine);
-  // task-test-gui-interaction: user action → state assertion coverage
-  RegisterP1InteractionTests(engine);
-  RegisterP1SliderBoundaryTests(engine);
-  RegisterP2InteractionRenderTests(engine);
-  RegisterP2InteractionModalTests(engine);
   RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
-  RegisterLinkedEntriesTests(engine);
   RegisterRunLifecycleTests(engine);
   RegisterStatusBarTests(engine);
   RegisterPreviewAnimationTests(engine);

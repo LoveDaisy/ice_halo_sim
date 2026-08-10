@@ -51,10 +51,6 @@ void OpenFilterModal(ImGuiTestContext* ctx) {
   ctx->Yield(4);
 }
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
-
 bool OkIsDisabled(ImGuiTestContext* ctx) {
   return IsDisabled(ctx->ItemInfo(kOk));
 }

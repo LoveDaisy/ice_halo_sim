@@ -166,8 +166,10 @@ std::string FilterSummarySuffix(const FilterConfig& fc) {
 //   - Raypath:    "<raypath_text or *> <In|Out>[ <sym>]"        (e.g. "3-1-5 In PBD")
 //   - EntryExit:  "EE:<entry>-><exit> <In|Out>[ <sym>]"
 //
-// 12-character truncation is preserved for the raypath body so the existing
-// test_gui_interaction "1-2-3-4-5-6-..." case stays bit-exact. Other types
+// 12-character truncation on the raypath body keeps the card text inside the row
+// it shares with the Edit button. Pinned by
+// `SceneCommitChain.ALongRaypathIsCutToTwelveCharactersOnTheCard` in
+// test/composition-correctness/gui/test_scene_commit_chain.cpp. Other types
 // emit short prefixes that fit comfortably without truncation; if they ever
 // need truncation, add it per-type.
 //

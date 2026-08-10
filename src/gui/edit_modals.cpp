@@ -99,7 +99,9 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 // control. Param fits its widest label ("Prism H" / "Upper H" / "Lower A", 7 chars ≈ 48 px) with
 // symmetric ~6 px margins; the 26 px reclaimed from the three of them all goes to the Value slider
 // (vertical layout: 181 → 207 px). Anything that lengthens a header or a row label has to revisit
-// these — sync_column_layout_budget in test_gui_interaction.cpp is what notices.
+// these — `edit_modal/the_fixed_columns_fit_their_text_in_both_layouts` in
+// test/gui/functional/test_edit_modal.cpp is what notices, by comparing each fixed column's
+// ContentMaxXHeadersIdeal against its WorkMaxX rather than against a pixel constant.
 constexpr float kShapeParamColWidth = 52.0f;
 constexpr float kShapeRandColWidth = 29.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;

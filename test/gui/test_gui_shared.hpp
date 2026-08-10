@@ -236,10 +236,96 @@ void InitSynthTexture();
 void StartPerfSimulation();
 void StopPerfSimulation();
 
+// ===== A table-driven loop stops at its first failing row. Why, and what to write =====
+//
+// A non-fatal IM_ERRORF is not "IM_CHECK that keeps going". It routes through the same
+// ImGuiTestEngine_Check as a fatal one and sets the test's status to Error just the same; the only
+// thing it skips is the `return`. And every ImGuiTestContext action — ItemClick, ItemInputValue,
+// ComboClick, ItemInfo, ItemExists, all of them — opens with `if (IsError()) return;`. So from the
+// first reported row onward, a loop that keeps going drives nothing and reads nothing: it compares
+// the state the GUI was left in, reports that too, and hands whoever reads the run a table of reds
+// in which only the first is a cause and the rest are its shadow.
+//
+// So the reason to prefer IM_ERRORF over IM_CHECK in such a loop is the MESSAGE — naming the row,
+// the value it landed on and the value expected, instead of "false is not true". It is not the
+// sweep. Every loop here that drives ctx and reports non-fatally therefore ends with
+//
+//     if (ctx->IsError()) {
+//       break;
+//     }
+//
+// once per loop level, nesting included: breaking an inner loop still leaves the outer one driving.
+// A loop that reports over data already in hand (comparing 16 floats of a pose matrix, say) needs
+// none of this and should not have it — it really does report every bad element.
+//
+// The trigger is REPETITION, not the `for` keyword, and the difference is worth stating because a
+// review pass already missed it once. A named lambda holding the body, called from a loop or called
+// twice in a row —
+//
+//     cancel_by(/*by_escape=*/true);
+//     cancel_by(/*by_escape=*/false);
+//
+// — is the same machine with one level of indirection: the first call reports the real failure, and
+// every action in the second one silently does nothing, so the second call fails on a premise its
+// own setup never got to establish. The guard goes at the CALL SITE (`return` between sequential
+// calls, `break` in a loop) rather than at the top of the lambda: an early return inside it would
+// stop the echo it produces itself, but not the caller's next fatal IM_CHECK reading state that was
+// never driven. A fatal IM_CHECK inside a lambda has the same reach, since it returns only that
+// lambda — which is why a lambda holding no IM_ERRORF at all still needs the guard around it.
+//
+// scripts/check_loop_fatal_asserts.py is the mechanical half of the same subject, from the other
+// side: a FATAL assert in a loop body, which ends the whole case at the first bad row without
+// saying so. The two rules point the same way — a table-driven loop reports one row and stops —
+// and this one is the half no script checks today.
+
+// Whether the item ImGui submitted is greyed out.
+//
+// Declared here and defined in test_gui_main.cpp rather than written inline: ImGuiItemFlags_Disabled
+// lives in imgui_internal.h, and a header every suite includes is the wrong place to drag that in.
+// Ten functional suites had a byte-identical copy of this one line in their own anonymous
+// namespace, which is ten places to remember the day the flag needs company (ImGuiItemFlags_
+// ReadOnly, say) for the predicate to still mean "the user cannot operate this".
+bool IsDisabled(const ImGuiTestItemInfo& info);
+
+// Hands ImGui's popup stack back when a case leaves, by whichever exit.
+//
+// ResetTestState() reaches everything about a popup this suite opens except the one piece ImGui
+// owns. Clearing the drawing side's statics stops the popup being submitted, but the entry
+// OpenPopup pushed onto ImGuiContext::OpenPopupStack when it opened stays there, keyed to a window
+// nobody draws any more — so IsPopupOpen, GetTopMostPopupModal and FindBlockingModal all keep
+// answering for it in every case that runs afterwards. That entry has no other owner: the next
+// case's ResetTestState() rebuilds GuiState and the modal statics and never touches ImGui's stack.
+//
+// Applies to all three popups this suite opens, not only the biggest one: the Edit Entry modal and
+// the custom-spectrum editor are BeginPopupModal (so a leaked one also blocks input), and the sun-
+// circles angle editor is a plain BeginPopup (which does not block, but leaves the same stack
+// entry). One guard for all three rather than three near-identical objects — a case that opens any
+// of them declares one of these.
+//
+// It has to be an object rather than statements at the end of the case body, for two mechanical
+// reasons rather than as a matter of taste:
+//   - a fatal IM_CHECK expands to `return` in the ENCLOSING function, so tail teardown runs only
+//     when the case passes — and the assertions it sits behind are exactly the ones a real
+//     regression trips;
+//   - every ImGuiTestContext action (ItemClick, ItemClose, WindowMove, …) opens with
+//     `if (IsError()) return;`, so `ctx->ItemClick(Cancel)` is already a no-op by the time a failed
+//     case would reach it. Writing the teardown after the assert would not have helped. Note this
+//     also applies after a NON-fatal IM_ERRORF, which sets the same error status without returning.
+//     ctx->Yield() is the one exception — it pumps frames unconditionally, which is why the
+//     destructor can still let the closing frame run.
+struct ScopedPopups {
+  explicit ScopedPopups(ImGuiTestContext* ctx) : ctx_(ctx) {}
+  ~ScopedPopups();
+
+  ScopedPopups(const ScopedPopups&) = delete;
+  ScopedPopups& operator=(const ScopedPopups&) = delete;
+
+ private:
+  ImGuiTestContext* ctx_;
+};
+
 // ========== Register function declarations ==========
 
-void RegisterP1Tests(ImGuiTestEngine* engine);
-void RegisterP2Tests(ImGuiTestEngine* engine);
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine);
 void RegisterExportPreviewTests(ImGuiTestEngine* engine);
 void RegisterPreviewPixelTests(ImGuiTestEngine* engine);
@@ -251,14 +337,13 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterFilterEditorTests(ImGuiTestEngine* engine);
 void RegisterEditModalTests(ImGuiTestEngine* engine);
 void RegisterSceneControlTests(ImGuiTestEngine* engine);
+void RegisterShellChromeTests(ImGuiTestEngine* engine);
+void RegisterLogPanelTests(ImGuiTestEngine* engine);
+void RegisterOverlayControlTests(ImGuiTestEngine* engine);
+void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
-void RegisterP1InteractionTests(ImGuiTestEngine* engine);
-void RegisterP1SliderBoundaryTests(ImGuiTestEngine* engine);
-void RegisterP2InteractionRenderTests(ImGuiTestEngine* engine);
-void RegisterP2InteractionModalTests(ImGuiTestEngine* engine);
 void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
-void RegisterLinkedEntriesTests(ImGuiTestEngine* engine);
 void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);

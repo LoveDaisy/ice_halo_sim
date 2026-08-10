@@ -6,7 +6,6 @@ set(IMGUI_TE_DIR ${imgui_test_engine_SOURCE_DIR}/imgui_test_engine)
 
 add_executable(gui_test
     test_gui_main.cpp
-    functional/test_gui_interaction.cpp
     functional/test_gui_preview_animation.cpp
     functional/test_export.cpp
     functional/test_file_ops.cpp
@@ -21,6 +20,10 @@ add_executable(gui_test
     functional/test_background_overlay.cpp
     functional/test_entry_management.cpp
     functional/test_scene_controls.cpp
+    functional/test_shell_chrome.cpp
+    functional/test_log_panel.cpp
+    functional/test_overlay_controls.cpp
+    functional/test_preview_viewport.cpp
     functional/test_preview_texture.cpp
     functional/test_view_display_controls.cpp
     functional/test_gui_sim_smoke.cpp

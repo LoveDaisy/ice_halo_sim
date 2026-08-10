@@ -38,8 +38,9 @@
 //      or not — this is a popup, not a replacement for the frame. Setting roll and THEN switching
 //      to a full-sky lens does not smuggle the pair through: roll is forced back to 0 on the next
 //      frame, before any Save can see it. Pinned directly (not just by this comment) by
-//      `p2_render/lens_full_sky_view_controls_disabled` in test_gui_interaction.cpp, which sets a
-//      non-zero roll under every entry of kFullSkyLensTypes and asserts the next frame zeroes it.
+//      `view_display_controls/which_view_sliders_apply_depends_on_the_lens` in
+//      test/gui/functional/test_view_display_controls.cpp, which sets a non-zero roll under every
+//      entry of kFullSkyLensTypes and asserts the next frame zeroes it.
 // Point 1 is the rule; point 2 is why a mistake in point 1 still cannot produce the bad state. What
 // this does NOT do is validate combinations that ARE reachable from the main UI — those need no
 // defending, since a user could have saved them by hand anyway.

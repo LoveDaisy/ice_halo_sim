@@ -175,10 +175,6 @@ gui::ColorClassConfig MakeMatchAllClass(float r, float g, float b, int z_order) 
   return cls;
 }
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
-
 // Click an item inside whichever popup is currently up, then point the ref back at the window.
 //
 // The two-step is needed because a wildcard path resolves its prefix with ImHashDecoratedPath,

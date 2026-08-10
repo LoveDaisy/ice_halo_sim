@@ -48,10 +48,6 @@ void YieldUntilTrue(ImGuiTestContext* ctx, int max_yields, Fn&& condition) {
   }
 }
 
-bool IsDisabled(const ImGuiTestItemInfo& info) {
-  return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
-}
-
 bool FileExists(const std::string& path) {
   std::ifstream f(path);
   return f.good();
