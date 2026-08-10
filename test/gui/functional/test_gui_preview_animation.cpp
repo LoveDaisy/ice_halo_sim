@@ -96,6 +96,9 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
         if (SnapshotPreviewVertices() != baseline) {
           IM_ERRORF("preview vertices changed at tick %d despite no active randomization", i);
         }
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");

@@ -1326,6 +1326,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         if (!ctx->ItemExists(row)) {
           IM_ERRORF("pyramid row missing: %s", row);
         }
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       // P89: a wedge-angle row carries Param and Value only. Its Sync / Rand / Spread cells are

@@ -92,9 +92,16 @@ state nothing actually put it in — and reports THAT as a second, third, ... fa
 echoes of the one real cause. Two shapes reproduce this, both found and fixed by hand across
 several rounds of review before this rule existed to catch them mechanically:
 
-  1. `for-loop-nonfatal-cascade`: inside a single `for` loop body, a non-fatal report followed —
-     later in that same body, not shielded by an inner lambda — by a `ctx->` call, with no
-     `break`/`continue`/`return` in between. Mirrors the fatal rule above, one macro family over.
+  1. `for-loop-nonfatal-cascade`: inside a single `for` loop body, a non-fatal report and a
+     `ctx`-driving call — a literal `ctx->` member call, or a call into a locally-defined
+     ctx-wrapper helper such as this suite's own `FilterTo`/`RowIsChecked` (any function whose
+     body itself calls `ctx->`, discovered per-file rather than off a hardcoded name list) — not
+     shielded by an inner lambda, with no `break`/`continue`/`return` in between. Order within one
+     textual pass of the driving call and the report does not decide this on its own: the loop body
+     runs again next iteration, so a driving call BEFORE the loop's only report is still at risk —
+     it is the first thing the next iteration executes, on whatever error state this iteration's
+     unguarded report left behind (round 23's real miss, reproduced in this rule's own selfcheck
+     fixtures). Mirrors the fatal rule above, one macro family over.
   2. `lambda-call-cascade`: a named lambda whose body both drives `ctx` and reports non-fatally,
      called back-to-back two or more times with nothing but whitespace between the calls — the
      same machine, one level of indirection. The header comment states it plainly: "The trigger is
@@ -170,6 +177,12 @@ CTX_CALL_RE = re.compile(r"\bctx->(?!IsError\b)")
 # present (mirrors LAMBDA_RE's docstring on the same tradeoff).
 CONTROL_FLOW_RE = re.compile(r"\b(break|continue|return)\b")
 
+# The signature shape of a locally-defined ctx-wrapper helper: `ctx` as the first parameter,
+# typed `ImGuiTestContext*`. Matches the call-site's own name, e.g. `RowIsChecked(ImGuiTestContext*
+# ctx, ...)`. Used by `_ctx_wrapper_helper_names` to find helpers whose BODY drives `ctx->` directly
+# — see that function's docstring for why a registry beats a hardcoded name list.
+CTX_HELPER_DEF_RE = re.compile(r"\b(\w+)\s*\(\s*ImGuiTestContext\s*\*\s*ctx\b")
+
 
 def _paren_close(code: str, after_open: int) -> int | None:
     """Index of the ')' matching the '(' whose content starts at `after_open`."""
@@ -217,6 +230,54 @@ def _brace_close(code: str, open_index: int) -> int | None:
                 state = "code"
         i += 1
     return None
+
+
+def _ctx_wrapper_helper_names(code: str) -> set[str]:
+    """Names of locally-defined functions that take `ctx` as their first parameter and whose body
+    itself calls `ctx->` directly (e.g. `FilterTo`/`RowIsChecked`/`ToggleRow` in this suite's own
+    per-file test helpers) — the "ctx-wrapper helper" shape. A call to
+    one of these, passing `ctx` as its first argument, drives `ctx` exactly as a literal `ctx->`
+    call would, but is textually invisible to `CTX_CALL_RE` on its own.
+
+    A registry built from the callee's OWN body (does it call `ctx->`?) is used instead of a
+    hardcoded name list (`FilterTo`/`RowIsChecked`/`ToggleRow`/...): the list would need updating
+    by hand every time this suite's authors write a new per-file wrapper, which is exactly the
+    "next round, a new shape" failure mode this rule's own history warns about. A function that
+    merely accepts `ctx` without driving it (rare, but not impossible) is correctly excluded by the
+    body check.
+    """
+    names: set[str] = set()
+    for m in CTX_HELPER_DEF_RE.finditer(code):
+        open_paren = code.find("(", m.start())
+        if open_paren == -1:
+            continue
+        close_paren = _paren_close(code, open_paren + 1)
+        if close_paren is None:
+            continue
+        j = close_paren + 1
+        while j < len(code) and code[j] in " \t\r\n":
+            j += 1
+        if j >= len(code) or code[j] != "{":
+            continue  # declaration only (no body), e.g. a forward decl or a header prototype
+        body_close = _brace_close(code, j)
+        if body_close is None:
+            continue
+        if CTX_CALL_RE.search(code, j, body_close):
+            names.add(m.group(1))
+    return names
+
+
+def _ctx_wrapper_call_starts(code: str, helper_names: set[str]) -> set[int]:
+    """Call-site start positions for `NAME(ctx, ...)` where NAME is a registered ctx-wrapper
+    helper (see `_ctx_wrapper_helper_names`) and `ctx` is literally its first argument — the same
+    driving-call semantics as a `CTX_CALL_RE` match, one level of indirection removed.
+    """
+    if not helper_names:
+        return set()
+    pattern = re.compile(
+        r"\b(?:" + "|".join(re.escape(n) for n in sorted(helper_names)) + r")\s*\(\s*ctx\b"
+    )
+    return {m.start() for m in pattern.finditer(code)}
 
 
 def _enclosing_scope_open(code: str, position: int) -> int | None:
@@ -353,22 +414,38 @@ def find_violations_in_text(code: str) -> list[_Hit]:
 
 def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
     """Shape 1 of the non-fatal half (see module docstring): inside a single `for` loop body, a
-    non-fatal report (IM_ERRORF/ADD_FAILURE) followed — later in that same body, not shielded by an
-    inner lambda — by a `ctx->` call, with no `break`/`continue`/`return` in between.
+    non-fatal report (IM_ERRORF/ADD_FAILURE) and a `ctx`-driving call (a literal `ctx->` member
+    call, or a call to a locally-defined ctx-wrapper helper — see `_ctx_wrapper_helper_names`),
+    with no `break`/`continue`/`return` in between.
 
     `armed` is tracked per `for`-frame on the walk's own stack: a qualifying report call sets it,
-    a qualifying `ctx->` call while set is a hit, and `break`/`continue` clear only the nearest
-    enclosing `for` while `return` clears every `for` frame up to (not past) the nearest enclosing
-    lambda boundary — the same reach a `return` has in the real function it appears in.
+    a qualifying driving call while set is a same-iteration hit, and `break`/`continue` clear only
+    the nearest enclosing `for` while `return` clears every `for` frame up to (not past) the
+    nearest enclosing lambda boundary — the same reach a `return` has in the real function it
+    appears in.
+
+    Order within one textual pass is not the whole story: a `for` loop's body runs again next
+    iteration, so a driving call that appears BEFORE the only report in the body is still at risk —
+    it is the first thing the NEXT iteration executes, on a `ctx` the PREVIOUS iteration may have
+    left in an error state. `first_ctx_line` records the first driving call seen in the frame
+    (whichever order it comes in); when the frame's closing `}` is reached still armed with no
+    guard since the last report, and that first driving call is textually earlier than the report
+    that left it armed, a wrap-around hit is reported there. The `<` guard against double-reporting
+    a same-iteration hit already caught by the forward-order check above (round 23's real miss:
+    test/gui/functional/test_defaults_panel.cpp's `reset_all_unchecks_every_row_...` case, where a
+    helper call drives before the loop's own unguarded report, not after).
     """
     for_opens = _for_body_opens(code)
     lambda_opens = _lambda_body_opens(code)
     nonfatal_starts = {m.start() for m in NONFATAL_RE.finditer(code)}
-    ctx_starts = {m.start() for m in CTX_CALL_RE.finditer(code)}
+    wrapper_names = _ctx_wrapper_helper_names(code)
+    ctx_starts = {m.start() for m in CTX_CALL_RE.finditer(code)} | _ctx_wrapper_call_starts(
+        code, wrapper_names
+    )
     control_flow_starts = {m.start(): m.group(1) for m in CONTROL_FLOW_RE.finditer(code)}
 
     hits: list[_CascadeHit] = []
-    # Each frame: [kind, for_line_or_None, armed, marker_line_or_None]
+    # Each frame: [kind, for_line_or_None, armed, marker_line_or_None, first_ctx_line_or_None]
     stack: list[list] = []
     state = "code"
     i, n = 0, len(code)
@@ -385,16 +462,23 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
                 continue
             if c == "{":
                 if i in for_opens:
-                    stack.append(["for", for_opens[i], False, None])
+                    stack.append(["for", for_opens[i], False, None, None])
                 elif i in lambda_opens:
-                    stack.append(["lambda", None, False, None])
+                    stack.append(["lambda", None, False, None, None])
                 else:
-                    stack.append(["other", None, False, None])
+                    stack.append(["other", None, False, None, None])
                 i += 1
                 continue
             if c == "}":
                 if stack:
-                    stack.pop()
+                    frame = stack.pop()
+                    if (
+                        frame[0] == "for"
+                        and frame[2]
+                        and frame[4] is not None
+                        and frame[4] < frame[3]
+                    ):
+                        hits.append(_CascadeHit(frame[4], frame[3]))
                 i += 1
                 continue
             if i in nonfatal_starts:
@@ -412,6 +496,8 @@ def find_for_cascade_in_text(code: str) -> list[_CascadeHit]:
                     if frame[0] == "lambda":
                         break
                     if frame[0] == "for":
+                        if frame[4] is None:
+                            frame[4] = code.count("\n", 0, i) + 1
                         if frame[2]:
                             hits.append(_CascadeHit(code.count("\n", 0, i) + 1, frame[3]))
                         break
@@ -714,12 +800,43 @@ TEST(ViewDisplayControls, EveryFullSkyLensZeroesTheStoredAngles) {
 }
 """
 
-_NEGATIVE_FOR_CTX_BEFORE_REPORT = """
+# Round 23's real miss (test/gui/functional/test_defaults_panel.cpp,
+# reset_all_unchecks_every_row_and_writes_nothing_until_save): a driving call BEFORE the loop's
+# only report, with nothing after it. This used to be a negative control on the theory that a
+# report with nothing driving `ctx` afterward in the same textual pass can't cascade — wrong in a
+# loop, which runs its body again: the driving call at the top of the NEXT iteration executes on
+# whatever error state THIS iteration's unguarded report left behind. See the "wrap-around" note in
+# find_for_cascade_in_text's docstring.
+_POSITIVE_FOR_CTX_BEFORE_REPORT_WRAP_AROUND = """
 TEST(ViewDisplayControls, ReportsAfterDriving) {
   for (const int lens : kFullSkyLensTypes) {
     ctx->ItemClick("**/Reset##view");
     if (gui::g_state.renderer.roll != 0.0f) {
       IM_ERRORF("full-sky lens %d kept a nonzero roll", lens);
+    }
+  }
+}
+"""
+
+# The exact shape of round 23's real miss, this time with the driving calls going through
+# locally-defined ctx-wrapper helpers (`FilterTo`/`RowIsChecked`) the way test_defaults_panel.cpp's
+# real case does, rather than a literal `ctx->` call — exercising `_ctx_wrapper_helper_names` /
+# `_ctx_wrapper_call_starts` together with the wrap-around fix above, on the actual code shape that
+# slipped past round 23's review.
+_POSITIVE_FOR_CTX_WRAPPER_HELPER_BEFORE_REPORT = """
+void FilterTo(ImGuiTestContext* ctx, const char* text) {
+  ctx->ItemInputValue("**/###defaults_search", text);
+}
+
+bool RowIsChecked(ImGuiTestContext* ctx, const std::string& key_path) {
+  return ctx->ItemIsChecked(key_path.c_str());
+}
+
+TEST(DefaultsPanel, reset_all_unchecks_every_row_and_writes_nothing_until_save) {
+  for (const auto& row : rows) {
+    FilterTo(ctx, row.key_path.c_str());
+    if (RowIsChecked(ctx, row.key_path)) {
+      IM_ERRORF("row '%s' survived Reset all still checked", row.key_path.c_str());
     }
   }
 }
@@ -864,8 +981,12 @@ def _selfcheck() -> int:
         ("negative: for-loop-nonfatal-cascade guarded by IsError()/break (the accepted fix shape, "
          "also regression-guards the ctx->IsError() exclusion)",
          _NEGATIVE_FOR_NONFATAL_GUARDED, False, find_for_cascade_in_text),
-        ("negative: for-loop ctx-> drives BEFORE the report, not after",
-         _NEGATIVE_FOR_CTX_BEFORE_REPORT, False, find_for_cascade_in_text),
+        ("known-positive: round-23 wrap-around, ctx-> drives BEFORE the loop's only report "
+         "(next iteration inherits the error)",
+         _POSITIVE_FOR_CTX_BEFORE_REPORT_WRAP_AROUND, True, find_for_cascade_in_text),
+        ("known-positive: round-23 real miss, ctx-wrapper helper (FilterTo/RowIsChecked) drives "
+         "before the loop's only report (reset_all_unchecks_every_row_and_writes_nothing_until_save)",
+         _POSITIVE_FOR_CTX_WRAPPER_HELPER_BEFORE_REPORT, True, find_for_cascade_in_text),
         ("negative: report shielded by an inline lambda inside the for body",
          _NEGATIVE_FOR_REPORT_IN_INLINE_LAMBDA, False, find_for_cascade_in_text),
         # -- non-fatal half: lambda-call-cascade -----------------------------

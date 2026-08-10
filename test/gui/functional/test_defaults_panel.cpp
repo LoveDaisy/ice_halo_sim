@@ -1190,6 +1190,9 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         if (RowIsChecked(ctx, row.key_path)) {
           IM_ERRORF("row '%s' survived Reset all still checked", row.key_path.c_str());
         }
+        if (ctx->IsError()) {
+          break;
+        }
       }
 
       FilterTo(ctx, "");
