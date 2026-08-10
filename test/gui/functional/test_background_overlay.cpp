@@ -156,6 +156,9 @@ void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK(IsDisabled(ctx->ItemInfo("**/Clear##display_bg")));
 
       LoadRenderAndBackground(ctx, kLandscape);
+      // DoLoadBackground writes bg_path after the file dialog returns; pushing the image straight
+      // into the renderer skips that, so the field is filled in here. Without it the Clear
+      // assertion below would be asserting that an already-empty string is still empty.
       gui::g_state.bg_path = RefPath(kLandscape);
       gui::g_state.aspect_preset = gui::AspectPreset::kMatchBg;
       ctx->ItemClick("**/Show##display_bg");

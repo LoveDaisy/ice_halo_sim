@@ -8,6 +8,14 @@
 // written on a completely different code path (the GLFW resize in ApplyAspectRatio), so "the flag
 // was set" and "the user was told" are two separate claims.
 //
+// NOT YET here, and belonging here. This file currently holds only the aspect-clamp propositions.
+// The rest of `##RightPanel`'s View and Display controls — the lens-type combo and the pose
+// sliders it re-gates, the FOV and visible-hemisphere gates, Reset, the aspect preset combo and its
+// portrait flip, the background row, and SliderWithInput's three value mappings — are still
+// asserted from test_gui_interaction.cpp, whose cases are grouped by an old `p1_slider` /
+// `p1_layout` category rather than by the window they drive. When those move, they belong in THIS
+// file: a second file on the same window is the shape this suite is being rewritten to remove.
+//
 // Deliberately NOT here. Whether ResolveAspectFit computes was_clamped correctly is arithmetic
 // over integers and is asserted over its whole domain in
 // unit-correctness/gui/test_gui_widget_rules.cpp; which preset options are disabled with and

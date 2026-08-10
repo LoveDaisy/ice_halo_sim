@@ -8,6 +8,15 @@
 // pointing at different slots are meant not to. Both halves need a real frame — the images are
 // produced by the update queue running across several of them.
 //
+// NOT YET here, and belonging here. This file currently holds only the thumbnail propositions. The
+// rest of what a card and a layer can do — the three Edit buttons and their initial tab, duplicate
+// and delete, the link badge two cards on one pool slot wear, `+ Layer` / `+ Crystal` and the
+// probability gates a new layer inherits, and the pick-mode strip a "Link to..." puts above the
+// cards — are still asserted from test_gui_interaction.cpp, whose cases are grouped by an old
+// `p1_card` / `p1_entry` / `p2_linked` category rather than by the panel they drive. When those
+// move, they belong in THIS file: a second file on the same panel is the shape this suite is being
+// rewritten to remove.
+//
 // Deliberately NOT here. That the fixed-seed thumbnail draw is deterministic (same config, same
 // seed, identical mesh) is test/gui/functional/test_gui_preview_animation.cpp; the crystal
 // renderer's own output is pinned against committed pixels in
