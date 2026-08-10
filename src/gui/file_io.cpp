@@ -538,13 +538,23 @@ static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
   const size_t kMaxTerms = static_cast<size_t>(LUMICE_MAX_CONFIG_TERMS);
   for (const auto& summand : f.param) {
     if (summand.factors.empty()) {
-      // A factor-less row (e.g. blank summand text) == match-all: one clause
-      // with a single match-all raypath term (mirrors the degenerate default).
-      if (ef.clauses.size() + 1 > kMaxClauses) {
-        ef.overflow = true;
-        break;
-      }
-      ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
+      // A factor-less row (blank / all-whitespace summand text) states no predicate, so it
+      // states nothing — and nothing is not "everything". Dropped, per owner decision
+      // 2026-08-10. It used to lower to one clause holding a single match-all term, which
+      // under filter_in widens the whole OR to everything (the user's other rows stop
+      // meaning anything) and under filter_out excludes every ray (a black render, with
+      // nothing on screen saying why). edit_modals.cpp's commit path already reads a blank
+      // row this way — it strips blank rows before building the filter — so this is the
+      // load/expand side catching up to the editor rather than a new rule.
+      //
+      // ⚠️ This drops ONE shape: a row with NO factors at all. It is NOT the shape a core
+      // config file's deliberate wildcard arrives as — that one is `type: "raypath"` with an
+      // empty `raypath` array, which TryReconstructComplexFilter / DeserializeFromJson Pass 2a
+      // (see the NOTE at the `raypath` branch of TryReconstructComplexFilter) turn into a row
+      // holding ONE factor whose text is empty. That row has a factor, so it never reaches
+      // here; it expands through FactorAlternatives' empty-text branch and stays a match-all.
+      // The two intents are separated by shape, and this branch is the only place the
+      // separation is enforced — widening the condition would silently delete the wildcard.
       continue;
     }
     // Multi-factor AND rows produce multi-term clauses; cap term count per clause.
@@ -592,11 +602,12 @@ static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
     ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
     return ef;
   }
-  // Defensive: a FilterConfig with an empty param vector is not a valid state
-  // (the default is a 1-row SoP), but never emit zero clauses.
-  if (ef.clauses.empty()) {
-    ef.clauses.push_back(std::vector<SimpleTermDesc>{ SimpleTermDesc{} });
-  }
+  // Zero clauses is now a legitimate result, not a state to defend against: it is what a filter
+  // whose every row was blank expands to, and it means the filter says nothing — i.e. there is no
+  // filter. This used to insert a match-all clause here, which turned "says nothing" into "matches
+  // everything", the same inversion the factor-less branch above used to make one row at a time.
+  // ExpandFilterToScene reads the empty clause set as FilterExpansionOutcome::kNoFilter and the
+  // entry commits with no filter attached.
   return ef;
 }
 
@@ -1146,7 +1157,21 @@ static void FillCrystalParam(const CrystalConfig& c, LUMICE_CrystalParam* dst) {
 // LUMICE_MAX_CONFIG_COMPLEX` check is gone: it guarded LUMICE_Config's fixed compositions[] pool,
 // and a Scene stores each composition inline in its filter object, so that pool no longer exists.
 // Complex filters stay bounded by LUMICE_MAX_CONFIG_FILTERS (each consumes >= 2 filter slots).
-static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int* filter_count, int* out_main_id) {
+//
+// Three outcomes, not two. "Attached" and "over the ABI bounds" were once the whole space, so a
+// bool carried them; a filter whose every row is blank now expands to zero clauses, which is
+// neither — it is a filter that says nothing, and the entry it belongs to commits with no filter.
+// Spelling that as a third `bool` out-param would leave the two failure-ish results distinguishable
+// only by reading both, and getting them backwards silently swaps "refuse the whole commit" for
+// "drop the user's filter", so they are named instead.
+enum class FilterExpansionOutcome {
+  kAttached,  // the filter is in the scene; *out_main_id is what the entry should point at
+  kNoFilter,  // the filter states nothing (every row blank) — attach nothing, commit proceeds
+  kOverflow,  // exceeds ABI clause / term / filter caps — the caller must abandon the commit
+};
+
+static FilterExpansionOutcome ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int* filter_count,
+                                                  int* out_main_id) {
   const int action = f.action;
   const int symmetry = (f.sym_p ? 1 : 0) | (f.sym_b ? 2 : 0) | (f.sym_d ? 4 : 0);
   // Build one term's LUMICE_FilterParam. `.id` is left zero on purpose — LUMICE_SceneAddFilter
@@ -1174,31 +1199,38 @@ static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int*
 
   const ExpandedFilter ef = ExpandSopToClauses(f);
   if (ef.overflow) {
-    return false;  // exceeds ABI clause/term caps — graceful drop
+    return FilterExpansionOutcome::kOverflow;  // exceeds ABI clause/term caps — graceful drop
+  }
+  if (ef.clauses.empty()) {
+    // Every row was blank, so the filter states nothing. Checked before the overflow-shaped
+    // returns below and kept distinct from them: this is not a rejection, and the caller must
+    // commit the scene without a filter on this entry rather than abandon the commit.
+    return FilterExpansionOutcome::kNoFilter;
   }
 
   if (IsDegenerateSingleTerm(ef)) {
     if (*filter_count >= LUMICE_MAX_CONFIG_FILTERS) {
-      return false;
+      return FilterExpansionOutcome::kOverflow;
     }
     const LUMICE_FilterParam param = make_term(ef.clauses[0][0]);
     if (LUMICE_SceneAddFilter(scene, &param, out_main_id) != LUMICE_OK) {
-      return false;
+      return FilterExpansionOutcome::kOverflow;
     }
     (*filter_count)++;
-    return true;
+    return FilterExpansionOutcome::kAttached;
   }
 
   int total_terms = 0;
   for (const auto& clause : ef.clauses) {
     if (static_cast<int>(clause.size()) > LUMICE_MAX_CONFIG_TERMS) {
-      return false;  // AND terms per clause (newly reachable via multi-factor rows)
+      // AND terms per clause (newly reachable via multi-factor rows)
+      return FilterExpansionOutcome::kOverflow;
     }
     total_terms += static_cast<int>(clause.size());
   }
   if (static_cast<int>(ef.clauses.size()) > LUMICE_MAX_CONFIG_CLAUSES ||
       *filter_count + total_terms + 1 > LUMICE_MAX_CONFIG_FILTERS) {
-    return false;
+    return FilterExpansionOutcome::kOverflow;
   }
 
   // Add the per-term simple filters first (clause order, term order within clause), collecting
@@ -1217,7 +1249,7 @@ static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int*
       const LUMICE_FilterParam param = make_term(term);
       int term_id = -1;
       if (LUMICE_SceneAddFilter(scene, &param, &term_id) != LUMICE_OK) {
-        return false;
+        return FilterExpansionOutcome::kOverflow;
       }
       (*filter_count)++;
       term_ids_vec.push_back(term_id);
@@ -1229,7 +1261,7 @@ static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int*
   // it must not outlive this call (and leaks if never released).
   LUMICE_ComplexComposition comp{};
   if (LUMICE_CompositionSetClauses(&comp, clause_n, term_counts_vec.data(), term_ids_vec.data()) != LUMICE_OK) {
-    return false;
+    return FilterExpansionOutcome::kOverflow;
   }
   LUMICE_FilterParam complex_param{};
   complex_param.action = action;
@@ -1238,10 +1270,10 @@ static bool ExpandFilterToScene(const FilterConfig& f, LUMICE_Scene* scene, int*
   const LUMICE_ErrorCode err = LUMICE_SceneAddComplexFilter(scene, &complex_param, &comp, out_main_id);
   LUMICE_CompositionReleaseClauses(&comp);
   if (err != LUMICE_OK) {
-    return false;
+    return FilterExpansionOutcome::kOverflow;
   }
   (*filter_count)++;
-  return true;
+  return FilterExpansionOutcome::kAttached;
 }
 
 std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
@@ -1470,9 +1502,19 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
           fid = it_f->second;
         } else {
           int main_id = -1;
-          if (ExpandFilterToScene(state.filters[fpool], scene.get(), &filter_count, &main_id)) {
+          const FilterExpansionOutcome outcome =
+              ExpandFilterToScene(state.filters[fpool], scene.get(), &filter_count, &main_id);
+          if (outcome == FilterExpansionOutcome::kAttached) {
             filter_pool_to_core.emplace(fpool, main_id);
             fid = main_id;
+          } else if (outcome == FilterExpansionOutcome::kNoFilter) {
+            // The filter states nothing (every row blank), so this entry commits with no filter —
+            // the same state as an entry whose filter_id was never set, which is the `else` arm
+            // below. Cached as -1 under the pool id for the same reason the attached case caches
+            // its id: a pool entry referenced from several sites must expand once and reach every
+            // site as the same answer.
+            filter_pool_to_core.emplace(fpool, -1);
+            fid = -1;
           } else {
             // Exceeded ABI bounds (clause / term / filter capacity). Bail out immediately so the
             // caller keeps the old committed state rather than commit a truncated config — the
@@ -1731,6 +1773,13 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
       // into the raypath branch, which would silently rewrite it into a match-all filter
       // (code-review-04 Major 1). Only an empty `raypath` ARRAY (with type=="raypath") is
       // the legitimate match-all wildcard.
+      //
+      // That wildcard survives the expansion path on the other side of this file, and the reason
+      // is the shape built here rather than any flag: this branch emits a row holding ONE factor
+      // whose text is empty, and ExpandSopToClauses only drops rows with NO factors (the blank
+      // summand row the user left empty). A one-factor empty-text row goes through
+      // FactorAlternatives' empty-text branch and stays a match-all. Keep it that way — folding
+      // this into a factor-less row would delete the wildcard the file explicitly asked for.
       if (ctype == "raypath") {
         // Join the raypath face ids with '-'. An empty/absent array is the
         // match-all raypath (empty text) — representable as a wildcard factor.

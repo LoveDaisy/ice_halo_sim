@@ -107,8 +107,11 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
 // (issue.md hard constraint — no re-implementation on the GUI side). Meant
 // only for cheap on-typing preview: value bounded by LUMICE_MAX_CONFIG_CLAUSES.
 struct SopExpansionSummary {
-  size_t clause_count = 0;  // 1..LUMICE_MAX_CONFIG_CLAUSES; degenerate default is 1
-  bool overflow = false;    // true iff the expansion tripped the clause/term cap
+  // 0..LUMICE_MAX_CONFIG_CLAUSES; degenerate default is 1. 0 means every row of the SoP was
+  // blank, i.e. the filter states nothing and commits as no filter at all — a legitimate
+  // result, not an error (the expansion used to substitute a match-all clause here).
+  size_t clause_count = 0;
+  bool overflow = false;  // true iff the expansion tripped the clause/term cap
 };
 SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f);
 
