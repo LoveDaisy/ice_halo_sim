@@ -312,6 +312,7 @@ if(BUILD_GUI)
     "${PROJ_SRC_DIR}/gui/imgui_te_stubs.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/gui_unit_test_env.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_roundtrip_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_lmc_load_atomicity_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_defaults_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_switch_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_legacy_document_chain.cpp"
