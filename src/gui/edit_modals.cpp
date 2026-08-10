@@ -931,14 +931,14 @@ static void RenderSummandRowList() {
         "  entry:1,2     comma-list = 'entry:1 OR entry:2' (expanded at filter apply)\n"
         "  & (AND)       within a row\n"
         "  new row       = OR alternative (sum-of-products)\n"
-        "  blank row     = match all rays (no filter)");
+        "  blank row     = states nothing, dropped (all rows blank = no filter)");
   }
 
   // Live preview of the sum-of-products the current row buffers would
   // expand to on commit. Uses the SAME parse/format helpers as the commit
   // path (BuildSopFromRows -> FormatSopExpansionPreview) so what the user
   // sees IS what will be serialized. Skipped when the row set is the
-  // trivial "single blank row" (match-all) state — otherwise the preview
+  // trivial "single blank row" (no filter) state — otherwise the preview
   // just repeats the hint line above with no new information.
   const bool show_live_preview =
       g_summand_rows.size() > 1 || (g_summand_rows.size() == 1 && g_summand_rows[0].text[0] != '\0');
