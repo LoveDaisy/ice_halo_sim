@@ -32,6 +32,7 @@
 namespace lumice::gui {
 namespace {
 
+using lumice::test::CommitSceneJson;
 using lumice::test::CoreJson;
 
 // The same one-entry document the commit chain uses, minus the filter, which each case supplies.
@@ -202,6 +203,21 @@ TEST(FilterReconstructChain, AnAndClauseBecomesOneRowAndAMatchAllAlternativeSurv
   EXPECT_TRUE(std::get<RaypathParams>(w.param[0].factors[0]).raypath_text.empty());
   EXPECT_EQ(w.param[1].text, std::string("3-5"));
   EXPECT_TRUE(PeekImportComplexFilterWarning().empty());
+
+  // The rebuilt rows are only half the round trip. What the simulator is handed is the other half,
+  // and it is the half the wildcard can be lost in: the expansion path drops a row that states no
+  // predicate, and this row's text is empty too. It is kept because it is not the same shape — the
+  // file asked for the wildcard with a `"raypath": []` that survives as a factor, where a row the
+  // user left blank has no factor at all. Asserting only the rows would leave that distinction
+  // resting on a claim about which shape reaches the expander rather than on the emitted document.
+  const nlohmann::json committed = CommitSceneJson(wildcard);
+  ASSERT_FALSE(committed.is_null()) << "the wildcard document did not commit at all";
+  const nlohmann::json& emitted_filters = committed["filter"];
+  ASSERT_EQ(emitted_filters.size(), 3u) << "expected wildcard + 3-5 + composition, got " << emitted_filters.dump();
+  EXPECT_EQ(emitted_filters[0]["type"].get<std::string>(), "raypath");
+  EXPECT_TRUE(emitted_filters[0]["raypath"].empty()) << "the explicit match-all wildcard was dropped or narrowed";
+  EXPECT_EQ(emitted_filters[1]["raypath"], nlohmann::json({ 3, 5 }));
+  EXPECT_EQ(emitted_filters[2]["composition"], nlohmann::json({ 0, 1 }));
 }
 
 // ---------------------------------------------------------------------------------------------
