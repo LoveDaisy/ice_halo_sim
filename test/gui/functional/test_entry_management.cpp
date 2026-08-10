@@ -40,29 +40,47 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A second entry bound to its OWN pool slot gets its own image. The cache is keyed by crystal id,
-  // so this is the case that separates "the cache regenerates when the layer structure changes"
-  // from "the cache happens to hold one texture and every card reads it".
+  // The cache is keyed by CRYSTAL id, and both halves of that sentence are asserted here: a card
+  // pointing at a new pool slot gets a texture of its own, and a card pointing at an existing slot
+  // gets the one already there.
+  //
+  // The distinctness assertion is the load-bearing one. A first draft of this case asserted only
+  // that both ids returned a non-zero texture, and a red-state probe walked straight through it —
+  // a cache that handed every caller the same texture satisfies "not zero" twice over, and the
+  // symptom a user reports is precisely two different crystals drawn with one picture.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_second_crystal_slot_gets_a_thumbnail_of_its_own");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "each_crystal_slot_has_its_own_thumbnail_and_shares_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(5);
 
+      // A second card on a NEW pool slot, and a third card pointing back at the first slot — the
+      // shape a duplicate entry produces.
       gui::CrystalConfig second;
       second.type = gui::CrystalType::kPyramid;
-      gui::EntryCard card;
-      card.crystal_id = static_cast<int>(gui::g_state.crystals.size());
+      gui::EntryCard on_new_slot;
+      on_new_slot.crystal_id = static_cast<int>(gui::g_state.crystals.size());
       gui::g_state.crystals.push_back(second);
-      gui::g_state.layers[0].entries.push_back(card);
+      gui::EntryCard sharing_first_slot;
+      sharing_first_slot.crystal_id = gui::g_state.layers[0].entries[0].crystal_id;
+      gui::g_state.layers[0].entries.push_back(on_new_slot);
+      gui::g_state.layers[0].entries.push_back(sharing_first_slot);
       gui::g_thumbnail_cache.OnLayerStructureChanged();
       ctx->Yield(kThumbnailFrames);
 
       const int first_id = gui::g_state.layers[0].entries[0].crystal_id;
       const int second_id = gui::g_state.layers[0].entries[1].crystal_id;
+      const int shared_id = gui::g_state.layers[0].entries[2].crystal_id;
       IM_CHECK_NE(first_id, second_id);  // the premise: two cards, two pool slots
-      IM_CHECK_NE(gui::g_thumbnail_cache.GetTexture(first_id), 0u);
-      IM_CHECK_NE(gui::g_thumbnail_cache.GetTexture(second_id), 0u);
+      IM_CHECK_EQ(first_id, shared_id);  // and a third card back on the first slot
+
+      const uintptr_t first_tex = gui::g_thumbnail_cache.GetTexture(first_id);
+      const uintptr_t second_tex = gui::g_thumbnail_cache.GetTexture(second_id);
+      IM_CHECK_NE(first_tex, 0u);
+      IM_CHECK_NE(second_tex, 0u);
+      IM_CHECK_NE(first_tex, second_tex);
+      IM_CHECK_EQ(gui::g_thumbnail_cache.GetTexture(shared_id), first_tex);
     };
   }
 }
