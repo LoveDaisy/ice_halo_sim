@@ -2847,9 +2847,8 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 // test/gui/ — functional/test_export.cpp and visual/test_preview_pixels.cpp call
 // it directly, and functional/test_background_overlay.cpp reaches it through the
 // shared RequestAndWaitPreviewExport helper in test/gui/test_gui_main.cpp.
-// Consolidated with
-// the overlay path in DoExportPreviewPng — the FBO+renderer logic lives once, in
-// export_fbo_renderer.cpp.
+// Consolidated with the overlay path in DoExportPreviewPng — the FBO+renderer
+// logic lives once, in export_fbo_renderer.cpp.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp) {
   if (vp.vp_w <= 0 || vp.vp_h <= 0 || !renderer.HasTexture()) {
     return false;
