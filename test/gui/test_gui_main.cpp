@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
   // Lock to non-Retina framebuffer on macOS so framebuffer size == window size
   // (1600x980) regardless of cold/warm start or visible/hidden state. Visual
-  // regression tests (e.g. screenshot/left_panel_psnr) need deterministic
+  // regression tests (e.g. visual/left_panel) need deterministic
   // capture dimensions; without this hint, hidden windows may yield 400x912
   // on one run and 800x1824 on the next.
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
@@ -475,8 +475,9 @@ int main(int argc, char** argv) {
   RegisterP2Tests(engine);
   RegisterViewDisplayControlTests(engine);
   RegisterExportPreviewTests(engine);
-  RegisterScreenshotTests(engine);
-  RegisterVisualTests(engine);
+  RegisterPreviewPixelTests(engine);
+  RegisterPreviewTextureTests(engine);
+  RegisterEntryManagementTests(engine);
   RegisterBackgroundOverlayTests(engine);
   RegisterFileOpsTests(engine);
   RegisterColorWindowTests(engine);

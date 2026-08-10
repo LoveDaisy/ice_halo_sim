@@ -59,8 +59,8 @@ struct ModalLayoutScene {
 // pixel-identical (PSNR=inf) and there is no finite mean − 4σ to calibrate: Phase A measured
 // zero pixel variance over 10 full-suite runs, and Phase B found 60/60 runs bit-identical for
 // every scene, recording the driver's deterministic floor. 40 dB is therefore not a sampled
-// statistic but the repo-wide floor for deterministic GL comparisons (screenshot/left_panel_psnr,
-// screenshot/crystal_psnr, capture_harness/fullframe) — bit-exactness cannot be demanded of a
+// statistic but the repo-wide floor for deterministic GL comparisons (visual/left_panel,
+// visual/crystal_preview_prism, capture_harness/fullframe) — bit-exactness cannot be demanded of a
 // committed reference compared on another machine's GL stack.
 // See groups.modal_layout in test/gui/references/_thresholds.json.
 static constexpr double kDeterministicThresholdDb = 40.0;
@@ -178,7 +178,7 @@ void RegisterModalLayoutTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Park the mouse off-window: a hovered widget bakes a highlight into the reference and
-      // every later no-hover run then fails (same rationale as screenshot/left_panel_psnr).
+      // every later no-hover run then fails (same rationale as visual/left_panel).
       // Must come after WindowMove, which drives the mouse to the title bar to drag it.
       ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
       ctx->Yield(4);
