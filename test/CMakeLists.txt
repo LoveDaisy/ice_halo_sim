@@ -316,6 +316,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_defaults_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_document_switch_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_legacy_document_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_json_import_contract_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_scene_commit_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_filter_reconstruct_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_raypath_color_document_chain.cpp"

@@ -625,6 +625,15 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
   }
 }
 
+// The GUI edits uniform shape distributions only. If a document carried non-uniform families
+// (gauss/laplacian/...) they were loaded as uniform (see ParseShapeDist). This is a deliberate
+// capability downgrade, surfaced once via the shared import-warning popup — from BOTH load
+// branches, which is why the sentence lives here instead of being spelled out twice.
+constexpr const char* kShapeDistDowngradeNotice =
+    "Some crystal shape distributions used non-uniform types (e.g. gauss, laplacian). The GUI "
+    "edits uniform distributions only, so they were loaded as uniform. Edit the config file / "
+    "CLI directly to keep other distribution types.";
+
 void DoOpen() {
   DoOpen(ShowOpenDialog());
 }
@@ -651,6 +660,11 @@ void DoOpen(const std::filesystem::path& path) {
     // left in place, this read's counts would surface on the next New and describe THAT load.
     TakeUserDefaultsDowngradeCount();
     TakeUserDefaultsDowngradeNotices();
+    // Same pre-load drain the .lmc branch does below, for the same reason: MakeNewDocumentState
+    // just ran the user's personal defaults through this very deserializer, so a hand-edited
+    // defaults file can leave a count behind that belongs to no load at all. Without it, the
+    // post-load take further down would report that count as this document's downgrade.
+    TakeShapeDistDowngradeCount();
     if (DeserializeFromJson(json_str, new_state)) {
       // Data restore + command-semantic fields (path/dirty/run_intent stay in handler per
       // plan §2 — they are command intent, not frontend reset).
@@ -663,6 +677,14 @@ void DoOpen(const std::filesystem::path& path) {
       ResetFrontendState(g_state, FrontendResetReason::kOpenJson);
       LoadBackgroundWithDegrade(g_state);
       GUI_LOG_INFO("[GUI] DoOpen (JSON import): {}", PathToU8(path));
+
+      // Same notice the .lmc branch raises below, and it belongs here even more than there: a core
+      // JSON is exactly the document that carries the distribution families the GUI cannot edit
+      // (gauss/laplacian/...), and until this call the downgrade happened with nothing said. The
+      // wording is shared with that branch — one downgrade, one sentence, wherever it is read from.
+      if (TakeShapeDistDowngradeCount() > 0) {
+        SetImportComplexFilterWarning(kShapeDistDowngradeNotice);
+      }
     }
     return;
   }
@@ -699,14 +721,9 @@ void DoOpen(const std::filesystem::path& path) {
     // already ClearBackground()'d, so a missing bg_path leaves the preview blank (as before).
     LoadBackgroundWithDegrade(g_state);
 
-    // Notify: the GUI edits uniform shape distributions only. If the file carried non-uniform
-    // families (gauss/laplacian/...) they were loaded as uniform (see ParseShapeDist). This is a
-    // deliberate capability downgrade, surfaced once via the shared import-warning popup.
+    // Notify: same downgrade, same sentence as the JSON-import branch above (kShapeDistDowngradeNotice).
     if (TakeShapeDistDowngradeCount() > 0) {
-      SetImportComplexFilterWarning(
-          "Some crystal shape distributions used non-uniform types (e.g. gauss, laplacian). The GUI "
-          "edits uniform distributions only, so they were loaded as uniform. Edit the config file / "
-          "CLI directly to keep other distribution types.");
+      SetImportComplexFilterWarning(kShapeDistDowngradeNotice);
     }
 
     // Notify: a filter object in the file described no rule a reader could use (an empty summands
