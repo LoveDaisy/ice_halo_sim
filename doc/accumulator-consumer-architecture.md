@@ -395,8 +395,9 @@ destroying and reconstructing consumers.
 > that saving as "~0.5ms vs. ~30ms for full rebuild". Those are historical
 > measurements with no corresponding constant, assertion or comment in the code, and
 > this revision did not re-measure them. Treat them as an order-of-magnitude claim of
-> unknown currency, not as a current figure. `CommitConfig` does log the real split
-> (`Stop` + rebuild + `Start`, in ms) on every commit at INFO level, which is the
+> unknown currency, not as a current figure. `ServerImpl::CommitConfig` does log the real
+> split on every commit at INFO level — `ILOG_INFO("CommitConfig: restart took … (Stop …
+> + rebuild … + Start …)")` (`server.cpp:701`, verified 2026-08-11) — which is the
 > cheapest way to get a number that is actually true of your machine and config.
 
 ---
