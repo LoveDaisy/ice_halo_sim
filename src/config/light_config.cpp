@@ -1,6 +1,8 @@
 #include "config/light_config.hpp"
 
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -51,7 +53,14 @@ void from_json(const nlohmann::json& j, LightSourceConfig& l) {
     }
     l.spectrum_ = std::move(wl_params);
   } else {
-    LOG_ERROR("Invalid spectrum format: expected string or array");
+    // Rejecting rather than logging: neither branch runs, so `spectrum_` keeps its
+    // default-constructed alternative — an EMPTY wavelength table, i.e. a light source that emits
+    // nothing. There is no neutral value to fall back on here, so there is nothing to degrade to.
+    // Unlike a crystal, a scene has exactly one light source, so no caller adds an id prefix and
+    // the field has to name itself.
+    throw std::invalid_argument("light_source.spectrum is neither a string nor an array: " + j_spectrum.dump() +
+                                ". Write either an illuminant name (e.g. \"D65\") or an array of "
+                                "{\"wavelength\": ..., \"weight\": ...} objects.");
   }
 
   const auto& j_type = j.at("type");

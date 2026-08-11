@@ -108,6 +108,33 @@ TEST(LightSourceSpectrum, IlluminantRoundTrip) {
   ASSERT_EQ(j_out["spectrum"].get<std::string>(), "D65");
 }
 
+// `spectrum` written as neither a string nor an array is rejected. It used to log an error and
+// carry on, which left `spectrum_` holding its default-constructed alternative: an EMPTY
+// wavelength table, i.e. a light source that emits nothing. Nothing downstream treated that as a
+// failure, so the run proceeded on a scene nobody wrote.
+//
+// Asserting the message, not merely the throw: a scene has one light source, so no caller adds a
+// `crystal[id=N]`-style prefix and the field has to name itself.
+TEST_F(V3TestJson, LightSource_SpectrumInvalidFormatRejected) {
+  for (const nlohmann::json bad : { nlohmann::json(42), nlohmann::json(true), nlohmann::json(nullptr) }) {
+    SCOPED_TRACE(bad.dump());
+    auto j = config_json_;
+    j.at("scene").at("light_source").at("spectrum") = bad;
+
+    try {
+      (void)j.get<ConfigManager>();
+      FAIL() << "expected std::invalid_argument for a spectrum that is neither a string nor an array";
+    } catch (const std::invalid_argument& e) {
+      const std::string msg = e.what();
+      EXPECT_NE(msg.find("light_source.spectrum"), std::string::npos) << msg;  // which field
+      EXPECT_NE(msg.find(bad.dump()), std::string::npos) << msg;               // what arrived
+      // Both legal ways to write it — the migration guidance, not decoration.
+      EXPECT_NE(msg.find("\"D65\""), std::string::npos) << msg;
+      EXPECT_NE(msg.find("\"wavelength\""), std::string::npos) << msg;
+    }
+  }
+}
+
 
 // =============== SPD Query ===============
 TEST(IlluminantSpd, D65At560nm) {
@@ -285,6 +312,54 @@ TEST_F(V3TestJson, Crystal_ShapeScalarObjectMissingTypeRejected) {
     // one it is on. The generic form still shows both legal ways to write it, which is the part
     // that has to be there.
     EXPECT_NE(msg.find("\"type\": \"gauss\""), std::string::npos) << msg;
+  }
+}
+
+// A `type` that names neither crystal kind is rejected. It used to log an error and carry on with
+// `param_` left default-constructed — so a config asking for a gauss-height prism got a plain
+// 1.0-height one, and the only trace was a log line no caller treated as a failure.
+TEST_F(V3TestJson, Crystal_UnknownTypeValueRejected) {
+  auto j = config_json_;
+  j.at("crystal")[1].at("type") = "cube";
+
+  try {
+    (void)j.get<ConfigManager>();
+    FAIL() << "expected std::invalid_argument for an unknown crystal type";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("crystal[id=2]"), std::string::npos) << msg;  // which crystal (outer wrap)
+    EXPECT_NE(msg.find("\"cube\""), std::string::npos) << msg;       // what arrived
+    // Both legal values — the migration guidance, not decoration.
+    EXPECT_NE(msg.find("\"prism\""), std::string::npos) << msg;
+    EXPECT_NE(msg.find("\"pyramid\""), std::string::npos) << msg;
+  }
+}
+
+// A distribution slot that is neither a number nor an object is rejected. It used to log an error
+// and leave `dist` holding whatever the destination already carried, so the written value vanished
+// without any downstream treating it as a failure.
+//
+// The axis slots (zenith/azimuth/roll) share this rejection: ParseAxisSlot's own narrowing only
+// covers "object with no type" and forwards everything else to the same Distribution::from_json.
+// So this is pinned once, on a shape scalar, rather than repeated per slot — same reasoning as
+// Crystal_ShapeScalarObjectMissingTypeRejected above.
+TEST_F(V3TestJson, Crystal_ShapeScalarNeitherNumberNorObjectRejected) {
+  for (const nlohmann::json bad : { nlohmann::json("tall"), nlohmann::json(true), nlohmann::json({ 1, 2, 3 }) }) {
+    SCOPED_TRACE(bad.dump());
+    auto j = config_json_;
+    j.at("crystal")[1].at("shape").at("height") = bad;
+
+    try {
+      (void)j.get<ConfigManager>();
+      FAIL() << "expected std::invalid_argument for a shape.height that is neither number nor object";
+    } catch (const std::invalid_argument& e) {
+      const std::string msg = e.what();
+      EXPECT_NE(msg.find("crystal[id=2]"), std::string::npos) << msg;  // which crystal (outer wrap)
+      EXPECT_NE(msg.find(bad.dump()), std::string::npos) << msg;       // what arrived
+      // No slot name: this layer serves every distribution in the document and does not know which
+      // one it is on. The generic form still shows both legal ways to write it.
+      EXPECT_NE(msg.find("\"type\": \"gauss\""), std::string::npos) << msg;
+    }
   }
 }
 
