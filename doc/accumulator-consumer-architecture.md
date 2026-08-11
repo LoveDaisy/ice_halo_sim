@@ -399,7 +399,7 @@ destroying and reconstructing consumers.
 > this revision did not re-measure them. Treat them as an order-of-magnitude claim of
 > unknown currency, not as a current figure. `ServerImpl::CommitConfig` does log the real
 > split on every commit at INFO level — `ILOG_INFO("CommitConfig: restart took … (Stop …
-> + rebuild … + Start …)")` (`server.cpp:701`, verified 2026-08-11) — which is the
+> + rebuild … + Start …)")` (`server.cpp:700`, verified 2026-08-11) — which is the
 > cheapest way to get a number that is actually true of your machine and config.
 
 ---
