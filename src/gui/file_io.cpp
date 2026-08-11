@@ -693,7 +693,18 @@ int TakeShapeDistDowngradeCount() {
 // simplified editor), surfaced via a load-complete notice — NOT a silent loss (contrast the earlier
 // bug where loading collapsed a distribution to its bare mean and dropped type/std with no notice).
 // NO_RANDOM (off) and UNIFORM pass through unchanged. Downgrades bump g_shape_dist_downgrade_count.
-static ShapeDist ParseShapeDist(const json& j, float default_center) {
+//
+// `crystal_label` / `slot_key` say WHICH slot of WHICH crystal a warning is about, same as
+// ParseAxisDist's — and for the same reason, since core states `type`'s requirement once for both
+// halves and only the axis half used to report it.
+//
+// `enforce_type_field` == false holds one slot out of that report: a `type`-less object still lands
+// on the same value, silently. It exists for `prism_h`, whose requiredness core has not settled —
+// changing what the GUI makes of it before core does would move a value from underneath the answer
+// core is about to give. Re-evaluate whether this parameter is still needed once core states
+// whether `prism_h` is optional.
+static ShapeDist ParseShapeDist(const json& j, float default_center, const std::string& crystal_label,
+                                const char* slot_key, bool enforce_type_field = true) {
   ShapeDist d;
   d.center = default_center;
   if (j.is_number()) {
@@ -701,7 +712,17 @@ static ShapeDist ParseShapeDist(const json& j, float default_center) {
     d.center = j.get<float>();
     d.spread = 0.0f;
   } else if (j.is_object()) {
-    d.type = ParseShapeDistType(j.value("type", ShapeDistTypeToString(ShapeDist{}.type)));
+    if (enforce_type_field && !j.contains("type")) {
+      d.type = ShapeDist{}.type;
+      const std::string msg = crystal_label + " shape." + slot_key +
+                              " is written as an object with no \"type\"; loaded as " +
+                              ShapeDistTypeToString(ShapeDist{}.type) +
+                              " (core rejects this document outright, since Distribution requires \"type\").";
+      GUI_LOG_WARNING("[FileIO] ParseShapeDist: {}", msg);
+      SetImportComplexFilterWarning(msg);
+    } else {
+      d.type = ParseShapeDistType(j.value("type", ShapeDistTypeToString(ShapeDist{}.type)));
+    }
     d.center = j.value("mean", default_center);
     d.spread = j.value("std", ShapeDist{}.spread);
   }
@@ -780,7 +801,7 @@ static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::strin
     if (c.type == CrystalType::kPrism) {
       const char* height_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
       if (s.contains(height_key)) {
-        c.height = ParseShapeDist(s[height_key], CrystalConfig{}.height.center);
+        c.height = ParseShapeDist(s[height_key], CrystalConfig{}.height.center, crystal_label, height_key);
       }
     } else {
       // prism_h takes CrystalConfig's own default when absent. upper_h/lower_h deliberately do
@@ -789,10 +810,17 @@ static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::strin
       const char* prism_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
       const char* upper_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
       const char* lower_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
-      c.prism_h = s.contains(prism_h_key) ? ParseShapeDist(s[prism_h_key], CrystalConfig{}.prism_h.center) :
-                                            CrystalConfig{}.prism_h;
-      c.upper_h = s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f) : ShapeDist(0.0f);
-      c.lower_h = s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f) : ShapeDist(0.0f);
+      // prism_h alone passes enforce_type_field=false: it is the one slot held out of the
+      // missing-`type` report, because core has not yet settled whether it requires the field at
+      // all. See ParseShapeDist's own comment.
+      c.prism_h = s.contains(prism_h_key) ?
+                      ParseShapeDist(s[prism_h_key], CrystalConfig{}.prism_h.center, crystal_label, prism_h_key,
+                                     /*enforce_type_field=*/false) :
+                      CrystalConfig{}.prism_h;
+      c.upper_h =
+          s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f, crystal_label, upper_h_key) : ShapeDist(0.0f);
+      c.lower_h =
+          s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f, crystal_label, lower_h_key) : ShapeDist(0.0f);
       // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
       for (int upper = 1; upper >= 0; upper--) {
         float& alpha = upper ? c.upper_alpha : c.lower_alpha;
@@ -810,7 +838,11 @@ static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::strin
     if (s.contains(fd_key) && s[fd_key].is_array()) {
       size_t n = std::min(s[fd_key].size(), static_cast<size_t>(6));
       for (size_t i = 0; i < n; i++) {
-        c.face_distance[i] = ParseShapeDist(s[fd_key][i], CrystalConfig{}.face_distance[i].center);
+        // Six slots share one key, so the index goes in the slot name: "which face" is the part a
+        // reader needs and the array key alone does not say.
+        const std::string fd_slot = std::string(fd_key) + "[" + std::to_string(i) + "]";
+        c.face_distance[i] =
+            ParseShapeDist(s[fd_key][i], CrystalConfig{}.face_distance[i].center, crystal_label, fd_slot.c_str());
       }
     }
     // shape.sync_group: read into the wire form's parallel array, then scatter back into each
