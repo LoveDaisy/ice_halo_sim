@@ -458,5 +458,172 @@ TEST(FilterReconstructChain, ARepeatedWarningIsShownOnceUntilItChangesOrClears) 
   ClearGuiWarning();
 }
 
+// ---------------------------------------------------------------------------------------------
+// The two ways core says "every ray", the one way it says "no ray", and which of them the editor
+// is allowed to turn into which.
+//
+// The editor has no spelling for a filter that matches nothing, and for a long time it read the
+// file as if core had none either. Core has all three, and they are not a matter of interpretation
+// (config/filter_config.cpp from_json, core/filter_spec.cpp):
+//
+//   no `type` key                     -> NoneFilterParam -> NoneSpec::Match returns true -> EVERY ray
+//   "type": "none"                    -> NoneFilterParam -> the same
+//   "type": "raypath", "raypath": []  -> a raypath orbit whose canonical sequence has length 0, and
+//                                        RaypathOrbit::Contains rejects on the length compare before
+//                                        it reads a byte -> NO ray. Measured, not read off the
+//                                        source: 200k rays through this filter render an all-black
+//                                        frame (mean 0.0000, 0 of 65536 pixels lit), against 14.49
+//                                        for the same document with `{"type": "none"}`.
+//
+// So the first two and the third are opposites, and the editor's only near-match for any of them —
+// a row whose raypath text is empty — has to be pointed at the first two. Pointing it at the third
+// is not a rounding error: under `filter_in` it is the difference between a picture and a black
+// frame, with nothing on screen to say which document produced it.
+
+// A filter core passes every ray through must still pass every ray after a load and a commit,
+// whichever of core's two spellings the file used.
+TEST(FilterReconstructChain, EitherSpellingOfCoresMatchAllStillPassesEveryRayAfterALoad) {
+  struct Case {
+    const char* name;
+    const char* filters;
+  };
+  const Case kCases[] = {
+    { "the explicit type", R"([{"id": 1, "type": "none", "action": "filter_in"}])" },
+    // Not a malformed document: core's own reader treats an absent `type` as NoneFilterParam on
+    // purpose, and says so where it does it.
+    { "no type key at all", R"([{"id": 1, "action": "filter_in"}])" },
+  };
+
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    DoNew();
+    ClearImportComplexFilterWarning();
+    GuiState loaded = InitDefaultState();
+    if (!DeserializeFromJson(CoreDocWithFilters(c.filters, 1), loaded)) {
+      ADD_FAILURE() << c.name << ": the document did not open at all";
+      continue;  // nothing loaded for this row; the other spelling still gets checked
+    }
+    if (!loaded.layers.at(0).entries.at(0).filter_id.has_value()) {
+      ADD_FAILURE() << c.name << ": the filter did not survive the load";
+      continue;
+    }
+
+    const nlohmann::json committed = CommitSceneJson(loaded);
+    if (committed.is_null()) {
+      ADD_FAILURE() << c.name << ": the document did not commit at all";
+      continue;
+    }
+    if (committed["filter"].size() != 1u) {
+      ADD_FAILURE() << c.name << ": expected exactly the one filter, got " << committed["filter"].dump();
+      continue;  // indexing [0] below would read past the pool
+    }
+    const nlohmann::json& jf = committed["filter"][0];
+    // Stated as the polarity first and the spelling second. The spelling could reasonably change;
+    // what may never happen is this filter coming back as the one shape core matches no ray with.
+    EXPECT_FALSE(jf["type"].get<std::string>() == "raypath" && jf["raypath"].empty())
+        << "a filter that passes every ray committed as the shape that passes none: " << jf.dump();
+    EXPECT_EQ(jf["type"].get<std::string>(), std::string("none")) << jf.dump();
+  }
+}
+
+// The opposite shape, at the top level of the filter pool. The editor cannot say "no ray", so the
+// contract is that it says so out loud rather than quietly filing the file's request under the
+// nearest thing it can say.
+//
+// The entry ends up carrying no filter, which on its own admits every ray — the same direction the
+// refused filter pointed away from. That is the cost of refusing, not a claim about what the file
+// meant: the user is told, by name, that a filter was dropped, which is the whole difference
+// between this and the inversion it replaces.
+TEST(FilterReconstructChain, ATopLevelEmptyRaypathArrayIsRefusedRatherThanReadAsItsOpposite) {
+  DoNew();
+  ClearImportComplexFilterWarning();
+  GuiState loaded = InitDefaultState();
+  ASSERT_TRUE(DeserializeFromJson(
+      CoreDocWithFilters(R"([{"id": 1, "type": "raypath", "action": "filter_in", "raypath": []}])", 1), loaded));
+
+  EXPECT_FALSE(loaded.layers.at(0).entries.at(0).filter_id.has_value())
+      << "a filter core matches no ray with came back as an editable row";
+  EXPECT_FALSE(PeekImportComplexFilterWarning().empty()) << "the filter was dropped with nothing said about it";
+
+  const nlohmann::json committed = CommitSceneJson(loaded);
+  ASSERT_FALSE(committed.is_null()) << "the document did not commit at all";
+  EXPECT_TRUE(committed["filter"].empty())
+      << "the refused filter reached the simulator anyway: " << committed["filter"].dump();
+  ClearImportComplexFilterWarning();
+}
+
+// The same shape one level down, as a term of a composition. It arrives through a SECOND decoder
+// (TryReconstructComplexFilter, not the top-level pass), which is exactly how the two came to
+// disagree about it, so it is pinned on both paths rather than on the one that happened to be read
+// first. A term cannot be dropped from an AND without changing what the AND says, so the refusal
+// here is of the whole composition — the loud-reject route the unrepresentable child types already
+// take.
+TEST(FilterReconstructChain, AnEmptyRaypathArrayInsideACompositionIsRefusedToo) {
+  DoNew();
+  ClearImportComplexFilterWarning();
+  GuiState loaded = InitDefaultState();
+  ASSERT_TRUE(
+      DeserializeFromJson(CoreDocWithFilters(R"([{"id": 1, "type": "raypath", "action": "filter_in", "raypath": []},
+                             {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+                             {"id": 3, "type": "complex", "action": "filter_in", "composition": [[1], [2]]}])",
+                                             3),
+                          loaded));
+
+  EXPECT_FALSE(loaded.layers.at(0).entries.at(0).filter_id.has_value())
+      << "the composition was rebuilt around a term the editor cannot say";
+  EXPECT_FALSE(PeekImportComplexFilterWarning().empty()) << "the composition vanished with nothing said about it";
+  ClearImportComplexFilterWarning();
+}
+
+// AC5: one input, two commit paths, one answer.
+//
+// A filter row and a colour-class predicate are written in the same little grammar and reach the
+// scene through two different encoders (ExpandFilterToScene's make_term, and FillColorPredicate).
+// They already answered differently for the identical input — the colour side translated an empty
+// raypath into core's match-all, the filter side handed core an empty raypath array, which is its
+// opposite. The input below is therefore constructed ONCE and handed to both, so this cannot pass
+// by the two sides being given two things that merely look alike.
+//
+// The two encoders reach match-all by different spellings on the wire, and that difference is
+// deliberate rather than a leftover: lumice.h states that LUMICE_FilterParam's UNSET is rejected at
+// commit while LUMICE_ColorPredicate's UNSET *is* match-all. So the comparison below is of what
+// core will do with each document, not of the bytes.
+TEST(FilterReconstructChain, TheFilterPathAndTheColourPathAgreeOnWhatAnEmptyRaypathMeans) {
+  const RaypathParams kEmptyRaypath{};  // the one input, built once
+
+  SeedOneEntryDocument();
+  ClearImportComplexFilterWarning();
+  FilterConfig f;
+  f.SetRaypath(kEmptyRaypath);
+  g_state.filters[0] = f;
+
+  ColorClassConfig cls;
+  ColorClassRefConfig ref;
+  ref.layer_idx = 0;
+  ref.crystal_pool_id = 0;
+  ref.match_all = false;  // NOT the explicit flag — the point is what the text alone resolves to
+  ref.predicate_text = kEmptyRaypath.raypath_text;
+  cls.match.push_back(ref);
+  g_state.raypath_color.push_back(cls);
+
+  const nlohmann::json committed = CommitSceneJson(g_state);
+  ASSERT_FALSE(committed.is_null()) << "the document did not commit at all";
+
+  ASSERT_EQ(committed["filter"].size(), 1u) << committed["filter"].dump();
+  const nlohmann::json& jf = committed["filter"][0];
+  ASSERT_TRUE(committed.contains("raypath_color")) << "the colour class did not reach the scene at all";
+  ASSERT_EQ(committed["raypath_color"]["classes"].size(), 1u);
+  ASSERT_EQ(committed["raypath_color"]["classes"][0]["match"].size(), 1u);
+  const nlohmann::json& jref = committed["raypath_color"]["classes"][0]["match"][0];
+
+  // Core reads a filter of type "none" and a predicate with no `type` key as the same thing: every
+  // ray. Neither may be the raypath-with-an-empty-array shape, which is the one core reads as no
+  // ray at all.
+  EXPECT_EQ(jf["type"].get<std::string>(), std::string("none")) << "filter path: " << jf.dump();
+  EXPECT_FALSE(jref.contains("type")) << "colour path: " << jref.dump();
+  EXPECT_FALSE(jf["type"].get<std::string>() == "raypath" && jf["raypath"].empty()) << jf.dump();
+  EXPECT_FALSE(jref.value("type", std::string{}) == "raypath" && jref["raypath"].empty()) << jref.dump();
+}
+
 }  // namespace
 }  // namespace lumice::gui
