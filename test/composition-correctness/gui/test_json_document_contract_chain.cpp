@@ -209,6 +209,27 @@ std::string DocWithCrystals(const std::string& crystals_json) {
   })";
 }
 
+// A complete, well-formed document apart from the one part the caller replaces. Every other field
+// the parse touches is stated, so a warning that appears can only be about the part under test —
+// the notice channel appends, so a document malformed in two places would let a row pass on the
+// wrong message.
+std::string DocWithParts(const char* light_source_json, const char* render_json, const char* extra_root_json) {
+  return std::string(R"({
+    "crystal": [{"id": 0, "type": "prism", "shape": {"height": 2.0, "face_distance": [1, 1, 1, 1, 1, 1]}}],
+    "filter": [],
+    "scene": {"light_source": )") +
+         light_source_json + R"(,
+              "ray_num": 1000, "max_hits": 8,
+              "scattering": [{"prob": 1.0, "entries": [{"crystal": 0, "proportion": 1.0}]}]},
+    "render": )" +
+         render_json + extra_root_json + R"(
+  })";
+}
+
+constexpr const char* kWellFormedLightSource = R"({"type": "sun", "altitude": 20, "spectrum": "D65"})";
+constexpr const char* kWellFormedRender =
+    R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64]}])";
+
 }  // namespace
 
 // D-1, the case the ruling puts in its own severity band: `id` is the key of the map crystals are
@@ -347,6 +368,86 @@ TEST(JsonImportContractChain, AJsonPrismHMissingTypeStaysSilentUnlikeOtherShapeD
 
   EXPECT_EQ(PeekImportComplexFilterWarning().find("prism_h"), std::string::npos)
       << "prism_h is held out of the rule until core settles it; got: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// D-4: `spectrum` is the key that decides how the rest of that object reads — a string names one of
+// the built-in spectra, an array is a discrete custom one. Absent, there is nothing to discriminate
+// on, and D65 is not the neutral answer to "which spectrum": it is a specific one, picked for the
+// user out of a document that declined to say.
+//
+// `light_source` is a singleton, so there is no collection to drop this from and no downstream
+// fallback to hand it to; what the ruling's "refuse" buys here is therefore the report, not a
+// different value. The loaded spectrum stays exactly what it is today — the silence is what ends.
+TEST(JsonImportContractChain, AJsonLightSourceMissingSpectrumWarnsAndKeepsDefault) {
+  const std::string doc = DocWithParts(R"({"type": "sun", "altitude": 20})", kWellFormedRender, "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_EQ(scratch.sun.spectrum_index, SunConfig{}.spectrum_index) << "the value it loads at is unchanged";
+  EXPECT_FLOAT_EQ(scratch.sun.altitude, 20.0f) << "premise: the light_source object was read at all";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "a spectrum was chosen for the user and never mentioned";
+  EXPECT_NE(warning.find("spectrum"), std::string::npos) << "must name the field, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// D-6: same shape as D-4 one level over — `lens.type` selects the whole projection branch the
+// preview inverts, and `linear` is one specific projection rather than an absence of one. Also a
+// singleton (the GUI keeps a single renderer), so again the value stays and the silence goes.
+//
+// `fov` beside it deliberately gets no such treatment: core itself reads that one as optional, so
+// its absence is a document saying nothing, not a document being malformed.
+TEST(JsonImportContractChain, AJsonRenderLensMissingTypeWarnsAndKeepsLinear) {
+  const std::string doc =
+      DocWithParts(kWellFormedLightSource, R"([{"id": 1, "lens": {"fov": 60}, "resolution": [64, 64]}])", "");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  EXPECT_EQ(scratch.renderer.lens_type, RenderConfig{}.lens_type) << "the value it loads at is unchanged";
+  EXPECT_FLOAT_EQ(scratch.renderer.fov, 60.0f) << "premise: the lens object was read at all";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "a projection was chosen for the user and never mentioned";
+  EXPECT_NE(warning.find("lens"), std::string::npos) << "must name the object, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// D-7: a colour class with no colour. No colour is the neutral one — black and white both read as
+// deliberate choices in a composite, and a class whose colour is undefined has no rendering meaning
+// at all — so the class goes rather than getting one assigned. The file already drops whole filters
+// and whole colour refs it cannot express; this is that same move one level out.
+//
+// The z_order assertion is the second half, and it is not incidental: z_order must be a compact
+// permutation of [0, size) over the vector that actually holds the classes, so assigning it from the
+// SOURCE array index — correct only while nothing is ever dropped — would punch a hole in that
+// invariant the moment dropping became possible. Hence the surviving class is the second one, and
+// its expected z_order is 0 rather than merely "non-negative".
+TEST(JsonImportContractChain, AJsonColorClassMissingColorIsDroppedNotDefaultColored) {
+  const std::string doc = DocWithParts(kWellFormedLightSource, kWellFormedRender, R"(,
+    "raypath_color": {"mode": "painter", "classes": [
+      {"match": [{"crystal": 0, "layer": 0}]},
+      {"color": [0.25, 0.5, 0.75], "match": [{"crystal": 0, "layer": 0}]}
+    ]})");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  ASSERT_EQ(scratch.raypath_color.size(), 1u) << "the colourless class was kept and given a colour nobody chose";
+  EXPECT_FLOAT_EQ(scratch.raypath_color.at(0).color[0], 0.25f) << "the survivor is the class that HAD a colour";
+  EXPECT_EQ(scratch.raypath_color.at(0).z_order, 0)
+      << "z_order came from the source array index, so dropping a class left a hole in a range that "
+         "must be a compact permutation of [0, size)";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "a colour class was dropped and the user was told nothing";
+  EXPECT_NE(warning.find("color"), std::string::npos) << "must name the field, got: " << warning;
   ClearImportComplexFilterWarning();
 }
 
