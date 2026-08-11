@@ -1,5 +1,5 @@
 """Regression guard: CUDA must stay isomorphic with CPU/Metal on degenerate
-K-shape pool geometry (no backend fallback, no per-ray log storm, no frame loss).
+K-shape pool geometry (no backend fallback, no frame loss).
 
 Root cause (the defect this guards against):
   With the per-ray K-shape geometry pool active (SceneConfig geom_clock > 0) and a
@@ -31,8 +31,14 @@ distinct crystal populations from the same wide distribution — sampling varian
 parity bug), so this file does NOT assert a tight cross-backend energy bound; the milder
 random-geometry parity contract is covered by CudaRandomGeometryParity and the parity
 battery. Here we assert the isomorphism invariants that were actually broken (no
-fallback / no storm / real output) plus CUDA cross-seed self-consistency (the halo is
+fallback / real output) plus CUDA cross-seed self-consistency (the halo is
 seed-stable, proving the output is genuine geometry rather than garbage neighbor reads).
+
+The log storm above is HISTORY, not a channel this file still watches: its producer, the
+per-ray `LOG_WARNING("PolygonFaceOfTri: ...")` in the legacy entry sampler, was deleted
+by cf1a9179 (2026-07-23), so the storm count read zero whether or not the backend fell
+back. It was only ever the DOWNSTREAM SYMPTOM of the fallback, which `routed_backend ==
+"cuda"` / `not fell_back` below assert directly — hence dropped, not re-plumbed.
 
 @pytest.mark.slow: needs the CUDA-enabled shared-lib build (LUMICE_LIB) + an NVIDIA
 device. CUDA-gated, so it is inert on non-CUDA hosts (CI, macOS).
@@ -82,14 +88,9 @@ def _run_cuda(seed: int) -> BufferedSimResult:
     )
 
 
-def _storm_count(result: BufferedSimResult) -> int:
-    """Count the per-ray PolygonFaceOfTri WARNING lines (the fallback-driven storm)."""
-    return sum("PolygonFaceOfTri" in line for line in result.log_lines)
-
-
 @pytest.mark.parametrize("seed", _SEEDS)
-def test_cuda_degenerate_no_fallback_no_storm(seed: int) -> None:
-    """Degenerate K-shape pool must run on CUDA end-to-end: no fallback, no storm."""
+def test_cuda_degenerate_no_fallback(seed: int) -> None:
+    """Degenerate K-shape pool must run on CUDA end-to-end: no fallback, real output."""
     r = _run_cuda(seed)
 
     # The core isomorphism invariant that was broken: the backend must NOT drop
@@ -101,15 +102,6 @@ def test_cuda_degenerate_no_fallback_no_storm(seed: int) -> None:
     assert not r.fell_back, (
         f"seed={seed}: CUDA fell back to legacy (fell_back=True). BuildGeomPool must "
         f"tolerate a degenerate K-shape pool slot, not throw BackendUnavailableError."
-    )
-
-    # The fallback's downstream symptom: legacy InitRayFirstMs emits one
-    # PolygonFaceOfTri WARNING per ray of a degenerate ci. Zero on the fixed path.
-    storm = _storm_count(r)
-    assert storm == 0, (
-        f"seed={seed}: {storm} PolygonFaceOfTri WARNING(s) observed. This per-ray "
-        f"log storm is emitted only on the legacy CPU fallback path — its presence "
-        f"means the CUDA backend dropped."
     )
 
     # Real output, not a frame-collapsed / all-rays-dropped image.

@@ -22,14 +22,23 @@ that split.
      "one geometry per batch" severity) and PRINTS the cross-vs-self gap as the
      explore-3 input.
 
-  2. **Exit conservation across the seam (D1 — ACTIVE since Scrum-268.4 drain).**
-     The worst-case `ms3_mixed_pyramid_heavy` used to overflow the fixed exit
-     buffer (exit_cap=12288) under deep continuation and silently CLAMP (E0).
-     Scrum 2 task-268.4 (commit↔batch decoupling + per-layer incremental drain)
-     eliminated the clamp. Gate is now active: any reappearance of the
-     "exit-ray overflow" log line on this scene fails the test. Root-ray
-     conservation (sim_rays == ray_num) was already an active assert and
-     stays so — together they pin both halves of the seam.
+  2. **Exit conservation across the seam (the log-scan half is now VACUOUS).**
+     `ms3_mixed_pyramid_heavy` used to overflow the fixed exit buffer
+     (exit_cap=12288) under deep continuation and silently CLAMP (E0); the
+     commit↔batch split's per-layer incremental drain removed the clamp (see item 1
+     above for the two knobs it introduced), and the S1 device-fused rewrite
+     (a01c257f) then removed the capacity-bounded buffer ITSELF — today
+     `params.exit_cap = 0u` ("exit buffers gone"), the kernel never reads the
+     field, `ReadbackExitRays` is `out.clear(); return 0;`, and no
+     `"exit-ray overflow"` string exists anywhere in src/. The scan below therefore
+     cannot fail: not because the seam is healthy, but because exits now accumulate
+     atomically into a fixed W×H×3 XYZ image BY PIXEL INDEX, a shape where "append
+     past capacity" is unreachable. Kept as this scene's narrative anchor, NOT as
+     coverage. The live guard for the general proposition (device-fused
+     accumulation must not silently DROP exits) is metric-based, not log-based:
+     `test_metal_exit_seam_parity.py`'s `test_parity_*` family (ds_corr + render
+     PSNR + total-Y, `slow`, per-PR). Root-ray conservation (sim_rays == ray_num)
+     is untouched by all of this and stays a genuinely active assert.
 
 CRITICAL (code-review BLOCKER-1): `LUMICE_DISPATCH_RAY_NUM` is read into a
 function-local `static const` in server.cpp's GenerateScene, frozen ONCE per
@@ -194,12 +203,12 @@ def test_metal_batch_invariance(config_name):
 
 @pytest.mark.slow
 def test_metal_exit_conservation_heavy():
-    """Worst-case exit conservation: the deep-continuation heavy scene must not
-    silently drop exit rays. Pre-Scrum-2 this overflowed exit_cap=12288 and
-    clamped (E0); Scrum-268.4's incremental drain eliminated it. Gate is now
-    ACTIVE — any re-introduction of the overflow fails the test. Root rays
-    stay conserved (sim_rays == ray_num) — this pins the loss to the exit
-    seam, not root generation.
+    """Root-ray conservation on the worst-case deep-continuation heavy scene.
+
+    Only the `sim_rays == ray_num` half of this is a live check. The exit-overflow
+    scan below is VACUOUS today — the capacity-bounded exit buffer it watched no
+    longer exists, so nothing can emit the line it looks for. See module docstring
+    item 2 for the full accounting and for what does guard exit-ray loss now.
     """
     cfg = _CONFIGS_DIR / "ms3_mixed_pyramid_heavy.json"
     with open(cfg) as f:
@@ -237,17 +246,18 @@ def test_metal_exit_conservation_heavy():
         f"root ray conservation broken: sim_rays={stats.group(1)} != {requested}"
     )
 
-    # --- D1 ACTIVE exit-conservation gate (Scrum-268.4 drain landed) ---
-    # The overflow message is emitted at the default log level to stdout/stderr;
-    # we scan both. Active since 2026-06-17 (task-270.7): Scrum 2's incremental
-    # drain made `overflowed` reliably False on this worst-case scene, so any
-    # reappearance is a regression in the seam.
+    # --- D1 exit-overflow scan: VACUOUS since a01c257f (see module docstring §2) ---
+    # Both the clamp and the capacity-bounded exit buffer it protected are gone, and
+    # with them the only emitter of this string. `overflowed` is therefore False by
+    # construction on every run — do NOT read a green here as evidence that the exit
+    # seam was exercised. The live guard for exit-ray loss is the metric-based
+    # test_parity_* family in test_metal_exit_seam_parity.py.
     overflowed = bool(_RE_OVERFLOW.search(log))
-    print(f"[exit-cons] ms3_mixed_pyramid_heavy: exit_overflow={overflowed} (gate: no overflow)")
+    print(f"[exit-cons] ms3_mixed_pyramid_heavy: exit_overflow={overflowed} (vacuous scan)")
     assert not overflowed, (
-        "ms3_mixed_pyramid_heavy overflowed exit_cap=12288 - Scrum-268.4's "
-        "incremental drain regressed. Re-introduce clamp-side observability "
-        "(see commit fb722c20 for the drain design) before relaxing this gate."
+        "'exit-ray overflow' reappeared on ms3_mixed_pyramid_heavy. Nothing in src/ "
+        "emits that string today, so this means a capacity-bounded exit buffer was "
+        "reintroduced — re-read the seam design before treating it as a simple regression."
     )
 
 

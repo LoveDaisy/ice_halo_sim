@@ -111,7 +111,8 @@ purpose 本身不足以完全分开八层中的两层：`unit-correctness`、`co
   bug（scrum-267）。必须配齐 metric-masks-bugs 全套：跨 seed 自洽 + 总能量守恒 + golden/解析锚 +
   人眼核查 + revert 反验（见 §4.2）。
 - **阈值约定**：统计型（相关性地板 + 能量守恒界 + 跨 seed 一致）。绝不用裸相关性门。
-- **节奏**：`PR` 与 `nightly`（heavy 变体）。
+- **节奏**：`PR`。（本行原先列的 `nightly` heavy 变体已于 2026-08-11 随 `heavy` marker 一并删除
+  ——没有任何 workflow 带 `schedule:` 触发器，所以它们从来没跑过。）
 - **命名**：`test_<backend>_<aspect>_parity.{cpp,py}`；`...Parity` gtest suite。
 - **物理位置**：目标态 `test/parity-cross-backend/<subsystem>/`；现状 `unit_test`（`.cpp`/`.mm`）
   + `test/e2e/`（pytest parity 测试）。
@@ -742,16 +743,17 @@ ImGuiTestEngine 的 `IM_CHECK*`），会在第一行失败时就中止**整个�
   `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"` 是
   `scripts/test.sh` 的 `quick`/`full`/`pr` 模式用来一次选中这四个非平铺层的选择器，不需要任何
   per-target 知识。
-- **pytest marker**：`slow`（需 shared-lib 构建；排除出 CI 快路径）与 `heavy`（slow + 冗余 parity
-  变体；按 PR 用 `not heavy` 取消选择）是运行节奏 marker，保留。层/subsystem 在目标态用目录 +
-  marker 表达。
+- **pytest marker**：`slow`（需 shared-lib 构建；排除出 CI 快路径）是**唯一**的运行节奏 marker，
+  保留。另一个 marker `heavy` 注册到 2026-08-11 为止：它命名的是「本地/nightly 跑」这一从未有任何
+  workflow 提供的节奏，因此它那三条测试哪里都没跑过；测试与注册已一并删除。层/subsystem 在目标态
+  用目录 + marker 表达。
 - **`addopts = ["-m", "not slow"]`（`pyproject.toml`）**：裸 `pytest` 被钳定到 fast 子集，让上文
   "裸 pytest = e2e fast 子集" 的说法从需要调用方记住的约定变成结构性事实。加之前，裸 `pytest`
   实测 collected 全集 166 个（而非 `-m "not slow"` 选出的 81 个 fast 子集），尽管 `AGENTS.md`
   一直把它文档化为 fast-only；runner 历史样本显示调用方**一贯以为**自己在跑 fast 路径、实际却
   跑了全集——这正是选择「门禁」而非「改文档」的原因（提醒型约束抓不住调用方本来就不知道自己
   错了的失效模式）。命令行 `-m` 会整体覆盖 addopts（不是 AND 组合），所以 `-m ''` 仍是取全集的
-  逃生口，`-m slow` / `-m "slow and not heavy"` 也仍不受影响地选中 CI 慢腿。任何依赖旧「无 `-m`
+  逃生口，`-m slow` 也仍不受影响地选中 CI 慢腿。任何依赖旧「无 `-m`
   = 跑该路径下全部」默认语义的 pytest 调用点都需要补上显式 `-m`——见
   `doc/gpu-remote-cuda-build-testing.md` 里 CUDA parity recipe 的修正案例。
 
@@ -762,7 +764,7 @@ ImGuiTestEngine 的 `IM_CHECK*`），会在第一行失败时就中止**整个�
       target 改名后仍能解析。
 - [ ] `ci.yml` 中 pytest 路径参数仍能解析——E2E-Slow matrix 按文件名引用具体文件
       （parity 腿 `test_metal_exit_seam_parity.py`；rest 腿 `--ignore=...`）。
-- [ ] marker selector `-m "not slow"` / `-m "slow and not heavy"` 仍选中预期集合。
+- [ ] marker selector `-m "not slow"` / `-m slow` 仍选中预期集合。
 - [ ] 参考图路径（`test/e2e/references/`、`test/gui/references/`）及其 `.gitignore` un-ignore 规则
       随读取它们的测试一起移动。
 - [ ] `release.yml` 不受影响（它不跑测试）——确认，别假设。

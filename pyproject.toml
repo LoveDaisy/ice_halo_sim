@@ -30,5 +30,4 @@ pythonpath = ["."]
 # default `pytest` behaviour is unchanged.
 markers = [
     "slow: requires shared-lib build; excluded from CI fast path",
-    "heavy: slow + redundant parity variant; run locally/nightly, deselected per-PR via 'not heavy'",
 ]

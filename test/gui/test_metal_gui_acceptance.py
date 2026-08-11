@@ -32,8 +32,12 @@ use_metal_backend so DoRun reconstructs into the single-engine Metal topology
 N-worker server. Baseline is legacy CPU (the GUI's real path); NEVER cpu_backend.
 
 Correctness is NOT re-tested here — it is already gated by the raw-XYZ parity
-matrix (test_metal_exit_seam_parity, 10/10) and the lens_proj PSNR references. G4
-owns the GUI-regime throughput + responsiveness legs.
+matrix (test_metal_exit_seam_parity) and the lens_proj PSNR references. G4 owns
+the GUI-regime throughput leg only. First-frame latency is deliberately NOT gated
+here: it is a perf-harness metric, measured off a real app log by
+`scripts/analyze_perf_log.py` ("First upload:" line), per test_gui_perf.cpp's own
+policy that budgets gate "the loop stopped" floors while throughput/latency
+belongs to doc/performance-testing.md's harness.
 
 @pytest.mark.slow — needs the GUI test binary + a display/GL context; Darwin-only
 (Metal). Skips gracefully when the binary is absent or no display is available.
@@ -74,28 +78,7 @@ _GATE = 1.0
 # against GUI-loop noise while tripping hard on a real regression.
 _SANITY_FLOOR = 0.8
 
-# --- Responsiveness gate: freeze detection, NOT "must beat legacy" ----------------
-# Large dispatch buys ~2x throughput at the cost of a higher first-frame latency
-# (an honest tradeoff, NOT a regression to hide). explore-265's failure mode was a
-# single dispatch >100ms freezing the UI (5s drag -> 2 frames, i.e. per-frame
-# stalls in the seconds range). This gate catches that pathological freeze regime.
-#
-# Calibration note (task-364, 2026-07-15): this test runs the HEAVY config
-# (_HEAVY_CONFIG, multi-MS + complex filter + multi-crystal, ray_num=infinite),
-# whose healthy Metal first_upload median measures ~200ms on Mac — this is the
-# physical floor of the first batch's trace + XYZ readback, which the O2 PSO/device
-# process-level cache (task-364) deliberately does NOT cover (it eliminates the
-# per-commit PSO-rebuild cost, not the GPU work of the first batch itself). The
-# prior 150ms value was calibrated against a lighter config (~71ms median) and only
-# surfaced as a failure once task-364 fixed the rays>0 assertion that masked it.
-# 250ms keeps headroom against run-to-run noise (measured 196-202ms, tight) while
-# still tripping hard on a genuine >100ms/dispatch freeze (which lands in the
-# seconds range). Whether the heavy-scene first batch can be compressed further,
-# or its UX softened, is deferred to a backlog explore (not a task-364 regression).
-_FIRST_UPLOAD_FREEZE_MS = 250.0
-
 _RE_STEADY = re.compile(r"steady_state:\s+([\d.]+)\s+rays/sec")
-_RE_FIRST_UPLOAD = re.compile(r"first_upload\s+avg=\d+ms\s+median=(\d+)ms")
 _RE_FALLBACK = re.compile(r"falling back to legacy CPU|incompatible with render", re.IGNORECASE)
 _RE_NO_DISPLAY = re.compile(r"Failed to create GLFW window|Failed to initialize", re.IGNORECASE)
 
@@ -117,10 +100,10 @@ def _make_infinite_config(tmp_dir: str) -> str:
 
 
 def _run_gui_perf(config_path: str, metal: bool) -> dict:
-    """Run gui_test perf scenarios; return parsed steady rps + first_upload.
+    """Run gui_test perf scenarios; return the parsed steady rps.
 
-    Returns {"steady_rps": float, "first_upload_ms": float, "fell_back": bool,
-             "no_display": bool, "raw": str}.
+    Returns {"steady_rps": float, "fell_back": bool, "no_display": bool,
+             "raw": str}.
     """
     env = dict(os.environ)
     env["LUMICE_PERF_CONFIG"] = config_path
@@ -141,13 +124,8 @@ def _run_gui_perf(config_path: str, metal: bool) -> dict:
     m = _RE_STEADY.search(out)
     if m:
         steady = float(m.group(1))
-    first_upload = 0.0
-    mu = _RE_FIRST_UPLOAD.search(out)
-    if mu:
-        first_upload = float(mu.group(1))
     return {
         "steady_rps": steady,
-        "first_upload_ms": first_upload,
         "fell_back": bool(metal and _RE_FALLBACK.search(out)),
         "no_display": bool(_RE_NO_DISPLAY.search(out)),
         "raw": out,
@@ -156,7 +134,7 @@ def _run_gui_perf(config_path: str, metal: bool) -> dict:
 
 @pytest.mark.slow
 def test_metal_gui_north_star():
-    """Metal single-engine beats legacy in the real GUI regime + stays responsive."""
+    """Metal single-engine beats legacy in the real GUI regime."""
     if not (_GUI_BIN.is_file() and os.access(_GUI_BIN, os.X_OK)):
         pytest.skip(f"GUI test binary not found at {_GUI_BIN}; build with ./scripts/build.sh -gtj release")
 
@@ -180,9 +158,7 @@ def test_metal_gui_north_star():
     print(
         f"[gui-north-star] {_HEAVY_CONFIG}: legacy_steady={legacy['steady_rps']:.0f} "
         f"metal_steady={metal['steady_rps']:.0f} ratio={ratio:.3f} "
-        f"(sanity>={_SANITY_FLOOR}, gate>={_GATE}); "
-        f"metal first_upload median={metal['first_upload_ms']:.0f}ms "
-        f"(freeze threshold {_FIRST_UPLOAD_FREEZE_MS:.0f}ms)"
+        f"(sanity>={_SANITY_FLOOR}, gate>={_GATE})"
     )
 
     # Sanity: catches the reconstruct-stall regression (ctor backend propagation)
@@ -197,13 +173,4 @@ def test_metal_gui_north_star():
     assert ratio >= _GATE, (
         f"GUI north-star regression ratio={ratio:.3f} < {_GATE} — Metal no longer "
         f"beats legacy CPU end-to-end in the GUI live-preview regime (scrum-268 §5)."
-    )
-
-    # Responsiveness: large dispatch must not regress into the UI-freeze regime.
-    # (Metal first_upload is honestly higher than legacy — the throughput/latency
-    # tradeoff — but must stay well below the freeze threshold.)
-    assert 0.0 < metal["first_upload_ms"] < _FIRST_UPLOAD_FREEZE_MS, (
-        f"GUI responsiveness regression: Metal first_upload median="
-        f"{metal['first_upload_ms']:.0f}ms >= {_FIRST_UPLOAD_FREEZE_MS:.0f}ms — large "
-        f"dispatch is freezing the UI (single dispatch too long; explore-265 failure mode)."
     )

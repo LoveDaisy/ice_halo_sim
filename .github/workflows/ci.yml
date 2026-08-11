@@ -652,9 +652,6 @@ jobs:
         run: pip install Pillow pytest numpy pytest-xdist
 
       - name: Run slow E2E tests
-        # 'not heavy' drops redundant parity variants (prob05*, single-MS no-filter)
-        # from the per-PR run; they stay available locally/nightly via `-m slow`.
-        #
         # CLI-based Darwin slow gates (test_metal_throughput, test_metal_batch_invariance
         # exit-conservation) drive the `Lumice` CLI via runner.find_lumice_binary(), which
         # looks for build/cmake_install/static/Lumice or $LUMICE_BIN. This shared-lib build does
@@ -678,13 +675,13 @@ jobs:
           # tests (the bulk of the macOS "rest" leg) dominate wall-time; this is
           # what keeps the leg under the step timeout. Throughput gates are
           # EXCLUDED here — they must not measure under concurrent GPU load.
-          pytest ${{ matrix.pytest_args }} --ignore=test/performance -n 3 -v -m "slow and not heavy"
+          pytest ${{ matrix.pytest_args }} --ignore=test/performance -n 3 -v -m slow
           # Phase 2 — serial + GPU-isolated: the throughput gates run alone so the
           # measured rate is not deflated by concurrent tests. Only legs whose args
           # include test/performance run this (the metal-exit-seam parity leg has
           # no perf tests → skipped). Cheap (~2 gates); no -n on purpose.
           case "${{ matrix.pytest_args }}" in
-            *test/performance*) pytest test/performance -v -m "slow and not heavy" ;;
+            *test/performance*) pytest test/performance -v -m slow ;;
           esac
         timeout-minutes: 15
 

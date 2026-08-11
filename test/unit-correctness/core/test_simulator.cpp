@@ -994,7 +994,7 @@ size_t CountDistinctUpperPolyFaces(const Crystal& crystal, bool* any_invalid_out
   return polys.size();
 }
 
-TEST(PolygonFaceOfTriArgmax, ExtremeWedge88SixDistinctUpperFaces) {
+TEST(UpperPyramidPolyFaceCoverage, ExtremeWedge88SixDistinctUpperFaces) {
   // Extreme wedge 88° — six distinct upper-pyramid polygon faces must be
   // exposed at the CPU consumer surface (parametric layout guarantee).
   auto crystal = Crystal::CreatePyramid(88.0f, 88.0f, 1.0f, 0.0f, 1.0f);
@@ -1006,7 +1006,7 @@ TEST(PolygonFaceOfTriArgmax, ExtremeWedge88SixDistinctUpperFaces) {
                                "closed-form-built crystal";
 }
 
-TEST(PolygonFaceOfTriArgmax, NormalWedge87SixDistinctUpperFaces) {
+TEST(UpperPyramidPolyFaceCoverage, NormalWedge87SixDistinctUpperFaces) {
   auto crystal = Crystal::CreatePyramid(87.0f, 87.0f, 1.0f, 0.0f, 1.0f);
   bool any_invalid = false;
   size_t distinct = CountDistinctUpperPolyFaces(crystal, &any_invalid);

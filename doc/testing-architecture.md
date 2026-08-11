@@ -151,7 +151,9 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   golden/analytic anchor + human-eye check + revert counter-check (see §4.2).
 - **Threshold convention**: statistical (correlation floor + energy-conservation bound +
   cross-seed agreement). Never a bare correlation gate.
-- **Cadence**: `PR` and `nightly` (heavy variants).
+- **Cadence**: `PR`. (The `nightly` heavy variants this line used to list were deleted on
+  2026-08-11 along with the `heavy` marker — no workflow has a `schedule:` trigger, so nothing
+  ever ran them.)
 - **Naming**: `test_<backend>_<aspect>_parity.{cpp,py}`; `...Parity` gtest suites.
 - **Physical location**: target-state `test/parity-cross-backend/<subsystem>/`; current
   `unit_test` (`.cpp`/`.mm`) + `test/e2e/` (pytest parity tests).
@@ -951,9 +953,11 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
   `integration` / `gui`). `ctest -L "unit-correctness|composition-correctness|parity|golden-analytic"`
   is the selector `scripts/test.sh`'s `quick`/`full`/`pr` modes use to pick up all four
   non-flat layers with no per-target knowledge.
-- **pytest markers**: `slow` (requires shared-lib build; excluded from CI fast path) and
-  `heavy` (slow + redundant parity variant; deselected per-PR via `not heavy`) are run-cadence
-  markers and stay. Layer/subsystem are expressed via directory + marker in the target state.
+- **pytest markers**: `slow` (requires shared-lib build; excluded from CI fast path) is the one
+  run-cadence marker and stays. A second marker, `heavy`, was registered until 2026-08-11: it
+  named a "run locally/nightly" cadence no workflow ever supplied, so its three tests never ran
+  anywhere; they and the registration were deleted together. Layer/subsystem are expressed via
+  directory + marker in the target state.
 - **`addopts = ["-m", "not slow"]` (`pyproject.toml`)**: bare `pytest` is pinned to the fast
   subset so the "bare pytest = e2e fast subset" claim above is structurally true rather than a
   convention callers must remember. Before this was added, bare `pytest` collected the full
@@ -962,8 +966,7 @@ Three naming systems must stay aligned across a migration (270.3–270.5):
   were on the fast path while running the whole suite, which is why the fix is a gate rather
   than a doc correction (a reminder can't catch a mistake the caller doesn't know they're
   making). Command-line `-m` overrides addopts entirely (not an AND-combine), so `-m ''` remains
-  the full-suite escape hatch and `-m slow` / `-m "slow and not heavy"` still select the CI slow
-  leg unchanged. Any pytest invocation that relies on the old "no `-m` = run everything under
+  the full-suite escape hatch and `-m slow` still selects the CI slow leg unchanged. Any pytest invocation that relies on the old "no `-m` = run everything under
   this path" default needs an explicit `-m` added — see `doc/gpu-remote-cuda-build-testing.md`'s
   CUDA parity recipes for one such fix.
 
@@ -974,7 +977,7 @@ any rename/move/marker-change that misses one turns CI red:
       still resolves after a target rename.
 - [ ] pytest path arguments in `ci.yml` still resolve — the E2E-Slow matrix references specific
       files by name (`test_metal_exit_seam_parity.py` parity leg; the `--ignore=...` rest leg).
-- [ ] marker selectors `-m "not slow"` / `-m "slow and not heavy"` still select the intended set.
+- [ ] marker selectors `-m "not slow"` / `-m slow` still select the intended set.
 - [ ] reference paths (`test/e2e/references/`, `test/gui/references/`) and their `.gitignore`
       un-ignore rules move together with the tests that read them.
 - [ ] `release.yml` is unaffected (it runs no tests) — confirm, don't assume.

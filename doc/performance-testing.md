@@ -58,8 +58,8 @@ Two goals are in tension — quantified by these metrics:
 
 | Goal | Metric | Source | Description |
 |------|--------|--------|-------------|
-| **Responsiveness** | `first_upload` (ms) | GUI perf test / log analysis | Commit → first successful texture upload; lower is better |
-| **Render quality** | `upload_rays` value + CV | GUI perf test / log analysis | Rays per upload; higher absolute value and lower CV is better |
+| **Responsiveness** | `first_upload` (ms) | Log analysis (`analyze_perf_log.py`) | Commit → first successful texture upload; lower is better |
+| **Render quality** | `upload_rays` value + CV | Log analysis (`analyze_perf_log.py`) | Rays per upload; higher absolute value and lower CV is better |
 
 **Note**: Low CV alone doesn't mean good quality — 1K rays with low CV is still poor.
 Both absolute value and stability matter.
@@ -692,8 +692,9 @@ to disable this for raw unlimited-FPS comparison.
 
 Two scenarios:
 - **steady_state**: 2 seconds of accumulation — measures rays/sec + texture FPS
-- **slider_drag**: 5 seconds of alternating parameter changes — measures rays/sec + upload ratio +
-  first_upload delay + per-upload rays CV
+- **slider_drag**: 5 seconds of alternating parameter changes — measures rays/sec, frames, restarts
+  and upload counts (first_upload delay and per-upload rays CV come from log analysis, not from
+  this scenario)
 
 ### Diagnostic Flags
 
