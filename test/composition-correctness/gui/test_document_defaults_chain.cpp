@@ -65,18 +65,26 @@ constexpr const char* kRoot = "{}";
 constexpr const char* kSun = R"({"sun":{}})";
 constexpr const char* kSim = R"({"sim":{}})";
 constexpr const char* kRenderer = R"({"renderer":{}})";
-constexpr const char* kCrystal = R"({"layers":[{"entries":[{"crystal":{}}]}]})";
+// Every crystal below states its `type`, and has to. `type` is not a field with a missing-key
+// default at all: it is the discriminant deciding how the rest of the crystal reads, so a crystal
+// that omits it is refused outright and the entry falls back to a default POOL SLOT. Rows reading
+// `s.crystals.at(0)` would then still find something to compare — an untouched slot — and pass
+// without the parse under test having run. So the rows keep their subject the only absent key by
+// stating `type`, and the refusal itself is pinned where it belongs, next to the other
+// core-rejects-this-document cases (JsonImportContractChain in the sibling contract-chain file).
+constexpr const char* kCrystal = R"({"layers":[{"entries":[{"crystal":{"type":"prism"}}]}]})";
 // The filter document carries a raypath, and it has to. A filter object that names no rule at all
 // is not loaded as a filter with default fields — it is loaded as no filter, so there would be no
 // `s.filters.at(0)` for the rows below to read a default off. That disposition is a row of its own
 // (kEmptyFilter, in the test body) rather than a silent property of this constant.
-constexpr const char* kFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"raypath_text":"3-5"}}]}]})";
+constexpr const char* kFilter =
+    R"({"layers":[{"entries":[{"crystal":{"type":"prism"},"filter":{"raypath_text":"3-5"}}]}]})";
 // entry_text carries a real value: an entry_exit filter naming neither face nor length is now the
 // wildcard shape (FromLegacyEntryExit) and does not become a filter in the pool at all — that
 // disposition is its own row below (kEmptyEeFilter, in the test body), same as kEmptyFilter for the
 // raypath arm above it.
 constexpr const char* kEeFilter =
-    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit","entry_text":"2"}}]}]})";
+    R"({"layers":[{"entries":[{"crystal":{"type":"prism"},"filter":{"type":"entry_exit","entry_text":"2"}}]}]})";
 
 const MissingKeyCase kGuiNativeCases[] = {
   // -- root-level GuiState fields; the parent object is the document root, always present --
@@ -126,28 +134,33 @@ const MissingKeyCase kGuiNativeCases[] = {
                          EntryCard{}.proportion),
 
   // -- the inline crystal (ParseCrystal, shared by both entry points) --
+  // `crystal.type` has no row of its own in either table, and the absence is the statement: it is
+  // the one crystal key whose omission is not answered with a default (see kCrystal above).
   LUMICE_MISSING_KEY_ROW(kCrystal, s.crystals.at(0).name, CrystalConfig{}.name),
-  LUMICE_MISSING_KEY_ROW(kCrystal, s.crystals.at(0).type, CrystalConfig{}.type),
   // ParseShapeDist: `type` is owned by ShapeDist; `center` comes from the per-scalar default the
   // CALL SITE passes, so it is pinned against that scalar's own struct default.
-  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{}}}}]}]})",
+  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"type":"prism","shape":{"height":{}}}}]}]})",
                          s.crystals.at(0).height.type, ShapeDist{}.type),
-  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{"type":"uniform","mean":2.0}}}}]}]})",
-                         s.crystals.at(0).height.spread, ShapeDist{}.spread),
-  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"shape":{"height":{"type":"uniform","std":0.5}}}}]}]})",
-                         s.crystals.at(0).height.center, CrystalConfig{}.height.center),
   LUMICE_MISSING_KEY_ROW(
-      R"({"layers":[{"entries":[{"crystal":{"shape":{"face_distance":[{"type":"uniform","std":0.1}]}}}]}]})",
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism","shape":{"height":{"type":"uniform","mean":2.0}}}}]}]})",
+      s.crystals.at(0).height.spread, ShapeDist{}.spread),
+  LUMICE_MISSING_KEY_ROW(
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism","shape":{"height":{"type":"uniform","std":0.5}}}}]}]})",
+      s.crystals.at(0).height.center, CrystalConfig{}.height.center),
+  LUMICE_MISSING_KEY_ROW(
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism","shape":{"face_distance":[{"type":"uniform","std":0.1}]}}}]}]})",
       s.crystals.at(0).face_distance[0].center, CrystalConfig{}.face_distance[0].center),
   LUMICE_MISSING_KEY_ROW(
       R"({"layers":[{"entries":[{"crystal":{"type":"pyramid","shape":{"prism_h":{"type":"uniform","std":0.1}}}}]}]})",
       s.crystals.at(0).prism_h.center, CrystalConfig{}.prism_h.center),
   // ParseAxisDist: `mean` / `std` are owned by AxisDist. `type` is pinned explicitly in each row so
   // the field under test is the only one the document leaves out.
-  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"axis":{"zenith":{"type":"uniform","std":360.0}}}}]}]})",
-                         s.crystals.at(0).zenith.mean, AxisDist{}.mean),
-  LUMICE_MISSING_KEY_ROW(R"({"layers":[{"entries":[{"crystal":{"axis":{"zenith":{"type":"uniform","mean":0.0}}}}]}]})",
-                         s.crystals.at(0).zenith.std, AxisDist{}.std),
+  LUMICE_MISSING_KEY_ROW(
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism","axis":{"zenith":{"type":"uniform","std":360.0}}}}]}]})",
+      s.crystals.at(0).zenith.mean, AxisDist{}.mean),
+  LUMICE_MISSING_KEY_ROW(
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism","axis":{"zenith":{"type":"uniform","mean":0.0}}}}]}]})",
+      s.crystals.at(0).zenith.std, AxisDist{}.std),
 
   // -- the inline filter (ParseFilterFromGuiJson) --
   LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).name, FilterConfig{}.name),
@@ -181,13 +194,15 @@ const MissingKeyCase kGuiNativeCases[] = {
 
 // Documents for the legacy core/CLI path, where a crystal needs an id and a scattering entry
 // pointing at it before any of its fields exist to check.
-constexpr const char* kCoreCrystal = R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]}})";
-constexpr const char* kCoreFilter = R"({"crystal":[{"id":1}],"filter":[{"id":1,"type":"raypath"}],
+constexpr const char* kCoreCrystal =
+    R"({"crystal":[{"id":1,"type":"prism"}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]}})";
+constexpr const char* kCoreFilter = R"({"crystal":[{"id":1,"type":"prism"}],"filter":[{"id":1,"type":"raypath"}],
         "scene":{"scattering":[{"entries":[{"crystal":1,"filter":1}]}]}})";
-constexpr const char* kCoreComplex = R"({"crystal":[{"id":1}],
+constexpr const char* kCoreComplex = R"({"crystal":[{"id":1,"type":"prism"}],
         "filter":[{"id":1,"type":"raypath","raypath":[3,5]},{"id":2,"type":"complex","composition":[[1]]}],
         "scene":{"scattering":[{"entries":[{"crystal":1,"filter":2}]}]}})";
-constexpr const char* kCoreColor = R"({"crystal":[{"id":1}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
+constexpr const char* kCoreColor =
+    R"({"crystal":[{"id":1,"type":"prism"}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
         "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})";
 
 const MissingKeyCase kCoreJsonCases[] = {
@@ -203,7 +218,6 @@ const MissingKeyCase kCoreJsonCases[] = {
   LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.opacity, RenderConfig{}.opacity),
   LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.exposure_offset, RenderConfig{}.exposure_offset),
   LUMICE_MISSING_KEY_ROW(kCoreCrystal, s.crystals.at(0).name, CrystalConfig{}.name),
-  LUMICE_MISSING_KEY_ROW(kCoreCrystal, s.crystals.at(0).type, CrystalConfig{}.type),
 
   // The next three rows expect CORE's default, not the GUI struct's, and say where core states it.
   // On this path the struct that owns the field and the struct that owns the WIRE FORMAT are not
@@ -214,8 +228,9 @@ const MissingKeyCase kCoreJsonCases[] = {
   LUMICE_MISSING_KEY_ROW(kCoreFilter, s.filters.at(0).sym_b, false),
   LUMICE_MISSING_KEY_ROW(kCoreFilter, s.filters.at(0).sym_d, false),
   LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.visible, kVisibleUpper),
-  LUMICE_MISSING_KEY_ROW(R"({"crystal":[{"id":1}],"scene":{"scattering":[{"prob":0,"entries":[{"crystal":1}]}]}})",
-                         s.layers.at(0).entries.at(0).proportion, EntryCard{}.proportion),
+  LUMICE_MISSING_KEY_ROW(
+      R"({"crystal":[{"id":1,"type":"prism"}],"scene":{"scattering":[{"prob":0,"entries":[{"crystal":1}]}]}})",
+      s.layers.at(0).entries.at(0).proportion, EntryCard{}.proportion),
 
   LUMICE_MISSING_KEY_ROW(kCoreFilter, s.filters.at(0).name, FilterConfig{}.name),
   LUMICE_MISSING_KEY_ROW(kCoreFilter, s.filters.at(0).action, FilterConfig{}.action),
@@ -249,7 +264,7 @@ TEST(DocumentDefaultsChain, GuiNativeAbsentKeyTakesTheOwningStructDefault) {
   // leaves nothing for a default to be read off: the entry is loaded without a filter rather than
   // with a default-constructed one, because a default FilterConfig lowered into the scene would be
   // a term matching every ray, and under filter_out that hides all of them.
-  constexpr const char* kEmptyFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})";
+  constexpr const char* kEmptyFilter = R"({"layers":[{"entries":[{"crystal":{"type":"prism"},"filter":{}}]}]})";
   GuiState empty_filter;
   ASSERT_TRUE(DeserializeGuiStateJson(kEmptyFilter, empty_filter)) << kEmptyFilter;
   EXPECT_TRUE(empty_filter.filters.empty()) << "an empty filter object became a filter in the pool";
@@ -260,7 +275,8 @@ TEST(DocumentDefaultsChain, GuiNativeAbsentKeyTakesTheOwningStructDefault) {
   // filter naming neither face nor length is the wildcard shape, and
   // FromLegacyEntryExit now answers it the same way FromLegacyRaypath answers an empty
   // raypath_text — no filter enters the pool for it.
-  constexpr const char* kEmptyEeFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})";
+  constexpr const char* kEmptyEeFilter =
+      R"({"layers":[{"entries":[{"crystal":{"type":"prism"},"filter":{"type":"entry_exit"}}]}]})";
   GuiState empty_ee_filter;
   ASSERT_TRUE(DeserializeGuiStateJson(kEmptyEeFilter, empty_ee_filter)) << kEmptyEeFilter;
   EXPECT_TRUE(empty_ee_filter.filters.empty())

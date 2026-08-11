@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -747,13 +748,30 @@ static AxisDist ParseAxisDist(const json& j, const std::string& crystal_label, c
 
 // `crystal_label` names this crystal in any import warning raised while parsing it — "crystal
 // id=3" where the document numbers its crystals, or a positional stand-in where it does not.
-static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_label) {
+//
+// nullopt = this crystal states no `type`, so there is no crystal here to load. `type` is the
+// discriminant for everything below it: it decides whether `shape` is read as a prism's keys or a
+// pyramid's, and neither of the two is the neutral answer. Core rejects such a document outright
+// (`.at("type")`); the GUI is an editor and loads the rest of the document, minus this crystal.
+static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::string& crystal_label) {
   CrystalConfig c;
   c.name = j.value("name", CrystalConfig{}.name);
 
-  // Only "pyramid" selects the non-default arm; an absent (or unrecognised) `type` lands on
-  // CrystalConfig's own default rather than on a literal that could drift away from it.
-  const auto type_str = j.value("type", std::string{});
+  if (!j.contains("type")) {
+    const std::string msg = crystal_label +
+                            " states no \"type\"; the crystal is dropped rather than "
+                            "loaded as a prism (core rejects this document outright, "
+                            "since \"type\" decides how the rest of the crystal reads).";
+    GUI_LOG_WARNING("[FileIO] ParseCrystal: {}", msg);
+    SetImportComplexFilterWarning(msg);
+    return std::nullopt;
+  }
+
+  // Only "pyramid" selects the non-default arm; an unrecognised `type` lands on CrystalConfig's own
+  // default rather than on a literal that could drift away from it. That is a present-but-unknown
+  // VALUE, which core answers the same way (it logs and carries on) — a different case from the
+  // absent key refused above.
+  const auto type_str = j.at("type").get<std::string>();
   c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalConfig{}.type;
   const LUMICE_CrystalKind kind = (c.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 
@@ -836,6 +854,33 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
   }
 
   return c;
+}
+
+// The one place a document's crystal array becomes an id-keyed map. Both wire formats that carry
+// such an array (the core config JSON and the legacy pool-shaped .lmc) go through here, because the
+// `id` refusal below is a property of the map, not of either format — and the two loops used to hold
+// a verbatim copy of it each, which is how one of them would get fixed and the other left behind.
+//
+// `id` is refused rather than defaulted because it is the map's KEY: an absent one is not a guessed
+// value but a collision. Two crystals that both omit it both land on key 0, where the second
+// destroys the first — a crystal the document did state, gone, with a Save-As able to freeze the
+// loss. No integer is the neutral "unspecified" (0 is a legal id in its own right), so there is
+// nothing to fall back to. Core rejects the document outright (`.at("id")`).
+static void ParseCrystalIntoMap(const json& jc, std::map<int, CrystalConfig>& crystal_map) {
+  if (!jc.contains("id")) {
+    const std::string msg =
+        "A crystal states no \"id\"; it is dropped rather than filed under a "
+        "guessed one (core rejects this document outright, and the id is what "
+        "the scattering entries reference).";
+    GUI_LOG_WARNING("[FileIO] ParseCrystalIntoMap: {}", msg);
+    SetImportComplexFilterWarning(msg);
+    return;
+  }
+  const int id = jc.at("id").get<int>();
+  // ParseCrystal reports its own refusal, so nullopt is simply not filed.
+  if (std::optional<CrystalConfig> c = ParseCrystal(jc, "crystal id=" + std::to_string(id))) {
+    crystal_map[id] = *std::move(c);
+  }
 }
 
 static int LensTypeFromString(const std::string& s) {
@@ -1953,8 +1998,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   std::map<int, CrystalConfig> crystal_map;
   if (root.contains("crystal") && root["crystal"].is_array()) {
     for (auto& jc : root["crystal"]) {
-      int id = jc.value("id", 0);
-      crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
+      ParseCrystalIntoMap(jc, crystal_map);
     }
   }
 
@@ -2484,16 +2528,19 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
       if (jl.contains("entries") && jl["entries"].is_array()) {
         for (auto& je : jl["entries"]) {
           EntryCard entry;
+          // The GUI-native form inlines each crystal in its entry and carries no id, so the warning
+          // names it by where it sits instead. A refused crystal (no `type`) lands in the same place
+          // an entry with no inline crystal at all does: a default pool slot, so entry.crystal_id
+          // stays valid. The document said nothing usable about this crystal either way.
+          entry.crystal_id = static_cast<int>(state.crystals.size());
+          std::optional<CrystalConfig> inline_crystal;
           if (je.contains("crystal")) {
-            entry.crystal_id = static_cast<int>(state.crystals.size());
-            // The GUI-native form inlines each crystal in its entry and carries no id, so the
-            // warning names it by where it sits instead.
-            state.crystals.push_back(ParseCrystal(je["crystal"], "layer " + std::to_string(state.layers.size()) +
-                                                                     " entry " + std::to_string(layer.entries.size()) +
-                                                                     "'s crystal"));
+            inline_crystal = ParseCrystal(je["crystal"], "layer " + std::to_string(state.layers.size()) + " entry " +
+                                                             std::to_string(layer.entries.size()) + "'s crystal");
+          }
+          if (inline_crystal) {
+            state.crystals.push_back(*std::move(inline_crystal));
           } else {
-            // No inline crystal — provide a default slot so entry stays valid.
-            entry.crystal_id = static_cast<int>(state.crystals.size());
             state.crystals.emplace_back();
           }
           entry.proportion = je.value("proportion", EntryCard{}.proportion);
@@ -2518,8 +2565,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     std::map<int, CrystalConfig> crystal_map;
     if (root["crystals"].is_array()) {
       for (auto& jc : root["crystals"]) {
-        int id = jc.value("id", 0);
-        crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
+        ParseCrystalIntoMap(jc, crystal_map);
       }
     }
     std::map<int, FilterConfig> filter_map;
