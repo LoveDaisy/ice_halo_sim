@@ -129,9 +129,11 @@ TEST(FilterSopAc1, FromLegacyRaypathFansOutToOneRowPerSegment) {
   const Case kCases[] = {
     { "3-5; 1-3", { "3-5", "1-3" } },
     { "3-5", { "3-5" } },
-    // Empty legacy raypath -> the "no filter" degenerate SoP: 1 row holding 1 empty raypath factor,
-    // which is the FilterConfig default state. Zero rows is not a valid filter.
-    { "", { "" } },
+    // Empty legacy raypath -> zero rows, which is "no filter" said in the type's own vocabulary and
+    // is also the FilterConfig default. It used to produce one row holding one empty raypath factor
+    // instead; that row is not "no filter" but the editor's match-all, and a filter_out entry
+    // wearing it excludes every ray.
+    { "", {} },
   };
   for (const Case& c : kCases) {
     SumOfProducts sop = FromLegacyRaypath(Rp(c.text));
@@ -293,12 +295,23 @@ TEST(FilterSopAc2, FilterConfigFieldSensitivity) {
 
 // --- default construction + compat accessors (data-model contract) ---------
 
-TEST(FilterSopModel, DefaultIsEmptyRaypathNoFilter) {
+// A default-constructed FilterConfig states nothing, and "nothing" is the empty SoP rather than a
+// row that happens to say everything.
+//
+// The distinction is the whole point. This used to default to one row holding one empty raypath
+// factor, on the reading that "empty raypath ≡ no filter" — true in pre-variant builds, false since
+// a factor with empty text became the editor's match-all. Under that default a FilterConfig nobody
+// filled in commits as core's `none`, which under filter_out excludes every ray. The compat
+// accessors are asserted to agree: a filter that says nothing is not a degenerate single factor, so
+// IsRaypath()/IsEntryExit() — questions about WHICH single factor it is — are both false.
+TEST(FilterSopModel, DefaultIsEmptySopNoFilter) {
   FilterConfig f;
-  EXPECT_TRUE(f.IsDegenerateSingleFactor());
-  EXPECT_TRUE(f.IsRaypath());
+  EXPECT_TRUE(f.param.empty());
+  EXPECT_FALSE(f.IsDegenerateSingleFactor());
+  EXPECT_FALSE(f.IsRaypath());
   EXPECT_FALSE(f.IsEntryExit());
-  EXPECT_TRUE(f.RaypathText().empty());
+  // RaypathText() / DegenerateFactor() are deliberately NOT called: they assert on a non-degenerate
+  // SoP, and this state is the reason that assert exists.
 }
 
 TEST(FilterSopModel, SetRaypathCompatWriter) {

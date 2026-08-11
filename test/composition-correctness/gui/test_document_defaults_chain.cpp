@@ -66,7 +66,11 @@ constexpr const char* kSun = R"({"sun":{}})";
 constexpr const char* kSim = R"({"sim":{}})";
 constexpr const char* kRenderer = R"({"renderer":{}})";
 constexpr const char* kCrystal = R"({"layers":[{"entries":[{"crystal":{}}]}]})";
-constexpr const char* kFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})";
+// The filter document carries a raypath, and it has to. A filter object that names no rule at all
+// is not loaded as a filter with default fields — it is loaded as no filter, so there would be no
+// `s.filters.at(0)` for the rows below to read a default off. That disposition is a row of its own
+// (kEmptyFilter, in the test body) rather than a silent property of this constant.
+constexpr const char* kFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"raypath_text":"3-5"}}]}]})";
 constexpr const char* kEeFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})";
 
 const MissingKeyCase kGuiNativeCases[] = {
@@ -146,9 +150,12 @@ const MissingKeyCase kGuiNativeCases[] = {
   LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).sym_p, FilterConfig{}.sym_p),
   LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).sym_b, FilterConfig{}.sym_b),
   LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).sym_d, FilterConfig{}.sym_d),
-  // No `type` and no `raypath_text`: the legacy arm must reconstruct FilterConfig's default
-  // 1-row / 1-factor empty-raypath SoP. Compared whole, not just by its text.
-  LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).param == FilterConfig{}.param, true),
+  // No `type`: the legacy arm reads the document as a raypath, so the text it does carry survives.
+  // (What happens when it carries no text either is the kEmptyFilter row in the test body — that
+  // one is not a "missing key takes the struct default" statement at all, which is why it is not
+  // here: the answer is that there is no filter to read a default off.)
+  LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).param.size(), 1u),
+  LUMICE_MISSING_KEY_ROW(kFilter, s.filters.at(0).param.at(0).text, std::string("3-5")),
   // Guard row, deliberately first of the EE group: EntryExitParamsValue() asserts on the wrong
   // variant arm, so a `type` that stopped selecting the EE arm would otherwise surface as a
   // bad_variant_access rather than as the plain statement that the arm is wrong.
@@ -229,6 +236,18 @@ TEST(DocumentDefaultsChain, GuiNativeAbsentKeyTakesTheOwningStructDefault) {
     }
     c.check(loaded);
   }
+
+  // The one filter key whose absence does NOT take the owning struct default, stated here because
+  // this is the file a reader comes to with the question. A `filter` object naming no rule at all
+  // leaves nothing for a default to be read off: the entry is loaded without a filter rather than
+  // with a default-constructed one, because a default FilterConfig lowered into the scene would be
+  // a term matching every ray, and under filter_out that hides all of them.
+  constexpr const char* kEmptyFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{}}]}]})";
+  GuiState empty_filter;
+  ASSERT_TRUE(DeserializeGuiStateJson(kEmptyFilter, empty_filter)) << kEmptyFilter;
+  EXPECT_TRUE(empty_filter.filters.empty()) << "an empty filter object became a filter in the pool";
+  EXPECT_FALSE(empty_filter.layers.at(0).entries.at(0).filter_id.has_value())
+      << "the entry was given a filter the document did not describe";
 }
 
 TEST(DocumentDefaultsChain, CoreJsonAbsentKeyTakesTheOwningStructDefault) {

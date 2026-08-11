@@ -945,7 +945,43 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
 //     canonical FromLegacyRaypath / FromLegacyEntryExit converters (';' fan-out
 //     for raypath, single EE row otherwise).
 
-static FilterConfig ParseFilterFromGuiJson(const json& jf) {
+// Count of filters dropped on load because the file described no predicate for them (see
+// NoFilterIfNoPredicate). Consumed + reset by TakeFilterNoPredicateDowngradeCount(), the same shape
+// as g_shape_dist_downgrade_count above and for the same reason: GUI file loading is single-
+// threaded, so a TU-local counter beats threading an accumulator through every parse call site.
+static int g_filter_no_predicate_downgrade_count = 0;
+
+int TakeFilterNoPredicateDowngradeCount() {
+  int n = g_filter_no_predicate_downgrade_count;
+  g_filter_no_predicate_downgrade_count = 0;
+  return n;
+}
+
+// The single disposition point for "the file's filter object states no predicate".
+//
+// Both readers below can end there — a v3 `summands` array that yields no rows, and a legacy form
+// whose `raypath_text` is absent or empty (including an unknown/removed `type` that falls through
+// to the raypath arm). Both used to answer it by writing a 1-row / 1-factor SoP holding an empty
+// RaypathParams. That shape is NOT "no filter": a row carrying a factor whose text is empty is the
+// editor's match-all and commits as core's `none`, so under filter_out the entry excluded every ray
+// and the render was black, with nothing on screen saying why. Under filter_in it admitted
+// everything, so the same shape was harmless there — the harm is asymmetric in `action`, while
+// having no filter at all is harmless under both.
+//
+// Removing the predicate rather than picking a value for it is the disposition the load-degrade
+// contract settled on for a filter the GUI's own format left underspecified. Returning
+// std::nullopt rather than an empty-param FilterConfig is what keeps it from having to be
+// re-decided at each call site: there is no "forgot to check" spelling of the caller.
+static std::optional<FilterConfig> NoFilterIfNoPredicate(FilterConfig f) {
+  if (f.param.empty()) {
+    ++g_filter_no_predicate_downgrade_count;
+    GUI_LOG_WARNING("[FileIO] Filter '{}' describes no rule; loading the entry without a filter.", f.name);
+    return std::nullopt;
+  }
+  return f;
+}
+
+static std::optional<FilterConfig> ParseFilterFromGuiJson(const json& jf) {
   FilterConfig f;
   f.name = jf.value("name", FilterConfig{}.name);
   auto action_str = jf.value("action", FilterActionToString(FilterConfig{}.action));
@@ -968,13 +1004,11 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
       std::string text = js.get<std::string>();
       sop.push_back(SummandText{ text, ParseSummandText(text) });
     }
-    if (sop.empty()) {
-      // Defensive: an empty summands array is not a valid state — fall back to
-      // the default 1-row / 1-factor empty-raypath SoP.
-      sop.push_back(SummandText{ std::string{}, std::vector<Factor>{ Factor{ RaypathParams{} } } });
-    }
+    // An empty summands array is not a valid state, and the disposition is the one at the bottom
+    // of this function: no predicate means no filter. It used to be backfilled here with a 1-row /
+    // 1-factor empty-raypath SoP, which is the editor's match-all — see the return below.
     f.param = std::move(sop);
-    return f;
+    return NoFilterIfNoPredicate(std::move(f));
   }
 
   // Legacy type-discriminated form → upgrade to SoP.
@@ -1020,7 +1054,7 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     // FromLegacyRaypath splits ';' multi-segment sugar into canonical OR rows.
     f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", RaypathParams{}.raypath_text) });
   }
-  return f;
+  return NoFilterIfNoPredicate(std::move(f));
 }
 
 
@@ -2464,8 +2498,13 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
           }
           entry.proportion = je.value("proportion", EntryCard{}.proportion);
           if (je.contains("filter") && !je["filter"].is_null()) {
-            entry.filter_id = static_cast<int>(state.filters.size());
-            state.filters.push_back(ParseFilterFromGuiJson(je["filter"]));
+            // nullopt = the file's filter object stated no predicate, so the entry gets no filter
+            // and nothing enters the pool (NoFilterIfNoPredicate). Same end state as an entry whose
+            // file carried no "filter" key at all, which is what the document actually says.
+            if (std::optional<FilterConfig> fc = ParseFilterFromGuiJson(je["filter"])) {
+              entry.filter_id = static_cast<int>(state.filters.size());
+              state.filters.push_back(*std::move(fc));
+            }
           }
           layer.entries.push_back(entry);
         }
@@ -2487,7 +2526,12 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     if (root.contains("filters") && root["filters"].is_array()) {
       for (auto& jf : root["filters"]) {
         int id = jf.value("id", 0);
-        filter_map[id] = ParseFilterFromGuiJson(jf);
+        // A pool filter that states no predicate is simply not put in the map: the consuming
+        // entries below look it up by `filter_map.count(filter_id)` and leave their filter_id unset
+        // when it is absent, so they land in the same "no filter" state the v2 arm above produces.
+        if (std::optional<FilterConfig> fc = ParseFilterFromGuiJson(jf)) {
+          filter_map[id] = *std::move(fc);
+        }
       }
     }
     if (root["scattering"].is_array()) {

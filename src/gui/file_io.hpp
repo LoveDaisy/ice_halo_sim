@@ -149,6 +149,15 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 // "some distributions were simplified" notice. Call once before a load to discard any stale count.
 int TakeShapeDistDowngradeCount();
 
+// Returns the number of filters dropped since the last call because the file described no rule for
+// them, and resets the counter. A `.lmc` filter object that yields no predicate (an empty
+// `summands` array, a legacy form with no raypath text, a filter type the GUI no longer has) loads
+// as no filter at all rather than as one that happens to match everything — under filter_out the
+// latter excludes every ray. Same shape and same call discipline as TakeShapeDistDowngradeCount():
+// call once before a load to discard any stale count, and again after it to decide whether to show
+// the notice.
+int TakeFilterNoPredicateDowngradeCount();
+
 // Export preview as PNG (renders via FBO, must be called on GL thread).
 // Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);

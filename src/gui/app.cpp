@@ -671,7 +671,12 @@ void DoOpen(const std::filesystem::path& path) {
   std::vector<unsigned char> tex_data;
   int tex_w = 0;
   int tex_h = 0;
-  TakeShapeDistDowngradeCount();  // discard any stale count so only this load's downgrades are counted
+  // Discard any stale counts so only this load's downgrades are counted. Both channels need the
+  // drain, and the filter one needs it for a reason the shape one does not have: MakeNewDocumentState
+  // runs the user's personal defaults through the same deserializer, so a hand-edited defaults file
+  // can leave a count behind that belongs to no load at all.
+  TakeShapeDistDowngradeCount();
+  TakeFilterNoPredicateDowngradeCount();
   if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
     // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
     g_state.current_file_path = path;
@@ -702,6 +707,18 @@ void DoOpen(const std::filesystem::path& path) {
           "Some crystal shape distributions used non-uniform types (e.g. gauss, laplacian). The GUI "
           "edits uniform distributions only, so they were loaded as uniform. Edit the config file / "
           "CLI directly to keep other distribution types.");
+    }
+
+    // Notify: a filter object in the file described no rule a reader could use (an empty summands
+    // array, a legacy form with no raypath text, a filter type the GUI no longer has). The entry
+    // was loaded without a filter rather than with one that matches everything — under filter_out
+    // the latter hides every ray, and a black picture says nothing about why. Same one-time popup
+    // as the shape-distribution notice above; the two append rather than replace each other.
+    if (TakeFilterNoPredicateDowngradeCount() > 0) {
+      SetImportComplexFilterWarning(
+          "Some filters in this file described no rule (no ray paths and no entry/exit faces). They "
+          "were loaded as no filter at all, so the entries they belonged to now let every ray "
+          "through. Re-add the rule in the entry's Filter tab if the file was meant to carry one.");
     }
   }
 }

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "gui/app.hpp"
+#include "gui/color_window.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
@@ -596,6 +597,120 @@ TEST(SceneCommitChain, AFilterOutRowLeftBlankDoesNotExcludeEveryRay) {
   EXPECT_EQ(filters[0]["type"].get<std::string>(), "raypath");
   EXPECT_EQ(filters[0]["action"].get<std::string>(), "filter_out");
   EXPECT_EQ(filters[0]["raypath"], nlohmann::json({ 3, 5 }));
+}
+
+// The same statement, made about the OTHER way a filter enters the document: off disk.
+//
+// The three cases above are all about a filter the user built in the editor, where the blank rows
+// carry no factor at all and the expansion drops them. A filter read from a `.lmc` reaches the same
+// question by a different route and used to answer it differently: when the file said nothing a
+// reader could turn into a predicate, the parser wrote a 1-row / 1-factor SoP holding an empty
+// raypath — a row that DOES carry a factor, which is the editor's match-all, which under filter_out
+// excludes every ray and renders a black frame.
+//
+// Each row below is a distinct branch of that parser, not a restatement: an empty `summands` array
+// (the v3 shape), a legacy filter whose `raypath_text` key is absent, a filter object with nothing
+// in it at all, and a `direction` filter — a type the GUI removed, so no reader can produce a
+// predicate from it either. All four are the same γ-class question (450.2 adjudication 5: illegal
+// input in the GUI's own format, with no core semantics to align to) and take the same answer
+// (adjudication 6: drop the predicate, do not pick a value for it).
+TEST(SceneCommitChain, AFilterReadFromAFileWithNoPredicateInItCommitsAsNoFilter) {
+  struct Case {
+    const char* name;
+    const char* filter_json;
+  };
+  const Case kCases[] = {
+    { "v3 empty summands array", R"({"summands": [], "action": "filter_out"})" },
+    { "legacy filter with no raypath_text", R"({"type": "raypath", "action": "filter_out"})" },
+    { "filter object with nothing in it", R"({"action": "filter_out"})" },
+    { "removed direction filter", R"({"type": "direction", "action": "filter_out", "az": 30.0, "el": 15.0})" },
+  };
+
+  // The baseline this is compared against: the same document with no `filter` key on the entry.
+  // Asserted as equality with that scene rather than as a list of properties, so "no filter" cannot
+  // quietly become a third state that merely looks empty from the angles a property list checks.
+  const std::string kDocPrefix =
+      R"({"schema_version": 3, "layers": [{"prob": 0.0, "entries": [{
+          "crystal": {"type": "prism", "shape": {"height": 1.0, "face_distance": [1,1,1,1,1,1]}},
+          "proportion": 100.0)";
+  const std::string kDocSuffix = R"(}]}]})";
+
+  GuiState without;
+  ASSERT_TRUE(DeserializeGuiStateJson(kDocPrefix + kDocSuffix, without)) << "the no-filter baseline did not load";
+  ASSERT_FALSE(without.layers.at(0).entries.at(0).filter_id.has_value());
+  const nlohmann::json baseline = CommitSceneJson(without);
+  ASSERT_FALSE(baseline.is_null()) << "the no-filter baseline did not commit";
+
+  for (const Case& c : kCases) {
+    GuiState loaded;
+    const std::string doc = kDocPrefix + R"(, "filter": )" + c.filter_json + kDocSuffix;
+    if (!DeserializeGuiStateJson(doc, loaded)) {
+      ADD_FAILURE() << c.name << ": the document did not load at all";
+      continue;  // nothing to inspect for this case; the rest still get checked
+    }
+    if (loaded.layers.size() != 1u || loaded.layers.at(0).entries.size() != 1u) {
+      ADD_FAILURE() << c.name << ": the document did not load as one layer of one entry";
+      continue;  // no entry to inspect for this case; the rest still get checked
+    }
+
+    // The document side: the entry points at no filter, and no filter was put in the pool for it.
+    EXPECT_FALSE(loaded.layers[0].entries[0].filter_id.has_value())
+        << c.name << ": the entry was given a filter the file did not describe";
+    EXPECT_TRUE(loaded.filters.empty()) << c.name << ": a filter with no predicate in it entered the pool";
+
+    // The simulator side: the scene is the one the file describes, which is the one with no filter.
+    const nlohmann::json scene = CommitSceneJson(loaded);
+    if (scene.is_null()) {
+      ADD_FAILURE() << c.name << ": the loaded document did not commit at all";
+      continue;  // no scene to read for this case; the rest still get checked
+    }
+    for (const nlohmann::json& jf : scene["filter"]) {
+      EXPECT_NE(jf.value("type", std::string{}), std::string("none"))
+          << c.name << ": filter_out was handed a match-all term — every ray is excluded: " << jf.dump();
+    }
+    EXPECT_TRUE(scene["filter"].empty()) << c.name << ": " << scene["filter"].dump();
+    EXPECT_EQ(scene["scene"]["scattering"], baseline["scene"]["scattering"])
+        << c.name << ": the entry landed in a third state, neither a filter nor the absence of one";
+  }
+}
+
+// The sentinel for the shape that keeps coming back: a filter in the pool that states nothing, with
+// an entry pointing at it.
+//
+// Every path that builds one has been closed — the editor strips blank rows before committing, and
+// the loader now returns no filter rather than an empty one — so this state is not reachable from
+// the product today. It is pinned anyway, because "not reachable" is a fact about the current set of
+// construction sites and the shape's whole history is of being reconstructed at a new one. What is
+// asserted is that the CONSUMERS are safe if it ever is: neither of them may read "says nothing" as
+// "matches everything". If a fourth construction site appears, that is a bug about the entry
+// pointing at a filter it should not; it must not also be a black frame.
+TEST(SceneCommitChain, APoolFilterStatingNothingIsNeverReadAsMatchAll) {
+  SeedOneEntryDocument();
+  ASSERT_TRUE(g_state.layers.at(0).entries.at(0).filter_id.has_value())
+      << "the seeded document has no filter to empty out";
+  g_state.filters[0] = FilterConfig{};  // states nothing, and the entry still points at it
+  g_state.filters[0].action = 1;        // filter_out — the action under which match-all hides all
+  ASSERT_TRUE(g_state.filters[0].param.empty()) << "a default FilterConfig is no longer the empty statement";
+
+  // Consumer 1, the commit path: no term matching every ray reaches the scene, and the entry
+  // commits with nothing attached.
+  const nlohmann::json scene = CommitSceneJson(g_state);
+  ASSERT_FALSE(scene.is_null()) << "the document did not commit at all";
+  for (const nlohmann::json& jf : scene["filter"]) {
+    EXPECT_NE(jf.value("type", std::string{}), std::string("none"))
+        << "filter_out was handed a match-all term — every ray is excluded: " << jf.dump();
+  }
+  EXPECT_TRUE(scene["filter"].empty()) << scene["filter"].dump();
+  EXPECT_FALSE(scene["scene"]["scattering"][0]["entries"][0].contains("filter"))
+      << scene["scene"]["scattering"][0]["entries"][0].dump();
+
+  // Consumer 2, the color-class import: the same filter read as color refs must produce no ref
+  // rather than one whose match_all is set — that flag is this consumer's spelling of the same
+  // "matches everything" the term above would have been.
+  int skipped = 0;
+  const ColorClassConfig cls = BuildClassFromFilter(0, 0, g_state.filters[0], skipped);
+  EXPECT_TRUE(cls.match.empty()) << "a filter that states nothing was imported as " << cls.match.size() << " ref(s)";
+  EXPECT_EQ(skipped, 0) << "nothing was there to skip";
 }
 
 }  // namespace

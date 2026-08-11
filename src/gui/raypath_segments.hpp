@@ -767,13 +767,18 @@ inline std::string FormatSopExpansionPreview(const SumOfProducts& sop) {
 // ---------------------------------------------------------------------------
 
 // Split RaypathParams.raypath_text on ';' into one OR-row per segment. Empty
-// input → single row with empty raypath (the "no filter" degenerate state, to
-// match the FilterConfig default).
+// input → empty SoP, which is "no filter" said in the type's own vocabulary and
+// is also the FilterConfig default.
+//
+// It used to return a single row holding an empty RaypathParams instead. That
+// row is not "no filter": a row carrying a factor whose text is empty is the
+// editor's match-all, and it commits as core's `none` — so under filter_out a
+// legacy file that named no raypath at all excluded every ray and rendered a
+// black frame. An empty SoP expands to zero clauses, which ExpandFilterToScene
+// reads as kNoFilter, and that is harmless under both actions.
 inline SumOfProducts FromLegacyRaypath(const RaypathParams& rp) {
   SumOfProducts out;
   if (rp.raypath_text.empty()) {
-    RaypathParams empty_rp;
-    out.push_back(SummandText{ std::string{}, std::vector<Factor>{ Factor{ empty_rp } } });
     return out;
   }
   auto segs = SplitRaypathSegments(rp.raypath_text);

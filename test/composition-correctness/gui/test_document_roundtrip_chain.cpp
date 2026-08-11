@@ -413,6 +413,59 @@ TEST(DocumentRoundtripChain, ANonUniformShapeDistIsDowngradedAndCountedAndAUnifo
   }
 }
 
+// The second loader downgrade that is announced rather than silent: a filter the file described no
+// rule for is loaded as no filter at all.
+//
+// Dropping it is the right disposition — the alternative, a filter that matches everything, hides
+// every ray under filter_out — but it is still a document arriving different from how it was
+// written, and the user's own copy of the file still says otherwise. The counter is what turns that
+// into a notice. Its three properties are the same three the shape-distribution counter has, and
+// they fail in the same three ways: never counting makes the change invisible, never clearing makes
+// the notice permanent, and counting documents that were loaded faithfully trains the user to
+// dismiss it.
+TEST(DocumentRoundtripChain, AFilterWithNoRuleInItIsDroppedAndCounted) {
+  struct Case {
+    const char* name;
+    const char* doc;
+    int expected_count;
+  };
+  const char* kPrism = R"("crystal": {"type": "prism", "shape": {"height": 1.0}}, "proportion": 100.0)";
+  const std::string kEmptySummands =
+      std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism + R"(, "filter": {"summands": []}}]}]})";
+  const std::string kNoRaypathText =
+      std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism + R"(, "filter": {"type": "raypath"}}]}]})";
+  const std::string kTwoOfThem = std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism +
+                                 R"(, "filter": {"summands": []}}, {)" + kPrism +
+                                 R"(, "filter": {"type": "raypath"}}]}]})";
+  const std::string kRealFilter =
+      std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism + R"(, "filter": {"summands": ["3-5"]}}]}]})";
+  const std::string kNoFilterKey = std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism + R"(}]}]})";
+
+  const Case kCases[] = {
+    { "an empty summands array", kEmptySummands.c_str(), 1 },
+    { "a legacy form with no raypath text", kNoRaypathText.c_str(), 1 },
+    // Per filter, not per document: a file with two of them has to say so, or the notice
+    // under-reports exactly when there is most to report.
+    { "two of them in one document", kTwoOfThem.c_str(), 2 },
+    // The other half of the claim: a document that was loaded faithfully is not counted.
+    { "a filter that does state a rule", kRealFilter.c_str(), 0 },
+    { "an entry with no filter at all", kNoFilterKey.c_str(), 0 },
+  };
+
+  for (const Case& c : kCases) {
+    TakeFilterNoPredicateDowngradeCount();  // discard anything a previous case in this binary left
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;  // no load to count; the rest still get checked
+    }
+    EXPECT_EQ(TakeFilterNoPredicateDowngradeCount(), c.expected_count)
+        << c.name << ": the document was changed on load with nothing to report it, or the reverse";
+    EXPECT_EQ(TakeFilterNoPredicateDowngradeCount(), 0)
+        << c.name << ": the counter did not clear on read, so a notice would never go away";
+  }
+}
+
 // E1 — sync_group on the crystal kind whose slots the probe sweep structurally cannot reach, with
 // the emitted KEY NAMES asserted rather than only the round trip.
 //
@@ -563,10 +616,13 @@ TEST(DocumentRoundtripChain, LegacyRaypathSplitsIntoOneRowPerSegment) {
     { "single-segment", "3-5", 1, "3-5" },
     { "two-segments", "3-5; 1-3", 2, "3-5" },
     { "three-segments", "3-5;1-3;4-6", 3, "3-5" },
-    // The empty case is not "no rows": FilterConfig's own default is a single row holding an
-    // empty RaypathParams, and the translator has to produce that same degenerate shape or a
-    // filter-less document becomes a document with a zero-row filter, which is not a valid state.
-    { "empty-is-one-degenerate-row", "", 1, "" },
+    // The empty case is zero rows, and zero rows is a valid filter — it is the one that says
+    // nothing, which the commit path reads as "no filter". The translator used to produce a single
+    // row holding an empty RaypathParams here, on the reading that a filter-less document must not
+    // become a zero-row filter. That row is not filter-less: it carries a factor, which makes it
+    // the editor's match-all, so a legacy file naming no raypath at all came back as a filter that
+    // matches everything — and under filter_out, one that excludes every ray.
+    { "empty-is-no-rows", "", 0, "" },
   };
 
   for (const LegacyRaypathCase& c : kCases) {
