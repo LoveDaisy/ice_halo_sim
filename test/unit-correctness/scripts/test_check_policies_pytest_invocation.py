@@ -209,7 +209,10 @@ def test_shell_invocation_without_a_py_target_is_clean(tree: Path) -> None:
 
 
 def test_shell_directory_target_with_marker_is_clean(tree: Path) -> None:
-    assert _shell(tree, 'pytest --ignore=test/performance -n 3 -m "slow and not heavy"\n') == []
+    """`scripts/test.sh`'s slow leg as it stands. The marker value is irrelevant to the
+    rule (it only asks that *some* `-m` is passed); this one mirrors the real command so
+    the fixture does not outlive the selector it quotes."""
+    assert _shell(tree, "pytest --ignore=test/performance -n 3 -m slow\n") == []
 
 
 def test_markdown_bare_pytest_lines_in_agents_md_are_clean(tree: Path) -> None:
