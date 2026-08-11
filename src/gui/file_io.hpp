@@ -170,6 +170,17 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
 // Export configuration as JSON (CLI-compatible format)
 bool ExportConfigJson(const std::filesystem::path& path, const std::string& json_str);
 
+// Must exporting the config JSON to `path` be confirmed by the user first? True iff something is
+// already there to lose — the export is a full overwrite, and what it writes is the GUI's own
+// re-emission, which carries only what the GUI can express. Overwriting the very document that was
+// imported is the case the ruling is about, but the harm ("a file you did not write is now the
+// GUI's lossy view of it") is the same for any existing target, and answering the narrower
+// question would mean carrying a "where did this document come from" field for nothing else.
+//
+// Pure, and separate from the dialog wrapper for the same reason BuildExportJsonOrWarn is: the
+// decision is testable, the file dialog is not.
+bool ConfigJsonExportNeedsOverwriteConfirm(const std::filesystem::path& path);
+
 // File dialog wrappers (return empty path on cancel)
 std::filesystem::path ShowOpenDialog();
 std::filesystem::path ShowSaveDialog();

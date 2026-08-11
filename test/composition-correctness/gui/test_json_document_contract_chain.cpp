@@ -1,10 +1,11 @@
-// Composition chain: what importing a core JSON is allowed to touch.
+// Composition chain: what a core JSON document on disk is allowed to have done to it.
 //
-// Units in the chain: app (DoOpen) × file_io (DeserializeFromJson / ParseShapeDist / the
-// downgrade counters) × gui_state.
+// Units in the chain: app (DoOpen / RequestConfigJsonExport) × file_io (DeserializeFromJson /
+// ParseShapeDist / the downgrade counters / ConfigJsonExportNeedsOverwriteConfirm) × gui_state.
 //
 // The GUI's expressive power is strictly smaller than the core config JSON's, so an import
-// degrades — and the owner ruling is that the degradation is confined to the copy in memory:
+// degrades — and the owner ruling is that the degradation is confined to the copy in memory,
+// with the export at the bottom of this file as the one deliberate way back out to disk:
 //
 //   (1) The source file is not rewritten. Nothing enforces that today except that no one has
 //       written the line yet, which is not a guarantee; a later "normalize the config on load and
@@ -174,6 +175,91 @@ TEST(JsonImportContractChain, AJsonImportDoesNotInheritAnEarlierReadsDowngrade) 
   EXPECT_TRUE(PeekImportComplexFilterWarning().empty())
       << "this document degraded nothing; the notice describes an earlier read: " << PeekImportComplexFilterWarning();
   ClearImportComplexFilterWarning();
+}
+
+// ---------------------------------------------------------------------------------------------
+// The export half of the same contract: what the GUI is allowed to write over.
+//
+// Import degrades in memory; export is where that degraded copy can reach the disk. The four cases
+// below pin the decision RequestConfigJsonExport makes — write, or ask first — and both answers to
+// the question it raises. They stop at the state and the bytes: that a modal is actually rendered
+// for the pending flag is a proposition about the frame loop, and lives in gui_test
+// (file_ops/exporting_over_an_existing_config_asks_before_overwriting).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// Distinguishable from anything the export could produce, so "unchanged" is checkable by content.
+constexpr const char* kExistingContent = "{\"not\": \"written by the gui\"}\n";
+constexpr const char* kExportedContent = "{\"exported\": true}\n";
+
+}  // namespace
+
+// Nothing at the target: the export is not a destructive act, and asking would be noise.
+TEST(ConfigJsonExportContractChain, ExportingToAFreshPathWritesWithoutAsking) {
+  const TempFile target{ std::filesystem::temp_directory_path() / "lumice_export_contract_fresh.json" };
+  std::error_code ec;
+  std::filesystem::remove(target.path, ec);
+  CancelPendingConfigJsonExport();
+  g_show_export_overwrite_confirm_popup = false;
+
+  RequestConfigJsonExport(target.path, kExportedContent);
+
+  EXPECT_FALSE(g_show_export_overwrite_confirm_popup) << "nothing was there to lose; the prompt is noise";
+  EXPECT_EQ(ReadAllBytes(target.path), kExportedContent);
+}
+
+// Something at the target: hold everything, ask, and — the part that matters — leave the file alone
+// while the question is open.
+TEST(ConfigJsonExportContractChain, ExportingOverAnExistingFileAsksBeforeWriting) {
+  const TempFile target = WriteTempFile("lumice_export_contract_existing.json", kExistingContent);
+  CancelPendingConfigJsonExport();
+  g_show_export_overwrite_confirm_popup = false;
+
+  RequestConfigJsonExport(target.path, kExportedContent);
+
+  EXPECT_TRUE(g_show_export_overwrite_confirm_popup) << "the overwrite happened without asking";
+  EXPECT_EQ(g_pending_export_json_path, target.path);
+  EXPECT_EQ(ReadAllBytes(target.path), kExistingContent) << "the file was written before the user answered";
+
+  CancelPendingConfigJsonExport();
+  g_show_export_overwrite_confirm_popup = false;
+}
+
+// Answering yes writes what was held, not what the state happens to say now.
+TEST(ConfigJsonExportContractChain, ConfirmingWritesTheHeldDocumentAndClearsThePending) {
+  const TempFile target = WriteTempFile("lumice_export_contract_confirm.json", kExistingContent);
+  CancelPendingConfigJsonExport();
+  g_show_export_overwrite_confirm_popup = false;
+  RequestConfigJsonExport(target.path, kExportedContent);
+  ASSERT_TRUE(g_show_export_overwrite_confirm_popup) << "premise: the prompt was raised";
+
+  ConfirmPendingConfigJsonExport();
+
+  EXPECT_EQ(ReadAllBytes(target.path), kExportedContent);
+  EXPECT_TRUE(g_pending_export_json_path.empty()) << "a resolved export must not stay pending";
+  EXPECT_TRUE(g_pending_export_json_content.empty());
+}
+
+// Answering no leaves the document exactly as it was — the whole reason the prompt exists.
+TEST(ConfigJsonExportContractChain, CancellingLeavesTheExistingFileUntouched) {
+  const TempFile target = WriteTempFile("lumice_export_contract_cancel.json", kExistingContent);
+  CancelPendingConfigJsonExport();
+  g_show_export_overwrite_confirm_popup = false;
+  RequestConfigJsonExport(target.path, kExportedContent);
+  ASSERT_TRUE(g_show_export_overwrite_confirm_popup) << "premise: the prompt was raised";
+  g_show_export_overwrite_confirm_popup = false;  // the render call would consume it
+
+  CancelPendingConfigJsonExport();
+
+  EXPECT_EQ(ReadAllBytes(target.path), kExistingContent);
+  EXPECT_TRUE(g_pending_export_json_path.empty());
+  EXPECT_TRUE(g_pending_export_json_content.empty());
+
+  // A cancelled export must stay cancelled: confirming afterwards has nothing held and must not
+  // fall back on some other path (the empty one, or the last one written).
+  ConfirmPendingConfigJsonExport();
+  EXPECT_EQ(ReadAllBytes(target.path), kExistingContent);
 }
 
 }  // namespace lumice::gui

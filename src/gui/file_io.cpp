@@ -2919,6 +2919,18 @@ bool ExportConfigJson(const std::filesystem::path& path, const std::string& json
   return out.good();
 }
 
+bool ConfigJsonExportNeedsOverwriteConfirm(const std::filesystem::path& path) {
+  if (path.empty()) {
+    return false;  // nothing to overwrite; ExportConfigJson refuses this path anyway
+  }
+  std::error_code ec;
+  // The non-throwing overload: an unreadable parent directory must not take the app down, and
+  // "cannot tell" is answered as "nothing there" — the export that follows fails on its own and
+  // reports that, which is a better outcome than a confirmation prompt for a write that cannot
+  // happen.
+  return std::filesystem::is_regular_file(path, ec);
+}
+
 // ========== File Dialogs ==========
 
 std::filesystem::path ShowOpenDialog() {

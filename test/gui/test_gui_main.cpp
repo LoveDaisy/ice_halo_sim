@@ -157,6 +157,11 @@ void ResetTestState() {
   // its modal on top of whatever the next case is driving. Several suites import configurations
   // that queue one as a side effect, which is why this is a reset rather than each case's job.
   gui::ClearImportComplexFilterWarning();
+  // Same shape again, for the export-overwrite prompt: a pending export left unanswered by one
+  // case would raise its modal over the next one, and — worse than a stray warning — the next
+  // case's stray click on "Overwrite" would write a file.
+  gui::g_show_export_overwrite_confirm_popup = false;
+  gui::CancelPendingConfigJsonExport();
   gui::g_server_poller.Stop();  // Stop poller before nulling server
   // task-349.4: Stop() only kPaused the worker — the last published PreviewSnapshot
   // survives (production keeps it on purpose for slider-scrub carry-forward, see
@@ -640,6 +645,11 @@ int main(int argc, char** argv) {
     // a modal already on screen, so the case that opens this one dismisses it through its own OK
     // button — an open modal swallows every subsequent ItemClick in the process.
     gui::RenderImportWarningPopup();
+    // The export-overwrite prompt, mirrored here from the same block of src/gui/main.cpp. A
+    // confirmation modal that only the product's loop renders is a confirmation no test can drive
+    // — and "the prompt never appeared, so the export silently did not happen" is precisely the
+    // failure mode it exists to prevent, so it has to be reachable from here.
+    gui::RenderExportOverwriteConfirmPopup();
     // Mirrors src/gui/main.cpp: a Render*Panel that only the production loop calls is
     // unreachable for every gui_test ("Unable to locate item"), a failure this repo has
     // already paid for twice.

@@ -378,6 +378,7 @@ int main(int argc, char** argv) {
     gui::RenderSaveModifiedPopup(window);
     gui::RenderDefaultsPanel(gui::g_state);
     gui::RenderImportWarningPopup();
+    gui::RenderExportOverwriteConfirmPopup();
     gui::RenderGuiWarningPopup();
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).

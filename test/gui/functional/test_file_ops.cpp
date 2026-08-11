@@ -23,8 +23,11 @@
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -802,6 +805,58 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
       // And it stays closed: the trigger is the queued message, not a flag that survives the modal.
       ctx->Yield(4);
       IM_CHECK(!ImGui::IsPopupOpen("Import Warning"));
+    };
+  }
+
+  // Exporting the config over a file that already exists asks first, and the answer decides what is
+  // on disk. Both answers are driven through the real modal because that is the only thing a
+  // composition test cannot say: RequestConfigJsonExport raising a flag proves nothing if no frame
+  // renders the prompt, and an export that quietly never happens looks the same to the user as one
+  // that silently overwrote their config — the two failures this case separates.
+  //
+  // Whether a given path needs confirming at all, and what "confirm" writes, is settled in
+  // composition-correctness/gui/test_json_document_contract_chain.cpp; the export is requested here
+  // directly through the same entry point the file dialog uses, since the dialog itself blocks.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "file_ops", "exporting_over_an_existing_config_asks_before_overwriting");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      const std::filesystem::path path = GuiTestTempPath("export_overwrite_confirm.json");
+      const char* const kExisting = "{\"not\": \"written by the gui\"}\n";
+      const char* const kExported = "{\"exported\": true}\n";
+      const auto write_existing = [&] {
+        std::ofstream out(path, std::ios::binary);
+        out << kExisting;
+      };
+      const auto read_back = [&] {
+        std::ifstream in(path, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      };
+
+      // Cancel: the prompt appears, and the document it was protecting is still there afterwards.
+      write_existing();
+      gui::RequestConfigJsonExport(path, kExported);
+      ctx->Yield(2);
+      IM_CHECK(ImGui::IsPopupOpen("Overwrite Config File"));
+      ctx->ItemClick("Overwrite Config File/Cancel");
+      ctx->Yield(2);
+      IM_CHECK(!ImGui::IsPopupOpen("Overwrite Config File"));
+      IM_CHECK_STR_EQ(read_back().c_str(), kExisting);
+
+      // Overwrite: the same prompt, the other button, and the export actually lands. Without this
+      // half, a prompt whose confirm branch does nothing would read as the feature working.
+      gui::RequestConfigJsonExport(path, kExported);
+      ctx->Yield(2);
+      IM_CHECK(ImGui::IsPopupOpen("Overwrite Config File"));
+      ctx->ItemClick("Overwrite Config File/Overwrite");
+      ctx->Yield(2);
+      IM_CHECK(!ImGui::IsPopupOpen("Overwrite Config File"));
+      IM_CHECK_STR_EQ(read_back().c_str(), kExported);
+
+      std::error_code ec;
+      std::filesystem::remove(path, ec);  // best-effort: a teardown failure must not fail the case
     };
   }
 

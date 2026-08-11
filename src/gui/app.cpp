@@ -86,6 +86,10 @@ PendingAction g_pending_action = PendingAction::kNone;
 bool g_show_save_modified_popup = false;
 PendingSaveKind g_pending_save_kind = PendingSaveKind::kNone;
 
+bool g_show_export_overwrite_confirm_popup = false;
+std::filesystem::path g_pending_export_json_path;
+std::string g_pending_export_json_content;
+
 float ComputeGridStep(float fov) {
   // FOV here is full-angle in degrees (matches RenderConfig::fov / ViewProjection::fov).
   // Aim: ~4–6 grid lines across the visible FOV; round to a "nice" step.
@@ -502,8 +506,46 @@ void DoExportConfigJson() {
     SetGuiWarning(warning);
     return;
   }
-  ExportConfigJson(path, json_str);
+  RequestConfigJsonExport(path, json_str);
+}
+
+void RequestConfigJsonExport(const std::filesystem::path& path, const std::string& json_str) {
+  if (path.empty()) {
+    return;
+  }
+  if (ConfigJsonExportNeedsOverwriteConfirm(path)) {
+    // Hold everything and ask. Nothing is written on this branch — the whole point is that the
+    // document already on disk survives until the user says otherwise.
+    g_pending_export_json_path = path;
+    g_pending_export_json_content = json_str;
+    g_show_export_overwrite_confirm_popup = true;
+    return;
+  }
+  if (!ExportConfigJson(path, json_str)) {
+    GUI_LOG_ERROR("[GUI] Export config JSON failed: {}", PathToU8(path));
+    return;
+  }
   GUI_LOG_INFO("[GUI] Export config JSON: {}", PathToU8(path));
+}
+
+void ConfirmPendingConfigJsonExport() {
+  if (g_pending_export_json_path.empty()) {
+    return;
+  }
+  const std::filesystem::path path = std::move(g_pending_export_json_path);
+  const std::string json_str = std::move(g_pending_export_json_content);
+  g_pending_export_json_path.clear();
+  g_pending_export_json_content.clear();
+  if (!ExportConfigJson(path, json_str)) {
+    GUI_LOG_ERROR("[GUI] Export config JSON failed: {}", PathToU8(path));
+    return;
+  }
+  GUI_LOG_INFO("[GUI] Export config JSON (overwrote existing file): {}", PathToU8(path));
+}
+
+void CancelPendingConfigJsonExport() {
+  g_pending_export_json_path.clear();
+  g_pending_export_json_content.clear();
 }
 
 // Helper: load image from path, downsample if needed, upload to bg texture.
