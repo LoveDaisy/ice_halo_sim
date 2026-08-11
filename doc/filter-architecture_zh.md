@@ -129,9 +129,9 @@ simulator 输出  →  RenderConsumer  →  投影  →  XYZ 累积
 当 `outgoing_w_.size() == 0` 时，拷贝、投影、累积循环全部退化为 no-op，`snapshot_intensity_` 保持为零。
 consumer **不得**假设「`rays_` 非空 ⟹ `outgoing_*` 非空」；它唯一可依赖的尺寸不变式是 `sim_data.hpp`
 中记录的 `outgoing_d_.size() == 3 * outgoing_w_.size()` parallel-array 关系（在
-`src/server/render.cpp:248` 处断言）。
+`RenderConsumer::Consume` 中断言，`src/server/render.cpp:262`）。
 
-> `render.cpp:248` 曾有一处陈旧断言编码「`rays_` 非空 ⟹ `outgoing_w_` 非空」，导致只要某个过滤后的批次恰好
+> 同一处曾有一条陈旧断言编码「`rays_` 非空 ⟹ `outgoing_w_` 非空」，导致只要某个过滤后的批次恰好
 > 被清空，Debug 构建就会 `SIGABRT`。现已替换为上述尺寸自洽检查——因为它当年触发的「空批次」状态正是
 > Design A 允许的。
 
@@ -245,7 +245,7 @@ P99.5 在 poller 线程中计算（`server_poller.cpp::PollOnce`），基于 sta
 | 绑定模型、GUI linked-group 不变式 | `src/gui/gui_state.hpp:294-328` |
 | Filter ↔ 晶体 per-entry 配置 | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator 端 filter 检查（Design A 门控） | `src/core/simulator.cpp` — `CollectData()` |
-| 空批次 consumer 契约（Design A） | `src/server/render.cpp:248` |
+| 空批次 consumer 契约（Design A） | `src/server/render.cpp` — `RenderConsumer::Consume()` |
 | FilterSpec 算法接口 | `src/core/filter_spec.hpp` |
 | C API anchor 字段（F1 anchor lane） | `src/include/lumice.h` — `LUMICE_RawXyzResult.anchor_p995_y` / `anchor_snapshot_intensity` |
 | Filter JSON schema | `doc/configuration.md` |

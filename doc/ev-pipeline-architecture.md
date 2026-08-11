@@ -161,7 +161,7 @@ next result-frame acquisition rebakes the composite. Mono path is untouched.
 ### §2.5 GUI Poller and SyncFromPoller
 
 The EV anchor is computed on the **poller thread**, not the server. In
-`ServerPoller` (`server_poller.cpp:215`):
+`ServerPoller::PollOnce` (`server_poller.cpp:513`):
 
 ```
 staged_.p99_y = ComputeP99Y(xyz_data, width, height, kEvAutoDownsampleFactor)
@@ -476,7 +476,7 @@ Regression pins:
 | `sizeof(RenderConfig)` static_assert (136) | `render_config.cpp:167` |
 | `DownsampleBoxSumY()` / `ComputeP99Y()` / `ComputeEvAuto()` | `gui_ev_auto.hpp:27,76,123` |
 | `kEvAutoDownsampleFactor` (8) | `gui_ev_auto.hpp:19` |
-| Poller P99 anchor computation | `server_poller.cpp:215` |
+| Poller P99 anchor computation | `server_poller.cpp` — `ServerPoller::PollOnce()` |
 | `SyncFromPoller()` — ev_auto computation | `app.cpp:741` |
 | `BuildExportParams()` — export EV consistency | `app.cpp:284-289` |
 | `RefreshCpuTextureForSave()` — .lmc thumbnail EV | `app.cpp:227-248` |
