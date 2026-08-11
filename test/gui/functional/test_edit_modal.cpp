@@ -2123,7 +2123,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
                      "sync_group": {"height": 1, "face_distance": [1,0,0,0,0,0]}}}
         ],
         "scene": {
-          "light_source": {"altitude": 20.0, "diameter": 0.5},
+          "light_source": {"altitude": 20.0, "diameter": 0.5, "spectrum": "D65"},
           "ray_num": 1000,
           "max_hits": 8,
           "scattering": [

@@ -330,7 +330,7 @@ TEST(DocumentDefaultsChain, TypelessAxisSlotLoadsAsTheStructDefaultAndIsAnnounce
             { "face_distance", { 1, 1, 1, 1, 1, 1 } },
             { "axis", axis } } });
     root["filter"] = nlohmann::json::array();
-    root["scene"]["light_source"] = { { "altitude", 20.0 }, { "diameter", 0.5 } };
+    root["scene"]["light_source"] = { { "altitude", 20.0 }, { "diameter", 0.5 }, { "spectrum", "D65" } };
     root["scene"]["ray_num"] = 1000;
     root["scene"]["max_hits"] = 8;
     root["scene"]["scattering"] = nlohmann::json::array(
@@ -368,7 +368,7 @@ TEST(DocumentDefaultsChain, TypelessAxisSlotLoadsAsTheStructDefaultAndIsAnnounce
     "crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
     "filter": [],
     "scene": {
-      "light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+      "light_source": {"altitude": 20.0, "diameter": 0.5, "spectrum": "D65"}, "ray_num": 1000, "max_hits": 8,
       "scattering": [
         {"prob": 0.5, "entries": [{"crystal": 1, "proportion": 100.0}]},
         {"entries": [{"crystal": 1, "proportion": 100.0}]}

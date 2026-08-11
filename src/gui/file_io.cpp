@@ -2154,6 +2154,17 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           state.sun.custom_spectrum = ParseWlWeightArray(sp);
           state.sun.spectrum_index = state.sun.custom_spectrum.empty() ? 2 /* D65 */ : kCustomSpectrumIndex;
         }
+      } else {
+        // `spectrum` discriminates how the rest of this reads (a string names a built-in, an array
+        // is a discrete custom one), and no spectrum is the neutral one — D65 is a specific choice.
+        // light_source is a singleton, so there is no unit to drop and nothing downstream to fall
+        // back to: what changes here is that the choice is stated instead of made in silence.
+        // state.sun already holds SunConfig{}'s default from the `state = GuiState{}` above.
+        const std::string msg = std::string("scene.light_source states no \"spectrum\"; loaded as ") +
+                                kSpectrumNames[SunConfig{}.spectrum_index] +
+                                " (core rejects this document outright, since it requires it).";
+        GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+        SetImportComplexFilterWarning(msg);
       }
     }
 
@@ -2379,8 +2390,22 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     RenderConfig r;
 
     if (jr.contains("lens")) {
-      r.lens_type = LensTypeFromString(jr["lens"].value("type", kLensTypeJsonNames[RenderConfig{}.lens_type]));
-      r.fov = jr["lens"].value("fov", RenderConfig{}.fov);
+      const auto& jlens = jr["lens"];
+      if (jlens.contains("type")) {
+        r.lens_type = LensTypeFromString(jlens.at("type").get<std::string>());
+      } else {
+        // Same shape as light_source.spectrum above: `type` selects the whole projection branch the
+        // preview inverts, `linear` is one specific projection rather than the absence of one, and a
+        // single renderer means there is no unit to drop. `fov` beside it is genuinely optional to
+        // core, so its absence is a document saying nothing rather than a malformed one.
+        r.lens_type = RenderConfig{}.lens_type;
+        const std::string msg = std::string("render[0].lens states no \"type\"; loaded as ") +
+                                kLensTypeJsonNames[RenderConfig{}.lens_type] +
+                                " (core rejects this document outright, since it requires it).";
+        GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+        SetImportComplexFilterWarning(msg);
+      }
+      r.fov = jlens.value("fov", RenderConfig{}.fov);
     }
 
     if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
