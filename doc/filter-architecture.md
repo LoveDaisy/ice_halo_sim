@@ -145,9 +145,9 @@ this**: with `outgoing_w_.size() == 0` the copy, projection, and accumulation lo
 no-ops and `snapshot_intensity_` stays zero. The consumer may **not** assume that a non-empty
 `rays_` implies non-empty `outgoing_*`; the only sizing invariant it may rely on is the
 `outgoing_d_.size() == 3 * outgoing_w_.size()` parallel-array relationship documented in
-`sim_data.hpp` (asserted at `src/server/render.cpp:248`).
+`sim_data.hpp` (asserted in `RenderConsumer::Consume`, `src/server/render.cpp:262`).
 
-> A stale assertion at `render.cpp:248` used to encode "`rays_` non-empty ⟹ `outgoing_w_`
+> A stale assertion in that same spot used to encode "`rays_` non-empty ⟹ `outgoing_w_`
 > non-empty", causing a Debug-only `SIGABRT` whenever a filtered batch happened to empty out.
 > It was replaced with the size-consistency check above, because the emptied-batch state it
 > tripped on is exactly what Design A allows.
@@ -361,9 +361,9 @@ The EV offset is sourced from the current frame's visible framebuffer:
 ev = log2(target_linear / (p99_y / snapshot_intensity))
 ```
 
-The P99 anchor is computed in the poller thread (`ServerPoller::WorkerLoop`,
-`server_poller.cpp:215`) over the staged XYZ data, using an f=8 box-sum downsample
-(`ComputeP99Y`). See `doc/ev-pipeline-architecture.md §2.5` and
+The P99 anchor is computed in the poller thread — the `ComputeP99Y` call inside
+`ServerPoller::PollOnce` (`server_poller.cpp:513`) — over the staged XYZ data, using an
+f=8 box-sum downsample. See `doc/ev-pipeline-architecture.md §2.5` and
 `doc/adaptive-brightness.md` for full EV semantics.
 
 ---
@@ -388,7 +388,7 @@ anchor points for future contributors:
 | Binding model, GUI linked-group invariants | `src/gui/gui_state.hpp:294-328` |
 | Filter ↔ crystal per-entry config | `src/config/proj_config.hpp` — `ScatteringSetting` |
 | Simulator-side filter check (Design A gate) | `src/core/simulator.cpp` — `CollectData()` |
-| Empty-batch consumer contract (Design A) | `src/server/render.cpp:248` |
+| Empty-batch consumer contract (Design A) | `src/server/render.cpp` — `RenderConsumer::Consume()` |
 | FilterSpec algorithm interface | `src/core/filter_spec.hpp` |
 | EV pipeline (single-lane, P99 anchor) | `doc/ev-pipeline-architecture.md` |
 | Filter JSON schema | `doc/configuration.md` |

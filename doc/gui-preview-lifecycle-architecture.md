@@ -186,8 +186,10 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 >   **第一次**低光线完成跑被救到。`WakeForRefresh` 同样复位，是因为它的全部用途就是给已完成的跑买
 >   一次额外 poll 去重新物化（改染色 / composite EV），被质量闸吞掉的话该跑的显示编辑将永远不生效。
 >
-> 回归测试：`gui_test` 的 `gui_lifecycle` 组，三阶段分别覆盖首次完成跑、经 `WakeForRestart` 的第二次
-> 完成跑、以及经 `WakeForRefresh` 的 display-time 刷新。
+> 回归测试（2026-08-11 重锚：GUI 套件重写把这三阶段从需要真实帧的 `gui_test` `gui_lifecycle` 组
+> 挪进了无窗口的 `gui_unit_test`）：`ServerPoller.ATerminalFrameBelowTheQualityGateIsStillUploadedOnEveryResume`
+> （`test/unit-correctness/gui/test_server_poller.cpp`），三阶段仍分别覆盖首次完成跑、经
+> `WakeForRestart` 的第二次完成跑、以及经 `WakeForRefresh` 的 display-time 刷新。
 
 > **落地补丁（2026-08-03，PR 见 git log）：I1 的前提「世代号是诚实的」曾不成立。**
 > 同样不是新增不变量，而是补上实现对 I1 的一次合规回归——I1 文本不变。
@@ -203,9 +205,11 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 此时 `MarkStructHardDirty` 抬到**旧** `committed_epoch` 的 floor 恰好拦不住（新号 > 旧 floor），
 > 于是"新一代还没出图就先把上一代的图当本代成果推上屏"，把 floor 这道围栏原地架空。
 >
-> 注意与 `ServerImpl::GetRawXyzAndCompositeResults` 处那句「锁下序列化，不会出现 new epoch with
-> stale data 的 tear」**不是同一件事**：那句说的是同一次读取内不会读到半更新的配对。此处两个值
-> **各自完整自洽**，错的是配对本身——**无 tear ≠ 无陈旧**。
+> 注意与「同一次读取内不会读到半更新的配对」**不是同一件事**。那条保证今天由不可变结果帧承担：
+> 一帧由一趟快照整体组装后发布，故同一帧上的任意两次读天然同世代（v4.15 之前它由
+> `ServerImpl::GetRawXyzAndCompositeResults` 的锁下序列化提供，那个配对 getter 已随帧模型一起删除
+> ——机制换了，这里要说的区别没变）。此处两个值**各自完整自洽**，错的是配对本身——
+> **无 tear ≠ 无陈旧**。
 >
 > 修复落点：`PollOnce()` 在质量闸的两条 bypass（超时兜底、终帧救援）**之后**追加一道内容世代闸，
 > 只在「内容确属当前世代」时才允许物化 payload。判据不是裸 `has_valid_data`：它镜像
@@ -217,16 +221,21 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 置于两条 bypass 之后是刻意的：兜底救「产出中但太稀疏」、终帧救「结束在门槛之下」，
 > 都不构成发布别代像素的许可。I6 实质不受影响——COMPLETED 由 `has_ever_consumed_` 派生，
 > 终帧必然满足第一个析取项。染色通道自动同覆盖：`PopulateCompositePayload` 就在同一个
-> `if (quality_ok)` 块内，且 `cached_composite_results_` 同样不随 `Stop()` 清除。
+> `if (quality_ok)` 块内，且合成结果同样不随 `Stop()` 清除——它与像素同住那份已发布的结果帧，
+> 而 `Stop()` 不撤回该帧（见 `doc/accumulator-consumer-architecture.md` §3.1）。
 >
 > **主动接受的窄缺口**：某一代若产出了数据、又在 poller 从未 poll 过的间隙里被 Stop，则没有任何
 > payload 记录过该代 epoch，其画面会被抑制、屏幕停在上一帧。闭掉它需要**服务端**戳出
 > "`snapshot_xyz_` 是在哪一代填的"（新的 C API 字段）——poller 侧状态**结构上做不到**，因为它
 > 按定义从未观测过那一代。判定其代价大于该缺口，故留白。
 >
-> 回归测试：`gui_unit_test` 的 `GuiLifecycle.restart_does_not_republish_prior_run_pixels`
-> 与 `GuiLifecycle.restart_window_does_not_republish_prior_run_composite`，均断言**像素/合成字节的
-> 内容指纹**而非只断言世代号——只断言号会在时序恰好没撞上时以错误理由变绿。
+> 回归测试（2026-08-11 重锚至 GUI 套件重写后的名字，均在 `gui_unit_test` 的
+> `test/unit-correctness/gui/test_server_poller.cpp`）：
+> `ServerPoller.TheRestartWindowRepublishesNeitherThePriorRunsStatsNorItsPixels` 断言**像素内容
+> 指纹**而非只断言世代号——只断言号会在时序恰好没撞上时以错误理由变绿；
+> `ServerPoller.TheRestartWindowDoesNotRepublishThePriorRunsComposite` 是它在合成通道的同族，
+> 断言窗口期内整份 payload 被原样 carry-forward（`is_composite` / `payload_epoch` /
+> `texture_serial` 三者都停在上一代）而不是拿上一代的 lane 重建一份。
 
 > **落地补丁（2026-08-06，PR 见 git log）：I3 两个分句此前都不合规。**
 > 同前两条，不是新增不变量，而是补上实现对 I3 的一次合规回归——I3 文本不变。
@@ -287,13 +296,21 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > `kIdleHeartbeatIntervalMs = 500`（`gui_constants.hpp`）是纯 UX/成本折衷，**无正确性含义**——
 > I3 只要求「不得彻底静默」，没给数字；该值待后续用容器复现配方做一次能耗/自愈延迟实测校准。
 >
-> 回归测试：`gui_unit_test` 的 `GuiLifecycle.self_pause_predicate_truth_table`（6 行纯真值表）、
-> `self_pause_publishes_final_totals`（接线 + 独立交叉核对 `LUMICE_GetDrainStatus`）、
-> `running_sim_never_self_pauses`（guard 恒为真方向的端到端否定）、
-> `idle_heartbeat_ticks_after_self_pause`（I3b + 心跳不 bump `texture_serial`）、
-> `stop_during_idle_heartbeat_quiesces_worker`（Stop 静默契约；`Stop()` 返回**之后**取基线——
-> 契约是「返回后不得再有 tick」，而 `Stop()` 允许在途 tick 跑完）；外加 `gui_test`
-> `gui_lifecycle/gpu_run_reaches_done` 里的 `--fixed-dt` 双时钟断言。
+> 回归测试（2026-08-11 重锚至 GUI 套件重写后的名字与落点）：纯真值表那条现在归
+> `composition_correctness_test` 的
+> `RunLifecycleChain.SelfPauseNeedsCompletionAndADrainedUnsupersededEpoch`
+> （`test/composition-correctness/gui/test_run_lifecycle_chain.cpp`，仍是 6 行真值表，直接喂
+> `ShouldSelfPause(lc, drain)`）；其余四条留在 `gui_unit_test` 的
+> `test/unit-correctness/gui/test_server_poller.cpp`：
+> `ServerPoller.APollAtTheDrainedMomentPublishesFinalTotals`（接线 + 独立交叉核对
+> `LUMICE_GetDrainStatus`）、`ServerPoller.AnUnboundedRunNeverSelfPauses`（guard 恒为真方向的
+> 端到端否定）、`ServerPoller.TheIdleHeartbeatKeepsTickingAndRepublishesNothing`（I3b + 心跳不
+> bump `texture_serial`）、`ServerPollerShutdown.StopQuiescesTheHeartbeatBeforeReturning`
+> （Stop 静默契约；`Stop()` 返回**之后**取基线——契约是「返回后不得再有 tick」，而 `Stop()`
+> 允许在途 tick 跑完）；外加 `gui_test`
+> `run_lifecycle/a_finite_run_reaches_done_and_the_heartbeat_holds` 里的 `--fixed-dt` 双时钟断言
+> （该用例在 Apple 上把 `use_gpu_backend` 打开后再跑，旧名 `gpu_run_reaches_done` 的 GPU 特化
+> 并未丢失，只是并进了这一条）。
 >
 > **未闭合、明示**：`COMPLETED 但尚未排空` 这个组合没有注入 seam，本机（macOS/Metal）不复现，
 > 因此只由真值表覆盖其逻辑；端到端证据来自 Linux/Mesa 容器复现，不来自本机绿。
@@ -319,8 +336,9 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 公共 C API 面即不可逆（见 `doc/api-layering-and-product-lines.md`），先加后撤的代价远大于按需
 > 再加。**重开条件**：出现真实消费者——需要在不取帧的前提下读这三个计数的调用方。
 >
-> 回归测试：`gui_unit_test` 的 `GuiLifecycle.stats_read_unconditional_on_first_gate_closed_poll`，
-> 钉住前半句唯一可达的可观测缺口——某 poller 实例第一次 poll 恰好门关闭（两个 disjunct 皆假）且
+> 回归测试（2026-08-11 重锚）：`gui_unit_test` 的
+> `ServerPoller.StatsAreReadOnAFirstPollWithBothMaterializeDoorsClosed`
+> （`test/unit-correctness/gui/test_server_poller.cpp`），钉住前半句唯一可达的可观测缺口——某 poller 实例第一次 poll 恰好门关闭（两个 disjunct 皆假）且
 > 无 `prev` 可 carry-forward，旧代码会让统计字段停在默认构造的 0。
 
 > **落地补丁（2026-08-06）：新增 I7「完成蕴含排空」——owner 已拍板升格，§5 已同步指向它。**

@@ -1012,7 +1012,8 @@ bool DoRun(bool user_initiated) {
       // Locator ("filter \"NAME\", Layer L / Entry E", or "Layer L / Entry E" when unnamed)
       // identifying which filter reference tripped the ABI bounds, captured inside
       // BuildScene. Built by FormatOverflowLocator so the format is unit-testable
-      // (test_gui_import_export.cpp) rather than only exercised through on-screen GUI.
+      // (test/composition-correctness/gui/test_filter_reconstruct_chain.cpp) rather than only
+      // exercised through on-screen GUI.
       log_locator = FormatOverflowLocator(overflow);
       warning_msg = "This filter has too many OR segments / values to apply (limit " +
                     std::to_string(LUMICE_MAX_CONFIG_CLAUSES) + "; " + log_locator +

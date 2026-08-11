@@ -170,10 +170,16 @@ The reusable recipes, so the next person does not re-derive them:
   population** before trusting a value. A razor-sharp caustic reads as a single-bin spike that
   windowed integration and a pixel-count sanity check will expose (this caught a spurious
   antisolar "peak" that was 8 pixels at the θ=180° pole).
-- **Raw un-clipped XYZ** via the C API (`LUMICE_GetRawXyzResults`) with `sim_seed` control, not
-  the 8-bit JPG/PNG the CLI writes. **Trap:** on a *no-filter* scene the C API's
-  `unfiltered_xyz_buffer` is a `0x1` sentinel (non-null junk) — read `xyz_buffer` (which is the
-  full image when nothing is filtered); dereferencing the sentinel segfaults.
+- **Raw un-clipped XYZ** via the C API with `sim_seed` control, not the 8-bit JPG/PNG the CLI
+  writes. Today that reads: `LUMICE_AcquireResultFrame(server, &frame)` →
+  `LUMICE_FrameGetRawXyz(frame, out, max_count)` → use `out[i].xyz_buffer` →
+  `LUMICE_ReleaseResultFrame(frame)`. The buffer is a **view into the frame** and is valid only
+  while you hold it, so copy anything you keep past the Release.
+  > **Trap, retired 2026-08-10:** this bullet used to warn that on a *no-filter* scene the C API's
+  > `unfiltered_xyz_buffer` was a `0x1` sentinel whose dereference segfaults. Both the old getter
+  > (`LUMICE_GetRawXyzResults`) and that field are gone — `LUMICE_RawXyzResult` now carries a
+  > single `xyz_buffer` with a plain `NULL` sentinel (`src/include/lumice.h:215-229`). Kept as a
+  > note only because the measurement recipe above was written against the old shape.
 
 ## 5. The two configs this pins down
 

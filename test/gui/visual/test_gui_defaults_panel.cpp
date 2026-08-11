@@ -8,7 +8,7 @@
 // sub-region capture below covers. All six scenes compare pixel-identical against the current
 // references.
 //
-// Why this exists: the functional suite (test/gui/functional/test_gui_defaults_panel.cpp) asserts
+// Why this exists: the functional suite (test/gui/functional/test_defaults_panel.cpp) asserts
 // what the panel DOES — which key lands in which section, what a click writes to disk. Nothing
 // there reads a pixel, so a column that collapsed to zero width, a warning column that silently
 // stopped being built, or an action row that drifted back inside the scrolling body would stay

@@ -1514,8 +1514,9 @@ void RenderSaveModifiedPopup(GLFWwindow* window) {
   // test_gui_main.cpp:264, so the nav-active precondition is satisfied — the
   // modal exclusion is what actually blocks it). Modals also block
   // click-outside-to-close by design. The only exits are the three buttons.
-  // gui_test p2_modal/save_modified_popup_escape_is_a_noop pins this via a
-  // real ctx->KeyPress(ImGuiKey_Escape) against the live popup.
+  // gui_test file_ops/escape_does_not_dismiss_the_modified_prompt
+  // (test/gui/functional/test_file_ops.cpp) pins this via a real
+  // ctx->KeyPress(ImGuiKey_Escape) against the live popup.
   if (g_show_save_modified_popup) {
     ImGui::OpenPopup("Save Modified Config");
     g_show_save_modified_popup = false;

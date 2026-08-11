@@ -34,9 +34,11 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
 // live EV-synced `intensity_factor` / `intensity_scale` from `BuildExportParams()` and
 // overwrite the 11 export-specific fields that must not inherit viewport dirty state.
 //
-// Shared between production (`app.cpp::DoExport*Png`) and test helpers
-// (`test_gui_export.cpp::Apply*Override`) so new `PreviewParams` fields only need to be
-// audited in one place — replaces the earlier "Must stay in sync" comment contract.
+// Shared between production (`app.cpp::DoExport*Png`) and the tests that exercise them
+// (`test/unit-correctness/gui/test_export_params.cpp` asserts field-by-field what each
+// preset may and may not overwrite; `test/gui/functional/test_export.cpp` calls the same
+// two functions on the pixel path) so new `PreviewParams` fields only need to be audited
+// in one place — replaces the earlier "Must stay in sync" comment contract.
 //
 // Required by `sampleDualFisheye`: both variants keep `max_abs_dz` / `r_scale` aligned
 // with `kDualFisheyeOverlap` because the equirect shader samples the dual-fisheye

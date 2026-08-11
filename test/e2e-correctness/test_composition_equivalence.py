@@ -20,10 +20,13 @@ output — this test does not itself re-run the GUI lowering.
 
 Layered fidelity (the full AC1 chain, transitively): that the GUI editor actually
 lowers the three rows to fixture A's structure, and round-trips the SoP losslessly
-through .lmc, is guarded by the GUI tests p2_filter_type/multi_row_commits_sop and
-p2_filter_type/sop_roundtrip_via_gui_editor (same three-row scenario), the
-struct-vs-JSON expansion by the unit test filter_expand_struct_vs_json, and the
-gate-equivalence of the emitted encoding by THIS test. Together: GUI edit → save/
+through .lmc, is guarded by the GUI tests filter_editor/rows_commit_verbatim_one_summand_each
+and filter_editor/authored_rows_survive_a_save_and_reload (same three-row scenario);
+that the struct the GUI emits and the JSON core reads back describe the same
+expansion, by SceneCommitChain.EveryExpressibleFilterShapeSurvivesCoresOwnReader
+(test/composition-correctness/gui/test_scene_commit_chain.cpp, which re-emits after a
+LUMICE_SceneFromJson round trip over every expressible shape, SoP rows included); and
+the gate-equivalence of the emitted encoding by THIS test. Together: GUI edit → save/
 reload → the simulator applies the compound predicate correctly.
 
 PSNR threshold: calibrated 2026-07-06 over 18 back-to-back A/B render pairs

@@ -144,8 +144,9 @@ _PSNR_RE = re.compile(r"\[(\w+)\]\s+(\S+):\s+PSNR=(inf|[0-9.]+)\s+dB")
 # Threshold recorded when every calibration run was pixel-identical to the reference, so
 # mean − kσ has nothing finite to work with. Bit-exactness cannot be demanded — references
 # are committed and compared on other machines — so this falls back to the value the repo's
-# other deterministic GL comparisons already use (screenshot/left_panel_psnr,
-# screenshot/crystal_psnr): high enough that a moved widget or changed color fails, loose
+# other deterministic GL comparisons already use (the visual/left_panel and visual/<crystal>
+# cases in test/gui/visual/test_preview_pixels.cpp, whose kDeterministicThresholdDb is this
+# same 40.0): high enough that a moved widget or changed color fails, loose
 # enough to absorb encoder/driver noise.
 DETERMINISTIC_FLOOR_DB = 40.0
 

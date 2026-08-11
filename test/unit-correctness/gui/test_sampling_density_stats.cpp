@@ -3,9 +3,9 @@
 // windowless target that links lumice_gui_obj (the functions under test are declared in
 // gui/app.hpp, which unit_correctness_test does not link).
 //
-// Their two frame-dependent siblings stay in test/gui/functional/test_gui_sampling_density_stats.cpp:
-// status_bar_renders_sampling (differential framebuffer capture) and status_bar_width_budget
-// (ImGui text metrics at the minimum window width).
+// Their two frame-dependent siblings stay in test/gui/functional/test_status_bar.cpp:
+// status_bar/sampling_segment_reaches_pixels (differential framebuffer capture) and
+// status_bar/width_budget_at_minimum_window (ImGui text metrics at the minimum window width).
 //
 // Tests:
 //  1. ratio_ge_one      — the resampled-per-ray branch, including draws == rays

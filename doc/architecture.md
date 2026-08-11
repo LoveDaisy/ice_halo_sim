@@ -60,8 +60,15 @@ The `Server` class is the central entry point of the architecture. It uses the P
   `LUMICE_CommitScene` (the C API's `LUMICE_Config` value struct and its three commit
   functions were removed in v4.12 — see [`doc/c_api.md`](c_api.md)).
 - `CommitConfig(const std::string&)`: JSON-string overload used by the benchmark harness
-- `GetRenderResults()`: Retrieve render results (non-blocking)
-- `GetStatsResult()`: Retrieve statistics results (non-blocking)
+- `AcquireResultFrame()`: Acquire a share of the most recent result frame — THE result entry
+  point. Returns a `std::shared_ptr<const ResultFrame>` (never null) carrying every kind of
+  result at once (mono render, composite, raw XYZ, stats), so any two of them are
+  same-generation by construction. It materializes a pending snapshot first, so the frame is
+  as fresh as the per-kind getters it replaced; the pointers inside stay valid for as long as
+  the caller keeps its share, because a later snapshot publishes a *new* frame rather than
+  overwriting this one. The six `Get*Results` getters this replaced were removed in v4.15 —
+  see [`doc/capi-lifecycle-architecture.md`](capi-lifecycle-architecture.md) §9 for the
+  ownership invariant and the two use-after-free recurrences that motivated it.
 - `IsIdle()`: Check whether the server is idle
 - `Stop()` / `Terminate()`: Stop the server
 
@@ -149,7 +156,9 @@ RenderConsumer / StatsConsumer
     ↓
 RenderResult / StatsResult
     ↓
-GetRenderResults() / GetStatsResult()
+DoSnapshot() publishes an immutable ResultFrame
+    ↓
+AcquireResultFrame() (caller holds a share of it)
 ```
 
 ### Complete Flow

@@ -91,11 +91,15 @@ struct PreviewSnapshot {
   LUMICE_RayCount stats_orientation_num = 0;
   // The lifecycle epoch the four stats fields above were actually produced under. Symmetric to
   // TexturePayload::payload_epoch: it may LAG the bundle epoch when the stats are carried forward
-  // across a restart, and that lag is exactly the signal the consumer needs. The server's cached
-  // stats survive a restart (ServerImpl::Stop clears the dirty/consumed flags but not
-  // cached_stats_result_) while the bundle epoch advances immediately, so without this stamp a
-  // carried-forward value is indistinguishable from a freshly produced one and the previous run's
-  // ray/crystal/sampling counts reappear on the status bar. Consumed via ShouldApplyStats.
+  // across a restart, and that lag is exactly the signal the consumer needs. The carrying
+  // mechanism has changed since this was written — the server no longer keeps a mutable stats
+  // cache, it publishes an immutable result frame — but the conclusion has not: ServerImpl::Stop
+  // clears the dirty/consumed flags and leaves the published frame alone, and only a completed
+  // snapshot pass ever replaces that frame, so the previous run's stats stay readable until the
+  // new run produces its first batch (doc/accumulator-consumer-architecture.md §3.1). The bundle
+  // epoch advances immediately, so without this stamp a carried-forward value is
+  // indistinguishable from a freshly produced one and the previous run's ray/crystal/sampling
+  // counts reappear on the status bar. Consumed via ShouldApplyStats.
   unsigned long long stats_epoch = 0;
   // Display payload: shared, immutable. Null / carried-forward on sparse / gate-rejected /
   // invalidated polls.
@@ -193,14 +197,15 @@ class ServerPoller {
   // Production callers: DoOpen (.json + .lmc) and DoNew — document-switch fences the staged
   // composite so SyncFromPoller won't re-upload the previous scene's snapshot over the just-cleared
   // preview (mode_changed OR-branch does not honor the epoch floor; must drop the payload). Also
-  // retained as a test seam (test_gui_lifecycle drives no-GL-context interleavings through it).
+  // retained as a test seam (test_server_poller.cpp and test_composite_preview.cpp, both under
+  // test/unit-correctness/gui/, drive no-GL-context interleavings through it).
   void InvalidateStagedTexture();
 
   // Set calibrated quality gate threshold (called once at startup after calibration run).
   // Thread-safe: only called from main thread before any Start().
   void SetCalibratedThreshold(unsigned long long threshold);
 
-  // ---- Test-only synchronous seam (see test/gui/functional/test_gui_lifecycle.cpp) ----
+  // ---- Test-only synchronous seam (see test/unit-correctness/gui/test_server_poller.cpp) ----
   // Drive exactly ONE poll against `server` on the CALLING thread, bypassing the worker
   // thread, so a regression test can deterministically construct the poll/sync interleaving
   // that used to lose the terminal completion edge (doc/gui-preview-lifecycle-architecture.md
@@ -222,8 +227,9 @@ class ServerPoller {
 
   // Test-only: pre-arm uploaded_since_resume_ so force_final_upload reads false even under a
   // COMPLETED lifecycle. Paired with SetGenerationForTest() to close BOTH disjuncts of
-  // `has_new_snapshot || force_final_upload` for a regression test — see
-  // test/unit-correctness/gui/test_lifecycle.cpp's I4a case. Not used in production.
+  // `has_new_snapshot || force_final_upload` for a regression test — see the I4a case in
+  // test/unit-correctness/gui/test_server_poller.cpp
+  // (ServerPoller.StatsAreReadOnAFirstPollWithBothMaterializeDoorsClosed). Not used in production.
   void SetUploadedSinceResumeForTest(bool uploaded) { uploaded_since_resume_ = uploaded; }
 
   // Test-only: exposes the private PublishValidReset() seam so a regression test can construct the

@@ -42,7 +42,8 @@ class IConsume {
 
   /**
    * @brief Post-process snapshot data (e.g., XYZ→RGB conversion).
-   * @details Called under snapshot_mutex_ (NOT consumer_mutex_) after PrepareSnapshot().
+   * @details Called in Phase 2 of the snapshot pass, after PrepareSnapshot(). The pass holds
+   *          do_snapshot_mutex_ throughout; consumer_mutex_ is deliberately NOT held here.
    *          Default implementation is empty (no-op).
    */
   virtual void PostSnapshot() {}

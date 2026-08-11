@@ -1,7 +1,7 @@
 // Defaults diff-engine tests — the pure-logic half of the defaults panel (src/gui/defaults_diff.*),
 // together with the two Settings-panel cases that ask about the panel's DATA rather than its UI
-// (which keys the field-editor registry covers, and when the row tint predicate fires). Their 33
-// widget-driving siblings stay in test/gui/functional/test_gui_defaults_panel.cpp.
+// (which keys the field-editor registry covers, and when the row tint predicate fires). Their 40
+// widget-driving siblings stay in test/gui/functional/test_defaults_panel.cpp.
 //
 // Nothing here renders a frame: every case calls the engine directly and asserts on the returned
 // row set or on the override file it wrote. They live in gui_unit_test rather than in
@@ -621,8 +621,8 @@ TEST_F(DefaultsDiff, a_replaced_non_object_path_node_is_reported_and_an_ordinary
 }
 
 // ================================================================================
-// The Settings panel's two data-only questions (its 33 widget-driving siblings are in
-// test/gui/functional/test_gui_defaults_panel.cpp)
+// The Settings panel's two data-only questions (its 40 widget-driving siblings are in
+// test/gui/functional/test_defaults_panel.cpp)
 // ================================================================================
 
 // AC3 — coverage as a COUNTABLE deliverable, not "the mechanism works".

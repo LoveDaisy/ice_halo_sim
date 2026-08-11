@@ -352,7 +352,7 @@ false and no snapshot is ever prepared). It still does **not** call
   `atomic<uint32_t>` ticket/serving counters. Prevents starvation that
   occurs with Windows SRWLOCK under high-frequency locking
   (see [`doc/accumulator-consumer-architecture.md` §4.1](accumulator-consumer-architecture.md)).
-- **`std::mutex`**: used for `snapshot_mutex_`, `do_snapshot_mutex_`, `status_mutex_`,
+- **`std::mutex`**: used for `do_snapshot_mutex_`, `status_mutex_`,
   `start_mutex_`, `prod_mutex_`, `scene_mutex_`.
 
 **Practical rule**: a single "owner thread" should perform all non-thread-safe

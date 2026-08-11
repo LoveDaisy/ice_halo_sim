@@ -98,7 +98,7 @@ owner 提出的三个扩张方向，压力点各不相同，**没有一条落在
 3. **发布形态是单一产品**。`.github/workflows/release.yml` 一次产出 CLI 与 GUI，同 tag 同签名，
    目前不存在需要独立节奏的 core 消费者。
 
-### 5.1 唯一一处边界确实没守住（可独立行动）—— **一半已收紧**
+### 5.1 唯一一处边界确实没守住（可独立行动）—— **2026-08-06 已收口，本节保留为记录**
 
 原始诊断（2026-08-01）：
 `test/gui/CMakeLists.txt:54`：`gui_test` 链接 `lumice_obj`（core 内部对象库）而非 `lumice`；
@@ -116,9 +116,24 @@ owner 提出的三个扩张方向，压力点各不相同，**没有一条落在
 parity 层链不到 GUI 侧符号，做不了这次比较。它现在是一个**有名字的显式跨层 oracle**
 （文件头写明了这一点），即本节原先给出的两个选项中的第一个。
 
-**⏳ 剩余部分**：`gui_test`（以及新增的 `gui_unit_test`）仍链 `lumice_obj` 而非 `lumice`。
-这条**链接边**才是本节的真正剩余内容，与 include 违规是两回事，未随迁移消解——
-故「GUI 侧能否只靠 C API 活下来」目前**仍无证据**，结论不变。
+**⏳ 剩余部分（2026-08-01 记）**：`gui_test`（以及新增的 `gui_unit_test`）仍链 `lumice_obj`
+而非 `lumice`。这条**链接边**才是本节的真正剩余内容，与 include 违规是两回事，未随迁移消解——
+故「GUI 侧能否只靠 C API 活下来」当时**仍无证据**。
+
+**✅ 已收口（2026-08-06，`chore/micro-debt-sweep` 动作 8；2026-08-10 复核）——上一段的结论已被反转**：
+`gui_test` 现在只链 `lumice_gui_obj` + `lumice`（`test/gui/CMakeLists.txt:73`），编得过、跑得绿。
+⇒ **这是「GUI 侧能只靠 C API 活下来」的第一份正面证据**：全仓最大的那个 GUI 测试 target
+不再需要 core 内部对象库。上一段"仍无证据"的判断到此为止，别再据它下结论。
+
+剩下的两处链 `lumice_obj` 是**有名字的显式豁免**，不是未经检视的默认——两处 CMake 注释都写明了这一点：
+
+| target | 位置 | 豁免理由 |
+|---|---|---|
+| `gui_unit_test` | `test/CMakeLists.txt:264` / `:281` | 全仓唯一同时链 `lumice_gui_obj` + `lumice_obj`，`test_render_handedness_guard.cpp` 这类**显式跨层 oracle**（比较 backend 正向投影 vs 两条 GUI 正向投影）必须同时看到两侧符号 |
+| `composition_correctness_test` | `test/CMakeLists.txt:337` / `:341` | `composition-correctness` 层（跨 ≥2 个单元、但不需要真实帧的命题）的 target，链接形态与 `gui_unit_test` 相同，理由同上 |
+
+⇒ 本节的诊断（产品遵守 C API、测试不遵守）已从"一处未守住的边界"变成"两处具名跨层 oracle"。
+⛔ 看见 `lumice_obj` 不等于发现了新缺口——先读那两处注释。
 
 ---
 
@@ -126,7 +141,8 @@ parity 层链不到 GUI 侧符号，做不了这次比较。它现在是一个**
 
 ### 现在就做（成本低、不可后悔）
 
-1. **在头文件里把三个高度显式分区**：仿真执行（Server / Scene / Commit / `Get*Results`）
+1. **在头文件里把三个高度显式分区**：仿真执行（Server / Scene / Commit / `LUMICE_ResultFrame`
+   一族 —— 本文写作时这里列的是 `Get*Results`，那六个 getter 已于 v4.15 净删）
    与域 schema、编辑器支撑（`*KeyName`、`IsLegalFace`、`ValidateRaypathText`、
    `GetCrystalMesh`、`MaxFov`）分节标注。价值不在美观，在于**将来发布时可以选择只发布哪一层**。
 2. **暂不正式发布动态库**；若要发布，明确标注 experimental、不承诺 ABI。

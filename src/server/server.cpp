@@ -218,7 +218,6 @@ class ServerImpl {
   std::vector<Simulator> simulators_;
   std::vector<ConsumerPtrS> consumers_;
   mutable TicketMutex consumer_mutex_;  // FIFO lock: prevents Poller starvation on Windows
-  mutable std::mutex snapshot_mutex_;   // Protects cached results
   bool snapshot_dirty_{ false };        // Set by ConsumeData, cleared by DoSnapshot
   bool has_ever_consumed_{ false };     // True after first ConsumeData; reset on Stop (new consumers have no data)
   uint64_t snapshot_generation_{
@@ -248,13 +247,13 @@ class ServerImpl {
     std::atomic_store(&published_frame_, std::move(next));
   }
 
-  // Serializes the whole two-phase snapshot pass. Phase 1 (consumer_mutex_) and Phase 2
-  // (snapshot_mutex_) take different locks, so two DoSnapshot calls could previously
-  // interleave: one thread's PrepareSnapshot could run while another was still reading the
-  // same consumer's snapshot lanes in Phase 2. That was already a torn-frame source; with
-  // Phase 1 now re-pointing the consumer's buffer members (see FrameBufferPool) it would be
-  // a pointer-level race, so the pass is made mutually exclusive. Outermost lock of the
-  // three — always taken BEFORE consumer_mutex_/snapshot_mutex_, never while holding either.
+  // Serializes the whole two-phase snapshot pass. Phase 1 takes consumer_mutex_ and Phase 2
+  // takes nothing, so without this lock two DoSnapshot calls could interleave: one thread's
+  // PrepareSnapshot could run while another was still reading the same consumer's snapshot
+  // lanes in Phase 2. That was already a torn-frame source; with Phase 1 now re-pointing the
+  // consumer's buffer members (see FrameBufferPool) it would be a pointer-level race, so the
+  // pass is made mutually exclusive. Outer lock of the two — always taken BEFORE
+  // consumer_mutex_, never while holding it.
   std::mutex do_snapshot_mutex_;
 
   // Scratch for DoSnapshot Phase 2's composite pass, and used nowhere else. It was a
@@ -713,8 +712,8 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
 // poll tick (e.g. RawXyz + Composite) see a coherent Phase-1..2 atomic event
 // rather than racing the dirty flag against each other (plan §3 keypoint 1).
 bool ServerImpl::DoSnapshot() {
-  // One snapshot pass at a time (see do_snapshot_mutex_'s declaration for why the two
-  // per-phase locks are not enough).
+  // One snapshot pass at a time (see do_snapshot_mutex_'s declaration for why Phase 1's
+  // consumer_mutex_ is not enough on its own).
   std::lock_guard<std::mutex> snapshot_pass(do_snapshot_mutex_);
 
   // Phase 1: memcpy under consumer_mutex_ (short hold).
@@ -759,7 +758,10 @@ bool ServerImpl::DoSnapshot() {
       rc->CountEffectivePixels();
     }
   }
-  // Phase 2: XYZ→RGB, then ASSEMBLE a new frame under snapshot_mutex_ (no consumer_mutex_).
+  // Phase 2: XYZ→RGB, then ASSEMBLE a new frame. Takes no lock of its own — the whole pass
+  // already holds do_snapshot_mutex_, and consumer_mutex_ is deliberately NOT held here.
+  // The braces below are a plain scope marking the phase, NOT a lock scope: read them as
+  // "Phase 2 runs here", not as "something is protected here".
   // Safe: snapshot_consumers holds shared_ptrs, objects won't be freed.
   //
   // The results are collected into a fresh ResultFrame that gets published at
@@ -770,7 +772,6 @@ bool ServerImpl::DoSnapshot() {
   frame->epoch_ = committed_epoch_.load(std::memory_order_acquire);
   frame->has_valid_data_ = valid_data;
   {
-    std::lock_guard<std::mutex> lock(snapshot_mutex_);
     for (const auto& c : snapshot_consumers) {
       c->PostSnapshot();
     }
