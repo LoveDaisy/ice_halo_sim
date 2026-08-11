@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786419211099,
+  "lastUpdate": 1786419213154,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "085d3a1ef63b9ff2eba44ab57ad6b3d40cac33d1",
-          "message": "Merge pull request #158 from LoveDaisy/feat/gpu-misc\n\nchore(cleanup): CUDA dead-code + CI Node24 bump + exit-seam crystals stat fix (scrum-311)",
-          "timestamp": "2026-07-01T13:10:24+08:00",
-          "tree_id": "6524533648ef89053374c3911be4dec2d1722643",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/085d3a1ef63b9ff2eba44ab57ad6b3d40cac33d1"
-        },
-        "date": 1782882991028,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 76.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 101.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 84.2,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 109.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "f8cdfeb59aa4b54dbb45e9bafbdfec1ea6176396",
           "message": "Merge pull request #159 from LoveDaisy/feat/gpu-readback-third-clock\n\nfeat(gpu): third-clock readback decoupling — fix high-resolution GPU throughput",
           "timestamp": "2026-07-01T21:22:40+08:00",
@@ -13969,6 +13925,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c2b1a9cd1daae6d11f8b670faca311a48723059",
+          "message": "Merge pull request #262 from LoveDaisy/fix/gui-blocked-production-defects\n\nfix(gui): four defects around blank filter rows, slider drags and failed loads",
+          "timestamp": "2026-08-11T11:22:23+08:00",
+          "tree_id": "86c4753b809868150c88ccfedc5bd8d90ea97394",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5c2b1a9cd1daae6d11f8b670faca311a48723059"
+        },
+        "date": 1786419212572,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 98.3,
             "unit": "%"
           }
         ]
