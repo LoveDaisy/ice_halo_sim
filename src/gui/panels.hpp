@@ -25,19 +25,31 @@ enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 // sub-widget — true exactly on the frame interaction with either one ends, not on every frame a
 // drag moves the value. The field-editor registry (`field_editor_registry.cpp`) needs this to
 // gate its own commit-and-refresh at "once per edit" rather than "once per frame of a drag".
+//
+// `active` (optional out-param, same nullptr default and the same OR across both sub-widgets): set
+// to `ImGui::IsItemActive()` semantics — whether the user is STILL holding either sub-widget this
+// frame. It answers a different question from `committed`: not "did an edit just end" but "may I
+// overwrite the value I passed in". A caller that keeps its own copy of the field (the field-editor
+// registry does, so that a drag's intermediate frames never reach the document) must refresh that
+// copy from its source only on frames where this is false — refreshed on the release frame, the
+// copy would be reset to the pre-drag value before `committed` ever gets read, and the whole drag
+// would be dropped. The distinction cannot be rebuilt at the call site: only this function sees
+// both sub-widgets' `IsItemActive()`, and after it returns ImGui's "last item" is the input box
+// alone.
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true, bool* committed = nullptr);
+                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true, bool* committed = nullptr,
+                     bool* active = nullptr);
 
 // SliderInt + InputInt + label text — SliderWithInput's integer sibling, same layout and the same
-// `trailing_label = false` table-cell mode and optional `committed` out-param. Returns true if the
-// value changed.
+// `trailing_label = false` table-cell mode and the same optional `committed` / `active` out-params.
+// Returns true if the value changed.
 //
 // Exported (it was file-static in panels.cpp) because the defaults panel's field-editor registry
 // renders integer settings with it: an integer setting has to be edited by the SAME control the
 // main UI uses, or the two disagree about what a valid value is — which is the whole point of that
 // registry.
 bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true,
-                        bool* committed = nullptr);
+                        bool* committed = nullptr, bool* active = nullptr);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };

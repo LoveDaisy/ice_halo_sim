@@ -501,5 +501,102 @@ TEST(SceneCommitChain, EveryEntryExitLengthModeHasItsOwnSummarySpelling) {
   EXPECT_EQ(summary_for(3, 2, 5), "EE:3-5 L=[2,5] In PBD");
 }
 
+// ---------------------------------------------------------------------------------------------
+// A row that states no predicate states nothing, and nothing is not "everything".
+//
+// The editor's commit path already reads a blank row that way — it strips blank rows before
+// building the filter, and a filter left with no rows is committed as no filter at all. The
+// expansion path underneath disagreed: a row that parsed to zero factors became one clause holding
+// a single match-all term. The two are not different spellings of the same result. Under
+// `filter_in` a match-all clause ORed beside the real ones widens the filter to everything, so the
+// user's other rows stop meaning anything; under `filter_out` it excludes every ray and the render
+// comes back black. Neither says anything on screen, and both are indistinguishable from "the
+// simulation is still warming up" until the user goes looking.
+//
+// The line these cases draw is between a row the user left empty and a filter a core config file
+// writes ON PURPOSE to admit every ray (`"type": "none"`, or no `type` key at all). The two arrive
+// as different shapes — a row with no factors at all, versus a row with one factor whose text is
+// empty — and only the first is dropped. FilterReconstructChain's match-all case guards the other
+// side of that line.
+//
+// A third shape is neither: `"type": "raypath"` with `"raypath": []`, which core matches NO ray
+// with. It was once read here as the deliberate wildcard, which is backwards; it is refused at
+// import now, and FilterReconstructChain pins that.
+
+// A blank row between two real ones leaves the two real ones, not three clauses one of which
+// matches everything.
+TEST(SceneCommitChain, AnEmptyOrRowIsDroppedRatherThanLoweredToMatchAll) {
+  SeedOneEntryDocument();
+  g_state.filters[0] = SopFilter({ "3-5", "", "1-3" });
+
+  const nlohmann::json scene = CommitSceneJson(g_state);
+  ASSERT_FALSE(scene.is_null()) << "the document with a blank row did not commit at all";
+  const nlohmann::json& filters = scene["filter"];
+  ASSERT_EQ(filters.size(), 3u) << "expected the two written rows plus one composition, got " << filters.dump();
+  EXPECT_EQ(filters[0]["raypath"], nlohmann::json({ 3, 5 }));
+  EXPECT_EQ(filters[1]["raypath"], nlohmann::json({ 1, 3 }));
+  EXPECT_EQ(filters[2]["type"].get<std::string>(), "complex");
+  EXPECT_EQ(filters[2]["composition"], nlohmann::json({ 0, 1 }));
+
+  // The claim the clause count alone does not make: nothing in the emitted pool matches every ray.
+  // `"type": "none"` is how the commit path spells a match-all term, so that is what a lowered
+  // blank row would look like here — and an empty `raypath` array is checked beside it because a
+  // term wearing that shape would be the reverse mistake, matching no ray at all.
+  for (const nlohmann::json& jf : filters) {
+    const std::string type = jf.value("type", std::string{});
+    EXPECT_NE(type, std::string("none")) << "a blank row became a match-all term: " << jf.dump();
+    if (type == "raypath") {
+      EXPECT_FALSE(jf["raypath"].empty()) << "a term was emitted that matches no ray at all: " << jf.dump();
+    }
+  }
+  EXPECT_EQ(scene["scene"]["scattering"][0]["entries"][0]["filter"].get<int>(), 2);
+}
+
+// Every row blank means the filter says nothing at all, which is no filter — not a filter that
+// happens to admit everything. The two differ once `action` is filter_out, and they differ in the
+// document either way, so the assertion is that the entry lands in the SAME observable state as an
+// entry that was never given a filter rather than in a new "empty filter" state of its own.
+TEST(SceneCommitChain, AFilterWhoseRowsAreAllBlankCommitsAsNoFilter) {
+  SeedOneEntryDocument();
+  g_state.layers[0].entries[0].filter_id.reset();
+  const nlohmann::json without = CommitSceneJson(g_state);
+  ASSERT_FALSE(without.is_null()) << "the no-filter baseline did not commit";
+
+  SeedOneEntryDocument();
+  g_state.filters[0] = SopFilter({ "", "  " });
+  const nlohmann::json blank = CommitSceneJson(g_state);
+  ASSERT_FALSE(blank.is_null()) << "the all-blank filter did not commit at all";
+
+  EXPECT_TRUE(blank["filter"].empty()) << "an all-blank filter still emitted filters: " << blank["filter"].dump();
+  EXPECT_FALSE(blank["scene"]["scattering"][0]["entries"][0].contains("filter"))
+      << "the entry still points at a filter: " << blank["scene"]["scattering"][0]["entries"][0].dump();
+  EXPECT_EQ(blank["scene"]["scattering"], without["scene"]["scattering"])
+      << "an all-blank filter is a third state, neither a filter nor the absence of one";
+}
+
+// The user-visible consequence, pinned as itself rather than as a clause count: a filter_out filter
+// carrying one blank row must not hide every ray. Under the old lowering this document committed a
+// two-clause OR whose second clause matched everything, and filter_out on "everything" renders a
+// black frame with no error anywhere.
+TEST(SceneCommitChain, AFilterOutRowLeftBlankDoesNotExcludeEveryRay) {
+  SeedOneEntryDocument();
+  FilterConfig f = SopFilter({ "3-5", "" });
+  f.action = 1;  // filter_out
+  g_state.filters[0] = f;
+
+  const nlohmann::json scene = CommitSceneJson(g_state);
+  ASSERT_FALSE(scene.is_null()) << "the filter_out document did not commit at all";
+  const nlohmann::json& filters = scene["filter"];
+  for (const nlohmann::json& jf : filters) {
+    EXPECT_NE(jf.value("type", std::string{}), std::string("none"))
+        << "filter_out was handed a match-all term — every ray is excluded: " << jf.dump();
+  }
+  // The one row that says something is the whole filter, so it needs no composition wrapping it.
+  ASSERT_EQ(filters.size(), 1u) << "expected the single surviving row, got " << filters.dump();
+  EXPECT_EQ(filters[0]["type"].get<std::string>(), "raypath");
+  EXPECT_EQ(filters[0]["action"].get<std::string>(), "filter_out");
+  EXPECT_EQ(filters[0]["raypath"], nlohmann::json({ 3, 5 }));
+}
+
 }  // namespace
 }  // namespace lumice::gui

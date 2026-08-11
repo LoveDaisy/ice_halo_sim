@@ -306,7 +306,7 @@ static void FinishSliderLayout(const char* display_label) {
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
-                     bool trailing_label, bool* committed) {
+                     bool trailing_label, bool* committed, bool* active) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -318,18 +318,23 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   ImGui::PushItemWidth(slider_w);
   RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
   const bool slider_committed = ImGui::IsItemDeactivatedAfterEdit();
+  const bool slider_active = ImGui::IsItemActive();
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
   ImGui::PushItemWidth(kInputWidth);
   ImGui::InputFloat(input_id, value, 0, 0, fmt);
   const bool input_committed = ImGui::IsItemDeactivatedAfterEdit();
+  const bool input_active = ImGui::IsItemActive();
   ImGui::PopItemWidth();
 
   *value = std::clamp(*value, min_val, max_val);
 
   if (committed) {
     *committed = slider_committed || input_committed;
+  }
+  if (active) {
+    *active = slider_active || input_active;
   }
 
   if (trailing_label) {
@@ -340,7 +345,8 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
 // Returns true if value changed.
-bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label, bool* committed) {
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label, bool* committed,
+                        bool* active) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
@@ -352,18 +358,23 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
   ImGui::PushItemWidth(slider_w);
   ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
   const bool slider_committed = ImGui::IsItemDeactivatedAfterEdit();
+  const bool slider_active = ImGui::IsItemActive();
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
   ImGui::PushItemWidth(kInputWidth);
   ImGui::InputInt(input_id, value, 0, 0);
   const bool input_committed = ImGui::IsItemDeactivatedAfterEdit();
+  const bool input_active = ImGui::IsItemActive();
   ImGui::PopItemWidth();
 
   *value = std::clamp(*value, min_val, max_val);
 
   if (committed) {
     *committed = slider_committed || input_committed;
+  }
+  if (active) {
+    *active = slider_active || input_active;
   }
 
   FinishSliderLayout(display_buf);

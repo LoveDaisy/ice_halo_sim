@@ -173,7 +173,7 @@ The predicate is a **sum-of-products**: an OR of rows, each row an AND of factor
 
 - **Each row is one OR term.** Add rows with `+ Add OR row`; a filter matches a ray if **any** row matches.
 - **Within a row, `&` is AND.** `3-5 & entry:2` matches rays that satisfy both factors.
-- **A blank row means "match all rays"** (no filter / wildcard).
+- **A blank row states nothing, so it is dropped.** It is not a wildcard: a row that matched every ray would widen the whole OR to everything (making your other rows moot), or — under **Exclude** — hide every ray and render a black frame. A filter whose rows are *all* blank is simply no filter, the same as leaving the crystal's filter unset. This holds whether the blank row was typed here or came from a `.lmc` file, so loading a config with an empty row applies the rows that say something and ignores the one that does not.
 
 A factor is either a **raypath** or an **entry-exit** token:
 
@@ -198,6 +198,10 @@ A factor is either a **raypath** or an **entry-exit** token:
 | (`1-3` or `3-5`) **and** enter face 2 | `1-3;3-5 & entry:2` → `(1-3 & entry:2) OR (3-5 & entry:2)` |
 
 `;` (and the `entry:1,2` comma list) is display sugar only — it fans out to separate OR terms when the filter is applied, so the underlying model stays a plain sum-of-products. A **live preview** below the rows shows the expanded predicate as you type, and the **ⓘ icon** next to the hint lists the full token syntax.
+
+**A hand-written config can still ask for a wildcard.** The dropped-blank-row rule above is about a row that carries no predicate at all. A core config file (the CLI format, or one this GUI exported) can ask for a filter that admits every ray by writing `{"type": "none"}`, or by leaving the `type` key off the filter entirely; both are kept as a match-all row and can sit beside real alternatives in a composition. The two are different things arriving by different routes: an empty editor row is an unfinished thought, a `none` filter is a request.
+
+**One shape is refused instead: `{"type": "raypath", "raypath": []}`.** An empty face list is not a wildcard — the simulator compares each ray's recorded path against the listed one, an empty list has nothing any ray can equal, and the filter therefore matches **no ray at all**. Under **Include** that renders a black frame. The editor has no row that says "no ray", and its nearest row (an empty one) says the opposite, so a filter of this shape is dropped on import with a warning naming it, rather than shown as something it is not. Any entry that referenced it opens with no filter; re-save the document and the filter is gone from it. Write the ray paths you want, or `{"type": "none"}` if you meant every ray.
 
 For the filter architecture behind this editor (physical gate semantics, the `ComplexFilterParam` sum-of-products, the 1:1 crystal binding), see [`filter-architecture.md`](filter-architecture.md).
 

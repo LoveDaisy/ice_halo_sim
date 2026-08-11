@@ -107,8 +107,11 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
 // (issue.md hard constraint — no re-implementation on the GUI side). Meant
 // only for cheap on-typing preview: value bounded by LUMICE_MAX_CONFIG_CLAUSES.
 struct SopExpansionSummary {
-  size_t clause_count = 0;  // 1..LUMICE_MAX_CONFIG_CLAUSES; degenerate default is 1
-  bool overflow = false;    // true iff the expansion tripped the clause/term cap
+  // 0..LUMICE_MAX_CONFIG_CLAUSES; degenerate default is 1. 0 means every row of the SoP was
+  // blank, i.e. the filter states nothing and commits as no filter at all — a legitimate
+  // result, not an error (the expansion used to substitute a match-all clause here).
+  size_t clause_count = 0;
+  bool overflow = false;  // true iff the expansion tripped the clause/term cap
 };
 SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f);
 
@@ -126,6 +129,15 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
                  bool save_texture);
 
 // Load .lmc binary file. If texture data is present, returns it via tex_data/tex_w/tex_h.
+//
+// All-or-nothing on `state`: on success it is replaced wholesale by the file's document; on
+// failure it is not written at all, so a caller may pass the live document straight in. The two
+// halves of that are one contract — the JSON section is deserialized well before the texture
+// section is even read, and the deserializer clears the document it is given, so deserializing in
+// place would let a failed load leave the caller showing the file it just refused to open.
+//
+// `tex_data`/`tex_w`/`tex_h` carry NO such guarantee: they are cleared on entry and are only
+// meaningful when this returns true. Read them only then.
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
                  int& tex_h);
 

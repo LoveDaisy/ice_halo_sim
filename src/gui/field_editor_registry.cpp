@@ -74,6 +74,24 @@ bool CommitIfEdited(T& slot, T next, T low, T high) {
   return true;
 }
 
+// Per-field drag scratch for the two slider field kinds — the scalar counterpart of
+// ColorFieldDragState further down, and there for the same reason: the value the control edits has
+// to SURVIVE the frames of a drag somewhere other than the document, because the document must not
+// see any of them (see CommitIfEdited's callers and the release-only commit rule they implement).
+//
+// Why it cannot just be re-read from the slot every frame, which is what this replaces: on the
+// frame the mouse comes up, the slider does not write the value again — it only reports that its
+// interaction ended. A working copy refreshed that frame would therefore hold the PRE-drag value at
+// exactly the moment the commit is finally allowed, the commit would compare equal and do nothing,
+// and every drag would be silently discarded while the input box beside it kept working. Refreshing
+// only on frames where nothing is being held (SliderWithInput's `active` out-param) is what makes
+// the release frame read back the value the drag actually left behind.
+template <typename T>
+struct ScalarDragState {
+  T working{};
+  bool was_active = false;
+};
+
 FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, const char* fmt,
                             SliderScale scale = SliderScale::kLinear, ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
@@ -86,13 +104,26 @@ FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, c
   entry.Render = [access, domain, fmt, scale](GuiState& state, const char* id_base) {
     const auto range = domain(state);
     float* slot = access(state);
-    float working = *slot;
+    // Keyed by the slot address, exactly as ColorField's map is and for the identical reason —
+    // that address is stable for the life of the process, so one map keeps every float field's
+    // in-progress drag independent of every other's.
+    static std::unordered_map<const float*, ScalarDragState<float>> drag_states;
+    ScalarDragState<float>& drag = drag_states[slot];
+    // Not being held => the document is the truth and the scratch follows it. This is also the
+    // first-ever call for this field (a default-constructed entry has was_active == false), so the
+    // scratch never renders a zero it invented.
+    if (!drag.was_active) {
+      drag.working = *slot;
+    }
     bool committed = false;
-    SliderWithInput(id_base, &working, range.first, range.second, fmt, scale, /*trailing_label=*/false, &committed);
+    bool active = false;
+    SliderWithInput(id_base, &drag.working, range.first, range.second, fmt, scale, /*trailing_label=*/false, &committed,
+                    &active);
+    drag.was_active = active;
     if (!committed) {
       return false;
     }
-    return CommitIfEdited(*slot, working, range.first, range.second);
+    return CommitIfEdited(*slot, drag.working, range.first, range.second);
   };
   return entry;
 }
@@ -108,13 +139,19 @@ FieldEditorEntry IntField(int* (*access)(GuiState&), int min_value, int max_valu
   };
   entry.Render = [access, min_value, max_value](GuiState& state, const char* id_base) {
     int* slot = access(state);
-    int working = *slot;
+    static std::unordered_map<const int*, ScalarDragState<int>> drag_states;  // see FloatField above
+    ScalarDragState<int>& drag = drag_states[slot];
+    if (!drag.was_active) {
+      drag.working = *slot;
+    }
     bool committed = false;
-    SliderIntWithInput(id_base, &working, min_value, max_value, /*trailing_label=*/false, &committed);
+    bool active = false;
+    SliderIntWithInput(id_base, &drag.working, min_value, max_value, /*trailing_label=*/false, &committed, &active);
+    drag.was_active = active;
     if (!committed) {
       return false;
     }
-    return CommitIfEdited(*slot, working, min_value, max_value);
+    return CommitIfEdited(*slot, drag.working, min_value, max_value);
   };
   return entry;
 }
