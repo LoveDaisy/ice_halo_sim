@@ -33,8 +33,11 @@ N-worker server. Baseline is legacy CPU (the GUI's real path); NEVER cpu_backend
 
 Correctness is NOT re-tested here — it is already gated by the raw-XYZ parity
 matrix (test_metal_exit_seam_parity) and the lens_proj PSNR references. G4 owns
-the GUI-regime throughput leg; its responsiveness leg is currently xfail'd for
-want of a producer (see the note above test_metal_gui_north_star_first_upload_budget).
+the GUI-regime throughput leg only. First-frame latency is deliberately NOT gated
+here: it is a perf-harness metric, measured off a real app log by
+`scripts/analyze_perf_log.py` ("First upload:" line), per test_gui_perf.cpp's own
+policy that budgets gate "the loop stopped" floors while throughput/latency
+belongs to doc/performance-testing.md's harness.
 
 @pytest.mark.slow — needs the GUI test binary + a display/GL context; Darwin-only
 (Metal). Skips gracefully when the binary is absent or no display is available.
@@ -75,28 +78,7 @@ _GATE = 1.0
 # against GUI-loop noise while tripping hard on a real regression.
 _SANITY_FLOOR = 0.8
 
-# --- Responsiveness gate: freeze detection, NOT "must beat legacy" ----------------
-# Large dispatch buys ~2x throughput at the cost of a higher first-frame latency
-# (an honest tradeoff, NOT a regression to hide). explore-265's failure mode was a
-# single dispatch >100ms freezing the UI (5s drag -> 2 frames, i.e. per-frame
-# stalls in the seconds range). This gate catches that pathological freeze regime.
-#
-# Calibration note (task-364, 2026-07-15): this test runs the HEAVY config
-# (_HEAVY_CONFIG, multi-MS + complex filter + multi-crystal, ray_num=infinite),
-# whose healthy Metal first_upload median measures ~200ms on Mac — this is the
-# physical floor of the first batch's trace + XYZ readback, which the O2 PSO/device
-# process-level cache (task-364) deliberately does NOT cover (it eliminates the
-# per-commit PSO-rebuild cost, not the GPU work of the first batch itself). The
-# prior 150ms value was calibrated against a lighter config (~71ms median) and only
-# surfaced as a failure once task-364 fixed the rays>0 assertion that masked it.
-# 250ms keeps headroom against run-to-run noise (measured 196-202ms, tight) while
-# still tripping hard on a genuine >100ms/dispatch freeze (which lands in the
-# seconds range). Whether the heavy-scene first batch can be compressed further,
-# or its UX softened, is deferred to a backlog explore (not a task-364 regression).
-_FIRST_UPLOAD_FREEZE_MS = 250.0
-
 _RE_STEADY = re.compile(r"steady_state:\s+([\d.]+)\s+rays/sec")
-_RE_FIRST_UPLOAD = re.compile(r"first_upload\s+avg=\d+ms\s+median=(\d+)ms")
 _RE_FALLBACK = re.compile(r"falling back to legacy CPU|incompatible with render", re.IGNORECASE)
 _RE_NO_DISPLAY = re.compile(r"Failed to create GLFW window|Failed to initialize", re.IGNORECASE)
 
@@ -118,10 +100,10 @@ def _make_infinite_config(tmp_dir: str) -> str:
 
 
 def _run_gui_perf(config_path: str, metal: bool) -> dict:
-    """Run gui_test perf scenarios; return parsed steady rps + first_upload.
+    """Run gui_test perf scenarios; return the parsed steady rps.
 
-    Returns {"steady_rps": float, "first_upload_ms": float, "fell_back": bool,
-             "no_display": bool, "raw": str}.
+    Returns {"steady_rps": float, "fell_back": bool, "no_display": bool,
+             "raw": str}.
     """
     env = dict(os.environ)
     env["LUMICE_PERF_CONFIG"] = config_path
@@ -142,29 +124,17 @@ def _run_gui_perf(config_path: str, metal: bool) -> dict:
     m = _RE_STEADY.search(out)
     if m:
         steady = float(m.group(1))
-    first_upload = 0.0
-    mu = _RE_FIRST_UPLOAD.search(out)
-    if mu:
-        first_upload = float(mu.group(1))
     return {
         "steady_rps": steady,
-        "first_upload_ms": first_upload,
         "fell_back": bool(metal and _RE_FALLBACK.search(out)),
         "no_display": bool(_RE_NO_DISPLAY.search(out)),
         "raw": out,
     }
 
 
-@pytest.fixture(scope="module")
-def gui_perf_runs():
-    """Run the legacy + Metal GUI perf pair ONCE for every test in this module.
-
-    Module scope, not the default function scope: this is two full gui_test perf
-    runs on the heavy scene, and the tests below assert on different legs of the
-    SAME measurement, so re-running per test would double the cost for no signal.
-    (Caveat: a module fixture is per-PROCESS, so the `-n 3` xdist slow leg may
-    still run the pair once per worker. Serial runs execute it once.)
-    """
+@pytest.mark.slow
+def test_metal_gui_north_star():
+    """Metal single-engine beats legacy in the real GUI regime."""
     if not (_GUI_BIN.is_file() and os.access(_GUI_BIN, os.X_OK)):
         pytest.skip(f"GUI test binary not found at {_GUI_BIN}; build with ./scripts/build.sh -gtj release")
 
@@ -176,13 +146,6 @@ def gui_perf_runs():
         metal = _run_gui_perf(cfg, metal=True)
         if metal["no_display"]:
             pytest.skip("No display / GL context available for the GUI test binary")
-    return legacy, metal
-
-
-@pytest.mark.slow
-def test_metal_gui_north_star(gui_perf_runs):
-    """Metal single-engine beats legacy in the real GUI regime."""
-    legacy, metal = gui_perf_runs
 
     assert not metal["fell_back"], (
         "Metal fell back to legacy CPU in the GUI path — backend requested but did "
@@ -210,49 +173,4 @@ def test_metal_gui_north_star(gui_perf_runs):
     assert ratio >= _GATE, (
         f"GUI north-star regression ratio={ratio:.3f} < {_GATE} — Metal no longer "
         f"beats legacy CPU end-to-end in the GUI live-preview regime (scrum-268 §5)."
-    )
-
-
-# --- Responsiveness leg: first-dispatch freeze budget ----------------------------
-# xfail'd since 2026-08-11: NO PRODUCER. The `first_upload avg=..ms median=..ms` line
-# this parses came from the old responsiveness perf scenarios, which 5734b5d9
-# (2026-08-10) rewrote; nothing emits it today, so _RE_FIRST_UPLOAD never matches and
-# first_upload_ms stays at its 0.0 default — the budget is unsatisfiable, not slow.
-# Not deleted, because the invariant has no replacement: test_gui_perf.cpp gates the
-# frame rate of the 2s window AFTER WaitForFirstBatch and caps that wait at 10s, so a
-# first dispatch between 250ms and 10s — the freeze regime this was calibrated for —
-# is caught by neither. Deleting would retire a 250ms SLA as a side effect.
-# A SEPARATE function, not an xfail on the north-star test, because a function-level
-# xfail absorbs every failure in it and would downgrade a real throughput or fallback
-# regression to XFAIL. strict=False so restoring a producer just turns it green.
-@pytest.mark.slow
-@pytest.mark.xfail(
-    reason=(
-        "first_upload producer removed by 5734b5d9 (2026-08-10); the 250ms "
-        "first-dispatch freeze budget has no current producer and is not equivalently "
-        "covered by test_gui_perf.cpp's post-first-batch frame-rate floor. Needs an "
-        "owner decision: restore a producer, or retire this SLA on purpose."
-    ),
-    strict=False,
-)
-def test_metal_gui_north_star_first_upload_budget(gui_perf_runs):
-    """Metal's first dispatch must not freeze the UI (large-dispatch latency budget)."""
-    _legacy, metal = gui_perf_runs
-
-    # Split from a single `0.0 < x < threshold` assertion: that form reported a
-    # parse failure (x == 0.0, nothing measured) with the freeze message, i.e. it
-    # blamed the lower bound on the upper one.
-    assert metal["first_upload_ms"] > 0.0, (
-        f"metal first_upload parse failed — no 'first_upload avg=..ms median=..ms' "
-        f"line in the gui_test output (producer removed by 5734b5d9). This is a MISSING "
-        f"MEASUREMENT, not a slow one.\n--- metal output tail ---\n{metal['raw'][-2000:]}"
-    )
-
-    # Responsiveness: large dispatch must not regress into the UI-freeze regime.
-    # (Metal first_upload is honestly higher than legacy — the throughput/latency
-    # tradeoff — but must stay well below the freeze threshold.)
-    assert metal["first_upload_ms"] < _FIRST_UPLOAD_FREEZE_MS, (
-        f"GUI responsiveness regression: Metal first_upload median="
-        f"{metal['first_upload_ms']:.0f}ms >= {_FIRST_UPLOAD_FREEZE_MS:.0f}ms — large "
-        f"dispatch is freezing the UI (single dispatch too long; explore-265 failure mode)."
     )

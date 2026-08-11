@@ -50,8 +50,8 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 
 | 目标 | 指标 | 来源 | 描述 |
 |------|------|------|------|
-| **响应性** | `first_upload`（ms） | GUI 性能测试 / 日志分析 | Commit → 首次纹理上传成功；越低越好 |
-| **渲染质量** | `upload_rays` 值 + CV | GUI 性能测试 / 日志分析 | 每次上传的光线数；绝对值越高、CV 越低越好 |
+| **响应性** | `first_upload`（ms） | 日志分析（`analyze_perf_log.py`） | Commit → 首次纹理上传成功；越低越好 |
+| **渲染质量** | `upload_rays` 值 + CV | 日志分析（`analyze_perf_log.py`） | 每次上传的光线数；绝对值越高、CV 越低越好 |
 
 **注意**：低 CV 不代表高质量——1K rays 配低 CV 仍然很差。绝对值和稳定性都重要。
 
@@ -460,7 +460,7 @@ legacy 的统计等价性由 slow-e2e parity harness 验证（`ds_corr ≥ 0.99`
 
 两个测试场景：
 - **steady_state**：2 秒累积——测量 rays/sec + 纹理 FPS
-- **slider_drag**：5 秒交替参数变化——测量 rays/sec + upload ratio + first_upload 延迟 + 每次上传光线数 CV
+- **slider_drag**：5 秒交替参数变化——测量 rays/sec、帧数、restart 次数与上传次数（first_upload 延迟与每次上传光线数 CV 来自日志分析，不由该场景产出）
 
 ### 诊断标志
 
