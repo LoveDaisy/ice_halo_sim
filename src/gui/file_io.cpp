@@ -2289,11 +2289,22 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             if (!jc.is_object()) {
               continue;
             }
+            // No colour is the neutral one — black and white both read as deliberate choices in a
+            // composite, and a class whose colour is undefined has no rendering meaning at all — so
+            // the class goes rather than getting one assigned. Core rejects the document outright
+            // (`j.at("color")`). Dropping the whole class, not just the field, is the same move the
+            // block above already makes for a filter and for a colour ref it cannot express.
+            if (!jc.contains("color") || !jc["color"].is_array() || jc["color"].size() != 3) {
+              const std::string msg = "raypath_color class " + std::to_string(ci) +
+                                      " states no usable \"color\" (three numbers); the class is dropped rather "
+                                      "than given one nobody chose (core rejects this document outright).";
+              GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+              SetImportComplexFilterWarning(msg);
+              continue;
+            }
             ColorClassConfig cls;
-            if (jc.contains("color") && jc["color"].is_array() && jc["color"].size() == 3) {
-              for (int k = 0; k < 3; k++) {
-                cls.color[k] = jc["color"][k].get<float>();
-              }
+            for (int k = 0; k < 3; k++) {
+              cls.color[k] = jc["color"][k].get<float>();
             }
             if (jc.contains("combine") && jc["combine"].is_string() && jc["combine"].get<std::string>() == "all") {
               cls.combine = LUMICE_COLOR_COMBINE_ALL;
@@ -2302,7 +2313,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             }
             cls.visible = jc.value("visible", ColorClassConfig{}.visible);
             cls.solo = jc.value("solo", ColorClassConfig{}.solo);
-            cls.z_order = static_cast<int>(ci);
+            // The DESTINATION's current length, not the source index `ci`: z_order has to be a
+            // compact permutation of [0, size) over the vector that actually holds the classes
+            // (CompactZOrder exists to repair holes), and the two counters part company the moment a
+            // class is dropped above. Where nothing is dropped they advance together, so this is the
+            // same number the source index used to give.
+            cls.z_order = static_cast<int>(state.raypath_color.size());
             if (jc.contains("match") && jc["match"].is_array()) {
               for (const auto& jr : jc["match"]) {
                 if (!jr.is_object()) {

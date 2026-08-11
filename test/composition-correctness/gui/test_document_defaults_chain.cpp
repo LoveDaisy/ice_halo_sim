@@ -201,9 +201,12 @@ constexpr const char* kCoreFilter = R"({"crystal":[{"id":1,"type":"prism"}],"fil
 constexpr const char* kCoreComplex = R"({"crystal":[{"id":1,"type":"prism"}],
         "filter":[{"id":1,"type":"raypath","raypath":[3,5]},{"id":2,"type":"complex","composition":[[1]]}],
         "scene":{"scattering":[{"entries":[{"crystal":1,"filter":2}]}]}})";
+// The class states a `color`, and has to, for the same reason every crystal above states a `type`:
+// a colourless class is refused outright rather than given a default colour, so the rows below would
+// have no `raypath_color.at(0)` to read a default off.
 constexpr const char* kCoreColor =
     R"({"crystal":[{"id":1,"type":"prism"}],"scene":{"scattering":[{"entries":[{"crystal":1}]}]},
-        "raypath_color":{"classes":[{"match":[{"crystal":1}]}]}})";
+        "raypath_color":{"classes":[{"color":[1,0,0],"match":[{"crystal":1}]}]}})";
 
 const MissingKeyCase kCoreJsonCases[] = {
   LUMICE_MISSING_KEY_ROW(R"({"scene":{}})", s.sim.max_hits, SimConfig{}.max_hits),
