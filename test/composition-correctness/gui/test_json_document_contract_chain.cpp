@@ -63,9 +63,36 @@ std::string UniformHeightDoc() {
 
 // A file that removes itself, so a failing assertion cannot leave the temp directory seeded for
 // the next run.
+//
+// Ownership is spelled out rather than left to the optimiser. The first version declared only the
+// destructor and returned a NAMED local from WriteTempFile below, which made correctness depend on
+// NRVO — an optional elision, not a guarantee. Where the compiler took it (clang/gcc) the file
+// survived; where it did not (MSVC) the source object was destroyed on return and deleted the
+// fixture before the case could read it, so seven cases failed on Windows alone with
+// `premise: the fixture was written`. Moving now transfers the duty and clears the source, so a
+// moved-from object's destructor is a no-op no matter what the compiler elides.
 struct TempFile {
   std::filesystem::path path;
+
+  TempFile() = default;
+  explicit TempFile(std::filesystem::path p) : path(std::move(p)) {}
+  TempFile(const TempFile&) = delete;
+  TempFile& operator=(const TempFile&) = delete;
+  TempFile(TempFile&& other) noexcept : path(std::move(other.path)) { other.path.clear(); }
+  TempFile& operator=(TempFile&& other) noexcept {
+    if (this != &other) {
+      std::error_code ec;
+      std::filesystem::remove(path, ec);
+      path = std::move(other.path);
+      other.path.clear();
+    }
+    return *this;
+  }
+
   ~TempFile() {
+    if (path.empty()) {
+      return;  // moved-from: the duty went with the path
+    }
     std::error_code ec;
     std::filesystem::remove(path, ec);  // best-effort: a teardown failure must not fail the case
   }
@@ -73,8 +100,10 @@ struct TempFile {
 
 TempFile WriteTempFile(const char* name, const std::string& text) {
   TempFile f{ std::filesystem::temp_directory_path() / name };
-  std::ofstream out(f.path, std::ios::binary);
-  out << text;
+  {
+    std::ofstream out(f.path, std::ios::binary);
+    out << text;
+  }  // closed before the handle leaves this scope, so the caller reads a flushed file
   return f;
 }
 
