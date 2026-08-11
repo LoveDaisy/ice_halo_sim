@@ -408,6 +408,17 @@ void RenderUnsavedPopup(GLFWwindow* window);
 // a fresh render matching the current config, then re-invoke Save.
 void RenderSaveModifiedPopup(GLFWwindow* window);
 void RenderImportWarningPopup();
+// What that modal has to say, and why it is not a generic "file exists, overwrite?": the file being
+// replaced may be a core config the GUI merely read, and what goes back is the GUI's own re-emission
+// of it — everything the GUI cannot express is gone from the copy on disk. "Overwrite?" asks about a
+// filename; the user has to be asked about the content.
+//
+// Named and declared here rather than written inline at the ImGui call so the wording is one thing
+// that can be asserted (ConfigJsonExportContractChain.TheOverwritePromptSaysWhatIsLost). That test
+// pins the sentence; the gui_test case pins that the modal renders at all. What neither can state is
+// the join — the renderer's single use of this constant is what makes it one proposition.
+extern const char* const kExportOverwriteWarningText;
+
 // Opens iff g_show_export_overwrite_confirm_popup is true. Must be called every frame, outside any
 // Begin/End block, like the other Render*Popup above it — an export that raised the prompt and
 // found nobody rendering it would sit pending forever, which is the same as losing the command.

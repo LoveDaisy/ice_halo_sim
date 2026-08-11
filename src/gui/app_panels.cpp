@@ -1351,15 +1351,16 @@ void RenderImportWarningPopup() {
   }
 }
 
+// See app.hpp for why this sentence is a named constant and what is asserted about it.
+const char* const kExportOverwriteWarningText =
+    "Exporting replaces it with what the GUI can express, so anything in it the GUI\n"
+    "cannot represent will be lost. Save as .lmc instead to keep this project\n"
+    "without touching that file.";
+
 // Export config JSON, onto a path that already holds a file. Same modal idiom as
 // RenderSaveModifiedPopup above (BeginPopupModal + explicit buttons, so Escape and click-outside
 // cannot dismiss it — see the note there for why that holds for every modal in this app), because
 // the same thing is being protected: a write the user cannot undo.
-//
-// What the wording has to say, and why it is not a generic "file exists, overwrite?": the file
-// being replaced may be a core config the GUI merely read, and what goes back is the GUI's own
-// re-emission of it — everything the GUI cannot express is gone from the copy on disk. "Overwrite?"
-// asks about a filename; the user needs to be asked about the content.
 void RenderExportOverwriteConfirmPopup() {
   if (g_show_export_overwrite_confirm_popup) {
     ImGui::OpenPopup("Overwrite Config File");
@@ -1370,9 +1371,7 @@ void RenderExportOverwriteConfirmPopup() {
     ImGui::TextUnformatted("A file already exists at:");
     ImGui::TextUnformatted(PathToU8(g_pending_export_json_path).c_str());
     ImGui::Separator();
-    ImGui::TextUnformatted("Exporting replaces it with what the GUI can express, so anything in it");
-    ImGui::TextUnformatted("the GUI cannot represent will be lost. Save as .lmc instead to keep");
-    ImGui::TextUnformatted("this project without touching that file.");
+    ImGui::TextUnformatted(kExportOverwriteWarningText);
     ImGui::Separator();
 
     if (ImGui::Button("Overwrite", ImVec2(120, 0))) {

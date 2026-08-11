@@ -241,6 +241,19 @@ TEST(ConfigJsonExportContractChain, ConfirmingWritesTheHeldDocumentAndClearsTheP
   EXPECT_TRUE(g_pending_export_json_content.empty());
 }
 
+// What the prompt says is the point of asking. "A file already exists — overwrite?" is a question
+// about a filename, and answering it yes is not the acknowledgement the ruling asks for: the user
+// has to be told that what goes back is only the part of that document the GUI can express. Pinned
+// because wording is exactly the kind of thing a later tidy-up shortens into a generic prompt, with
+// nothing failing.
+TEST(ConfigJsonExportContractChain, TheOverwritePromptSaysWhatIsLost) {
+  const std::string text = kExportOverwriteWarningText;
+  EXPECT_NE(text.find("lost"), std::string::npos) << "must say something is lost, got: " << text;
+  EXPECT_NE(text.find("cannot represent"), std::string::npos)
+      << "must say WHAT is lost — what the GUI cannot represent — not merely that a file changes: " << text;
+  EXPECT_NE(text.find(".lmc"), std::string::npos) << "must name the lossless alternative, got: " << text;
+}
+
 // Answering no leaves the document exactly as it was — the whole reason the prompt exists.
 TEST(ConfigJsonExportContractChain, CancellingLeavesTheExistingFileUntouched) {
   const TempFile target = WriteTempFile("lumice_export_contract_cancel.json", kExistingContent);
