@@ -74,13 +74,15 @@ Key source files:
 |--------|-------------|---------|
 | `Consume(SimData)` | `consumer_mutex_` | Accumulate one batch of ray data |
 | `PrepareSnapshot()` | `consumer_mutex_` | Freeze accumulated state into a **freshly borrowed** snapshot buffer |
-| `PostSnapshot()` | `snapshot_mutex_` | XYZ→sRGB into a freshly borrowed image buffer (CLI path) |
-| `GetResult()` | `snapshot_mutex_` | Return typed result (`RenderResult` / `StatsResult`) |
+| `PostSnapshot()` | `do_snapshot_mutex_` only | XYZ→sRGB into a freshly borrowed image buffer (CLI path) |
+| `GetResult()` | `do_snapshot_mutex_` only | Return typed result (`RenderResult` / `StatsResult`) |
 | `Reset()` | `consumer_mutex_` | Zero accumulators, preserve buffer allocations |
 
-All five are called from a snapshot pass that additionally holds
-`do_snapshot_mutex_`, except `Consume` (driven by `ServerImpl::ConsumeData`) and
-`Reset` (driven by `ServerImpl::CommitConfig`). See §4.1.
+`PrepareSnapshot`, `PostSnapshot` and `GetResult` are the three called from a
+snapshot pass, which holds `do_snapshot_mutex_` from entry to publish: Phase 1
+takes `consumer_mutex_` inside that scope, Phase 2 takes no lock of its own.
+`Consume` (driven by `ServerImpl::ConsumeData`) and `Reset` (driven by
+`ServerImpl::CommitConfig`) are not part of the pass. See §4.1.
 
 One `RenderConsumer` method is deliberately **not** on the interface and is called
 under **no lock at all**: `CountEffectivePixels()`, in Phase 1.5 (§4.2).
@@ -183,22 +185,22 @@ State flags:
 
 ## §4 Thread Safety Model
 
-### §4.1 Three-Lock Design
+### §4.1 Two-Lock Design
 
 | Lock | Type | Guards | Writer thread | Reader thread |
 |------|------|--------|---------------|---------------|
 | `do_snapshot_mutex_` | `std::mutex` | A whole snapshot pass (Phase 1 → Phase 2 → publish) | — | Every caller of `ServerImpl::DoSnapshot` |
 | `consumer_mutex_` | `TicketMutex` (FIFO) | `consumers_` list, all consumer mutable state (`internal_xyz_`, `total_intensity_`, the color-class lanes), plus `snapshot_dirty_` / `has_ever_consumed_` / `snapshot_generation_` / `active_class_table_` / `active_composite_mode_` / `display_ev_total_` | `ConsumeData` thread (high frequency) | `AcquireResultFrame` (low frequency); `CommitConfig` caller (rebuild/reset); `GetLiveSimRayCount`; `GetColorClassSignals` |
-| `snapshot_mutex_` | `std::mutex` | Phase 2's assembly of the new `ResultFrame` (`PostSnapshot` + `GetResult` + storage anchors + composites) | `DoSnapshot` Phase 2 | — |
 
-**Lock ordering (invariant)**: `do_snapshot_mutex_` is the **outermost** of the
-three. It is always taken *before* `consumer_mutex_` / `snapshot_mutex_` and never
-while either is held. `ServerImpl::DoSnapshot` is its only acquisition site, and
-there the two inner scopes do not nest: Phase 1's `consumer_mutex_` scope closes
-before Phase 2's `snapshot_mutex_` scope opens.
+**Lock ordering (invariant)**: `do_snapshot_mutex_` is the **outer** of the two.
+It is always taken *before* `consumer_mutex_` and never while that one is held.
+`ServerImpl::DoSnapshot` is its only acquisition site, and there Phase 1's
+`consumer_mutex_` scope closes before Phase 2 starts — Phase 2 assembles the new
+`ResultFrame` (`PostSnapshot` + `GetResult` + storage anchors + composites) under
+the outer lock alone, with no second lock of its own.
 
-**Why a third lock exists**: Phase 1 and Phase 2 take *different* locks, so two
-`DoSnapshot` calls could interleave — one thread's `PrepareSnapshot()` running
+**Why the outer lock exists**: only Phase 1 takes a lock of its own, so without it
+two `DoSnapshot` calls could interleave — one thread's `PrepareSnapshot()` running
 while another was still reading the same consumer's snapshot lanes in Phase 2.
 That was already a torn-frame source; once Phase 1 began *re-pointing* the
 consumer's buffer members (see `FrameBufferPool`, §4.3) it would be a
@@ -238,7 +240,7 @@ Phase 1  (consumer_mutex_ held):
 Phase 1.5 (NO lock held):
   CountEffectivePixels()                    ← O(W×H) scan of snapshot_xyz_
 
-Phase 2  (snapshot_mutex_ held):
+Phase 2  (no lock of its own — still inside do_snapshot_mutex_):
   frame = new ResultFrame                   ← assembled, never a cache overwrite
   PostSnapshot() for each consumer          ← XYZ→sRGB (CLI path)
   GetResult()  → frame->render_results_ / frame->stats_result_
