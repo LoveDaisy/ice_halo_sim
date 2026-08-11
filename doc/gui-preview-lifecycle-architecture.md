@@ -205,9 +205,11 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 此时 `MarkStructHardDirty` 抬到**旧** `committed_epoch` 的 floor 恰好拦不住（新号 > 旧 floor），
 > 于是"新一代还没出图就先把上一代的图当本代成果推上屏"，把 floor 这道围栏原地架空。
 >
-> 注意与 `ServerImpl::GetRawXyzAndCompositeResults` 处那句「锁下序列化，不会出现 new epoch with
-> stale data 的 tear」**不是同一件事**：那句说的是同一次读取内不会读到半更新的配对。此处两个值
-> **各自完整自洽**，错的是配对本身——**无 tear ≠ 无陈旧**。
+> 注意与「同一次读取内不会读到半更新的配对」**不是同一件事**。那条保证今天由不可变结果帧承担：
+> 一帧由一趟快照整体组装后发布，故同一帧上的任意两次读天然同世代（v4.15 之前它由
+> `ServerImpl::GetRawXyzAndCompositeResults` 的锁下序列化提供，那个配对 getter 已随帧模型一起删除
+> ——机制换了，这里要说的区别没变）。此处两个值**各自完整自洽**，错的是配对本身——
+> **无 tear ≠ 无陈旧**。
 >
 > 修复落点：`PollOnce()` 在质量闸的两条 bypass（超时兜底、终帧救援）**之后**追加一道内容世代闸，
 > 只在「内容确属当前世代」时才允许物化 payload。判据不是裸 `has_valid_data`：它镜像
@@ -219,7 +221,8 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 > 置于两条 bypass 之后是刻意的：兜底救「产出中但太稀疏」、终帧救「结束在门槛之下」，
 > 都不构成发布别代像素的许可。I6 实质不受影响——COMPLETED 由 `has_ever_consumed_` 派生，
 > 终帧必然满足第一个析取项。染色通道自动同覆盖：`PopulateCompositePayload` 就在同一个
-> `if (quality_ok)` 块内，且 `cached_composite_results_` 同样不随 `Stop()` 清除。
+> `if (quality_ok)` 块内，且合成结果同样不随 `Stop()` 清除——它与像素同住那份已发布的结果帧，
+> 而 `Stop()` 不撤回该帧（见 `doc/accumulator-consumer-architecture.md` §3.1）。
 >
 > **主动接受的窄缺口**：某一代若产出了数据、又在 poller 从未 poll 过的间隙里被 Stop，则没有任何
 > payload 记录过该代 epoch，其画面会被抑制、屏幕停在上一帧。闭掉它需要**服务端**戳出

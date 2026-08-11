@@ -91,11 +91,15 @@ struct PreviewSnapshot {
   LUMICE_RayCount stats_orientation_num = 0;
   // The lifecycle epoch the four stats fields above were actually produced under. Symmetric to
   // TexturePayload::payload_epoch: it may LAG the bundle epoch when the stats are carried forward
-  // across a restart, and that lag is exactly the signal the consumer needs. The server's cached
-  // stats survive a restart (ServerImpl::Stop clears the dirty/consumed flags but not
-  // cached_stats_result_) while the bundle epoch advances immediately, so without this stamp a
-  // carried-forward value is indistinguishable from a freshly produced one and the previous run's
-  // ray/crystal/sampling counts reappear on the status bar. Consumed via ShouldApplyStats.
+  // across a restart, and that lag is exactly the signal the consumer needs. The carrying
+  // mechanism has changed since this was written — the server no longer keeps a mutable stats
+  // cache, it publishes an immutable result frame — but the conclusion has not: ServerImpl::Stop
+  // clears the dirty/consumed flags and leaves the published frame alone, and only a completed
+  // snapshot pass ever replaces that frame, so the previous run's stats stay readable until the
+  // new run produces its first batch (doc/accumulator-consumer-architecture.md §3.1). The bundle
+  // epoch advances immediately, so without this stamp a carried-forward value is
+  // indistinguishable from a freshly produced one and the previous run's ray/crystal/sampling
+  // counts reappear on the status bar. Consumed via ShouldApplyStats.
   unsigned long long stats_epoch = 0;
   // Display payload: shared, immutable. Null / carried-forward on sparse / gate-rejected /
   // invalidated polls.
