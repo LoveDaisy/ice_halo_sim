@@ -624,6 +624,10 @@ TEST(SceneCommitChain, AFilterReadFromAFileWithNoPredicateInItCommitsAsNoFilter)
     { "legacy filter with no raypath_text", R"({"type": "raypath", "action": "filter_out"})" },
     { "filter object with nothing in it", R"({"action": "filter_out"})" },
     { "removed direction filter", R"({"type": "direction", "action": "filter_out", "az": 30.0, "el": 15.0})" },
+    // Same γ-class question as the raypath row above, on the entry_exit arm instead:
+    // FromLegacyEntryExit used to build the single-row match-all shape even when
+    // entry_text/exit_text/length were all absent.
+    { "legacy entry_exit filter naming neither face nor length", R"({"type": "entry_exit", "action": "filter_out"})" },
   };
 
   // The baseline this is compared against: the same document with no `filter` key on the entry.

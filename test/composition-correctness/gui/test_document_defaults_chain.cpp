@@ -71,7 +71,12 @@ constexpr const char* kCrystal = R"({"layers":[{"entries":[{"crystal":{}}]}]})";
 // `s.filters.at(0)` for the rows below to read a default off. That disposition is a row of its own
 // (kEmptyFilter, in the test body) rather than a silent property of this constant.
 constexpr const char* kFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"raypath_text":"3-5"}}]}]})";
-constexpr const char* kEeFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})";
+// entry_text carries a real value: an entry_exit filter naming neither face nor length is now the
+// wildcard shape (FromLegacyEntryExit) and does not become a filter in the pool at all — that
+// disposition is its own row below (kEmptyEeFilter, in the test body), same as kEmptyFilter for the
+// raypath arm above it.
+constexpr const char* kEeFilter =
+    R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit","entry_text":"2"}}]}]})";
 
 const MissingKeyCase kGuiNativeCases[] = {
   // -- root-level GuiState fields; the parent object is the document root, always present --
@@ -159,8 +164,10 @@ const MissingKeyCase kGuiNativeCases[] = {
   // Guard row, deliberately first of the EE group: EntryExitParamsValue() asserts on the wrong
   // variant arm, so a `type` that stopped selecting the EE arm would otherwise surface as a
   // bad_variant_access rather than as the plain statement that the arm is wrong.
+  // entry_text itself is not tested for its own missing-key default here (mirrors kFilter/raypath_text
+  // above it): entry_text is kEeFilter's anchor predicate, so its absence is the kEmptyEeFilter row
+  // in the test body instead, not a "missing key takes the struct default" statement.
   LUMICE_MISSING_KEY_ROW(kEeFilter, s.filters.at(0).IsEntryExit(), true),
-  LUMICE_MISSING_KEY_ROW(kEeFilter, s.filters.at(0).EntryExitParamsValue().entry_text, EntryExitParams{}.entry_text),
   LUMICE_MISSING_KEY_ROW(kEeFilter, s.filters.at(0).EntryExitParamsValue().exit_text, EntryExitParams{}.exit_text),
   LUMICE_MISSING_KEY_ROW(kEeFilter, s.filters.at(0).EntryExitParamsValue().length_mode, EntryExitParams{}.length_mode),
   LUMICE_MISSING_KEY_ROW(kEeFilter, s.filters.at(0).EntryExitParamsValue().min_len, EntryExitParams{}.min_len),
@@ -247,6 +254,18 @@ TEST(DocumentDefaultsChain, GuiNativeAbsentKeyTakesTheOwningStructDefault) {
   ASSERT_TRUE(DeserializeGuiStateJson(kEmptyFilter, empty_filter)) << kEmptyFilter;
   EXPECT_TRUE(empty_filter.filters.empty()) << "an empty filter object became a filter in the pool";
   EXPECT_FALSE(empty_filter.layers.at(0).entries.at(0).filter_id.has_value())
+      << "the entry was given a filter the document did not describe";
+
+  // Symmetric with kEmptyFilter above, but for the entry_exit legacy arm: a `type":"entry_exit"`
+  // filter naming neither face nor length is the wildcard shape, and
+  // FromLegacyEntryExit now answers it the same way FromLegacyRaypath answers an empty
+  // raypath_text — no filter enters the pool for it.
+  constexpr const char* kEmptyEeFilter = R"({"layers":[{"entries":[{"crystal":{},"filter":{"type":"entry_exit"}}]}]})";
+  GuiState empty_ee_filter;
+  ASSERT_TRUE(DeserializeGuiStateJson(kEmptyEeFilter, empty_ee_filter)) << kEmptyEeFilter;
+  EXPECT_TRUE(empty_ee_filter.filters.empty())
+      << "an entry_exit filter naming neither face nor length became a filter in the pool";
+  EXPECT_FALSE(empty_ee_filter.layers.at(0).entries.at(0).filter_id.has_value())
       << "the entry was given a filter the document did not describe";
 }
 

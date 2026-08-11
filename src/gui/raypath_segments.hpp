@@ -793,8 +793,20 @@ inline SumOfProducts FromLegacyRaypath(const RaypathParams& rp) {
 // Wrap an EntryExitParams into a single-row SoP. The comma-list multi-value OR
 // semantics inside entry_text / exit_text are preserved as-is (cartesian
 // expansion into multiple core simple filters is 333.3's job, not this task).
+//
+// entry_text empty + exit_text empty + no length constraint is the wildcard shape — it names no
+// face on either end and no length bound, i.e. no predicate at all — and gets the same empty-SoP
+// answer FromLegacyRaypath gives an empty raypath_text above: zero rows is "no filter" in the
+// type's own vocabulary, which NoFilterIfNoPredicate (file_io.cpp) reads as "drop the filter". It
+// used to construct the single-row match-all shape unconditionally; a legacy `.lmc` whose
+// entry_exit filter named neither face nor length came back as a filter matching everything, and
+// under filter_out that excluded every ray. A length constraint alone (length_mode != 0) is still
+// a real predicate and keeps the single-row form.
 inline SumOfProducts FromLegacyEntryExit(const EntryExitParams& ep) {
   SumOfProducts out;
+  if (ep.entry_text.empty() && ep.exit_text.empty() && ep.length_mode == 0) {
+    return out;
+  }
   std::string text = FormatEntryExitFactorText(ep);
   out.push_back(SummandText{ std::move(text), std::vector<Factor>{ Factor{ ep } } });
   return out;

@@ -204,6 +204,18 @@ TEST(FilterSopAc1, FromLegacyEntryExitIsSingleRowAllModes) {
   }
 }
 
+// A wildcard EE (no entry, no exit, no length constraint) states no predicate at all, and
+// FromLegacyEntryExit now answers that the same way FromLegacyRaypath answers an empty
+// raypath_text above ("" -> {} case): zero rows, which is "no filter" in the type's own
+// vocabulary. It used to produce the single-row match-all shape unconditionally — a legacy .lmc's
+// entry_exit filter naming neither face nor length came back as a filter matching everything, and
+// under filter_out that excluded every ray.
+TEST(FilterSopAc1, FromLegacyEntryExitIsEmptyWhenNothingIsStated) {
+  EXPECT_TRUE(FromLegacyEntryExit(Ee("")).empty());
+  // A length constraint alone is still a real predicate, not the wildcard shape.
+  EXPECT_FALSE(FromLegacyEntryExit(Ee("", "", /*mode=*/1, /*min_len=*/2, /*max_len=*/2)).empty());
+}
+
 // ===========================================================================
 // AC2 — operator== sensitivity (AS-DESIGNED semantics)
 // ===========================================================================
