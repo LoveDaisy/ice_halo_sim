@@ -178,6 +178,120 @@ TEST(JsonImportContractChain, AJsonImportDoesNotInheritAnEarlierReadsDowngrade) 
 }
 
 // ---------------------------------------------------------------------------------------------
+// (4) The other half of the same import contract: a document core would REJECT outright.
+//
+// The three cases above are about a document core accepts and the GUI cannot hold as written — a
+// capability downgrade. These are the opposite shape: a field core requires (`.at(key)`, which
+// throws) that the document does not carry at all. The GUI used to read every one of them with
+// `.value(key, default)`, which cannot tell "absent" from "present and equal to the default", so a
+// malformed document opened as a silently invented one.
+//
+// The disposition is per-field, and it is not uniformly "drop it": where the missing field is a
+// discriminant selecting how the REST of the unit is read, or where no value of its type is the
+// neutral one, the unit it belongs to is dropped rather than guessed. Where the field lives in a
+// singleton scope with no collection to drop from, the value stays as it was and only the silence
+// ends. Either way the report goes out through the channel the import already had.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// A crystal object the caller shapes, wired into an otherwise complete document with a single
+// scattering entry referencing crystal id 1. `%s` is the whole crystal object.
+std::string DocWithCrystals(const std::string& crystals_json) {
+  return std::string(R"({
+    "crystal": )") +
+         crystals_json + R"(,
+    "filter": [],
+    "scene": {"light_source": {"type": "sun", "altitude": 20, "spectrum": "D65"},
+              "ray_num": 1000, "max_hits": 8,
+              "scattering": [{"prob": 1.0, "entries": [{"crystal": 0, "proportion": 1.0}]}]},
+    "render": [{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64]}]
+  })";
+}
+
+}  // namespace
+
+// D-1, the case the ruling puts in its own severity band: `id` is the key of the map crystals are
+// collected into, so an absent one is not a guessed value, it is a collision. Two crystals that both
+// omit `id` both land on key 0 and the second silently destroys the first — an existing crystal the
+// document DID state is gone, and a later Save-As freezes the loss.
+//
+// The two crystals are made distinguishable by height on purpose: the surviving slot's height is
+// what says WHICH of the two won, and the assertion that it is neither of them is what says the
+// question no longer has an answer because neither was accepted.
+TEST(JsonImportContractChain, TwoCrystalsMissingIdDoNotSilentlyCollide) {
+  const std::string doc = DocWithCrystals(R"([
+    {"type": "prism", "shape": {"height": 2.0, "face_distance": [1, 1, 1, 1, 1, 1]}},
+    {"type": "prism", "shape": {"height": 5.0, "face_distance": [1, 1, 1, 1, 1, 1]}}
+  ])");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch)) << "the document still loads; only the two crystals are refused";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "two crystals collided on one map key and the user was told nothing";
+  EXPECT_NE(warning.find("id"), std::string::npos) << "must name the field that was missing, got: " << warning;
+
+  ASSERT_EQ(scratch.crystals.size(), 1u) << "the entry's fallback slot, and nothing else";
+  const float center = scratch.crystals.at(0).height.center;
+  EXPECT_FLOAT_EQ(center, CrystalConfig{}.height.center)
+      << "the surviving crystal is one of the two the document wrote (height " << center
+      << "), so one of them was silently overwritten by the other";
+  ClearImportComplexFilterWarning();
+}
+
+// D-2: `type` is the discriminant — it decides whether `shape.*` is read as a prism's keys or a
+// pyramid's. Reading it with a default picks one of the two geometries on the user's behalf, and
+// "prism" is not the neutral answer, it is a specific crystal.
+TEST(JsonImportContractChain, AJsonCrystalMissingTypeIsDroppedNotAssumedPrism) {
+  const std::string doc = DocWithCrystals(R"([
+    {"id": 0, "shape": {"height": 5.0, "face_distance": [1, 1, 1, 1, 1, 1]}}
+  ])");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "a crystal with no `type` was assumed to be a prism, silently";
+  EXPECT_NE(warning.find("type"), std::string::npos) << "must name the field that was missing, got: " << warning;
+
+  ASSERT_EQ(scratch.crystals.size(), 1u);
+  EXPECT_FLOAT_EQ(scratch.crystals.at(0).height.center, CrystalConfig{}.height.center)
+      << "the refused crystal was loaded anyway, as a prism nobody asked for";
+  ClearImportComplexFilterWarning();
+}
+
+// The same refusal, reached through the OTHER caller of the shared crystal parse: the GUI-native
+// .lmc v2 form inlines its crystal in the entry and carries no `id`, so D-1 does not apply there —
+// but D-2 does, and it arrives by inheriting the shared function's new return type rather than by a
+// second edit. That inheritance is exactly the kind of path that gets assumed rather than checked,
+// which is why it is pinned here: the refusal must land on the same default slot an entry with no
+// inline crystal at all gets, not on a half-built one.
+TEST(JsonImportContractChain, ALmcInlineCrystalMissingTypeFallsBackToADefaultSlot) {
+  const std::string lmc = R"({
+    "layers": [{"prob": 1.0, "entries": [
+      {"crystal": {"shape": {"height": 5.0, "face_distance": [1, 1, 1, 1, 1, 1]}}, "proportion": 1.0}
+    ]}]
+  })";
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeGuiStateJson(lmc, scratch));
+
+  ASSERT_EQ(scratch.layers.size(), 1u);
+  ASSERT_EQ(scratch.layers.at(0).entries.size(), 1u);
+  ASSERT_EQ(scratch.crystals.size(), 1u) << "the entry still needs a valid pool slot to point at";
+  EXPECT_EQ(scratch.layers.at(0).entries.at(0).crystal_id, 0);
+  EXPECT_FLOAT_EQ(scratch.crystals.at(0).height.center, CrystalConfig{}.height.center)
+      << "the inline crystal was accepted as a prism instead of refused";
+  EXPECT_NE(PeekImportComplexFilterWarning().find("type"), std::string::npos)
+      << "got: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
+// ---------------------------------------------------------------------------------------------
 // The export half of the same contract: what the GUI is allowed to write over.
 //
 // Import degrades in memory; export is where that degraded copy can reach the disk. The four cases
