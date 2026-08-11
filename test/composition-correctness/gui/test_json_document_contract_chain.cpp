@@ -291,6 +291,65 @@ TEST(JsonImportContractChain, ALmcInlineCrystalMissingTypeFallsBackToADefaultSlo
   ClearImportComplexFilterWarning();
 }
 
+// D-5: a shape scalar written as a distribution object with no `type`. Core requires it there
+// (Distribution::from_json), and the axis half of that same core rule is already reported by
+// ParseAxisDist — the shape half sat silent in the same file, which is the shape of "fixed one of
+// the two places" this case exists to close.
+//
+// The disposition here is NOT the refusal the crystal keys above get: `type` on a distribution is a
+// field of ShapeDist with a documented default, and the ruling puts this one on the same footing as
+// its axis twin — load at that default, and say so. What changes is only the silence.
+TEST(JsonImportContractChain, AJsonShapeDistMissingTypeLoadsAtNoRandomAndWarns) {
+  const std::string doc = DocWithCrystals(R"([
+    {"id": 0, "type": "prism",
+     "shape": {"height": 2.0, "face_distance": [{"mean": 2.0, "std": 0.1}, 1, 1, 1, 1, 1]}}
+  ])");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+  ASSERT_EQ(scratch.crystals.size(), 1u) << "premise: the crystal itself was accepted";
+
+  const ShapeDist& fd0 = scratch.crystals.at(0).face_distance[0];
+  EXPECT_EQ(fd0.type, ShapeDist{}.type) << "the value loads at the owning struct's default, unchanged by this fix";
+  EXPECT_FLOAT_EQ(fd0.center, 2.0f) << "the `mean` the document did state must survive";
+
+  const std::string warning = PeekImportComplexFilterWarning();
+  EXPECT_FALSE(warning.empty()) << "the shape half of the rule stayed silent while the axis half reports";
+  EXPECT_NE(warning.find("type"), std::string::npos) << "must name the field that was missing, got: " << warning;
+  EXPECT_NE(warning.find("face_distance"), std::string::npos)
+      << "must name WHICH slot was rewritten, the way the axis twin does, got: " << warning;
+  ClearImportComplexFilterWarning();
+}
+
+// The one shape scalar deliberately left out of the rule above, and the contrast is the point: on
+// the core side `prism_h` is still a hard requirement whose disposition is being settled there, so
+// changing what the GUI makes of a typeless `prism_h` object now would move a value core has not
+// finished defining. It keeps today's answer, silently, until that lands.
+//
+// Asserted as a negative rather than trusted: the exception lives in one boolean argument at one
+// call site, which is exactly the kind of thing that gets flipped by a later tidy-up with nothing
+// failing.
+TEST(JsonImportContractChain, AJsonPrismHMissingTypeStaysSilentUnlikeOtherShapeDists) {
+  const std::string doc = DocWithCrystals(R"([
+    {"id": 0, "type": "pyramid",
+     "shape": {"prism_h": {"mean": 2.0, "std": 0.1}, "face_distance": [1, 1, 1, 1, 1, 1]}}
+  ])");
+
+  ClearImportComplexFilterWarning();
+  GuiState scratch;
+  ASSERT_TRUE(DeserializeFromJson(doc, scratch));
+  ASSERT_EQ(scratch.crystals.size(), 1u) << "premise: the crystal itself was accepted";
+
+  const ShapeDist& prism_h = scratch.crystals.at(0).prism_h;
+  EXPECT_EQ(prism_h.type, ShapeDist{}.type) << "the value it loads at is unchanged from before this fix";
+  EXPECT_FLOAT_EQ(prism_h.center, 2.0f);
+
+  EXPECT_EQ(PeekImportComplexFilterWarning().find("prism_h"), std::string::npos)
+      << "prism_h is held out of the rule until core settles it; got: " << PeekImportComplexFilterWarning();
+  ClearImportComplexFilterWarning();
+}
+
 // ---------------------------------------------------------------------------------------------
 // The export half of the same contract: what the GUI is allowed to write over.
 //
