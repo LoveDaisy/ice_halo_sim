@@ -375,18 +375,11 @@ def _assert_parity(config_name: str, cm: float, pm: float, cc: float, pc: float)
     assert pc >= _T_PSNR_DB, f"{config_name} Axis B render PSNR {pc:.2f} dB < {_T_PSNR_DB}"
 
 
-# --- Single MS, no filter -------------------------------------------------- #
-
-@pytest.mark.slow
-@pytest.mark.heavy  # single-MS parity covered per-PR by device_gen metal; demote to local/nightly
-def test_parity_single_ms_no_filter():
-    # Role: backend-equivalence oracle (Metal + cpu_backend vs legacy CPU).
-    # dual_fisheye_ref here is a parity baseline, NOT a device-gen gate —
-    # see test_device_gen_default_path.py for the orthogonal gen-switch axis.
-    cm, pm, cc, pc = _parity_axes("dual_fisheye_ref")
-    print(f"[parity] dual_fisheye_ref: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
-    _assert_parity("dual_fisheye_ref", cm, pm, cc, pc)
-
+# Deleted 2026-08-11 with the `heavy` marker itself: test_parity_single_ms_no_filter
+# (dual_fisheye_ref). `heavy` named a "run locally/nightly" cadence this repo never
+# had, so nothing ran it, and its own comment said why that was tolerable — single-MS
+# Metal parity runs per-PR in test_device_gen_default_path.py on the same scene.
+# Its _RAW_THRESHOLDS row stays: _projection_battery.py derives its floor from it.
 
 # --- Single MS + filter ---------------------------------------------------- #
 
@@ -422,31 +415,11 @@ def test_parity_multi_ms_prob08_filter():
     _assert_metal_self_consistency("ms_multi_crystal_filtered", metal, legacy)
 
 
-# --- Multi MS prob=0.5, no filter ----------------------------------------- #
-
-@pytest.mark.slow
-@pytest.mark.heavy  # prob-value variant of prob08 (same code path); demote to local/nightly
-def test_parity_multi_ms_prob05():
-    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_ms_prob05")
-    print(f"[parity] parity_ms_prob05: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
-    _assert_parity("parity_ms_prob05", cm, pm, cc, pc)
-    # 267.4 matrix hardening: extend energy+self gates to the prob05 variant.
-    _assert_energy_conservation("parity_ms_prob05", metal, legacy)
-    _assert_metal_self_consistency("parity_ms_prob05", metal, legacy)
-
-
-# --- Multi MS prob=0.5 + filter ------------------------------------------- #
-
-@pytest.mark.slow
-@pytest.mark.heavy  # prob-value variant of prob08_filter (same code path); demote to local/nightly
-def test_parity_multi_ms_prob05_filter():
-    (legacy, metal, _cpu), (cm, pm, cc, pc) = _run_parity("parity_ms_prob05_filter")
-    print(f"[parity] parity_ms_prob05_filter: metal ds={cm:.4f} psnr={pm:.2f}dB | cpu_backend ds={cc:.4f} psnr={pc:.2f}dB")
-    _assert_parity("parity_ms_prob05_filter", cm, pm, cc, pc)
-    # 267.4 matrix hardening: extend energy+self gates to the prob05_filter variant.
-    _assert_energy_conservation("parity_ms_prob05_filter", metal, legacy)
-    _assert_metal_self_consistency("parity_ms_prob05_filter", metal, legacy)
-
+# Deleted 2026-08-11, same reason: test_parity_multi_ms_prob05 (parity_ms_prob05) and
+# test_parity_multi_ms_prob05_filter (parity_ms_prob05_filter) were `heavy`, and each
+# was — by its own comment — a prob-VALUE variant of the prob08 test right above, same
+# code path and same four assertions, which does run per-PR. Their _RAW_THRESHOLDS rows
+# and config files stay (test_metal_batch_invariance / test_cuda_filter_parity use them).
 
 # --- Single MS + BD filter (267.4 matrix extension) ----------------------- #
 # DISCOVERY (267.4 Step 5 calibration, 2026-06-14): both single-MS and multi-MS

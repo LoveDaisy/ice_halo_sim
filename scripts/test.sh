@@ -281,8 +281,8 @@ layer_fast_e2e() {
 # Phase 2 runs even if phase 1 failed (same no-fail-fast reasoning as the layers).
 layer_slow_e2e_cmd() {
   local rc1=0 rc2=0
-  pytest --ignore=test/performance -n 3 -m "slow and not heavy" || rc1=$?
-  pytest test/performance -m "slow and not heavy" || rc2=$?
+  pytest --ignore=test/performance -n 3 -m slow || rc1=$?
+  pytest test/performance -m slow || rc2=$?
   [[ ${rc1} -eq 0 ]] || return ${rc1}
   return ${rc2}
 }

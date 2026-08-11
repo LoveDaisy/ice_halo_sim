@@ -32,8 +32,9 @@ use_metal_backend so DoRun reconstructs into the single-engine Metal topology
 N-worker server. Baseline is legacy CPU (the GUI's real path); NEVER cpu_backend.
 
 Correctness is NOT re-tested here — it is already gated by the raw-XYZ parity
-matrix (test_metal_exit_seam_parity, 10/10) and the lens_proj PSNR references. G4
-owns the GUI-regime throughput + responsiveness legs.
+matrix (test_metal_exit_seam_parity) and the lens_proj PSNR references. G4 owns
+the GUI-regime throughput leg; its responsiveness leg is currently xfail'd for
+want of a producer (see the note above test_metal_gui_north_star_first_upload_budget).
 
 @pytest.mark.slow — needs the GUI test binary + a display/GL context; Darwin-only
 (Metal). Skips gracefully when the binary is absent or no display is available.
@@ -154,9 +155,16 @@ def _run_gui_perf(config_path: str, metal: bool) -> dict:
     }
 
 
-@pytest.mark.slow
-def test_metal_gui_north_star():
-    """Metal single-engine beats legacy in the real GUI regime + stays responsive."""
+@pytest.fixture(scope="module")
+def gui_perf_runs():
+    """Run the legacy + Metal GUI perf pair ONCE for every test in this module.
+
+    Module scope, not the default function scope: this is two full gui_test perf
+    runs on the heavy scene, and the tests below assert on different legs of the
+    SAME measurement, so re-running per test would double the cost for no signal.
+    (Caveat: a module fixture is per-PROCESS, so the `-n 3` xdist slow leg may
+    still run the pair once per worker. Serial runs execute it once.)
+    """
     if not (_GUI_BIN.is_file() and os.access(_GUI_BIN, os.X_OK)):
         pytest.skip(f"GUI test binary not found at {_GUI_BIN}; build with ./scripts/build.sh -gtj release")
 
@@ -168,6 +176,13 @@ def test_metal_gui_north_star():
         metal = _run_gui_perf(cfg, metal=True)
         if metal["no_display"]:
             pytest.skip("No display / GL context available for the GUI test binary")
+    return legacy, metal
+
+
+@pytest.mark.slow
+def test_metal_gui_north_star(gui_perf_runs):
+    """Metal single-engine beats legacy in the real GUI regime."""
+    legacy, metal = gui_perf_runs
 
     assert not metal["fell_back"], (
         "Metal fell back to legacy CPU in the GUI path — backend requested but did "
@@ -180,9 +195,7 @@ def test_metal_gui_north_star():
     print(
         f"[gui-north-star] {_HEAVY_CONFIG}: legacy_steady={legacy['steady_rps']:.0f} "
         f"metal_steady={metal['steady_rps']:.0f} ratio={ratio:.3f} "
-        f"(sanity>={_SANITY_FLOOR}, gate>={_GATE}); "
-        f"metal first_upload median={metal['first_upload_ms']:.0f}ms "
-        f"(freeze threshold {_FIRST_UPLOAD_FREEZE_MS:.0f}ms)"
+        f"(sanity>={_SANITY_FLOOR}, gate>={_GATE})"
     )
 
     # Sanity: catches the reconstruct-stall regression (ctor backend propagation)
@@ -199,10 +212,46 @@ def test_metal_gui_north_star():
         f"beats legacy CPU end-to-end in the GUI live-preview regime (scrum-268 §5)."
     )
 
+
+# --- Responsiveness leg: first-dispatch freeze budget ----------------------------
+# xfail'd since 2026-08-11: NO PRODUCER. The `first_upload avg=..ms median=..ms` line
+# this parses came from the old responsiveness perf scenarios, which 5734b5d9
+# (2026-08-10) rewrote; nothing emits it today, so _RE_FIRST_UPLOAD never matches and
+# first_upload_ms stays at its 0.0 default — the budget is unsatisfiable, not slow.
+# Not deleted, because the invariant has no replacement: test_gui_perf.cpp gates the
+# frame rate of the 2s window AFTER WaitForFirstBatch and caps that wait at 10s, so a
+# first dispatch between 250ms and 10s — the freeze regime this was calibrated for —
+# is caught by neither. Deleting would retire a 250ms SLA as a side effect.
+# A SEPARATE function, not an xfail on the north-star test, because a function-level
+# xfail absorbs every failure in it and would downgrade a real throughput or fallback
+# regression to XFAIL. strict=False so restoring a producer just turns it green.
+@pytest.mark.slow
+@pytest.mark.xfail(
+    reason=(
+        "first_upload producer removed by 5734b5d9 (2026-08-10); the 250ms "
+        "first-dispatch freeze budget has no current producer and is not equivalently "
+        "covered by test_gui_perf.cpp's post-first-batch frame-rate floor. Needs an "
+        "owner decision: restore a producer, or retire this SLA on purpose."
+    ),
+    strict=False,
+)
+def test_metal_gui_north_star_first_upload_budget(gui_perf_runs):
+    """Metal's first dispatch must not freeze the UI (large-dispatch latency budget)."""
+    _legacy, metal = gui_perf_runs
+
+    # Split from a single `0.0 < x < threshold` assertion: that form reported a
+    # parse failure (x == 0.0, nothing measured) with the freeze message, i.e. it
+    # blamed the lower bound on the upper one.
+    assert metal["first_upload_ms"] > 0.0, (
+        f"metal first_upload parse failed — no 'first_upload avg=..ms median=..ms' "
+        f"line in the gui_test output (producer removed by 5734b5d9). This is a MISSING "
+        f"MEASUREMENT, not a slow one.\n--- metal output tail ---\n{metal['raw'][-2000:]}"
+    )
+
     # Responsiveness: large dispatch must not regress into the UI-freeze regime.
     # (Metal first_upload is honestly higher than legacy — the throughput/latency
     # tradeoff — but must stay well below the freeze threshold.)
-    assert 0.0 < metal["first_upload_ms"] < _FIRST_UPLOAD_FREEZE_MS, (
+    assert metal["first_upload_ms"] < _FIRST_UPLOAD_FREEZE_MS, (
         f"GUI responsiveness regression: Metal first_upload median="
         f"{metal['first_upload_ms']:.0f}ms >= {_FIRST_UPLOAD_FREEZE_MS:.0f}ms — large "
         f"dispatch is freezing the UI (single dispatch too long; explore-265 failure mode)."
