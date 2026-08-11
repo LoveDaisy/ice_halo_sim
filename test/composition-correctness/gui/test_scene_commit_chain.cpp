@@ -513,11 +513,15 @@ TEST(SceneCommitChain, EveryEntryExitLengthModeHasItsOwnSummarySpelling) {
 // comes back black. Neither says anything on screen, and both are indistinguishable from "the
 // simulation is still warming up" until the user goes looking.
 //
-// The line these cases draw is between a row the user left empty and an empty raypath a core
-// config file writes ON PURPOSE (`"type": "raypath"` with `"raypath": []`), which is a wildcard
-// the file explicitly asks for and stays a match-all. The two arrive as different shapes — a row
-// with no factors at all, versus a row with one factor whose text is empty — and only the first
-// is dropped. FilterReconstructChain's wildcard case guards the other side of that line.
+// The line these cases draw is between a row the user left empty and a filter a core config file
+// writes ON PURPOSE to admit every ray (`"type": "none"`, or no `type` key at all). The two arrive
+// as different shapes — a row with no factors at all, versus a row with one factor whose text is
+// empty — and only the first is dropped. FilterReconstructChain's match-all case guards the other
+// side of that line.
+//
+// A third shape is neither: `"type": "raypath"` with `"raypath": []`, which core matches NO ray
+// with. It was once read here as the deliberate wildcard, which is backwards; it is refused at
+// import now, and FilterReconstructChain pins that.
 
 // A blank row between two real ones leaves the two real ones, not three clauses one of which
 // matches everything.
@@ -535,10 +539,14 @@ TEST(SceneCommitChain, AnEmptyOrRowIsDroppedRatherThanLoweredToMatchAll) {
   EXPECT_EQ(filters[2]["composition"], nlohmann::json({ 0, 1 }));
 
   // The claim the clause count alone does not make: nothing in the emitted pool matches every ray.
-  // An empty `raypath` array IS the match-all term, so this is the symptom stated directly.
+  // `"type": "none"` is how the commit path spells a match-all term, so that is what a lowered
+  // blank row would look like here — and an empty `raypath` array is checked beside it because a
+  // term wearing that shape would be the reverse mistake, matching no ray at all.
   for (const nlohmann::json& jf : filters) {
-    if (jf.value("type", std::string{}) == "raypath") {
-      EXPECT_FALSE(jf["raypath"].empty()) << "a blank row became a match-all term: " << jf.dump();
+    const std::string type = jf.value("type", std::string{});
+    EXPECT_NE(type, std::string("none")) << "a blank row became a match-all term: " << jf.dump();
+    if (type == "raypath") {
+      EXPECT_FALSE(jf["raypath"].empty()) << "a term was emitted that matches no ray at all: " << jf.dump();
     }
   }
   EXPECT_EQ(scene["scene"]["scattering"][0]["entries"][0]["filter"].get<int>(), 2);
@@ -580,9 +588,8 @@ TEST(SceneCommitChain, AFilterOutRowLeftBlankDoesNotExcludeEveryRay) {
   ASSERT_FALSE(scene.is_null()) << "the filter_out document did not commit at all";
   const nlohmann::json& filters = scene["filter"];
   for (const nlohmann::json& jf : filters) {
-    if (jf.value("type", std::string{}) == "raypath") {
-      EXPECT_FALSE(jf["raypath"].empty()) << "filter_out was handed a match-all term — every ray is excluded";
-    }
+    EXPECT_NE(jf.value("type", std::string{}), std::string("none"))
+        << "filter_out was handed a match-all term — every ray is excluded: " << jf.dump();
   }
   // The one row that says something is the whole filter, so it needs no composition wrapping it.
   ASSERT_EQ(filters.size(), 1u) << "expected the single surviving row, got " << filters.dump();

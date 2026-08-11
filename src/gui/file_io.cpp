@@ -539,20 +539,21 @@ static ExpandedFilter ExpandSopToClauses(const FilterConfig& f) {
   for (const auto& summand : f.param) {
     if (summand.factors.empty()) {
       // A factor-less row (blank / all-whitespace summand text) states no predicate, so it
-      // states nothing — and nothing is not "everything". Dropped, per owner decision
-      // 2026-08-10. It used to lower to one clause holding a single match-all term, which
-      // under filter_in widens the whole OR to everything (the user's other rows stop
-      // meaning anything) and under filter_out excludes every ray (a black render, with
-      // nothing on screen saying why). edit_modals.cpp's commit path already reads a blank
-      // row this way — it strips blank rows before building the filter — so this is the
-      // load/expand side catching up to the editor rather than a new rule.
+      // states nothing — and nothing is not "everything". It used to lower to one clause
+      // holding a single match-all term, which under filter_in widens the whole OR to
+      // everything (the user's other rows stop meaning anything) and under filter_out
+      // excludes every ray (a black render, with nothing on screen saying why).
+      // edit_modals.cpp's commit path already reads a blank row this way — it strips blank
+      // rows before building the filter — so this is the load/expand side catching up to the
+      // editor rather than a new rule.
       //
-      // ⚠️ This drops ONE shape: a row with NO factors at all. It is NOT the shape a core
-      // config file's deliberate wildcard arrives as — that one is `type: "raypath"` with an
-      // empty `raypath` array, which TryReconstructComplexFilter / DeserializeFromJson Pass 2a
-      // (see the NOTE at the `raypath` branch of TryReconstructComplexFilter) turn into a row
-      // holding ONE factor whose text is empty. That row has a factor, so it never reaches
-      // here; it expands through FactorAlternatives' empty-text branch and stays a match-all.
+      // ⚠️ This drops ONE shape: a row with NO factors at all. A row holding one factor whose
+      // text is empty is a different shape and a different statement — it is the editor's
+      // match-all, it reaches FactorAlternatives' empty-text branch, and make_term commits it
+      // as core's `none`. Both core decoders build that shape for the two spellings core reads
+      // as match-all (an absent `type`, and `"type": "none"`); an explicitly empty `raypath`
+      // array is NOT one of them — core matches no ray at all with it, and both decoders
+      // refuse it out loud rather than build a row here that would mean its opposite.
       // The two intents are separated by shape, and this branch is the only place the
       // separation is enforced — widening the condition would silently delete the wildcard.
       continue;
@@ -1181,6 +1182,23 @@ static FilterExpansionOutcome ExpandFilterToScene(const FilterConfig& f, LUMICE_
     dst.action = action;
     dst.symmetry = symmetry;
     if (t.is_raypath) {
+      if (t.raypath.empty()) {
+        // A term with no faces in it is the editor's match-all, and this is the one place that has
+        // to be said in core's vocabulary. RAYPATH with raypath_count 0 is NOT how core says it:
+        // from that core builds a raypath orbit whose canonical sequence has length zero, and
+        // RaypathOrbit::Contains rejects on the length compare before it reads a byte, so the
+        // filter matches nothing — the exact opposite of the row. Under filter_in that is the
+        // difference between a picture and a black frame, with nothing on screen to say which
+        // document produced it. NONE is core's own name for the filter that passes everything.
+        //
+        // FillColorPredicate below has read the identical input this way for a while; it writes
+        // LUMICE_FILTER_TYPE_UNSET rather than NONE, and that is not a second opinion. lumice.h
+        // gives UNSET opposite meanings in the two structs — rejected at commit in a
+        // LUMICE_FilterParam, match-all in a LUMICE_ColorPredicate — so the two spellings are the
+        // same statement about what core will do.
+        dst.type = LUMICE_FILTER_TYPE_NONE;
+        return dst;
+      }
       dst.type = LUMICE_FILTER_TYPE_RAYPATH;
       dst.raypath_count =
           static_cast<int>(std::min(t.raypath.size(), static_cast<size_t>(LUMICE_MAX_CONFIG_RAYPATH_LEN)));
@@ -1699,6 +1717,67 @@ static std::string DecodeEEFaceFromJson(const json& jf, const char* key) {
   return (v < 0) ? std::string{} : std::to_string(v);
 }
 
+// What core makes of a simple filter object's (`type`, `raypath`) pair.
+//
+// Stated once because two independent decoders below need the answer — DeserializeFromJson's
+// Pass 2a, for a filter a scattering entry references directly, and TryReconstructComplexFilter,
+// for one reachable only as a composition term. Each used to answer for itself, and they drifted
+// apart on exactly this pair; a shape one of them called a wildcard the other called malformed.
+// A single reading is the point of this function, not a convenience.
+//
+// The readings are core's, not this file's (config/filter_config.cpp from_json,
+// core/filter_spec.cpp):
+//
+//   no `type` key            NoneFilterParam. Deliberate, and core says why where it does it:
+//                            a Design-2 colour ref's only required wire fields are {layer,
+//                            crystal}. NoneSpec::Match returns true -> every ray.
+//   "type": "none"           NoneFilterParam again — core's own first-class spelling for it.
+//   "type": "raypath", [..]  A raypath orbit compared against each ray's recorded path.
+//   "type": "raypath", []    An orbit whose canonical sequence has length zero.
+//                            RaypathOrbit::Contains rejects on the length compare before it reads
+//                            a byte, and no real ray has length zero -> NO ray. Measured, not
+//                            inferred: 200k rays through this shape render an all-black frame.
+//   "type": "raypath", none  Malformed. `j.at("raypath")` throws in core's reader and the C API
+//                            returns LUMICE_ERR_MISSING_FIELD, so core refuses the whole document
+//                            and there is no core reading to mirror. Kept apart from the empty
+//                            array above rather than folded into it, because they are not the
+//                            same fact: one is a filter core runs and this editor cannot write,
+//                            the other is a file core will not open at all.
+enum class CoreRaypathForm {
+  kMatchAll,            // core passes every ray through this filter
+  kRaypathSequence,     // a real face sequence; `text_out` holds it in the editor's spelling
+  kMatchesNoRay,        // core passes NO ray through this filter
+  kRaypathWithNoArray,  // malformed; core refuses the document, so the editor degrades on its own
+  kOtherType,           // entry_exit / direction / crystal / complex — the caller's branches own it
+};
+
+// Fills `*text_out` with the '-'-joined face list for kRaypathSequence, and leaves it alone
+// otherwise (the other forms have no face list to spell).
+static CoreRaypathForm ClassifyCoreRaypathForm(const json& jf, const std::string& type_str, std::string* text_out) {
+  if (type_str.empty() || type_str == "none") {
+    return CoreRaypathForm::kMatchAll;
+  }
+  if (type_str != "raypath") {
+    return CoreRaypathForm::kOtherType;
+  }
+  if (!jf.contains("raypath") || !jf["raypath"].is_array()) {
+    return CoreRaypathForm::kRaypathWithNoArray;
+  }
+  const json& rp = jf["raypath"];
+  if (rp.empty()) {
+    return CoreRaypathForm::kMatchesNoRay;
+  }
+  std::string text;
+  for (size_t i = 0; i < rp.size(); i++) {
+    if (i > 0) {
+      text += kRaypathSepStr;
+    }
+    text += std::to_string(rp[i].get<int>());
+  }
+  *text_out = std::move(text);
+  return CoreRaypathForm::kRaypathSequence;
+}
+
 // Reverse of ExpandFilterToScene — reconstruct a GUI FilterConfig from a core
 // "complex" filter. The sum-of-products model (task-serialization-bidirectional)
 // makes the GUI able to express a general OR-of-(AND-of-terms): each composition
@@ -1768,31 +1847,38 @@ static bool TryReconstructComplexFilter(const json& jf, const std::map<int, json
       }
       const json& cj = it->second;
       const std::string ctype = cj.value("type", std::string{});
-      // NOTE: a MISSING/empty `type` is malformed core-JSON and must fall to the loud
-      // reject branch below (explore-271 anti-silent-miscull contract) — do NOT fold it
-      // into the raypath branch, which would silently rewrite it into a match-all filter
-      // (code-review-04 Major 1). Only an empty `raypath` ARRAY (with type=="raypath") is
-      // the legitimate match-all wildcard.
+      std::string rp_text;
+      const CoreRaypathForm form = ClassifyCoreRaypathForm(cj, ctype, &rp_text);
+      if (form == CoreRaypathForm::kMatchesNoRay) {
+        // The editor has no factor that matches no ray, and the nearest factor it has — one whose
+        // raypath text is empty — is this term's exact opposite. A term also cannot be dropped
+        // from a clause without changing what the clause says, so the refusal is of the whole
+        // composition, on the same loud route the unrepresentable child types take.
+        //
+        // The entry then commits with no filter, which on its own admits every ray. That is what
+        // refusing costs, not a claim that the file meant match-all: the difference from the
+        // silent rewrite this replaces is that the user is told which filter was dropped and why.
+        fail_reason = "complex filter id=" + std::to_string(complex_id) + ": child id=" + std::to_string(cid) +
+                      " has an explicitly empty \"raypath\" array, which matches no ray at all — the editor has no "
+                      "way to write that, and its empty row means the opposite, so the filter was dropped rather "
+                      "than rebuilt into its reverse";
+        return false;
+      }
+      // A term core passes every ray through becomes a factor with empty text, which is the
+      // editor's own match-all. It survives the expansion path on the other side of this file
+      // because of the SHAPE built here rather than any flag: ExpandSopToClauses drops only rows
+      // with NO factors (the blank summand row a user left empty), and this is a row holding one
+      // factor whose text happens to be empty. Folding it into a factor-less row would delete the
+      // wildcard the file asked for.
       //
-      // That wildcard survives the expansion path on the other side of this file, and the reason
-      // is the shape built here rather than any flag: this branch emits a row holding ONE factor
-      // whose text is empty, and ExpandSopToClauses only drops rows with NO factors (the blank
-      // summand row the user left empty). A one-factor empty-text row goes through
-      // FactorAlternatives' empty-text branch and stays a match-all. Keep it that way — folding
-      // this into a factor-less row would delete the wildcard the file explicitly asked for.
-      if (ctype == "raypath") {
-        // Join the raypath face ids with '-'. An empty/absent array is the
-        // match-all raypath (empty text) — representable as a wildcard factor.
-        std::string text;
-        if (cj.contains("raypath") && cj["raypath"].is_array()) {
-          for (size_t k = 0; k < cj["raypath"].size(); ++k) {
-            if (k > 0) {
-              text += kRaypathSepStr;
-            }
-            text += std::to_string(cj["raypath"][k].get<int>());
-          }
-        }
-        factors.emplace_back(RaypathParams{ text });
+      // `none` and a missing `type` are handled here rather than refused. Refusing them was not a
+      // second opinion about what they mean — it was written when the file believed an empty
+      // `raypath` array was core's wildcard, which left no room for core's actual two. It also no
+      // longer round-trips: since match-all commits as `{"type": "none"}`, refusing `none` here
+      // would mean the GUI cannot read back a composition it wrote itself.
+      if (form == CoreRaypathForm::kMatchAll || form == CoreRaypathForm::kRaypathWithNoArray ||
+          form == CoreRaypathForm::kRaypathSequence) {
+        factors.emplace_back(RaypathParams{ rp_text });
       } else if (ctype == "entry_exit") {
         EntryExitParams p;
         p.entry_text = DecodeEEFaceFromJson(cj, "entry");
@@ -1873,17 +1959,32 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       f.sym_b = (sym.find('B') != std::string::npos);
       f.sym_d = (sym.find('D') != std::string::npos);
 
-      if (type_str == "raypath" || type_str.empty()) {
-        std::string text;
-        if (jf.contains("raypath") && jf["raypath"].is_array()) {
-          for (size_t i = 0; i < jf["raypath"].size(); i++) {
-            if (i > 0) {
-              text += kRaypathSepStr;
-            }
-            text += std::to_string(jf["raypath"][i].get<int>());
-          }
-        }
-        f.SetRaypath(RaypathParams{ text });
+      std::string rp_text;
+      const CoreRaypathForm form = ClassifyCoreRaypathForm(jf, type_str, &rp_text);
+      if (form == CoreRaypathForm::kMatchesNoRay) {
+        // Refused rather than shown, for the reason spelled out at the same branch in
+        // TryReconstructComplexFilter: the editor's empty row is this filter's opposite, so
+        // accepting it would hand the simulator the reverse of what the file asked for. The entry
+        // referencing this id finds nothing in filter_map below and commits with no filter — a
+        // consequence of the refusal, not a claim that the file meant match-all.
+        const std::string msg =
+            "Filter id=" + std::to_string(id) +
+            " has an explicitly empty \"raypath\" array, which matches no ray at all — the editor has no way to "
+            "write that, and its empty row means the opposite, so the filter was dropped rather than shown as its "
+            "reverse. Any entry using it now has no filter.";
+        GUI_LOG_WARNING("[FileIO] {}", msg);
+        SetImportComplexFilterWarning(msg);
+        continue;
+      }
+      if (form == CoreRaypathForm::kMatchAll || form == CoreRaypathForm::kRaypathWithNoArray) {
+        // An empty raypath row is the editor's match-all, which is what core's `none` and its
+        // absent `type` both mean. `none` reaching this branch is the point of it: it used to fall
+        // to the unknown-type warning below, which called core's own first-class spelling unknown
+        // and — before make_term learned to encode a blank row as `none` — committed it as the
+        // filter that passes nothing.
+        f.SetRaypath(RaypathParams{});
+      } else if (form == CoreRaypathForm::kRaypathSequence) {
+        f.SetRaypath(RaypathParams{ rp_text });
       } else if (type_str == "entry_exit") {
         // core JSON keeps int "entry" / "exit" — translate to GUI's text
         // representation. Absent or explicit-null fields are the wildcard

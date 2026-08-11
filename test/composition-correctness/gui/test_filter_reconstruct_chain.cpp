@@ -146,13 +146,10 @@ TEST(FilterReconstructChain, ExpressibleCompositionsComeBackAsEditableRows) {
   }
 }
 
-// Two composition shapes the editor CAN express, both loaded through the same skeleton. A clause
-// holding more than one term is an AND, expressed as one row with several factors — once refused
-// outright, and refusing a shape the editor can show is how an imported filter silently becomes no
-// filter. An empty raypath is the match-all wildcard and can sit beside a real one as separate
-// alternatives — treating the empty array as "no filter" instead would drop the wildcard row and
-// narrow the filter to the other alternative.
-TEST(FilterReconstructChain, AnAndClauseBecomesOneRowAndAMatchAllAlternativeSurvivesBesideARealOne) {
+// A clause holding more than one term is an AND, expressed as one row with several factors — once
+// refused outright, and refusing a shape the editor can show is how an imported filter silently
+// becomes no filter.
+TEST(FilterReconstructChain, AnAndClauseBecomesOneRow) {
   DoNew();
   ClearImportComplexFilterWarning();
   GuiState loaded = InitDefaultState();
@@ -186,38 +183,78 @@ TEST(FilterReconstructChain, AnAndClauseBecomesOneRowAndAMatchAllAlternativeSurv
       { "composition", { { 0, 1 } } } },
   };
   EXPECT_EQ(nlohmann::json::parse(CoreJson(loaded))["filter"], expected);
+}
 
-  GuiState wildcard = InitDefaultState();
-  ASSERT_TRUE(
-      DeserializeFromJson(CoreDocWithFilters(R"([{"id": 1, "type": "raypath", "action": "filter_in", "raypath": []},
-                             {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
-                             {"id": 3, "type": "complex", "action": "filter_in", "composition": [[1], [2]]}])",
-                                             3),
-                          wildcard));
+// A term that passes every ray can sit beside a real one as separate alternatives, and has to
+// survive as its own row: dropping it would narrow the filter to the other alternative, and the
+// picture would come back missing rays the file admitted.
+//
+// This case used to write that alternative as `{"type": "raypath", "raypath": []}` and call it the
+// wildcard the file asked for. It is not one. Core reads that array as a raypath orbit of length
+// zero and matches NO ray with it — the opposite — and the belief that it was a wildcard is what
+// let a match-all filter commit as the filter that blocks everything. So the case is re-pointed at
+// the two spellings core actually reads as match-all, and the shape it used to use is now pinned
+// as refused, next door.
+TEST(FilterReconstructChain, AMatchAllAlternativeSurvivesBesideARealOne) {
+  struct Case {
+    const char* name;
+    const char* wildcard_child;
+  };
+  const Case kCases[] = {
+    { "the explicit type", R"({"id": 1, "type": "none", "action": "filter_in"})" },
+    { "no type key at all", R"({"id": 1, "action": "filter_in"})" },
+  };
 
-  ASSERT_TRUE(wildcard.layers.at(0).entries.at(0).filter_id.has_value());
-  const FilterConfig& w = LoadedFilter(wildcard);
-  ASSERT_EQ(w.param.size(), 2u);
-  ASSERT_EQ(w.param[0].factors.size(), 1u);
-  ASSERT_TRUE(std::holds_alternative<RaypathParams>(w.param[0].factors[0]));
-  EXPECT_TRUE(std::get<RaypathParams>(w.param[0].factors[0]).raypath_text.empty());
-  EXPECT_EQ(w.param[1].text, std::string("3-5"));
-  EXPECT_TRUE(PeekImportComplexFilterWarning().empty());
+  for (const Case& c : kCases) {
+    SCOPED_TRACE(c.name);
+    DoNew();
+    ClearImportComplexFilterWarning();
+    GuiState wildcard = InitDefaultState();
+    const std::string filters = std::string("[") + c.wildcard_child +
+                                R"(, {"id": 2, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
+                                     {"id": 3, "type": "complex", "action": "filter_in", "composition": [[1], [2]]}])";
+    if (!DeserializeFromJson(CoreDocWithFilters(filters, 3), wildcard)) {
+      ADD_FAILURE() << c.name << ": the document did not open at all";
+      continue;  // nothing loaded for this row; the other spelling still gets checked
+    }
+    if (!wildcard.layers.at(0).entries.at(0).filter_id.has_value()) {
+      ADD_FAILURE() << c.name << ": the composition was refused";
+      continue;
+    }
 
-  // The rebuilt rows are only half the round trip. What the simulator is handed is the other half,
-  // and it is the half the wildcard can be lost in: the expansion path drops a row that states no
-  // predicate, and this row's text is empty too. It is kept because it is not the same shape — the
-  // file asked for the wildcard with a `"raypath": []` that survives as a factor, where a row the
-  // user left blank has no factor at all. Asserting only the rows would leave that distinction
-  // resting on a claim about which shape reaches the expander rather than on the emitted document.
-  const nlohmann::json committed = CommitSceneJson(wildcard);
-  ASSERT_FALSE(committed.is_null()) << "the wildcard document did not commit at all";
-  const nlohmann::json& emitted_filters = committed["filter"];
-  ASSERT_EQ(emitted_filters.size(), 3u) << "expected wildcard + 3-5 + composition, got " << emitted_filters.dump();
-  EXPECT_EQ(emitted_filters[0]["type"].get<std::string>(), "raypath");
-  EXPECT_TRUE(emitted_filters[0]["raypath"].empty()) << "the explicit match-all wildcard was dropped or narrowed";
-  EXPECT_EQ(emitted_filters[1]["raypath"], nlohmann::json({ 3, 5 }));
-  EXPECT_EQ(emitted_filters[2]["composition"], nlohmann::json({ 0, 1 }));
+    const FilterConfig& w = LoadedFilter(wildcard);
+    if (w.param.size() != 2u || w.param[0].factors.size() != 1u) {
+      ADD_FAILURE() << c.name << ": expected two rows, the first holding one factor";
+      continue;  // the indexing below would run out of bounds
+    }
+    EXPECT_TRUE(std::holds_alternative<RaypathParams>(w.param[0].factors[0]));
+    EXPECT_TRUE(std::get<RaypathParams>(w.param[0].factors[0]).raypath_text.empty());
+    EXPECT_EQ(w.param[1].text, std::string("3-5"));
+    EXPECT_TRUE(PeekImportComplexFilterWarning().empty());
+
+    // The rebuilt rows are only half the round trip. What the simulator is handed is the other
+    // half, and it is the half the wildcard can be lost in: the expansion path drops a row that
+    // states no predicate, and this row's text is empty too. It is kept because it is not the same
+    // shape — this row holds one factor, where a row the user left blank has none at all.
+    // Asserting only the rows would leave that distinction resting on a claim about which shape
+    // reaches the expander rather than on the emitted document.
+    const nlohmann::json committed = CommitSceneJson(wildcard);
+    if (committed.is_null()) {
+      ADD_FAILURE() << c.name << ": the wildcard document did not commit at all";
+      continue;
+    }
+    const nlohmann::json& emitted_filters = committed["filter"];
+    if (emitted_filters.size() != 3u) {
+      ADD_FAILURE() << c.name << ": expected wildcard + 3-5 + composition, got " << emitted_filters.dump();
+      continue;
+    }
+    // Round-tripped through core's spelling, not the editor's: whichever of the two the file used,
+    // what comes back out is `none`, and re-opening THAT document has to land here again.
+    EXPECT_EQ(emitted_filters[0]["type"].get<std::string>(), std::string("none"))
+        << "the match-all alternative was dropped or narrowed: " << emitted_filters[0].dump();
+    EXPECT_EQ(emitted_filters[1]["raypath"], nlohmann::json({ 3, 5 }));
+    EXPECT_EQ(emitted_filters[2]["composition"], nlohmann::json({ 0, 1 }));
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -248,13 +285,12 @@ TEST(FilterReconstructChain, UnrepresentableCompositionsAreRefusedLoudly) {
       R"([{"id": 1, "type": "raypath", "action": "filter_in", "raypath": [3, 5]},
           {"id": 2, "type": "complex", "action": "filter_in", "composition": [[]]}])",
       2 },
-    // A child with no `type` at all is malformed, and the tempting reading — "no type, so match
-    // everything" — is the worst possible one: it turns a narrow filter into no filter.
-    { "a child with no type field",
-      R"([{"id": 1, "action": "filter_in", "raypath": [3, 5]},
-          {"id": 2, "type": "complex", "action": "filter_in", "composition": [[1]]}])",
-      2 },
   };
+  // A child with no `type` at all was refused here too, on the reading that it is malformed and
+  // that "no type, so match everything" would be the worst possible guess. It is not a guess:
+  // core's own reader returns NoneFilterParam for an absent `type` and says why where it does it.
+  // That case now lives in AMatchAllAlternativeSurvivesBesideARealOne, as one of the two spellings
+  // it must survive as.
 
   for (const Case& c : kCases) {
     SCOPED_TRACE(c.name);
