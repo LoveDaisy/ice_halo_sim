@@ -58,7 +58,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -70,6 +69,7 @@
 #include "core/backend/cuda_trace_backend.hpp"
 #include "core/backend/trace_backend.hpp"
 #include "cuda_test_helpers.hpp"
+#include "support/env_var.hpp"
 
 namespace lumice {
 namespace {
@@ -132,9 +132,9 @@ Stats ComputeStats(const std::vector<double>& xs) {
 std::pair<size_t, double> RunCudaOnce(const SceneConfig& scene, const RenderConfig& render, uint32_t seed,
                                       size_t ray_count, const char* k_env) {
   if (k_env != nullptr) {
-    ::setenv("LUMICE_GPU_GEOM_CLOCK", k_env, /*overwrite=*/1);
+    test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", k_env);
   } else {
-    ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+    test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
   }
   SessionSpec spec;
   spec.scene = &scene;
@@ -211,7 +211,7 @@ TEST(CudaKShapeFilterParity, KDoesNotBiasEntryExitFilterAdmission_AC1) {
     w_k0.push_back(w0);
     w_k8.push_back(w8);
   }
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 
   Stats s0 = ComputeStats(w_k0);
   Stats s8 = ComputeStats(w_k8);
@@ -250,7 +250,7 @@ TEST(CudaKShapeFilterParity, KEnabledFilterAdmissionMatchesCpuBallpark_AC1) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   auto scene = MakeFilteredStochasticScene(kMaxHits);
   auto render = MakeRenderConfig();
@@ -265,7 +265,7 @@ TEST(CudaKShapeFilterParity, KEnabledFilterAdmissionMatchesCpuBallpark_AC1) {
     w_cuda.push_back(wc);
     w_cpu.push_back(wp);
   }
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 
   Stats sc = ComputeStats(w_cuda);
   Stats sp = ComputeStats(w_cpu);

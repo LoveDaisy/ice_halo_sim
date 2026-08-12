@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "gui/user_defaults.hpp"
+#include "support/env_var.hpp"
 
 namespace gui = lumice::gui;
 
@@ -103,15 +104,11 @@ class ScopedNoUserConfigDirEnv {
   }
 
   static void Apply(const std::string& name, const std::optional<std::string>& value) {
-#if defined(_WIN32)
-    _putenv_s(name.c_str(), value ? value->c_str() : "");
-#else
     if (value) {
-      setenv(name.c_str(), value->c_str(), 1);
+      test::SetEnvVar(name.c_str(), value->c_str());
     } else {
-      unsetenv(name.c_str());
+      test::UnsetEnvVar(name.c_str());
     }
-#endif
   }
 
   std::vector<std::pair<std::string, std::optional<std::string>>> saved_;

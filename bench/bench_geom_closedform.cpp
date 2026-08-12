@@ -48,6 +48,13 @@ namespace {
 
 constexpr int kPrismFaces = 6;
 
+// Double-precision pi, local to this file (same treatment as
+// test/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp). `M_PI` is not portable
+// (MSVC leaves it undefined unless `_USE_MATH_DEFINES` is set before <cmath>), and `math::kPi` is
+// float — 8.7e-8 off, which is three to four orders of magnitude coarser than the 1e-12 / 1e-9
+// geometric slack thresholds every counter below is judged against.
+constexpr double kPiDouble = 3.14159265358979323846;
+
 // ---- closed form, templated on the working precision (Q3) -------------------
 
 template <typename T>
@@ -70,7 +77,7 @@ ClosedFormResult<T> ClosedFormPrism(const float* dist, T feas_tol_rel) {
   T r[kPrismFaces], cs[kPrismFaces], sn[kPrismFaces];
   T scale = 0;
   for (int i = 0; i < kPrismFaces; i++) {
-    const T t = static_cast<T>(i) * static_cast<T>(M_PI) / static_cast<T>(3);
+    const T t = static_cast<T>(i) * static_cast<T>(kPiDouble) / static_cast<T>(3);
     cs[i] = std::cos(t);
     sn[i] = std::sin(t);
     r[i] = k * static_cast<T>(dist[i]);
@@ -274,7 +281,7 @@ SweepStats RunSweep(double sigma, unsigned seed, int samples) {
       bool flagged = false;
       for (int v = 0; v < cf_d.vtx_cnt && !flagged; v++) {
         for (int m = 0; m < kPrismFaces; m++) {
-          const double t = m * M_PI / 3.0;
+          const double t = m * kPiDouble / 3.0;
           const double slack = k * dist[m] - (cf_d.x[v] * std::cos(t) + cf_d.y[v] * std::sin(t));
           if (std::fabs(slack) < 1e-9) {
             continue;  // a defining face of this corner
@@ -450,7 +457,7 @@ ReuseAdjudication RunReuseAdjudication(double sigma, unsigned seed, int samples)
     }
     double r[kPrismFaces], cs[kPrismFaces], sn[kPrismFaces];
     for (int i = 0; i < kPrismFaces; i++) {
-      const double t = i * M_PI / 3.0;
+      const double t = i * kPiDouble / 3.0;
       cs[i] = std::cos(t);
       sn[i] = std::sin(t);
       r[i] = k * static_cast<double>(dist[i]);
@@ -556,7 +563,7 @@ void BM_PyramidSixDirections(benchmark::State& state) {
       // best match against the six fixed directions
       double best = -2.0;
       for (int i = 0; i < kPrismFaces; i++) {
-        const double t = i * M_PI / 3.0;
+        const double t = i * kPiDouble / 3.0;
         best = std::max(best, (nx * std::cos(t) + ny * std::sin(t)) / h);
       }
       worst_dir_err = std::max(worst_dir_err, 1.0 - best);
@@ -984,7 +991,7 @@ void BM_UniformErosionModel(benchmark::State& state) {
       double s_val[kPrismFaces];
       bool ok = true;
       for (int i = 0; i < kPrismFaces && ok; i++) {
-        const double t = i * M_PI / 3.0;
+        const double t = i * kPiDouble / 3.0;
         double g = std::numeric_limits<double>::max();
         double r_prism = std::numeric_limits<double>::max();
         for (int k = 2; k < n; k++) {

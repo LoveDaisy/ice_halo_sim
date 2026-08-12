@@ -75,10 +75,6 @@
 - ssh 会话**自带管理员令牌**，需要提权的安装可以直接远程执行。
 - ⚠️ `scripts/bench_throughput.py` 的默认二进制探测**不带 `.exe`** 后缀
   ⇒ 在 Windows 上必须显式设 `LUMICE_BENCH_BIN`。
-- ⚠️ **`BUILD_TEST=ON` 目前在 Windows + CUDA 下编译不过**（POSIX `setenv`/`unsetenv` 与
-  `M_PI` 三处 MSVC 不兼容），因此现阶段 Windows 构建须带
-  `-DBUILD_TEST=OFF -DBUILD_BENCH=OFF`。**这是已知的临时状态，不是这台机器的属性**；
-  修复落地后本行应删除。
 
 ## 已知坑（都由一手实测确认）
 
