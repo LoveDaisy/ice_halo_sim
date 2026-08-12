@@ -197,19 +197,27 @@ const LegacyDocCase kGuiNativeCases[] = {
       EXPECT_EQ(f.EntryExitParamsValue().exit_text, std::string("4"));
     } },
 
-  // The Direction filter type was removed from the GUI. A file still carrying one must degrade to a
-  // filter that matches everything rather than to a filter that matches nothing — and the crystal
-  // beside it, which is fine, must survive either way.
-  { "removed direction filter degrades to an empty raypath",
+  // The Direction filter type was removed from the GUI. No reader here can turn a file still
+  // carrying one into a predicate, so the entry degrades to having no filter — and the crystal
+  // beside it, which is fine, survives.
+  //
+  // The degradation used to be "a filter holding an empty raypath", chosen so the entry let
+  // everything through rather than nothing. It let everything through only under filter_in: the
+  // same shape is the editor's match-all, and match-all under filter_out excludes every ray. Having
+  // no filter is the disposition that is harmless under both, and it is indistinguishable from the
+  // old one in the filter_in picture this case was written about.
+  { "removed direction filter degrades to no filter at all",
     R"({"schema_version": 2, "layers": [{"prob": 0.0, "entries": [{
         "crystal": {"type": "prism", "shape": {"height": 1.0}}, "proportion": 100.0,
         "filter": {"type": "direction", "action": "filter_in", "az": 30.0, "el": 15.0}}]}]})",
     [](const GuiState& s) {
       ASSERT_EQ(s.layers.at(0).entries.size(), 1u);
-      ASSERT_TRUE(s.layers[0].entries[0].filter_id.has_value());
-      const FilterConfig& f = s.filters.at(*s.layers[0].entries[0].filter_id);
-      EXPECT_TRUE(f.IsRaypath());
-      EXPECT_TRUE(f.RaypathText().empty());
+      EXPECT_FALSE(s.layers[0].entries[0].filter_id.has_value());
+      EXPECT_TRUE(s.filters.empty());
+      // The crystal is the other half of the claim: degrading the filter must not take the entry's
+      // crystal with it.
+      ASSERT_EQ(s.crystals.size(), 1u);
+      EXPECT_EQ(s.crystals.at(0).type, CrystalType::kPrism);
     } },
 };
 

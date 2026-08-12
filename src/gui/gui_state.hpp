@@ -617,23 +617,33 @@ struct SummandText {
 
 // Sum-of-products container: an OR of AND-of-factors rows. Concrete type for
 // FilterConfig::param (replaces the pre-uplift Factor alias). An empty vector
-// is not a valid state — a "no filter" FilterConfig holds a single-row single-
-// factor SoP with an empty RaypathParams (see the FilterConfig default below).
+// is the canonical form of "this filter states no rule" — it expands to zero
+// clauses, which the commit path reads as "no filter" (see the FilterConfig
+// default below).
 using SumOfProducts = std::vector<SummandText>;
 
 // GUI-only data structure: filter configuration.
 //
 // Top-level fields (name/action/sym_*) apply to all filter types; per-summand
-// data lives inside `param` (sum-of-products of Factors). Default-constructed
-// FilterConfig holds a 1-row / 1-factor SoP containing an empty RaypathParams
-// (the "no filter" state of pre-variant builds).
+// data lives inside `param` (sum-of-products of Factors). A default-constructed
+// FilterConfig states nothing: its SoP is empty.
+//
+// It used to default to a 1-row / 1-factor SoP holding an empty RaypathParams,
+// inherited from pre-variant builds where "empty raypath" WAS how the editor
+// spelled "no filter". That stopped being true once a factor with empty text
+// became the editor's match-all: the same shape now commits as core's `none`,
+// which under filter_out excludes every ray. The default is the empty vector so
+// that the type's own zero value is the harmless state rather than a match-all
+// one construction away. The editor still opens "no filter" as exactly one
+// blank row — that row is supplied by SetRowsFromSop (edit_modals.cpp) as a
+// display affordance, and is a separate thing from this model default.
 struct FilterConfig {
   std::string name;
   int action = 0;  // 0=filter_in, 1=filter_out
   bool sym_p = true;
   bool sym_b = true;
   bool sym_d = true;
-  SumOfProducts param{ SummandText{ std::string{}, std::vector<Factor>{ Factor{ RaypathParams{} } } } };
+  SumOfProducts param;
 
   // Compat accessors — degenerate single-factor path.
   //

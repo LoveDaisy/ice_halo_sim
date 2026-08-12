@@ -14,7 +14,6 @@
 #include "core/lat_lut.hpp"
 #include "core/shared/lat_path_selection.hpp"
 #include "core/shared/pcg_shared.h"
-#include "util/logger.hpp"
 
 
 namespace lumice {
@@ -622,7 +621,13 @@ void from_json(const nlohmann::json& obj, Distribution& dist) {
       obj.at("std").get_to(dist.spread);
     }
   } else {
-    LOG_ERROR("Cannot recognize distribution!");
+    // Rejecting rather than logging: neither branch runs, so `dist` silently keeps whatever the
+    // caller handed in — the destination's default, not anything written in the document. Same
+    // honest boundary as the missing-"type" branch above: this function serves every distribution
+    // slot in the document and cannot name which one it is on.
+    throw std::invalid_argument("distribution value is neither a number nor an object: " + obj.dump() +
+                                ". Write either a bare number (e.g. 20) or an object naming the distribution "
+                                "(e.g. {\"type\": \"gauss\", \"mean\": 20, \"std\": 5}).");
   }
 }
 

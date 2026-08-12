@@ -60,7 +60,7 @@ std::string CoreDocWithFilters(const std::string& filter_array, int main_id) {
   return R"({"crystal": [{"id": 1, "type": "Prism", "height": 1.0, "face_distance": [1,1,1,1,1,1]}],
              "filter": )" +
          filter_array + R"(,
-             "scene": {"light_source": {"altitude": 20.0, "diameter": 0.5}, "ray_num": 1000, "max_hits": 8,
+             "scene": {"light_source": {"altitude": 20.0, "diameter": 0.5, "spectrum": "D65"}, "ray_num": 1000, "max_hits": 8,
                        "scattering": [{"prob": 1.0, "entries": [{"crystal": 1, "proportion": 100.0, "filter": )" +
          std::to_string(main_id) + R"(}]}]}})";
 }

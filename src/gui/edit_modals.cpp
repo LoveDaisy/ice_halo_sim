@@ -418,9 +418,13 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_axis_buf[2] = src_crystal.roll;
   // Filter buffers (H5 sum-of-products): top-level shared fields (name / action
   // / sym_*) go into g_filter_top; per-row SoP text goes into g_summand_rows,
-  // keyed by stable uid. Default-constructed FilterConfig carries a 1-row empty
-  // SoP so "no filter" opens with exactly one blank row (matches the pre-task
-  // "empty raypath ≡ no filter" UX).
+  // keyed by stable uid. A default-constructed FilterConfig states nothing — its
+  // SoP is empty. The "no filter" case still opens with exactly one blank row,
+  // but that row comes from SetRowsFromSop, which supplies one for an empty SoP:
+  // the blank row is an editor affordance, not the model's default value. The
+  // two were the same object back when the default was a 1-row empty-raypath
+  // SoP, and reading them as one is how that shape came to be constructed in
+  // places that meant "no filter" and got a match-all.
   const FilterConfig src = entry.filter_id.has_value() ? state.filters[*entry.filter_id] : FilterConfig{};
   g_filter_top = FilterConfig{};
   g_filter_top.name = src.name;

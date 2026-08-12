@@ -4,6 +4,8 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -417,7 +419,10 @@ void from_json(const nlohmann::json& j, CrystalConfig& c) {
   } else if (j_type == "pyramid") {
     c.param_ = j.at("shape").get<PyramidCrystalParam>();
   } else {
-    LOG_ERROR("Unknown crystal type!");
+    // Rejecting rather than logging: with no type there is no shape to parse, so `param_` would
+    // keep its default-constructed prism — a crystal nobody wrote, entering the simulation while
+    // the error line scrolls past. The id is prepended by the caller in config_manager.cpp.
+    throw std::invalid_argument("unknown crystal type: " + j_type.dump() + ". Write either \"prism\" or \"pyramid\".");
   }
 
   if (j.contains("axis")) {

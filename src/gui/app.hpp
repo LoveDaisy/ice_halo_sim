@@ -86,6 +86,15 @@ extern PendingAction g_pending_action;
 extern bool g_show_save_modified_popup;
 extern PendingSaveKind g_pending_save_kind;
 
+// Export-config-JSON overwrite prompt state. Set by RequestConfigJsonExport when the target
+// already exists; consumed by RenderExportOverwriteConfirmPopup, which resolves it through
+// ConfirmPendingConfigJsonExport / CancelPendingConfigJsonExport. The JSON is built BEFORE the
+// prompt (it is what the user asked to export) and held here until they answer, so the document
+// they confirm is the one that gets written even if the state changes underneath.
+extern bool g_show_export_overwrite_confirm_popup;
+extern std::filesystem::path g_pending_export_json_path;
+extern std::string g_pending_export_json_content;
+
 // Queue a user-visible warning surfaced by RenderImportWarningPopup; consecutive
 // calls within one import concatenate so all offending filters are reported.
 void SetImportComplexFilterWarning(const std::string& msg);
@@ -155,6 +164,21 @@ void DoExportPreviewPng();
 void DoExportDualFisheyeEqualAreaPng();
 void DoExportEquirectangularPng();
 void DoExportConfigJson();
+
+// The half of DoExportConfigJson that is not the file dialog: write `json_str` to `path`, OR — when
+// something is already at `path` (ConfigJsonExportNeedsOverwriteConfirm) — hold both in the pending
+// slots above and raise the confirmation prompt instead. Exporting is the one way the GUI can write
+// over a document it did not author, and what it writes is only what the GUI can express, so that
+// write is an explicit act rather than a side effect of picking a filename.
+//
+// Split out from the dialog wrapper so the decision is testable without NFD (the same shape as
+// BuildExportJsonOrWarn). Does nothing on an empty path.
+void RequestConfigJsonExport(const std::filesystem::path& path, const std::string& json_str);
+
+// Resolve a pending export. Confirm writes the held JSON to the held path; Cancel drops both. Both
+// clear the pending slots, and both are no-ops when nothing is pending.
+void ConfirmPendingConfigJsonExport();
+void CancelPendingConfigJsonExport();
 void DoOpen();
 void DoOpen(const std::filesystem::path& path);
 void DoNew();
@@ -384,6 +408,21 @@ void RenderUnsavedPopup(GLFWwindow* window);
 // a fresh render matching the current config, then re-invoke Save.
 void RenderSaveModifiedPopup(GLFWwindow* window);
 void RenderImportWarningPopup();
+// What that modal has to say, and why it is not a generic "file exists, overwrite?": the file being
+// replaced may be a core config the GUI merely read, and what goes back is the GUI's own re-emission
+// of it — everything the GUI cannot express is gone from the copy on disk. "Overwrite?" asks about a
+// filename; the user has to be asked about the content.
+//
+// Named and declared here rather than written inline at the ImGui call so the wording is one thing
+// that can be asserted (ConfigJsonExportContractChain.TheOverwritePromptSaysWhatIsLost). That test
+// pins the sentence; the gui_test case pins that the modal renders at all. What neither can state is
+// the join — the renderer's single use of this constant is what makes it one proposition.
+extern const char* const kExportOverwriteWarningText;
+
+// Opens iff g_show_export_overwrite_confirm_popup is true. Must be called every frame, outside any
+// Begin/End block, like the other Render*Popup above it — an export that raised the prompt and
+// found nobody rendering it would sit pending forever, which is the same as losing the command.
+void RenderExportOverwriteConfirmPopup();
 // Generic GUI warning modal (see app_panels.cpp). SetGuiWarning queues a message (idempotent
 // while the same message is in-flight, so a persistent condition re-detected every debounced
 // commit does not re-spam the modal). ClearGuiWarning re-arms it (called on a successful

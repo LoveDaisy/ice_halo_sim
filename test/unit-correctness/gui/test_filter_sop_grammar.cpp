@@ -129,9 +129,11 @@ TEST(FilterSopAc1, FromLegacyRaypathFansOutToOneRowPerSegment) {
   const Case kCases[] = {
     { "3-5; 1-3", { "3-5", "1-3" } },
     { "3-5", { "3-5" } },
-    // Empty legacy raypath -> the "no filter" degenerate SoP: 1 row holding 1 empty raypath factor,
-    // which is the FilterConfig default state. Zero rows is not a valid filter.
-    { "", { "" } },
+    // Empty legacy raypath -> zero rows, which is "no filter" said in the type's own vocabulary and
+    // is also the FilterConfig default. It used to produce one row holding one empty raypath factor
+    // instead; that row is not "no filter" but the editor's match-all, and a filter_out entry
+    // wearing it excludes every ray.
+    { "", {} },
   };
   for (const Case& c : kCases) {
     SumOfProducts sop = FromLegacyRaypath(Rp(c.text));
@@ -200,6 +202,18 @@ TEST(FilterSopAc1, FromLegacyEntryExitIsSingleRowAllModes) {
     }
     EXPECT_TRUE(std::get<EntryExitParams>(reparsed[0]) == c.ep);
   }
+}
+
+// A wildcard EE (no entry, no exit, no length constraint) states no predicate at all, and
+// FromLegacyEntryExit now answers that the same way FromLegacyRaypath answers an empty
+// raypath_text above ("" -> {} case): zero rows, which is "no filter" in the type's own
+// vocabulary. It used to produce the single-row match-all shape unconditionally — a legacy .lmc's
+// entry_exit filter naming neither face nor length came back as a filter matching everything, and
+// under filter_out that excluded every ray.
+TEST(FilterSopAc1, FromLegacyEntryExitIsEmptyWhenNothingIsStated) {
+  EXPECT_TRUE(FromLegacyEntryExit(Ee("")).empty());
+  // A length constraint alone is still a real predicate, not the wildcard shape.
+  EXPECT_FALSE(FromLegacyEntryExit(Ee("", "", /*mode=*/1, /*min_len=*/2, /*max_len=*/2)).empty());
 }
 
 // ===========================================================================
@@ -293,12 +307,23 @@ TEST(FilterSopAc2, FilterConfigFieldSensitivity) {
 
 // --- default construction + compat accessors (data-model contract) ---------
 
-TEST(FilterSopModel, DefaultIsEmptyRaypathNoFilter) {
+// A default-constructed FilterConfig states nothing, and "nothing" is the empty SoP rather than a
+// row that happens to say everything.
+//
+// The distinction is the whole point. This used to default to one row holding one empty raypath
+// factor, on the reading that "empty raypath ≡ no filter" — true in pre-variant builds, false since
+// a factor with empty text became the editor's match-all. Under that default a FilterConfig nobody
+// filled in commits as core's `none`, which under filter_out excludes every ray. The compat
+// accessors are asserted to agree: a filter that says nothing is not a degenerate single factor, so
+// IsRaypath()/IsEntryExit() — questions about WHICH single factor it is — are both false.
+TEST(FilterSopModel, DefaultIsEmptySopNoFilter) {
   FilterConfig f;
-  EXPECT_TRUE(f.IsDegenerateSingleFactor());
-  EXPECT_TRUE(f.IsRaypath());
+  EXPECT_TRUE(f.param.empty());
+  EXPECT_FALSE(f.IsDegenerateSingleFactor());
+  EXPECT_FALSE(f.IsRaypath());
   EXPECT_FALSE(f.IsEntryExit());
-  EXPECT_TRUE(f.RaypathText().empty());
+  // RaypathText() / DegenerateFactor() are deliberately NOT called: they assert on a non-degenerate
+  // SoP, and this state is the reason that assert exists.
 }
 
 TEST(FilterSopModel, SetRaypathCompatWriter) {

@@ -23,6 +23,7 @@
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "imgui.h"
+#include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
 
 // =============================================================================
 // GUI window z-order convention (task-gui-window-zorder, scrum-gui-polish-v12)
@@ -1346,6 +1347,43 @@ void RenderImportWarningPopup() {
       active_msg.clear();
       ImGui::CloseCurrentPopup();
     }
+    ImGui::EndPopup();
+  }
+}
+
+// See app.hpp for why this sentence is a named constant and what is asserted about it.
+const char* const kExportOverwriteWarningText =
+    "Exporting replaces it with what the GUI can express, so anything in it the GUI\n"
+    "cannot represent will be lost. Save as .lmc instead to keep this project\n"
+    "without touching that file.";
+
+// Export config JSON, onto a path that already holds a file. Same modal idiom as
+// RenderSaveModifiedPopup above (BeginPopupModal + explicit buttons, so Escape and click-outside
+// cannot dismiss it — see the note there for why that holds for every modal in this app), because
+// the same thing is being protected: a write the user cannot undo.
+void RenderExportOverwriteConfirmPopup() {
+  if (g_show_export_overwrite_confirm_popup) {
+    ImGui::OpenPopup("Overwrite Config File");
+    g_show_export_overwrite_confirm_popup = false;
+  }
+
+  if (ImGui::BeginPopupModal("Overwrite Config File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("A file already exists at:");
+    ImGui::TextUnformatted(PathToU8(g_pending_export_json_path).c_str());
+    ImGui::Separator();
+    ImGui::TextUnformatted(kExportOverwriteWarningText);
+    ImGui::Separator();
+
+    if (ImGui::Button("Overwrite", ImVec2(120, 0))) {
+      ConfirmPendingConfigJsonExport();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+      CancelPendingConfigJsonExport();
+      ImGui::CloseCurrentPopup();
+    }
+
     ImGui::EndPopup();
   }
 }

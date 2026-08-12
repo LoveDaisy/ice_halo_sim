@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -692,7 +693,18 @@ int TakeShapeDistDowngradeCount() {
 // simplified editor), surfaced via a load-complete notice — NOT a silent loss (contrast the earlier
 // bug where loading collapsed a distribution to its bare mean and dropped type/std with no notice).
 // NO_RANDOM (off) and UNIFORM pass through unchanged. Downgrades bump g_shape_dist_downgrade_count.
-static ShapeDist ParseShapeDist(const json& j, float default_center) {
+//
+// `crystal_label` / `slot_key` say WHICH slot of WHICH crystal a warning is about, same as
+// ParseAxisDist's — and for the same reason, since core states `type`'s requirement once for both
+// halves and only the axis half used to report it.
+//
+// `enforce_type_field` == false holds one slot out of that report: a `type`-less object still lands
+// on the same value, silently. It exists for `prism_h`, whose requiredness core has not settled —
+// changing what the GUI makes of it before core does would move a value from underneath the answer
+// core is about to give. Re-evaluate whether this parameter is still needed once core states
+// whether `prism_h` is optional.
+static ShapeDist ParseShapeDist(const json& j, float default_center, const std::string& crystal_label,
+                                const char* slot_key, bool enforce_type_field = true) {
   ShapeDist d;
   d.center = default_center;
   if (j.is_number()) {
@@ -700,7 +712,17 @@ static ShapeDist ParseShapeDist(const json& j, float default_center) {
     d.center = j.get<float>();
     d.spread = 0.0f;
   } else if (j.is_object()) {
-    d.type = ParseShapeDistType(j.value("type", ShapeDistTypeToString(ShapeDist{}.type)));
+    if (enforce_type_field && !j.contains("type")) {
+      d.type = ShapeDist{}.type;
+      const std::string msg = crystal_label + " shape." + slot_key +
+                              " is written as an object with no \"type\"; loaded as " +
+                              ShapeDistTypeToString(ShapeDist{}.type) +
+                              " (core rejects this document outright, since Distribution requires \"type\").";
+      GUI_LOG_WARNING("[FileIO] ParseShapeDist: {}", msg);
+      SetImportComplexFilterWarning(msg);
+    } else {
+      d.type = ParseShapeDistType(j.value("type", ShapeDistTypeToString(ShapeDist{}.type)));
+    }
     d.center = j.value("mean", default_center);
     d.spread = j.value("std", ShapeDist{}.spread);
   }
@@ -747,13 +769,30 @@ static AxisDist ParseAxisDist(const json& j, const std::string& crystal_label, c
 
 // `crystal_label` names this crystal in any import warning raised while parsing it — "crystal
 // id=3" where the document numbers its crystals, or a positional stand-in where it does not.
-static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_label) {
+//
+// nullopt = this crystal states no `type`, so there is no crystal here to load. `type` is the
+// discriminant for everything below it: it decides whether `shape` is read as a prism's keys or a
+// pyramid's, and neither of the two is the neutral answer. Core rejects such a document outright
+// (`.at("type")`); the GUI is an editor and loads the rest of the document, minus this crystal.
+static std::optional<CrystalConfig> ParseCrystal(const json& j, const std::string& crystal_label) {
   CrystalConfig c;
   c.name = j.value("name", CrystalConfig{}.name);
 
-  // Only "pyramid" selects the non-default arm; an absent (or unrecognised) `type` lands on
-  // CrystalConfig's own default rather than on a literal that could drift away from it.
-  const auto type_str = j.value("type", std::string{});
+  if (!j.contains("type")) {
+    const std::string msg = crystal_label +
+                            " states no \"type\"; the crystal is dropped rather than "
+                            "loaded as a prism (core rejects this document outright, "
+                            "since \"type\" decides how the rest of the crystal reads).";
+    GUI_LOG_WARNING("[FileIO] ParseCrystal: {}", msg);
+    SetImportComplexFilterWarning(msg);
+    return std::nullopt;
+  }
+
+  // Only "pyramid" selects the non-default arm; an unrecognised `type` lands on CrystalConfig's own
+  // default rather than on a literal that could drift away from it. That is a present-but-unknown
+  // VALUE, which core answers the same way (it logs and carries on) — a different case from the
+  // absent key refused above.
+  const auto type_str = j.at("type").get<std::string>();
   c.type = (type_str == "pyramid") ? CrystalType::kPyramid : CrystalConfig{}.type;
   const LUMICE_CrystalKind kind = (c.type == CrystalType::kPrism) ? LUMICE_CRYSTAL_PRISM : LUMICE_CRYSTAL_PYRAMID;
 
@@ -762,7 +801,7 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
     if (c.type == CrystalType::kPrism) {
       const char* height_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_HEIGHT);
       if (s.contains(height_key)) {
-        c.height = ParseShapeDist(s[height_key], CrystalConfig{}.height.center);
+        c.height = ParseShapeDist(s[height_key], CrystalConfig{}.height.center, crystal_label, height_key);
       }
     } else {
       // prism_h takes CrystalConfig's own default when absent. upper_h/lower_h deliberately do
@@ -771,10 +810,17 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
       const char* prism_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_PRISM_H);
       const char* upper_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_UPPER_H);
       const char* lower_h_key = LUMICE_ShapeScalarSyncKeyName(kind, LUMICE_SHAPE_SCALAR_LOWER_H);
-      c.prism_h = s.contains(prism_h_key) ? ParseShapeDist(s[prism_h_key], CrystalConfig{}.prism_h.center) :
-                                            CrystalConfig{}.prism_h;
-      c.upper_h = s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f) : ShapeDist(0.0f);
-      c.lower_h = s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f) : ShapeDist(0.0f);
+      // prism_h alone passes enforce_type_field=false: it is the one slot held out of the
+      // missing-`type` report, because core has not yet settled whether it requires the field at
+      // all. See ParseShapeDist's own comment.
+      c.prism_h = s.contains(prism_h_key) ?
+                      ParseShapeDist(s[prism_h_key], CrystalConfig{}.prism_h.center, crystal_label, prism_h_key,
+                                     /*enforce_type_field=*/false) :
+                      CrystalConfig{}.prism_h;
+      c.upper_h =
+          s.contains(upper_h_key) ? ParseShapeDist(s[upper_h_key], 0.0f, crystal_label, upper_h_key) : ShapeDist(0.0f);
+      c.lower_h =
+          s.contains(lower_h_key) ? ParseShapeDist(s[lower_h_key], 0.0f, crystal_label, lower_h_key) : ShapeDist(0.0f);
       // Wedge angle: prefer the explicit angle, fallback to the Miller-index conversion
       for (int upper = 1; upper >= 0; upper--) {
         float& alpha = upper ? c.upper_alpha : c.lower_alpha;
@@ -792,7 +838,11 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
     if (s.contains(fd_key) && s[fd_key].is_array()) {
       size_t n = std::min(s[fd_key].size(), static_cast<size_t>(6));
       for (size_t i = 0; i < n; i++) {
-        c.face_distance[i] = ParseShapeDist(s[fd_key][i], CrystalConfig{}.face_distance[i].center);
+        // Six slots share one key, so the index goes in the slot name: "which face" is the part a
+        // reader needs and the array key alone does not say.
+        const std::string fd_slot = std::string(fd_key) + "[" + std::to_string(i) + "]";
+        c.face_distance[i] =
+            ParseShapeDist(s[fd_key][i], CrystalConfig{}.face_distance[i].center, crystal_label, fd_slot.c_str());
       }
     }
     // shape.sync_group: read into the wire form's parallel array, then scatter back into each
@@ -836,6 +886,33 @@ static CrystalConfig ParseCrystal(const json& j, const std::string& crystal_labe
   }
 
   return c;
+}
+
+// The one place a document's crystal array becomes an id-keyed map. Both wire formats that carry
+// such an array (the core config JSON and the legacy pool-shaped .lmc) go through here, because the
+// `id` refusal below is a property of the map, not of either format — and the two loops used to hold
+// a verbatim copy of it each, which is how one of them would get fixed and the other left behind.
+//
+// `id` is refused rather than defaulted because it is the map's KEY: an absent one is not a guessed
+// value but a collision. Two crystals that both omit it both land on key 0, where the second
+// destroys the first — a crystal the document did state, gone, with a Save-As able to freeze the
+// loss. No integer is the neutral "unspecified" (0 is a legal id in its own right), so there is
+// nothing to fall back to. Core rejects the document outright (`.at("id")`).
+static void ParseCrystalIntoMap(const json& jc, std::map<int, CrystalConfig>& crystal_map) {
+  if (!jc.contains("id")) {
+    const std::string msg =
+        "A crystal states no \"id\"; it is dropped rather than filed under a "
+        "guessed one (core rejects this document outright, and the id is what "
+        "the scattering entries reference).";
+    GUI_LOG_WARNING("[FileIO] ParseCrystalIntoMap: {}", msg);
+    SetImportComplexFilterWarning(msg);
+    return;
+  }
+  const int id = jc.at("id").get<int>();
+  // ParseCrystal reports its own refusal, so nullopt is simply not filed.
+  if (std::optional<CrystalConfig> c = ParseCrystal(jc, "crystal id=" + std::to_string(id))) {
+    crystal_map[id] = *std::move(c);
+  }
 }
 
 static int LensTypeFromString(const std::string& s) {
@@ -945,7 +1022,43 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
 //     canonical FromLegacyRaypath / FromLegacyEntryExit converters (';' fan-out
 //     for raypath, single EE row otherwise).
 
-static FilterConfig ParseFilterFromGuiJson(const json& jf) {
+// Count of filters dropped on load because the file described no predicate for them (see
+// NoFilterIfNoPredicate). Consumed + reset by TakeFilterNoPredicateDowngradeCount(), the same shape
+// as g_shape_dist_downgrade_count above and for the same reason: GUI file loading is single-
+// threaded, so a TU-local counter beats threading an accumulator through every parse call site.
+static int g_filter_no_predicate_downgrade_count = 0;
+
+int TakeFilterNoPredicateDowngradeCount() {
+  int n = g_filter_no_predicate_downgrade_count;
+  g_filter_no_predicate_downgrade_count = 0;
+  return n;
+}
+
+// The single disposition point for "the file's filter object states no predicate".
+//
+// Both readers below can end there — a v3 `summands` array that yields no rows, and a legacy form
+// whose `raypath_text` is absent or empty (including an unknown/removed `type` that falls through
+// to the raypath arm). Both used to answer it by writing a 1-row / 1-factor SoP holding an empty
+// RaypathParams. That shape is NOT "no filter": a row carrying a factor whose text is empty is the
+// editor's match-all and commits as core's `none`, so under filter_out the entry excluded every ray
+// and the render was black, with nothing on screen saying why. Under filter_in it admitted
+// everything, so the same shape was harmless there — the harm is asymmetric in `action`, while
+// having no filter at all is harmless under both.
+//
+// Removing the predicate rather than picking a value for it is the disposition the load-degrade
+// contract settled on for a filter the GUI's own format left underspecified. Returning
+// std::nullopt rather than an empty-param FilterConfig is what keeps it from having to be
+// re-decided at each call site: there is no "forgot to check" spelling of the caller.
+static std::optional<FilterConfig> NoFilterIfNoPredicate(FilterConfig f) {
+  if (f.param.empty()) {
+    ++g_filter_no_predicate_downgrade_count;
+    GUI_LOG_WARNING("[FileIO] Filter '{}' describes no rule; loading the entry without a filter.", f.name);
+    return std::nullopt;
+  }
+  return f;
+}
+
+static std::optional<FilterConfig> ParseFilterFromGuiJson(const json& jf) {
   FilterConfig f;
   f.name = jf.value("name", FilterConfig{}.name);
   auto action_str = jf.value("action", FilterActionToString(FilterConfig{}.action));
@@ -968,13 +1081,11 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
       std::string text = js.get<std::string>();
       sop.push_back(SummandText{ text, ParseSummandText(text) });
     }
-    if (sop.empty()) {
-      // Defensive: an empty summands array is not a valid state — fall back to
-      // the default 1-row / 1-factor empty-raypath SoP.
-      sop.push_back(SummandText{ std::string{}, std::vector<Factor>{ Factor{ RaypathParams{} } } });
-    }
+    // An empty summands array is not a valid state, and the disposition is the one at the bottom
+    // of this function: no predicate means no filter. It used to be backfilled here with a 1-row /
+    // 1-factor empty-raypath SoP, which is the editor's match-all — see the return below.
     f.param = std::move(sop);
-    return f;
+    return NoFilterIfNoPredicate(std::move(f));
   }
 
   // Legacy type-discriminated form → upgrade to SoP.
@@ -1020,7 +1131,7 @@ static FilterConfig ParseFilterFromGuiJson(const json& jf) {
     // FromLegacyRaypath splits ';' multi-segment sugar into canonical OR rows.
     f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", RaypathParams{}.raypath_text) });
   }
-  return f;
+  return NoFilterIfNoPredicate(std::move(f));
 }
 
 
@@ -1919,8 +2030,7 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
   std::map<int, CrystalConfig> crystal_map;
   if (root.contains("crystal") && root["crystal"].is_array()) {
     for (auto& jc : root["crystal"]) {
-      int id = jc.value("id", 0);
-      crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
+      ParseCrystalIntoMap(jc, crystal_map);
     }
   }
 
@@ -2044,6 +2154,17 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
           state.sun.custom_spectrum = ParseWlWeightArray(sp);
           state.sun.spectrum_index = state.sun.custom_spectrum.empty() ? 2 /* D65 */ : kCustomSpectrumIndex;
         }
+      } else {
+        // `spectrum` discriminates how the rest of this reads (a string names a built-in, an array
+        // is a discrete custom one), and no spectrum is the neutral one — D65 is a specific choice.
+        // light_source is a singleton, so there is no unit to drop and nothing downstream to fall
+        // back to: what changes here is that the choice is stated instead of made in silence.
+        // state.sun already holds SunConfig{}'s default from the `state = GuiState{}` above.
+        const std::string msg = std::string("scene.light_source states no \"spectrum\"; loaded as ") +
+                                kSpectrumNames[SunConfig{}.spectrum_index] +
+                                " (core rejects this document outright, since it requires it).";
+        GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+        SetImportComplexFilterWarning(msg);
       }
     }
 
@@ -2168,11 +2289,22 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             if (!jc.is_object()) {
               continue;
             }
+            // No colour is the neutral one — black and white both read as deliberate choices in a
+            // composite, and a class whose colour is undefined has no rendering meaning at all — so
+            // the class goes rather than getting one assigned. Core rejects the document outright
+            // (`j.at("color")`). Dropping the whole class, not just the field, is the same move the
+            // block above already makes for a filter and for a colour ref it cannot express.
+            if (!jc.contains("color") || !jc["color"].is_array() || jc["color"].size() != 3) {
+              const std::string msg = "raypath_color class " + std::to_string(ci) +
+                                      " states no usable \"color\" (three numbers); the class is dropped rather "
+                                      "than given one nobody chose (core rejects this document outright).";
+              GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+              SetImportComplexFilterWarning(msg);
+              continue;
+            }
             ColorClassConfig cls;
-            if (jc.contains("color") && jc["color"].is_array() && jc["color"].size() == 3) {
-              for (int k = 0; k < 3; k++) {
-                cls.color[k] = jc["color"][k].get<float>();
-              }
+            for (int k = 0; k < 3; k++) {
+              cls.color[k] = jc["color"][k].get<float>();
             }
             if (jc.contains("combine") && jc["combine"].is_string() && jc["combine"].get<std::string>() == "all") {
               cls.combine = LUMICE_COLOR_COMBINE_ALL;
@@ -2181,7 +2313,12 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
             }
             cls.visible = jc.value("visible", ColorClassConfig{}.visible);
             cls.solo = jc.value("solo", ColorClassConfig{}.solo);
-            cls.z_order = static_cast<int>(ci);
+            // The DESTINATION's current length, not the source index `ci`: z_order has to be a
+            // compact permutation of [0, size) over the vector that actually holds the classes
+            // (CompactZOrder exists to repair holes), and the two counters part company the moment a
+            // class is dropped above. Where nothing is dropped they advance together, so this is the
+            // same number the source index used to give.
+            cls.z_order = static_cast<int>(state.raypath_color.size());
             if (jc.contains("match") && jc["match"].is_array()) {
               for (const auto& jr : jc["match"]) {
                 if (!jr.is_object()) {
@@ -2269,8 +2406,22 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     RenderConfig r;
 
     if (jr.contains("lens")) {
-      r.lens_type = LensTypeFromString(jr["lens"].value("type", kLensTypeJsonNames[RenderConfig{}.lens_type]));
-      r.fov = jr["lens"].value("fov", RenderConfig{}.fov);
+      const auto& jlens = jr["lens"];
+      if (jlens.contains("type")) {
+        r.lens_type = LensTypeFromString(jlens.at("type").get<std::string>());
+      } else {
+        // Same shape as light_source.spectrum above: `type` selects the whole projection branch the
+        // preview inverts, `linear` is one specific projection rather than the absence of one, and a
+        // single renderer means there is no unit to drop. `fov` beside it is genuinely optional to
+        // core, so its absence is a document saying nothing rather than a malformed one.
+        r.lens_type = RenderConfig{}.lens_type;
+        const std::string msg = std::string("render[0].lens states no \"type\"; loaded as ") +
+                                kLensTypeJsonNames[RenderConfig{}.lens_type] +
+                                " (core rejects this document outright, since it requires it).";
+        GUI_LOG_WARNING("[FileIO] DeserializeFromJson: {}", msg);
+        SetImportComplexFilterWarning(msg);
+      }
+      r.fov = jlens.value("fov", RenderConfig{}.fov);
     }
 
     if (jr.contains("resolution") && jr["resolution"].is_array() && jr["resolution"].size() == 2) {
@@ -2450,22 +2601,30 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
       if (jl.contains("entries") && jl["entries"].is_array()) {
         for (auto& je : jl["entries"]) {
           EntryCard entry;
+          // The GUI-native form inlines each crystal in its entry and carries no id, so the warning
+          // names it by where it sits instead. A refused crystal (no `type`) lands in the same place
+          // an entry with no inline crystal at all does: a default pool slot, so entry.crystal_id
+          // stays valid. The document said nothing usable about this crystal either way.
+          entry.crystal_id = static_cast<int>(state.crystals.size());
+          std::optional<CrystalConfig> inline_crystal;
           if (je.contains("crystal")) {
-            entry.crystal_id = static_cast<int>(state.crystals.size());
-            // The GUI-native form inlines each crystal in its entry and carries no id, so the
-            // warning names it by where it sits instead.
-            state.crystals.push_back(ParseCrystal(je["crystal"], "layer " + std::to_string(state.layers.size()) +
-                                                                     " entry " + std::to_string(layer.entries.size()) +
-                                                                     "'s crystal"));
+            inline_crystal = ParseCrystal(je["crystal"], "layer " + std::to_string(state.layers.size()) + " entry " +
+                                                             std::to_string(layer.entries.size()) + "'s crystal");
+          }
+          if (inline_crystal) {
+            state.crystals.push_back(*std::move(inline_crystal));
           } else {
-            // No inline crystal — provide a default slot so entry stays valid.
-            entry.crystal_id = static_cast<int>(state.crystals.size());
             state.crystals.emplace_back();
           }
           entry.proportion = je.value("proportion", EntryCard{}.proportion);
           if (je.contains("filter") && !je["filter"].is_null()) {
-            entry.filter_id = static_cast<int>(state.filters.size());
-            state.filters.push_back(ParseFilterFromGuiJson(je["filter"]));
+            // nullopt = the file's filter object stated no predicate, so the entry gets no filter
+            // and nothing enters the pool (NoFilterIfNoPredicate). Same end state as an entry whose
+            // file carried no "filter" key at all, which is what the document actually says.
+            if (std::optional<FilterConfig> fc = ParseFilterFromGuiJson(je["filter"])) {
+              entry.filter_id = static_cast<int>(state.filters.size());
+              state.filters.push_back(*std::move(fc));
+            }
           }
           layer.entries.push_back(entry);
         }
@@ -2479,15 +2638,19 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
     std::map<int, CrystalConfig> crystal_map;
     if (root["crystals"].is_array()) {
       for (auto& jc : root["crystals"]) {
-        int id = jc.value("id", 0);
-        crystal_map[id] = ParseCrystal(jc, "crystal id=" + std::to_string(id));
+        ParseCrystalIntoMap(jc, crystal_map);
       }
     }
     std::map<int, FilterConfig> filter_map;
     if (root.contains("filters") && root["filters"].is_array()) {
       for (auto& jf : root["filters"]) {
         int id = jf.value("id", 0);
-        filter_map[id] = ParseFilterFromGuiJson(jf);
+        // A pool filter that states no predicate is simply not put in the map: the consuming
+        // entries below look it up by `filter_map.count(filter_id)` and leave their filter_id unset
+        // when it is absent, so they land in the same "no filter" state the v2 arm above produces.
+        if (std::optional<FilterConfig> fc = ParseFilterFromGuiJson(jf)) {
+          filter_map[id] = *std::move(fc);
+        }
       }
     }
     if (root["scattering"].is_array()) {
@@ -2873,6 +3036,18 @@ bool ExportConfigJson(const std::filesystem::path& path, const std::string& json
   }
   out << json_str;
   return out.good();
+}
+
+bool ConfigJsonExportNeedsOverwriteConfirm(const std::filesystem::path& path) {
+  if (path.empty()) {
+    return false;  // nothing to overwrite; ExportConfigJson refuses this path anyway
+  }
+  std::error_code ec;
+  // The non-throwing overload: an unreadable parent directory must not take the app down, and
+  // "cannot tell" is answered as "nothing there" — the export that follows fails on its own and
+  // reports that, which is a better outcome than a confirmation prompt for a write that cannot
+  // happen.
+  return std::filesystem::is_regular_file(path, ec);
 }
 
 // ========== File Dialogs ==========
