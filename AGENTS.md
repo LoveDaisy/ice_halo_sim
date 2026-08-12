@@ -102,6 +102,15 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   (centralized + logged on startup) and test/build infra. All `LUMICE_*` env reads live in
   `src/util/env_knobs.cpp` and are enforced by `scripts/check_policies.py` (CI `policy` job +
   local pre-commit hook, installed via `./scripts/install-hooks.sh`).
+  The **write** side has its own single owner, on the test side only: a test that has to set or
+  clear a variable calls `lumice::test::SetEnvVar` / `UnsetEnvVar` from `test/support/env_var.hpp`,
+  which is the one place in the tree holding the `_WIN32` branch (`_putenv_s` vs POSIX
+  `setenv`/`unsetenv` — MSVC declares neither of the latter two). This is not enforced by a
+  checker, deliberately: a bare `::setenv` is a *compile error* on MSVC, not a silent failure,
+  which is the line the other four gates are drawn on. What it is not, is a compile error you
+  will see — the two CUDA sources that first hit it sat behind `#if LUMICE_CUDA_ENABLED` and the
+  Metal ones behind `#if defined(__APPLE__)`, so the breakage was invisible for three weeks until
+  a Windows host built with both CUDA and `BUILD_TEST` on. `src/` never writes env vars at all.
 - Working-note references: prose in a tracked file must not cite `scratchpad/` artifacts —
   task ids (`task-<name>`, `explore-<name>`, `scrum-<name>`, `chore-<name>`), per-task note
   filenames (`plan.md`, `progress.md`, `SUMMARY.md`), `code-review-0N`, `round-N`, or
@@ -467,9 +476,11 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     `LUMICE_HAS_CUDA` un-skip 闸（须与 `LUMICE_CUDA_ENABLED` **同设**，二者语义不同）、
     parity battery 三文件、验收口径 10/10、「别信 subprocess 自报」纪律，以及 Linux/Windows 两个
     参照机角色各自的 build / parity / 冒烟命令。主机绑定见 `machines.md`。
-    ⚠️ 当前限制：**Windows 侧 `BUILD_TEST=ON` 编译不过**（三处 MSVC 不兼容），故那台只能验编译；
-    成因是主矩阵 Windows job 开 `BUILD_TEST` 但没开 CUDA、CUDA job 开 CUDA 但没开 `BUILD_TEST`，
-    **两半都在、交集为空**。与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
+    ⚠️ **Windows + CUDA + `BUILD_TEST=ON` 至今没有任何 CI job 走过**——主矩阵 Windows job 开
+    `BUILD_TEST` 但没开 CUDA、CUDA job 开 CUDA 但没开 `BUILD_TEST`，**两半都在、交集为空**。
+    这个缺口一次攒下三处 MSVC 不兼容、三周无信号；它们已修，但缺口本身还在 ⇒ 动 `test/` 或
+    `bench/` 后别拿 mac/Linux 的绿推断 Windows 也绿。
+    与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
   - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
 - **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
 - Example config: `examples/config_example.json`

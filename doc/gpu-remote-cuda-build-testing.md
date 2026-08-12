@@ -140,15 +140,17 @@
   ⚠️ 长时间构建**别用 `Start-Process` 分离**（实测会静默失败、日志为空）；
   要么同步跑（我方 bash 用后台任务拿 notification），要么用 `schtasks` 建一次性计划任务。
 
-- **⚠️ 当前限制：`BUILD_TEST=ON` 在 Windows + CUDA 下编译不过。**
-  三处 MSVC 不兼容（两个 `test_cuda_*` 用了 POSIX `setenv`/`unsetenv`、一个 bench 文件用了
-  `M_PI`）。**所以这台机器上现在只能构建产物**（`-DBUILD_TEST=OFF -DBUILD_BENCH=OFF`），
-  跑不了 gtest / parity。修复落地后本节应恢复完整流程并删除本段。
-  成因值得记住：Windows 上「带 CUDA 编译测试」这个配置**没有任何 CI job 走过**，
-  而原因不是漏了 Windows，是主矩阵的 Windows job 开了 `BUILD_TEST` 但没开 CUDA、
-  CUDA 编译 job 开了 CUDA 但没开 `BUILD_TEST`——**两半都在，交集为空**。
+- **⚠️ 这条路径至今没有任何 CI job 走过，所以它的红只会在这台机器上出现。**
+  Windows 上「带 CUDA 编译测试」这个配置的覆盖缺口**仍然存在**，而原因不是漏了 Windows：
+  主矩阵的 Windows job 开了 `BUILD_TEST` 但没开 CUDA、CUDA 编译 job 开了 CUDA 但没开
+  `BUILD_TEST`——**两半都在，交集为空**。这个缺口一次攒下三处 MSVC 不兼容
+  （两个 `test_cuda_*` 用 POSIX `setenv`/`unsetenv`、一个 bench 文件用 `M_PI`），
+  三周无信号，直到这台机器第一次以 `BUILD_TEST=ON` + CUDA 构建才炸出来；它们已经修掉
+  （`test/support/env_var.hpp` 是全树唯一持有该 `#ifdef` 的地方），但**攒下它们的缺口没有**。
+  ⇒ 在缺口补上之前，动 `test/` 或 `bench/` 后请在这台机器上真跑一次本节的构建，
+  别把「mac/Linux 绿」当成 Windows 也绿。
 
-- **parity（限制解除后）**：
+- **parity**：
   ```bat
   set LUMICE_HAS_CUDA=1
   set LUMICE_CUDA_ENABLED=1
