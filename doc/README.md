@@ -19,6 +19,7 @@ doc/
 ├── gui-guide.md / _zh.md                            # GUI application guide
 ├── performance-testing.md / _zh.md                  # Performance testing guide
 ├── windows-remote-testing.md / _zh.md               # Windows remote testing guide
+├── machines.md                                      # Verification machines: role -> host bindings
 ├── crystal-orientation-sampling.md / _zh.md         # Crystal orientation sampling (research)
 ├── research/                                        # Research documents (not in production)
 │   ├── beam-tracing.md / _zh.md                     # Beam tracing algorithm
@@ -93,6 +94,10 @@ For project developers and contributors:
 - **[Performance Testing](performance-testing.md)**: Performance testing guide
   - CLI benchmarks, GUI automated tests, manual/remote testing
   - Log analysis with `scripts/analyze_perf_log.py`
+
+- **[Verification Machines](machines.md)**: role -> host bindings (single source)
+  - Which machine fills which verification role, and its paths / CUDA version
+  - Change machines here only; the recipes speak in roles
 
 - **[Windows Remote Testing](windows-remote-testing.md)**: Windows remote testing guide
   - Running tests on Windows via watcher and SSH

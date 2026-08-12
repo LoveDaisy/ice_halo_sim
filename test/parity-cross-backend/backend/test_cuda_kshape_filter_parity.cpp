@@ -43,7 +43,7 @@
 // `GTEST_SKIP`s on hosts without a CUDA device. The Test D
 // detection-power evidence (temporarily corrupt trace_single_ms_kernel's
 // path[] write to add poly_off, rebuild, confirm this test fails, revert,
-// rebuild, confirm it passes) must be produced on dev49 as part of the
+// rebuild, confirm it passes) must be produced on a CUDA host as part of the
 // Step 7 checklist — writing the test on Mac is code-landing, not
 // detection-power evidence.
 //

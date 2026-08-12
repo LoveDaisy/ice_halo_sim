@@ -19,6 +19,7 @@ doc/
 ├── gui-guide.md / _zh.md                            # GUI 使用指南
 ├── performance-testing.md / _zh.md                  # 性能测试指南
 ├── windows-remote-testing.md / _zh.md               # Windows 远程测试指南
+├── machines.md                                      # 验证机器清单：角色 → 主机绑定
 ├── crystal-orientation-sampling.md / _zh.md         # 晶体取向采样（研究）
 ├── research/                                        # 研究文档（未在生产中实现）
 │   ├── beam-tracing.md / _zh.md                     # 光束追踪算法
@@ -92,6 +93,10 @@ doc/
 - **[性能测试指南](performance-testing_zh.md)**: 性能测试指南
   - CLI 基准测试、GUI 自动化测试、手动/远程测试
   - 使用 `scripts/analyze_perf_log.py` 分析日志
+
+- **[验证机器清单](machines.md)**: 角色 → 主机绑定（单一真源）
+  - 哪台机器承担哪个验证角色，及其路径 / CUDA 版本
+  - 换机器只改这一份；各 recipe 正文只写角色
 
 - **[Windows 远程测试指南](windows-remote-testing_zh.md)**: Windows 远程测试指南
   - 通过 watcher 和 SSH 在 Windows 上执行测试

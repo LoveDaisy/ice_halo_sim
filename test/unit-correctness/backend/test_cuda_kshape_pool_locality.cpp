@@ -40,7 +40,7 @@
 // non-CUDA hosts (compiles+links into unit_correctness_test with zero
 // contributed symbols on Mac). Runtime: `ShouldSkipCudaTests()` mirrors
 // test_cuda_geom_pool_rebuild.cpp / test_cuda_rich_exit.cpp so the tests
-// self-skip when no CUDA device is enumerated (dev49-only body).
+// self-skip when no CUDA device is enumerated (CUDA-device-only body).
 
 #include <gtest/gtest.h>
 

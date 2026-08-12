@@ -25,7 +25,10 @@
 set -euo pipefail
 
 # --- Configuration ---
-SSH_HOST="${WIN_SSH_HOST:-win-builder}"
+# Default SSH host = the current Windows test box. This is an ssh(1) alias, so it
+# must exist in the caller's ~/.ssh/config; override with WIN_SSH_HOST for any
+# other machine. (Was `win-builder` until that box was retired, 2026-08-11.)
+SSH_HOST="${WIN_SSH_HOST:-home-win}"
 REMOTE_DIR="${WIN_REMOTE_DIR:-C:/lumice-test}"
 POLL_INTERVAL=2    # seconds between done-checks
 TIMEOUT=300        # seconds before giving up
@@ -35,7 +38,7 @@ if [ $# -lt 1 ]; then
     echo "Usage: $0 <local-binary> [args...]"
     echo ""
     echo "Environment variables:"
-    echo "  WIN_SSH_HOST    SSH host (default: win-builder)"
+    echo "  WIN_SSH_HOST    SSH host (default: home-win)"
     echo "  WIN_REMOTE_DIR  Shared directory (default: C:/lumice-test)"
     exit 1
 fi

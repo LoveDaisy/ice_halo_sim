@@ -4,7 +4,7 @@ Backend-equivalence oracle for the CUDA single-MS megakernel. Mirrors
 ``test_metal_exit_seam_parity.py``'s G1+G2 axes (block-mean ds_corr + total-Y
 energy conservation) and adds G3 cross-seed self-consistency + G6 env-revert
 sanity gate. G4 (golden-analytic) is verified separately via ``ctest -L
-"unit-correctness|golden-analytic"`` in the dev49 CUDA build (kicked off by
+"unit-correctness|golden-analytic"`` in a CUDA-enabled build (kicked off by
 the same harness; not part of this file).
 
 Pre-registered acceptance bar (plan §0.5):
@@ -18,8 +18,8 @@ Requires:
   - ``LUMICE_CUDA_ENABLED=ON`` build with the CUDA toolchain.
   - NVIDIA device visible to the runtime (compute-sanitizer clean per M2).
   - Shared-lib build: ``./scripts/build.sh -sj release`` is not sufficient
-    on its own — the CUDA path needs the CUDA-enabled Release build. The
-    dev49 docker recipe in scrum-cuda-backend-mvp/.../plan.md §6 covers it.
+    on its own — the CUDA path needs the CUDA-enabled Release build
+    (``-DLUMICE_CUDA_ENABLED=ON -DBUILD_SHARED_LIBS=ON``).
 
 All tests are @pytest.mark.slow (long-running parity loop + shared-lib).
 """
@@ -56,12 +56,12 @@ _T_SELF_MARGIN = 0.02
 # Mac / Windows hosts and Linux builds without the gate fall back to legacy;
 # routed_backend would come out "legacy" and the parity assertions would be
 # false positives (legacy-vs-legacy). Two cheap probes:
-#   1. Platform != Linux: dev49 toolchain is Linux-only — skip non-Linux to
+#   1. Platform != Linux: our CUDA build recipe is Linux-only — skip non-Linux to
 #      keep the harness honest. (If a future macOS CUDA path lands, lift this.)
 #   2. Env knob LUMICE_HAS_CUDA != "1": gate the slow runs behind an explicit
 #      opt-in so default `pytest -v -m slow` on a CPU-only Linux box does not
-#      light up these tests as failures. Set LUMICE_HAS_CUDA=1 in the dev49
-#      docker run command (plan §6).
+#      light up these tests as failures. Set LUMICE_HAS_CUDA=1 in the
+#      environment the CUDA build is run under.
 _CUDA_AVAILABLE = (
     platform.system() in ("Linux", "Windows") and os.environ.get("LUMICE_HAS_CUDA") == "1"
 )
@@ -70,7 +70,7 @@ pytestmark = pytest.mark.skipif(
     not _CUDA_AVAILABLE,
     reason=(
         "CUDA backend requires Linux + LUMICE_HAS_CUDA=1 + LUMICE_CUDA_ENABLED=ON "
-        "build with NVIDIA device (dev49 docker). Skipping on this host."
+        "build with an NVIDIA device. Skipping on this host."
     ),
 )
 

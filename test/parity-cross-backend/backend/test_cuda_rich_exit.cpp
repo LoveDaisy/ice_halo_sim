@@ -57,7 +57,7 @@ using cuda_test::MakeTwoLayerScene;
 
 // Drive CUDA backend on the prism config and return the drained exit records.
 // Skips the body (returns empty) if no CUDA device is enumerated at runtime,
-// matching how the Python parity layer handles dev49 host-only runs.
+// matching how the Python parity layer handles CUDA-host-only runs.
 std::vector<ExitRayRecord> RunCudaPrism(size_t ray_count, size_t max_hits) {
   if (!CudaDeviceAvailable()) {
     return {};
@@ -322,7 +322,7 @@ TEST(CudaBackendCrystalCount, CountsStochasticCrystalDrawsAcrossLayers) {
 // broken gate/transit wire. So `SetInitialRayBaseForTest` takes per-stream bases
 // and each test below drives EXACTLY ONE stream into a non-zero hi epoch.
 //
-// dev49-only (skips on Mac / hosts without a CUDA device).
+// CUDA-device-only (skips on Mac / hosts without a CUDA device).
 // =============================================================================
 namespace hi_wire {
 
@@ -367,7 +367,7 @@ void AssertImageHiDivergence(const std::vector<std::vector<float>>& images, cons
 // gen base; transit/gate stay hi==0.
 TEST(CudaRngHiWiring, GenStreamWireUp) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
   auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.0f);
   auto render = MakeRenderConfig();
@@ -425,7 +425,7 @@ TEST(CudaRngHiWiring, GenStreamWireUp) {
 // param + stream, covered separately by GateMsMode1StreamWireUp below.
 TEST(CudaRngHiWiring, GateStreamWireUp) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
   auto scene = MakeRandomAxisScene(/*max_hits=*/8, /*final_prob=*/0.5f);
   auto render = MakeFullViewRender();
@@ -470,7 +470,7 @@ TEST(CudaRngHiWiring, GateStreamWireUp) {
 // which enables it between layers to route it to transit_multi_ms_kernel).
 TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
   auto scene = MakeTwoLayerScene(/*max_hits=*/6);  // layer 0 → ms_mode==1
   auto render = MakeFullViewRender();
@@ -535,7 +535,7 @@ TEST(CudaRngHiWiring, GateMsMode1StreamWireUp) {
 // identical.
 TEST(CudaRngHiWiring, TransitStreamWireUp) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
   auto scene = MakeTwoLayerScene(/*max_hits=*/6);
   auto render = MakeFullViewRender();
@@ -604,11 +604,11 @@ TEST(CudaRngHiWiring, TransitStreamWireUp) {
 // static `lat_attempts_ci_start_` base to every ci's gen_root_kernel dispatch
 // — with a non-zero base ci_start armed, the second ci's dispatch could
 // silently clobber the first ci's already-written window (or, pre-capacity-
-// fix, write past the [0, count) allocation). dev49-only (skips on Mac /
+// fix, write past the [0, count) allocation). CUDA-device-only (skips on Mac /
 // hosts without a CUDA device) — mirrors the hi_wire tests above.
 TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
 
   constexpr size_t kTotal = 16000;
@@ -683,7 +683,7 @@ TEST(RngObservabilityFacilitySmoke, MultiCiAttemptWindowsDoNotOverwrite) {
 // doc/near-pole-area-measure-sampling.md §附录 Python MC prediction.
 TEST(RngObservabilityFacilitySmoke, NearPoleGaussianTightEnvelopeAcceptanceRate) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
 
   constexpr size_t kSmokeRayCount = 65536;
@@ -758,7 +758,7 @@ TEST(RngObservabilityFacilitySmoke, NearPoleGaussianTightEnvelopeAcceptanceRate)
 // Metal-side Laplacian anchor and the scrum-328.4 exp4 Python MC estimate 1.0075.
 TEST(RngObservabilityFacilitySmoke, NearPoleLaplacianTightEnvelopeAcceptanceRate) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
 
   constexpr size_t kSmokeRayCount = 65536;
@@ -901,7 +901,7 @@ CudaEntryVerifyStats VerifyCudaEntryPoints(const Crystal& crystal, const std::ve
 
 TEST(CudaRootGen, PerRayEntryPointGeometricConsistency) {
   if (!CudaDeviceAvailable()) {
-    GTEST_SKIP() << "No CUDA device available on this host; requires dev49.";
+    GTEST_SKIP() << "No CUDA device available on this host; requires a CUDA-capable GPU.";
   }
   auto scene = MakeTwoLayerScene(/*max_hits=*/6);  // 2 MS layers, deterministic prism h=1.0
   auto render = MakeFullViewRender();

@@ -1,153 +1,183 @@
-# 远程 CUDA 编译 / 测试流程（dev49 + win-builder）
+# 远程 CUDA 编译 / 测试流程
 
-> Mac 本机编不了 CUDA，subprocess 自报不可信 → CUDA 改动必须在 dev49（Linux/NVIDIA）
-> 和/或 win-builder（Windows/NVIDIA）亲跑。本文档是这两台机器的现成 recipe，免每次重新折腾。
-> 首次落地：scrum-311（2026-07-01）；scrum-313 从 scratchpad 提升为 tracked 文档并加索引（避免每
-> 次新 session 对两台机器从头摸索）。关联记忆 `reference_win_builder_cuda_build_recipe`、
-> `reference_dev49_linux_bench`、`reference_win_test_machine`（三者均以本文档为单一真源）。
+> Mac 本机编不了 CUDA，subprocess 自报不可信 → CUDA 改动必须在 **CUDA 参照机**上亲跑。
+> 本文档是那套流程的现成 recipe，免每次重新折腾。
+>
+> ⭐ **本文档正文只写角色，不写主机名。** 「CUDA 参照机（Linux）」「CUDA 参照机（Windows）」
+> 具体是哪台机器、仓库在哪、CUDA 装在哪，全部在
+> [`machines.md`](machines.md) —— 那是主机绑定的**单一真源**。换机器只改那一份，本文档不动。
+> 这个分层是有代价换来的：上一代验证机整体不可用时，正文里每一条写死的 ssh 别名与路径同时
+> 失效，把本来仍然有效的协议部分一起拖成了可疑内容。
 >
 > **与 [`windows-remote-testing.md`](windows-remote-testing.md) 的分工**：那份讲的是 **GUI VSync
-> 物理桌面性能测试**（`win_remote_test.sh` + `win_test_watcher.ps1`，需真实显示器 session）；**本文档**
-> 讲的是 **CUDA build + parity/正确性验证**（dev49 docker + win-builder BuildTools，headless 即可）。
-> 二者场景正交，别混用。吞吐 bench 口径见 [`performance-testing.md`](performance-testing.md)。
+> 物理桌面性能测试**（需真实显示器 session）；**本文档**讲的是 **CUDA build + parity/正确性验证**
+> （headless 即可）。二者场景正交，别混用。吞吐 bench 口径见
+> [`performance-testing.md`](performance-testing.md)。
 
 ## 0. 何时需要
 
 - 任何触及 `src/core/backend/cuda_trace_backend.*` 或三后端共享头（`trace_backend.hpp`、
   `pcg_shared.h`、`*_shared.h`）、`SimData`、simulator/server/stats 的改动。
 - 验收口径：**CUDA parity battery 10/10**（exit-seam 2 + filter 4 + multi-MS 4）+（按需）CLI 冒烟。
-- perf bench 才需要 dev49 idle-gate 锁频窗口；**纯正确性验证不需要等窗口**，随时可跑。
+- perf bench 才需要锁频 / idle 窗口；**纯正确性验证不需要等窗口**，随时可跑。
 
-## 1. 通用约定（两台机器都适用）
+## 1. 通用约定（两个角色都适用）
 
 - **un-skip 闸**：CUDA parity pytest 用 `pytest.mark.skipif(platform in (Linux,Windows) and
   os.environ["LUMICE_HAS_CUDA"]=="1")`。**必须设 `LUMICE_HAS_CUDA=1`** 才会跑（不是
-  `LUMICE_CUDA_ENABLED`——那个是 runtime 路由用的，两个都要设）。
+  `LUMICE_CUDA_ENABLED`——那个是 runtime 路由用的，**两个都要设**）。
 - **CApiRunner 找 lib**：`LUMICE_LIB` 指向 shared lib（`.so`/`.dll`），cudart 需与之同目录或在 PATH。
 - **parity battery 三文件**：`test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py`。
 - **别信 subprocess 自报**：读 build EXIT、grep 告警、亲看 pytest 计数（`N passed`）。
+  ⚠️ 管道会吃掉退出码——`cmd | tail` 的 `$?` 是 `tail` 的。要么读前台命令的 `$?`，
+  要么 `set -o pipefail`。
+- **arch 表**：本仓库默认 `CMAKE_CUDA_ARCHITECTURES` 以 `61-virtual` 为 PTX floor。
+  ⚠️ **CUDA 13 已移除 `compute_61`**，用它构建会直接 `nvcc fatal`，与你改的东西无关。
+  参照机须装 CUDA 12.x。做吞吐 bench 时还要追加与卡匹配的 `-real` arch，否则跑的是
+  驱动 JIT 出来的 PTX 而非原生 SASS（详见 [`machines.md`](machines.md) 的「已知坑」）。
 
-## 2. dev49（Linux / RTX 4060Ti / `ssh 49-GPU`，主机 wztest49）
+## 2. CUDA 参照机（Linux）
 
-- **源码树**：`/home/work/zjj/ice-halo-sim`（rsync 同步改动：
-  `rsync -az --delete src/ 49-GPU:/home/work/zjj/ice-halo-sim/src/` + 同理 test/，
-  排除 `__pycache__`/`references/`）。非 git 仓，rsync 覆盖即可。
-- **CUDA docker 镜像**：
-  - ⭐**优先用本地镜像 `lumice-cuda-test:11.6-py`**（dev49 本地 tag，`docker images` 可见）。它 = 下方 base 镜像 **+ 预装 `pytest`/`numpy`/`Pillow`**（explore-359 打的，避免每次 `docker run` 重装；`--rm` 只删容器不删镜像故持久留存）。**用它就不用再写 `pip install` 行**。
-  - base 镜像（新镜像的 FROM、也是纯 build 用）：
-    `registry.cn-zhangjiakou.aliyuncs.com/weizhendev/wzffm-centos7-cuda11.6:20250811T094454Z-e7555768`（CUDA 11.6）。
-  - **若本地镜像丢失（换机/清 docker）→ 一条命令重建**：
-    ```bash
-    ssh 49-GPU 'mkdir -p /tmp/lumice-img-build && printf "%s\n%s\n" \
-      "FROM registry.cn-zhangjiakou.aliyuncs.com/weizhendev/wzffm-centos7-cuda11.6:20250811T094454Z-e7555768" \
-      "RUN python3 -m pip install --no-cache-dir pytest numpy Pillow" \
-      > /tmp/lumice-img-build/Dockerfile && \
-      docker build -t lumice-cuda-test:11.6-py /tmp/lumice-img-build'
-    ```
-    baked 版本（首建时）：pytest 8.4.2 / numpy 2.0.2 / Pillow 11.3.0。
-- **build dir**：`build/cmake_build_cuda`（已配好，Ninja，`LUMICE_CUDA_ENABLED=ON`，86-virtual PTX，
-  `BUILD_SHARED_LIBS=ON`——产物是 `liblumice.so`）。产物路径带 flavor 段，故这台机上是
-  `build/Release/shared/{bin,lib}/`；下次 `ninja` 会因 `CMakeLists.txt` mtime 变化自动 reconfigure 并
-  落到新位置，无需手工重配。
-- **build**：
+本节命令假设你已按 [`machines.md`](machines.md) 设好这几个绑定（值在那份文件里，不在这里）：
+
+| 变量 | 含义 |
+|---|---|
+| `$HOSTALIAS` | 该角色的 ssh 别名 |
+| `$REPO` | 机器上的仓库路径 |
+| `$ENVSH` | 环境激活脚本（设 CUDA 版本 + venv + arch 表） |
+
+- **同步改动**：仓库是 git 工作树，改动经局域网 rsync 推送即可：
   ```bash
-  ssh 49-GPU 'cd /home/work/zjj/ice-halo-sim && IMG=lumice-cuda-test:11.6-py && \
-    docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work \
-      -w /work/build/cmake_build_cuda $IMG bash -lc "ninja"'
+  rsync -az --exclude '__pycache__' src/ $HOSTALIAS:$REPO/src/   # test/ 同理
   ```
-  单 TU 强制重编：`rm -f CMakeFiles/lumice_obj.dir/src/core/backend/cuda_trace_backend.cu.o &&
-  ninja <该 .o target>`；grep `177-D`/`declared but never referenced` 查死代码告警
-  （既有噪声：spdlog/fmt 的 `#128-D loop is not reachable`、`trace_backend.hpp` multi-line comment，
-  与改动无关）。
-- **parity（⭐首选 pytest，已修复）**：dev49 上 pytest CUDA parity battery 曾经 `Fatal Python error: Aborted`
-  （`free(): invalid next size`）——根因是 `test/e2e/capi_runner.py` 的 ctypes 镜像结构（`LUMICE_RenderResult`/
-  `LUMICE_ServerConfig`）比 C 侧头文件 sizeof 小 8/4 字节，导致每次 poll 调用堆越界写、污染 Python ctypes
-  相邻堆块（task-cuda-ctypes-teardown-crash 修复，已补 ctypes 字段 + C++ 侧 `static_assert(sizeof(...))`
-  编译期护栏）。**现在 pytest 不再崩溃**，恢复为首选验证路径（用新镜像，无需 pip install）：
-  ```bash
-  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
-    export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-    export LUMICE_LIB=/work/build/Release/shared/lib/liblumice.so
-    export LD_LIBRARY_PATH=/work/build/Release/shared/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    python3 -m pytest -v -m slow test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py'
-  ```
-  判据 = 退出码 0 且看到 `N passed`（无需再加 `-p no:faulthandler`）。
-  （ctest 的 `CudaMultiMsParity` 因 cmake `PYTEST_EXECUTABLE` cache 指向不存在路径会 Not Run；直接 `python3 -m pytest` 绕过。）
-- **gtest parity（快速冒烟补充）**：C++ gtest `parity_test` 更快（~2s），适合改动后先跑一遍再上 pytest 全量：
-  ```bash
-  docker run --rm --gpus all -v /home/work/zjj/ice-halo-sim:/work -w /work lumice-cuda-test:11.6-py bash -lc '
-    export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
-    export LD_LIBRARY_PATH=/work/build/Release/shared/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    /work/build/Release/shared/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"'
-  ```
-  覆盖 `CudaRichExit`（2 个 in-test `GTEST_SKIP`）、`CudaBackendCrystalCount`、`CudaRngHiWiring`(4)、
-  `CudaComponentMaskParity`(6，染色 parity)。**判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。
-- **染色密度验证（本 bug / 任何 Y-lane composite 改动的功能门，parity 只测 mask 是盲区）**：three_arcs 2M
-  跑 `--backend cuda` vs `--backend cpu`，比 `img_01_components.jpg` 的 lit-px 密度（用新镜像，`test/e2e/image_utils.py::classify_pixels_by_color_direction`）。修复后 CUDA≈CPU（~100k）；explore-359 pre-fix 塌到 65k(CUDA)/3k(Metal)。
-- **CLI 冒烟**：`Lumice -f examples/config_example.json --backend cuda -o /tmp`
-  （`-o` 是**目录**不是文件），grep `Stats: ... crystals=N`。
-- **坑**：shared 机 CPU 争用使 host-bound 吞吐剧烈抖动（只信 interleaved，perf 才在意）；
-  rsync 对 root 生成的历史文件报 Permission denied 是环境噪声，忽略。
+  ⚠️ 首次同步整棵树时**别在机器上从 GitHub 拉**——见 `machines.md` 的网络实测，
+  从开发机 rsync 过去快得多，`build/cpm_cache` 尤其（省掉全部依赖下载）。
 
-## 3. win-builder（Windows / GTX 1070Ti sm_61 / `ssh win-builder`，主机 DESKTOP-4G9MT1O）
+- **build**（shared flavor，parity 需要 `.so`）：
+  ```bash
+  ssh $HOSTALIAS "bash -lc 'source $ENVSH && ~/lumice-build-cuda.sh'"
+  ```
+  判据 = 日志里 `CONFIGURE_EXIT` / `BUILD_EXIT` / `INSTALL_EXIT` **三个都是 0**。
+  单 TU 强制重编：删掉对应 `.o` 再 `ninja` 那个 target。
+  既有噪声告警（与改动无关，别追）：`nvcc warning : Support for offline compilation for
+  architectures prior to '<compute/sm/lto>_75' will be removed`（这是 `61-virtual` floor 的
+  必然产物）、spdlog/fmt 的 `#128-D loop is not reachable`、`math.hpp` 的 C4305 truncation。
 
-- **源码树**：`C:\lumice-src`。**同步坑**：`scp` 到 `C:/lumice-src/深层/路径` 会因盘符冒号
-  解析失败 → **tarball 法**：
+- **parity（⭐首选 pytest）**：
+  ```bash
+  source $ENVSH
+  export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
+  export LUMICE_LIB=$REPO/build/Release/shared/lib/liblumice.so
+  export LD_LIBRARY_PATH=$REPO/build/Release/shared/lib:$LD_LIBRARY_PATH
+  python -m pytest -v -m slow \
+    test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py
+  ```
+  判据 = 退出码 0 且看到 `N passed`。
+  - 历史坑（**已修复**，留档以免误判为新问题）：这套 pytest 曾 `Fatal Python error: Aborted`
+    （`free(): invalid next size`），根因是 `test/e2e/capi_runner.py` 的 ctypes 镜像结构
+    （`LUMICE_RenderResult` / `LUMICE_ServerConfig`）比 C 侧头文件 sizeof 小 8/4 字节，
+    每次 poll 堆越界写、污染相邻堆块。现已补齐 ctypes 字段 + C++ 侧
+    `static_assert(sizeof(...))` 编译期护栏。**再遇到类似崩溃属新问题，别按旧结论绕过。**
+  - ctest 的 `CudaMultiMsParity` 可能因 cmake `PYTEST_EXECUTABLE` cache 指向不存在的路径而
+    Not Run；直接 `python -m pytest` 绕过。（在激活了 venv 的 shell 里 configure 可以让
+    cmake 找到正确的 pytest，`find_program(... HINTS ENV PATH)`。）
+
+- **gtest parity（快速冒烟补充）**：C++ `parity_test` 只要 ~1s，适合改完先跑一遍再上 pytest 全量：
+  ```bash
+  export LUMICE_HAS_CUDA=1 LUMICE_CUDA_ENABLED=1
+  export LD_LIBRARY_PATH=$REPO/build/Release/shared/lib:$LD_LIBRARY_PATH
+  $REPO/build/Release/shared/bin/parity_test --gtest_filter="Cuda*:*ComponentMask*"
+  ```
+  覆盖 `CudaRichExit`（含 2 个 in-test `GTEST_SKIP`）、`CudaBackendCrystalCount`、
+  `CudaRngHiWiring`、`CudaComponentMaskParity`（染色 parity）、`CudaKShapeFilterParity`。
+  **判据 = 进程退出码 0 且 0 failed**（skip 不算失败）。
+
+- **染色密度验证**（任何 Y-lane composite 改动的功能门——parity 只测 mask，密度是它的盲区）：
+  three_arcs 2M 跑 `--backend cuda` vs `--backend cpu`，比 `img_01_components.jpg` 的 lit-px
+  密度（`test/e2e/image_utils.py::classify_pixels_by_color_direction`）。健康时两者接近。
+
+- **CLI 冒烟**：
+  ```bash
+  $REPO/build/cmake_install/shared/Lumice -f examples/config_example.json --backend cuda -o /tmp
+  ```
+  （`-o` 是**目录**不是文件。）确认日志里有 `preferred_backend=cuda → routing via CudaTraceBackend`，
+  再 grep `Stats: ... crystals=N`。
+  ⚠️ **`examples/config_example.json` 有 4 个 renderer，而 TraceBackend 路径只支持单 renderer**
+  ⇒ 它会打印 `falling back to legacy CPU` 然后用 CPU 跑完。这是配置属性不是故障，但**这条冒烟
+  因此不能证明 CUDA 真的跑了仿真**——要证明路由，看上面那行 `routing via CudaTraceBackend`；
+  要证明算得对，用 parity battery。
+
+- **GUI 测试**：该机是 WSL，`gui_test` 需要 `xvfb-run`（WSLg 的 X server 在 ssh 会话里不可达）：
+  ```bash
+  xvfb-run -a build/Release/static/bin/gui_test \
+    --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config
+  ```
+  这两组正是 CI 在软件光栅下运行的组。⚠️ **完整视觉池里的 `crystal_preview_*` 与
+  `capture_harness` 场景在软件光栅下达不到 40 dB 阈值**，属已知边界，不是回归——
+  判据与可运行组的界定见 `testing-architecture.md`。
+
+## 3. CUDA 参照机（Windows）
+
+绑定同样见 [`machines.md`](machines.md)（仓库路径、BuildTools 路径、CUDA 路径、构建脚本名）。
+
+- **同步改动**：`scp` 到带盘符冒号的深层路径会解析失败 → **tarball 法**：
   ```bash
   git diff --name-only <base>..HEAD -- src/ test/ > files.txt
   tar czf changed.tgz -T files.txt
-  scp changed.tgz win-builder:C:/lumice-test/changed.tgz   # 浅路径 scp OK
-  ssh win-builder "powershell -NoProfile -Command \"cd C:/lumice-src; tar xzf C:/lumice-test/changed.tgz\""
+  scp changed.tgz $WINALIAS:C:/lumice-test/changed.tgz     # 浅路径 scp OK
   ```
-  （Windows 10+ 自带 `tar`=bsdtar。）验证：`Select-String -Path <file> -Pattern <新符号>`。
-- **工具链**：VS BuildTools `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools`，
-  MSVC 工具集 **14.39.33519**（scrum-309 定；14.51 太新 CUDA 11.7 收不了）。CUDA `v11.7`。
-  cmake/ninja 不在 PATH，走 BuildTools 内置（build.ninja 已 baked 绝对路径，纯 ninja 增量即可）。
-- **配好的 CUDA build dirs**（CMakeCache+build.ninja 齐全，`LUMICE_CUDA_ENABLED=ON`）：
-  - `C:\lumice-src\build\win-cuda`（静态 CLI）→ 产物 `build\Release\static\bin\`
-  - `C:\lumice-src\build\win-cuda-shared`（**shared→liblumice.dll，parity 用这个**）→ 产物 `build\Release\shared\bin\`
-  - `C:\lumice-src\build\win-gui-cuda`（GUI，静态）→ 产物 `build\Release\static\bin\`
+  再在机器上解包到仓库根。（Windows 10+ 自带 `tar` = bsdtar。）
+  验证：`Select-String -Path <file> -Pattern <新符号>`。
 
-  ⚠️ 产物路径带 flavor 段是**新行为**。在此之前三棵树都写同一个 `build\Release\bin\`，即静态与
-  shared 一直在互相覆盖对方的 `Lumice.exe`——parity 跑到的 CLI 取决于谁最后构建。现在两者分家，
-  各棵树 `ninja` 时会因 `CMakeLists.txt` mtime 变化自动 reconfigure，不必手工重配。
-- **build**（写 .bat scp 过去，`cmd /c` 跑——**别用 PowerShell `&` 后台化，会 AmpersandNotAllowed**；
-  同步跑，我方 bash `run_in_background` 拿 notification）：
-  ```bat
-  @echo off
-  call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.39 >nul 2>&1
-  set NINJA="C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
-  cd /d C:\lumice-src\build\win-cuda-shared
-  %NINJA%
-  echo NINJA_EXIT=%ERRORLEVEL%
-  ```
-  产物 `C:\lumice-src\build\Release\shared\bin\lumice.dll` + `Lumice.exe`（cudart64_110.dll 同目录）。
-  既有噪声告警：fmt/spdlog `#27-D character out of range`、`math.hpp` C4305 truncation（无关）。
-- **parity**：embeddable python `C:\lumice-test\py311\python.exe`（**已装 pytest+numpy**）：
+- **PS over ssh 通用坑**（⭐ 每次都会撞）：默认 shell 是 **PowerShell 5.1**——
+  `&&` 不是有效语句分隔符；内联引号 + 中文 locale 极易乱码或解析错；本地 bash 还会先吃掉 `$`。
+  ⇒ **一律写 `.ps1` / `.bat` 文件 scp 过去再执行**（`powershell -NoProfile -ExecutionPolicy
+  Bypass -File` 或 `cmd /c`），或用 `powershell -EncodedCommand`（UTF-16LE + base64）传整段。
+
+- **build**：调 `machines.md` 里记的构建脚本；它内部 `call vcvars64.bat`、把 BuildTools 自带的
+  cmake/ninja 与 CUDA 的 `bin` 加进 PATH，然后 configure + build + install。
+  判据 = `CONFIGURE_EXIT` / `BUILD_EXIT` / `INSTALL_EXIT` 三个都是 0。
+  ⚠️ 长时间构建**别用 `Start-Process` 分离**（实测会静默失败、日志为空）；
+  要么同步跑（我方 bash 用后台任务拿 notification），要么用 `schtasks` 建一次性计划任务。
+
+- **⚠️ 当前限制：`BUILD_TEST=ON` 在 Windows + CUDA 下编译不过。**
+  三处 MSVC 不兼容（两个 `test_cuda_*` 用了 POSIX `setenv`/`unsetenv`、一个 bench 文件用了
+  `M_PI`）。**所以这台机器上现在只能构建产物**（`-DBUILD_TEST=OFF -DBUILD_BENCH=OFF`），
+  跑不了 gtest / parity。修复落地后本节应恢复完整流程并删除本段。
+  成因值得记住：Windows 上「带 CUDA 编译测试」这个配置**没有任何 CI job 走过**，
+  而原因不是漏了 Windows，是主矩阵的 Windows job 开了 `BUILD_TEST` 但没开 CUDA、
+  CUDA 编译 job 开了 CUDA 但没开 `BUILD_TEST`——**两半都在，交集为空**。
+
+- **parity（限制解除后）**：
   ```bat
   set LUMICE_HAS_CUDA=1
   set LUMICE_CUDA_ENABLED=1
-  set LUMICE_LIB=C:\lumice-src\build\Release\shared\bin\lumice.dll
-  set PATH=C:\lumice-src\build\Release\shared\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin;%PATH%
+  set LUMICE_LIB=<仓库>\build\Release\shared\bin\lumice.dll
+  set PATH=<仓库>\build\Release\shared\bin;<CUDA>\bin;%PATH%
   set PYTHONUTF8=1
-  cd /d C:\lumice-src
-  C:\lumice-test\py311\python.exe -m pytest -v -m slow test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py test\parity-cross-backend\backend\test_cuda_filter_parity.py test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
+  python.exe -m pytest -v -m slow test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py ^
+    test\parity-cross-backend\backend\test_cuda_filter_parity.py ^
+    test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
   ```
-  耗时 ~7min，1070Ti/sm_61 走 compute_61 PTX JIT。
   - ⚠️ **`set PYTHONUTF8=1` 必带**：中文 Windows 控制台默认 GBK codec，parity 测试的
-    docstring/traceback 若含非 ASCII 字符（数学符号、破折号），pytest 输出时会
-    `UnicodeEncodeError` 崩在渲染上 → parity 计算已完成但断言未执行 = 假失败遮蔽真结果。
-    `PYTHONUTF8=1` 强制 Python UTF-8 I/O，与 locale 无关，是这个坑的环境兜底。
-    测试消息串本身已改 ASCII（治本），此为第二道保险。
-- **PS over ssh 通用坑**：默认 shell 是 PowerShell，内联引号 + 中文 locale 易乱码/解析错 →
-  **一律写 .ps1/.bat 文件 scp 过去，再 `powershell -NoProfile -ExecutionPolicy Bypass -File`
-  或 `cmd /c`**。用完清理 `C:\lumice-test` 下的临时脚本（共享机卫生）。
+    docstring/traceback 若含非 ASCII 字符（数学符号、破折号），pytest 渲染输出时会
+    `UnicodeEncodeError` 崩掉 —— parity 已算完但断言未执行，**假失败遮蔽真结果**。
+    `PYTHONUTF8=1` 强制 Python UTF-8 I/O，与 locale 无关。测试消息串本身已改 ASCII（治本），
+    此为第二道保险。
+
+- **吞吐 bench**：⚠️ `scripts/bench_throughput.py` 的默认二进制探测**不带 `.exe`**
+  ⇒ Windows 上必须显式 `set LUMICE_BENCH_BIN=<仓库>\build\cmake_install\static\Lumice.exe`，
+  否则 preflight 直接报 `Binary missing or not executable`。
 
 ## 4. 一次完整改动的推荐顺序
 
 1. 本机改代码 + Mac build/单测/Metal parity（`./scripts/build.sh -tj release`）。
-2. rsync/tarball 同步到 dev49 + win-builder。
-3. 两台各自 build（查 EXIT + 告警）。
-4. 两台各自跑 CUDA parity battery（各 10/10）。
-5.（按需）CLI 冒烟核 `Stats`/出图。
+2. 同步到 CUDA 参照机（Linux rsync / Windows tarball）。
+3. 各自 build，**逐个查 EXIT 码 + grep 告警**。
+4. Linux 参照机跑 CUDA parity battery（10/10）；Windows 侧在上述限制解除前只验编译。
+5.（按需）CLI 冒烟核路由与 `Stats`、染色密度门。
 6. commit + push + PR，CI 的 `windows-cuda-compile` job 再兜一层 Windows 编译。
+
+> ⚠️ **两个 CUDA 参照机角色目前由同一台物理机的两个环境承担**（见 `machines.md`）。
+> 因此第 3、4 步**不要并行跑**——共享 CPU 与 GPU 会让任何吞吐数字失真，
+> 正确性验证也会被拖慢到看起来像挂起。
