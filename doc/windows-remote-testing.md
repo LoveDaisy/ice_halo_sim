@@ -4,6 +4,17 @@ This guide explains how to run Lumice GUI tests on a Windows machine remotely,
 using a watcher-based workflow that executes tests in the physical desktop session
 (with real display, VSync, and DWM compositor).
 
+> **Roles, not hostnames.** This guide describes the *GUI physical-desktop* role. Which
+> machine currently fills it, and its repo/toolchain paths, live in
+> [`machines.md`](machines.md) — the single source for host bindings. Change machines
+> there; this guide does not need to change with them.
+>
+> ⚠️ **Verification status: this workflow has not been re-run since the machine change.**
+> The host currently assigned to this role was set up and verified for *compilation and
+> throughput* only; `win_remote_test.sh` / `win_test_watcher.ps1` were not exercised on it.
+> Treat the steps below as carried over, not as freshly confirmed — expect to debug the
+> shared-directory permissions and the watcher's session assumptions on first use.
+
 ## Why Remote Testing?
 
 GUI tests that involve display interaction (VSync, DWM composition, window visibility)
