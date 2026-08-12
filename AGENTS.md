@@ -499,3 +499,25 @@ owner already settled. Avoid it:
 - **Think at the architecture level before decomposing into tasks.** The task/scrum
   machinery rewards fast decomposition and immediate action; resist acting on the first
   promising small direction before the architecture-level question is reasoned through.
+- **A completeness claim carries the same burden of proof as adding code.** "Covers all
+  20 panels with zero omissions", "orthogonal", "closed", "every proposition enumerated"
+  read as achievements and pass review unchallenged, while their opposites ("this class is
+  not worth covering", "50 cases is enough here") have to be argued for. That asymmetry is
+  the default state, not a choice anyone makes, so completeness wins every conflict without
+  a single person advocating for it — including conflicts against the task's own declared
+  budget. Measured instance, PR #261: the pre-committed target was −30% de-commented test
+  lines against a baseline of 21,336 pinned by two independent counters
+  (`scripts/count_gui_test_lines.py` and `cloc --by-file`, 52/52 files zero diff). It
+  landed at −8.7%, and the coverage backfill demanded by "20 panels, zero omissions"
+  accounts for 1,000–1,500 lines, roughly a third of the miss — the work shape was spending
+  against the metric the same task had committed to. Escape-defect density over those same
+  files had already been measured before the partition was drawn and spans 8× (47.2 vs 6.2
+  defects per kloc); the equal-weight-per-panel split discarded that measurement.
+  So: when a plan, a scope statement, or a review comment asserts coverage of an enumerated
+  surface, it must say why each member is worth covering. Where a per-member value measure
+  exists or is cheap to obtain (escape-defect density, call-site count, blast radius, user
+  reachability), an equal-weight partition needs a stated reason — "it is the whole set" is
+  not one. This puts the burden of proof on the side that adds and the side that persists,
+  which is where it belongs, and which completeness normally escapes. It is **not** a
+  mandate to cut: whether a leaner suite would have let more defects escape is a
+  counterfactual and untestable. What is required is the justification, not the reduction.
