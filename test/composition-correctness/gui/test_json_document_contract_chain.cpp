@@ -26,6 +26,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -496,6 +497,24 @@ namespace {
 constexpr const char* kExistingContent = "{\"not\": \"written by the gui\"}\n";
 constexpr const char* kExportedContent = "{\"exported\": true}\n";
 
+// Read back a file THE EXPORT WROTE, with line endings normalised to LF.
+//
+// `ExportConfigJson` opens its stream in text mode (`file_io.cpp`, since 3bf557fd 2026-03-19 —
+// unlike SaveLmcFile, which is explicitly binary), so on Windows the runtime translates the `\n`
+// this file hands it into `\r\n` and a byte compare against the literal fails there and only
+// there. That translation is not what these two cases are about: their proposition is that the
+// content the GUI was handed is the content that landed on disk, and the line ending is an
+// incidental of the platform's text mode.
+//
+// ⛔ Deliberately NOT used by the "source file untouched" cases below. There the byte comparison
+// IS the proposition, and it is a comparison of one file against its own earlier bytes — both
+// sides written by this file in binary, so no translation is in play to paper over.
+std::string ReadAllBytesLf(const std::filesystem::path& path) {
+  std::string s = ReadAllBytes(path);
+  s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+  return s;
+}
+
 }  // namespace
 
 // Nothing at the target: the export is not a destructive act, and asking would be noise.
@@ -509,7 +528,7 @@ TEST(ConfigJsonExportContractChain, ExportingToAFreshPathWritesWithoutAsking) {
   RequestConfigJsonExport(target.path, kExportedContent);
 
   EXPECT_FALSE(g_show_export_overwrite_confirm_popup) << "nothing was there to lose; the prompt is noise";
-  EXPECT_EQ(ReadAllBytes(target.path), kExportedContent);
+  EXPECT_EQ(ReadAllBytesLf(target.path), kExportedContent);
 }
 
 // Something at the target: hold everything, ask, and — the part that matters — leave the file alone
@@ -539,7 +558,7 @@ TEST(ConfigJsonExportContractChain, ConfirmingWritesTheHeldDocumentAndClearsTheP
 
   ConfirmPendingConfigJsonExport();
 
-  EXPECT_EQ(ReadAllBytes(target.path), kExportedContent);
+  EXPECT_EQ(ReadAllBytesLf(target.path), kExportedContent);
   EXPECT_TRUE(g_pending_export_json_path.empty()) << "a resolved export must not stay pending";
   EXPECT_TRUE(g_pending_export_json_content.empty());
 }
