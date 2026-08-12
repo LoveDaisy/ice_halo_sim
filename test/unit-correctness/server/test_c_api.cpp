@@ -24,6 +24,7 @@
 #include "core/def.hpp"
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch(+Guard) + ParseConfigString + ConfigToJson (internal)
+#include "support/env_var.hpp"
 
 // Regression guard (task-fix-stats-ray-count-u32-overflow): ray-count fields must be
 // 64-bit so totals > 2^32 never truncate on Windows, where `unsigned long` is 32-bit
@@ -1565,17 +1566,10 @@ TEST_F(ServerLifecycleApi, StressStartStop) {
 // 60s timeout dominates the ~few-seconds expected runtime; on regression the
 // server will sit forever at <1.0 progress with workers idle in config_queue.
 TEST_F(ServerLifecycleApi, ZeroExitBatchNoHang) {
-#ifdef _WIN32
-  ::_putenv_s("LUMICE_TRACE_BACKEND", "cpu_backend");
+  lumice::test::SetEnvVar("LUMICE_TRACE_BACKEND", "cpu_backend");
   struct EnvGuard {
-    ~EnvGuard() { ::_putenv_s("LUMICE_TRACE_BACKEND", ""); }
+    ~EnvGuard() { lumice::test::UnsetEnvVar("LUMICE_TRACE_BACKEND"); }
   } guard;
-#else
-  ::setenv("LUMICE_TRACE_BACKEND", "cpu_backend", 1);
-  struct EnvGuard {
-    ~EnvGuard() { ::unsetenv("LUMICE_TRACE_BACKEND"); }
-  } guard;
-#endif
 
   auto json = MakeBdFilterConfigJson();
   ASSERT_EQ(CommitJsonConfig(server_, json.c_str()), LUMICE_OK);

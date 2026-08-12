@@ -22,6 +22,7 @@
 #include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
+#include "support/env_var.hpp"
 
 namespace lumice {
 namespace metal_test {
@@ -38,10 +39,10 @@ inline bool ShouldSkipMetalTests() {
 // backend to one path. The env var is read per-dispatch in
 // MetalTraceBackend::TraceLayer so toggling between tests is fine.
 inline void ForceHostGenForByteIdentity() {
-  ::setenv("LUMICE_DISABLE_DEVICE_GEN", "1", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_DISABLE_DEVICE_GEN", "1");
 }
 inline void EnableDeviceGenForStatisticalParity() {
-  ::unsetenv("LUMICE_DISABLE_DEVICE_GEN");
+  test::UnsetEnvVar("LUMICE_DISABLE_DEVICE_GEN");
 }
 
 inline RenderConfig MakeRectangularRender() {

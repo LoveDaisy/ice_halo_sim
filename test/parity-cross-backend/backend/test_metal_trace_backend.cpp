@@ -8,7 +8,6 @@
 #if defined(__APPLE__)
 
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <vector>
@@ -20,6 +19,7 @@
 #include "core/backend/trace_backend.hpp"
 #include "core/trace_ops.hpp"
 #include "metal_test_helpers.hpp"
+#include "support/env_var.hpp"
 
 namespace lumice {
 namespace {
@@ -515,7 +515,7 @@ TEST(MetalTraceBackend, KShapePool_DefaultKnobUnsetGivesPCiOne_AC1) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
   // Guarantee the knob is off for this test (independent of prior test order).
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 
   auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
@@ -544,7 +544,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledBuildsCeilNciOverKShapes_AC1) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
   auto render = MakeRectangularRender();
@@ -606,7 +606,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledBuildsCeilNciOverKShapes_AC1) {
   }
 
   backend.EndSession();
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // K-shape pool driven by config (NOT env): SceneConfig::geom_clock_ is now the
@@ -620,7 +620,7 @@ TEST(MetalTraceBackend, KShapePool_ConfigDrivenKWithoutEnv) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
   // No env override: the value must come purely from config.
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 
   auto scene = MakeMetalSceneRandomH(/*max_hits=*/4, /*ms_layers=*/1);
   scene.geom_clock_ = 8;  // config-supplied K
@@ -673,9 +673,9 @@ TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
 
   auto run_and_get_stats = [&](const char* k_val) {
     if (k_val) {
-      ::setenv("LUMICE_GPU_GEOM_CLOCK", k_val, /*overwrite=*/1);
+      test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", k_val);
     } else {
-      ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+      test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
     }
     MetalTraceBackend backend;
     backend.BeginSession(spec);
@@ -716,7 +716,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledSessionRunsAndProducesOutput_AC2) {
   EXPECT_GT(w_ratio, 0.2f);
   EXPECT_LT(w_ratio, 5.0f);
 
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // AC2 statistical gate: with a stochastic h_ distribution, each K=0 session
@@ -742,9 +742,9 @@ TEST(MetalTraceBackend, KShapePool_KEnabledReducesCrossSeedVariance_AC2) {
 
   auto run_batch = [&](const char* k_val, uint32_t seed) -> float {
     if (k_val) {
-      ::setenv("LUMICE_GPU_GEOM_CLOCK", k_val, /*overwrite=*/1);
+      test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", k_val);
     } else {
-      ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+      test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
     }
     MetalTraceBackend backend;
     SessionSpec spec = spec_template;
@@ -810,7 +810,7 @@ TEST(MetalTraceBackend, KShapePool_KEnabledReducesCrossSeedVariance_AC2) {
                                  << " must be < 0.75 × sd(K=0) = " << (0.75 * sd_k0) << " (mean_k0=" << mean_k0
                                  << ", mean_k8=" << mean_k8 << ")";
 
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // Regression coverage for the "empty batch + K knob enabled + stochastic
@@ -837,7 +837,7 @@ TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_Regression
   spec.wl = WlParam{ 550.0f, 1.0f };
   spec.seed = 7;
 
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   MetalTraceBackend backend;
   backend.BeginSession(spec);
@@ -856,7 +856,7 @@ TEST(MetalTraceBackend, KShapePool_EmptyBatchWithKEnabledDoesNotCrash_Regression
          "and the K-shape path partially ran on a zero-ray batch.";
   backend.EndSession();
 
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // =============================================================================
@@ -893,7 +893,7 @@ TEST(MetalTraceBackend, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1_TestA) 
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   const size_t kMaxHits = 4;
   auto scene = MakeMetalSceneRandomH(/*max_hits=*/kMaxHits, /*ms_layers=*/1);
@@ -1018,7 +1018,7 @@ TEST(MetalTraceBackend, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1_TestA) 
   }
 
   backend.EndSession();
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 TEST(MetalTraceBackend, KShapePool_TransitPicksMultipleShapes_AC1_TestB) {
@@ -1030,7 +1030,7 @@ TEST(MetalTraceBackend, KShapePool_TransitPicksMultipleShapes_AC1_TestB) {
   if (ShouldSkipMetalTests()) {
     GTEST_SKIP() << "LUMICE_SKIP_METAL_TESTS set";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   auto scene = MakeMetalSceneRandomH(/*max_hits=*/6, /*ms_layers=*/2);
   auto render = MakeRectangularRender();
@@ -1093,7 +1093,7 @@ TEST(MetalTraceBackend, KShapePool_TransitPicksMultipleShapes_AC1_TestB) {
                                  << " — transit's K-shape pick is not distributing.";
 
   backend.EndSession();
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 }  // namespace

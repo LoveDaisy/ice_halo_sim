@@ -48,7 +48,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <set>
 #include <utility>
 #include <vector>
@@ -62,6 +61,7 @@
 #include "core/exit_seam.hpp"
 #include "core/raypath.hpp"
 #include "cuda_test_helpers.hpp"
+#include "support/env_var.hpp"
 
 namespace lumice {
 namespace {
@@ -101,7 +101,7 @@ TEST(CudaKShapePool, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   const size_t kMaxHits = 6;
   auto scene = MakeTwoLayerStochasticScene(kMaxHits);
@@ -193,7 +193,7 @@ TEST(CudaKShapePool, KShapePool_PathIsLocalWithinPolygonFaceCount_AC1) {
   // the task archive.
 
   backend.EndSession();
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // =============================================================================
@@ -203,7 +203,7 @@ TEST(CudaKShapePool, KShapePool_TransitPicksMultipleShapes_AC1) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
-  ::setenv("LUMICE_GPU_GEOM_CLOCK", "8", /*overwrite=*/1);
+  test::SetEnvVar("LUMICE_GPU_GEOM_CLOCK", "8");
 
   const size_t kMaxHits = 6;
   auto scene = MakeTwoLayerStochasticScene(kMaxHits);
@@ -276,7 +276,7 @@ TEST(CudaKShapePool, KShapePool_TransitPicksMultipleShapes_AC1) {
                               << " — transit_multi_ms_kernel K-shape pick is not distributing.";
 
   backend.EndSession();
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");
 }
 
 // =============================================================================
@@ -286,7 +286,7 @@ TEST(CudaKShapePool, KShapePool_DefaultKnobUnsetGivesPCiOne_AC2) {
   if (ShouldSkipCudaTests()) {
     GTEST_SKIP() << "no CUDA device enumerated";
   }
-  ::unsetenv("LUMICE_GPU_GEOM_CLOCK");  // isolation from prior test order
+  test::UnsetEnvVar("LUMICE_GPU_GEOM_CLOCK");  // isolation from prior test order
 
   // Single-layer stochastic scene — one (layer, ci) pair. K=0 → P_ci = 1 →
   // pool table has exactly one row, and
