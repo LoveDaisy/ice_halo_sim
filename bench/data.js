@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786539478705,
+  "lastUpdate": 1786539481404,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9584,50 +9584,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ba2b6bbf58cb0df294c2994d9af0c0c39a8fe3d4",
-          "message": "Merge pull request #161 from LoveDaisy/feat/gpu-bench-drain-aligned-rate\n\nfix(bench): drain-count-driven GPU --benchmark rate (fixes 5× under-report)",
-          "timestamp": "2026-07-02T17:54:37+08:00",
-          "tree_id": "5f5489b014b23a7dbed42902f7ac0d35530eb9a9",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ba2b6bbf58cb0df294c2994d9af0c0c39a8fe3d4"
-        },
-        "date": 1782986447264,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 72.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "941ef7f1f57c56309fd9833e8bc4ecedcdb7914c",
           "message": "Merge pull request #164 from LoveDaisy/feat/gpu-rng-ray-index-uint64\n\nfix(gpu-rng): lift device-gen PCG ray-index 32-bit cap (uint64 lo/hi)",
           "timestamp": "2026-07-03T00:46:46+08:00",
@@ -13957,6 +13913,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 87.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "660cb36f3211d40db009ebe4cb974d819900051d",
+          "message": "Merge pull request #268 from LoveDaisy/task/msvc-portability-test-env-helper\n\nfix(test): 把 setenv/unsetenv 的 #ifdef 收敛成一个有名字的 helper",
+          "timestamp": "2026-08-12T20:45:55+08:00",
+          "tree_id": "a60dffae6ac4ce8bfff90f14b0a1c3d1815c8fe7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/660cb36f3211d40db009ebe4cb974d819900051d"
+        },
+        "date": 1786539480463,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.5,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.5,
             "unit": "%"
           }
         ]
