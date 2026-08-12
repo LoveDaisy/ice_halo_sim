@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786520735811,
+  "lastUpdate": 1786520738427,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9596,50 +9596,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "23f16349a76ae1ea75539389ae8c1beb8c83b93e",
-          "message": "Merge pull request #163 from LoveDaisy/ci/parallelize-slow-e2e\n\nci: parallelize slow-e2e with pytest-xdist, isolate throughput gates",
-          "timestamp": "2026-07-02T17:42:26+08:00",
-          "tree_id": "6097dda8ad93d8a7322ae8086936166b9c7ecbd1",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/23f16349a76ae1ea75539389ae8c1beb8c83b93e"
-        },
-        "date": 1782985721554,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 62.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 102.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 87.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 99,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "ba2b6bbf58cb0df294c2994d9af0c0c39a8fe3d4",
           "message": "Merge pull request #161 from LoveDaisy/feat/gpu-bench-drain-aligned-rate\n\nfix(bench): drain-count-driven GPU --benchmark rate (fixes 5× under-report)",
           "timestamp": "2026-07-02T17:54:37+08:00",
@@ -13969,6 +13925,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b06a512d9e1c500bf53c2ae03ebc98e78a8ee6d",
+          "message": "Merge pull request #267 from LoveDaisy/chore/perf-doc-machine-provenance\n\ndocs: 远程验证文档按「角色 / 主机绑定」分层，并写入新参照机 recipe",
+          "timestamp": "2026-08-12T15:34:26+08:00",
+          "tree_id": "622acaacaf2c20558ea2765a841267f06017335f",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3b06a512d9e1c500bf53c2ae03ebc98e78a8ee6d"
+        },
+        "date": 1786520737531,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 78.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.3,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 87.1,
             "unit": "%"
           }
         ]
