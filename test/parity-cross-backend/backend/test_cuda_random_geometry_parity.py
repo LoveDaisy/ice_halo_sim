@@ -38,8 +38,8 @@ Pre-registered acceptance bar:
 Requires:
   - ``LUMICE_CUDA_ENABLED=ON`` build with the CUDA toolchain.
   - NVIDIA device visible to the runtime.
-  - Shared-lib build with the CUDA-enabled Release configuration (dev49
-    docker recipe in ``dev49_parity.sh``).
+  - Shared-lib build produced by the CUDA-enabled Release configuration
+    (a plain ``./scripts/build.sh -sj release`` is not enough on its own).
 
 All tests are ``@pytest.mark.slow``.
 """
@@ -87,7 +87,7 @@ pytestmark = pytest.mark.skipif(
     not _CUDA_AVAILABLE,
     reason=(
         "CUDA backend requires Linux + LUMICE_HAS_CUDA=1 + LUMICE_CUDA_ENABLED=ON "
-        "build with NVIDIA device (dev49 docker). Skipping on this host."
+        "build with an NVIDIA device. Skipping on this host."
     ),
 )
 

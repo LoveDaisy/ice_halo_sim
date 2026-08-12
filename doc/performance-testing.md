@@ -10,7 +10,10 @@ All commands assume the working directory is the project root.
 > methodology notes) live in the git-ignored `scratchpad/perf-results-log.md` — append new
 > per-run numbers there, and promote a number here only when it becomes the new canonical
 > anchor. CUDA build + parity/correctness on the remote boxes is a separate concern — see
-> [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md).
+> [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md) (⛔ its two machines are
+> retired and its commands no longer run — read the banner at the top of that file first).
+> Which throughput numbers below are still reproducible is stated per host block under
+> "Canonical throughput results"; **read that status before using any number as a criterion.**
 
 ## ⚠️ Synthetic CPU-load generators: cleanup needs more than a `trap ... EXIT`
 
@@ -351,9 +354,38 @@ results below. Metal has no such tax (`StorageModeShared` unified memory + defer
 **Registered hardware-capability targets** (absolute, scene-anchored — cite these,
 not "× legacy", when judging GPU throughput):
 
-| scene | comparable workload | hardware-capability target | source |
-|---|---|---|---|
-| `bench_light_single_ms` (light·single-MS) | single crystal, single MS, no continuation | **≥ 25M rays/s on RTX 4060 Ti** | competitor product (measured) — the light single-MS scene is the apples-to-apples comparison |
+| scene | comparable workload | hardware-capability target | status | source |
+|---|---|---|---|---|
+| `bench_light_single_ms` (light·single-MS) | single crystal, single MS, no continuation | **≥ 25M rays/s on RTX 4060 Ti** | ⚠️ **NOT DIRECTLY CHECKABLE since 2026-08-11** — see below | competitor product (measured) — the light single-MS scene is the apples-to-apples comparison |
+
+> **⚠️ Why the 25M bar is currently uncheckable, and the three legitimate ways out.**
+> The bar is anchored to a specific card — an RTX 4060 Ti — and that card is no longer available
+> (see the machine-status table under "Canonical throughput results"). A bar you cannot measure
+> against is not a weaker bar; it is **not a bar at all**, and it is worse than having none,
+> because it still reads like a live gate. Do not cite it as if a run had passed or failed it.
+>
+> Three legitimate dispositions, best first:
+> 1. **Re-measure the competitor on the card we actually have**, at a stated resolution and on the
+>    same comparable scene, and register the resulting number as the new bar. This is the only
+>    option that restores an actual hardware-capability yardstick.
+> 2. **Retire the bar** and let GPU acceptance fall back to the profiler-grounded mechanism
+>    argument (where the time goes / is the device starved). Weaker, but honest.
+> 3. **Keep it as a historical floor, explicitly marked uncheckable** — the stop-the-bleeding
+>    wording in effect right now, until (1) is done.
+>
+> **⛔ Do NOT "convert" 25M/s to a new card via a TFLOPs or memory-bandwidth ratio.** Two
+> independent reasons, either one sufficient:
+> - A spec ratio is a **proxy quantity standing in for the target quantity**. It tracks throughput
+>   only where throughput is compute- or bandwidth-limited, which is exactly the regime a bar does
+>   *not* work in — a bar lives at the margin, where that coupling is the first thing to break.
+> - This repo's CUDA path is **measured to be host-round-trip bound**, not compute bound: the
+>   dominant cost is the exit-seam D2H readback and the command round trip (this is precisely the
+>   mechanism the third clock addresses, table below). A path bound by host round trips does not
+>   scale with the new card's FLOPs at all, so the converted number would not even be wrong in a
+>   consistent direction.
+>
+> A converted bar is a fabricated measurement wearing a threshold's clothing. Either measure (1),
+> or say there is no bar (2).
 
 - Always benchmark the **comparable** scene against an external target — do NOT
   cite a heavy multi-crystal / multi-MS number (e.g. `ms_multi_crystal`) when
@@ -372,12 +404,40 @@ not "× legacy", when judging GPU throughput):
   dimension"). Align resolution before judging the bar — don't claim the bar is met from a 512×256
   L2-resident number. Use `bench_throughput.py --res-sweep` for the real-resolution comparison point.
 
-### Canonical throughput results (current)
+### Canonical throughput results (per-machine status: LIVE / ARCHIVED)
 
 > The current authoritative reference numbers. **Cross-hardware numbers are NOT comparable** —
 > read within one host block. Historical per-run dumps (dated tables, raw reps, per-effort
 > methodology) live in `scratchpad/perf-results-log.md`. GPU steady rate = `drain_aligned`
 > `rays_per_sec` (see below); the older scrum-312 res-sweep block reads `multi_wall`.
+>
+> ⚠️ **"Authoritative" no longer implies "reproducible".** Each host block below is labelled
+> **LIVE** or **ARCHIVED** — read that label before using any number as a criterion.
+
+#### ⚠️ Machine status — which of these numbers can still be reproduced
+
+Every number below **was true when measured** and none of them have been changed. What changed is
+whether the machine that produced them still exists. Read the status before treating any row as a
+regression criterion:
+
+| host block | status | what it means |
+|---|---|---|
+| **Mac** (Apple Silicon; Metal + legacy CPU) | **LIVE** | machine still in hand → reproducible, usable as a regression criterion |
+| **dev49** (Linux; RTX 4060 Ti Ada + legacy CPU) | **ARCHIVED — hardware unavailable since 2026-08-11** | frozen record; cannot be re-run, cannot gate anything |
+| **win-builder** (Windows; GTX 1070 Ti Pascal) | **ARCHIVED — hardware unavailable since 2026-08-11** | frozen record; cannot be re-run, cannot gate anything |
+
+Two consequences that are easy to miss:
+
+- **There is no LIVE NVIDIA column at all.** Both CUDA columns *and* the `dev49 legacy CPU`
+  baseline they are divided by are archived, so every `× legacy` ratio in a dev49 row has a dead
+  numerator **and** a dead denominator. The only LIVE rows are Mac Metal and Mac legacy CPU.
+- **This gap is accurate, and must not be closed on paper.** The replacement box
+  (`home-win` / `home-wsl`, one physical machine, RTX 5090 D 32GB / Blackwell sm_120) has produced
+  **zero** measurements to date — its CUDA toolchain is not even installed yet. Do **not** fill the
+  NVIDIA columns by scaling the archived numbers by TFLOPs, memory bandwidth, or any other spec
+  ratio; that is fabricated data, not a measurement (see the bar note above for why the scaling is
+  invalid here in particular). A column gets refilled only by re-running `bench_throughput.py`
+  under the N≥5 CoV protocol on hardware someone actually has.
 
 #### drain-count-driven canonical · default dispatch · config-default resolution · `drain_aligned` `rays_per_sec` · 2026-07-02
 
@@ -400,7 +460,7 @@ the ≥15% CoV → N=9 escalation.
 > measurement on a machine that did not catastrophically hang (1070Ti's render tax was
 > non-catastrophic), and that the ~10 % dev49 delta was old-run noise, not a systematic effect.
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(approx) | dev49 legacy CPU (5M) |
+| config | dev49 4060Ti CUDA (vs legacy) **[ARCHIVED]** | win-builder 1070Ti CUDA **[ARCHIVED]** | Mac Metal ⚠️(approx) **[LIVE]** | dev49 legacy CPU (5M) **[ARCHIVED]** |
 |---|---|---|---|---|
 | `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.4%) | ~69 M/s (CoV 11%) | 10.45 M/s |
 | `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.2 M/s (0.4%) | ~16.7 M/s (8.3%) | 1.74 M/s |
@@ -438,20 +498,27 @@ amortized. `bench_light_single_ms` (light·single-MS, L2/readback dominated), pe
 
 | host / backend | 256×128 | 512×256 | 1024×512 | 1536×768 | **2048×1024** |
 |---|---|---|---|---|---|
-| dev49 RTX 4060Ti (Ada) CUDA | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
-| win-builder GTX 1070Ti (Pascal) CUDA | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
-| Mac M-series Metal | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
-| dev49 legacy CPU (baseline) | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
-| Mac legacy CPU (baseline) | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
+| dev49 RTX 4060Ti (Ada) CUDA **[ARCHIVED]** | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
+| win-builder GTX 1070Ti (Pascal) CUDA **[ARCHIVED]** | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
+| Mac M-series Metal **[LIVE]** | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
+| dev49 legacy CPU (baseline) **[ARCHIVED]** | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
+| Mac legacy CPU (baseline) **[LIVE]** | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
 
 **Third-clock gain at 2048×1024** (vs the old per-batch drain, interleaved same-binary to isolate
 the drain cadence):
 
 | host / backend | old (per-batch) | third clock | gain | mechanism |
 |---|---|---|---|---|
-| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | large Ada L2 → old value already L2-resident; the tax is mainly per-batch D2H readback |
-| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | both L2 overflow + readback tax; third clock removes the readback (L2 residual) |
-| M-series Metal (unified memory) | 11 M/s | 32.3 M/s | **~3×** | no PCIe readback; per-batch 24MB memset+memcpy (×76 batch ≈ 3.6GB) amortized |
+| 4060Ti (Ada, 32MB L2) CUDA **[ARCHIVED]** | 28 M/s | 39 M/s | **1.4×** | large Ada L2 → old value already L2-resident; the tax is mainly per-batch D2H readback |
+| 1070Ti (Pascal, 2MB L2) CUDA **[ARCHIVED]** | 12.5 M/s | 33.5 M/s | **2.7×** | both L2 overflow + readback tax; third clock removes the readback (L2 residual) |
+| M-series Metal (unified memory) **[LIVE]** | 11 M/s | 32.3 M/s | **~3×** | no PCIe readback; per-batch 24MB memset+memcpy (×76 batch ≈ 3.6GB) amortized |
+
+> **⚠️ The L2-size mechanism argument survives; the experiment that produced it does not.** The
+> claim "the smaller the L2, the larger the third-clock gain" rests on the Ada-vs-Pascal contrast
+> (32MB vs 2MB L2) — and **both** of those cards are archived. There is now exactly one NVIDIA card
+> available, so this two-point contrast **cannot be re-run**, on new hardware or otherwise. Treat
+> the conclusion as standing on evidence from retired hardware: usable as a mechanism to reason
+> with, not as a measurement to re-verify or to gate against.
 
 **Key points**:
 - **All three hardware classes (CUDA-Ada / CUDA-Pascal / Metal) confirm the third clock is a
@@ -511,9 +578,16 @@ scp examples/bench_config.json <windows-host>:<path>/
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
 
-### Linux / CUDA (dev49)
+### Linux / CUDA (NVIDIA bench box)
 
-CUDA throughput is measured on the dev49 bench box (NVIDIA RTX 4060 Ti, Linux,
+> ⛔ **The commands in this subsection are not runnable as written (since 2026-08-11).** They are
+> pinned to the `dev49` box (paths, docker image, `/work` mount), which is permanently unavailable.
+> The **method** below is still correct and is the point of keeping this section — use the committed
+> `scripts/bench_throughput.py` harness, drive it through the `LUMICE_BENCH_*` env overrides, run
+> `legacy,cuda` in one session, read median + CoV. Only the host-specific literals are dead.
+> A runnable form has to wait until a CUDA toolchain exists on the replacement box.
+
+CUDA throughput was measured on the dev49 bench box (NVIDIA RTX 4060 Ti, Linux,
 CUDA docker). For the full two-machine build + parity/correctness recipe (source sync,
 docker/BuildTools toolchain, `LUMICE_HAS_CUDA` un-skip gate, parity battery), see
 [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md).
@@ -538,12 +612,21 @@ LUMICE_BENCH_BACKENDS=legacy,cuda \
 # detached bench running on the shared box).
 ```
 
+> ⚠️ **The idle-gate line above assumes a shared box; the replacement box is not shared.** That
+> premise (contend for an idle window, never kill someone else's processes) was a property of
+> `dev49`, not of benchmarking. Re-deriving the measurement protocol for a dedicated box is out of
+> scope here — flagged so nobody carries the shared-box rules over as if they were universal.
+
 #### GPU active% diagnostic (CUDA only — Metal/Mac has no equivalent CLI path)
 
 A throughput number alone cannot tell you whether the GPU is fed or starved.
-On CUDA/dev49, pair the bench with an `nsys` capture to read GPU utilization —
+On a CUDA host, pair the bench with an `nsys` capture to read GPU utilization —
 this is the diagnostic that distinguishes a real win from a "beat the CPU while
-the GPU idles" false win. Profiler is already de-risked on dev49 (nsys 2023.4.4 +
+the GPU idles" false win. ⚠️ The de-risk claim in the next sentence is about the
+**retired** dev49 box; the profiler toolchain has to be re-established on the
+replacement box before this diagnostic is available again — the *technique* carries
+over, the installed-and-verified status does not.
+Profiler is already de-risked on dev49 (nsys 2023.4.4 +
 ncu 2024.1.1; install + usage recipe in `explore-cuda-step2-derisk/TOOLCHAIN.md`).
 active% is **not a hard universal gate** — Metal on macOS has no comparable CLI
 active% path, so the cross-platform acceptance criterion stays the absolute

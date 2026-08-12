@@ -69,7 +69,7 @@ Remote trigger script. Copies the binary to the Windows shared directory, writes
 trigger file, waits for completion, and collects results.
 
 Environment variables:
-- `WIN_SSH_HOST` — SSH host (default: `win-builder`)
+- `WIN_SSH_HOST` — SSH host (default: `home-win`; an ssh(1) alias, must be in your `~/.ssh/config`)
 - `WIN_REMOTE_DIR` — Shared directory (default: `C:/lumice-test`)
 
 ### `scripts/win_test_watcher.ps1`
@@ -91,5 +91,6 @@ Parameters:
 
 - [Performance Testing Guide](performance-testing.md) — comprehensive perf testing overview
 - [Remote CUDA Build / Test Recipe](gpu-remote-cuda-build-testing.md) — **different concern**: CUDA
-  compile + parity/correctness on dev49 (Linux) and win-builder (Windows), headless. This guide (Windows
+  compile + parity/correctness on a Linux and a Windows NVIDIA host, headless (⛔ that recipe's two
+  machines are retired and its commands no longer run — see the banner at the top of it). This guide (Windows
   remote testing) is for GUI VSync perf on a *physical desktop session*; that one is for CUDA build+parity.

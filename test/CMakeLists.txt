@@ -349,13 +349,13 @@ if(BUILD_GUI)
 endif()
 
 # --------------------------------------------------------------------------------------------------
-# CUDA multi-MS parity (Python pytest, dev49-only guard via LUMICE_CUDA_ENABLED env)
+# CUDA multi-MS parity (Python pytest, CUDA-host-only guard via LUMICE_CUDA_ENABLED env)
 #
 # Mirrors the test_cuda_exit_seam_parity.py pattern: implemented as pytest to
 # reuse the e2e runner fixtures (CApiRunner) rather than duplicating them in a
 # new gtest binary. On Mac (LUMICE_CUDA_ENABLED=OFF) the test self-skips; it is
-# intended to run on dev49 via `pytest -m slow test_cuda_multi_ms_parity.py` or
-# via `ctest -R CudaMultiMsParity` on dev49 after LUMICE_CUDA_ENABLED=1 in env.
+# intended to run on a CUDA-capable host via `pytest -m slow test_cuda_multi_ms_parity.py`
+# or via `ctest -R CudaMultiMsParity` there after LUMICE_CUDA_ENABLED=1 in env.
 #
 # `-m slow` is REQUIRED, not decorative: every test in both files below is
 # slow-marked, and `pyproject.toml`'s `addopts = ["-m", "not slow"]` pins a bare
@@ -372,7 +372,7 @@ endif()
 # CudaRandomGeometryParity.
 #
 # So the capture point for these is a local `./scripts/test.sh quick` (or a direct ctest on
-# dev49 / win-builder), NOT CI. Stated here because "it's an add_test, therefore CI runs it" is
+# a CUDA-capable host), NOT CI. Stated here because "it's an add_test, therefore CI runs it" is
 # the natural reading and it is wrong.
 #
 # Deliberately NOT resolved here: whether to install pytest in the build jobs (making them run)
@@ -388,7 +388,7 @@ if(PYTEST_EXECUTABLE)
     LABELS "parity;cuda"
     ENVIRONMENT "LUMICE_CUDA_ENABLED=1")
   # Random-geometry cross-backend regression. Same ctest scaffolding as
-  # `CudaMultiMsParity` above so dev49 / win-builder can run it via
+  # `CudaMultiMsParity` above so a CUDA-capable host can run it via
   # `ctest -R CudaRandomGeometryParity`; on Mac / no-CUDA hosts the body
   # self-skips at pytest collection time.
   add_test(NAME "CudaRandomGeometryParity"

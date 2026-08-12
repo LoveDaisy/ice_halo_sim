@@ -7,7 +7,10 @@
 > **范围**：本指南保留稳定的操作手册 + **当前 canonical** 吞吐参考。历史 per-run 实测详录
 > （带日期的表、原始 reps、各 effort 的方法论）放在 git-ignored 的 `scratchpad/perf-results-log.md`
 > ——新 per-run 数字追加那里，只有成为新 canonical 锚时才提升进本文档。远程机器上的 CUDA build +
-> parity/正确性验证是另一件事——见 [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md)。
+> parity/正确性验证是另一件事——见 [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md)
+> （⛔ 该 recipe 的两台机器已退役、命令不可执行——先读那份文件顶部的横幅）。
+> 下面哪些吞吐数字仍可复现，按 host 块标在「canonical 吞吐结果」一节里；
+> **把任何数字当判据之前先读那个状态。**
 
 ## ⚠️ 合成 CPU 负载发生器：清理不能只靠 `trap ... EXIT`
 
@@ -200,9 +203,30 @@ CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 Sim
 
 **已注册硬件能力目标**（绝对、场景锚——判 GPU 吞吐时引用这个，而非"× legacy"）：
 
-| 场景 | 可比负载 | 硬件能力目标 | 来源 |
-|---|---|---|---|
-| `bench_light_single_ms`（轻·单MS） | 单晶 + 单 MS + 无续传 | **4060 Ti ≥ 25M rays/s** | 竞品实测——轻·单MS 是 apples-to-apples 对比 |
+| 场景 | 可比负载 | 硬件能力目标 | 状态 | 来源 |
+|---|---|---|---|---|
+| `bench_light_single_ms`（轻·单MS） | 单晶 + 单 MS + 无续传 | **4060 Ti ≥ 25M rays/s** | ⚠️ **2026-08-11 起不可直接检验**——见下 | 竞品实测——轻·单MS 是 apples-to-apples 对比 |
+
+> **⚠️ 25M bar 为何当前不可检验，以及三条合法出路。**
+> 这个 bar 锚定在一块具体的卡（RTX 4060 Ti）上，而那块卡已不可得（见"canonical 吞吐结果"下的
+> 机器状态表）。**一个无法据以测量的 bar 不是"弱一点的 bar"，而是根本不是 bar**，且比没有 bar 更糟
+> ——它读起来仍像一道在生效的闸。不要再引用它宣称某次 run 达标或未达标。
+>
+> 三条合法出路（由优到次）：
+> 1. **在手头这块卡上重测竞品**：同硬件、同可比场景、写明分辨率，把测得的数字注册为新 bar。
+>    只有这条能真正恢复一把硬件能力标尺。
+> 2. **降级为「无 bar」**：GPU 验收退回 profiler 落地的机制论证（时间花哪了 / GPU 是否饿着）。
+>    更弱，但诚实。
+> 3. **保留为历史 floor 并明示不可检验**——即当前采用的止血写法，直到 ① 做到为止。
+>
+> **⛔ 禁止用 TFLOPs / 显存带宽比值把 25M/s「折算」到新卡。** 两条独立理由，任一条即足够：
+> - 规格比值是**拿代理量顶替目标量**。它只在吞吐受算力或带宽限制的区间里与吞吐同向，而这恰恰**不是**
+>   bar 工作的区间——判据活在边缘，那正是这层耦合最先断裂的地方。
+> - 本仓 CUDA 路径**实测是主机往返 bound**、不是 compute bound：主导成本是出射 seam 的 D2H readback
+>   与命令往返（这正是第三时钟要解的机制，见下表）。受主机往返限制的路径根本不随新卡的 FLOPs 缩放，
+>   折算出的数字连"错得方向一致"都做不到。
+>
+> 折算出来的 bar 是一个穿着阈值外衣的伪造测量值。要么去测（①），要么就说没有 bar（②）。
 
 - 永远拿**可比**场景对标外部目标——别拿重场景（多晶/多 MS，如 `ms_multi_crystal`）的数去对标单晶单散射。
   逐光线工作量差一个数量级。
@@ -214,11 +238,36 @@ CUDA 路线还有 **per-batch 同步 readback** 税（`ReadbackXyzAccum` 每 Sim
   维度"）。判定是否达标前必须**对齐分辨率**——别拿 512×256 的 L2-resident 数字宣称达 bar。用
   `bench_throughput.py --res-sweep` 取真实分辨率对标点。
 
-### 当前 canonical 吞吐结果
+### canonical 吞吐结果（逐机器状态：LIVE / ARCHIVED）
 
 > 当前权威参考数字。**跨硬件数字不可比**——只在同一 host 块内读。历史 per-run 详录（带日期的表、原始
 > reps、各 effort 方法论）在 `scratchpad/perf-results-log.md`。GPU 稳态率 = `drain_aligned`
 > `rays_per_sec`（见下）；较旧的 scrum-312 res-sweep 块读 `multi_wall`。
+>
+> ⚠️ **「权威」不再等于「可复现」**：下面每个 host 块都标了 **LIVE** 或 **ARCHIVED**——
+> 把任何数字当判据之前先读那个标记。
+
+#### ⚠️ 机器状态——下面哪些数字今天还复现得出来
+
+下面每一个数字**在测的当时都是真的**，且**一个都没有被改动**。变的不是数字，而是产出它的那台机器
+还在不在。把任何一行当回归判据之前，先读它的状态：
+
+| host 块 | 状态 | 含义 |
+|---|---|---|
+| **Mac**（Apple Silicon；Metal + legacy CPU） | **LIVE** | 机器仍在手上 → 可复现、可作回归判据 |
+| **dev49**（Linux；RTX 4060 Ti Ada + legacy CPU） | **ARCHIVED — 2026-08-11 起硬件不可得** | 冻结记录；不可重跑，不可用于门控 |
+| **win-builder**（Windows；GTX 1070 Ti Pascal） | **ARCHIVED — 2026-08-11 起硬件不可得** | 冻结记录；不可重跑，不可用于门控 |
+
+两个容易被漏掉的推论：
+
+- **NVIDIA 侧一列 LIVE 都没有。** 两个 CUDA 列**以及**它们所除的 `dev49 legacy CPU` 基线全部已归档，
+  所以 dev49 行里每一个 `× legacy` 比值的分子与分母**同时**是死的。仅有的 LIVE 行是 Mac Metal 与
+  Mac legacy CPU。
+- **这个空缺是准确的，⛔ 不许在纸面上补齐。** 替代机（`home-win` / `home-wsl`，同一台物理机，
+  RTX 5090 D 32GB / Blackwell sm_120）**至今一个数都没测过**——它连 CUDA 工具链都还没装。
+  ⛔ 不要用 TFLOPs、显存带宽或任何规格比值把已归档数字缩放着填进 NVIDIA 列；那是造数据、不是测量
+  （为何在本仓这种缩放尤其无效，见上文 bar 说明）。一列只能靠在真有的硬件上按 N≥5 CoV 协议重跑
+  `bench_throughput.py` 来重新填满。
 
 #### drain-count-driven canonical · default dispatch · config 默认分辨率 · `drain_aligned` `rays_per_sec` · 2026-07-02
 
@@ -236,7 +285,7 @@ reps，>15% CoV → N=9 escalation。
 > 修复对"未灾难性挂起"的机器（1070Ti render tax 非灾难性）不改变测量值，且 dev49 那 ~10% 差是旧 run 噪声非
 > 系统性效应。
 
-| config | dev49 4060Ti CUDA (vs legacy) | win-builder 1070Ti CUDA | Mac Metal ⚠️(近似) | dev49 legacy CPU (5M) |
+| config | dev49 4060Ti CUDA (vs legacy) **[ARCHIVED]** | win-builder 1070Ti CUDA **[ARCHIVED]** | Mac Metal ⚠️(近似) **[LIVE]** | dev49 legacy CPU (5M) **[ARCHIVED]** |
 |---|---|---|---|---|
 | `bench_light_single_ms` | **130.5 M/s** (12.5×, CoV 0.2%) | 80.7 M/s (0.4%) | ~69 M/s (CoV 11%) | 10.45 M/s |
 | `ms_multi_crystal` | 22.2 M/s (12.7×, 0.1%) | 13.2 M/s (0.4%) | ~16.7 M/s (8.3%) | 1.74 M/s |
@@ -267,19 +316,24 @@ per-resolution `multi_wall`：
 
 | host / backend | 256×128 | 512×256 | 1024×512 | 1536×768 | **2048×1024** |
 |---|---|---|---|---|---|
-| dev49 RTX 4060Ti (Ada) CUDA | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
-| win-builder GTX 1070Ti (Pascal) CUDA | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
-| Mac M-series Metal | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
-| dev49 legacy CPU (baseline) | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
-| Mac legacy CPU (baseline) | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
+| dev49 RTX 4060Ti (Ada) CUDA **[ARCHIVED]** | 116 M/s | 110 M/s | 92 M/s | 65 M/s | **39.2 M/s** |
+| win-builder GTX 1070Ti (Pascal) CUDA **[ARCHIVED]** | 77 M/s | 69 M/s | 45 M/s | 40 M/s | **33.5 M/s** |
+| Mac M-series Metal **[LIVE]** | 28.1 M/s | 30.3 M/s | 31.2 M/s | 35.1 M/s | **32.3 M/s** |
+| dev49 legacy CPU (baseline) **[ARCHIVED]** | 9.0 M/s | 8.8 M/s | 8.4 M/s | 7.7 M/s | 6.9 M/s |
+| Mac legacy CPU (baseline) **[LIVE]** | 5.1 M/s | 4.8 M/s | 4.7 M/s | 4.8 M/s | 4.7 M/s |
 
 **第三时钟在 2048×1024 的增益**（vs per-batch drain 旧值，interleaved 同 binary 隔离 drain cadence）：
 
 | host / backend | 旧（per-batch） | 第三时钟 | 增益 | 机制 |
 |---|---|---|---|---|
-| 4060Ti (Ada, 32MB L2) CUDA | 28 M/s | 39 M/s | **1.4×** | Ada L2 大→旧值已 L2-resident，税主要是 per-batch D2H readback |
-| 1070Ti (Pascal, 2MB L2) CUDA | 12.5 M/s | 33.5 M/s | **2.7×** | 兼有 L2 溢出 + readback 税；第三时钟消 readback（L2 残留） |
-| M-series Metal（统一内存） | 11 M/s | 32.3 M/s | **~3×** | 无 PCIe readback；per-batch 24MB memset+memcpy(×76 batch≈3.6GB) 被摊薄 |
+| 4060Ti (Ada, 32MB L2) CUDA **[ARCHIVED]** | 28 M/s | 39 M/s | **1.4×** | Ada L2 大→旧值已 L2-resident，税主要是 per-batch D2H readback |
+| 1070Ti (Pascal, 2MB L2) CUDA **[ARCHIVED]** | 12.5 M/s | 33.5 M/s | **2.7×** | 兼有 L2 溢出 + readback 税；第三时钟消 readback（L2 残留） |
+| M-series Metal（统一内存） **[LIVE]** | 11 M/s | 32.3 M/s | **~3×** | 无 PCIe readback；per-batch 24MB memset+memcpy(×76 batch≈3.6GB) 被摊薄 |
+
+> **⚠️ L2 尺寸这条机制论证仍然成立，但产出它的实验已不可重做。**「L2 越小、第三时钟增益越大」这个
+> 结论建立在 Ada vs Pascal 的对照上（32MB vs 2MB L2），而这两块卡**都已归档**。现在手上只有一块
+> N 卡，故这个两点对照**无法重跑**——换新硬件也不行（对照需要的是两块 L2 差异大的卡，不是一块新卡）。
+> 请把该结论当作**基于已退役硬件的证据**：可以拿来做机制推理，但不可作为待复验的测量、也不可用于门控。
 
 **要点**：
 - **三种硬件（CUDA-Ada / CUDA-Pascal / Metal）一致确证第三时钟在真实 GUI 分辨率显著提速**；增益随
@@ -334,9 +388,14 @@ scp examples/bench_config.json <windows-host>:<path>/
 Measure-Command { .\Lumice.exe -f bench_config.json -o . 2>&1 | Out-Null } | Select-Object TotalSeconds
 ```
 
-### Linux / CUDA（dev49）
+### Linux / CUDA（NVIDIA bench 机）
 
-CUDA 吞吐在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。两机完整 build + parity/正确性 recipe
+> ⛔ **本小节的命令按原样已不可执行（2026-08-11 起）**：它们钉死在 `dev49` 上（路径、docker 镜像、
+> `/work` 挂载），而那台机器已永久不可访问。**方法本身仍然正确**，这也是保留本节的理由——用 committed
+> harness `scripts/bench_throughput.py`，经 `LUMICE_BENCH_*` env 覆盖驱动，同一会话跑 `legacy,cuda`，
+> 读 median + CoV。死掉的只是那些主机相关的字面量。可执行形态要等替代机装好 CUDA 工具链后才写得出来。
+
+CUDA 吞吐曾在 dev49（RTX 4060 Ti，Linux，CUDA docker）测。两机完整 build + parity/正确性 recipe
 （源码同步、docker/BuildTools 工具链、`LUMICE_HAS_CUDA` un-skip 闸、parity battery）见
 [`gpu-remote-cuda-build-testing.md`](gpu-remote-cuda-build-testing.md)。**禁止每个 task 自己写 bench
 脚本**——用 committed harness `scripts/bench_throughput.py`（已支持 CUDA env 覆盖、跑 canonical 场景集
@@ -352,10 +411,17 @@ LUMICE_BENCH_BACKENDS=legacy,cuda \
 # dev49 共享机：严格吞吐须 idle 窗口；用完立刻清自己进程，别占机。
 ```
 
+> ⚠️ **上面那条 idle-gate 的前提是「共享机」，而替代机不是共享的。**「抢空闲窗口、别杀别人的进程」
+> 是 `dev49` 这台机器的属性，不是 benchmark 的属性。为独占机重新推导测量协议不在本次范围内——
+> 在此标注，免得有人把共享机规矩当成普适规则搬过去。
+
 #### GPU active% 诊断（仅 CUDA——Metal/Mac 无同口径 CLI 路径）
 
-单看吞吐数字无法判断 GPU 是被喂饱还是饿着。CUDA/dev49 上把 bench 配一个 `nsys` capture 读 GPU 利用率
-——这是区分"真赢"与"GPU 空转还打过 CPU 的假赢"的诊断。profiler 已在 dev49 de-risk（nsys 2023.4.4 +
+单看吞吐数字无法判断 GPU 是被喂饱还是饿着。CUDA 主机上把 bench 配一个 `nsys` capture 读 GPU 利用率
+——这是区分"真赢"与"GPU 空转还打过 CPU 的假赢"的诊断。⚠️ 下一句的 de-risk 说的是**已退役**的 dev49；
+profiler 工具链必须在替代机上重新装起来，这个诊断才重新可用——**技术手段**可迁移，
+**已装好并验证过**这个状态不可迁移。
+profiler 已在 dev49 de-risk（nsys 2023.4.4 +
 ncu 2024.1.1；安装 + 用法见 `explore-cuda-step2-derisk/TOOLCHAIN.md`）。active% **非硬性普适门**——
 macOS 上 Metal 无同口径 CLI active% 路径，故跨平台验收判据仍是上方绝对硬件能力目标；active% 是 CUDA 侧
 佐证"为何这个数字高或低"的诊断。

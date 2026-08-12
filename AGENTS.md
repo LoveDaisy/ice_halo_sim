@@ -454,10 +454,13 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
 - **Perf / testing**: `performance-testing.md`, `windows-remote-testing.md`, `xyz-stats-tool.md`
   - `geometry-randomization-value-and-measurement.md` — **几何随机化"值不值钱"的两轴框架 + 偏置轴度量方法论 + stage-1 发现**（新，explore 收敛 2026-07-23）：⭐**混轴是度量原罪**——方差/效率轴（K=D vs 64，收敛多快）vs 偏置/正确性轴（ON vs OFF，确定性收敛到物理错的过锐图）；**已有 moat 数字（28–40×/15×）是方差轴的**，卖点在没测过的偏置轴。偏置发现：主峰软化 −21% / 暗区填充 +50% / 对日弱峰抑制减半，**gauss≡uniform 同 σ ⇒ 干净多分散非退化背景**，效应集中 faint/away-from-peak（两轴同指向）；plate 幻日环更丰富 + 120° 反常变亮（未解）。含**变量定律 blueprint**（`Var(K)=(σ̄²_w+K·σ²_b)/N`，`K*=√((σ̄²_w/σ²_b)·(C/c))` + 三结构不变量 + 护栏红线）+ 度量方法论（散射角空间 / 天顶-rectangular / plate 幻日环 / uniform disentangle / 积分能量纪律 / C API no-filter 读 xyz_buffer）。设计几何随机化质量/吞吐 gate 前先读。
   - `geometry-randomization-perf.md` — **几何随机化性能的成本模型 + 前沿图**（**顶部有 post-闭式更正段**）：真正指标 = equal-error throughput（变量轴，非 raw）；⚠️「随机比确定性慢 15.7×」是冷 vs 暖 CUDA context-init 假象；⭐**闭式落地（PR #214）后 C（拓扑复用）是错杠杆**（只碰 92ns compute=构造 5%，「B+C 不可分」作废），真杠杆 = 砍 MakeCrystal 对象构造（多晶体 ROI 最大）；⭐**K=64 惩罚场景相关 0.25–0.43、多晶体更差**（非普适 0.37×），K=D 跨场景免费。含「压到极限没有」核对清单 + 测量纪律。优化几何随机化路径前先读，配 `geometry-randomization-value-and-measurement.md` 一起。
-  - `gpu-remote-cuda-build-testing.md` — **dev49 + win-builder 现成 recipe**（CUDA build + parity/正确性
-    验证的两机操作手册：源码同步、docker/BuildTools 工具链、`LUMICE_HAS_CUDA` un-skip 闸、parity battery
-    三文件、PS-over-ssh 坑）。**任何触及 `cuda_trace_backend.*` / 三后端共享头 / SimData / simulator 的
-    改动，先读这份**，别对两台机器从头摸索。与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
+  - `gpu-remote-cuda-build-testing.md` — ⛔ **两机 recipe 已随硬件退役失效（2026-08-11），命令一条都不可跑**：
+    文中的 `dev49` / `win-builder` 已永久不可访问，替代机（`home-win` / `home-wsl`，RTX 5090 D）的 CUDA
+    工具链尚未配置 ⇒ 目前**没有**可用的替代 recipe。仍然有效的是**与机器无关的那半份**：`LUMICE_HAS_CUDA`
+    un-skip 闸（须与 `LUMICE_CUDA_ENABLED` 同设）、parity battery 三文件、验收口径 10/10、
+    「别信 subprocess 自报」纪律。**任何触及 `cuda_trace_backend.*` / 三后端共享头 / SimData / simulator
+    的改动，仍先读这份**（读约定，不读命令）；文件顶部的失效横幅写明了判别法。与
+    `windows-remote-testing.md`（GUI VSync 物理桌面，写法与机器无关、未失效）场景正交。
   - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
 - **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
 - Example config: `examples/config_example.json`

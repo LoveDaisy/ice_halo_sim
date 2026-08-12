@@ -1,4 +1,27 @@
-# 远程 CUDA 编译 / 测试流程（dev49 + win-builder）
+# 远程 CUDA 编译 / 测试流程（dev49 + win-builder）— ⛔ 机器已退役，全文命令不可执行
+
+> ## ⛔ 失效横幅（2026-08-11）— 本文档的**操作部分**已全部不可执行
+>
+> `dev49`（Linux / RTX 4060 Ti，ssh 别名 `49-GPU`）与 `win-builder`（Windows / GTX 1070 Ti）
+> 两台机器**已永久不可访问**。本文档从 §2 起的每一条 ssh 别名、docker 镜像 tag、build 目录路径、
+> MSVC 工具集版本、embeddable python 路径，都指向这两台机器上的具体状态 ——
+> **一条都不要照着跑**，它们不会报「机器不存在」以外的任何有用错误。
+>
+> **替代机器**：`home-win`（原生 Windows）+ `home-wsl`（WSL2 Ubuntu），二者是**同一台物理机**的
+> 两个环境，GPU = RTX 5090 D 32GB（Blackwell sm_120）。⚠️ **新机的 CUDA 工具链尚未配置**
+> （`nvcc` 未装、pytest/numpy/Pillow 缺失、仓库未同步），因此**目前不存在可用的替代 recipe**。
+> 新 recipe 必须等真在 `home-wsl` 上跑通一次 CUDA build 之后才写得出来 —— 现在写只能是猜。
+>
+> **⚠️ 但正文并非全部作废。** 以下内容**与机器无关，今天仍然有效**，是保留全文的理由：
+> - §1 的 **`LUMICE_HAS_CUDA` un-skip 闸**（必须同时设 `LUMICE_HAS_CUDA=1` 与
+>   `LUMICE_CUDA_ENABLED=1`，两者语义不同）；
+> - §1 的 **parity battery 三文件**清单与 `LUMICE_LIB` 约定；
+> - §1 的 **「别信 subprocess 自报」**纪律（读 build EXIT、grep 告警、亲看 `N passed` 计数）；
+> - §0 的**触发条件**与**验收口径**（parity battery 10/10）。
+>
+> 判别法：**在讲「验证什么、怎么判定通过」→ 仍然有效；在讲「去哪台机、敲哪条命令」→ 已失效。**
+>
+> 关联：`doc/windows-remote-testing.md`（GUI 物理桌面测试，同样按旧机器名写死，同样过期）。
 
 > Mac 本机编不了 CUDA，subprocess 自报不可信 → CUDA 改动必须在 dev49（Linux/NVIDIA）
 > 和/或 win-builder（Windows/NVIDIA）亲跑。本文档是这两台机器的现成 recipe，免每次重新折腾。

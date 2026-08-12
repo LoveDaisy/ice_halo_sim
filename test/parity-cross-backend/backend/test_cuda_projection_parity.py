@@ -12,7 +12,7 @@ type. This suite pins per-projection parity vs legacy CPU + confirms every type
 routes to CUDA with no silent fallback.
 
 Gating: CUDA is only available on a ``LUMICE_CUDA_ENABLED=ON`` build with an
-NVIDIA device (dev49 docker). Skipped unless Linux/Windows AND
+NVIDIA device. Skipped unless Linux/Windows AND
 ``LUMICE_HAS_CUDA=1`` is set — the same gate as ``test_cuda_exit_seam_parity.py``.
 On Mac this whole module is skipped at collection. All tests @pytest.mark.slow.
 """
@@ -42,7 +42,7 @@ _SEED_B = 7
 _TIMEOUT = 300  # CUDA dev49 docker first-launch JIT can take a minute
 
 # Same availability gate as test_cuda_exit_seam_parity.py: Linux/Windows +
-# explicit LUMICE_HAS_CUDA=1 opt-in (set in the dev49 docker run command). On any
+# explicit LUMICE_HAS_CUDA=1 opt-in (set it in the CUDA run environment). On any
 # other host the CUDA backend falls back to legacy and routed_backend would come
 # out "legacy" → the parity assertions would be false positives.
 _CUDA_AVAILABLE = (
@@ -53,7 +53,7 @@ pytestmark = pytest.mark.skipif(
     not _CUDA_AVAILABLE,
     reason=(
         "CUDA backend requires Linux/Windows + LUMICE_HAS_CUDA=1 + "
-        "LUMICE_CUDA_ENABLED=ON build with NVIDIA device (dev49 docker)."
+        "LUMICE_CUDA_ENABLED=ON build with an NVIDIA device."
     ),
 )
 

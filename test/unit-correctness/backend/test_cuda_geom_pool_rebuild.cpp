@@ -21,7 +21,7 @@
 // non-CUDA hosts (compiles and links into unit_correctness_test with zero
 // contributed symbols on Mac). Runtime: `ShouldSkipCudaTests()` mirrors
 // test_cuda_component_mask_parity.cpp / test_cuda_rich_exit.cpp so the
-// tests self-skip when no CUDA device is enumerated (dev49-only body).
+// tests self-skip when no CUDA device is enumerated (CUDA-device-only body).
 
 #include <gtest/gtest.h>
 
@@ -156,7 +156,7 @@ TEST(CudaGeomPoolRebuild, StochasticScene_Gaussian_RebuildsEveryBatch) {
 // to the same prefix each time and every rebuild would draw the IDENTICAL
 // shape — yet `geom_pool_rebuild_count_` would still equal kCycles. Only a
 // direct geometry comparison distinguishes "rebuilt with a fresh draw" from
-// "rebuilt with a frozen draw". This is the sole local (pre-dev49) defense for
+// "rebuilt with a frozen draw". This is the sole local (pre-GPU-validation) defense for
 // the Layer 1 seed-once invariant, so it must assert on geometry, not counts.
 TEST(CudaGeomPoolRebuild, StochasticScene_ShapesDifferAcrossBatches) {
   if (ShouldSkipCudaTests()) {

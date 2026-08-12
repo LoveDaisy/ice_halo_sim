@@ -33,7 +33,7 @@
 //
 // Build gate: `#if defined(LUMICE_CUDA_ENABLED)` — the TU is empty on non-CUDA
 // hosts. At runtime, each test SKIPs cleanly if no CUDA device is enumerated
-// (dev49 host-only runs), matching test_cuda_rich_exit.cpp.
+// (CUDA-host-only runs), matching test_cuda_rich_exit.cpp.
 
 #include <gtest/gtest.h>
 

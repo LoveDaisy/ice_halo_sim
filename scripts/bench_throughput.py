@@ -4,7 +4,7 @@
 Runs `Lumice --benchmark` across a 4-backend × heavy-config × GPU-dispatch
 matrix, reports median rays/s + CoV per cell, ratios against the legacy CPU
 baseline. Backends: legacy CPU (baseline), cpu_backend (verify-only), Metal
-(Apple host only), CUDA (CUDA host only, e.g. dev49 — scrum-296 Step D). The
+(Apple host only), CUDA (CUDA host only). The
 host-incompatible GPU rows print as N/A. Replaces the gitignored `scratchpad/bench/seam_exit_bench.py` (whose
 LUMICE_BATCH_RAY_NUM knob was removed in scrum-268.4).
 
@@ -44,8 +44,8 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# BIN/lib are env-overridable so the same harness runs on dev49 (CUDA bench, Linux
-# docker: binary at /work/build/Release/shared/bin/Lumice) as on a local Mac.
+# BIN/lib are env-overridable so the same harness runs on a remote CUDA bench host
+# (Linux docker: binary at /work/build/Release/shared/bin/Lumice) as on a local Mac.
 # Default is the local install path.
 #
 # The install tree is per-flavor, so the default is a two-candidate probe rather
@@ -64,7 +64,7 @@ else:
     BIN = next((c for c in _BIN_CANDIDATES if c.exists()), _BIN_CANDIDATES[0])
 # rpath workaround for -sj shared-lib builds (backlog #345). Harmless for -j.
 # Shared flavor only — a static build has no dylib to find.
-# LUMICE_BENCH_LIBDIR prepends a dir (dev49: /work/build/Release/shared/lib).
+# LUMICE_BENCH_LIBDIR prepends a dir (remote docker bench: /work/build/Release/shared/lib).
 _LIBDIR_ENV = os.environ.get("LUMICE_BENCH_LIBDIR")
 LIB_DIRS = ([Path(_LIBDIR_ENV)] if _LIBDIR_ENV else []) + [
     PROJECT_ROOT / "build" / "Release" / "shared" / "lib",
@@ -190,7 +190,7 @@ CPU_BACKEND_LABEL = "[verify-only]"  # not a baseline; see feedback_perf_baselin
 
 
 # --- Optional env-driven matrix narrowing (for focused / robust remote runs) ---
-# The committed defaults above run the full matrix. For a focused dev49 run (e.g.
+# The committed defaults above run the full matrix. For a focused remote run (e.g.
 # scrum-296 Step D: legacy vs cuda only, fewer reps, larger dispatch probe) these
 # env knobs trim the matrix WITHOUT editing the committed defaults. Unset = full.
 #   LUMICE_BENCH_BACKENDS=legacy,cuda      # subset of backend labels (order kept)
@@ -371,7 +371,7 @@ def _backend_na_reason(backend_label: str, is_darwin: bool) -> str | None:
     """Which backends are not runnable on this host (returns reason, else None).
 
     Metal needs an Apple host; CUDA needs a CUDA-enabled build + NVIDIA device
-    (the dev49 Linux docker image), which is never the Mac dev host.
+    (a Linux CUDA docker image), which is never the Mac dev host.
     """
     if backend_label == "metal" and not is_darwin:
         return "Darwin only"

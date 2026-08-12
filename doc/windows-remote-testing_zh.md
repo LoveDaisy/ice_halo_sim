@@ -64,7 +64,7 @@ gh run download <RUN_ID> --name gui-test-windows-msvc --dir /tmp/ci-win
 远程触发脚本。将二进制文件拷贝到 Windows 共享目录，写入触发文件，等待完成，收集结果。
 
 环境变量：
-- `WIN_SSH_HOST` — SSH 主机（默认：`win-builder`）
+- `WIN_SSH_HOST` — SSH 主机（默认：`home-win`；这是 ssh(1) 别名，须在你的 `~/.ssh/config` 里）
 - `WIN_REMOTE_DIR` — 共享目录（默认：`C:/lumice-test`）
 
 ### `scripts/win_test_watcher.ps1`

@@ -253,11 +253,11 @@ jobs:
 
   # CUDA compile-only: nvcc actually compiles the .cu translation units on every
   # push/PR. No GPU is required (nvcc emits PTX/object from CPU). Runtime and
-  # parity validation still need a GPU runner (dev49) and are intentionally
+  # parity validation still need a GPU runner and are intentionally
   # out of scope here — see issue.md AC6: this job must not be read as
   # "CUDA all green". The job exists to catch nvcc-only compile/syntax bugs
   # (e.g. -Werror=switch breaking nvcc, scrum-295 commit 9b9cdacd) without
-  # waiting for the rsync→docker→dev49 loop.
+  # waiting for the rsync→docker→GPU-host loop.
   #
   # PTX floor = compute_61 (Pascal/2016+); driver JIT-compiles to native sm on
   # any GPU >= sm_61. Matches CMakeLists.txt CMAKE_CUDA_ARCHITECTURES default.
