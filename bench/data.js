@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786494689397,
+  "lastUpdate": 1786494693094,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4806,54 +4806,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "85fdfef28b6cbde3034622ca889e9d508457ca0d",
-          "message": "Merge pull request #162 from LoveDaisy/feat/gpu-projection-parity\n\nfeat(gpu): unify render projection into single source + all 11 projections on Metal/CUDA (scrum-315)",
-          "timestamp": "2026-07-02T14:58:05+08:00",
-          "tree_id": "94499fa0850c528ab90de71578462a098aae6efb",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/85fdfef28b6cbde3034622ca889e9d508457ca0d"
-        },
-        "date": 1782975850251,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 706973,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1190231.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 648114.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 593539.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "23f16349a76ae1ea75539389ae8c1beb8c83b93e",
           "message": "Merge pull request #163 from LoveDaisy/ci/parallelize-slow-e2e\n\nci: parallelize slow-e2e with pytest-xdist, isolate throughput gates",
           "timestamp": "2026-07-02T17:42:26+08:00",
@@ -9578,6 +9530,54 @@ window.BENCHMARK_DATA = {
             "value": 628480.1,
             "unit": "rays/sec",
             "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "a1957e028279c05871bc50cbd1001cacb1aa2ee8",
+          "message": "docs: make a completeness claim carry the same burden of proof as adding code\n\n\"Covers all 20 panels with zero omissions\" reads as an achievement and passes\nreview unchallenged; \"this class is not worth covering\" has to be argued for.\nThat asymmetry is the default state rather than anyone's choice, so completeness\nwins every conflict without a single person advocating for it -- including\nconflicts against the budget the same task committed to.\n\nPR #261 is the measured instance: a pre-committed target of -30% de-commented\ntest lines (baseline 21,336, pinned by two independent counters with 52/52 files\nzero diff) landed at -8.7%, and the coverage backfill demanded by \"20 panels,\nzero omissions\" accounts for roughly a third of the miss. Escape-defect density\nover those same files had already been measured and spans 8x; the equal-weight-\nper-panel split discarded that measurement.\n\nThe rule asks for the justification, not the reduction. Whether a leaner suite\nwould have let more defects escape is a counterfactual and untestable, so this\nis explicitly not a mandate to cut -- only a requirement that an equal-weight\npartition state its reason when a per-member value measure is available.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-12T08:19:41+08:00",
+          "tree_id": "45eab6bd9bc7f45bb51575ce022fbe40ff3e9e32",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a1957e028279c05871bc50cbd1001cacb1aa2ee8"
+        },
+        "date": 1786494692358,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 909759.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1172285.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 767219.6,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 593607.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
