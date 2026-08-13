@@ -22,6 +22,7 @@
 #include "gui/panels.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
+#include "gui/theme.hpp"
 #include "imgui.h"
 #include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
 
@@ -359,7 +360,7 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
     ImGui::BeginDisabled(composite_empty);
-    if (ImGui::Checkbox(checkbox_id.c_str(), &checked)) {
+    if (Checkbox(checkbox_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
     ImGui::EndDisabled();
@@ -699,7 +700,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::SameLine(0, 20);
     const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
     ImGui::BeginDisabled(!front_c.enabled);
-    ImGui::Checkbox("Front##visible", &r.front);
+    Checkbox("Front##visible", &r.front);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
     }
@@ -827,7 +828,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(no_bg);
-    ImGui::Checkbox("Show##display_bg", &g_state.bg_show);
+    Checkbox("Show##display_bg", &g_state.bg_show);
     // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
     // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
     // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
@@ -868,9 +869,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       ImGui::SameLine();
       ImGui::TextUnformatted(name);
       ImGui::SameLine(line_col_x);
-      ImGui::Checkbox(line_id, line_v);
+      Checkbox(line_id, line_v);
       ImGui::SameLine(label_col_x);
-      ImGui::Checkbox(label_id, label_v);
+      Checkbox(label_id, label_v);
     };
 
     overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
@@ -954,7 +955,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::SameLine();
     ImGui::TextUnformatted("Zenith/Nadir");
     ImGui::SameLine(line_col_x);
-    ImGui::Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
+    Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
     const FieldEditorConstraint zn_a_c = ConstraintFor("overlay_zenith_nadir_alpha", g_state);
     SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, static_cast<float>(zn_a_c.min_value),
                     static_cast<float>(zn_a_c.max_value), zn_a_c.fmt, zn_a_c.scale);
@@ -1661,7 +1662,7 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
-  if (ImGui::Checkbox("File", &g_state.log_to_file)) {
+  if (Checkbox("File", &g_state.log_to_file)) {
     if (g_file_log_sink) {
       g_file_log_sink->set_level(g_state.log_to_file ? spdlog::level::trace : spdlog::level::off);
     }

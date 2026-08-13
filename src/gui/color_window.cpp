@@ -36,6 +36,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/symmetry_ui.hpp"
+#include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
 
@@ -462,7 +463,7 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   // of vanishing, and restore the same text when the user un-checks whole.
   ImGui::SameLine();
   bool whole = ref.match_all;
-  if (ImGui::Checkbox("whole", &whole)) {
+  if (Checkbox("whole", &whole)) {
     SetRefMatchAll(ref, whole);
     // T1: structural → reconciler.
   }
@@ -809,7 +810,7 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     if (composite_empty) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Checkbox(label, &checked)) {
+    if (Checkbox(label, &checked)) {
       ToggleCompositePreview(state);
     }
     if (composite_empty) {

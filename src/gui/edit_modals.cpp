@@ -24,6 +24,7 @@
 #include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
 #include "gui/symmetry_ui.hpp"
+#include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
@@ -1842,7 +1843,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   }
   // Vertical layout toggle (view preference — does NOT mark the file dirty).
   // Checked = stacked layout (preview on top); unchecked = side-by-side.
-  ImGui::Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
+  Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("%s", state.modal_layout_vertical ? "Stacked layout (preview on top)" :
                                                           "Side-by-side layout (preview on left)");
@@ -1850,7 +1851,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   ImGui::SameLine();
   // ImGui::Checkbox returns true only on the frame the user actually toggled
   // the value, so checking the return alone is sufficient to detect a change.
-  if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
+  if (Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
     g_pending_mode_switch = true;
     if (state.modal_immediate_mode) {
       // Staged → Immediate: commit in-flight buffer to state so any pending

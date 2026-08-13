@@ -19,6 +19,7 @@
 #include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
 #include "gui/shape_scalar_domain.hpp"
 #include "gui/slider_mapping.hpp"
+#include "gui/theme.hpp"
 #include "imgui.h"
 #include "lumice.h"
 
@@ -881,7 +882,7 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
   char ck_id[96];
   snprintf(ck_id, sizeof(ck_id), "##rnd_%s", label);
   bool randomize = dist.type != ShapeDistType::kNoRandom;
-  if (ImGui::Checkbox(ck_id, &randomize)) {
+  if (Checkbox(ck_id, &randomize)) {
     if (randomize) {
       dist.type = ShapeDistType::kUniform;                          // GUI edits uniform only
       dist.spread = kShapeDistDefaultSpreadFraction * dist.center;  // default spread heuristic
@@ -1505,7 +1506,7 @@ void RenderSceneControls(GuiState& state) {
 
   ImGui::SeparatorText("Simulation");
   ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  ImGui::Checkbox("Infinite rays", &state.sim.infinite);
+  Checkbox("Infinite rays", &state.sim.infinite);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Run simulation continuously until manually stopped");
   }
@@ -1560,7 +1561,7 @@ void RenderSceneControls(GuiState& state) {
     if (busy) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Checkbox("Use GPU", &state.use_gpu_backend)) {
+    if (Checkbox("Use GPU", &state.use_gpu_backend)) {
       state.MarkDirty();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
