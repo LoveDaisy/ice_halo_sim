@@ -118,15 +118,48 @@ endif()
 # per language, so a regression that reaches only one of them — a future CMake version
 # difference, or someone overriding CMAKE_C_FLAGS_RELEASE — would otherwise slip past a
 # CXX-only check, and the C-only dependencies (glad) would quietly link the other CRT.
+#
+# Two things about reading this check's result. It is only trustworthy on a FRESH cache:
+# these are CACHE variables, so once a configure has baked a runtime flag into them, a
+# reconfigure in the same build directory reuses the stale value and the check reports on
+# that rather than on what this file now does — deleting the build tree (or at least
+# CMakeCache.txt) is part of verifying it. And when it does find a baked flag, it reads
+# WHICH one: the usual failure bakes the dynamic flag, but an explicit
+# -DCMAKE_CXX_FLAGS_RELEASE=/MT bakes the static one, and in that case the build really is
+# static even though the abstraction is being bypassed. Reporting OFF there would push
+# gtest to the opposite CRT and produce the very LNK1319 mismatch this variable exists to
+# prevent, so the answer follows the measurement in both directions.
 set(LUMICE_MSVC_STATIC_CRT OFF)
 if(MSVC AND NOT BUILD_SHARED_LIBS)
-  if("${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL} ${CMAKE_C_FLAGS_RELEASE} ${CMAKE_C_FLAGS_DEBUG} ${CMAKE_C_FLAGS_RELWITHDEBINFO} ${CMAKE_C_FLAGS_MINSIZEREL}"
-     MATCHES "[-/]M[DT]")
-    message(WARNING "MSVC runtime library selection is not in effect: a runtime flag is "
-                    "baked into the per-config compiler flags, so CMAKE_MSVC_RUNTIME_LIBRARY "
-                    "is ignored and this build will link the DYNAMIC CRT and depend on the "
-                    "VC++ Redistributable (CMake <3.15, a CMP0091 call moved after project(), "
-                    "or overridden CMAKE_C_FLAGS_<CONFIG> / CMAKE_CXX_FLAGS_<CONFIG>).")
+  string(REGEX MATCHALL "[-/]M[DT]"
+         LUMICE_BAKED_CRT_FLAGS
+         "${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL} ${CMAKE_C_FLAGS_RELEASE} ${CMAKE_C_FLAGS_DEBUG} ${CMAKE_C_FLAGS_RELWITHDEBINFO} ${CMAKE_C_FLAGS_MINSIZEREL}")
+  if(LUMICE_BAKED_CRT_FLAGS)
+    # Static only if EVERY baked flag is the static one; a mix means different translation
+    # units disagree, which is not something to report as either answer confidently, so it
+    # takes the conservative one.
+    set(LUMICE_MSVC_STATIC_CRT ON)
+    foreach(LUMICE_BAKED_CRT_FLAG IN LISTS LUMICE_BAKED_CRT_FLAGS)
+      if(NOT LUMICE_BAKED_CRT_FLAG MATCHES "MT$")
+        set(LUMICE_MSVC_STATIC_CRT OFF)
+      endif()
+    endforeach()
+    if(LUMICE_MSVC_STATIC_CRT)
+      set(LUMICE_BAKED_CRT_DESCRIPTION "the STATIC CRT, through those flags rather than "
+                                       "through CMAKE_MSVC_RUNTIME_LIBRARY")
+    else()
+      set(LUMICE_BAKED_CRT_DESCRIPTION "the DYNAMIC CRT and depend on the VC++ "
+                                       "Redistributable")
+    endif()
+    set(LUMICE_BAKED_CRT_FLAGS_SEEN ${LUMICE_BAKED_CRT_FLAGS})
+    list(REMOVE_DUPLICATES LUMICE_BAKED_CRT_FLAGS_SEEN)
+    string(REPLACE ";" " " LUMICE_BAKED_CRT_FLAGS_SEEN "${LUMICE_BAKED_CRT_FLAGS_SEEN}")
+    message(WARNING "MSVC runtime library selection is not in effect: a runtime flag "
+                    "(${LUMICE_BAKED_CRT_FLAGS_SEEN}) is baked into the per-config compiler flags, "
+                    "so CMAKE_MSVC_RUNTIME_LIBRARY is ignored and this build will link "
+                    ${LUMICE_BAKED_CRT_DESCRIPTION} " (CMake <3.15, a CMP0091 call moved "
+                    "after project(), or overridden CMAKE_C_FLAGS_<CONFIG> / "
+                    "CMAKE_CXX_FLAGS_<CONFIG>).")
   else()
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set(LUMICE_MSVC_STATIC_CRT ON)
