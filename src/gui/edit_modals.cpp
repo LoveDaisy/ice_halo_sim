@@ -102,8 +102,18 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 // these — `edit_modal/the_fixed_columns_fit_their_text_in_both_layouts` in
 // test/gui/functional/test_edit_modal.cpp is what notices, by comparing each fixed column's
 // ContentMaxXHeadersIdeal against its WorkMaxX rather than against a pixel constant.
+//
+// Re-measured after the body font became Roboto Medium 15 px (it was ProggyClean 13 px when these
+// were first settled). Widening the glyphs is exactly the "lengthens a header" case above, and it
+// pushed Rand past its budget. Measured needs/has per column at the new font, both tables:
+//   Param  needs 48 / has 52     Sync   needs 28 / has 29
+//   Rand   needs 30 / has 29 ✗   Spread needs 60 / has 60
+// Only Rand is widened here, to the smallest value that restores a margin rather than a hairline
+// fit. Sync and Spread are left alone deliberately: they still satisfy the invariant, and rebalancing
+// four columns that merely sit close to their bound is type-setting work, not a repair. Their
+// margins (1 px and 0 px) are recorded here so that work starts from measurements instead of by eye.
 constexpr float kShapeParamColWidth = 52.0f;
-constexpr float kShapeRandColWidth = 29.0f;
+constexpr float kShapeRandColWidth = 32.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
 // Sync (shape-scalar sync group): a square swatch button one frame tall (~19 px), so like Rand this
 // column is sized by its 4-character header, not by its control. That it lands on the SAME number as
