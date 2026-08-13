@@ -6,6 +6,29 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 endif()
 
+# CMP0091 decides whether CMAKE_MSVC_RUNTIME_LIBRARY (set in the MSVC block further
+# down, with the reasoning for the /MT choice) means anything at all. It has to be
+# decided HERE, before project(): project() enables the C/CXX languages, and that is
+# when CMake either bakes a runtime-library flag into the CMAKE_<LANG>_FLAGS_<CONFIG>
+# defaults (OLD) or leaves them alone and honors the abstraction instead (NEW).
+# Setting the policy after project() is measurably too late — the flags are already
+# baked and the whole block silently does nothing.
+#   - if(POLICY ...) guard: below CMake 3.15 this policy does not exist, and
+#     cmake_policy(SET) on an unknown id is a hard configure error, not a no-op. The
+#     silent-/MD case that leaves is caught by the MSVC block's check further down.
+#   - CMAKE_POLICY_DEFAULT_CMP0091 covers scopes created later. A function records the
+#     policy stack in effect where it was defined, and cmake/CPM.cmake declares its own
+#     (lower) cmake_minimum_required at the top, so CPMAddPackage and the
+#     add_subdirectory it performs would otherwise run with CMP0091 unset and the
+#     third-party dependencies would keep the dynamic CRT while this project uses the
+#     static one. Both must precede include(cmake/CPM.cmake) and every add_subdirectory.
+# This is deliberately not gated on MSVC: neither line exists as a variable before
+# project(), and both are inert on every non-MSVC toolchain.
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+endif()
+
 project(Lumice VERSION 4.4.2)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
@@ -42,9 +65,121 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-# MSVC: use static CRT (/MT) so distributed .exe doesn't require vcruntime DLLs.
-if(MSVC)
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# MSVC: the executables this repo distributes link the static CRT (/MT) so they run on
+# a machine with no VC++ Redistributable installed. The shared-library flavor keeps the
+# dynamic CRT (/MD), and that split is the whole point rather than an oversight:
+#
+#   - The release workflow publishes only the CLI and GUI executables. For those, a
+#     private CRT is exactly what is wanted, and the dynamic CRT's worst failure mode
+#     (several modules each holding their own CRT state) cannot arise in a single
+#     self-contained process.
+#   - A DLL is the opposite case: it is loaded into someone else's process, and a static
+#     CRT gives it a *private copy of the CRT state* — its own heap, and its own
+#     environment block. The environment half is not theoretical here. It was measured:
+#     with /MT, a LUMICE_* variable the host process sets after loading the library is
+#     invisible to getenv() inside it, because the library's CRT snapshotted the
+#     environment when it initialized. The whole CUDA parity suite, which selects the
+#     backend exactly that way, silently ran on the CPU path instead and failed 11/11;
+#     the same suite passes with /MD. Sharing the host's CRT is the correct behavior for
+#     a library, so this is the answer, not a workaround.
+#
+# So: the trigger for revisiting is a change to what gets *published*, not a CMake or
+# compiler version bump.
+#
+# The setting below only means something if CMP0091 is NEW; that is arranged before
+# project() at the top of this file, where the reasoning lives. When CMP0091 is not in
+# effect, CMake's own default is the dynamic CRT, which is why only the static-CRT
+# branch has to check that the abstraction actually works.
+#
+# That check reads the state which actually decides the outcome rather than the policy's
+# nominal value: under CMP0091 NEW, CMake puts no runtime-library flag in the per-config
+# flag defaults and adds it from the abstraction instead. A runtime flag sitting in those
+# defaults therefore means the abstraction is being ignored and this build links the
+# dynamic CRT no matter what the line below says — whether because the CMake in use
+# predates 3.15, because someone moved the policy call below project() (that regression
+# is not hypothetical), or because the flags were overridden on the command line. Asking
+# cmake_policy(GET) instead would not catch any of those: it reports NEW happily while
+# the baked flags win.
+#
+# When you touch this, verify the *artifact*, not the intent: check that the generated
+# build.ninja compile FLAGS carry the static-CRT flag (dependencies included, not just
+# this project's own sources) and that dumpbin /dependents on the produced .exe lists no
+# MSVCP140.dll / VCRUNTIME140.dll / VCRUNTIME140_1.dll. This block was inert for a long
+# time precisely because it was only ever read, never measured. If some target ever needs
+# a per-target MSVC_RUNTIME_LIBRARY override, add it in one named block per build unit
+# (one here after all CPMAddPackage calls, one in test/CMakeLists.txt) instead of
+# scattering set_target_properties calls, so a reader can still answer "who decides this
+# target's CRT" from a single place.
+#
+# LUMICE_MSVC_STATIC_CRT is the single answer to "is this build using the static CRT",
+# for anything downstream that has to agree with it (see test/CMakeLists.txt). It is
+# deliberately the *measured* answer, not the intended one.
+# Both languages are checked, not just CXX. CMP0091 bakes into CMAKE_<LANG>_FLAGS_<CONFIG>
+# per language, so a regression that reaches only one of them — a future CMake version
+# difference, or someone overriding CMAKE_C_FLAGS_RELEASE — would otherwise slip past a
+# CXX-only check, and the C-only dependencies (glad) would quietly link the other CRT.
+#
+# Two things about reading this check's result. It is only trustworthy on a FRESH cache:
+# these are CACHE variables, so once a configure has baked a runtime flag into them, a
+# reconfigure in the same build directory reuses the stale value and the check reports on
+# that rather than on what this file now does — deleting the build tree (or at least
+# CMakeCache.txt) is part of verifying it. And when it does find a baked flag, it reads
+# WHICH one: the usual failure bakes the dynamic flag, but an explicit
+# -DCMAKE_CXX_FLAGS_RELEASE=/MT bakes the static one, and in that case the build really is
+# static even though the abstraction is being bypassed. Reporting OFF there would push
+# gtest to the opposite CRT and produce the very LNK1319 mismatch this variable exists to
+# prevent, so the answer follows the measurement in both directions.
+set(LUMICE_MSVC_STATIC_CRT OFF)
+if(MSVC AND NOT BUILD_SHARED_LIBS)
+  string(REGEX MATCHALL "[-/]M[DT]"
+         LUMICE_BAKED_CRT_FLAGS
+         "${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL} ${CMAKE_C_FLAGS_RELEASE} ${CMAKE_C_FLAGS_DEBUG} ${CMAKE_C_FLAGS_RELWITHDEBINFO} ${CMAKE_C_FLAGS_MINSIZEREL}")
+  if(LUMICE_BAKED_CRT_FLAGS)
+    # Static only if EVERY baked flag is the static one; a mix means different translation
+    # units disagree, which is not something to report as either answer confidently, so it
+    # takes the conservative one.
+    set(LUMICE_MSVC_STATIC_CRT ON)
+    set(LUMICE_BAKED_CRT_SAW_STATIC OFF)
+    set(LUMICE_BAKED_CRT_SAW_DYNAMIC OFF)
+    foreach(LUMICE_BAKED_CRT_FLAG IN LISTS LUMICE_BAKED_CRT_FLAGS)
+      if(NOT LUMICE_BAKED_CRT_FLAG MATCHES "MT$")
+        set(LUMICE_MSVC_STATIC_CRT OFF)
+        set(LUMICE_BAKED_CRT_SAW_DYNAMIC ON)
+      else()
+        set(LUMICE_BAKED_CRT_SAW_STATIC ON)
+      endif()
+    endforeach()
+    # string(CONCAT), not set(), so the result is ONE string: it is expanded inside a quoted
+    # message() argument below, where a multi-element list would render its separators.
+    if(LUMICE_MSVC_STATIC_CRT)
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "the STATIC CRT, through those flags rather than "
+             "through CMAKE_MSVC_RUNTIME_LIBRARY")
+    elseif(LUMICE_BAKED_CRT_SAW_STATIC AND LUMICE_BAKED_CRT_SAW_DYNAMIC)
+      # Worth its own wording: this is not "the build fell back to /MD", it is compilation
+      # units disagreeing with each other, which surfaces at link time as LNK1319/LNK2038.
+      # Sending the reader looking for "why did it all become dynamic" would be the wrong
+      # search.
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "a MIX of static and dynamic CRT flags across compilation units, which will "
+             "fail at link time (LNK1319/LNK2038) rather than produce a working binary")
+    else()
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "the DYNAMIC CRT and depend on the VC++ Redistributable")
+    endif()
+    set(LUMICE_BAKED_CRT_FLAGS_SEEN ${LUMICE_BAKED_CRT_FLAGS})
+    list(REMOVE_DUPLICATES LUMICE_BAKED_CRT_FLAGS_SEEN)
+    string(REPLACE ";" " " LUMICE_BAKED_CRT_FLAGS_SEEN "${LUMICE_BAKED_CRT_FLAGS_SEEN}")
+    message(WARNING "MSVC runtime library selection is not in effect: a runtime flag "
+                    "(${LUMICE_BAKED_CRT_FLAGS_SEEN}) is baked into the per-config compiler flags, "
+                    "so CMAKE_MSVC_RUNTIME_LIBRARY is ignored and this build will link "
+                    "${LUMICE_BAKED_CRT_DESCRIPTION}" " (CMake <3.15, a CMP0091 call moved "
+                    "after project(), or overridden CMAKE_C_FLAGS_<CONFIG> / "
+                    "CMAKE_CXX_FLAGS_<CONFIG>).")
+  else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(LUMICE_MSVC_STATIC_CRT ON)
+  endif()
 endif()
 
 include(CheckIPOSupported)
