@@ -6,6 +6,29 @@ if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
 endif()
 
+# CMP0091 decides whether CMAKE_MSVC_RUNTIME_LIBRARY (set in the MSVC block further
+# down, with the reasoning for the /MT choice) means anything at all. It has to be
+# decided HERE, before project(): project() enables the C/CXX languages, and that is
+# when CMake either bakes a runtime-library flag into the CMAKE_<LANG>_FLAGS_<CONFIG>
+# defaults (OLD) or leaves them alone and honors the abstraction instead (NEW).
+# Setting the policy after project() is measurably too late — the flags are already
+# baked and the whole block silently does nothing.
+#   - if(POLICY ...) guard: below CMake 3.15 this policy does not exist, and
+#     cmake_policy(SET) on an unknown id is a hard configure error, not a no-op. The
+#     silent-/MD case that leaves is caught by the MSVC block's check further down.
+#   - CMAKE_POLICY_DEFAULT_CMP0091 covers scopes created later. A function records the
+#     policy stack in effect where it was defined, and cmake/CPM.cmake declares its own
+#     (lower) cmake_minimum_required at the top, so CPMAddPackage and the
+#     add_subdirectory it performs would otherwise run with CMP0091 unset and the
+#     third-party dependencies would keep the dynamic CRT while this project uses the
+#     static one. Both must precede include(cmake/CPM.cmake) and every add_subdirectory.
+# This is deliberately not gated on MSVC: neither line exists as a variable before
+# project(), and both are inert on every non-MSVC toolchain.
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+endif()
+
 project(Lumice VERSION 4.4.2)
 
 set(CMAKE_VERBOSE_MAKEFILE OFF)
@@ -52,21 +75,22 @@ endif()
 # Revisit this choice if that changes — publishing a DLL for third-party consumers is
 # the trigger, not a version bump.
 #
-# The two policy lines are load-bearing, not boilerplate:
-#   - CMP0091 (the policy that makes CMAKE_MSVC_RUNTIME_LIBRARY mean anything) arrived
-#     in CMake 3.15. Below the cmake_minimum_required set at the top of this file it
-#     defaults to OLD, and CMake then ignores the variable *silently* — no warning, no
-#     error, just /MD in the compile command. Setting the variable alone is not enough.
-#   - CMAKE_POLICY_DEFAULT_CMP0091 covers scopes created later. A function records the
-#     policy stack in effect where it was *defined*, and cmake/CPM.cmake declares its own
-#     (lower) cmake_minimum_required at the top, so CPMAddPackage and the
-#     add_subdirectory it performs run with CMP0091 unset. Without this line the
-#     third-party dependency scopes keep /MD and mix with a /MT main build.
-# Both must precede include(cmake/CPM.cmake) and every add_subdirectory below.
+# The setting below only means something if CMP0091 is NEW; that is arranged before
+# project() at the top of this file, where the reasoning lives.
 #
-# When you touch these lines, verify the *artifact*, not the intent: check that the
-# generated build.ninja compile FLAGS say /MT (dependencies included, not just this
-# project's own sources) and that dumpbin /dependents on the produced .exe lists no
+# The guard here checks the state that actually decides the outcome rather than the
+# policy's nominal value: under CMP0091 NEW, CMake puts no runtime-library flag in the
+# per-config flag defaults and adds it from the abstraction instead. A runtime flag
+# sitting in those defaults therefore means the abstraction is being ignored and this
+# build links the dynamic CRT no matter what the line below says — whether because the
+# CMake in use predates 3.15, because someone moved the policy call below project()
+# (that regression is not hypothetical), or because the flags were overridden on the
+# command line. Asking cmake_policy(GET) instead would not catch any of those: it
+# reports NEW happily while the baked flags win.
+#
+# When you touch this, verify the *artifact*, not the intent: check that the generated
+# build.ninja compile FLAGS carry the static-CRT flag (dependencies included, not just
+# this project's own sources) and that dumpbin /dependents on the produced .exe lists no
 # MSVCP140.dll / VCRUNTIME140.dll / VCRUNTIME140_1.dll. This block was inert for a long
 # time precisely because it was only ever read, never measured. If some target ever needs
 # a per-target MSVC_RUNTIME_LIBRARY override, add it in one named block per build unit
@@ -74,12 +98,13 @@ endif()
 # scattering set_target_properties calls, so a reader can still answer "who decides this
 # target's CRT" from a single place.
 if(MSVC)
-  if(POLICY CMP0091)
-    cmake_policy(SET CMP0091 NEW)
-    set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
-  else()
-    message(WARNING "CMake <3.15 does not know CMP0091; MSVC runtime library selection is "
-                    "ignored and this build will link the DYNAMIC CRT (/MD) instead of /MT.")
+  if("${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL}"
+     MATCHES "[-/]M[DT]")
+    message(WARNING "MSVC runtime library selection is not in effect: a runtime flag is "
+                    "baked into the per-config compiler flags, so CMAKE_MSVC_RUNTIME_LIBRARY "
+                    "is ignored and this build will link whichever CRT that flag names "
+                    "(CMake <3.15, a CMP0091 call moved after project(), or overridden "
+                    "CMAKE_CXX_FLAGS_<CONFIG>).")
   endif()
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
