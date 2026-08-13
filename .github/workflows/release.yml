@@ -10,6 +10,11 @@ env:
 
   # Platform support decisions (2026-03):
   #   - Only CLI and GUI executables are published; shared library publishing is deferred.
+  #     This line is what makes the MSVC static-CRT (/MT) choice safe, so changing it means
+  #     re-reading the CRT reasoning in the top-level CMakeLists.txt MSVC block first: the
+  #     shared flavor deliberately stays on the dynamic CRT, because a static CRT gives a
+  #     DLL its own environment block and swallows variables the host process sets after
+  #     loading it.
   #   - linux-arm64: GUI OFF — ARM runner GPU/display support not verified.
   #   - macOS Intel: excluded — GitHub Actions dropped macos-13 runners (2025).
 

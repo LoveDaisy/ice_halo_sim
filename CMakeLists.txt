@@ -139,17 +139,33 @@ if(MSVC AND NOT BUILD_SHARED_LIBS)
     # units disagree, which is not something to report as either answer confidently, so it
     # takes the conservative one.
     set(LUMICE_MSVC_STATIC_CRT ON)
+    set(LUMICE_BAKED_CRT_SAW_STATIC OFF)
+    set(LUMICE_BAKED_CRT_SAW_DYNAMIC OFF)
     foreach(LUMICE_BAKED_CRT_FLAG IN LISTS LUMICE_BAKED_CRT_FLAGS)
       if(NOT LUMICE_BAKED_CRT_FLAG MATCHES "MT$")
         set(LUMICE_MSVC_STATIC_CRT OFF)
+        set(LUMICE_BAKED_CRT_SAW_DYNAMIC ON)
+      else()
+        set(LUMICE_BAKED_CRT_SAW_STATIC ON)
       endif()
     endforeach()
+    # string(CONCAT), not set(), so the result is ONE string: it is expanded inside a quoted
+    # message() argument below, where a multi-element list would render its separators.
     if(LUMICE_MSVC_STATIC_CRT)
-      set(LUMICE_BAKED_CRT_DESCRIPTION "the STATIC CRT, through those flags rather than "
-                                       "through CMAKE_MSVC_RUNTIME_LIBRARY")
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "the STATIC CRT, through those flags rather than "
+             "through CMAKE_MSVC_RUNTIME_LIBRARY")
+    elseif(LUMICE_BAKED_CRT_SAW_STATIC AND LUMICE_BAKED_CRT_SAW_DYNAMIC)
+      # Worth its own wording: this is not "the build fell back to /MD", it is compilation
+      # units disagreeing with each other, which surfaces at link time as LNK1319/LNK2038.
+      # Sending the reader looking for "why did it all become dynamic" would be the wrong
+      # search.
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "a MIX of static and dynamic CRT flags across compilation units, which will "
+             "fail at link time (LNK1319/LNK2038) rather than produce a working binary")
     else()
-      set(LUMICE_BAKED_CRT_DESCRIPTION "the DYNAMIC CRT and depend on the VC++ "
-                                       "Redistributable")
+      string(CONCAT LUMICE_BAKED_CRT_DESCRIPTION
+             "the DYNAMIC CRT and depend on the VC++ Redistributable")
     endif()
     set(LUMICE_BAKED_CRT_FLAGS_SEEN ${LUMICE_BAKED_CRT_FLAGS})
     list(REMOVE_DUPLICATES LUMICE_BAKED_CRT_FLAGS_SEEN)
@@ -157,7 +173,7 @@ if(MSVC AND NOT BUILD_SHARED_LIBS)
     message(WARNING "MSVC runtime library selection is not in effect: a runtime flag "
                     "(${LUMICE_BAKED_CRT_FLAGS_SEEN}) is baked into the per-config compiler flags, "
                     "so CMAKE_MSVC_RUNTIME_LIBRARY is ignored and this build will link "
-                    ${LUMICE_BAKED_CRT_DESCRIPTION} " (CMake <3.15, a CMP0091 call moved "
+                    "${LUMICE_BAKED_CRT_DESCRIPTION}" " (CMake <3.15, a CMP0091 call moved "
                     "after project(), or overridden CMAKE_C_FLAGS_<CONFIG> / "
                     "CMAKE_CXX_FLAGS_<CONFIG>).")
   else()
