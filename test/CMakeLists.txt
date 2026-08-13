@@ -1,13 +1,19 @@
 # ==================================================================================================
 # Google Test
-# gtest_force_shared_crt drives GoogleTest's own pre-CMP0091 mechanism: it rewrites
-# /MD into /MT in the compiler flags itself and knows nothing about
-# CMAKE_MSVC_RUNTIME_LIBRARY. It has to agree with the CRT this project selects (see the
-# MSVC block in the top-level CMakeLists.txt) or gtest links against a different CRT than
-# everything it is linked into. It was ON back when the whole project effectively built
-# /MD; OFF is the value that matches /MT, and is also GoogleTest's own default. Kept
-# explicit rather than deleted so the coupling stays visible at the point it applies.
-set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
+# gtest_force_shared_crt drives GoogleTest's own pre-CMP0091 mechanism: it rewrites the
+# dynamic-CRT flag into the static one in the inherited compiler flags itself, and knows
+# nothing about CMAKE_MSVC_RUNTIME_LIBRARY. It has to agree with the CRT this build
+# actually selected or gtest links against a different CRT than everything it is linked
+# into — which surfaces as LNK2038/LNK1319 at link time, not as anything readable here.
+# Hence it follows LUMICE_MSVC_STATIC_CRT (set in the top-level CMakeLists.txt, where the
+# CRT choice and its reasoning live) rather than restating the condition: this variable
+# reports what the build measured, so the two cannot drift apart. Kept explicit rather
+# than deleted so the coupling stays visible at the point it applies.
+if(LUMICE_MSVC_STATIC_CRT)
+  set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
+else()
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+endif()
 CPMAddPackage(
   NAME GTest
   URL https://github.com/google/googletest/releases/download/v1.15.2/googletest-1.15.2.tar.gz

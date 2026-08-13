@@ -65,28 +65,41 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-# MSVC: use the static CRT (/MT) so a distributed .exe runs on a machine that has
-# no VC++ Redistributable installed. The dynamic CRT's worst failure mode — several
-# modules each holding their own CRT heap, one module freeing a pointer another
-# allocated — does not apply to what this repo actually ships: the release workflow
-# publishes only the CLI and GUI executables (no shared library), and the C API pairs
-# every allocation with its own release entry point (Acquire/Release, Create/Destroy,
-# CompositionReleaseClauses) rather than handing raw pointers to a caller's free().
-# Revisit this choice if that changes — publishing a DLL for third-party consumers is
-# the trigger, not a version bump.
+# MSVC: the executables this repo distributes link the static CRT (/MT) so they run on
+# a machine with no VC++ Redistributable installed. The shared-library flavor keeps the
+# dynamic CRT (/MD), and that split is the whole point rather than an oversight:
+#
+#   - The release workflow publishes only the CLI and GUI executables. For those, a
+#     private CRT is exactly what is wanted, and the dynamic CRT's worst failure mode
+#     (several modules each holding their own CRT state) cannot arise in a single
+#     self-contained process.
+#   - A DLL is the opposite case: it is loaded into someone else's process, and a static
+#     CRT gives it a *private copy of the CRT state* — its own heap, and its own
+#     environment block. The environment half is not theoretical here. It was measured:
+#     with /MT, a LUMICE_* variable the host process sets after loading the library is
+#     invisible to getenv() inside it, because the library's CRT snapshotted the
+#     environment when it initialized. The whole CUDA parity suite, which selects the
+#     backend exactly that way, silently ran on the CPU path instead and failed 11/11;
+#     the same suite passes with /MD. Sharing the host's CRT is the correct behavior for
+#     a library, so this is the answer, not a workaround.
+#
+# So: the trigger for revisiting is a change to what gets *published*, not a CMake or
+# compiler version bump.
 #
 # The setting below only means something if CMP0091 is NEW; that is arranged before
-# project() at the top of this file, where the reasoning lives.
+# project() at the top of this file, where the reasoning lives. When CMP0091 is not in
+# effect, CMake's own default is the dynamic CRT, which is why only the static-CRT
+# branch has to check that the abstraction actually works.
 #
-# The guard here checks the state that actually decides the outcome rather than the
-# policy's nominal value: under CMP0091 NEW, CMake puts no runtime-library flag in the
-# per-config flag defaults and adds it from the abstraction instead. A runtime flag
-# sitting in those defaults therefore means the abstraction is being ignored and this
-# build links the dynamic CRT no matter what the line below says — whether because the
-# CMake in use predates 3.15, because someone moved the policy call below project()
-# (that regression is not hypothetical), or because the flags were overridden on the
-# command line. Asking cmake_policy(GET) instead would not catch any of those: it
-# reports NEW happily while the baked flags win.
+# That check reads the state which actually decides the outcome rather than the policy's
+# nominal value: under CMP0091 NEW, CMake puts no runtime-library flag in the per-config
+# flag defaults and adds it from the abstraction instead. A runtime flag sitting in those
+# defaults therefore means the abstraction is being ignored and this build links the
+# dynamic CRT no matter what the line below says — whether because the CMake in use
+# predates 3.15, because someone moved the policy call below project() (that regression
+# is not hypothetical), or because the flags were overridden on the command line. Asking
+# cmake_policy(GET) instead would not catch any of those: it reports NEW happily while
+# the baked flags win.
 #
 # When you touch this, verify the *artifact*, not the intent: check that the generated
 # build.ninja compile FLAGS carry the static-CRT flag (dependencies included, not just
@@ -97,16 +110,23 @@ endif()
 # (one here after all CPMAddPackage calls, one in test/CMakeLists.txt) instead of
 # scattering set_target_properties calls, so a reader can still answer "who decides this
 # target's CRT" from a single place.
-if(MSVC)
+#
+# LUMICE_MSVC_STATIC_CRT is the single answer to "is this build using the static CRT",
+# for anything downstream that has to agree with it (see test/CMakeLists.txt). It is
+# deliberately the *measured* answer, not the intended one.
+set(LUMICE_MSVC_STATIC_CRT OFF)
+if(MSVC AND NOT BUILD_SHARED_LIBS)
   if("${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL}"
      MATCHES "[-/]M[DT]")
     message(WARNING "MSVC runtime library selection is not in effect: a runtime flag is "
                     "baked into the per-config compiler flags, so CMAKE_MSVC_RUNTIME_LIBRARY "
-                    "is ignored and this build will link whichever CRT that flag names "
-                    "(CMake <3.15, a CMP0091 call moved after project(), or overridden "
-                    "CMAKE_CXX_FLAGS_<CONFIG>).")
+                    "is ignored and this build will link the DYNAMIC CRT and depend on the "
+                    "VC++ Redistributable (CMake <3.15, a CMP0091 call moved after project(), "
+                    "or overridden CMAKE_CXX_FLAGS_<CONFIG>).")
+  else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(LUMICE_MSVC_STATIC_CRT ON)
   endif()
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 include(CheckIPOSupported)
