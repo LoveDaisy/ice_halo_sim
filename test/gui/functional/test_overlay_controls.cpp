@@ -33,7 +33,26 @@
 #include "gui/gui_state.hpp"
 #include "test_gui_shared.hpp"
 
-namespace {}  // namespace
+namespace {
+
+// RAII pairing for ImGuiTestContext::SetRef, for the same mechanical reason ScopedPopups exists
+// (see its comment in test_gui_shared.hpp): a fatal IM_CHECK expands to `return` in the enclosing
+// lambda, so a tail-of-function `SetRef("")` only runs when the case passes — and the assertions
+// it sits behind are exactly the ones a real regression would trip. Without this, a genuine UI
+// regression here would leave the ref pinned to "//##RightPanel" for the rest of the test process,
+// turning one real failure into a cascade of unrelated false negatives in later cases.
+struct ScopedRef {
+  ScopedRef(ImGuiTestContext* ctx, const char* ref) : ctx_(ctx) { ctx_->SetRef(ref); }
+  ~ScopedRef() { ctx_->SetRef(""); }
+
+  ScopedRef(const ScopedRef&) = delete;
+  ScopedRef& operator=(const ScopedRef&) = delete;
+
+ private:
+  ImGuiTestContext* ctx_;
+};
+
+}  // namespace
 
 void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
   // P32's layout half. The three rows carry names of different widths and their checkboxes are
@@ -107,7 +126,12 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       // — but only when the ref names the window to pan. Without it, `!ItemExists` would be
       // satisfied by "scrolled out of view" as readily as by "not offered", and whether the case
       // passes turns on whether some earlier ItemClick happened to scroll the panel first.
-      ctx->SetRef("//##RightPanel");
+      //
+      // Scoped as an object rather than a matching SetRef("") at the tail, for the same reason
+      // ScopedPopups above is: several of the IM_CHECKs this ref covers are exactly the ones a real
+      // regression would trip, and a fatal one exits the lambda before a tail-of-function SetRef("")
+      // would run, leaving the ref pinned for the rest of the test process.
+      const ScopedRef right_panel_ref(ctx, "//##RightPanel");
       IM_CHECK(!gui::g_state.show_sun_circles_line);
       IM_CHECK(!gui::g_state.show_sun_circles_label);
       IM_CHECK(!ctx->ItemExists("**/Edit Angles...##overlay"));
@@ -128,7 +152,6 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Label##sun_circles");
       ctx->Yield(3);
-      ctx->SetRef("");
     };
   }
 
@@ -148,12 +171,14 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       // Named ref for the button only, for the reason given in the case above — it sits under the
-      // panel's fold and a wildcard lookup needs a window it can pan. Handed straight back: the
-      // presets and the delete rows below live in the "SunCirclesEdit" popup, a different window,
-      // which a right-panel prefix would exclude.
-      ctx->SetRef("//##RightPanel");
-      ctx->ItemClick("**/Edit Angles...##overlay");
-      ctx->SetRef("");
+      // panel's fold and a wildcard lookup needs a window it can pan. Scoped to just this click
+      // (rather than covering the case above's several IM_CHECKs) is deliberate: the presets and
+      // the delete rows below live in the "SunCirclesEdit" popup, a different window, which a
+      // right-panel prefix would exclude, so the ref must not still be set once we get there.
+      {
+        const ScopedRef right_panel_ref(ctx, "//##RightPanel");
+        ctx->ItemClick("**/Edit Angles...##overlay");
+      }
       ctx->Yield(3);
 
       // All four presets the panel offers (9 / 22 / 28 / 46 degrees), deliberately clicked out of
