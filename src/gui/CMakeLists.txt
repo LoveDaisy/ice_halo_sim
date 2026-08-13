@@ -72,6 +72,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/panels.cpp
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp
+    ${PROJ_SRC_DIR}/gui/semantic_colors.cpp
     ${PROJ_SRC_DIR}/gui/crystal_renderer.cpp
     ${PROJ_SRC_DIR}/gui/thumbnail_cache.cpp
     ${PROJ_SRC_DIR}/gui/gl_init.cpp
