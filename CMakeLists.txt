@@ -114,15 +114,19 @@ endif()
 # LUMICE_MSVC_STATIC_CRT is the single answer to "is this build using the static CRT",
 # for anything downstream that has to agree with it (see test/CMakeLists.txt). It is
 # deliberately the *measured* answer, not the intended one.
+# Both languages are checked, not just CXX. CMP0091 bakes into CMAKE_<LANG>_FLAGS_<CONFIG>
+# per language, so a regression that reaches only one of them — a future CMake version
+# difference, or someone overriding CMAKE_C_FLAGS_RELEASE — would otherwise slip past a
+# CXX-only check, and the C-only dependencies (glad) would quietly link the other CRT.
 set(LUMICE_MSVC_STATIC_CRT OFF)
 if(MSVC AND NOT BUILD_SHARED_LIBS)
-  if("${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL}"
+  if("${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${CMAKE_CXX_FLAGS_MINSIZEREL} ${CMAKE_C_FLAGS_RELEASE} ${CMAKE_C_FLAGS_DEBUG} ${CMAKE_C_FLAGS_RELWITHDEBINFO} ${CMAKE_C_FLAGS_MINSIZEREL}"
      MATCHES "[-/]M[DT]")
     message(WARNING "MSVC runtime library selection is not in effect: a runtime flag is "
                     "baked into the per-config compiler flags, so CMAKE_MSVC_RUNTIME_LIBRARY "
                     "is ignored and this build will link the DYNAMIC CRT and depend on the "
                     "VC++ Redistributable (CMake <3.15, a CMP0091 call moved after project(), "
-                    "or overridden CMAKE_CXX_FLAGS_<CONFIG>).")
+                    "or overridden CMAKE_C_FLAGS_<CONFIG> / CMAKE_CXX_FLAGS_<CONFIG>).")
   else()
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     set(LUMICE_MSVC_STATIC_CRT ON)
