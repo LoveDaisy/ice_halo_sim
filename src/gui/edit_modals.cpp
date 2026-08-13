@@ -23,6 +23,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
+#include "gui/semantic_colors.hpp"
 #include "gui/symmetry_ui.hpp"
 #include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
@@ -804,14 +805,17 @@ namespace {
 LUMICE_CrystalKind CurrentValidationKind();
 }
 
+// The three validation states are exactly the three semantic grades, so they take the shared muted
+// fills from gui/semantic_colors.hpp rather than a private set. This function previously carried its
+// own three literals, which is how a grade ends up with two owners that drift.
 static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   switch (state) {
     case LUMICE_RAYPATH_VALID:
-      return ImVec4(0.06f, 0.24f, 0.06f, 0.5f);
+      return GoodFillColor(0.5f);
     case LUMICE_RAYPATH_INCOMPLETE:
-      return ImVec4(0.27f, 0.24f, 0.03f, 0.5f);
+      return WarningFillColor(0.5f);
     case LUMICE_RAYPATH_INVALID:
-      return ImVec4(0.27f, 0.06f, 0.06f, 0.5f);
+      return DestructiveFillColor(0.5f);
   }
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
@@ -886,11 +890,11 @@ static void RenderSummandRowList() {
         case LUMICE_RAYPATH_VALID:
           break;  // silent when valid
         case LUMICE_RAYPATH_INCOMPLETE:
-          ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Row %zu: incomplete", i + 1);
+          ImGui::TextColored(WarningTextColor(), "Row %zu: incomplete", i + 1);
           break;
         case LUMICE_RAYPATH_INVALID: {
           const char* msg = v.message.empty() ? "Invalid" : v.message.c_str();
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+          ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
           ImGui::TextWrapped("Row %zu: %s", i + 1, msg);
           ImGui::PopStyleColor();
           break;
@@ -983,7 +987,7 @@ static void RenderSummandRowList() {
     std::snprintf(clause_line, sizeof(clause_line), "Clauses: %zu / %d", sop_summary.clause_count,
                   LUMICE_MAX_CONFIG_CLAUSES);
     if (sop_summary.overflow) {
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
       ImGui::TextUnformatted(clause_line);
       ImGui::SameLine();
       ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
@@ -2004,9 +2008,8 @@ void RenderSpectrumModal(GuiState& state) {
   ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
 
   if (cur_count > kSpectrumSoftWarnCount) {
-    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                       "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.", cur_count,
-                       kSpectrumSoftWarnCount);
+    ImGui::TextColored(WarningTextColor(), "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.",
+                       cur_count, kSpectrumSoftWarnCount);
   }
 
   ImGui::Separator();

@@ -17,6 +17,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
+#include "gui/semantic_colors.hpp"
 #include "gui/shape_scalar_domain.hpp"
 #include "gui/slider_mapping.hpp"
 #include "gui/theme.hpp"
@@ -1387,7 +1388,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
     bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
     if (show_warning_icon) {
       ImGui::SameLine();
-      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", prob_tip);
       }

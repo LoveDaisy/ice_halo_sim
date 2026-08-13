@@ -35,6 +35,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
+#include "gui/semantic_colors.hpp"
 #include "gui/symmetry_ui.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
@@ -322,14 +323,6 @@ const char* CrystalDisplayName(const GuiState& state, int pool_id) {
   return buf.c_str();
 }
 
-// Push item-scoped color states for the "empty arc" warning icon (amber-ish).
-void PushWarningStyle() {
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
-}
-void PopWarningStyle() {
-  ImGui::PopStyleColor();
-}
-
 // -------------------- window body --------------------
 
 // T1: no `server` parameter — display push derived by the frame-tail reconciler from the
@@ -484,7 +477,7 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   const auto validation = ValidateSingleAtomText(ref.predicate_text);
   const bool invalid = !ref.match_all && validation.state != LUMICE_RAYPATH_VALID;
   if (invalid) {
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, DestructiveTextColor());
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
   }
   if (ref.match_all) {
@@ -919,9 +912,9 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
     // Empty warning (AC4).
     if (phys < signal_flags.size() && !cls.match.empty() && signal_flags[phys] == 0) {
       ImGui::SameLine();
-      PushWarningStyle();
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
-      PopWarningStyle();
+      ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("No rays matched this class (a physical filter may be blocking them).");
       }

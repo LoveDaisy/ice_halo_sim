@@ -13,6 +13,7 @@
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/defaults_panel.hpp"
+#include "gui/destructive_style.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
@@ -20,6 +21,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
+#include "gui/semantic_colors.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
@@ -160,13 +162,13 @@ void RenderTopBar(float window_width) {
                                     ImGui::CalcTextSize(kStoppingLabel).x }) +
                          style.FramePadding.x * 2;
   if (simulating) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.05f, 0.05f, 1.0f));
+    // Stop is a destructive action in the same sense as delete/remove — it shares their palette
+    // rather than keeping a second, slightly different red of its own.
+    PushDestructiveStyle();
     if (ImGui::Button(kStopLabel, ImVec2(run_stop_width, 0))) {
       DoStop();
     }
-    ImGui::PopStyleColor(3);
+    PopDestructiveStyle();
   } else if (stopping) {
     // Async Stop in flight: greyed, disabled "Stopping…" (DoStop is idempotent, but the disabled
     // button makes the in-flight state unambiguous and blocks re-entry at the UI layer).
@@ -174,13 +176,11 @@ void RenderTopBar(float window_width) {
     ImGui::Button(kStoppingLabel, ImVec2(run_stop_width, 0));
     ImGui::EndDisabled();
   } else {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.15f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.35f, 0.1f, 1.0f));
+    PushGoodButtonStyle();
     if (ImGui::Button(kRunLabel, ImVec2(run_stop_width, 0))) {
       DoRun(/*user_initiated=*/true);
     }
-    ImGui::PopStyleColor(3);
+    PopGoodButtonStyle();
   }
 
   // Revert area — always rendered for stable layout, hidden when not modified.
@@ -192,7 +192,7 @@ void RenderTopBar(float window_width) {
   }
   ImGui::BeginDisabled(!modified);
   ImGui::SameLine();
-  ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_FA_CIRCLE_EXCLAMATION);
+  ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
   // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
   // means. Source-agnostic wording (config changed, not "you added a color
   // class") — main-scene edits and color-class edits reach kModified through
@@ -397,7 +397,7 @@ void RenderTopBar(float window_width) {
     // pip is the persistent per-row / aggregate warning surface.
     if (composite_empty) {
       ImGui::SameLine();
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.2f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
       ImGui::TextUnformatted(ICON_FA_TRIANGLE_EXCLAMATION);
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) {
@@ -531,7 +531,7 @@ void RenderLeftPanel(float window_height) {
   // each entry card (handled inside RenderEntryCard via InvisibleButton).
   if (pick_active_at_entry) {
     const auto& src = *g_state.pick_link_source;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
     ImGui::TextWrapped("Pick mode: click an entry to share crystal/filter from Layer %d / Entry %d (Esc to cancel)",
                        src.layer_idx, src.entry_idx);
     ImGui::PopStyleColor();
@@ -754,7 +754,9 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
     ImGui::SeparatorText("Rendering");
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.28f, 0.12f, 0.6f));
+    // Rust-tinted input: changing Resolution re-runs the simulation and discards accumulated rays.
+    // The warning is the point — see doc/gui-visual-language.md §7.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, WarningFillColor(0.6f));
     ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
@@ -807,8 +809,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
       // disabled Selectable still calls ItemAdd with a real ID derived from
       // the label, so it is addressable while remaining non-interactive).
       // Dynamic ratio detail follows as a plain Text below.
-      const ImVec4 kClampWarnColor = ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
-      ImGui::PushStyleColor(ImGuiCol_Text, kClampWarnColor);
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
       ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
       ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
                   g_state.aspect_clamp.requested_preview_ratio);
@@ -1207,7 +1208,7 @@ void RenderStatusBar(float window_width, float window_height) {
   // Status indicator
   switch (g_state.sim_state) {
     case SimState::kIdle:
-      ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");
+      ImGui::TextColored(GoodTextColor(), "Ready");
       break;
     case SimState::kSimulating:
       ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
@@ -1219,7 +1220,7 @@ void RenderStatusBar(float window_width, float window_height) {
       ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");
       break;
     case SimState::kModified:
-      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Modified");
+      ImGui::TextColored(WarningTextColor(), "Modified");
       break;
   }
 
@@ -1708,11 +1709,11 @@ void RenderLogPanel(float window_width, float window_height) {
           color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
           break;
         case spdlog::level::warn:
-          color = ImVec4(1.0f, 0.85f, 0.3f, 1.0f);
+          color = WarningTextColor();
           break;
         case spdlog::level::err:
         case spdlog::level::critical:
-          color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+          color = DestructiveTextColor();
           break;
         default:
           color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
