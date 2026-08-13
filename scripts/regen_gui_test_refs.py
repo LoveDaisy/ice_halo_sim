@@ -131,6 +131,17 @@ GROUPS: dict[str, ReferenceGroup] = {
     ),
 }
 
+# NOT registered here, and won't be reshot by any command in this file: the "visual" category in
+# test/gui/visual/test_preview_pixels.cpp (crystal_preview_prism/pyramid/wireframe/shaded,
+# left_panel). Its threshold is the compile-time constant kDeterministicThresholdDb=40.0, not a
+# Phase B calibrated statistic, and its reference filenames (crystal_prism_default.jpg,
+# left_panel_default.jpg, ...) do not follow the <ref_prefix><scene> convention every
+# ReferenceGroup above assumes — registering it would mean renaming those files and editing the
+# hardcoded ref-path strings in test_preview_pixels.cpp for a Phase A/B calibration this category
+# has no use for (deterministic scenes have nothing to average or calibrate). After a theme/layout
+# change, reshoot these by hand: one full-suite gui_test run (SUITE_ARGS below) with
+# --keep-export-png --export-dir, then copy the changed lumice_<scene>.png exports over the
+# matching test/gui/references/*.jpg (re-encode at the same JPEG quality the existing file uses).
 STAGING_DIR = "/tmp/gui_refs_build"
 
 # PSNR output pattern from lumice::test::CheckAgainstReference (test_screenshot.cpp).
