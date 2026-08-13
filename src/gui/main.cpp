@@ -18,12 +18,12 @@
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
-#include "gui/font_init.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
@@ -164,9 +164,7 @@ int main(int argc, char** argv) {
   io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.IniFilename = nullptr;  // Disable imgui.ini persistence (also suppresses viewport position persistence)
 
-  ImGui::StyleColorsDark();
-
-  gui::LoadFontAtlas(io);
+  gui::ApplyVisualLanguage(io);
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");

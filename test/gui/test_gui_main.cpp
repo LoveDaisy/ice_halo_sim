@@ -26,7 +26,6 @@
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
-#include "gui/font_init.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
@@ -34,6 +33,7 @@
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
+#include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -436,9 +436,7 @@ int main(int argc, char** argv) {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.IniFilename = nullptr;
 
-  ImGui::StyleColorsDark();
-
-  gui::LoadFontAtlas(io);
+  gui::ApplyVisualLanguage(io);
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
