@@ -1,6 +1,13 @@
 # ==================================================================================================
 # Google Test
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# gtest_force_shared_crt drives GoogleTest's own pre-CMP0091 mechanism: it rewrites
+# /MD into /MT in the compiler flags itself and knows nothing about
+# CMAKE_MSVC_RUNTIME_LIBRARY. It has to agree with the CRT this project selects (see the
+# MSVC block in the top-level CMakeLists.txt) or gtest links against a different CRT than
+# everything it is linked into. It was ON back when the whole project effectively built
+# /MD; OFF is the value that matches /MT, and is also GoogleTest's own default. Kept
+# explicit rather than deleted so the coupling stays visible at the point it applies.
+set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
 CPMAddPackage(
   NAME GTest
   URL https://github.com/google/googletest/releases/download/v1.15.2/googletest-1.15.2.tar.gz

@@ -42,8 +42,45 @@ if(MINGW)
   add_link_options(-static)
 endif()
 
-# MSVC: use static CRT (/MT) so distributed .exe doesn't require vcruntime DLLs.
+# MSVC: use the static CRT (/MT) so a distributed .exe runs on a machine that has
+# no VC++ Redistributable installed. The dynamic CRT's worst failure mode — several
+# modules each holding their own CRT heap, one module freeing a pointer another
+# allocated — does not apply to what this repo actually ships: the release workflow
+# publishes only the CLI and GUI executables (no shared library), and the C API pairs
+# every allocation with its own release entry point (Acquire/Release, Create/Destroy,
+# CompositionReleaseClauses) rather than handing raw pointers to a caller's free().
+# Revisit this choice if that changes — publishing a DLL for third-party consumers is
+# the trigger, not a version bump.
+#
+# The two policy lines are load-bearing, not boilerplate:
+#   - CMP0091 (the policy that makes CMAKE_MSVC_RUNTIME_LIBRARY mean anything) arrived
+#     in CMake 3.15. Below the cmake_minimum_required set at the top of this file it
+#     defaults to OLD, and CMake then ignores the variable *silently* — no warning, no
+#     error, just /MD in the compile command. Setting the variable alone is not enough.
+#   - CMAKE_POLICY_DEFAULT_CMP0091 covers scopes created later. A function records the
+#     policy stack in effect where it was *defined*, and cmake/CPM.cmake declares its own
+#     (lower) cmake_minimum_required at the top, so CPMAddPackage and the
+#     add_subdirectory it performs run with CMP0091 unset. Without this line the
+#     third-party dependency scopes keep /MD and mix with a /MT main build.
+# Both must precede include(cmake/CPM.cmake) and every add_subdirectory below.
+#
+# When you touch these lines, verify the *artifact*, not the intent: check that the
+# generated build.ninja compile FLAGS say /MT (dependencies included, not just this
+# project's own sources) and that dumpbin /dependents on the produced .exe lists no
+# MSVCP140.dll / VCRUNTIME140.dll / VCRUNTIME140_1.dll. This block was inert for a long
+# time precisely because it was only ever read, never measured. If some target ever needs
+# a per-target MSVC_RUNTIME_LIBRARY override, add it in one named block per build unit
+# (one here after all CPMAddPackage calls, one in test/CMakeLists.txt) instead of
+# scattering set_target_properties calls, so a reader can still answer "who decides this
+# target's CRT" from a single place.
 if(MSVC)
+  if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+    set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+  else()
+    message(WARNING "CMake <3.15 does not know CMP0091; MSVC runtime library selection is "
+                    "ignored and this build will link the DYNAMIC CRT (/MD) instead of /MT.")
+  endif()
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
