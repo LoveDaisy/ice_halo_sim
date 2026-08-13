@@ -99,6 +99,15 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(3);
+      // Everything this case looks up lives in the right panel, and it is named rather than left to
+      // the default ref for a reason the negative checks below depend on. "Edit Angles..." is the
+      // last row of the Overlay group and sits just under the panel's fold; a wildcard lookup
+      // resolves an item by its LABEL, and the engine records no label for a clipped item, so a
+      // clipped button reads exactly like an absent one. The engine recovers by panning the window
+      // — but only when the ref names the window to pan. Without it, `!ItemExists` would be
+      // satisfied by "scrolled out of view" as readily as by "not offered", and whether the case
+      // passes turns on whether some earlier ItemClick happened to scroll the panel first.
+      ctx->SetRef("//##RightPanel");
       IM_CHECK(!gui::g_state.show_sun_circles_line);
       IM_CHECK(!gui::g_state.show_sun_circles_label);
       IM_CHECK(!ctx->ItemExists("**/Edit Angles...##overlay"));
@@ -119,6 +128,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/Label##sun_circles");
       ctx->Yield(3);
+      ctx->SetRef("");
     };
   }
 
@@ -137,7 +147,13 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.sun_circle_angles.clear();
       ctx->Yield(3);
 
+      // Named ref for the button only, for the reason given in the case above — it sits under the
+      // panel's fold and a wildcard lookup needs a window it can pan. Handed straight back: the
+      // presets and the delete rows below live in the "SunCirclesEdit" popup, a different window,
+      // which a right-panel prefix would exclude.
+      ctx->SetRef("//##RightPanel");
       ctx->ItemClick("**/Edit Angles...##overlay");
+      ctx->SetRef("");
       ctx->Yield(3);
 
       // All four presets the panel offers (9 / 22 / 28 / 46 degrees), deliberately clicked out of
