@@ -357,6 +357,16 @@ Two constraints when registering one: the key must be unique across groups (PSNR
 attributed by an exact match on the `[<tag>]` prefix in a shared full-suite stderr), and the
 test must compare via `lumice::test::CheckAgainstReference` so Phase B can parse its PSNR line.
 
+Not every `CheckAgainstReference` caller is in `GROUPS`. The `visual` category
+(`test/gui/visual/test_preview_pixels.cpp`: `crystal_preview_prism/pyramid/wireframe/shaded`,
+`left_panel`) compares at a compile-time constant (`kDeterministicThresholdDb`), not a Phase-B-
+calibrated one, and its reference filenames do not follow the `<ref_prefix><scene>` convention
+every `ReferenceGroup` above assumes — see the comment above `STAGING_DIR` in
+`scripts/regen_gui_test_refs.py` for why registering it buys nothing and how to reshoot it by
+hand. A theme/layout change that reaches the left panel or the crystal-preview FBO needs that
+manual step in addition to the three `--group` commands above; running only the registered
+groups leaves `visual`'s references stale with no automated signal pointing at it.
+
 A scene whose frame is deterministic (no simulation, no RNG) compares pixel-identical, i.e.
 `PSNR=inf`, which leaves `mean − 4σ` no finite sample. Phase B records `identical_runs` for such
 scenes and reports a fixed 40 dB floor instead of a calibrated statistic — bit-exactness is not
