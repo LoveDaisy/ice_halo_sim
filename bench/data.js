@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786667412458,
+  "lastUpdate": 1786667414350,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9584,50 +9584,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "f5b75ab9e83d57e35e755c4898cff59adaaf1faf",
-          "message": "Merge pull request #166 from LoveDaisy/feat/azimuth-handedness-alignment\n\nfix(render): unify screen handedness to right=+az (scrum-321)",
-          "timestamp": "2026-07-03T16:07:56+08:00",
-          "tree_id": "83dad4392b494a6bad816129042c2a0250c83832",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f5b75ab9e83d57e35e755c4898cff59adaaf1faf"
-        },
-        "date": 1783066442511,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 71.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "fd719cc6d151b919a44e8ff1717f6e393a9bb12c",
           "message": "Merge pull request #167 from LoveDaisy/feat/gui-lifecycle-clock-decouple\n\nGUI preview lifecycle: clock-decouple to single-source epoch/lifecycle (I1–I6)",
           "timestamp": "2026-07-03T16:35:42+08:00",
@@ -13952,6 +13908,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de2400d72e0c74815654b5c0798537d321c36342",
+          "message": "Merge pull request #271 from LoveDaisy/task/gui-visual-language\n\nfeat(gui): 落地 GUI 视觉语言——单一 owner、比例字体、量化节奏、调色板与语义色",
+          "timestamp": "2026-08-14T08:18:19+08:00",
+          "tree_id": "e4dae219cff3b357fa69562f4581b9a13c1244c7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/de2400d72e0c74815654b5c0798537d321c36342"
+        },
+        "date": 1786667413863,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95,
             "unit": "%"
           }
         ]
