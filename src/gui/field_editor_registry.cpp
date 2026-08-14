@@ -7,6 +7,7 @@
 #include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/panels.hpp"
+#include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
 #include "util/fatal.hpp"
@@ -164,7 +165,7 @@ FieldEditorEntry BoolField(bool* (*access)(GuiState&), ApplicabilityFn applicabl
     return FieldEditorConstraint{ a.enabled, a.disabled_reason, false, 0.0, 0.0 };
   };
   entry.Render = [access](GuiState& state, const char* id_base) {
-    return ImGui::Checkbox(HiddenLabel(id_base).c_str(), access(state));
+    return Checkbox(HiddenLabel(id_base).c_str(), access(state));
   };
   return entry;
 }

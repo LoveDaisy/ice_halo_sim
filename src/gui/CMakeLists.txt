@@ -35,6 +35,27 @@ add_custom_command(
     COMMENT "[gui] Embedding fa-solid-900.ttf -> fa_solid_900_embed.cpp"
     VERBATIM)
 
+# Embed the body font (Roboto Medium) the same way. It ships inside imgui's own
+# source tree (misc/fonts, Apache-2.0), so this adds no new dependency — only a
+# second use of a resource CPM already fetched. Embedding rather than reading a
+# file at runtime is what lets the binary render text with no font file present.
+set(ROBOTO_TTF_SRC "${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf")
+set(ROBOTO_TTF_EMBED_CPP "${CMAKE_CURRENT_BINARY_DIR}/roboto_medium_embed.cpp")
+if(NOT EXISTS "${ROBOTO_TTF_SRC}")
+  message(FATAL_ERROR "[gui] Roboto-Medium.ttf not found at ${ROBOTO_TTF_SRC}. "
+                      "Check the imgui CPM dependency in top-level CMakeLists.txt.")
+endif()
+add_custom_command(
+    OUTPUT "${ROBOTO_TTF_EMBED_CPP}"
+    COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+            "${ROBOTO_TTF_SRC}"
+            "${ROBOTO_TTF_EMBED_CPP}"
+            "kRobotoMedium"
+    DEPENDS "${ROBOTO_TTF_SRC}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+    COMMENT "[gui] Embedding Roboto-Medium.ttf -> roboto_medium_embed.cpp"
+    VERBATIM)
+
 # OBJECT library: shared between LumiceGUI and gui_test
 add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app.cpp
@@ -51,6 +72,7 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/panels.cpp
     ${PROJ_SRC_DIR}/gui/file_io.cpp
     ${PROJ_SRC_DIR}/gui/preview_renderer.cpp
+    ${PROJ_SRC_DIR}/gui/semantic_colors.cpp
     ${PROJ_SRC_DIR}/gui/crystal_renderer.cpp
     ${PROJ_SRC_DIR}/gui/thumbnail_cache.cpp
     ${PROJ_SRC_DIR}/gui/gl_init.cpp
@@ -60,9 +82,11 @@ add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/server_poller.cpp
     ${PROJ_SRC_DIR}/gui/stb_impl.cpp
     ${PROJ_SRC_DIR}/gui/symmetry_ui.cpp
+    ${PROJ_SRC_DIR}/gui/theme.cpp
     ${PROJ_SRC_DIR}/gui/user_defaults.cpp
     ${PROJ_SRC_DIR}/gui/window_sizing.cpp
     ${FA_TTF_EMBED_CPP}
+    ${ROBOTO_TTF_EMBED_CPP}
     ${IMGUI_SOURCES})
 
 target_include_directories(lumice_gui_obj PUBLIC

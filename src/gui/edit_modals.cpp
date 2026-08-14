@@ -23,7 +23,9 @@
 #include "gui/gui_state.hpp"
 #include "gui/panels.hpp"
 #include "gui/raypath_segments.hpp"
+#include "gui/semantic_colors.hpp"
 #include "gui/symmetry_ui.hpp"
+#include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "imgui.h"
@@ -102,8 +104,18 @@ constexpr float kEditModalMinHeightVertical = 0.0f;
 // these — `edit_modal/the_fixed_columns_fit_their_text_in_both_layouts` in
 // test/gui/functional/test_edit_modal.cpp is what notices, by comparing each fixed column's
 // ContentMaxXHeadersIdeal against its WorkMaxX rather than against a pixel constant.
+//
+// Re-measured after the body font became Roboto Medium 15 px (it was ProggyClean 13 px when these
+// were first settled). Widening the glyphs is exactly the "lengthens a header" case above, and it
+// pushed Rand past its budget. Measured needs/has per column at the new font, both tables:
+//   Param  needs 48 / has 52     Sync   needs 28 / has 29
+//   Rand   needs 30 / has 29 ✗   Spread needs 60 / has 60
+// Only Rand is widened here, to the smallest value that restores a margin rather than a hairline
+// fit. Sync and Spread are left alone deliberately: they still satisfy the invariant, and rebalancing
+// four columns that merely sit close to their bound is type-setting work, not a repair. Their
+// margins (1 px and 0 px) are recorded here so that work starts from measurements instead of by eye.
 constexpr float kShapeParamColWidth = 52.0f;
-constexpr float kShapeRandColWidth = 29.0f;
+constexpr float kShapeRandColWidth = 32.0f;
 constexpr float kShapeSpreadColWidth = 60.0f;
 // Sync (shape-scalar sync group): a square swatch button one frame tall (~19 px), so like Rand this
 // column is sized by its 4-character header, not by its control. That it lands on the SAME number as
@@ -793,14 +805,17 @@ namespace {
 LUMICE_CrystalKind CurrentValidationKind();
 }
 
+// The three validation states are exactly the three semantic grades, so they take the shared muted
+// fills from gui/semantic_colors.hpp rather than a private set. This function previously carried its
+// own three literals, which is how a grade ends up with two owners that drift.
 static ImVec4 ValidationFrameBgColor(LUMICE_RaypathValidationState state) {
   switch (state) {
     case LUMICE_RAYPATH_VALID:
-      return ImVec4(0.06f, 0.24f, 0.06f, 0.5f);
+      return GoodFillColor(0.5f);
     case LUMICE_RAYPATH_INCOMPLETE:
-      return ImVec4(0.27f, 0.24f, 0.03f, 0.5f);
+      return WarningFillColor(0.5f);
     case LUMICE_RAYPATH_INVALID:
-      return ImVec4(0.27f, 0.06f, 0.06f, 0.5f);
+      return DestructiveFillColor(0.5f);
   }
   return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
 }
@@ -875,11 +890,11 @@ static void RenderSummandRowList() {
         case LUMICE_RAYPATH_VALID:
           break;  // silent when valid
         case LUMICE_RAYPATH_INCOMPLETE:
-          ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.1f, 1.0f), "Row %zu: incomplete", i + 1);
+          ImGui::TextColored(WarningTextColor(), "Row %zu: incomplete", i + 1);
           break;
         case LUMICE_RAYPATH_INVALID: {
           const char* msg = v.message.empty() ? "Invalid" : v.message.c_str();
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
+          ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
           ImGui::TextWrapped("Row %zu: %s", i + 1, msg);
           ImGui::PopStyleColor();
           break;
@@ -972,7 +987,7 @@ static void RenderSummandRowList() {
     std::snprintf(clause_line, sizeof(clause_line), "Clauses: %zu / %d", sop_summary.clause_count,
                   LUMICE_MAX_CONFIG_CLAUSES);
     if (sop_summary.overflow) {
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
       ImGui::TextUnformatted(clause_line);
       ImGui::SameLine();
       ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
@@ -1832,7 +1847,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   }
   // Vertical layout toggle (view preference — does NOT mark the file dirty).
   // Checked = stacked layout (preview on top); unchecked = side-by-side.
-  ImGui::Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
+  Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("%s", state.modal_layout_vertical ? "Stacked layout (preview on top)" :
                                                           "Side-by-side layout (preview on left)");
@@ -1840,7 +1855,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
   ImGui::SameLine();
   // ImGui::Checkbox returns true only on the frame the user actually toggled
   // the value, so checking the return alone is sufficient to detect a change.
-  if (ImGui::Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
+  if (Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
     g_pending_mode_switch = true;
     if (state.modal_immediate_mode) {
       // Staged → Immediate: commit in-flight buffer to state so any pending
@@ -1993,9 +2008,8 @@ void RenderSpectrumModal(GuiState& state) {
   ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
 
   if (cur_count > kSpectrumSoftWarnCount) {
-    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f),
-                       "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.", cur_count,
-                       kSpectrumSoftWarnCount);
+    ImGui::TextColored(WarningTextColor(), "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.",
+                       cur_count, kSpectrumSoftWarnCount);
   }
 
   ImGui::Separator();

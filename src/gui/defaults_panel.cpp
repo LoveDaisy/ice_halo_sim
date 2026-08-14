@@ -18,6 +18,7 @@
 #include "gui/destructive_style.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/panels.hpp"
+#include "gui/theme.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui.h"
 
@@ -605,7 +606,7 @@ void RenderSettingsTable(GuiState& state, float table_height) {
     // tests here before cannot arise. Every id this panel exposes uses "###" so the ID is the
     // short suffix alone: a test ref then does not have to carry the icon glyphs of a label.
     const std::string check_id = "###adopt_" + row.key_path;
-    if (ImGui::Checkbox(check_id.c_str(), &checked)) {
+    if (Checkbox(check_id.c_str(), &checked)) {
       if (checked) {
         g_checked_keys.insert(row.key_path);
       } else {

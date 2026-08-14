@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "IconsFontAwesome6.h"
+#include "gui/theme.hpp"
 #include "imgui.h"
 
 namespace lumice::gui {
@@ -28,19 +29,19 @@ void RenderSymmetryCheckboxes(bool& sym_p, bool& sym_b, bool& sym_d, bool d_appl
   // effectively constant.
   char id_buf[64];
   std::snprintf(id_buf, sizeof(id_buf), "P##%s", id_suffix);
-  ImGui::Checkbox(id_buf, &sym_p);
+  Checkbox(id_buf, &sym_p);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Prism-face reflection symmetry");
   }
   ImGui::SameLine();
   std::snprintf(id_buf, sizeof(id_buf), "B##%s", id_suffix);
-  ImGui::Checkbox(id_buf, &sym_b);
+  Checkbox(id_buf, &sym_b);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Basal-face reflection symmetry");
   }
   ImGui::SameLine();
   std::snprintf(id_buf, sizeof(id_buf), "D##%s", id_suffix);
-  ImGui::Checkbox(id_buf, &sym_d);
+  Checkbox(id_buf, &sym_d);
   if (!d_applicable) {
     ImGui::SameLine();
     // SmallButton with transparent styling acts as a hover target for the tooltip
