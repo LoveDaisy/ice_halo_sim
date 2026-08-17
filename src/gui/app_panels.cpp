@@ -1146,6 +1146,90 @@ CentralBand GetCentralBand(float window_width, float window_height) {
   return band;
 }
 
+// One frame's auxiliary-line overlay, derived from the document alone — the sun, the renderer pose
+// and the show_*_line view preferences. It reads nothing from the simulation lifecycle, and that is
+// load-bearing rather than incidental: it is what lets a stale on-screen image and a live
+// coordinate system disagree on purpose. The pixels are the last run's, the lines are the current
+// document's, and the offset between them IS the "this result is out of date" signal, read at the
+// same moment as the top bar's dirty chip (doc/gui-layout-architecture.md §4).
+//
+// Deliberately pure: the empty state's own presentation (half intensity, forced sun marker) is a
+// post-processing step the caller applies to the returned value. Pushing it in here as a couple of
+// mode parameters would make every other call site pass constants that only exist to say "I am not
+// the empty state".
+OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjection& vp, int vp_w, int vp_h) {
+  OverlayDecoration ov;
+
+  // Line flags only — labels are a separate path via BuildOverlayLabelInput.
+  ov.show_horizon = st.show_horizon_line;
+  ov.show_grid = st.show_grid_line;
+  ov.show_sun_circles = st.show_sun_circles_line;
+  std::copy(std::begin(st.horizon_color), std::end(st.horizon_color), std::begin(ov.horizon_color));
+  std::copy(std::begin(st.grid_color), std::end(st.grid_color), std::begin(ov.grid_color));
+  std::copy(std::begin(st.sun_circles_color), std::end(st.sun_circles_color), std::begin(ov.sun_circles_color));
+  ov.horizon_alpha = st.horizon_alpha;
+  ov.grid_alpha = st.grid_alpha;
+  ov.sun_circles_alpha = st.sun_circles_alpha;
+  ov.grid_step = ComputeGridStep(st.renderer.fov);
+
+  // Sun direction in world space (azimuth fixed at 0, only altitude matters). Computed once and
+  // used twice — as the shader's u_sun_dir for the angular-distance circles, and as the input to
+  // the marker's forward projection below. Two copies of this derivation would have to agree
+  // forever for the circles to stay centred on the dot.
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  const float sa = st.sun.altitude * kDeg2Rad;
+  const float sun_world_dir[3] = { -std::cos(sa), 0.0f, -std::sin(sa) };
+  std::copy(std::begin(sun_world_dir), std::end(sun_world_dir), std::begin(ov.sun_dir));
+  ov.sun_circle_count = std::min(static_cast<int>(st.sun_circle_angles.size()), kMaxSunCircles);
+  for (int i = 0; i < ov.sun_circle_count; i++) {
+    ov.sun_circle_angles[i] = st.sun_circle_angles[i];
+  }
+
+  // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
+  // (see preview_renderer.cpp:overlayAuxLines altitude convention).
+  ov.show_zenith_nadir = st.show_zenith_nadir_line;
+  std::copy(std::begin(st.zenith_nadir_color), std::end(st.zenith_nadir_color), std::begin(ov.zenith_nadir_color));
+  ov.zenith_nadir_alpha = st.zenith_nadir_alpha;
+  ov.zenith_nadir_radius_px = st.zenith_nadir_radius_px;
+  constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
+  constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
+  const auto zpos = ProjectWorldDirToScreen(vp, kZenithWorldDir, vp_w, vp_h);
+  const auto npos = ProjectWorldDirToScreen(vp, kNadirWorldDir, vp_w, vp_h);
+  ov.zenith_screen_pos[0] = zpos[0];
+  ov.zenith_screen_pos[1] = zpos[1];
+  ov.nadir_screen_pos[0] = npos[0];
+  ov.nadir_screen_pos[1] = npos[1];
+
+  // The sun's own pixel position. Placed unconditionally — show_sun_marker stays false here and is
+  // the caller's to set, so a call site that wants the marker never has to also remember to ask for
+  // the position, and a test can read the position without turning the marker on.
+  const auto spos = ProjectWorldDirToScreen(vp, sun_world_dir, vp_w, vp_h);
+  ov.sun_marker_screen_pos[0] = spos[0];
+  ov.sun_marker_screen_pos[1] = spos[1];
+
+  return ov;
+}
+
+// How much of the user's overlay intensity the empty state keeps. Half is where the prototype
+// landed: enough to read the sky as "framed and waiting" rather than as a rendered result, which is
+// the whole distinction the empty state is drawing. A starting point, not a derived constant.
+constexpr float kEmptyStateOverlayAlphaScale = 0.5f;
+
+// Turn a document's overlay into the empty state's version of itself: the same lines, dimmer, plus
+// the sun marker.
+//
+// The marker's alpha is NOT scaled. The four alphas above are user settings, chosen for legibility
+// on top of a rendered image, so halving them is what "dimmer than that" means. The marker has no
+// user setting and never appears over an image — its OverlayDecoration default IS its empty-state
+// value, and halving it would only be halving a number this task chose one line earlier.
+void ApplyEmptyStatePresentation(OverlayDecoration* ov) {
+  ov->horizon_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->grid_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->sun_circles_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->zenith_nadir_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->show_sun_marker = true;
+}
+
 }  // namespace
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
@@ -1183,29 +1267,45 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
   float preview_height = panel_height;
 
-  g_preview_vp.active = false;
+  // The viewport rectangle, the view projection and the overlay are computed for BOTH states, not
+  // only the one that has pixels. An empty preview draws the same sky coordinate system through the
+  // same shader, so it needs the same rectangle and the same projection; what it does not need is
+  // the exposure, the background image and the drag surface. Those three — not the geometry — are
+  // where the two states actually part company, and the branch below is now only about them.
+  //
+  // Compute viewport in framebuffer pixels (for HiDPI).
+  int fb_w = 0;
+  int fb_h = 0;
+  glfwGetFramebufferSize(window, &fb_w, &fb_h);
+  float scale_x = static_cast<float>(fb_w) / window_width;
+  float scale_y = static_cast<float>(fb_h) / window_height;
+
+  auto& rc = g_state.renderer;
+  auto& pp = g_preview_vp.params;
+
+  // Store viewport for deferred rendering. Always active: with the empty state drawing its own
+  // coordinate system, there is no longer a frame in which the panel is on screen and has nothing
+  // for PreviewRenderer::Render to do (which guards a degenerate rectangle itself).
+  g_preview_vp.active = true;
+  g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
+  // OpenGL Y is bottom-up: measure from the window's bottom edge to the panel's bottom edge. This
+  // used to read kStatusBarHeight directly, which was the same number only while the panel was
+  // guaranteed to end exactly at the status bar.
+  g_preview_vp.vp_y = static_cast<int>((window_height - (panel_y + panel_height)) * scale_y);
+  g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
+  g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
+  pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
+  // Overlap parameters for dual fisheye texture sampling. Frame-invariant constants, so they are
+  // set once for both states rather than left holding whichever frame last passed through the
+  // branch below.
+  pp.source.max_abs_dz = kDualFisheyeOverlap;
+  pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+  // Auxiliary line overlay (line flags only — labels are handled separately via
+  // BuildOverlayLabelInput below). Read from the document every frame in both states, which is what
+  // keeps a stale image and a live coordinate system able to disagree — see BuildOverlayDecoration.
+  pp.overlay = BuildOverlayDecoration(g_state, pp.view_proj, g_preview_vp.vp_w, g_preview_vp.vp_h);
 
   if (g_preview.HasTexture() || g_preview.HasBackground()) {
-    // Compute viewport in framebuffer pixels (for HiDPI)
-    int fb_w = 0;
-    int fb_h = 0;
-    glfwGetFramebufferSize(window, &fb_w, &fb_h);
-    float scale_x = static_cast<float>(fb_w) / window_width;
-    float scale_y = static_cast<float>(fb_h) / window_height;
-
-    auto& rc = g_state.renderer;
-
-    // Store viewport for deferred rendering
-    g_preview_vp.active = true;
-    g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
-    // OpenGL Y is bottom-up: measure from the window's bottom edge to the panel's bottom edge. This
-    // used to read kStatusBarHeight directly, which was the same number only while the panel was
-    // guaranteed to end exactly at the status bar.
-    g_preview_vp.vp_y = static_cast<int>((window_height - (panel_y + panel_height)) * scale_y);
-    g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
-    g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
-    auto& pp = g_preview_vp.params;
-    pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
 
@@ -1255,52 +1355,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     }
     float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
-    // Overlap parameters for dual fisheye texture sampling.
-    pp.source.max_abs_dz = kDualFisheyeOverlap;
-    pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
-
-    // Auxiliary line overlay parameters (line flags only — labels are handled
-    // separately via BuildOverlayLabelInput below).
-    pp.overlay.show_horizon = g_state.show_horizon_line;
-    pp.overlay.show_grid = g_state.show_grid_line;
-    pp.overlay.show_sun_circles = g_state.show_sun_circles_line;
-    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
-    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
-    std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-              std::begin(pp.overlay.sun_circles_color));
-    pp.overlay.horizon_alpha = g_state.horizon_alpha;
-    pp.overlay.grid_alpha = g_state.grid_alpha;
-    pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
-    pp.overlay.grid_step = ComputeGridStep(rc.fov);
-    // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
-    constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-    float sa = g_state.sun.altitude * kDeg2Rad;
-    pp.overlay.sun_dir[0] = -std::cos(sa);
-    pp.overlay.sun_dir[1] = 0.0f;
-    pp.overlay.sun_dir[2] = -std::sin(sa);
-    pp.overlay.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
-    for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
-      pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
-    }
-
-    // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
-    // (see preview_renderer.cpp:overlayAuxLines altitude convention).
-    pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
-    std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
-              std::begin(pp.overlay.zenith_nadir_color));
-    pp.overlay.zenith_nadir_alpha = g_state.zenith_nadir_alpha;
-    pp.overlay.zenith_nadir_radius_px = g_state.zenith_nadir_radius_px;
-    constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-    constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-    auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    auto npos = ProjectWorldDirToScreen(pp.view_proj, kNadirWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    pp.overlay.zenith_screen_pos[0] = zpos[0];
-    pp.overlay.zenith_screen_pos[1] = zpos[1];
-    pp.overlay.nadir_screen_pos[0] = npos[0];
-    pp.overlay.nadir_screen_pos[1] = npos[1];
 
     // Overlay labels at viewport edges (drawn on the preview window's draw list so
     // modals correctly occlude them). BuildOverlayLabelInput is shared with
@@ -1379,10 +1436,27 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
     }
   } else {
+    // Nothing has been rendered and nothing has been loaded. The view is still a view, though: the
+    // document already says which way the camera points, how wide the lens is and where the sun
+    // will be, so the panel draws that — dimmed, and with the sun marked — instead of a black
+    // rectangle. The empty state stops being "there is nothing here" and becomes "this is framed,
+    // press Run" (doc/gui-layout-architecture.md §4).
+    //
+    // Exposure and background stay at their defaults: with no texture uploaded, PreviewRenderer
+    // samples its 1x1 blank in sRGB mode, where neither is read. The drag surface is deliberately
+    // NOT submitted — orbiting an empty view is a separate question from previewing one, and this
+    // panel keeps its "the surface exists only when there is something to interact with" contract.
+    ApplyEmptyStatePresentation(&pp.overlay);
+    pp.exposure = Exposure{};
+    pp.bg = Background::Disabled();
+
+    // Instructional, not descriptive: it names the next action rather than restating what the user
+    // can already see (doc/gui-visual-language.md).
+    const char* kEmptyHint = "Press Run to render this view.";
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImVec2 text_size = ImGui::CalcTextSize("Render Preview");
+    ImVec2 text_size = ImGui::CalcTextSize(kEmptyHint);
     ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
-    ImGui::TextDisabled("Render Preview");
+    ImGui::TextDisabled("%s", kEmptyHint);
   }
 
   ImGui::End();

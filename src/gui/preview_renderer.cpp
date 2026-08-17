@@ -71,6 +71,15 @@ uniform float u_zenith_nadir_radius_px;
 uniform vec3 u_zenith_nadir_color;
 uniform float u_zenith_nadir_alpha;
 
+// Sun position marker uniforms. Same screen-position convention and sentinel handling as the
+// zenith/nadir pair above; a filled disc rather than a ring, so it reads as "the sun is HERE"
+// next to the sun_circles, which are rings around that same point.
+uniform int u_show_sun_marker;
+uniform vec2 u_sun_marker_screen_pos;
+uniform float u_sun_marker_radius_px;
+uniform vec3 u_sun_marker_color;
+uniform float u_sun_marker_alpha;
+
 const float PI = 3.14159265358979323846;
 
 // Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
@@ -369,6 +378,17 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
     float tn = 1.0 - smoothstep(0.0, kRingHalfWidthPx,
                                 abs(dn - u_zenith_nadir_radius_px));
     color = mix(color, u_zenith_nadir_color, tn * u_zenith_nadir_alpha);
+  }
+
+  // Sun position marker — the topmost overlay, since it is the one thing the empty-state view
+  // exists to point at. Filled disc: the distance is compared against the radius itself rather
+  // than against |dist - radius|, which is the one line separating a dot from a ring.
+  if (u_show_sun_marker != 0) {
+    const float kEdgeSoftnessPx = 1.5;
+    float ds = length(pos_pix - u_sun_marker_screen_pos);
+    float ts = 1.0 - smoothstep(u_sun_marker_radius_px - kEdgeSoftnessPx,
+                                u_sun_marker_radius_px + kEdgeSoftnessPx, ds);
+    color = mix(color, u_sun_marker_color, ts * u_sun_marker_alpha);
   }
 
   return color;
@@ -1250,6 +1270,14 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform3f(glGetUniformLocation(shader_program_, "u_zenith_nadir_color"), ov.zenith_nadir_color[0],
               ov.zenith_nadir_color[1], ov.zenith_nadir_color[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_alpha"), ov.zenith_nadir_alpha);
+
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_marker"), ov.show_sun_marker ? 1 : 0);
+  glUniform2f(glGetUniformLocation(shader_program_, "u_sun_marker_screen_pos"), ov.sun_marker_screen_pos[0],
+              ov.sun_marker_screen_pos[1]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_marker_radius_px"), ov.sun_marker_radius_px);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_marker_color"), ov.sun_marker_color[0],
+              ov.sun_marker_color[1], ov.sun_marker_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_sun_marker_alpha"), ov.sun_marker_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);
