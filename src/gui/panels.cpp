@@ -1441,6 +1441,86 @@ void RenderLayer(GuiState& state, int layer_idx) {
 }
 
 
+// ========== Layer inspector page ==========
+
+bool RenderLayerInspector(GuiState& state, int layer_idx) {
+  auto& layer = state.layers[layer_idx];
+
+  ImGui::PushID(layer_idx);
+
+  // Multi-scatter probability slider — four states covering both footguns:
+  //   (a) last layer & prob≈0  → slider disabled (locked at correct 0)
+  //   (b) last layer & prob>0  → slider enabled + warning icon (came from a
+  //       hand-written config; we don't silently rewrite the file value, so
+  //       let the user drag it back to 0)
+  //   (c) non-last layer & prob≈0 → slider enabled + warning icon (the next
+  //       layer will receive no rays — footgun #2)
+  //   (d) otherwise → plain slider
+  // Zero-detection uses IsProbZero (epsilon) rather than == 0.0f — slider
+  // drags can produce sub-step floats that would sneak past a strict check.
+  const bool is_last_layer = layer_idx == static_cast<int>(state.layers.size()) - 1;
+  const bool prob_is_zero = IsProbZero(layer.probability);
+  const bool disable_slider = is_last_layer && prob_is_zero;
+  ImGui::BeginDisabled(disable_slider);
+  ImGui::BeginGroup();
+  SliderWithInput("Prob.", &layer.probability, 0.0f, 1.0f, "%.2f");
+  ImGui::EndGroup();
+  ImGui::EndDisabled();
+  const char* prob_tip = nullptr;
+  if (disable_slider) {
+    prob_tip = "Last layer: all filter-pass rays are effective output; prob does not apply.";
+  } else if (is_last_layer && !prob_is_zero) {
+    prob_tip =
+        "Last layer has prob > 0: that fraction of rays will be discarded (no next layer to receive them). Set to 0.";
+  } else if (!is_last_layer && prob_is_zero) {
+    prob_tip = "prob = 0 means no rays reach the next scattering layer (it will be effectively dead).";
+  } else {
+    prob_tip = "Fraction of rays continuing to the next layer.";
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", prob_tip);
+  }
+  const bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
+  if (show_warning_icon) {
+    ImGui::SameLine();
+    ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", prob_tip);
+    }
+  }
+
+  // How many crystals this layer holds. The tree above shows them one per row, but a folded layer
+  // shows none, and this page is reachable with the layer folded.
+  const int entry_count = static_cast<int>(layer.entries.size());
+  ImGui::TextDisabled("%d crystal%s", entry_count, entry_count == 1 ? "" : "s");
+
+  ImGui::Separator();
+
+  // Deleting the layer from here rather than only from its tree row: the inspector is where the
+  // layer's own properties live, and the tree row's × is easy to miss at one frame of height.
+  // Returned to the caller rather than erased in place — the caller owns the selection fix-up, and
+  // doing it here would leave `layer` dangling for the rest of this function.
+  const bool can_delete_layer = state.layers.size() > 1;
+  if (!can_delete_layer) {
+    ImGui::BeginDisabled();
+  } else {
+    PushDestructiveStyle();
+  }
+  const bool delete_clicked = ImGui::SmallButton(ICON_FA_XMARK " Delete layer");
+  if (!can_delete_layer) {
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("The scattering model requires at least one layer.");
+    }
+  } else {
+    PopDestructiveStyle();
+  }
+
+  ImGui::PopID();
+  return delete_clicked && can_delete_layer;
+}
+
+
 // ========== Document tree rows ==========
 
 void RenderDocumentTreeRows(GuiState& state) {
@@ -1461,10 +1541,9 @@ void RenderDocumentTreeRows(GuiState& state) {
 }
 
 
-// ========== Scene Controls (rendered in the right panel Scene group) ==========
+// ========== Sun controls (the inspector's Sun page) ==========
 
-void RenderSceneControls(GuiState& state) {
-  ImGui::SeparatorText("Sun");
+void RenderSunControls(GuiState& state) {
   ImGui::BeginGroup();
   // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
   // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.

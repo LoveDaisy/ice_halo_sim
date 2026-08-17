@@ -1,12 +1,20 @@
-// The right panel's View and Display groups — the controls that decide what the preview shows and
-// at what shape, as opposed to what the simulation computes.
+// The camera and display controls — what the preview shows and at what shape, as opposed to what
+// the simulation computes.
 //
-// What this suite is for. These are the panel's own controls (`##RightPanel`), and what can only
-// be answered by a real frame is whether a piece of state the panel derives actually reaches the
-// screen. The aspect-clamp warning below is the sharpest instance: it is the only feedback a user
-// gets when the window they asked for did not fit the monitor, and it is drawn from a signal
-// written on a completely different code path (the GLFW resize in ApplyAspectRatio), so "the flag
-// was set" and "the user was told" are two separate claims.
+// Where they live, which is now two places. The Display and Overlay groups are still the right
+// panel's own (`##RightPanel`). The View group is not: it became the document column inspector's
+// Camera page (`##DocumentInspector`), because a lens and a pose are saved with the scene and
+// describe the document rather than the session (doc/gui-layout-architecture.md §2). Its cases
+// stayed here, because what they assert — which slider applies under which lens, and what a typed
+// number lands on — is a property of the controls, not of the window hosting them. What DID change
+// in them is one line: the page only exists while the tree's Camera row is selected, so each case
+// says so before driving it.
+//
+// What this suite is for. What can only be answered by a real frame is whether a piece of state the
+// panel derives actually reaches the screen. The aspect-clamp warning below is the sharpest instance: it is the only
+// feedback a user gets when the window they asked for did not fit the monitor, and it is drawn from a signal written on
+// a completely different code path (the GLFW resize in ApplyAspectRatio), so "the flag was set" and "the user was told"
+// are two separate claims.
 //
 // The rest of the group is here too: the lens-type combo and the pose it re-gates on every switch,
 // the FOV and visible-hemisphere gates, Reset, and the background row. What they have in common is
@@ -137,21 +145,25 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P19. The four groups fold independently and all four start open, so a user who collapses Scene
-  // to get at Overlay does not find Display gone too. Asserted through an item inside each group,
-  // because "the header is closed" and "its contents are not submitted" are the same claim and the
-  // second is the one that matters.
+  // P19. The groups fold independently and start open, so a user who collapses one to get at
+  // another does not find the second gone too. Asserted through an item inside each group, because
+  // "the header is closed" and "its contents are not submitted" are the same claim and the second
+  // is the one that matters.
+  //
+  // Two groups, not the four this case was written for. Scene (Sun) and View (Camera) left this
+  // panel for the document column's inspector, where they are PAGES selected from the tree rather
+  // than headers folded in place — there is no fold gesture on them to be independent of. What
+  // survives the move is the proposition about the groups that are still folded here; the pages'
+  // own reachability is functional/test_document_column.cpp's.
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "view_display_controls", "the_four_groups_fold_independently_and_start_open");
+        IM_REGISTER_TEST(engine, "view_display_controls", "the_panel_groups_fold_independently_and_start_open");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       struct Group {
         const char* header;
         const char* member;  // an item that exists only while that group is expanded
       };
       const Group kGroups[] = {
-        { "**/Scene", "**/##Altitude_input" },
-        { "**/View", "**/##FOV##view_input" },
         { "**/Display", "**/##EV##display_input" },
         { "**/Overlay", "**/Line##horizon" },
       };
@@ -201,9 +213,10 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "view_display_controls", "the_lens_combo_lists_lenses_in_presentation_order");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(3);
 
-      ctx->SetRef("//##RightPanel");
+      ctx->SetRef("//##DocumentInspector");
       ctx->ItemClick("Lens Type##view");  // opens the popup; BeginCombo reports no info of its own
       ctx->SetRef("");
       ctx->Yield(3);
@@ -274,6 +287,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "the_globe_masks_roll_without_discarding_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
 
       gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
@@ -324,6 +338,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       for (const Row& r : kRows) {
         ResetTestState();
+        gui::g_state.SelectCamera();
         ctx->Yield(2);
         gui::g_state.renderer.lens_type = r.from_lens;
         gui::g_state.renderer.azimuth = r.az_before;
@@ -332,7 +347,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
         // The combo button is not in the item registry; ComboClick resolves it by id and scrolls
         // the popup to reveal an entry that starts clipped.
-        ctx->SetRef("//##RightPanel");
+        ctx->SetRef("//##DocumentInspector");
         ctx->ComboClick((std::string("Lens Type##view/") + r.pick).c_str());
         ctx->SetRef("");
         ctx->Yield(3);
@@ -368,6 +383,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       const char* const kHemisphere[] = { "**/Upper##visible", "**/Full##visible", "**/Lower##visible" };
 
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
       for (int lens = 0; lens < gui::kLensTypeCount; ++lens) {
         gui::g_state.renderer.lens_type = lens;
@@ -404,6 +420,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "view_display_controls", "the_visibility_row_commits_and_stays_on_one_line");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
       gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEqualArea;
       ctx->Yield(3);
@@ -438,6 +455,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "view_display_controls", "the_view_sliders_clamp_and_elevation_tightens_on_globe");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
       gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
       ctx->Yield(3);
@@ -481,6 +499,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "which_view_sliders_apply_depends_on_the_lens");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
 
       gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
@@ -549,12 +568,14 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "view_display_controls", "reset_returns_the_view_to_the_lenses_own_defaults");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectCamera();
       ctx->Yield(2);
       IM_CHECK(ctx->ItemExists("**/Reset##view"));
 
       const int kLenses[] = { gui::kLensTypeFisheyeEquidist, gui::kLensTypeGlobe };
       for (const int lens : kLenses) {
         ResetTestState();
+        gui::g_state.SelectCamera();
         ctx->Yield(2);
         gui::g_state.renderer.lens_type = lens;
         ctx->Yield(3);

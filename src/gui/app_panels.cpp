@@ -815,6 +815,127 @@ void RenderDocumentTree() {
   ImGui::End();
 }
 
+namespace {
+
+// The inspector's Camera page: which lens the sky is projected through, which hemisphere is
+// shown, and where the observer is pointed. This used to be the right panel's "View" group. It
+// moved because these fields describe the DOCUMENT — they are saved with the scene and a change
+// to any of them is a different picture of the same simulation — which is the line the whole
+// column is drawn along (doc/gui-layout-architecture.md §2). Only the host changed: every gate
+// below is still the field editor registry's answer, not this call site's.
+void RenderCameraControls() {
+  auto& r = g_state.renderer;
+  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  ImGui::SeparatorText("Lens");
+  // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+  // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+  if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
+    for (int idx : kLensTypePresentationOrder) {
+      bool selected = (r.lens_type == idx);
+      if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+        // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+        // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+        // lens_type directly, so they keep their fov.
+        ApplyLensTypeSelection(r, idx);
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
+  // Domain, format and disabled-when all come from the field editor registry rather than being
+  // written here — same for every slider below whose field is a registered document leaf. The
+  // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
+  // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
+  const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
+  ImGui::BeginDisabled(!fov_c.enabled);
+  SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
+                  fov_c.fmt, fov_c.scale);
+  ImGui::EndDisabled();
+  bool is_globe = (r.lens_type == kLensTypeGlobe);
+  ImGui::SeparatorText("Visibility");
+  // Same registry query as the FOV slider above, for the same reason. What used to stand here was
+  // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
+  // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
+  // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
+  // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
+  // full-sky case in, so the call site needs no nesting: one flat pair per field.
+  const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
+  ImGui::BeginDisabled(!visible_c.enabled);
+  ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+  ImGui::SameLine();
+  ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+  ImGui::SameLine();
+  ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+  ImGui::EndDisabled();
+  // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
+  // next widget, so it is unaffected by — and does not affect — the disabled stack.
+  ImGui::SameLine(0, 20);
+  const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
+  ImGui::BeginDisabled(!front_c.enabled);
+  Checkbox("Front##visible", &r.front);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+  }
+  ImGui::EndDisabled();
+  ImGui::SeparatorText("Pose");
+  if (is_globe) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "In Globe lens, Az/El/Roll control the observer's orbit\n"
+          "around the sphere, not the camera's own attitude.\n"
+          "Roll is locked to 0 in this mode (slider is greyed out).");
+    }
+  }
+  // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
+  // gate the two share, is the registry's to state. Both entries carry the SAME gate
+  // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
+  const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
+  const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
+  ImGui::BeginDisabled(!el_c.enabled);
+  SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
+                  static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
+  SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
+                  az_c.fmt, az_c.scale);
+  ImGui::EndDisabled();
+  // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
+  const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
+  ImGui::BeginDisabled(!roll_c.enabled);
+  SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
+                  roll_c.fmt, roll_c.scale);
+  ImGui::EndDisabled();
+
+  ImGui::Separator();
+  float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  float avail = ImGui::GetContentRegionAvail().x;
+  if (avail > btn_w) {
+    ImGui::SameLine(avail - btn_w);
+  }
+  if (ImGui::SmallButton("Reset##view")) {
+    ViewDefaults d = DefaultViewParamsFor(r.lens_type);
+    r.fov = d.fov;
+    r.elevation = d.elevation;
+    r.azimuth = d.azimuth;
+    r.roll = d.roll;
+  }
+
+  ImGui::PopItemWidth();
+}
+
+// The page title. Every page gets one, because the inspector is the only thing on screen that says
+// which item the controls below are editing — the tree's highlight says it too, but the tree can be
+// scrolled away from the selected row while the inspector still shows it.
+void InspectorTitle(const char* icon, const char* text) {
+  ImGui::TextUnformatted(icon);
+  ImGui::SameLine();
+  ImGui::TextUnformatted(text);
+  ImGui::Separator();
+}
+
+}  // namespace
+
 void RenderDocumentInspector() {
   // Not submitted while the column is collapsed. Unlike the tree — whose window has to stay
   // submitted so the strip keeps a node beside the preview rather than on top of it — the
@@ -826,7 +947,53 @@ void RenderDocumentInspector() {
   }
 
   ImGui::Begin(kDocumentInspectorWindowName, nullptr, kSidePanelBaseFlags);
-  ImGui::TextDisabled("Select an item in the tree above.");
+
+  // A selection is a pair of indices into vectors the user can shrink, so it can name something
+  // that no longer exists. The delete paths clear it, but that is a claim about every writer being
+  // careful; range-checking HERE is a claim about this reader, and it is the one that decides
+  // whether a stale selection is a blank page or a crash.
+  GuiState::DocumentSelection sel = g_state.selection;
+  const int layer_count = static_cast<int>(g_state.layers.size());
+  const bool layer_in_range = sel.layer_idx >= 0 && sel.layer_idx < layer_count;
+  if ((sel.kind == GuiState::SelectionKind::kLayer || sel.kind == GuiState::SelectionKind::kCrystal) &&
+      !layer_in_range) {
+    sel.kind = GuiState::SelectionKind::kNone;
+  }
+  if (sel.kind == GuiState::SelectionKind::kCrystal && !g_state.HasValidCrystalSelection()) {
+    sel.kind = GuiState::SelectionKind::kNone;
+  }
+
+  switch (sel.kind) {
+    case GuiState::SelectionKind::kSun:
+      InspectorTitle(ICON_FA_SUN, "Sun");
+      RenderSunControls(g_state);
+      break;
+    case GuiState::SelectionKind::kCamera:
+      InspectorTitle(ICON_FA_CAMERA, "Camera");
+      RenderCameraControls();
+      break;
+    case GuiState::SelectionKind::kLayer: {
+      char title[32];
+      snprintf(title, sizeof(title), "Layer %d", sel.layer_idx + 1);
+      InspectorTitle(ICON_FA_LAYER_GROUP, title);
+      // The erase is the caller's, not the page's — see RenderLayerInspector. Doing it here also
+      // keeps it after the tree has finished iterating this frame's layers.
+      if (RenderLayerInspector(g_state, sel.layer_idx)) {
+        g_state.layers.erase(g_state.layers.begin() + sel.layer_idx);
+        g_thumbnail_cache.OnLayerStructureChanged();
+        g_state.SelectNone();
+      }
+      break;
+    }
+    case GuiState::SelectionKind::kCrystal:
+      // Filled in by Step 4 (the crystal page absorbs the three edit modals).
+      InspectorTitle(ICON_FA_GEM, "Crystal");
+      break;
+    case GuiState::SelectionKind::kNone:
+      ImGui::TextDisabled("Select an item in the tree above.");
+      break;
+  }
+
   ImGui::End();
 }
 
@@ -847,114 +1014,14 @@ void RenderRightPanel(GLFWwindow* window) {
   ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
   ApplyPanelCollapseWidth(GetPanelNodeIds().right, false, kRightPanelWidth, &s_collapse);
 
-  // ---- Scene Group ----
-  if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
-    RenderSceneControls(g_state);
-  }
+  // The Scene (Sun) and View (Camera) groups that used to open this panel are gone from it. Both
+  // describe the DOCUMENT — what is being simulated, and from where — so they moved into the
+  // document column's inspector, next to the layers and crystals they belong with
+  // (doc/gui-layout-architecture.md §2). What is left below is display state: how the accumulated
+  // result is shown. Its own move, to a strip under the viewport, is 456.4's.
 
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-
-  // ---- View Group ----
-  if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Lens");
-    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
-    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
-    if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
-      for (int idx : kLensTypePresentationOrder) {
-        bool selected = (r.lens_type == idx);
-        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
-          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
-          // lens_type directly, so they keep their fov.
-          ApplyLensTypeSelection(r, idx);
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-      }
-      ImGui::EndCombo();
-    }
-    // Domain, format and disabled-when all come from the field editor registry rather than being
-    // written here — same for every slider below whose field is a registered document leaf. The
-    // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
-    // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
-    const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
-    ImGui::BeginDisabled(!fov_c.enabled);
-    SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
-                    fov_c.fmt, fov_c.scale);
-    ImGui::EndDisabled();
-    bool is_globe = (r.lens_type == kLensTypeGlobe);
-    ImGui::SeparatorText("Visibility");
-    // Same registry query as the FOV slider above, for the same reason. What used to stand here was
-    // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
-    // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
-    // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
-    // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
-    // full-sky case in, so the call site needs no nesting: one flat pair per field.
-    const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
-    ImGui::BeginDisabled(!visible_c.enabled);
-    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
-    ImGui::SameLine();
-    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
-    ImGui::SameLine();
-    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
-    ImGui::EndDisabled();
-    // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
-    // next widget, so it is unaffected by — and does not affect — the disabled stack.
-    ImGui::SameLine(0, 20);
-    const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
-    ImGui::BeginDisabled(!front_c.enabled);
-    Checkbox("Front##visible", &r.front);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
-    }
-    ImGui::EndDisabled();
-    ImGui::SeparatorText("Pose");
-    if (is_globe) {
-      ImGui::TextDisabled("(?)");
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "In Globe lens, Az/El/Roll control the observer's orbit\n"
-            "around the sphere, not the camera's own attitude.\n"
-            "Roll is locked to 0 in this mode (slider is greyed out).");
-      }
-    }
-    // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
-    // gate the two share, is the registry's to state. Both entries carry the SAME gate
-    // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
-    const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
-    const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
-    ImGui::BeginDisabled(!el_c.enabled);
-    SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
-                    static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
-    SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
-                    az_c.fmt, az_c.scale);
-    ImGui::EndDisabled();
-    // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
-    const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
-    ImGui::BeginDisabled(!roll_c.enabled);
-    SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
-                    roll_c.fmt, roll_c.scale);
-    ImGui::EndDisabled();
-
-    ImGui::Separator();
-    float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    float avail = ImGui::GetContentRegionAvail().x;
-    if (avail > btn_w) {
-      ImGui::SameLine(avail - btn_w);
-    }
-    if (ImGui::SmallButton("Reset##view")) {
-      ViewDefaults d = DefaultViewParamsFor(r.lens_type);
-      r.fov = d.fov;
-      r.elevation = d.elevation;
-      r.azimuth = d.azimuth;
-      r.roll = d.roll;
-    }
-
-    ImGui::PopItemWidth();
-  }
 
   // ---- Display Group ----
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {

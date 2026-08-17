@@ -173,8 +173,14 @@ void RenderLayer(GuiState& state, int layer_idx);
 // document-tree window's scroll area (app_panels.cpp).
 void RenderDocumentTreeRows(GuiState& state);
 
+// The inspector's Layer page: the multi-scatter probability, how many crystals the layer holds, and
+// a delete button. Returns true when the user asked to delete the layer; the CALLER erases it, so
+// that the selection fix-up has a single owner and this function never leaves its own `layer`
+// reference dangling.
+bool RenderLayerInspector(GuiState& state, int layer_idx);
+
 // Sun controls, rendered on the inspector's Sun page.
-void RenderSceneControls(GuiState& state);
+void RenderSunControls(GuiState& state);
 
 // Reset all panel editing state: edit request, selection indices.
 // Name kept for GUI test teardown compatibility (was pending-delete only, now broader).

@@ -1,7 +1,12 @@
-// The right panel's Scene group — what the simulation is asked to compute, as opposed to how the
-// result is shown.
+// The Sun — what the simulation is asked to compute, as opposed to how the result is shown.
 //
-// What this suite is for. `RenderSceneControls` (src/gui/panels.cpp) draws the sun and the spectrum
+// Where it lives. This was the right panel's "Scene" group; it is now the document column
+// inspector's Sun page (`##DocumentInspector`), reached by selecting the tree's Sun row, because
+// the sun is part of the saved document (doc/gui-layout-architecture.md §2). The cases came with
+// it unchanged apart from saying which row is selected before they drive anything — what they
+// assert is a property of the controls, not of the window hosting them.
+//
+// What this suite is for. `RenderSunControls` (src/gui/panels.cpp) draws the sun and the spectrum
 // picker. Two things about it can only be settled by a real frame. The first is the clamp: every
 // slider here reads its domain from the field editor registry, and what a user typing a number
 // actually lands on is a property of the call site, not of the registry — asking the registry what
@@ -73,6 +78,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         const float* slot;
       };
       ResetTestState();
+      gui::g_state.SelectSun();
       ctx->Yield(2);
 
       const Bound kBounds[] = {
@@ -116,6 +122,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       const Rejected kCases[] = { { 90.0f, 200.0f }, { -90.0f, -200.0f } };
       for (const Rejected& c : kCases) {
         ResetTestState();
+        gui::g_state.SelectSun();
         ctx->Yield(2);
         gui::g_state.sun.altitude = c.seed;
         gui::g_state.dirty = false;
@@ -152,6 +159,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "an_edit_after_a_run_dirties_the_document_that_same_frame");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       ScopedServer server;
       IM_CHECK(server.ok());
       gui::g_state.sim.infinite = false;
@@ -176,12 +184,13 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "picking_custom_opens_the_editor_without_committing_it");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const int preset_before = gui::g_state.sun.spectrum_index;
       IM_CHECK_NE(preset_before, gui::kCustomSpectrumIndex);
 
-      ctx->SetRef("//##RightPanel");
+      ctx->SetRef("//##DocumentInspector");
       ctx->ComboClick("Spectrum/Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
@@ -196,7 +205,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.sun.spectrum_index, preset_before);
 
       // OK is the sole commit point.
-      ctx->SetRef("//##RightPanel");
+      ctx->SetRef("//##DocumentInspector");
       ctx->ComboClick("Spectrum/Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
@@ -213,6 +222,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "the_edit_spectrum_button_appears_only_once_custom_is_committed");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       IM_CHECK(!ctx->ItemExists("**/Edit spectrum...##spectrum_edit"));
@@ -236,6 +246,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "a_preset_detour_does_not_discard_the_custom_spectrum");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
@@ -245,7 +256,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // Away to a preset, through the real combo...
-      ctx->SetRef("//##RightPanel");
+      ctx->SetRef("//##DocumentInspector");
       ctx->ComboClick("Spectrum/D65");
       ctx->SetRef("");
       ctx->Yield(3);
@@ -253,7 +264,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.sun.custom_spectrum.size(), authored.size());
 
       // ...and back. The editor opens on the list that was there, not on a fresh seed.
-      ctx->SetRef("//##RightPanel");
+      ctx->SetRef("//##DocumentInspector");
       ctx->ComboClick("Spectrum/Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
@@ -280,6 +291,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "spectrum_rows_can_be_edited_added_and_removed");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       gui::g_state.sun.spectrum_index = gui::kCustomSpectrumIndex;
@@ -321,6 +333,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
         IM_REGISTER_TEST(engine, "scene_controls", "spectrum_reset_seeds_a_uniform_grid_and_cancel_still_discards");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.SelectSun();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
       const std::vector<gui::WlWeight> baseline = { { 450.0f, 0.5f }, { 550.0f, 1.0f }, { 650.0f, 0.7f } };
