@@ -22,7 +22,22 @@ constexpr int kMinWindowHeight = 640;
 constexpr int kWindowDecorationMargin = 50;
 constexpr float kLeftPanelWidth = 400.0f;
 constexpr float kRightPanelWidth = 300.0f;
-constexpr float kTopBarHeight = 40.0f;
+// The top bar is TWO rows: chrome (panel toggles / New / Open / Save / Colors / Settings / View) on
+// the first, the execution cluster (Run / Stop / dirty chip / Revert / Rays / Max hits / Use GPU /
+// run status) on the second. One row was measured not to fit: the chrome row alone is ~700 px and
+// the execution cluster adds ~800 px, which overflows even the 1600 px default window and is far
+// past kMinWindowWidth. Height = WindowPadding.y*2 + FrameHeight*2 + ItemSpacing.y with the theme's
+// 15 px body font (theme.cpp) = 6*2 + 21*2 + 3 = 57, rounded up to 64 for the same slack the 40 px
+// single-row value carried.
+//
+// MAINTAINER: this constant is the input to every fixed-chrome geometry calculation in the app —
+// the dock host's origin and height (main.cpp / test_gui_main.cpp), the side panels' y and height
+// (RenderLeftPanel / RenderRightPanel call sites in app_panels.cpp), the collapsed-strip button
+// centring (RenderCollapsedStrip's callers), and the aspect-fit solver (ResolveAspectFit, app.cpp).
+// Changing it also changes the pixel height of the `visual` group's left_panel reference capture
+// (test_gui_main.cpp's left-panel readback derives rh from it), so a change here requires a
+// reference re-shoot for that group.
+constexpr float kTopBarHeight = 64.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
 // Live-edit timing constants

@@ -530,6 +530,7 @@ int main(int argc, char** argv) {
   RegisterFilterEditorTests(engine);
   RegisterEditModalTests(engine);
   RegisterSceneControlTests(engine);
+  RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);

@@ -1,19 +1,23 @@
 // The right panel's Scene group — what the simulation is asked to compute, as opposed to how the
 // result is shown.
 //
-// What this suite is for. `RenderSceneControls` (src/gui/panels.cpp) draws the sun, the ray budget
-// and the spectrum picker. Two things about it can only be settled by a real frame. The first is
-// the clamp: every slider here reads its domain from the field editor registry, and what a user
-// typing a number actually lands on is a property of the call site, not of the registry — asking
-// the registry what to expect would compare one line of code against itself, so every bound below
-// is a literal. The second is the spectrum picker's transaction: choosing "Custom..." must open an
-// editor WITHOUT committing the custom index, and only the editor's OK may advance it, so that
-// dismissing the editor leaves the combo where it was.
+// What this suite is for. `RenderSceneControls` (src/gui/panels.cpp) draws the sun and the spectrum
+// picker. Two things about it can only be settled by a real frame. The first is the clamp: every
+// slider here reads its domain from the field editor registry, and what a user typing a number
+// actually lands on is a property of the call site, not of the registry — asking the registry what
+// to expect would compare one line of code against itself, so every bound below is a literal. The
+// second is the spectrum picker's transaction: choosing "Custom..." must open an editor WITHOUT
+// committing the custom index, and only the editor's OK may advance it, so that dismissing the
+// editor leaves the combo where it was.
 //
-// Deliberately NOT here, with where each lives instead. Whether the registry's own table is right
-// is unit-correctness/gui/test_gui_widget_rules.cpp; whether a custom spectrum survives a save and
-// reload is composition-correctness/gui/test_document_roundtrip_chain.cpp; what the reconciler does
-// with a dirty document once it is dirty is composition-correctness/gui/test_run_lifecycle_chain.cpp.
+// Deliberately NOT here, with where each lives instead. The ray budget, max hits and the backend
+// toggle moved to the top bar's execution cluster and their cases moved with them, to
+// functional/test_execution_cluster.cpp — the split is by what the field is FOR (this run vs. the
+// saved document), which is the same line the panels themselves are now drawn along. Whether the
+// registry's own table is right is unit-correctness/gui/test_gui_widget_rules.cpp; whether a custom
+// spectrum survives a save and reload is
+// composition-correctness/gui/test_document_roundtrip_chain.cpp; what the reconciler does with a
+// dirty document once it is dirty is composition-correctness/gui/test_run_lifecycle_chain.cpp.
 //
 // What a user sees when these break: a number they typed silently becoming a different number, a
 // document that reports unsaved changes after they typed something the control rejected anyway, or
@@ -30,8 +34,6 @@ namespace {
 
 const char* const kAltitude = "**/##Altitude_input";
 const char* const kDiameter = "**/##Diameter_input";
-const char* const kRays = "**/##Rays(M)_input";
-const char* const kMaxHits = "**/##Max hits_input";
 
 // Owns a real server for the length of one case.
 //
@@ -54,21 +56,6 @@ struct ScopedServer {
     gui::g_state.dirty = false;
   }
   bool ok() const { return gui::g_server != nullptr; }
-};
-
-// The run-intent latch, handed back on every exit path, for the one case that fakes a run without
-// a server.
-//
-// `run_intent` is what makes "a run is in flight" stick: the harness main loop re-derives sim_state
-// every frame, so a bare sim_state write is gone by the next one and this is the only way to reach
-// the disabled branch of a control. Unlike the server above, this field IS rebuilt by the next
-// case's ResetTestState() — so what this object buys is not a repair of a leak nothing else
-// reaches, but that the case states what it borrowed and gives it back at the same place. The
-// reason it has to be an object is the same as everywhere else here: the two checks it sits behind
-// are precisely the ones a real regression trips, and a fatal IM_CHECK returns past any teardown
-// written below them.
-struct ScopedRunIntent {
-  ~ScopedRunIntent() { gui::g_state.run_intent = gui::RunIntent::kNone; }
 };
 
 }  // namespace
@@ -178,123 +165,6 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue(kAltitude, gui::g_state.sun.altitude + 5.0f);
       IM_CHECK(gui::g_state.dirty);
       // Teardown is the guard's; see ScopedServer for why it cannot be written here.
-    };
-  }
-
-  // P82. The ray total is ONE control greyed by the registry, not two call sites picked between by
-  // an if. Both states are asserted on the same widget id, which is what makes "there is only one"
-  // observable: a reintroduced second call site under `infinite` would be a different item, and the
-  // id that exists in one state would have to stop existing in the other.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "the_ray_total_is_one_control_the_registry_greys");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      IM_CHECK(!gui::g_state.sim.infinite);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo(kRays)));
-
-      // The declared domain, as literals.
-      ctx->ItemInputValue(kRays, 0.1f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 0.1f);
-      ctx->ItemInputValue(kRays, 100.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 100.0f);
-
-      gui::g_state.sim.infinite = true;
-      ctx->Yield(3);
-      IM_CHECK(ctx->ItemExists(kRays));  // still the same item, and still submitted
-      IM_CHECK(IsDisabled(ctx->ItemInfo(kRays)));
-
-      gui::g_state.sim.infinite = false;
-      ctx->Yield(3);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo(kRays)));
-    };
-  }
-
-  // P82's user-visible consequence: turning the budget off and on again must give it back. A
-  // checkbox that zeroed the total on the way past would be indistinguishable from this one until
-  // the user turned it off.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "toggling_infinite_rays_gives_the_ray_total_back");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemInputValue(kRays, 5.0f);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 5.0f);
-
-      ctx->ItemClick("**/Infinite rays");
-      ctx->Yield();
-      IM_CHECK(gui::g_state.sim.infinite);
-      ctx->ItemClick("**/Infinite rays");
-      ctx->Yield();
-      IM_CHECK(!gui::g_state.sim.infinite);
-      IM_CHECK_EQ(gui::g_state.sim.ray_num_millions, 5.0f);
-    };
-  }
-
-  // P83. The int slider is a different widget family from the float ones above and reads its bounds
-  // from the same registry, so it gets the same treatment: literals, at both ends.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "scene_controls", "max_hits_clamps_typed_values_to_its_domain");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      ctx->ItemInputValue(kMaxHits, 12);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.sim.max_hits, 12);
-      ctx->ItemInputValue(kMaxHits, 100000);
-      ctx->Yield();
-      const int at_max = gui::g_state.sim.max_hits;
-      IM_CHECK_LT(at_max, 100000);  // it was clamped by something
-      ctx->ItemInputValue(kMaxHits, -5);
-      ctx->Yield();
-      IM_CHECK_GT(gui::g_state.sim.max_hits, 0);
-      IM_CHECK_LT(gui::g_state.sim.max_hits, at_max);
-    };
-  }
-
-  // P84. The GPU toggle is not a control that greys out on a machine without a GPU — it is not
-  // drawn at all, because a checkbox whose only outcome is a silent fallback to the CPU is worse
-  // than no checkbox. Which branch is under test is decided by the same probe the panel uses, so
-  // this case says something true on a machine with a backend and on one without; asserting only
-  // the branch this developer's machine happens to take would make it a no-op elsewhere.
-  {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "scene_controls", "the_gpu_toggle_is_absent_rather_than_greyed_without_a_backend");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-
-      const bool have_backend =
-          LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA);
-      if (!have_backend) {
-        IM_CHECK(!ctx->ItemExists("**/Use GPU"));
-        return;
-      }
-
-      IM_CHECK(ctx->ItemExists("**/Use GPU"));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/Use GPU")));
-      const bool before = gui::g_state.use_gpu_backend;
-      gui::g_state.dirty = false;
-      ctx->ItemClick("**/Use GPU");
-      ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.use_gpu_backend, !before);
-      // The backend choice rebuilds the server on the next Run, so it has to read as a change.
-      IM_CHECK(gui::g_state.dirty);
-
-      // ...and it is unreachable while a run is in flight, since an in-flight stop still holds the
-      // server the switch would rebuild. run_intent is what makes the state stick: the harness main
-      // loop re-derives sim_state every frame, so a bare sim_state write is gone by the next one.
-      const ScopedRunIntent intent_guard;
-      gui::g_state.run_intent = gui::RunIntent::kRunning;
-      ctx->Yield(3);
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state),
-                  static_cast<int>(gui::GuiState::SimState::kSimulating));  // the premise held
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/Use GPU")));
     };
   }
 

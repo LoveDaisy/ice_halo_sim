@@ -48,8 +48,28 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 // renders integer settings with it: an integer setting has to be edited by the SAME control the
 // main UI uses, or the two disagree about what a valid value is — which is the whole point of that
 // registry.
+//
+// `total_width > 0` sizes the [slider][input](label) triple explicitly instead of from the content
+// region. Needed only in a horizontal toolbar row, where "the content region" is the distance to
+// the window's right edge and would swallow everything after it.
 bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true,
-                        bool* committed = nullptr, bool* active = nullptr);
+                        bool* committed = nullptr, bool* active = nullptr, float total_width = 0.0f);
+
+// The ray-budget control: [slider][input] Rays(M), where the slider's rightmost band is a detent
+// that reads "until stopped" instead of a number and sets sim.infinite.
+//
+// It is a bespoke control for ONE field, not a general SliderWithInput mode, and it should stay
+// that way: the reason it exists is that this field's domain has a non-numeric top end, which no
+// other field editable through SliderWithInput has. Two properties are load-bearing —
+//   - the detent's boundary is closed on the infinite side, so the largest FINITE value cannot be
+//     reached by dragging at all (not "is hard to hit"), and
+//   - the input box is never disabled, so that value stays typeable —
+// which together are what keeps ∞ a termination mode rather than a synonym for "a big number"
+// (doc/gui-visual-language.md §4.5). Disabling the input box while the detent is engaged, or
+// snapping a near-max drag up to max, each individually breaks that.
+//
+// Returns true if sim.infinite or sim.ray_num_millions changed this frame.
+bool RaysBudgetControl(GuiState& state, float total_width = 0.0f);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };

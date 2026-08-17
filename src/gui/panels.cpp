@@ -272,9 +272,15 @@ namespace {
 // mode): the width no longer reserves kLabelColWidth nor its extra SameLine spacing,
 // so the [slider][input] pair fills the whole cell (GetContentRegionAvail() ==
 // column width inside a BeginTable cell).
+//
+// `total_width > 0` overrides the "fill the content region" default. A horizontal toolbar row (the
+// top bar's execution cluster) has no meaningful content region: everything after a SameLine still
+// reports the distance to the window's right edge, so a slider sized from it would swallow the rest
+// of the row. Passing an explicit width is the only way to place these controls side by side; the
+// 0.0f default keeps every panel/table call site byte-for-byte unchanged.
 static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
                                  size_t slider_id_size, char* input_id, size_t input_id_size,
-                                 bool reserve_label_col = true) {
+                                 bool reserve_label_col = true, float total_width = 0.0f) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* hash_pos = strstr(label, "##");
   if (hash_pos) {
@@ -291,7 +297,7 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   snprintf(input_id, input_id_size, "##%s_input", label);
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
-  float avail_w = ImGui::GetContentRegionAvail().x;
+  float avail_w = total_width > 0.0f ? total_width : ImGui::GetContentRegionAvail().x;
   // With the trailing label: subtract kLabelColWidth + 2 SameLine spacings
   // (slider→input, input→label). Without it: only the slider→input spacing.
   float slider_w =
@@ -348,12 +354,12 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
 // Returns true if value changed.
 bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label, bool* committed,
-                        bool* active) {
+                        bool* active, float total_width) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), trailing_label);
+                                       sizeof(input_id), trailing_label, total_width);
 
   const int old_value = *value;
 
@@ -381,6 +387,123 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
 
   FinishSliderLayout(display_buf);
   return *value != old_value;
+}
+
+// ---- Ray budget: slider with an ∞ detent, plus the input box that is the only way to the top ----
+
+namespace {
+// Fraction of the ray-budget slider's track that carries the finite domain. The remaining tail is
+// the ∞ detent. 0.88 leaves the detent about an eighth of the track — wide enough to be a target a
+// user can hit deliberately, narrow enough that it does not eat the useful part of the domain.
+//
+// The boundary is deliberately CLOSED on the detent side (`pos >= kRaysFiniteSpan` means infinite),
+// which makes the largest finite value strictly unreachable by dragging: the slider maps
+// [0, kRaysFiniteSpan) onto [min, max), so every position it can report as finite is below max.
+// That is not an accident of pixel quantisation to be tuned away — it is the property the input box
+// exists to complement, and the one the AC2 pair of tests pins from both sides. ∞ changes the
+// TERMINATION SEMANTICS rather than being "a very large number"
+// (doc/gui-visual-language.md §4.5), so a detent that swallows the top of the numeric domain is
+// correct only as long as the number itself stays typeable.
+constexpr float kRaysFiniteSpan = 0.88f;
+}  // namespace
+
+bool RaysBudgetControl(GuiState& state, float total_width) {
+  // The registry stays the single owner of the domain and the display format. Its applicability
+  // predicate ("infinite rays is on, so no ray total applies") is deliberately NOT consumed here:
+  // it means "grey this row out", which is right for a generic one-row-per-field editor (the
+  // defaults panel renders it that way) and wrong for this control, whose whole point is that the
+  // input box stays live while the detent is engaged.
+  const FieldEditorConstraint rays_c = ConstraintFor("sim.ray_num_millions", state);
+  const auto min_v = static_cast<float>(rays_c.min_value);
+  const auto max_v = static_cast<float>(rays_c.max_value);
+
+  char display_buf[64];
+  char slider_id[64];
+  char input_id[64];
+  // reserve_label_col=false: the trailing "Rays(M)" is still drawn (FinishSliderLayout below), but
+  // it is not given a fixed column — this control lives in a horizontal toolbar, where the fixed
+  // column exists to align nothing.
+  const float slider_w = PrepareSliderLayout("Rays(M)", display_buf, sizeof(display_buf), slider_id, sizeof(slider_id),
+                                             input_id, sizeof(input_id), /*reserve_label_col=*/false, total_width);
+
+  const bool old_infinite = state.sim.infinite;
+  const float old_value = state.sim.ray_num_millions;
+
+  // The slider is driven through a normalized position rather than the field itself, because the
+  // track carries two different kinds of thing (a number, and a mode) and only a position can
+  // address both. sim.infinite + ray_num_millions remain the sole truth: `pos` is recomputed from
+  // them every frame and never stored.
+  float pos = old_infinite ? 1.0f : kRaysFiniteSpan * (old_value - min_v) / (max_v - min_v);
+
+  // ImGui prints the slider's display string through ImFormatString(buf, size, fmt, value), so a
+  // string with no conversion specifier is emitted verbatim — which is how the detent shows words
+  // where the rest of the track shows a number.
+  char slider_text[64];
+  if (old_infinite) {
+    snprintf(slider_text, sizeof(slider_text), "until stopped");
+  } else {
+    snprintf(slider_text, sizeof(slider_text), rays_c.fmt, static_cast<double>(old_value));
+  }
+
+  // The ray total the user had before this drag started, restored if the drag ends up in the
+  // detent. Without it, reaching ∞ by dragging would destroy the number on the way past: an ImGui
+  // slider writes a value from the pointer's absolute position on every frame of a drag, so a user
+  // going from 5 M to "until stopped" would arrive with ~99 M in the input box and no way back to
+  // the 5 they chose. That property — turn the budget off and on again and get it back — was the
+  // "Infinite rays" checkbox's, and it does not stop mattering because the checkbox is gone.
+  //
+  // Widget-local drag scratch, not a second source of truth: it is written only while this slider
+  // is being held, read only to undo what the same drag wrote, and never consulted otherwise.
+  // There is one ray budget, hence one static.
+  static float s_finite_before_drag = 0.0f;
+
+  ImGui::PushItemWidth(slider_w);
+  // NoInput: Ctrl+click text entry would write the raw normalized position into the field, bypassing
+  // the mapping entirely. The input box beside it is the text path.
+  const bool slider_moved = ImGui::SliderFloat(slider_id, &pos, 0.0f, 1.0f, slider_text,
+                                               ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
+  // Queried after the call, so `old_value` is still the value from before this frame's click — on
+  // the activation frame ImGui has already jumped the position to wherever the pointer landed, but
+  // it cannot have touched the field, which only this block writes.
+  if (ImGui::IsItemActivated()) {
+    s_finite_before_drag = old_infinite ? old_value : std::clamp(old_value, min_v, max_v);
+  }
+  if (slider_moved) {
+    if (pos >= kRaysFiniteSpan) {
+      state.sim.infinite = true;
+      state.sim.ray_num_millions = s_finite_before_drag;
+    } else {
+      state.sim.infinite = false;
+      state.sim.ray_num_millions = min_v + (pos / kRaysFiniteSpan) * (max_v - min_v);
+    }
+  }
+  ImGui::PopItemWidth();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Total rays across all spectrum wavelengths, in millions.\n"
+        "The server distributes the total to each wavelength as\n"
+        "ceil(total / N_wavelengths) per wavelength.\n"
+        "Drag to the far right for \"until stopped\" -- that is a termination\n"
+        "mode, not a large number. Type the exact maximum in the box instead.");
+  }
+
+  ImGui::SameLine();
+  ImGui::PushItemWidth(kInputWidth);
+  ImGui::InputFloat(input_id, &state.sim.ray_num_millions, 0, 0, rays_c.fmt);
+  const bool input_committed = ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::PopItemWidth();
+  state.sim.ray_num_millions = std::clamp(state.sim.ray_num_millions, min_v, max_v);
+  if (input_committed) {
+    // Typing a ray total IS the explicit statement that the run has one, so it leaves the detent.
+    // This is also the only route to the largest finite value, which the detent has swallowed.
+    state.sim.infinite = false;
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Exact ray total. Typing here leaves \"until stopped\".");
+  }
+
+  FinishSliderLayout(display_buf);
+  return state.sim.infinite != old_infinite || state.sim.ray_num_millions != old_value;
 }
 
 // ---- Shared combo-popup fix (see panels.hpp) ----
@@ -1505,73 +1628,12 @@ void RenderSceneControls(GuiState& state) {
     }
   }
 
-  ImGui::SeparatorText("Simulation");
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-  Checkbox("Infinite rays", &state.sim.infinite);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Run simulation continuously until manually stopped");
-  }
-  ImGui::PopItemWidth();
-  ImGui::BeginGroup();
-  // One call, not one per branch. The two branches were identical apart from the BeginDisabled
-  // wrapper, and `enabled` (the registry's "infinite rays is on, so no ray total applies") is
-  // exactly the condition they split on — so the split has nothing left to express, and collapsing
-  // it removes the only way this field could still hold two constraints that disagree.
-  const FieldEditorConstraint rays_c = ConstraintFor("sim.ray_num_millions", state);
-  ImGui::BeginDisabled(!rays_c.enabled);
-  SliderWithInput("Rays(M)", &state.sim.ray_num_millions, static_cast<float>(rays_c.min_value),
-                  static_cast<float>(rays_c.max_value), rays_c.fmt, rays_c.scale);
-  ImGui::EndDisabled();
-  ImGui::EndGroup();
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip(
-        "Total rays across all spectrum wavelengths, in millions.\n"
-        "The server distributes the total to each wavelength as\n"
-        "ceil(total / N_wavelengths) per wavelength.");
-  }
-  ImGui::BeginGroup();
-  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
-  const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", state);
-  SliderIntWithInput("Max hits", &state.sim.max_hits, static_cast<int>(hits_c.min_value),
-                     static_cast<int>(hits_c.max_value));
-  ImGui::EndGroup();
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
-  }
-
-  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so
-  // the next Apply/Run reconstructs the server for the chosen backend
-  // (MaybeReconstructServerForBackend in app.cpp) — CPU N-worker vs GPU single
-  // engine are different orchestration topologies, so the server is rebuilt and the
-  // accumulated image resets on toggle. Falls back to CPU silently if the active
-  // config is not GPU-compatible.
-  // use_gpu_backend is intentionally excluded from ConfigSnapshot (session/view field,
-  // see gui_state.hpp field-sync scope comment), so it cannot participate in the
-  // reconciler auto-diff — the manual MarkDirty call below is the T0 documented exception.
-  // Runtime gate: only show the checkbox when a GPU backend is actually available
-  // (Metal device on Apple / NVIDIA device + usable CUDA on Windows-Linux), so it
-  // never appears on CPU-only hosts or machines with very old hardware / broken GPU
-  // drivers, where selecting it would otherwise fail in EnsureDevice. The probe is
-  // cached, so the per-frame cost is a plain memory read.
-  // ImGui::Checkbox renders its label to the right and ignores the item-width
-  // stack, so no PushItemWidth wrapper is needed here.
-  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
-    // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
-    // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
-    bool busy = state.sim_state == GuiState::SimState::kSimulating || state.sim_state == GuiState::SimState::kStopping;
-    if (busy) {
-      ImGui::BeginDisabled();
-    }
-    if (Checkbox("Use GPU", &state.use_gpu_backend)) {
-      state.MarkDirty();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
-    }
-    if (busy) {
-      ImGui::EndDisabled();
-    }
-  }
+  // The "Simulation" group that used to sit here — Infinite rays / Rays(M) / Max hits / Use GPU —
+  // now lives in the top bar's execution cluster (RenderExecutionCluster, app_panels.cpp). It was
+  // moved because those fields answer "how hard does THIS RUN go", which is the Run button's
+  // question, not the document's: everything left in this function is saved with the scene, and
+  // nothing that was moved is (see doc/gui-layout-architecture.md §1/§3). Do not add run-budget
+  // controls back here.
 }
 
 }  // namespace lumice::gui

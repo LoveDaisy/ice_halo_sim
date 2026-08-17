@@ -144,34 +144,40 @@ inline void SetNextPanelGeometry(float x, float y, float w, float h) {
   ImGui::SetNextWindowSize(ImVec2(w, h));
   ImGui::SetNextWindowViewport(vp->ID);
 }
-}  // namespace
 
-void RenderTopBar(float window_width) {
-  SetNextPanelGeometry(0, 0, window_width, kTopBarHeight);
-  ImGui::Begin("##TopBar", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+// ================================================================================================
+// Execution cluster — the top bar's SECOND row, rendered by RenderExecutionCluster below.
+//
+// Why it is a block of its own rather than more statements in RenderTopBar: the first row is static
+// chrome (buttons that open things), while this row is the only part of the top bar that reads
+// simulation state and writes document fields. Keeping the two apart is what lets a reader answer
+// "what in the top bar can change while a run is in flight" by looking at one function.
+//
+// What belongs here is decided by field lifecycle, not by convenience: these controls say how hard
+// THIS RUN goes and whether the picture on screen still corresponds to the document. Nothing saved
+// with the scene belongs in this row — that is the document column's job
+// (doc/gui-layout-architecture.md §1/§3).
+// ================================================================================================
 
-  // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
-  // so it can never overlap with panel-internal headers).
-  {
-    const char* left_toggle_label = g_state.left_panel_collapsed ? ICON_FA_CHEVRON_RIGHT "##left_panel_toggle" :
-                                                                   ICON_FA_CHEVRON_LEFT "##left_panel_toggle";
-    if (ImGui::Button(left_toggle_label)) {
-      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-  }
+// Widths of the two numeric controls, in pixels, covering their [slider][input] pair only (the
+// trailing text label is drawn after and sizes itself). Chosen so the whole row fits inside
+// kMinWindowWidth (1024): the row totals ~985 px with separators. A narrower window clips the tail
+// of the row rather than reflowing it — the blueprint leaves narrow-window degradation to the
+// implementation (§6), and clipping keeps Run, the dirty chip and the ray budget (the leftmost,
+// most-used items) on screen.
+constexpr float kRaysControlWidth = 170.0f;
+constexpr float kMaxHitsControlWidth = 150.0f;
+// Fixed slot for the run-progress readout, so the row does not shift as the text under it changes
+// between a percentage, "until stopped", and nothing at all.
+constexpr float kProgressSlotWidth = 130.0f;
 
-  // Run/Stop — fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on
-  // toggle. `busy` widens the file-op gates below: New/Open/Save/backend-toggle stay disabled while
-  // the backend is still draining an async Stop (kStopping), not just while simulating.
-  bool simulating = IsSimulating(g_state.sim_state);
-  bool stopping = IsStopping(g_state.sim_state);
-  bool busy = IsBusy(g_state.sim_state);
+void RenderExecutionCluster() {
   const auto& style = ImGui::GetStyle();
+  const bool simulating = IsSimulating(g_state.sim_state);
+  const bool stopping = IsStopping(g_state.sim_state);
+
+  // ---- Run / Stop ----
+  // Fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on toggle.
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
   const char* kStoppingLabel = ICON_FA_STOP " Stopping...";
@@ -200,27 +206,46 @@ void RenderTopBar(float window_width) {
     PopGoodButtonStyle();
   }
 
-  // Revert area — always rendered for stable layout, hidden when not modified.
-  // Alpha=0 + BeginDisabled: invisible and non-interactive, but still occupies layout space.
-  // The hidden area intercepts clicks, which is harmless in this horizontal toolbar context.
-  bool modified = IsModified(g_state.sim_state);
+  // ---- Dirty chip + Revert ----
+  // Always rendered for stable layout, hidden when not modified: Alpha=0 + BeginDisabled leaves the
+  // area invisible and non-interactive while it still occupies layout space. The hidden area
+  // intercepts clicks, which is harmless in this horizontal toolbar context.
+  //
+  // The chip and Revert are two actions, not one: the chip re-runs with the new configuration, and
+  // Revert throws the new configuration away. Merging them would leave no way to do the second.
+  //
+  // The predicate is `IsModified(sim_state)` and nothing else — deliberately NOT a second list of
+  // "which fields count as simulation input". IsModified is fed by ReconcileSimState, whose dirty
+  // flag is DiffAgainstCommitBaseline's verdict over the field→tier table (gui_state_tiers.hpp), so
+  // the chip and the tier classifier are the same statement read twice. Anything that would make
+  // the chip disagree with the classifier is a bug in the classifier, and belongs there.
+  //
+  // A consequence of that predicate worth stating, because it is a behavior and not an oversight:
+  // the chip cannot appear during a run. ReconcileSimState only produces kModified from kDone, so
+  // kSimulating/kStopping are never downgraded to it; edits made while a run is in flight are
+  // auto-committed to the running server instead (the throttled commit in main.cpp), which is what
+  // makes "modified relative to the last completed run" the only question the chip answers.
+  const bool modified = IsModified(g_state.sim_state);
   if (!modified) {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
   }
   ImGui::BeginDisabled(!modified);
   ImGui::SameLine();
-  ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
-  // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
-  // means. Source-agnostic wording (config changed, not "you added a color
-  // class") — main-scene edits and color-class edits reach kModified through
-  // the same ReconcileSimState pipeline, so a single tooltip covers both.
-  // Attached to the icon rather than the button so the button's own hover
-  // action (click to revert) is not shadowed. Only shown when modified,
-  // since the row is BeginDisabled(alpha=0) otherwise.
+  PushWarningButtonStyle();
+  if (ImGui::Button(ICON_FA_CIRCLE_EXCLAMATION " Changed - re-run") && modified) {
+    // Same call as the Run button above, not a variant of it: the chip is a second entry point to
+    // running, placed where the user is already looking when they notice the result is stale.
+    DoRun(/*user_initiated=*/true);
+  }
+  PopWarningButtonStyle();
+  // The wording is source-agnostic on purpose — "configuration changed", not "you added a color
+  // class". Main-scene edits and color-class edits reach kModified through the same
+  // ReconcileSimState pipeline, so naming either source would be wrong half the time. Shown only
+  // when modified, since the row is BeginDisabled(alpha=0) otherwise.
   if (modified && ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "Configuration changed since the last run.\n"
-        "Click Run to re-simulate, or Revert to discard the changes.");
+        "Click to re-simulate, or Revert to discard the changes.");
   }
   ImGui::SameLine();
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
@@ -233,7 +258,106 @@ void RenderTopBar(float window_width) {
 
   ImGui::SameLine();
   ImGui::TextDisabled("|");
+
+  // ---- Ray budget ----
   ImGui::SameLine();
+  RaysBudgetControl(g_state, kRaysControlWidth);
+
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+
+  // ---- Max hits ----
+  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
+  ImGui::SameLine();
+  const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", g_state);
+  SliderIntWithInput("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
+                     static_cast<int>(hits_c.max_value), /*trailing_label=*/false, /*committed=*/nullptr,
+                     /*active=*/nullptr, kMaxHitsControlWidth);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
+  }
+
+  // ---- Backend toggle ----
+  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so the next
+  // Apply/Run reconstructs the server for the chosen backend (MaybeReconstructServerForBackend in
+  // app.cpp) — CPU N-worker vs GPU single engine are different orchestration topologies, so the
+  // server is rebuilt and the accumulated image resets on toggle. Falls back to CPU silently if the
+  // active config is not GPU-compatible.
+  // use_gpu_backend is intentionally excluded from ConfigSnapshot (session/view field, see
+  // gui_state.hpp field-sync scope comment), so it cannot participate in the reconciler auto-diff —
+  // the manual MarkDirty call below is the T0 documented exception.
+  // Runtime gate: only show the checkbox when a GPU backend is actually available (Metal device on
+  // Apple / NVIDIA device + usable CUDA on Windows-Linux), so it never appears on CPU-only hosts or
+  // machines with very old hardware / broken GPU drivers, where selecting it would otherwise fail
+  // in EnsureDevice. The probe is cached, so the per-frame cost is a plain memory read.
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
+    // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
+    const bool busy = IsBusy(g_state.sim_state);
+    ImGui::BeginDisabled(busy);
+    if (Checkbox("Use GPU", &g_state.use_gpu_backend)) {
+      g_state.MarkDirty();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
+    }
+  }
+
+  // ---- Run progress ----
+  // The fraction is derived, not stored: rays traced so far against the budget this run was asked
+  // for. An infinite run has no denominator and therefore no progress — rather than invent one
+  // (a full bar reads as "finished", an empty one as "stuck"), the slot says what the run is doing.
+  // Both branches occupy the same fixed width so the row's length does not depend on run state.
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine();
+  if (g_state.sim.infinite) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("until stopped");
+  } else {
+    const double target = static_cast<double>(g_state.sim.ray_num_millions) * 1e6;
+    const double done = static_cast<double>(g_state.stats_sim_ray_num);
+    const float fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
+    char overlay[32];
+    snprintf(overlay, sizeof(overlay), "%.0f%%", static_cast<double>(fraction) * 100.0);
+    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, 0.0f), overlay);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Rays traced so far against this run's ray budget.");
+    }
+  }
+}
+}  // namespace
+
+void RenderTopBar(float window_width) {
+  SetNextPanelGeometry(0, 0, window_width, kTopBarHeight);
+  ImGui::Begin("##TopBar", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  // ---- Row 1: chrome. Documents, features, windows — nothing here reads simulation state except
+  // the `busy` gate on the file operations, and nothing here writes a document field.
+  //
+  // Left-panel collapse toggle owns the leftmost slot of the top bar so it can never overlap with
+  // panel-internal headers.
+  {
+    const char* left_toggle_label = g_state.left_panel_collapsed ? ICON_FA_CHEVRON_RIGHT "##left_panel_toggle" :
+                                                                   ICON_FA_CHEVRON_LEFT "##left_panel_toggle";
+    if (ImGui::Button(left_toggle_label)) {
+      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+  }
+
+  // `busy` gates the file operations: New/Open/Save stay disabled while the backend is still
+  // draining an async Stop (kStopping), not just while simulating.
+  const bool busy = IsBusy(g_state.sim_state);
+  const auto& style = ImGui::GetStyle();
 
   // File operations — New/Open disabled while busy (simulating OR async Stop draining); Save menu
   // itself stays enabled so read-only exports (Screenshot / Dual Fisheye Equal Area /
@@ -487,6 +611,10 @@ void RenderTopBar(float window_width) {
       g_state.right_panel_collapsed = !g_state.right_panel_collapsed;
     }
   }
+
+  // ---- Row 2: the execution cluster. No SameLine, so it starts on a fresh line; kTopBarHeight is
+  // sized for exactly these two rows (gui_constants.hpp).
+  RenderExecutionCluster();
 
   ImGui::End();
 }
