@@ -902,6 +902,59 @@ struct GuiState {
   };
   std::optional<EntryRef> pick_link_source;
 
+  // Which document item the inspector edits, i.e. the "detail" half of the document column's
+  // master–detail pair (doc/gui-layout-architecture.md §2). It replaces the modal-open state
+  // machine that used to answer the same question: before this, "which entry is being edited"
+  // lived in edit_modals.cpp as a pair of file-scope statics reachable only through
+  // OpenEditModal, so the tree had no way to ask it and the answer disappeared when the popup
+  // closed. Now the selection IS the question's single owner, and the inspector renders whatever
+  // it names.
+  //
+  // Addressing reuses EntryRef's (layer_idx, entry_idx) rather than inventing a second
+  // coordinate system, and the two index fields are meaningful only for the kinds that need
+  // them: kCrystal uses both, kLayer uses layer_idx alone, kSun/kCamera/kNone use neither and
+  // leave both at -1. Indices are NOT validated on write — layers/entries can be deleted while a
+  // selection points at them, so every reader must range-check before dereferencing (the same
+  // contract pick_link_source has carried since it was introduced).
+  //
+  // Registered kSession, not kView: this is transient runtime UI state with no persistence and
+  // no meaning as a personal default, which is exactly pick_link_source's classification and for
+  // exactly the same reason. It is neither written to .lmc by file_io.cpp nor captured in
+  // ConfigSnapshot, so Revert leaves it alone.
+  enum class SelectionKind { kNone, kSun, kCamera, kLayer, kCrystal };
+  struct DocumentSelection {
+    SelectionKind kind = SelectionKind::kNone;
+    int layer_idx = -1;
+    int entry_idx = -1;
+
+    friend bool operator==(const DocumentSelection& a, const DocumentSelection& b) {
+      return a.kind == b.kind && a.layer_idx == b.layer_idx && a.entry_idx == b.entry_idx;
+    }
+    friend bool operator!=(const DocumentSelection& a, const DocumentSelection& b) { return !(a == b); }
+  };
+  DocumentSelection selection;
+
+  // Selection writers. Free-standing assignments would work, but each of these also states which
+  // index fields the kind leaves unused — writing `{kSun, 3, 0}` is expressible and meaningless,
+  // and a reader that trusted layer_idx there would be reading a leftover.
+  void SelectNone() { selection = DocumentSelection{}; }
+  void SelectSun() { selection = DocumentSelection{ SelectionKind::kSun, -1, -1 }; }
+  void SelectCamera() { selection = DocumentSelection{ SelectionKind::kCamera, -1, -1 }; }
+  void SelectLayer(int layer_idx) { selection = DocumentSelection{ SelectionKind::kLayer, layer_idx, -1 }; }
+  void SelectCrystal(int layer_idx, int entry_idx) {
+    selection = DocumentSelection{ SelectionKind::kCrystal, layer_idx, entry_idx };
+  }
+
+  // True when `selection` names an entry that still exists. The inspector's crystal page and
+  // every buffer-commit path go through this rather than re-deriving the bounds check, because
+  // getting it wrong is not a crash on the frame the layer is deleted — the indices stay in
+  // range while pointing at a different entry, and the edit buffer commits into it.
+  bool HasValidCrystalSelection() const {
+    return selection.kind == SelectionKind::kCrystal && selection.layer_idx >= 0 &&
+           selection.layer_idx < static_cast<int>(layers.size()) && selection.entry_idx >= 0 &&
+           selection.entry_idx < static_cast<int>(layers[selection.layer_idx].entries.size());
+  }
+
   // Layers (entry cards reference crystals/filters via pool ids)
   std::vector<Layer> layers;
 

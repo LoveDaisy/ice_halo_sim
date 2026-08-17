@@ -53,8 +53,20 @@ ImGuiID DockedNodeIdOf(const char* window_name) {
 }
 
 void RefreshPanelNodeIds() {
-  if (const ImGuiID left = DockedNodeIdOf(kLeftPanelWindowName)) {
-    g_panel_node_ids.left = left;
+  if (const ImGuiID tree = DockedNodeIdOf(kDocumentTreeWindowName)) {
+    g_panel_node_ids.document_tree = tree;
+    // The column's parent is read back from the tree's node rather than remembered from the last
+    // build, for the same reason the leaf ids are: a layout restored from the .ini never ran the
+    // builder. ParentNode is null while the tree is undocked (a user can drag it out), in which
+    // case the previous value is kept rather than zeroed — a whole-column collapse then still
+    // resizes the column the inspector is left in, instead of silently doing nothing.
+    if (const ImGuiDockNode* tree_node = ImGui::DockBuilderGetNode(tree);
+        tree_node != nullptr && tree_node->ParentNode != nullptr) {
+      g_panel_node_ids.left = tree_node->ParentNode->ID;
+    }
+  }
+  if (const ImGuiID inspector = DockedNodeIdOf(kDocumentInspectorWindowName)) {
+    g_panel_node_ids.document_inspector = inspector;
   }
   if (const ImGuiID right = DockedNodeIdOf(kRightPanelWindowName)) {
     g_panel_node_ids.right = right;
@@ -137,22 +149,36 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
   ImGui::DockBuilderSetNodeSize(left_id, ImVec2(kLeftPanelWidth, h));
   ImGui::DockBuilderSetNodeSize(right_id, ImVec2(kRightPanelWidth, h));
 
-  // No tab bar: this migration keeps the panels looking exactly like the fixed strips they replace,
-  // and a single-window node would otherwise grow a tab header the previous layout never had.
-  if (ImGuiDockNode* left_node = ImGui::DockBuilderGetNode(left_id)) {
-    left_node->SetLocalFlags(left_node->LocalFlags | ImGuiDockNodeFlags_NoTabBar);
-  }
-  if (ImGuiDockNode* right_node = ImGui::DockBuilderGetNode(right_id)) {
-    right_node->SetLocalFlags(right_node->LocalFlags | ImGuiDockNodeFlags_NoTabBar);
+  // Second split, inside the left column: the document tree on top, the inspector below. This is
+  // the master-detail pair of doc/gui-layout-architecture.md §2, and it is built out of a real
+  // dock split rather than a hand-rolled child-window splitter precisely because everything the
+  // blueprint asks of it — independent scrolling, a draggable separator, per-half collapse — is
+  // what a dock node already does. `left_id` stays valid afterwards: DockBuilderSplitNode turns
+  // the node it is given into the parent of the two new children and keeps its ID.
+  ImGuiID tree_id = left_id;
+  const ImGuiID inspector_id =
+      ImGui::DockBuilderSplitNode(tree_id, ImGuiDir_Down, kDocumentInspectorHeightRatio, nullptr, &tree_id);
+
+  // No tab bar: this layout keeps the panels looking exactly like the fixed strips they replace,
+  // and a single-window node would otherwise grow a tab header the previous layout never had. The
+  // flag goes on the three LEAF nodes; the left column's parent is a split node, which has no tab
+  // bar of its own to suppress.
+  for (const ImGuiID leaf : { tree_id, inspector_id, right_id }) {
+    if (ImGuiDockNode* node_ptr = ImGui::DockBuilderGetNode(leaf)) {
+      node_ptr->SetLocalFlags(node_ptr->LocalFlags | ImGuiDockNodeFlags_NoTabBar);
+    }
   }
 
   // ##PreviewPanel is intentionally NOT docked -- see kDockSpaceFlags. It is positioned over the
   // (permanently empty) central node by GetCentralNodeRect().
-  ImGui::DockBuilderDockWindow(kLeftPanelWindowName, left_id);
+  ImGui::DockBuilderDockWindow(kDocumentTreeWindowName, tree_id);
+  ImGui::DockBuilderDockWindow(kDocumentInspectorWindowName, inspector_id);
   ImGui::DockBuilderDockWindow(kRightPanelWindowName, right_id);
   ImGui::DockBuilderFinish(dockspace_id);
 
   g_panel_node_ids.left = left_id;
+  g_panel_node_ids.document_tree = tree_id;
+  g_panel_node_ids.document_inspector = inspector_id;
   g_panel_node_ids.right = right_id;
 }
 
@@ -175,6 +201,11 @@ void ResizePanelNode(ImGuiID node_id, ImVec2 size) {
 float GetPanelNodeWidth(ImGuiID node_id) {
   const ImGuiDockNode* node = node_id != 0 ? ImGui::DockBuilderGetNode(node_id) : nullptr;
   return node != nullptr ? node->Size.x : 0.0f;
+}
+
+float GetPanelNodeHeight(ImGuiID node_id) {
+  const ImGuiDockNode* node = node_id != 0 ? ImGui::DockBuilderGetNode(node_id) : nullptr;
+  return node != nullptr ? node->Size.y : 0.0f;
 }
 
 bool GetCentralNodeRect(ImVec2* out_pos, ImVec2* out_size) {

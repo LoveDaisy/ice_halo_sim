@@ -70,7 +70,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.left_panel_collapsed);
-      IM_CHECK(ctx->GetWindowByRef("##LeftPanel") != nullptr);
+      IM_CHECK(ctx->GetWindowByRef("##DocumentTree") != nullptr);
 
       // The strip spans the space between the top bar and the status bar, with a square button
       // centred vertically in it (RenderCollapsedStrip, src/gui/app_panels.cpp). kCollapseBtnSize is
@@ -88,7 +88,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       // dock node now, and a docked window that stops being submitted takes its node out of the
       // layout entirely — the column would go to the preview and the strip would end up drawn on top
       // of it rather than beside it.
-      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_LE(left->Size.x, kCollapseBtnSize);
 
@@ -102,7 +102,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.left_panel_collapsed);
       // The other half of the round trip: the column comes back at its default width, not at some
       // width the collapse left behind.
-      left = ctx->GetWindowByRef("##LeftPanel");
+      left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
     };
@@ -123,7 +123,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("##TopBar/" ICON_FA_CHEVRON_LEFT "##left_panel_toggle");
       ctx->Yield(3);
       IM_CHECK(gui::g_state.left_panel_collapsed);
-      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_LT(left->Size.x, gui::kLeftPanelWidth);
 
@@ -133,7 +133,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       IM_CHECK(!gui::g_state.left_panel_collapsed);
-      left = ctx->GetWindowByRef("##LeftPanel");
+      left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
     };
@@ -158,7 +158,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(3);
 
-      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
       ImGuiWindow* preview = ctx->GetWindowByRef("##PreviewPanel");
@@ -179,7 +179,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->MouseUp(0);
       ctx->Yield(3);
 
-      left = ctx->GetWindowByRef("##LeftPanel");
+      left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       // Not an exact width: the splitter lands where the pointer left it, and ImGui truncates the
       // resulting node sizes. What must be true is that the drag moved the panel, and moved it the
@@ -203,7 +203,7 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->MouseUp(0);
       ctx->Yield(3);
 
-      left = ctx->GetWindowByRef("##LeftPanel");
+      left = ctx->GetWindowByRef("##DocumentTree");
       IM_CHECK(left != nullptr);
       IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
       preview = ctx->GetWindowByRef("##PreviewPanel");
@@ -313,13 +313,13 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       gui::g_state.log_panel_open = true;
       ctx->Yield(4);
 
-      // Try to raise a background panel. Without its flag this would splice ##LeftPanel to the back
+      // Try to raise a background panel. Without its flag this would splice ##DocumentTree to the back
       // of the list, i.e. above the log panel.
-      ctx->WindowFocus("##LeftPanel");
+      ctx->WindowFocus("##DocumentTree");
       ctx->Yield(2);
 
       const int log_idx = WindowStackIndex("##LogPanel");
-      const int left_idx = WindowStackIndex("##LeftPanel");
+      const int left_idx = WindowStackIndex("##DocumentTree");
       IM_CHECK_GE(log_idx, 0);
       IM_CHECK_GE(left_idx, 0);
       IM_CHECK_GT(log_idx, left_idx);

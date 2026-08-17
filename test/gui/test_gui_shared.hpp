@@ -341,6 +341,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine);
 void RegisterSceneControlTests(ImGuiTestEngine* engine);
 void RegisterExecutionClusterTests(ImGuiTestEngine* engine);
 void RegisterShellChromeTests(ImGuiTestEngine* engine);
+void RegisterDocumentColumnTests(ImGuiTestEngine* engine);
 void RegisterLogPanelTests(ImGuiTestEngine* engine);
 void RegisterOverlayControlTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);

@@ -395,7 +395,12 @@ void ToggleCompositePreview(GuiState& state);
 
 // Panel rendering
 void RenderTopBar(float window_width);
-void RenderLeftPanel();
+// The document column, as two windows in one dock column (doc/gui-layout-architecture.md §2):
+// the tree names every document item, the inspector edits whichever one is selected. Call them in
+// this order — the tree writes g_state.selection, and rendering the inspector afterwards means a
+// click is answered in the same frame it happens rather than one frame later.
+void RenderDocumentTree();
+void RenderDocumentInspector();
 void RenderRightPanel(GLFWwindow* window);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);

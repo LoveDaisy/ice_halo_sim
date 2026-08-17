@@ -22,19 +22,38 @@ namespace lumice::gui {
 //     from ImGui::GetWindowSize() like any other window; adding a second way to ask for that size
 //     would create a value that can disagree with the window's actual geometry.
 
-// The two side panels' ImGui window names. Defined here because this module has to name them in
+// The side panels' ImGui window names. Defined here because this module has to name them in
 // order to dock them, and a second spelling in app_panels.cpp's Begin calls would dock a window that
 // does not exist — silently, since docking a never-submitted window is not an error.
-constexpr const char* kLeftPanelWindowName = "##LeftPanel";
+//
+// The left column is TWO windows, not one: the document tree (master) above and the inspector
+// (detail) below, split by a native docking separator. The single "##LeftPanel" they replaced is
+// gone rather than kept as the tree's name — a name that says "left panel" would make the pair's
+// asymmetry (one of them happens to keep the old name) look like a hierarchy that does not exist.
+constexpr const char* kDocumentTreeWindowName = "##DocumentTree";
+constexpr const char* kDocumentInspectorWindowName = "##DocumentInspector";
 constexpr const char* kRightPanelWindowName = "##RightPanel";
 
-// IDs of the dock nodes the two side panels currently occupy. Valid only after
-// BuildDefaultDockLayout() has run at least once; before that both fields are 0 (a value no dock
+// IDs of the dock nodes the side panels currently occupy. Valid only after
+// BuildDefaultDockLayout() has run at least once; before that every field is 0 (a value no dock
 // node ever has), and callers must treat 0 as "layout not built yet" rather than as a node.
+//
+// `left` is the document column's PARENT node — a split node no window occupies, holding
+// document_tree above document_inspector. It is what the whole-column collapse resizes: writing
+// the parent's size propagates down to both children on the same frame (ImGui's
+// DockNodeTreeUpdatePosSize recurses from the root every frame and distributes each split node's
+// size to its children), so collapsing the column does not need to know it has two halves.
 struct DockPanelNodeIds {
   ImGuiID left = 0;
+  ImGuiID document_tree = 0;
+  ImGuiID document_inspector = 0;
   ImGuiID right = 0;
 };
+
+// Fraction of the document column's height given to the inspector by the default layout. The tree
+// gets the rest. Both halves are freely resizable by dragging their separator afterwards; this is
+// only where they start.
+constexpr float kDocumentInspectorHeightRatio = 0.55f;
 
 // Enables ImGuiConfigFlags_DockingEnable. Call once, early during IO setup (alongside the other
 // io.ConfigFlags assignments), before the first ImGui::NewFrame().
@@ -72,6 +91,15 @@ void ResizePanelNode(ImGuiID node_id, ImVec2 size);
 // the window exists — after a restore from the .ini, the first frame has a dock tree and no windows
 // at all — which no window can be asked. Per-frame geometry still comes from the window.
 float GetPanelNodeWidth(ImGuiID node_id);
+
+// Current height of a dock node, or 0 when there is no such node.
+//
+// Same exemption as GetPanelNodeWidth above, plus one the width query did not need: the document
+// column's parent node is a SPLIT node, which no window occupies at all. ResizePanelNode takes a
+// full ImVec2, so collapsing the column has to name its height, and the only honest source for
+// that number is the node. The tree window's own GetWindowSize().y is a different quantity (one
+// half of the column) and writing it back would shrink the column every time it collapsed.
+float GetPanelNodeHeight(ImGuiID node_id);
 
 // Rectangle of the dockspace's central node, in main-viewport-local coordinates. The central node is
 // kept empty on purpose (ImGuiDockNodeFlags_PassthruCentralNode + NoDockingOverCentralNode), so this

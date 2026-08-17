@@ -75,9 +75,11 @@
 //     - "##DockHost" — the transparent host carrying the main DockSpace
 //       (dock_layout.cpp). Draws nothing itself; the dockspace paints the
 //       panel background over everything except its central node.
-//     - "##LeftPanel" / "##RightPanel" — docked INTO that dockspace. Their
-//       position and size come from their dock nodes; they no longer carry
-//       NoMove/NoResize because they no longer place themselves.
+//     - "##DocumentTree" / "##DocumentInspector" / "##RightPanel" — docked
+//       INTO that dockspace. Their position and size come from their dock
+//       nodes; they no longer carry NoMove/NoResize because they no longer
+//       place themselves. The first two share the left column, one above the
+//       other, with a native separator between them.
 //     - "##TopBar" / "##StatusBar" — fixed top/bottom bars, outside the
 //       dockspace, still placed by SetNextPanelGeometry.
 //     - "##PreviewPanel" — transparent (NoBackground) and pinned over the
@@ -589,7 +591,7 @@ void RenderTopBar(float window_width) {
       // A reset that left the panels collapsed would not be a reset: collapse is view state, and the
       // rebuilt layout restores both panels to their default width regardless. Clearing the flags
       // here keeps the marker and the geometry from disagreeing. The collapse-tracking in
-      // RenderLeftPanel / RenderRightPanel sees this as an ordinary expand and asks for the width
+      // RenderDocumentTree / RenderRightPanel sees this as an ordinary expand and asks for the width
       // the rebuild already produced, so the two agree rather than fight.
       g_state.left_panel_collapsed = false;
       g_state.right_panel_collapsed = false;
@@ -650,7 +652,7 @@ struct PanelCollapseTracker {
   bool applied = false;
 };
 
-// A side panel's collapsed/expanded state is now the width of its dock node. Three things about the
+// A side panel's collapsed/expanded state is now the width of its dock node. Four things about the
 // shape of this:
 //   - It writes only on a transition, never every frame. A per-frame DockBuilderSetNodeSize would
 //     silently undo a splitter drag on the very next frame, i.e. the panels would look resizable and
@@ -662,8 +664,13 @@ struct PanelCollapseTracker {
 //     that quit with a panel collapsed comes back with a strip-wide node and a flag that says
 //     expanded; a marker starting at "expanded" would agree with the flag, see no transition, and
 //     leave the panel rendering its full content inside a 20 px column.
-void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_width, float node_height,
-                             PanelCollapseTracker* tracker) {
+//   - The height it writes back comes from the NODE, not from the calling window. For the right
+//     panel the two are the same number; for the document column they are not — its node is the
+//     split parent of the tree and the inspector, and the tree window's own height is one half of
+//     it. Writing that half back would shrink the column a little further on every collapse. A
+//     node that cannot be measured (height 0, i.e. the id no longer resolves) leaves the marker
+//     untouched so the transition is retried rather than swallowed.
+void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_width, PanelCollapseTracker* tracker) {
   if (node_id == 0) {
     return;
   }
@@ -672,6 +679,10 @@ void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_wid
     tracker->applied = GetPanelNodeWidth(node_id) <= kCollapseBtnSize;
   }
   if (collapsed == tracker->applied) {
+    return;
+  }
+  const float node_height = GetPanelNodeHeight(node_id);
+  if (node_height <= 0.0f) {
     return;
   }
   tracker->applied = collapsed;
@@ -686,25 +697,24 @@ constexpr ImGuiWindowFlags kSidePanelBaseFlags =
     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 }  // namespace
 
-void RenderLeftPanel() {
+void RenderDocumentTree() {
   static PanelCollapseTracker s_collapse;
 
   if (g_state.left_panel_collapsed) {
-    // The window is still submitted, holding a strip-wide dock node, rather than skipped: a docked
-    // window that stops submitting makes its node invisible, and the neighbours take the space back
-    // the same frame — the strip would end up on top of the preview instead of beside it.
+    // The tree window is still submitted, holding the strip-wide column, rather than skipped: a
+    // docked window that stops submitting makes its node invisible, and the neighbours take the
+    // space back the same frame — the strip would end up on top of the preview instead of beside
+    // it. The INSPECTOR is skipped while collapsed (see RenderDocumentInspector), and that is the
+    // same mechanism used deliberately: its neighbour is the tree, one node over, so the space it
+    // gives up stays inside the column and the strip holds one chevron rather than two.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin(kLeftPanelWindowName, nullptr,
+    ImGui::Begin(kDocumentTreeWindowName, nullptr,
                  kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
-    // The node height comes from this window's own GetWindowSize(), read after Begin, rather than
-    // from an arithmetic stand-in like window_height - kTopBarHeight - kStatusBarHeight. That
-    // expression happens to be equal today only because the side nodes are split horizontally and
-    // span the full dock host; introduce a horizontal split and it silently becomes stale geometry
-    // that nothing checks. The window is the single source for its own size.
-    // Consequence, by design: a resize written here lands on the dock node starting next frame,
-    // like every other transition-triggered ResizePanelNode call.
-    ApplyPanelCollapseWidth(GetPanelNodeIds().left, true, kLeftPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
+    // Collapse resizes the column's PARENT node, not this window's own node — see
+    // DockPanelNodeIds. Consequence, by design: a resize written here lands on the dock node
+    // starting next frame, like every other transition-triggered ResizePanelNode call.
+    ApplyPanelCollapseWidth(GetPanelNodeIds().left, true, kLeftPanelWidth, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
     ImGui::End();
     return;
@@ -717,17 +727,17 @@ void RenderLeftPanel() {
     g_state.pick_link_source.reset();
   }
   // Remember whether pick was active at the start of this frame so we can
-  // detect "pick just completed" at the bottom and re-open the modal.
+  // detect "pick just completed" at the bottom and re-select the source entry.
   std::optional<GuiState::EntryRef> pick_source_at_entry =
       pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
 
-  ImGui::Begin(kLeftPanelWindowName, nullptr,
+  ImGui::Begin(kDocumentTreeWindowName, nullptr,
                kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  ApplyPanelCollapseWidth(GetPanelNodeIds().left, false, kLeftPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
+  ApplyPanelCollapseWidth(GetPanelNodeIds().left, false, kLeftPanelWidth, &s_collapse);
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
   // the active-pick state and the Esc instruction. The actual click target is
-  // each entry card (handled inside RenderEntryCard via InvisibleButton).
+  // each entry row (handled inside RenderEntryRow).
   if (pick_active_at_entry) {
     const auto& src = *g_state.pick_link_source;
     ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
@@ -737,17 +747,17 @@ void RenderLeftPanel() {
     ImGui::Separator();
   }
 
-  // ---- Layout: cards (scroll) + toolbar ----
+  // ---- Layout: tree rows (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
   auto& style = ImGui::GetStyle();
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-  float cards_h = std::max(0.0f, avail_h - toolbar_h);
+  float rows_h = std::max(0.0f, avail_h - toolbar_h);
 
-  // Process thumbnail update queue before rendering cards
+  // Process thumbnail update queue before rendering rows
   g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
 
-  // ---- Card scroll area (fills panel above the toolbar) ----
-  ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
+  // ---- Row scroll area (fills panel above the toolbar) ----
+  ImGui::BeginChild("##TreeScroll", ImVec2(0, rows_h), ImGuiChildFlags_None);
   RenderScatteringSection(g_state);
   ImGui::EndChild();
 
@@ -825,23 +835,37 @@ void RenderLeftPanel() {
   ImGui::End();
 }
 
+void RenderDocumentInspector() {
+  // Not submitted while the column is collapsed. Unlike the tree — whose window has to stay
+  // submitted so the strip keeps a node beside the preview rather than on top of it — the
+  // inspector's neighbour is the tree, one node over inside the same column. Dropping it hands
+  // its height to the tree, which is the whole 20 px strip, so the collapsed column shows one
+  // chevron instead of two stacked ones with a separator between them.
+  if (g_state.left_panel_collapsed) {
+    return;
+  }
+
+  ImGui::Begin(kDocumentInspectorWindowName, nullptr, kSidePanelBaseFlags);
+  ImGui::TextDisabled("Select an item in the tree above.");
+  ImGui::End();
+}
+
 void RenderRightPanel(GLFWwindow* window) {
   static PanelCollapseTracker s_collapse;
 
   if (g_state.right_panel_collapsed) {
-    // See RenderLeftPanel for why the window is still submitted while collapsed.
+    // See RenderDocumentTree for why the window is still submitted while collapsed.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
-    // See RenderLeftPanel for why node_height is read here rather than passed in.
-    ApplyPanelCollapseWidth(GetPanelNodeIds().right, true, kRightPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
+    ApplyPanelCollapseWidth(GetPanelNodeIds().right, true, kRightPanelWidth, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
     ImGui::End();
     return;
   }
 
   ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
-  ApplyPanelCollapseWidth(GetPanelNodeIds().right, false, kRightPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
+  ApplyPanelCollapseWidth(GetPanelNodeIds().right, false, kRightPanelWidth, &s_collapse);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {

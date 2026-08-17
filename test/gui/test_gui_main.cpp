@@ -532,6 +532,7 @@ int main(int argc, char** argv) {
   RegisterSceneControlTests(engine);
   RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
+  RegisterDocumentColumnTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
   RegisterPreviewViewportTests(engine);
@@ -622,7 +623,8 @@ int main(int argc, char** argv) {
     const float dock_host_height = layout_height - gui::kTopBarHeight - gui::kStatusBarHeight;
     const ImGuiID dockspace_id = gui::RenderDockSpaceHost(0.0f, gui::kTopBarHeight, layout_width, dock_host_height);
     gui::BuildDefaultDockLayout(dockspace_id, layout_width, dock_host_height);
-    gui::RenderLeftPanel();
+    gui::RenderDocumentTree();
+    gui::RenderDocumentInspector();
     gui::RenderRightPanel(window);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     if (g_enable_log_panel) {

@@ -307,7 +307,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
   // The Immediate window is an ordinary window, so an ordinary window could be raised over it. The
   // six background panels carry NoBringToFrontOnFocus for exactly this reason; without the flag,
-  // focusing ##LeftPanel splices it to the back of g.Windows and it occludes the modal.
+  // focusing ##DocumentTree splices it to the back of g.Windows and it occludes the modal.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_immediate_window_stays_above_the_background_panels");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -320,7 +320,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
 
-      ctx->WindowFocus("##LeftPanel");
+      ctx->WindowFocus("##DocumentTree");
       ctx->Yield(2);
 
       ImGuiWindow* topmost = TopmostRootWindow();

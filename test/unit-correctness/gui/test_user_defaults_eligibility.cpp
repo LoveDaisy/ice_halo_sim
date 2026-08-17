@@ -41,7 +41,11 @@ namespace {
 // run-result readbacks polled off the server's stats, exactly like the stats_ray_seg_num /
 // stats_sim_ray_num pair beside them, so they are kDerivedRuntime and deliberately ineligible as
 // personal defaults — a measurement of the last run is not a preference a user can pre-set.
-constexpr std::size_t kExpectedGovernedFieldCount = 66;
+// 67 since `selection` (the document column's master–detail cursor) was registered kSession: it
+// names a (layer, entry) inside the document currently open, so a saved copy would restore onto a
+// different document and select something unrelated. Ineligible for the same reason
+// pick_link_source is.
+constexpr std::size_t kExpectedGovernedFieldCount = 67;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
