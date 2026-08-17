@@ -135,8 +135,20 @@ void RegisterCrystalInspectorLayoutTests(ImGuiTestEngine* engine) {
       }
       ctx->Yield(4);
 
-      if (scene.expand_face_distance) {
-        ctx->ItemOpen("**/Face Distance##modal");
+      // Face Distance is a collapsible section whose open state lives in ImGui storage and
+      // survives ResetTestState — the crystal tab only, so the normalization is scoped to it the
+      // same way the retired modal_layout scoped its own if/else. ItemOpen/ItemClose are
+      // idempotent (they read the item's Opened status first), so this makes each scene
+      // independent of whatever an earlier test (or an earlier scene in this same suite) left the
+      // section at, in either direction — not just the expand direction. Without the else branch,
+      // crystal_prism (which never asks for the expanded state) would silently inherit it, folding
+      // its "shallow" proposition into whatever the previous test happened to leave behind.
+      if (!scene.open_filter_tab) {
+        if (scene.expand_face_distance) {
+          ctx->ItemOpen("**/Face Distance##modal");
+        } else {
+          ctx->ItemClose("**/Face Distance##modal");
+        }
         ctx->Yield(3);
       }
 
