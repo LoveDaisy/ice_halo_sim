@@ -81,4 +81,26 @@
   - **中心节点永久保持为空**（`PassthruCentralNode | NoDockingOverCentralNode`），视口窗口钉在它的矩形上而不是 dock 进去。这不是风格选择：ImGui 只在中心节点为空时才在 dockspace 背景上开洞，一旦有窗口 dock 进中心节点，`ImGuiCol_WindowBg` 会填满整个 dockspace 把 GL 预览盖住。§1 的「图像区 = 视口」因此在机制上也成立——视口不是一个可以被拖走或被别的面板顶掉的工具窗。
   - **`DockBuilder*` 只允许出现在 `src/gui/dock_layout.cpp`**：docking 配置与默认布局若在 app 与 gui_test 各写一遍，参考图截出来的布局与真 app 就只是碰巧一致。与视觉语言收敛到 `theme.cpp` 同一条纪律。
 - 纯视觉语言（字体/调色板/节奏/语义色）与本文正交，按 `doc/gui-visual-language.md` §6 先行落地。
+### 7.1 基底 as-built（迁移第一步已落地，后续各区在此之上重建）
+
+docking 基底已经就位，形态**刻意未变**（面板组织、编辑 modal 全部原样），以便把「docking 引入的回归」
+与「形态重组引入的回归」分开归因。接手后续各区前需要知道的三件事：
+
+- **单一 owner**：`src/gui/dock_layout.{hpp,cpp}` 是 docking 配置标志、DockSpace host、默认布局与
+  **每一次对 dock 节点几何的写入**的唯一持有者。`src/gui/main.cpp` 与 `test/gui/test_gui_main.cpp`
+  只调它暴露的那组函数、不自行触碰 `DockBuilder*`——理由与 `theme.cpp` 持有视觉语言完全相同：两套
+  各自维护的 docking 初始化会让 gui_test 的截图变成「关于测试夹具的证据」而不是关于真 app 的证据。
+  这条可机械核验：`grep -rn "DockBuilder\|DockSpace(" src/` 只应命中 `dock_layout.{hpp,cpp}`。
+- **⭐ 中心节点永久为空，预览不是 dock 节点**。这条最容易被下一个人"顺手修正"回去，所以写明机制：
+  `ImGuiDockNodeFlags_PassthruCentralNode` 只在中心节点**为空**时保持透明；一旦有窗口真的 dock 进
+  中心节点，该窗口的 `ImGuiCol_WindowBg` 会整块盖住底下的 OpenGL 画面，「预览 docked」与「预览可见」
+  不能同时成立。因此中心节点带 `NoDockingOverCentralNode` 永久留空，`##PreviewPanel` 是带
+  `ImGuiWindowFlags_NoDocking` 的普通窗口，几何取自 `dock_layout` 的 `GetCentralNodeRect()`
+  ——中心节点没有窗口入驻，没有任何窗口能被问出它的矩形，这正是该接口存在的原因。
+  §2 所说「检视器天然可撕出浮动」不受影响：那是侧节点的原生能力，与中心节点留空无关。
+- **布局持久化**：交互式 app 把用户拖出来的布局持久化到用户配置目录（**不是** ImGui 默认的
+  `imgui.ini`，那会落在进程 cwd 随启动目录漂移），配 View → Reset Layout 复位；`gui_test` 侧
+  `io.IniFilename` 恒为 `nullptr`。这条分叉是刻意的，与 gui_test 默认禁用个人默认值同一条隔离纪律：
+  参考图绝不能依赖跑测机器上碰巧存在的布局文件。**新增视觉参考场景时不要"顺手打开"测试侧的持久化。**
+
 - 测试影响：`modal_layout` 参考组随编辑模态退役而废弃（其覆盖的控件布局命题由检视器侧的新参考组接手）；`defaults_panel_layout` 的 Settings 面板不在本文范围、暂不受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考随每步 shell 改动失效，重拍税一次性付清于 shell 收尾（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
