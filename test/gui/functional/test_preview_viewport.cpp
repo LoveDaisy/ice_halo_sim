@@ -67,25 +67,54 @@ void SeedPose(int lens_type, float fov, float az, float el) {
 }  // namespace
 
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
-  // P33. With nothing to show, the panel says so and reports no viewport — the second half is what
-  // stops the rest of the GUI from computing drag gains and overlay placements against a rectangle
-  // that is not being drawn into.
+  // P33. With nothing rendered and nothing loaded, the panel is not empty — it is aimed. The
+  // document already says which way the camera points, how wide the lens is and where the sun will
+  // be, so the panel draws that sky, dimmed, instead of a black rectangle. What it still does NOT
+  // do is offer a drag surface: aiming a view that has no content is a separate question from
+  // previewing one, and the panel keeps "the surface exists only when there is something to
+  // interact with".
+  //
+  // The two halves that could each pass alone are asserted together on purpose: the marker is
+  // forced on (it has no user toggle to follow), while the horizon line is NOT — it is read from
+  // the toggle, set to a non-default value here so "follows the toggle" cannot be satisfied by a
+  // hardcoded false.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_preview_says_so_and_claims_no_viewport");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_preview_frames_the_sky_it_has_not_rendered");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
+      gui::g_state.show_horizon_line = true;
+      gui::g_state.show_grid_line = false;
       ctx->Yield(3);
 
       IM_CHECK(!gui::g_preview.HasTexture());
       IM_CHECK(!gui::g_preview.HasBackground());
-      IM_CHECK(!gui::g_preview_vp.active);
-      // No interaction surface either: there is nothing to drag.
+      // A viewport IS claimed now: the empty state renders through the same shader as a result.
+      IM_CHECK(gui::g_preview_vp.active);
+      IM_CHECK_GT(gui::g_preview_vp.vp_w, 0);
+      IM_CHECK_GT(gui::g_preview_vp.vp_h, 0);
+
+      const auto& ov = gui::g_preview_vp.params.overlay;
+      IM_CHECK(ov.show_sun_marker);
+      IM_CHECK_NE(ov.sun_marker_screen_pos[1], gui::kOverlaySentinel);
+      // The user's own toggles still decide, in both directions.
+      IM_CHECK(ov.show_horizon);
+      IM_CHECK(!ov.show_grid);
+      // ...at half the intensity they were set at, which is what separates "framed and waiting"
+      // from "rendered". The marker's own alpha is not scaled — it has no full-strength
+      // counterpart, see ApplyEmptyStatePresentation.
+      IM_CHECK_LT(std::fabs(ov.horizon_alpha - gui::g_state.horizon_alpha * 0.5f), 1e-5f);
+      IM_CHECK_LT(std::fabs(ov.grid_alpha - gui::g_state.grid_alpha * 0.5f), 1e-5f);
+      IM_CHECK_LT(std::fabs(ov.sun_circles_alpha - gui::g_state.sun_circles_alpha * 0.5f), 1e-5f);
+      IM_CHECK_LT(std::fabs(ov.zenith_nadir_alpha - gui::g_state.zenith_nadir_alpha * 0.5f), 1e-5f);
+      // No interaction surface: there is nothing to drag.
       IM_CHECK(!ctx->ItemExists(kInteract));
     };
   }
 
   // The other side of the same claim, so the case above cannot pass by the panel being broken:
-  // once a texture arrives the viewport becomes active and the surface appears.
+  // once a texture arrives the surface appears, the overlay goes back to the user's own intensity,
+  // and the sun marker — whose whole job is to stand in for an image that is not there yet — turns
+  // itself off rather than sitting on top of the sun it was predicting.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "a_rendered_preview_claims_a_viewport_to_drag");
     t->GuiFunc = UploadSynthTexture;
@@ -99,6 +128,85 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       IM_CHECK_GT(gui::g_preview_vp.vp_w, 0);
       IM_CHECK_GT(gui::g_preview_vp.vp_h, 0);
       IM_CHECK(ctx->ItemExists(kInteract));
+
+      const auto& ov = gui::g_preview_vp.params.overlay;
+      IM_CHECK(!ov.show_sun_marker);
+      IM_CHECK_LT(std::fabs(ov.horizon_alpha - gui::g_state.horizon_alpha), 1e-6f);
+      IM_CHECK_LT(std::fabs(ov.grid_alpha - gui::g_state.grid_alpha), 1e-6f);
+    };
+  }
+
+  // The empty state is not a picture of a default sky, it is a picture of THIS document: raising
+  // the sun or narrowing the lens moves the marker on the very next frame, with no run in between.
+  // That is the whole "already framed, press Run" claim — a static placeholder would satisfy every
+  // assertion in the case above.
+  //
+  // Both moves are asserted by direction rather than by magnitude: a higher sun is higher in the
+  // frame, and a narrower lens pushes the same sun further from the centre. The magnitudes belong
+  // to the projection laws, which have their own coverage at the unit layer.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_previews_sky_tracks_the_document_live");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      SeedPose(gui::kLensTypeLinear, 90.0f, 0.0f, 0.0f);
+      gui::g_state.sun.altitude = 5.0f;
+      ctx->Yield(3);
+      IM_CHECK(!gui::g_preview.HasTexture());  // the premise: this is the empty state
+      const float low = gui::g_preview_vp.params.overlay.sun_marker_screen_pos[1];
+      const float low_dir_z = gui::g_preview_vp.params.overlay.sun_dir[2];
+      IM_CHECK_NE(low, gui::kOverlaySentinel);
+
+      gui::g_state.sun.altitude = 20.0f;
+      ctx->Yield(2);
+      const float high = gui::g_preview_vp.params.overlay.sun_marker_screen_pos[1];
+      IM_CHECK_NE(high, gui::kOverlaySentinel);
+      IM_CHECK_GT(high, low + 1.0f);
+      // The direction fed to the angular-distance circles moved with it, so the circles stay
+      // centred on the marker rather than the two disagreeing about where the sun is.
+      IM_CHECK_LT(gui::g_preview_vp.params.overlay.sun_dir[2], low_dir_z);
+
+      gui::g_state.sun.altitude = 5.0f;
+      gui::g_state.renderer.fov = 45.0f;
+      ctx->Yield(2);
+      const float zoomed = gui::g_preview_vp.params.overlay.sun_marker_screen_pos[1];
+      IM_CHECK_NE(zoomed, gui::kOverlaySentinel);
+      IM_CHECK_GT(zoomed, low + 1.0f);
+    };
+  }
+
+  // The same liveness, read at the moment it is worth something: a result IS on screen but the
+  // document has moved on since it was produced. The image stays exactly as it was rendered while
+  // the coordinate system follows the edit, and the gap between them is the "this result is out of
+  // date" signal — the same statement as the top bar's dirty chip, made in pixels.
+  //
+  // Asserted without reference to sim_state on purpose: the overlay never reads the simulation
+  // lifecycle, and a test that checked kModified here would be pinning a coupling that must not
+  // exist.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "preview_viewport", "a_stale_result_keeps_its_pixels_while_the_sky_moves_on");
+    t->GuiFunc = UploadSynthTexture;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_upload_done = false;
+      SeedPose(gui::kLensTypeLinear, 90.0f, 0.0f, 0.0f);
+      gui::g_state.sun.altitude = 5.0f;
+      ctx->Yield(4);
+      IM_CHECK(gui::g_preview.HasTexture());
+      const int tex_w = gui::g_preview.GetTextureWidth();
+      const int tex_h = gui::g_preview.GetTextureHeight();
+      const float before = gui::g_preview_vp.params.overlay.sun_marker_screen_pos[1];
+      IM_CHECK_NE(before, gui::kOverlaySentinel);
+
+      // Edit the document without re-running. Nothing re-uploads a texture, so the pixels on screen
+      // are still the ones produced under the old sun.
+      gui::g_state.sun.altitude = 20.0f;
+      ctx->Yield(3);
+
+      IM_CHECK_GT(gui::g_preview_vp.params.overlay.sun_marker_screen_pos[1], before + 1.0f);
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK_EQ(gui::g_preview.GetTextureWidth(), tex_w);
+      IM_CHECK_EQ(gui::g_preview.GetTextureHeight(), tex_h);
     };
   }
 

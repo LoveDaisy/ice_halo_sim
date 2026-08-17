@@ -54,6 +54,12 @@ PreviewParams CallerParams() {
   params.overlay.show_horizon = true;
   params.overlay.show_grid = true;
   params.overlay.show_sun_circles = true;
+  params.overlay.show_zenith_nadir = true;
+  // The sun marker specifically. It is the one decoration with no user toggle behind it — the
+  // empty-state preview forces it on in the live params these presets are applied to a copy of —
+  // so "the user did not ask for it, therefore it cannot be on" is not an argument that covers it,
+  // and the committed lens-projection reference images are compared against this path.
+  params.overlay.show_sun_marker = true;
   params.bg.enabled = true;
   params.bg.alpha = 0.7f;
   return params;
@@ -81,6 +87,8 @@ TEST(ExportPresets, EachPresetOverwritesOnlyTheViewAndTheDecorations) {
     EXPECT_FALSE(params.overlay.show_horizon) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_grid) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_sun_circles) << preset.name << ": a decoration survived into the export";
+    EXPECT_FALSE(params.overlay.show_zenith_nadir) << preset.name << ": a decoration survived into the export";
+    EXPECT_FALSE(params.overlay.show_sun_marker) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.bg.enabled) << preset.name << ": the background survived into the export";
   }
 }
