@@ -1167,13 +1167,24 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   // buttons on the card this row replaced carried their indices for the same reason.
   char row_id[32];
   snprintf(row_id, sizeof(row_id), "##row_%d_%d", layer_idx, entry_idx);
-  const bool row_clicked = ImGui::Selectable(row_id, selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, row_h));
-  // Completing a pick has to happen on PRESS, not on the Selectable's release. The blank-area
-  // cancel in RenderDocumentTree tests IsMouseClicked, which is a press, and it runs after these
-  // rows in the same frame: a release-triggered completion is therefore always beaten to it by the
-  // cancel, and every pick ends as "nothing happened and I lost pick mode". The cards this row
-  // replaced hit-tested the press for the same reason, which is why the defect only appeared when
-  // the hand-rolled hit test became a real widget.
+  ImGui::Selectable(row_id, selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, row_h));
+  // BOTH things a click on this row can mean are read off the PRESS, and they have to be the same
+  // event for the two of them to be exclusive.
+  //
+  // Completing a pick has to be the press. The blank-area cancel in RenderDocumentTree tests
+  // IsMouseClicked, which is a press, and it runs after these rows in the same frame: a
+  // release-triggered completion is therefore always beaten to it by the cancel, and every pick
+  // ends as "nothing happened and I lost pick mode". The cards this row replaced hit-tested the
+  // press for the same reason, which is why that defect only appeared when the hand-rolled hit test
+  // became a real widget.
+  //
+  // Selecting then has to be the press as well — not because selection cares, but because mixing
+  // the two events makes them non-exclusive across a frame boundary. ImGui delivers press and
+  // release on separate frames, and pick mode ends on the press: so the release of the very click
+  // that completed a link arrives with pick_active already false and falls into the select branch,
+  // moving the selection onto the row that was merely clicked as a MODEL. The link is applied and
+  // the user is then editing the wrong entry — silently, and only when press and release happen to
+  // straddle two frames, which is why it survived a suite that passed.
   const bool row_pressed = ImGui::IsItemClicked(ImGuiMouseButton_Left);
   if (pick_active && pick_disabled) {
     ImGui::EndDisabled();
@@ -1192,7 +1203,7 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
       ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
       state.pick_link_source.reset();
     }
-  } else if (row_clicked) {
+  } else if (row_pressed) {
     state.SelectCrystal(layer_idx, entry_idx);
   }
   const bool row_hovered = ImGui::IsItemHovered();

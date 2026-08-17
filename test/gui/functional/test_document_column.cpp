@@ -283,6 +283,48 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The two collapses compose: the column's own (a width, handled in test_shell_chrome.cpp) and a
+  // half's fold (a height). Combination states are where this layout has already produced bugs
+  // once — the substrate task's ini-restore defects were both "each piece works, the pair does
+  // not" — and the specific risk here is that the fold is written to a node whose id the column
+  // collapse leaves untouched, so nothing re-asserts it on the way back.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "a_folded_half_survives_the_whole_column_collapsing");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(2, 3);
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(4);
+
+      gui::g_state.FoldDocumentHalves(/*tree_folded=*/true, /*inspector_folded=*/false);
+      ctx->Yield(4);
+      ImGuiWindow* tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      IM_CHECK(tree != nullptr);
+      const float folded_tree_h = tree->Size.y;
+
+      gui::g_state.left_panel_collapsed = true;
+      ctx->Yield(4);
+      gui::g_state.left_panel_collapsed = false;
+      ctx->Yield(4);
+
+      // Still folded, and still folded to the same strip — not silently re-expanded, and not
+      // collapsed a second time onto an already-folded node.
+      IM_CHECK(gui::g_state.document_tree_folded);
+      tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      ImGuiWindow* inspector = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+      IM_CHECK(tree != nullptr);
+      IM_CHECK(inspector != nullptr);
+      IM_CHECK_EQ(tree->Size.y, folded_tree_h);
+      IM_CHECK_GT(inspector->Size.y, folded_tree_h);
+      // And the column is back to its full width, i.e. the fold did not interfere with the
+      // whole-column collapse it was nested inside.
+      IM_CHECK_EQ(tree->Size.x, gui::kLeftPanelWidth);
+
+      gui::g_state.FoldDocumentHalves(false, false);
+      ctx->Yield(3);
+    };
+  }
+
   // The tree's rows are what pick mode is waiting to be clicked, so arming it has to put them on
   // screen. Folded away, "Link to..." would arm a mode whose only exit is Esc.
   {

@@ -1082,7 +1082,16 @@ void ResetSpectrumModalStateGlobals();
 void ResetModalState() {
   ResetSpectrumModalStateGlobals();  // clear the spectrum-editor statics too (Major: test isolation)
   g_active_tab = ActiveTab::kCrystal;
-  g_pending_tab_select = false;
+  // ARMED, not cleared, and the difference is the whole reset. Which tab is selected lives in
+  // ImGui's TabBar, not here; g_active_tab only mirrors it. Assigning kCrystal above therefore
+  // resets our mirror and leaves the actual selection wherever the user (or the previous document)
+  // left it — so a fresh document opens on the Filter tab because something before it went there.
+  // Arming the flag makes the next render force the selection, which is what "reset" has to mean
+  // for a control whose state is not ours to write directly.
+  //
+  // The popup that used to own this flag set it on every open for the same reason. The page has no
+  // open event, so this is the only remaining place that can.
+  g_pending_tab_select = true;
   g_modal_layer_idx = -1;
   g_modal_entry_idx = -1;
   g_modal_view_crystal_id = -1;
@@ -1511,8 +1520,25 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
 
   // No dirty marks on the labels: " *" meant "these edits are not in the document yet", and here
   // they always are. The `###` suffixes stay so the tab identity does not depend on the text.
-  RenderModalTabBar(state, "Crystal###crystal_tab", "Axis###axis_tab", "Filter###filter_tab", ImGuiTabItemFlags_None,
-                    ImGuiTabItemFlags_None, ImGuiTabItemFlags_None);
+  //
+  // The SetSelected flags are computed rather than passed as None, and the reason is not
+  // hypothetical: which tab is showing lives in ImGui's TabBar, and this is the only wire by which
+  // anything can put it back. With all three hardcoded to None, ResetModalState's "reset to the
+  // Crystal tab" reset only ever moved our own mirror of the selection — a new document opened on
+  // whatever tab the previous one was left on, and the Crystal tab's controls were simply absent
+  // from a page that looked normal. Selection changes deliberately do NOT arm this: moving to
+  // another crystal keeps the tab the user was working in.
+  const ImGuiTabItemFlags crystal_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kCrystal) ?
+                                              ImGuiTabItemFlags_SetSelected :
+                                              ImGuiTabItemFlags_None;
+  const ImGuiTabItemFlags axis_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kAxis) ?
+                                           ImGuiTabItemFlags_SetSelected :
+                                           ImGuiTabItemFlags_None;
+  const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
+                                             ImGuiTabItemFlags_SetSelected :
+                                             ImGuiTabItemFlags_None;
+  RenderModalTabBar(state, "Crystal###crystal_tab", "Axis###axis_tab", "Filter###filter_tab", crystal_flags, axis_flags,
+                    filter_flags);
 
   // Push buffers → entry every frame (diff-gated inside; a no-op when nothing changed). This is
   // AC2's "immediate mode" — not a new mechanism, but the one branch of the modal that was already
