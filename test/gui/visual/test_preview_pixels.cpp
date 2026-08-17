@@ -46,7 +46,7 @@ constexpr double kDeterministicThresholdDb = 40.0;
 // the bottom preview was removed, and the modal guard mirrors the in-panel logic it replaced so an
 // open edit modal's own FBO content is not overwritten.
 void DriveCrystalPreviewFbo() {
-  if (gui::IsEditModalOpen()) {
+  if (gui::g_state.HasValidCrystalSelection()) {
     return;
   }
   if (gui::g_state.layers.empty() || gui::g_state.layers[0].entries.empty()) {

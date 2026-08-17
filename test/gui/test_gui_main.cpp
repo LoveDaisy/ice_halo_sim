@@ -84,6 +84,42 @@ std::vector<unsigned char> g_synth_tex;
 
 // ========== Shared function definitions ==========
 
+// See the declaration in test_gui_shared.hpp for why these exist.
+ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
+  ImGuiTestItemInfo info = ctx->ItemInfo(ref, ImGuiTestOpFlags_NoError);
+  if (info.ID != 0) {
+    return info;
+  }
+  ImGuiWindow* page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+  if (page == nullptr || page->ScrollMax.y <= 0.0f) {
+    return info;
+  }
+  // Walk the page in half-window steps rather than jumping to the bottom: the target may be
+  // anywhere, and a row is only submitted while it is within the clip rect, so every band has to be
+  // visited. The scroll is restored afterwards so a lookup cannot decide what the next assertion in
+  // the same case sees.
+  const float restore = page->Scroll.y;
+  const float step = ImMax(page->Size.y * 0.5f, 1.0f);
+  for (float y = 0.0f; y <= page->ScrollMax.y + step; y += step) {
+    page->Scroll.y = ImMin(y, page->ScrollMax.y);
+    ctx->Yield(2);
+    info = ctx->ItemInfo(ref, ImGuiTestOpFlags_NoError);
+    if (info.ID != 0) {
+      break;
+    }
+  }
+  page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+  if (page != nullptr) {
+    page->Scroll.y = restore;
+    ctx->Yield(2);
+  }
+  return info;
+}
+
+bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref) {
+  return InspectorItemInfo(ctx, ref).ID != 0;
+}
+
 // See the declaration in test_gui_shared.hpp for why this exists and who consumes it.
 std::filesystem::path GuiTestTempPath(const std::string& filename) {
   // The directory is latched on the FIRST call and reused for the rest of the process, so a call
@@ -142,11 +178,19 @@ void ResetTestState() {
   // re-docks the panels, and for the frame after that their child windows are not submitted, so
   // every case paying two frames here would turn "the card is there" into a race. The one case that
   // moves a splitter restores it by dragging back — see shell_chrome's splitter case.
-  // Modal view preferences: pin to legacy defaults (H + Staged) for test
-  // determinism. Production defaults changed to V + Immediate in
-  // gui-polish-v15 round 2; individual tests opt-in explicitly as needed.
-  gui::g_state.modal_layout_vertical = false;
-  gui::g_state.modal_immediate_mode = false;
+  //
+  // A window's SCROLL outlives g_state the same way, and unlike the splitter it is left behind by
+  // ordinary cases rather than by one deliberate one: ItemInputValue scrolls whatever window the
+  // field is in, so any case that types into the inspector hands the next case a page scrolled to
+  // the bottom. That is not cosmetic — ImGui culls table rows outside the clip rect BEFORE
+  // submitting them, so a scrolled-away row does not merely look absent, it IS absent, and the next
+  // case's ItemInfo cannot find it. The inspector's own product rule (scroll to top when the page
+  // swaps) does not cover this: DoNew leaves the selection where the next case puts it, so from the
+  // window's point of view the page never changed.
+  if (ImGuiWindow* inspector = ImGui::FindWindowByName(gui::kDocumentInspectorWindowName)) {
+    inspector->Scroll.y = 0.0f;
+    inspector->ScrollTarget.y = 0.0f;
+  }
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
 
@@ -207,10 +251,30 @@ bool IsDisabled(const ImGuiTestItemInfo& info) {
   return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
 }
 
+// See the contract note in test_gui_shared.hpp.
+void OpenEntryTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx, const char* tab_ref) {
+  gui::g_state.SelectCrystal(layer_idx, entry_idx);
+  ctx->Yield(3);
+  ctx->ItemClick(tab_ref);
+  ctx->Yield(2);
+}
+
+void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###crystal_tab");
+}
+
+void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###axis_tab");
+}
+
+void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###filter_tab");
+}
+
 // See the contract note in test_gui_shared.hpp for why this is a destructor rather than three
 // statements at the end of a case body.
 ScopedPopups::~ScopedPopups() {
-  // The gui side first, so the popup stops being submitted: RenderEditModals and
+  // The gui side first, so the popup stops being submitted:
   // RenderSpectrumModal only call BeginPopupModal while these statics say one is open. One call
   // covers both — ResetModalState delegates to ResetSpectrumModalStateGlobals. The sun-circles
   // editor has no statics of its own: it is opened straight from its button and needs only the
@@ -547,7 +611,6 @@ int main(int argc, char** argv) {
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);
-  RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -637,12 +700,6 @@ int main(int argc, char** argv) {
     // tests is negligible.
     gui::RenderColorWindow(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
-    // Intentional deviation from plan (which suggested nullptr): the test
-    // harness owns a real GLFW window (hidden in CI), so passing it yields
-    // a realistic monitor-aware size clamp when a display server is present.
-    // In fully headless CI `glfwGetMonitors` returns 0 → helper returns false
-    // → caller falls back to FLT_MAX, matching the plan-intended behavior.
-    gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     // task-cleanup-hardening code-review-01 M1: RenderSaveModifiedPopup was

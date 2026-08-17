@@ -71,18 +71,6 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
 // Returns true if sim.infinite or sim.ray_num_millions changed this frame.
 bool RaysBudgetControl(GuiState& state, float total_width = 0.0f);
 
-// ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
-enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };
-
-struct EditRequest {
-  EditTarget target = EditTarget::kNone;
-  int layer_idx = -1;
-  int entry_idx = -1;
-};
-
-const EditRequest& GetEditRequest();
-void ResetEditRequest();
-
 // ---- Shared ImGui combo-popup fix (panels.cpp and edit_modals.cpp both call this) ----
 
 // Mark the next combo's popup viewport as TopMost so it shares NSWindow level with a detached

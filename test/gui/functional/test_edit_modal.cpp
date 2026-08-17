@@ -40,6 +40,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/crystal_preview.hpp"  // BuildCrystalMeshData — core's own answer to "which member led"
+#include "gui/dock_layout.hpp"      // kDocumentInspectorWindowName — the page's host window
 #include "gui/file_io.hpp"          // DeserializeFromJson / BuildExportJsonOrWarn
 #include "gui/panels.hpp"
 // imgui_internal.h is normally an anti-pattern. Three claims here have no public reading: window
@@ -57,10 +58,8 @@ using lumice::test::PrismFacePlaneOffsets;
 
 namespace {
 
-const char* const kOk = "**/" ICON_FA_CHECK " OK##edit_modal";
-const char* const kCancel = "**/" ICON_FA_XMARK " Cancel##edit_modal";
-const char* const kClose = "**/Close##edit_modal";  // Immediate mode's single exit button
 const char* const kHeightInput = "**/##Height##modal_cr_input";
+
 
 gui::CrystalConfig& EntryCrystal() {
   return gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
@@ -70,23 +69,29 @@ gui::CrystalConfig& EntryCrystal() {
 // submitted rather than off the buffer-vs-snapshot comparison the marker is derived from — the
 // point of the marker is that the user can see it.
 bool TabIsDirty(ImGuiTestContext* ctx, const char* tab_ref) {
-  const ImGuiTestItemInfo info = ctx->ItemInfo(tab_ref);
+  const ImGuiTestItemInfo info = InspectorItemInfo(ctx, tab_ref);
   return info.ID != 0 && std::strstr(info.DebugLabel, "*") != nullptr;
 }
 
-// One logical filter-presence edit driven through either commit path from an identical "finite rays
-// done" baseline, returning the effect-observable triple. A free function rather than a capturing
-// lambda because ImGuiTest::TestFunc is a raw function pointer typedef.
+// One logical filter-presence edit from a "finite rays done" baseline, returning the
+// effect-observable triple. A free function rather than a capturing lambda because
+// ImGuiTest::TestFunc is a raw function pointer typedef.
+//
+// This used to take an `immediate` flag and the two cases below compared the staged path's triple
+// against the immediate path's. There is now one path, so that comparison would be a tautology —
+// the two calls would run the same code and agree with themselves. What is asserted instead is the
+// effect itself, in absolute terms: adding or removing a filter is a STRUCTURAL change, so it must
+// mark the document dirty and drop the accumulated display rather than leaving a picture on screen
+// that no longer corresponds to the scene.
 struct CommitOutcome {
   bool dirty;
   gui::GuiState::SimState sim_state;
   unsigned long long display_epoch_floor;
 };
 
-CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_filter, bool immediate) {
+CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_filter) {
   ResetTestState();
   const ScopedPopups popup_guard(ctx);
-  gui::g_state.modal_immediate_mode = immediate;
   if (start_with_filter) {
     gui::FilterConfig f;
     f.SetRaypath(gui::RaypathParams{ "3-1-5" });
@@ -101,24 +106,16 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
   gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
   ctx->Yield(2);
 
-  ctx->ItemClick("**/Edit##fi");
-  ctx->Yield(4);
-  ctx->ItemClick("**/###filter_tab");
+  OpenFilterTab(ctx);
   ctx->Yield(4);
   if (start_with_filter) {
     ctx->ItemClick("**/Remove Filter##filter");
   } else {
     ctx->ItemInputValue("**/##row_text_0", "3-1-5");
   }
-  ctx->Yield(2);
-  ctx->ItemClick(immediate ? kClose : kOk);
-  ctx->Yield(2);
+  ctx->Yield(4);
 
-  const CommitOutcome out{ gui::g_state.dirty, gui::g_state.sim_state, gui::g_state.display_epoch_floor };
-  if (immediate) {
-    gui::g_state.modal_immediate_mode = false;
-  }
-  return out;
+  return CommitOutcome{ gui::g_state.dirty, gui::g_state.sim_state, gui::g_state.display_epoch_floor };
 }
 
 // The id of one axis row's distribution combo.
@@ -133,7 +130,7 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
 // Derived rather than spelled out because the alternative is a literal path through the tab body's
 // BeginChild, whose name ImGui generates; that would pin this file to ImGui's child-naming scheme.
 ImGuiID AxisDistComboId(ImGuiTestContext* ctx, const char* row_label) {
-  const ImGuiTestItemInfo mean = ctx->ItemInfo((std::string("**/") + row_label + "/##Mean_input").c_str());
+  const ImGuiTestItemInfo mean = InspectorItemInfo(ctx, (std::string("**/") + row_label + "/##Mean_input").c_str());
   IM_CHECK_RETV(mean.ID != 0, 0);
   return ImHashStr("##dist", 0, mean.ParentID);
 }
@@ -158,459 +155,34 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   // The container: what kind of window each mode opens, and how it closes.
   // ===================================================================================
 
-  // P107 / P108. The two modes differ in exactly one structural way, and every behavioural
-  // difference below follows from it: staged is a real modal, Immediate is an ordinary window.
-  // Asserted on ImGui's own notion of "a modal is up" rather than by trying to click a background
-  // control, because a click the modal correctly swallows and a click that missed its target are
-  // the same observation.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "staged_opens_a_real_modal_and_immediate_does_not");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = false;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ImGuiWindow* blocking = ImGui::GetTopMostPopupModal();
-      IM_CHECK(blocking != nullptr);
-      IM_CHECK_STR_EQ(blocking->Name, "Edit Entry");
-
-      // The same window in Immediate mode blocks nothing.
-      ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(8);
-      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));  // premise: it is still open
-      IM_CHECK(ImGui::GetTopMostPopupModal() == nullptr);
-
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // P108, the behavioural half of the above: a click outside the Immediate window reaches the
-  // control it landed on AND leaves the window open. Both directions matter — a window that closed
-  // on the click would also let the click through.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_click_outside_the_immediate_window_reaches_the_top_bar");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
-
-      // ##TopBar/Save rather than New: the Immediate window opens at ImGui's default origin near
-      // the upper left and can cover the leftmost top-bar items. The menu's contents are
-      // functional/test_file_ops.cpp's contract; all that is read here is that it opened.
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Save Copy"));
-      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
-
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-      ctx->ItemClick(kClose);
-      ctx->Yield(4);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // P116's "× and Close share one teardown path", checked at the depth the bug had. Four separate
-  // cases used to stand here, one per observation: body items gone, window gone, the × path, and a
-  // second open/close cycle. They are one claim — the Immediate window is torn down, by either
-  // exit, repeatably — and the deepest observation (WasActive) implies the shallowest.
-  //
-  // The failure this guards is specific: ImGui::Begin with *p_open=false left a tomb-stone title
-  // bar behind, which the body-item check alone reported as success.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "either_exit_tears_the_immediate_window_down_repeatably");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-
-      auto open = [ctx]() {
-        ctx->ItemClick("**/Edit##cr");
-        ctx->Yield(4);
-        ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
-        IM_CHECK(w != nullptr);
-        IM_CHECK(w->WasActive);
-        IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
-      };
-      auto expect_gone = [ctx]() {
-        ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
-        IM_CHECK(w == nullptr || !w->WasActive);
-        IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
-      };
-
-      open();
-      ctx->ItemClick(kClose);
-      ctx->Yield(4);
-      expect_gone();
-
-      if (ctx->IsError()) {
-        return;
-      }
-
-      // Second cycle, closed through the title-bar ×. WindowClose drives ImGui's internal close,
-      // the same path the glyph does. Reopening also proves no pending-open / pending-tab flag
-      // leaked out of the first cycle.
-      open();
-      ctx->WindowClose("Edit Entry");
-      ctx->Yield(4);
-      expect_gone();
-
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // P108. Immediate has no staged buffer, so neither exit can revert: what was typed is already on
-  // the entry. Both exits are driven because Esc travels a different ImGui path (nav-cancel) than
-  // the button, and the reopen re-reads from the entry rather than from a buffer that might have
-  // survived in memory.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "closing_immediate_by_button_or_escape_keeps_the_edit");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-      const float orig_h = EntryCrystal().height.center;
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ctx->ItemInputValue(kHeightInput, orig_h + 4.0f);
-      ctx->Yield(2);
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      IM_CHECK_EQ(EntryCrystal().height, orig_h + 4.0f);
-
-      // Reopen: the value came back from the entry, not from a buffer that outlived the window.
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK_EQ(EntryCrystal().height, orig_h + 4.0f);
-      ctx->ItemInputValue(kHeightInput, orig_h + 5.0f);
-      ctx->Yield(2);
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-      IM_CHECK_EQ(EntryCrystal().height, orig_h + 5.0f);
-
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // The Immediate window is an ordinary window, so an ordinary window could be raised over it. The
-  // six background panels carry NoBringToFrontOnFocus for exactly this reason; without the flag,
-  // focusing ##DocumentTree splices it to the back of g.Windows and it occludes the modal.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_immediate_window_stays_above_the_background_panels");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
-
-      ctx->WindowFocus("##DocumentTree");
-      ctx->Yield(2);
-
-      ImGuiWindow* topmost = TopmostRootWindow();
-      IM_CHECK(topmost != nullptr);
-      IM_CHECK_STR_EQ(topmost->Name, "Edit Entry");
-
-      // ...and it is still taking clicks, not merely drawn on top.
-      ctx->ItemClick(kClose);
-      ctx->Yield(4);
-      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
-      ResetTestState();
-    };
-  }
-
-  // The structural half of the detachable-modal feature. Runtime detach cannot be exercised here —
-  // flipping ImGuiConfigFlags_ViewportsEnable inside the harness's hidden GLFW window crashes the
-  // backend, so platform-window creation is validated by manual macOS QA. What is checkable is the
-  // flag that makes detaching safe: without NoDocking the window would dock into a main-window
-  // split target instead of becoming its own viewport.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_immediate_window_keeps_its_no_docking_flag");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
-      IM_CHECK(w != nullptr);
-      IM_CHECK(w->WasActive);
-      IM_CHECK((w->Flags & ImGuiWindowFlags_NoDocking) != 0);
-      IM_CHECK(w->Viewport == ImGui::GetMainViewport());
-
-      ctx->ItemClick(kClose);
-      ctx->Yield(3);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // The one contract in this file that has no guard anywhere else and fails SILENTLY.
-  //
-  // When the Immediate window is dragged out into its own OS viewport it sits at a raised platform
-  // window level, and a combo popup opened inside it defaults to the normal level — i.e. it renders
-  // BEHIND the window that spawned it, invisible and click-through. src/gui/panels.cpp fixes that by
-  // requiring every modal-internal combo to be preceded by SetNextComboPopupTopMost(), and states in
-  // its own comment that forgetting the call has no compile-time error and cannot be reproduced in
-  // CI (the harness's hidden window pins the main viewport to the origin, so nothing ever detaches).
-  //
-  // What IS observable in CI is the queued request itself: the helper sets a window class whose
-  // ViewportFlagsOverrideSet carries TopMost, and BeginCombo forwards it to the popup's Begin. So
-  // this reads the popup window's class. Deleting the SetNextComboPopupTopMost call in front of
-  // RenderAxisDist turns it red without any viewport being involved.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_combo_popup_inside_the_modal_asks_to_stay_on_top");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##ax");
-      ctx->Yield(4);
-      ctx->ItemClick("**/###axis_tab");
-      ctx->Yield(2);
-
-      ctx->ItemClick(AxisDistComboId(ctx, "Zenith"));
-      ctx->Yield(2);
-
-      ImGuiContext& g = *ImGui::GetCurrentContext();
-      int popups_seen = 0;
-      for (ImGuiWindow* w : g.Windows) {
-        if (!w->WasActive || (w->Flags & ImGuiWindowFlags_Popup) == 0 || std::strstr(w->Name, "Combo") == nullptr) {
-          continue;
-        }
-        ++popups_seen;
-        if ((w->WindowClass.ViewportFlagsOverrideSet & ImGuiViewportFlags_TopMost) == 0) {
-          IM_ERRORF("combo popup '%s' did not ask for a raised viewport level", w->Name);
-        }
-      }
-      // A popup that never opened would satisfy the loop vacuously.
-      IM_CHECK_EQ(popups_seen, 1);
-
-      ctx->KeyPress(ImGuiKey_Escape);
-      ctx->Yield(2);
-      ctx->SetRef("");
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-    };
-  }
-
-  // P109 plus the target the open modal reports. RenderEntryCard highlights the card the modal is
-  // bound to, so "which entry is open" is state the left panel reads every frame; and an entry that
-  // is deleted underneath an open modal must take the modal with it rather than leave it pointing
-  // at a stale index.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_open_modal_names_its_entry_and_closes_when_it_dies");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-
-      auto expect_closed = [](const char* where) {
-        const auto target = gui::GetEditModalTarget();
-        if (gui::IsEditModalOpen() || target.layer_idx != -1 || target.entry_idx != -1) {
-          IM_ERRORF("%s: expected closed+unbound, got open=%d target=(%d,%d)", where,
-                    static_cast<int>(gui::IsEditModalOpen()), target.layer_idx, target.entry_idx);
-        }
-      };
-
-      expect_closed("before opening");
-
-      if (ctx->IsError()) {
-        return;
-      }
-
-      // Both exits unbind: a Cancel that left the target set would keep a card highlighted with no
-      // modal on screen.
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(gui::IsEditModalOpen());
-      IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
-      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-      expect_closed("after Cancel");
-
-      if (ctx->IsError()) {
-        return;
-      }
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-      expect_closed("after OK");
-
-      if (ctx->IsError()) {
-        return;
-      }
-
-      // Routing: a modal opened on the SECOND entry must report that entry, not entry 0. Driven
-      // through OpenEditModal with a full request so the assignment path still runs end to end —
-      // writing the indices by hand would degrade this into "assign X, read X".
-      gui::g_state.layers[0].entries.emplace_back();
-      ctx->Yield(2);
-      gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
-      gui::OpenEditModal(req, gui::g_state);
-      ctx->Yield(2);
-      IM_CHECK(gui::IsEditModalOpen());
-      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 1);
-
-      // ...and deleting that entry closes the modal on the next frame.
-      gui::g_state.layers[0].entries.erase(gui::g_state.layers[0].entries.begin() + 1);
-      gui::g_thumbnail_cache.OnLayerStructureChanged();
-      ctx->Yield(4);
-      expect_closed("after the bound entry was deleted");
-    };
-  }
-
   // ===================================================================================
-  // Commit semantics: what OK, Cancel and the Immediate frame loop each write.
+  // Commit semantics: what the per-frame commit writes.
   // ===================================================================================
 
-  // P116, both exits of the staged form, against a baseline captured before the modal opened rather
-  // than against the struct defaults — so neither half can pass by the entry having been reset.
+  // Attaching or clearing a filter is a STRUCTURAL edit: the rays already accumulated were traced
+  // against a different scene, so the document must go dirty and the picture on screen must be
+  // dropped rather than left standing as a result of a scene that no longer exists. Add and remove
+  // are kept apart because they enter ApplyBuffersToEntry through different branches (creation vs
+  // clearing).
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_commits_the_buffer_and_cancel_discards_it");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "adding_a_filter_marks_the_document_and_drops_the_display");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-      const gui::CrystalConfig baseline = EntryCrystal();
-
-      // Cancel first, so the OK half below starts from a known-unchanged entry.
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(3);
-      ctx->ItemInputValue(kHeightInput, baseline.height.center + 3.0f);
-      ctx->Yield(2);
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-      IM_CHECK(EntryCrystal() == baseline);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(3);
-      ctx->ItemInputValue(kHeightInput, 5.0f);
-      ctx->Yield(2);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-      IM_CHECK_EQ(EntryCrystal().height, 5.0f);
-    };
-  }
-
-  // The render-invalidation gate, negative branch. An OK that touched nothing must not wipe the
-  // accumulated preview or arm Revert: CommitAllBuffers used to MarkStructHardDirty unconditionally
-  // after any OK, which threw away a finished run because the user opened a modal and closed it.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_without_a_change_leaves_the_result_on_screen");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-
-      // "Finite rays just finished". run_intent=kLoaded is what makes kDone stick — the harness
-      // main loop re-derives sim_state every frame, so a bare sim_state write would be overwritten.
-      gui::g_state.run_intent = gui::RunIntent::kLoaded;
-      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
-      gui::g_state.snapshot_intensity = 0.5f;
-      gui::g_state.committed_epoch = 5;
-      gui::g_state.display_epoch_floor = 0;
-      gui::g_state.dirty = false;
-      ctx->Yield();
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kDone));
-      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);
-      IM_CHECK(!gui::g_state.dirty);
-    };
-  }
-
-  // The same gate's positive branch, paired with the case above: a gate stuck closed would pass
-  // that one on its own. Remove Filter is the edit because it is the cheapest change that must fire
-  // all four effects.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "ok_with_a_change_throws_the_result_away");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-
-      gui::FilterConfig f;
-      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
-      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      gui::g_state.run_intent = gui::RunIntent::kLoaded;
-      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
-      gui::g_state.snapshot_intensity = 0.5f;
-      gui::g_state.committed_epoch = 5;
-      gui::g_state.display_epoch_floor = 0;
-      gui::g_state.dirty = false;
-      // The baseline is what the reconciler diffs against; without it seeded at "filter present"
-      // there is no diff for Remove Filter to produce.
-      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
-      ctx->Yield();
-
-      ctx->ItemClick("**/Edit##fi");
-      ctx->Yield(4);
-      ctx->ItemClick("**/Remove Filter##filter");
-      ctx->Yield(2);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-
-      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
-      IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
-      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
-      IM_CHECK(gui::g_state.dirty);
-    };
-  }
-
-  // P117's premise: the two commit paths are one mechanism, so the same logical edit must produce
-  // the same effects through either. Add and remove are kept apart because they enter
-  // ApplyBuffersToEntry through different branches (creation vs clearing).
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "both_commit_paths_agree_on_adding_a_filter");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      const CommitOutcome staged = RunFilterPresenceToggle(ctx, /*start_with_filter=*/false, /*immediate=*/false);
-      const CommitOutcome immediate = RunFilterPresenceToggle(ctx, /*start_with_filter=*/false, /*immediate=*/true);
-      IM_CHECK_EQ(staged.dirty, immediate.dirty);
-      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
-      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
-      // Non-vacuous witness: both fired the hard reset, rather than both doing nothing.
-      IM_CHECK(staged.dirty);
-      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      const CommitOutcome out = RunFilterPresenceToggle(ctx, /*start_with_filter=*/false);
+      IM_CHECK(out.dirty);
+      IM_CHECK_EQ(static_cast<int>(out.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      // The baseline set display_epoch_floor to 0 against a committed_epoch of 5, so a floor that
+      // moved is the accumulated display being discarded rather than shown on.
+      IM_CHECK_GT(out.display_epoch_floor, 0u);
     };
   }
 
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "both_commit_paths_agree_on_removing_a_filter");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "removing_a_filter_marks_the_document_and_drops_the_display");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      const CommitOutcome staged = RunFilterPresenceToggle(ctx, /*start_with_filter=*/true, /*immediate=*/false);
-      const CommitOutcome immediate = RunFilterPresenceToggle(ctx, /*start_with_filter=*/true, /*immediate=*/true);
-      IM_CHECK_EQ(staged.dirty, immediate.dirty);
-      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(immediate.sim_state));
-      IM_CHECK_EQ(staged.display_epoch_floor, immediate.display_epoch_floor);
-      IM_CHECK(staged.dirty);
-      IM_CHECK_EQ(static_cast<int>(staged.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      const CommitOutcome out = RunFilterPresenceToggle(ctx, /*start_with_filter=*/true);
+      IM_CHECK(out.dirty);
+      IM_CHECK_EQ(static_cast<int>(out.sim_state), static_cast<int>(gui::GuiState::SimState::kModified));
+      IM_CHECK_GT(out.display_epoch_floor, 0u);
     };
   }
 
@@ -620,19 +192,16 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemInputValue(kHeightInput, orig_h + 2.5f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height, orig_h + 2.5f);
 
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -646,7 +215,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
       gui::g_state.run_intent = gui::RunIntent::kLoaded;
@@ -659,14 +227,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      // No mode to switch into: the page commits every frame, which is what this case was checking
+      // the Immediate checkbox to obtain.
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(6);
-      // The mode switch closes and reopens the window without re-entering OpenEditModal, so the
-      // pending-tab request that normally selects Crystal is not replayed — select it explicitly.
-      ctx->ItemClick("**/###crystal_tab");
-      ctx->Yield(2);
 
       ctx->ItemInputValue(kHeightInput, orig_h + 1.0f);
       ctx->Yield(2);
@@ -682,9 +246,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.snapshot_intensity, 0.0f);
       IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
 
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -702,10 +264,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
@@ -742,9 +303,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
 
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -764,11 +323,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
+      IM_CHECK(InspectorItemExists(ctx, "**/##modal_preview_interact"));
       // The right pane resolved to a non-zero width, or the tab bar would not have been submitted.
-      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+      IM_CHECK(InspectorItemExists(ctx, "**/###crystal_tab"));
 
       float before[16];
       std::memcpy(before, gui::g_crystal_rotation, sizeof before);
@@ -781,7 +340,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       for (const char* tab : { "**/###axis_tab", "**/###filter_tab", "**/###crystal_tab" }) {
         ctx->ItemClick(tab);
         ctx->Yield(2);
-        if (!ctx->ItemExists("**/##modal_preview_interact")) {
+        if (!InspectorItemExists(ctx, "**/##modal_preview_interact")) {
           IM_ERRORF("the preview pane is not reachable from %s", tab);
         }
 
@@ -791,205 +350,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       }
       IM_CHECK(std::memcmp(dragged, gui::g_crystal_rotation, sizeof dragged) == 0);
 
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
-    };
-  }
-
-  // P111. The marker is the only thing that tells a staged user which tab holds work OK will
-  // commit, and it must be absent in Immediate mode, where there is no uncommitted state for it to
-  // describe. Both are here because the second is a statement about the first.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "a_tab_marks_itself_dirty_only_while_staged");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-      const float orig_h = EntryCrystal().height.center;
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###axis_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###filter_tab"));
-
-      // Editing Crystal marks Crystal and nothing else.
-      ctx->ItemInputValue(kHeightInput, orig_h + 1.0f);
-      ctx->Yield(2);
-      IM_CHECK(TabIsDirty(ctx, "**/###crystal_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###axis_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###filter_tab"));
-
-      // The marker is a comparison against the open-time snapshot, not a "was touched" latch.
-      ctx->ItemInputValue(kHeightInput, orig_h);
-      ctx->Yield(2);
-      IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
-
-      // Cancel discards, so a reopen starts clean...
-      ctx->ItemInputValue(kHeightInput, orig_h + 2.0f);
-      ctx->Yield(2);
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
-
-      // ...and so does a reopen after OK, which mints a new snapshot rather than keeping the old.
-      ctx->ItemInputValue(kHeightInput, orig_h + 3.0f);
-      ctx->Yield(2);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-
-      // Immediate mode: every edit is already applied, so no tab may claim to be dirty.
-      gui::g_state.modal_immediate_mode = true;
-      ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ctx->ItemInputValue(kHeightInput, orig_h + 4.0f);
-      ctx->Yield(2);
-      IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###axis_tab"));
-      IM_CHECK(!TabIsDirty(ctx, "**/###filter_tab"));
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // P117. Switching mode closes and reopens the window; the tab the user was on and the work they
-  // had staged must both come out the other side — and the staged work is committed on the way,
-  // because the Immediate window they land in has no buffer to hold it.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "switching_commit_mode_keeps_the_tab_and_commits_the_buffer");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = false;
-      ctx->Yield(2);
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ctx->ItemClick("**/###filter_tab");
-      ctx->Yield(4);
-      ctx->ItemInputValue("**/##row_text_0", "3-1-5");
-      ctx->Yield(2);
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());  // staged: not yet applied
-
-      ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(8);
-
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK_STR_EQ(gui::g_state.filters[*gui::g_state.layers[0].entries[0].filter_id].RaypathText().c_str(),
-                      "3-1-5");
-      IM_CHECK(ctx->ItemExists("**/##row_text_0"));  // still on the Filter tab
-
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // The leak this guards is a mechanism, not a field: crystal-card clicks are a raw hit test rather
-  // than a real ImGui widget, so an InputText that is mid-edit is never deactivated the normal way.
-  // ImGui then replays the pending text into whatever widget claims the same id next — and the ids
-  // are entry-agnostic by construction. The fix is a per-(layer,entry) PushID scope around each
-  // tab's content; ClearActiveID() does NOT fix it, since that is what populates the replay buffer
-  // in the first place.
-  //
-  // Two cases, one per tab family, because the claim the fix makes is that it covers all of them:
-  // the Filter tab is where the bug was reported and the Crystal tab is the evidence it was never
-  // filter-specific. The second entry is bound to a DISTINCT crystal on purpose — entries sharing a
-  // pool slot are a linked group that propagates filters by design, which would mask the bug.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "an_uncommitted_filter_edit_does_not_follow_an_entry_switch");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = true;  // the bug is Immediate-mode only
-
-      gui::CrystalConfig second;
-      second.height = 5.0f;
-      gui::EntryCard e_second;
-      e_second.crystal_id = static_cast<int>(gui::g_state.crystals.size());
-      gui::g_state.crystals.push_back(second);
-      gui::g_state.layers[0].entries.push_back(e_second);
-      ctx->Yield(2);
-      IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());
-      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
-
-      gui::EditRequest req0{ gui::EditTarget::kFilter, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req0, gui::g_state);
-      ctx->Yield(4);
-      // KeyCharsAppend does not send Enter, so the box stays active — the cursor never leaves it,
-      // which is the precondition the bug needs.
-      ctx->ItemClick("**/##row_text_0");
-      ctx->KeyCharsAppend("3-5");
-      ctx->Yield(2);
-      IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());  // the text really landed
-      IM_CHECK(ImGui::GetActiveID() != 0);                                // ...and is still active
-
-      gui::EditRequest req1{ gui::EditTarget::kFilter, /*layer_idx=*/0, /*entry_idx=*/1 };
-      gui::OpenEditModal(req1, gui::g_state);
-      ctx->Yield(4);
-      IM_CHECK(!gui::g_state.layers[0].entries[1].filter_id.has_value());
-
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "edit_modal", "an_uncommitted_crystal_edit_does_not_follow_an_entry_switch");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = true;
-
-      gui::CrystalConfig second;
-      second.height = 5.0f;  // distinct from entry 0's default, so "unchanged" is a strong claim
-      gui::EntryCard e_second;
-      e_second.crystal_id = static_cast<int>(gui::g_state.crystals.size());
-      gui::g_state.crystals.push_back(second);
-      gui::g_state.layers[0].entries.push_back(e_second);
-      ctx->Yield(2);
-      const int cid1 = gui::g_state.layers[0].entries[1].crystal_id;
-      IM_CHECK_EQ(gui::g_state.crystals[cid1].height.center, 5.0f);
-
-      gui::EditRequest req0{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req0, gui::g_state);
-      ctx->Yield(4);
-      ctx->ItemClick(kHeightInput);
-      ctx->KeyCharsAppend("9");
-      ctx->Yield(2);
-      // An InputFloat commits on deactivation rather than live, so entry 0's height cannot be read
-      // as evidence yet. Pin the active item to Height's own id instead: if the click or the
-      // keystroke ever stops landing, this fails loudly rather than letting the real assertion pass
-      // vacuously.
-      const ImGuiID height_id = ctx->ItemInfo(kHeightInput).ID;
-      IM_CHECK(height_id != 0);
-      IM_CHECK_EQ(ImGui::GetActiveID(), height_id);
-
-      gui::EditRequest req1{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
-      gui::OpenEditModal(req1, gui::g_state);
-      ctx->Yield(4);
-      // Enter forces the pending InputFloat writeback. With the fix, entry 1's Height input carries
-      // a different id, nothing matches the replay buffer, and this is a no-op.
-      ctx->KeyPress(ImGuiKey_Enter);
-      ctx->Yield(2);
-      IM_CHECK_EQ(gui::g_state.crystals[cid1].height.center, 5.0f);
-
-      ctx->ItemClick(kClose);
-      ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1001,7 +362,8 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   // opening the SAME one again keeps whatever the user dragged. The judge is crystal_id rather than
   // (layer, entry), which is what lets two entries linked to one pool slot share a viewing history.
   //
-  // Driven through OpenEditModal rather than the card, so the assertion isolates the reset logic
+  // Driven through the selection directly rather than by clicking a row, so the assertion isolates
+  // the reset logic
   // from the card router's indirection — and the card-to-card switch WITHOUT an intervening
   // Cancel/OK is the exact path the bug reproduced on.
   {
@@ -1044,10 +406,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         }
       };
 
-      gui::EditRequest req0{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req0, gui::g_state);
-      ctx->Yield(2);
-      expect_pose("entry 0 on open", expected0);
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+      expect_pose("entry 0 on first selection", expected0);
 
       if (ctx->IsError()) {
         return;
@@ -1057,26 +418,28 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::ApplyTrackballRotation(60.0f, 0.0f);
       IM_CHECK(std::memcmp(gui::g_crystal_rotation, expected0, sizeof expected0) != 0);
 
-      gui::EditRequest req1{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/1 };
-      gui::OpenEditModal(req1, gui::g_state);
-      ctx->Yield(2);
-      expect_pose("entry 1 after a direct card-to-card switch", expected1);
+      gui::g_state.SelectCrystal(0, 1);
+      ctx->Yield(3);
+      expect_pose("entry 1 after a direct row-to-row switch", expected1);
 
       if (ctx->IsError()) {
         return;
       }
 
-      // Re-opening the SAME crystal is idempotent: the drag survives. This is what separates the
-      // crystal_id judge from an "always reset" fix.
+      // Re-selecting the SAME crystal is idempotent: the drag survives. This is what separates the
+      // crystal_id judge from an "always reset" fix. Driven by leaving the page and coming back,
+      // since re-selecting the row already selected is not a state change at all — the page would
+      // not even notice it, which would make this half of the case vacuous.
       gui::ApplyTrackballRotation(30.0f, 20.0f);
       float after_drag[16];
       std::memcpy(after_drag, gui::g_crystal_rotation, sizeof after_drag);
       IM_CHECK(std::memcmp(after_drag, expected1, sizeof expected1) != 0);
-      gui::OpenEditModal(req1, gui::g_state);
-      ctx->Yield(2);
+      gui::g_state.SelectSun();
+      ctx->Yield(3);
+      gui::g_state.SelectCrystal(0, 1);
+      ctx->Yield(3);
       IM_CHECK(std::memcmp(gui::g_crystal_rotation, after_drag, sizeof after_drag) == 0);
 
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
     };
   }
@@ -1100,7 +463,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(cr.zenith, cr.azimuth, cr.roll)),
                     static_cast<int>(preset));
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCrystalTab(ctx);
         ctx->Yield(3);
         ctx->ItemClick("**/Reset View##modal");
         ctx->Yield(2);
@@ -1108,7 +471,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         // would observe the pre-open matrix instead of Reset View's result.
         float observed[16];
         std::memcpy(observed, gui::g_crystal_rotation, sizeof observed);
-        ctx->ItemClick(kCancel);
         ctx->Yield(2);
 
         gui::AxisDist params[3] = { zenith, azimuth, roll };
@@ -1173,7 +535,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         ResetTestState();
         const ScopedPopups popup_guard(ctx);
         ctx->Yield(2);
-        ctx->ItemClick("**/Edit##cr");
+        OpenCrystalTab(ctx);
         ctx->Yield(3);
         ctx->ItemClick("**/###axis_tab");
         ctx->Yield(2);
@@ -1185,7 +547,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         gui::AxisDist params[3] = { zenith, azimuth, roll };
         float expected[16] = { 0 };
         gui::DefaultPreviewRotation(preset, params, expected);
-        ctx->ItemClick(kCancel);
         ctx->Yield(2);
 
         for (int i = 0; i < 16; ++i) {
@@ -1235,7 +596,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(3);
 
       // Snapshot AFTER the drag, so the baseline is the dragged pose rather than the open-time one.
@@ -1252,7 +613,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // ...and again BEFORE Cancel, for the same reason as in the Reset View case above.
       float after[16];
       std::memcpy(after, gui::g_crystal_rotation, sizeof after);
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
 
       for (int i = 0; i < 16; ++i) {
@@ -1277,21 +637,20 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       cr.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 150.0f };  // legal for Gauss (max 180)
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##ax");
+      OpenAxisTab(ctx);
       ctx->Yield(4);
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/Zenith/##Std_input"));
-      IM_CHECK(!ctx->ItemExists("**/Zenith/##Amplitude_input"));
+      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Std_input"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Amplitude_input"));
 
       ctx->ItemClick(AxisDistComboId(ctx, "Zenith"));
       ctx->Yield(2);
       ctx->ItemClick("**/Zigzag");  // the popup's Selectables ARE registered by label
       ctx->Yield(3);
 
-      IM_CHECK(ctx->ItemExists("**/Zenith/##Amplitude_input"));
-      IM_CHECK(!ctx->ItemExists("**/Zenith/##Std_input"));
-      ctx->ItemClick(kOk);
+      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Amplitude_input"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Std_input"));
       ctx->Yield(2);
       IM_CHECK_EQ(static_cast<int>(EntryCrystal().zenith.type), static_cast<int>(gui::AxisDistType::kZigzag));
       IM_CHECK_EQ(EntryCrystal().zenith.std, 90.0f);  // clamped into Zigzag's range on the switch
@@ -1309,21 +668,20 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      IM_CHECK(ctx->ItemExists(kHeightInput));
-      IM_CHECK(!ctx->ItemExists("**/##Prism H##modal_cr_input"));
+      IM_CHECK(InspectorItemExists(ctx, kHeightInput));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##Prism H##modal_cr_input"));
 
       ctx->ItemClick("**/Pyramid##modal");
       ctx->Yield(3);
-      IM_CHECK(!ctx->ItemExists(kHeightInput));
+      IM_CHECK(!InspectorItemExists(ctx, kHeightInput));
       for (const char* row :
            { "**/##Prism H##modal_cr_input", "**/##Upper H##modal_cr_input", "**/##Lower H##modal_cr_input",
              "**/##Upper A##modal_cr_input", "**/##Lower A##modal_cr_input" }) {
-        if (!ctx->ItemExists(row)) {
+        if (!InspectorItemExists(ctx, row)) {
           IM_ERRORF("pyramid row missing: %s", row);
         }
         if (ctx->IsError()) {
@@ -1334,16 +692,14 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // P89: a wedge-angle row carries Param and Value only. Its Sync / Rand / Spread cells are
       // pushed but left empty, so the grid stays rectangular and the headers stay over their
       // columns — which is why the sync swatch exists on an H row and not on a wedge row.
-      IM_CHECK(ctx->ItemExists("**/##sync_Upper H##modal_cr"));
-      IM_CHECK(!ctx->ItemExists("**/##sync_Upper A##modal_cr"));
-      IM_CHECK(!ctx->ItemExists("**/##rnd_Upper A##modal_cr"));
+      IM_CHECK(InspectorItemExists(ctx, "**/##sync_Upper H##modal_cr"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##sync_Upper A##modal_cr"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##rnd_Upper A##modal_cr"));
 
       ctx->ItemClick("**/Prism##modal");
       ctx->Yield(3);
-      IM_CHECK(ctx->ItemExists(kHeightInput));
-      ctx->ItemClick(kClose);
+      IM_CHECK(InspectorItemExists(ctx, kHeightInput));
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1380,11 +736,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         EntryCrystal().type = row.type;
         ctx->Yield();
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCrystalTab(ctx);
         ctx->Yield(3);
         ctx->ItemInputValue(row.input, row.typed);
         ctx->Yield();
-        ctx->ItemClick(kOk);
         ctx->Yield(2);
 
         const float got =
@@ -1414,7 +769,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;  // so checkbox edits reach g_state every frame
       ctx->Yield(2);
 
       IM_CHECK_EQ(EntryCrystal().height.type, gui::ShapeDistType::kNoRandom);
@@ -1424,25 +778,23 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         }
       }
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      IM_CHECK((ctx->ItemInfo("**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+      IM_CHECK((InspectorItemInfo(ctx, "**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // The checkbox is text-less — the table header names the column — so its id is the suffix.
       ctx->ItemClick("**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height.type, gui::ShapeDistType::kUniform);
       IM_CHECK_GT(EntryCrystal().height.spread, 0.0f);
-      IM_CHECK((ctx->ItemInfo("**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+      IM_CHECK((InspectorItemInfo(ctx, "**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
       ctx->ItemClick("**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height.type, gui::ShapeDistType::kNoRandom);
       IM_CHECK_EQ(EntryCrystal().height.spread, 0.0f);
 
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1455,10 +807,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");  // default-collapsed
       ctx->Yield(2);
@@ -1487,9 +838,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // section open would change the modal's layout for every later case in this process.
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1505,11 +854,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // A non-default baseline, so "back to defaults" has something to differ from.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, 5.0f);
       ctx->Yield();
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height, 5.0f);
 
@@ -1520,26 +868,20 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       EntryCrystal().height.sync_group = 3;
       EntryCrystal().face_distance[2].sync_group = 1;
       EntryCrystal().face_distance[4].sync_group = 1;
+      // Captured for the "Reset All touches the SHAPE and nothing else" assertions at the end:
+      // name, type and the three axis distributions must come through untouched.
       const gui::CrystalConfig before_modal = EntryCrystal();
 
-      // First: Reset All followed by Cancel must leave the entry untouched.
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(3);
-      ctx->ItemClick("**/Reset All##modal_cr");
-      ctx->Yield();
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-      IM_CHECK(EntryCrystal() == before_modal);
-
-      // Then: the same Reset All followed by OK does commit it.
-      ctx->ItemClick("**/Edit##cr");
+      // The "Reset All then Cancel leaves the entry untouched" half of this case is gone with
+      // Cancel: there is no uncommitted state for a discard to throw away, so the proposition has
+      // no subject rather than a changed answer. What is left is the half that was always the
+      // point — Reset All puts every shape field, including the sync groups, back to its default.
+      OpenCrystalTab(ctx);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, 2.0f);
       ctx->Yield();
       ctx->ItemClick("**/Reset All##modal_cr");
-      ctx->Yield();
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
+      ctx->Yield(3);
 
       const gui::CrystalConfig defaults;
       const auto& cr = EntryCrystal();
@@ -1572,17 +914,16 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   }
 
   // P62 / P110. The Sync column is fixed-width and Value is the only stretch column, so every pixel
-  // Sync takes comes out of the slider. Two failures are invisible in any state assertion: the
-  // slider hitting PrepareSliderLayout's 40 px floor (below which it stops shrinking and starts
-  // overflowing its cell), and the content needing a scrollbar in the modal's fixed-height pane.
-  // Both are measured in the worst case the modal supports — the narrow vertical layout, a Pyramid,
-  // Face Distance expanded.
+  // Sync takes comes out of the slider. The failure this catches is invisible in any state
+  // assertion: the slider hitting PrepareSliderLayout's 40 px floor, below which it stops shrinking
+  // and starts overflowing its cell. Measured in the worst case the page supports — a Pyramid with
+  // Face Distance expanded, in a column narrower than the modal this replaced.
   //
-  // The layout flip is also P110's evidence: the 420 px floor is applied on the frame
-  // RenderEditModals observes the flag CHANGE, so the window has to be open before the flip.
+  // The modal's companion claim — that the content fits its fixed-height pane without a scrollbar —
+  // is gone with the pane. The page is a docked window the user can resize and its content scrolls
+  // by design, so a scrollbar there is the feature rather than the regression.
   {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "edit_modal", "the_sync_column_leaves_the_slider_room_in_the_narrow_layout");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_sync_column_leaves_the_slider_room");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -1593,23 +934,24 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // ItemClose/ItemClick pair at the end of the body.
       const ScopedPopups popup_guard(ctx);
 
-      gui::g_state.modal_layout_vertical = false;
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      gui::g_state.modal_layout_vertical = true;
       ctx->Yield(6);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(4);
 
-      ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+      ImGuiWindow* win = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
       IM_CHECK(win != nullptr);
-      IM_CHECK_EQ(win->Size.x, 420.0f);  // the window really did snap to the narrow layout
+      // Narrower than the modal this replaced (420 px), which is why the column budget below is
+      // the binding constraint rather than a formality: the page lives in the document column and
+      // takes its width from the dock node.
+      IM_CHECK_EQ(win->Size.x, gui::kLeftPanelWidth);
 
-      const auto slider = ctx->ItemInfo("**/##Face 3##modal_fd_slider");
-      const auto input = ctx->ItemInfo("**/##Face 3##modal_fd_input");
-      const auto swatch = ctx->ItemInfo("**/##sync_Face 3##modal_fd");
-      const auto rand_check = ctx->ItemInfo("**/##rnd_Face 3##modal_fd");
+      const auto slider = InspectorItemInfo(ctx, "**/##Face 3##modal_fd_slider");
+      const auto input = InspectorItemInfo(ctx, "**/##Face 3##modal_fd_input");
+      const auto swatch = InspectorItemInfo(ctx, "**/##sync_Face 3##modal_fd");
+      const auto rand_check = InspectorItemInfo(ctx, "**/##rnd_Face 3##modal_fd");
       // PrepareSliderLayout returns max(avail - kInputWidth - spacing, 40); exactly 40 means the
       // cell is too narrow for the [slider][input] pair and the input is spilling out of it.
       IM_CHECK_GT(slider.RectFull.GetWidth(), 40.0f);
@@ -1622,31 +964,18 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
       IM_CHECK_LE(swatch.RectFull.GetHeight(), ImGui::GetFrameHeight());
 
-      // ...and with everything expanded the content still fits the fixed-height pane. The pane is a
-      // BeginChild of the modal, found by walking ImGui's window list rather than by guessing the
-      // auto-generated child name.
-      ImGuiContext& g = *ImGui::GetCurrentContext();
-      bool found_pane = false;
-      for (ImGuiWindow* w : g.Windows) {
-        if (w->ParentWindow == win && w->WasActive && std::strstr(w->Name, "modal_bottom_pane") != nullptr) {
-          found_pane = true;
-          if (w->ScrollMax.y != 0.0f) {
-            IM_ERRORF("the content pane '%s' needs a scrollbar (ScrollMax.y=%.1f)", w->Name,
-                      static_cast<double>(w->ScrollMax.y));
-          }
-        }
-      }
-      IM_CHECK(found_pane);  // a renamed pane must fail loudly, not silently skip the check
+      // The "does the content fit its fixed-height pane without a scrollbar" half of this case is
+      // gone with the modal. The pane it named was the popup's own BeginChild, sized so the tallest
+      // crystal layout fit inside a window that had to stay on screen. The page has no such pane:
+      // it is a docked window the user can resize, and its content scrolls by design — a scrollbar
+      // there is the feature, not the regression, so there is nothing left to assert.
 
-      // Close the way a user would, which also collapses the Face Distance node — the one piece of
-      // borrowed state the guard cannot hand back, since a tree node's open flag lives in the
-      // modal window's own ImGui storage. Everything else here the guard owns; this path is what
-      // runs when the case passes.
+      // Collapse the Face Distance node again: a tree node's open flag lives in the host window's
+      // ImGui storage, which outlives ResetTestState, so the next case would otherwise start with
+      // it expanded.
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      gui::g_state.modal_layout_vertical = false;
       ctx->Yield(4);
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
     };
   }
@@ -1662,37 +991,30 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   // DPI-adaptive by construction — a platform whose glyphs render wider fails here instead of
   // shipping a clipped table.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_fixed_columns_fit_their_text_in_both_layouts");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "the_fixed_columns_fit_their_text");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
       // Pyramid has the widest Param labels ("Prism H", "Upper A", "Lower A").
       EntryCrystal().type = gui::CrystalType::kPyramid;
 
-      // One pass per layout, as a lambda rather than a loop body: the width and table-count checks
-      // below are fatal (a wrong window width makes every column measurement meaningless), and a
-      // fatal assert inside a loop body would return out of the whole case and take the second
-      // layout with it.
-      //
-      // The lambda alone is only half of that, though: a fatal check returns out of THIS CALL, past
-      // the ItemClose/ItemClick at the bottom, and the second call would then be driving a modal the
-      // first one left open. The guard is what makes each call start from a closed modal regardless
-      // of how the previous one ended.
-      auto check_layout = [ctx](bool vertical) {
+      // One layout, where there were two. The modal offered a side-by-side arrangement and a
+      // stacked one and this case checked the column budget in both; the page is a fixed-width
+      // column, so the stacked arrangement is the only one that means anything and the other has
+      // no window to be measured in. The lambda is kept rather than inlined because its checks are
+      // fatal, and a fatal assert returns out of the enclosing function — keeping the body in a
+      // callee is what stops one failure from also skipping the teardown below it.
+      auto check_layout = [ctx]() {
         const ScopedPopups popup_guard(ctx);
-        // Same flag-flip dance as the case above, for the same reason.
-        gui::g_state.modal_layout_vertical = !vertical;
         ctx->Yield(2);
-        ctx->ItemClick("**/Edit##cr");
-        ctx->Yield(4);
-        gui::g_state.modal_layout_vertical = vertical;
+        OpenCrystalTab(ctx);
         ctx->Yield(6);
         ctx->ItemOpen("**/Face Distance##modal");
         ctx->Yield(4);
 
-        ImGuiWindow* win = ctx->GetWindowByRef("Edit Entry");
+        ImGuiWindow* win = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
         IM_CHECK(win != nullptr);
-        IM_CHECK_EQ(win->Size.x, vertical ? 420.0f : 820.0f);
+        IM_CHECK_EQ(win->Size.x, gui::kLeftPanelWidth);
 
         // Both shape tables, found by their column signature rather than by an id we would have to
         // reproduce through the child-window stack.
@@ -1717,8 +1039,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
             }
             const float ideal = ImMax(column.ContentMaxXHeadersIdeal, column.ContentMaxXUnfrozen);
             if (ideal > column.WorkMaxX) {
-              IM_ERRORF("column %s clips in the %s layout: needs %.1f, has %.1f", name,
-                        vertical ? "vertical" : "horizontal", static_cast<double>(ideal - column.WorkMinX),
+              IM_ERRORF("column %s clips: needs %.1f, has %.1f", name, static_cast<double>(ideal - column.WorkMinX),
                         static_cast<double>(column.WorkMaxX - column.WorkMinX));
             }
           }
@@ -1727,16 +1048,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
         ctx->ItemClose("**/Face Distance##modal");
         ctx->Yield(2);
-        ctx->ItemClick(kCancel);
         ctx->Yield(2);
       };
 
-      check_layout(/*vertical=*/false);
-
-      if (ctx->IsError()) {
-        return;
-      }
-      check_layout(/*vertical=*/true);
+      check_layout();
     };
   }
 
@@ -1761,10 +1076,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -1816,9 +1130,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1829,10 +1141,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -1869,52 +1180,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
-    };
-  }
-
-  // Grouping is edit-buffer state like every other shape field, so Cancel discards a regrouping.
-  // Compared against a baseline captured just before the modal opened rather than against the
-  // defaults, so it cannot pass by the entry being reset instead of preserved.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "cancel_discards_a_regrouping");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();  // staged: OK/Cancel atomicity is what is under test
-      const ScopedPopups popup_guard(ctx);
-      ctx->Yield(2);
-
-      EntryCrystal().face_distance[0].sync_group = 2;
-      EntryCrystal().face_distance[1].sync_group = 2;
-      const gui::CrystalConfig baseline = EntryCrystal();
-
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
-      ctx->ItemOpen("**/Face Distance##modal");
-      ctx->Yield(2);
-
-      // A third row joins group 2 and one of its members leaves.
-      ctx->ItemClick("**/##sync_Face 6##modal_fd");
-      ctx->Yield(2);
-      ctx->ItemClick("**/###sync_group_2");
-      ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Face 3##modal_fd");
-      ctx->Yield(2);
-      ctx->ItemClick("**/###sync_none");
-      ctx->Yield(2);
-      IM_CHECK(EntryCrystal() == baseline);  // staged: none of it reached the entry
-
-      ctx->ItemClose("**/Face Distance##modal");
-      ctx->Yield(2);
-      ctx->ItemClick(kCancel);
-      ctx->Yield(3);
-
-      // Whole-crystal comparison (ShapeDist::operator== includes sync_group), plus the two ids
-      // spelled out so a failure names the field rather than "the crystal differs".
-      IM_CHECK(EntryCrystal() == baseline);
-      IM_CHECK_EQ(EntryCrystal().face_distance[3].sync_group, 0);
-      IM_CHECK_EQ(EntryCrystal().face_distance[0].sync_group, 2);
     };
   }
 
@@ -1927,13 +1193,12 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       // height is prism-only; give it a group, then edit the crystal as a pyramid.
       EntryCrystal().height.sync_group = 4;
       EntryCrystal().type = gui::CrystalType::kPrism;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemClick("**/Pyramid##modal");
       ctx->Yield(3);
@@ -1956,9 +1221,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().height.sync_group, 4);
       IM_CHECK_EQ(EntryCrystal().upper_h.sync_group, 5);
 
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -1975,7 +1238,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       EntryCrystal().face_distance[0] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.6f, 0.3f };
       EntryCrystal().face_distance[0].sync_group = 1;  // the leader, lowest slot
@@ -1984,7 +1246,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const gui::ShapeDist leader_before = EntryCrystal().face_distance[0];
       const gui::ShapeDist member_before = EntryCrystal().face_distance[1];
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2011,9 +1273,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -2036,7 +1296,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       auto& cr = EntryCrystal();
       cr.type = gui::CrystalType::kPyramid;
@@ -2051,7 +1310,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       cr.face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.5f, 0.3f };
       cr.face_distance[1].sync_group = 2;  // slot 5 — the lowest slot the user can reach
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2088,9 +1347,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -2131,21 +1388,17 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
           ]
         }
       })";
-      // DeserializeFromJson assigns a fresh GuiState, which resets the modal's two display-tier
-      // flags to their STRUCT defaults rather than to whatever the harness had them at.
-      // modal_layout_vertical in particular defaults to true, and the harness never recomputes it
-      // without a window resize — so an import would silently hand the clicks below a vertical modal
-      // whose bottom button row is off screen. Both flags are therefore set AFTER the import.
-      const bool layout_vertical_before = gui::g_state.modal_layout_vertical;
+      // DeserializeFromJson assigns a fresh GuiState. That used to need repairing afterwards: the
+      // modal carried two display-tier layout flags that the import reset to their struct defaults,
+      // handing the clicks below a differently-shaped window. The page has no such flags — its
+      // geometry is the dock node's — so the import needs no fix-up.
       IM_CHECK(gui::DeserializeFromJson(core_json, gui::g_state));
-      gui::g_state.modal_layout_vertical = layout_vertical_before;
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().type, gui::CrystalType::kPrism);
       IM_CHECK_EQ(EntryCrystal().height.sync_group, 1);
       IM_CHECK_EQ(EntryCrystal().face_distance[0].sync_group, 1);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2153,16 +1406,16 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // (1) No Sync control on the Height row — with two positive controls beside it, so a false
       // pass is impossible: the row itself is still there and editable, and a row that IS syncable
       // still has its swatch.
-      IM_CHECK(!ctx->ItemExists("**/##sync_Height##modal_cr"));
-      IM_CHECK(ctx->ItemExists(kHeightInput));
-      IM_CHECK(ctx->ItemExists("**/##sync_Face 3##modal_fd"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##sync_Height##modal_cr"));
+      IM_CHECK(InspectorItemExists(ctx, kHeightInput));
+      IM_CHECK(InspectorItemExists(ctx, "**/##sync_Face 3##modal_fd"));
 
       // (2) The membership list names the group's real members, Height included — it describes the
       // group the user is about to join, and Height is the member whose value that group carries.
       // Read off the popup item's visible label rather than re-derived.
       ctx->ItemClick("**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
-      const ImGuiTestItemInfo group_item = ctx->ItemInfo("**/###sync_group_1");
+      const ImGuiTestItemInfo group_item = InspectorItemInfo(ctx, "**/###sync_group_1");
       IM_CHECK_NE(group_item.ID, (ImGuiID)0);
       IM_CHECK(std::strstr(group_item.DebugLabel, "Face 3") != nullptr);  // the list is really read
       IM_CHECK(std::strstr(group_item.DebugLabel, "Height") != nullptr);  // ...and Height is in it
@@ -2189,9 +1442,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
 
       // (4) The group id was never the GUI's to clean up: it survives the walkthrough in state AND
       // through the production export path, read back rather than matched as a substring.
@@ -2227,7 +1478,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
       // The owner's reproduction verbatim: prism height (slot 0, no Sync control) grouped with
@@ -2281,7 +1531,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // Face 5 joining group 1 snapshots from whatever the GUI thinks the leader is, so the value
       // that lands in the row IS the GUI's answer — read through a real click rather than by calling
       // the predicate.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2310,9 +1560,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -2330,11 +1578,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
       EntryCrystal().type = gui::CrystalType::kPyramid;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2362,9 +1609,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kClose);
       ctx->Yield(2);
-      gui::g_state.modal_immediate_mode = false;
     };
   }
 
@@ -2377,10 +1622,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
-      gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2416,7 +1660,6 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClose("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick(kOk);
       ctx->Yield(3);
 
       // Two separate claims: the committed entry carries the grouping the clicks described, and the

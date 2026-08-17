@@ -326,6 +326,41 @@ struct ScopedPopups {
   ImGuiTestContext* ctx_;
 };
 
+// Put the document inspector's crystal page on an entry, showing one of its three tabs.
+//
+// Every suite that used to reach the crystal / axis / filter editors did it by clicking an "Edit"
+// button on an entry card, which opened a modal. Both are gone: the editors are the inspector's
+// crystal page, and what decides which entry they edit is the tree's selection
+// (doc/gui-layout-architecture.md §2). There is no dismissal counterpart on purpose — the page is
+// always up and an edit is in the document the frame it is made.
+//
+// Shared rather than copied into each suite because five of them need it and the sequence is not
+// obvious: the selection has to be pumped before the tab click, since the tab does not exist until
+// the page is rendering.
+void OpenEntryTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx, const char* tab_ref);
+void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+
+// Locate an item in the document inspector, scrolling the page if it is not on screen.
+//
+// Why this is needed at all, and why only here. The inspector is a docked window a few hundred
+// pixels tall showing an editor that is routinely taller — a Pyramid with its Face Distance section
+// expanded runs to about 660 px in a 490 px column — so the page scrolls, by design. ImGui culls
+// TABLE ROWS whose rectangle falls outside the host clip rect BEFORE submitting their contents, so
+// a row scrolled out of view is not merely off screen: its widgets are never submitted, never reach
+// the test engine's item registry, and ItemExists / ItemInfo answer "no such item" rather than
+// "not visible". (Non-table items are registered even when clipped, which is why the Face Distance
+// header can be found while the rows above it cannot — a difference that reads as nonsense until
+// you know it is ItemAdd's clipping early-out vs. TableBeginRow's SkipItems.)
+//
+// ItemClick and the other ItemAction verbs already scroll to their target, so they were never
+// affected; it is exactly the read-only queries that need this. The modal these pages replaced
+// never hit the problem because it sized its content pane to fit its tallest tab, a luxury a docked
+// column does not have.
+ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref);
+bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref);
+
 // ========== Register function declarations ==========
 
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine);
@@ -354,7 +389,6 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
-void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
 

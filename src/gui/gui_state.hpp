@@ -1048,13 +1048,17 @@ struct GuiState {
   // engine), so the accumulated image resets on toggle. UI-only, session-only.
   bool use_gpu_backend = false;
 
-  // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
-  // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
-  // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single
-  // Close button + no dirty-mark; every frame commits buffer to state via
-  // CommitAllBuffersImmediate (crystal/axis edits only MarkDirty — filter
-  // edits still MarkStructHardDirty — so infinite-rays accumulation persists
-  // while the user drags a crystal slider).
+  // ORPHANED, deliberately, and this is the only place that says so.
+  //
+  // It used to choose between the edit modal's two commit modes: staged (OK/Cancel, dirty marks on
+  // the tabs) and immediate (every frame commits the buffer). The modal is gone — the editors are
+  // the document inspector's crystal page — and the page commits every frame unconditionally, so
+  // the field has no reader left. What it once selected is now the only behaviour there is.
+  //
+  // Kept rather than deleted because removing a field is a change to the tier table, the
+  // user-defaults eligibility count and four test files, none of which is what the migration that
+  // orphaned it was about. It is session-tier and never serialised, so an orphan here costs a bool
+  // and nothing else. Remove it in a cleanup change of its own.
   bool modal_immediate_mode = true;
 
   // Mark the config dirty. sim_state is NOT touched here — it is derived once per frame by
@@ -1120,10 +1124,18 @@ struct GuiState {
   // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
-  // Edit modal layout orientation (view preference). false = horizontal
-  // (preview left + tabs right); true = vertical (preview top + tabs below,
-  // default since gui-polish-v15 round 2). Persisted to .lmc alongside
-  // right_panel_collapsed.
+  // ORPHANED, deliberately — and unlike modal_immediate_mode above, this one IS persisted, so the
+  // orphan is visible in every .lmc written from now on.
+  //
+  // It chose between the edit modal's two arrangements: preview-left/tabs-right, or preview-above/
+  // tabs-below. The inspector's crystal page is a fixed-width column, where only the stacked
+  // arrangement means anything, so the page hard-codes it and offers no toggle. The field is
+  // therefore written to .lmc and read back and never consulted.
+  //
+  // Kept because dropping it is a FORMAT change: files written by this build would lose a key that
+  // files written by the last one carry, and the round-trip and missing-key tests both name it.
+  // That is a breaking-bump decision, not a side effect of moving a panel. Until then it stays
+  // true, which is what every reader that ever existed would have seen.
   bool modal_layout_vertical = true;
 
   // Log panel state (view preference — does not call MarkDirty)

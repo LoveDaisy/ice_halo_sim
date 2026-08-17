@@ -1395,7 +1395,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       panel.Close();
 
       gui::g_state.renderer.fov = 90.0f;
-      ctx->Yield(2);
+      // FOV's "main UI control" is the document inspector's Camera page now, not the right panel,
+      // so the row has to be selected for the control to be on screen at all.
+      gui::g_state.SelectCamera();
+      ctx->Yield(3);
       ctx->ItemInputValue("**/##FOV##view_input", 900.0f);
       ctx->Yield(3);
       IM_CHECK_EQ(fov_from_table, gui::g_state.renderer.fov);
@@ -2584,15 +2587,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       SaveDefaultsPanel(ctx);
       panel.Close();
 
-      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req, gui::g_state);
-      ctx->Yield(4);
+      OpenAxisTab(ctx);
       ctx->ItemClick("**/Column");
-      ctx->Yield(2);
-      // Committed rather than read out of the modal's buffer: the buffer is TU-private by design
-      // (OK/Cancel atomicity), and "the value reached the document" is the stronger claim anyway.
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(3);
+      // Read off the document rather than the editor's buffer: the buffer is TU-private, and "the
+      // value reached the document" is the stronger claim anyway. It gets there on its own now —
+      // the page commits every frame, so there is no OK to press.
 
       const auto& edited = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
       IM_CHECK_EQ(edited.zenith.std, 0.3f);
@@ -2614,9 +2614,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedPanel panel(ctx, "panel_modal_no_writeback");
 
-      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req, gui::g_state);
-      ctx->Yield(4);
+      OpenAxisTab(ctx);
 
       // The same starting point the read case used: Column, then a std the user tuned. If any
       // write-through survived, this is the edit it would carry into the library.
@@ -2630,7 +2628,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/###save_as_preset_plate"));
       IM_CHECK(!ctx->ItemExists("**/###save_as_preset_lowitz"));
 
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(3);
 
       // The crystal took the edit; the library did not. OK rather than Cancel on purpose: a

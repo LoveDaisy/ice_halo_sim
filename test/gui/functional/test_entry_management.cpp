@@ -43,7 +43,7 @@
 
 #include "IconsFontAwesome6.h"
 #include "gui/gui_state.hpp"
-#include "imgui_internal.h"  // ImGuiWindow — a card's widgets are not addressable by path; see CardWindow
+#include "imgui_internal.h"  // ImGuiWindow — the Colors-window occlusion case reads z-order directly
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -53,38 +53,21 @@ namespace {
 // run about the wrong thing.
 constexpr int kThumbnailFrames = 10;
 
-// The n-th entry card's window, in submission order.
-//
-// A card's widgets cannot be addressed by a path. RenderScatteringSection pushes the layer index
-// and RenderEntryCard the entry index, so every card's Edit button carries the same LABEL and a
-// different id — which is exactly the case a label wildcard cannot resolve (it stops at the first
-// match) and a literal path cannot either (the ids live under a BeginChild whose name ImGui
-// generates). What is unambiguous is the child window each card opens: they are submitted in card
-// order, so the n-th of them is the n-th card.
-ImGuiWindow* CardWindow(int index) {
-  ImGuiContext& g = *ImGui::GetCurrentContext();
-  int seen = 0;
-  for (ImGuiWindow* w : g.Windows) {
-    if (w->WasActive && (w->Flags & ImGuiWindowFlags_ChildWindow) != 0 && std::strstr(w->Name, "##card") != nullptr) {
-      if (seen == index) {
-        return w;
-      }
-      ++seen;
-    }
-  }
-  return nullptr;
+// A tree row's path. The cards these replaced could not be addressed at all — every card's Edit
+// button carried the same label under a different pushed-integer id, so a wildcard stopped at the
+// first one and the suite had to find each card's child window by walking ImGui's window list.
+// The rows carry their indices in the label for exactly this reason, so they are ordinary paths.
+std::string RowRef(int layer_idx, int entry_idx) {
+  return "**/##row_" + std::to_string(layer_idx) + "_" + std::to_string(entry_idx);
 }
 
-// The blank area of a card, in screen coordinates.
-//
-// There is no widget there to click, and that is the point of the proposition: RenderEntryCard
-// hit-tests the card rectangle itself so the whole card is a target, and a test that clicked a
-// button instead would not exercise it. 30 px in from the card's left edge is inside the thumbnail,
-// which is drawn rather than submitted as an item.
-ImVec2 CardBlankSpot(int index) {
-  ImGuiWindow* w = CardWindow(index);
-  IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
-  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + 20.0f);
+// The middle of a row, in screen coordinates, for the cases that must click a POINT rather than an
+// item — the click-through guard below asks whether a click at a location reaches the row, which a
+// path-addressed ItemClick would answer by construction.
+ImVec2 RowSpot(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  const ImGuiTestItemInfo info = ctx->ItemInfo(RowRef(layer_idx, entry_idx).c_str());
+  IM_CHECK_RETV(info.ID != 0, ImVec2(0, 0));
+  return info.RectFull.GetCenter();
 }
 
 // A second entry in layer 0, bound to a pool slot of its own.
@@ -284,7 +267,6 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_NE(headers[2].ID, 0u);
       IM_CHECK_NE(tails[2].ID, 0u);
 
-      const float spacing = ImGui::GetStyle().ItemSpacing.y;
       for (int i = 0; i + 1 < 3; ++i) {
         // Order: every control of layer i sits above layer i+1's header.
         if (tails[i].RectFull.Max.y >= headers[i + 1].RectFull.Min.y) {
@@ -292,11 +274,13 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
                     static_cast<double>(tails[i].RectFull.Max.y), i + 1,
                     static_cast<double>(headers[i + 1].RectFull.Min.y));
         }
-        // ...and the blocks are held apart by more than ordinary item spacing.
+        // ...and they do not overlap. The stronger claim this used to make — that the blocks are
+        // held APART by more than one item spacing — went with the cards: a tree is meant to be
+        // dense, and the separation that reads a layer as a group is now the fold triangle and the
+        // indent, not a gap. Asserting a gap here would be pinning the opposite of the intent.
         const float gap = headers[i + 1].RectFull.Min.y - tails[i].RectFull.Max.y;
-        if (gap <= spacing * 1.5f) {
-          IM_ERRORF("layers %d and %d are %.1f px apart, no more than one item spacing (%.1f px)", i, i + 1,
-                    static_cast<double>(gap), static_cast<double>(spacing));
+        if (gap < 0.0f) {
+          IM_ERRORF("layers %d and %d overlap by %.1f px", i, i + 1, static_cast<double>(-gap));
         }
       }
     };
@@ -339,6 +323,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
           gui::g_state.layers.push_back(std::move(extra));
         }
         gui::g_state.layers[0].probability = s.layer0_prob;
+        // The slider is the inspector's Layer page now, not a control under the tree's layer
+        // header, so the layer has to be selected for it to exist at all.
+        gui::g_state.SelectLayer(0);
         ctx->Yield(3);
 
         const bool disabled = IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0_input"));
@@ -420,6 +407,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK_EQ(static_cast<int>(gui::g_state.layers.size()), 1);
       IM_CHECK_EQ(gui::g_state.layers[0].probability, gui::kDefaultContinuationProb);
+      // The slider lives on the inspector's Layer page; select the layer to reach it.
+      gui::g_state.SelectLayer(0);
+      ctx->Yield(3);
       IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0_input")));
     };
   }
@@ -487,46 +477,11 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // Opening the modal from a card.
   // ================================================================================
 
-  // P66. Each of the three Edit buttons is a shortcut to one tab, not three ways to open the same
-  // one — the whole point of having three is that the user lands where they were going.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "each_edit_button_opens_the_modal_on_its_own_tab");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      struct Shortcut {
-        const char* button;
-        const char* tab_content;  // an item that exists only while that tab's body is up
-      };
-      const Shortcut kShortcuts[] = {
-        { "Edit##cr", "**/##Height##modal_cr_input" },
-        { "Edit##ax", "**/Zenith/##Mean_input" },
-        { "Edit##fi", "**/##row_text_0" },
-      };
-
-      for (const Shortcut& s : kShortcuts) {
-        ResetTestState();
-        ctx->Yield(2);
-        // Per iteration, because IM_ERRORF below is non-fatal but still sets the error status —
-        // after which every ImGuiTestContext call would be a no-op, which is why the break below
-        // comes before the trailing Cancel click rather than after it: popup_guard's destructor
-        // closes the modal regardless, so that click has nothing left to do once this iteration
-        // has already failed.
-        const ScopedPopups popup_guard(ctx);
-        ctx->ItemClick((std::string("**/") + s.button).c_str());
-        ctx->Yield(4);
-        if (!ctx->ItemExists(s.tab_content)) {
-          IM_ERRORF("%s did not land on the tab that owns %s", s.button, s.tab_content);
-        }
-        if (ctx->IsError()) {
-          break;
-        }
-        ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-        ctx->Yield(2);
-      }
-    };
-  }
-
-  // P72. The whole card is a target, not just its buttons — RenderEntryCard hit-tests the card
-  // rectangle itself, which is why this clicks blank space rather than a widget.
+  // P72, one shape on. The card was a rectangle hit-tested by hand, so this case clicked blank
+  // space to prove the WHOLE card was the target rather than just its buttons. The row is a real
+  // Selectable spanning the row, with the thumbnail and labels drawn over it under AllowOverlap, so
+  // what has to be proved now is that the overlay did not steal the hit: a click in the middle of
+  // the row, which is on top of the thumbnail, must still select it.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "entry_management", "clicking_a_cards_blank_area_opens_the_modal_on_that_card");
@@ -534,17 +489,16 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       const ScopedPopups popup_guard(ctx);
-      IM_CHECK(!gui::IsEditModalOpen());
+      IM_CHECK(!gui::g_state.HasValidCrystalSelection());
 
-      ctx->MouseMoveToPos(CardBlankSpot(0));
+      ctx->MouseMoveToPos(RowSpot(ctx, 0, 0));
       ctx->MouseClick(0);
       ctx->Yield(4);
 
-      IM_CHECK(gui::IsEditModalOpen());
-      IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
-      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK(gui::g_state.HasValidCrystalSelection());
+      IM_CHECK_EQ(gui::g_state.selection.layer_idx, 0);
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 0);
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -566,8 +520,8 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // the regression it is looking for would open behind that window.
       const ScopedColorWindow color_guard;
       const ScopedPopups popup_guard(ctx);
-      IM_CHECK(!gui::IsEditModalOpen());
-      const ImVec2 spot = CardBlankSpot(0);
+      IM_CHECK(!gui::g_state.HasValidCrystalSelection());
+      const ImVec2 spot = RowSpot(ctx, 0, 0);
 
       // Anchor the Colors window so `spot` lands mid-window, well below its header, mode combo and
       // button row. raypath_color is empty after a new document, so the class table under the click
@@ -581,7 +535,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->MouseMoveToPos(spot);
       ctx->MouseClick(0);
       ctx->Yield(4);
-      IM_CHECK(!gui::IsEditModalOpen());
+      IM_CHECK(!gui::g_state.HasValidCrystalSelection());
     };
   }
 
@@ -597,20 +551,19 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const ScopedPopups popup_guard(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
-      IM_CHECK(gui::IsEditModalOpen());
+      IM_CHECK(gui::g_state.HasValidCrystalSelection());
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 33.0f);
       ctx->Yield(2);
 
-      ctx->MouseMoveToPos(CardBlankSpot(0));
+      ctx->MouseMoveToPos(RowSpot(ctx, 0, 0));
       ctx->MouseClick(0);
       ctx->Yield(4);
-      IM_CHECK(gui::IsEditModalOpen());
-      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK(gui::g_state.HasValidCrystalSelection());
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 0);
 
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 33.0f);
     };
@@ -639,7 +592,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, shared_cid, std::nullopt), 2);
       const float shared_h = gui::g_state.crystals[shared_cid].height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/Unlink##share"));
       ctx->ItemClick("**/Unlink##share");
@@ -654,7 +607,6 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // The next edit lands on the fork, and the card left behind keeps what it had.
       ctx->ItemInputValue("**/##Height##modal_cr_input", shared_h + 7.0f);
       ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[forked_cid].height, shared_h + 7.0f);
       IM_CHECK_EQ(gui::g_state.crystals[shared_cid].height, shared_h);
@@ -665,14 +617,14 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // mode, close the modal — and the panel then has to say so, because the next click means
   // something different from what it usually means. The prompt is the only feedback there is.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "link_to_arms_pick_mode_and_says_so_above_the_cards");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "link_to_arms_pick_mode_and_says_so_above_the_rows");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
       const ScopedPopups popup_guard(ctx);
       AddSecondEntryOnItsOwnSlot(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
@@ -681,31 +633,36 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Link to...##share");
       ctx->Yield(4);
 
-      // Committed on the way out — a staged edit discarded here would be silent.
+      // Committed on the way out — an edit lost here would be silent.
       IM_CHECK_EQ(gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height, orig_h + 2.0f);
-      IM_CHECK(!gui::IsEditModalOpen());
+      // The editor STAYS on the source entry, where the modal used to close itself. Deliberate, and
+      // the opposite of the old assertion: the modal had to get out of the way because its backdrop
+      // sat between the user and the cards they were being asked to click, while the page is beside
+      // the tree rather than over it — so it can go on showing what is being linked FROM while the
+      // user picks what to link TO.
+      IM_CHECK(gui::g_state.HasValidCrystalSelection());
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 0);
       IM_CHECK(gui::g_state.pick_link_source.has_value());
       IM_CHECK_EQ(gui::g_state.pick_link_source->layer_idx, 0);
       IM_CHECK_EQ(gui::g_state.pick_link_source->entry_idx, 0);
 
       // The prompt is a TextWrapped, i.e. id == 0 and invisible to the item registry. What IS
-      // observable is what it does to the layout: the cards move down to make room for it.
-      // Compared against the same card's position with pick mode off, on the next frame.
+      // observable is what it does to the layout: the rows move down to make room for it. Compared
+      // against the same row's position with pick mode off, on the next frame.
       //
-      // Both lookups are checked before use. A missing card window is precisely one of the
-      // regressions this case exists to catch (a prompt that did not get inserted, or a card list
-      // that stopped being submitted), and dereferencing it would take the whole binary down
-      // instead of producing one red case.
-      ImGuiWindow* card_with_prompt = CardWindow(0);
-      IM_CHECK(card_with_prompt != nullptr);
-      const float y_with_prompt = card_with_prompt->Pos.y;
+      // Read off the row rather than off the card's child window, which no longer exists — and the
+      // id is checked before the rect is used, because a row that stopped being submitted is
+      // precisely one of the regressions this case exists to catch.
+      const ImGuiTestItemInfo row_with_prompt = ctx->ItemInfo(RowRef(0, 0).c_str());
+      IM_CHECK_NE(row_with_prompt.ID, 0u);
+      const float y_with_prompt = row_with_prompt.RectFull.Min.y;
 
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(3);
       IM_CHECK(!gui::g_state.pick_link_source.has_value());
-      ImGuiWindow* card_without_prompt = CardWindow(0);
-      IM_CHECK(card_without_prompt != nullptr);
-      IM_CHECK_GT(y_with_prompt, card_without_prompt->Pos.y);
+      const ImGuiTestItemInfo row_without_prompt = ctx->ItemInfo(RowRef(0, 0).c_str());
+      IM_CHECK_NE(row_without_prompt.ID, 0u);
+      IM_CHECK_GT(y_with_prompt, row_without_prompt.RectFull.Min.y);
     };
   }
 
@@ -713,7 +670,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // happen on either: the modal must stay closed. The reopen is reserved for a completed pick — a
   // cancel that reopened it would put the user back in a dialog they had just left.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "cancelling_pick_mode_does_not_reopen_the_modal");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "cancelling_pick_mode_leaves_the_editor_where_it_was");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       // One exit per call rather than one loop body: arming pick mode is a fatal precondition (a
       // cancel test on a pick that never armed proves nothing), and a fatal assert inside a loop
@@ -727,7 +684,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         AddSecondEntryOnItsOwnSlot(ctx);
         const int cid_before = gui::g_state.layers[0].entries[1].crystal_id;
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCrystalTab(ctx);
         ctx->Yield(4);
         ctx->ItemClick("**/Link to...##share");
         ctx->Yield(4);
@@ -747,8 +704,11 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         if (gui::g_state.pick_link_source.has_value()) {
           IM_ERRORF("%s did not cancel pick mode", how);
         }
-        if (gui::IsEditModalOpen()) {
-          IM_ERRORF("%s reopened the edit modal", how);
+        // The selection is where it was, not moved by the cancel. Under the modal this read "the
+        // modal did not reopen", the reopen being reserved for a completed pick; with no open or
+        // close to speak of, what a bad cancel would do instead is silently retarget the editor.
+        if (!gui::g_state.HasValidCrystalSelection() || gui::g_state.selection.entry_idx != 0) {
+          IM_ERRORF("%s moved the editor off the source entry", how);
         }
         // ...and nothing was linked on the way out.
         if (gui::g_state.layers[0].entries[1].crystal_id != cid_before) {
@@ -798,7 +758,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const int source_cid_before = gui::g_state.layers[0].entries[0].crystal_id;
       IM_CHECK_NE(target_cid, source_cid_before);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->ItemClick("**/Link to...##share");
       ctx->Yield(4);
@@ -807,7 +767,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // Drag the preview first, so a pose that simply survived is distinguishable from one that was
       // recomputed for the new crystal.
       gui::ApplyTrackballRotation(45.0f, 15.0f);
-      const ImVec2 target_spot = CardBlankSpot(1);
+      const ImVec2 target_spot = RowSpot(ctx, 0, 1);
       ctx->MouseMoveToPos(target_spot);
       ctx->MouseClick(0);
       ctx->Yield(6);
@@ -818,9 +778,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, target_cid, std::nullopt), 2);
 
       // Reopened on the SOURCE card, not on the one that was clicked.
-      IM_CHECK(gui::IsEditModalOpen());
-      IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
-      IM_CHECK_EQ(gui::GetEditModalTarget().entry_idx, 0);
+      IM_CHECK(gui::g_state.HasValidCrystalSelection());
+      IM_CHECK_EQ(gui::g_state.selection.layer_idx, 0);
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 0);
 
       // ...showing the crystal it now points at, from that crystal's default angle.
       gui::AxisDist params[3] = { column.zenith, column.azimuth, column.roll };
@@ -833,7 +793,6 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         }
       }
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -855,11 +814,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenFilterTab(ctx);
       ctx->Yield(4);
       ctx->ItemInputValue("**/##row_text_0", "3-5");
       ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(gui::g_state.layers[0].entries[0].filter_id.has_value());
@@ -889,11 +847,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenFilterTab(ctx);
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(2);
 
       IM_CHECK(!gui::g_state.layers[0].entries[0].filter_id.has_value());

@@ -61,33 +61,7 @@ void ResetCrystalShapeParams(CrystalConfig& c) {
 // Modal state (file scope — not shared via gui_state.hpp)
 // ============================================================
 
-enum class ActiveModal { kNone, kOpen };
 enum class ActiveTab { kCrystal, kAxis, kFilter };
-
-// Minimum width applied to the unified edit popup. Covers the two-column
-// layout: the runtime left-pane width is
-//   `kModalPreviewImageSize + 2×WindowPadding.x + 4`
-// computed dynamically; ≈340 under the default style (WindowPadding.x=8),
-// ≈348 with HiDPI themes that raise padding. The floor of 820 adds the
-// right TabBar content minimum (~432) + child spacing (~16) + popup window
-// padding (~32). AlwaysAutoResize still governs height; the constraint only
-// adds a width floor so that both columns render without clipping.
-constexpr float kEditModalMinWidth = 820.0f;
-
-// Vertical layout (modal_layout_vertical=true) relaxes the horizontal floor
-// since the tab content is stacked below the preview rather than beside it.
-// Height is content-driven (AlwaysAutoResize): the bottom pane uses the same
-// fixed height as the horizontal right pane (kPreviewChildHeight), so the
-// vertical modal is exactly 2× the horizontal modal height plus chrome.
-//
-// Held at 420 for the Crystal-tab shape property table. Fixed columns
-// (Param kShapeParamColWidth=52 + Sync kShapeSyncColWidth=29 + Rand
-// kShapeRandColWidth=29 + Spread kShapeSpreadColWidth=60) sum to ~170; the stretch Value column then
-// gets a long slider + input(kInputWidth=60) pair with the "%.4f" Prism-H number
-// readable, plus inner borders / cell padding. (The GUI is uniform-only, so there
-// is no Type column; that reclaimed width goes to the Value slider.)
-constexpr float kEditModalMinWidthVertical = 420.0f;
-constexpr float kEditModalMinHeightVertical = 0.0f;
 
 // Shape property-table fixed column widths; the Value column is WidthStretch and
 // takes the remainder. Tuned so the vertical layout gives the Value slider real
@@ -124,10 +98,9 @@ constexpr float kShapeSpreadColWidth = 60.0f;
 // other along.
 constexpr float kShapeSyncColWidth = 29.0f;
 
-static ActiveModal g_active_modal = ActiveModal::kNone;
 static int g_modal_layer_idx = -1;
 // Tracks the crystal_id currently loaded into the preview trackball state so we
-// can detect card-to-card switches inside OpenEditModal (see Bug 2 fix). -1 =
+// can detect row-to-row switches inside LoadBuffersFromEntry (see Bug 2 fix). -1 =
 // no crystal loaded yet; cleared in ResetModalState alongside layer/entry idx.
 static int g_modal_view_crystal_id = -1;
 static int g_modal_entry_idx = -1;
@@ -154,9 +127,17 @@ static int g_modal_entry_idx = -1;
 static int g_buf_crystal_id = -1;
 static int g_inspector_page_last_frame = -1000;
 
+// What the page last wrote into the entry's pool slots. See PoolChangedSinceLastCommit for why the
+// baseline is "what we wrote" rather than "what the buffers hold".
+static CrystalConfig g_buf_last_written_crystal;
+static std::optional<int> g_buf_last_written_filter_id;
+static FilterConfig g_buf_last_written_filter;
+static bool g_buf_last_written_valid = false;
+
 // Active tab is updated each frame inside the corresponding BeginTabItem true-branch
-// (ImGui doesn't auto-write user state). The OpenEditModal path always sets it
-// explicitly together with g_pending_tab_select=true to drive first-frame selection;
+// (ImGui doesn't auto-write user state). The retired popup's open path used to set it explicitly
+// together with g_pending_tab_select=true to drive first-frame selection; the page has no open
+// event, so the flag is only ever false now and the tab the user left selected is the tab they get;
 // at other times its value reflects the ImGui TabBar's currently active tab.
 static ActiveTab g_active_tab = ActiveTab::kCrystal;
 static bool g_pending_tab_select = false;
@@ -198,7 +179,8 @@ static FilterConfig g_filter_top_snapshot;
 static bool g_filter_initial_present = false;
 static bool g_filter_remove_intent = false;
 
-// Snapshots captured on OpenEditModal for per-tab dirty-mark computation.
+// Snapshots captured on LoadBuffersFromEntry, for the buffer-vs-baseline comparison the filter's
+// commit gate still reads. The per-tab " *" dirty marks these also fed went with the staged mode.
 // Filter already has its own snapshot above (used for a separate purpose in
 // CommitAllBuffers). Crystal / Axis were previously not snapshotted; they are
 // now needed so the tab label can append " *" when the in-flight buffer
@@ -206,30 +188,17 @@ static bool g_filter_remove_intent = false;
 static CrystalConfig g_crystal_buf_snapshot;
 static AxisDist g_axis_buf_snapshot[3];
 
-// Crystal modal: trackball state saved on open, restored on Cancel
-static float g_saved_rotation[16];
-static float g_saved_zoom;
-
 // Crystal modal: mesh hash for edit buffer change detection
 static int g_modal_mesh_hash = 0;
 // Crystal modal: sample_seed the cached mesh was last built with. Paired with g_modal_mesh_hash to
 // form a two-field rebuild gate (param OR seed changed) — kept separate from the param hash rather
 // than XOR-merged, because distinct (hash, seed) pairs could collide to one int and drop a rebuild.
 static unsigned long long g_modal_mesh_seed_built = kPreviewFixedSampleSeed;
-// Crystal modal: preview lifecycle epoch. Bumped on every OpenEditModal / ResetModalState (the two
+// Preview lifecycle epoch. Bumped on every LoadBuffersFromEntry / ResetModalState (the two
 // "new preview session" boundaries) so the animation ticker resets its accumulated time + seed
 // instead of carrying a stale value across sessions (see gui-state-governance: local static timers
 // must be epoch-keyed, not bare timestamps).
 static unsigned long long g_modal_preview_epoch = 0;
-
-// Flag: the OpenPopup call must happen exactly once per modal open,
-// on the frame following the EditRequest.
-static bool g_pending_open = false;
-
-// Flag: Immediate↔Staged switch is a close+reopen cycle that must bypass
-// the Staged Cancel trackball-restore path in HandlePopupClosed; set by the
-// checkbox handler in RenderEditModals, consumed on the next-frame close.
-static bool g_pending_mode_switch = false;
 
 // ============================================================
 // Wedge angle presets for edit modal
@@ -375,8 +344,8 @@ void SetRowsFromSop(const SumOfProducts& sop) {
 }
 
 // Re-snapshot all three buffers as the new dirty-compare baseline. Used by
-// OpenEditModal (initial snapshot) and the Immediate→Staged mode switch
-// (fresh baseline so dirty-mark starts from zero). Does NOT touch trackball
+// LoadBuffersFromEntry (initial snapshot) and by Unlink, which forks the pool slot under the
+// buffers and needs the baseline to follow. Does NOT touch trackball
 // save — that retains the Open-time baseline.
 //
 // Any new edit-buffer field added in the future must be appended here AND
@@ -399,7 +368,7 @@ void SnapshotAllBuffers(const GuiState& state) {
 }  // namespace
 
 // ============================================================
-// OpenEditModal — called from RenderLeftPanel on EditRequest
+// Buffer loading — the page's only initialisation event
 // ============================================================
 
 namespace {
@@ -407,10 +376,10 @@ namespace {
 // Point the edit buffers at entry (ly, en) and fill them from it.
 //
 // This is the whole of what "opening" an editor ever meant: there is no window to raise, only a
-// question of which entry the buffers describe. It is called from OpenEditModal (the retiring popup
+// question of which entry the buffers describe. It is called from RenderCrystalInspector (the only
 // path) and, on the selection edge, from RenderCrystalInspector — the inspector has no open/close
-// lifecycle of its own, so "the user selected a different crystal" is its only initialisation
-// trigger. Caller guarantees the indices are in range.
+// lifecycle of its own, so a change in what it is pointed at is its only initialisation trigger.
+// Caller guarantees the indices are in range.
 void LoadBuffersFromEntry(GuiState& state, int ly, int en) {
   auto& entry = state.layers[ly].entries[en];
   g_modal_layer_idx = ly;
@@ -469,51 +438,18 @@ void LoadBuffersFromEntry(GuiState& state, int ly, int en) {
   // it's Open-time state, not snapshot.
   SnapshotAllBuffers(state);
 
-  // Save trackball state for Cancel restoration
-  std::memcpy(g_saved_rotation, g_crystal_rotation, sizeof(g_saved_rotation));
-  g_saved_zoom = g_crystal_zoom;
   g_modal_mesh_hash = 0;    // Force mesh update on first frame
   g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
+  // The buffers now describe the pool exactly, so this IS the "what we last wrote" baseline —
+  // without re-establishing it here, the reload would be re-triggered every frame by the very
+  // difference it just resolved.
+  g_buf_last_written_crystal = state.crystals[entry.crystal_id];
+  g_buf_last_written_filter_id = entry.filter_id;
+  g_buf_last_written_filter = entry.filter_id.has_value() ? state.filters[*entry.filter_id] : FilterConfig{};
+  g_buf_last_written_valid = true;
 }
 
 }  // namespace
-
-void OpenEditModal(const EditRequest& req, GuiState& state) {
-  if (req.target == EditTarget::kNone) {
-    return;
-  }
-
-  // Validate index
-  int ly = req.layer_idx;
-  int en = req.entry_idx;
-  if (ly < 0 || ly >= static_cast<int>(state.layers.size())) {
-    return;
-  }
-  if (en < 0 || en >= static_cast<int>(state.layers[ly].entries.size())) {
-    return;
-  }
-
-  LoadBuffersFromEntry(state, ly, en);
-
-  switch (req.target) {
-    case EditTarget::kCrystal:
-      g_active_tab = ActiveTab::kCrystal;
-      break;
-    case EditTarget::kAxis:
-      g_active_tab = ActiveTab::kAxis;
-      break;
-    case EditTarget::kFilter:
-      g_active_tab = ActiveTab::kFilter;
-      break;
-    default:
-      return;
-  }
-
-  g_active_modal = ActiveModal::kOpen;
-  g_pending_open = true;
-  g_pending_tab_select = true;
-}
-
 
 // ============================================================
 // Crystal Modal
@@ -533,10 +469,39 @@ static void HandleCrystalPreviewInteraction(bool hovered, bool active) {
   }
 }
 
-// Constant: 3D preview image size inside the left pane (also the FBO display
-// size). WindowPadding is applied by the surrounding child; see the dynamic
-// child-size computation in RenderEditModals.
+// Upper bound on the 3D preview square inside the inspector's crystal page (also the size the FBO
+// texture is drawn at). NOT the drawn size: the page picks a smaller square when the column is
+// short — see InspectorPreviewSide.
 constexpr float kModalPreviewImageSize = 320.0f;
+
+// Floor on that square. Below roughly this the preview stops being an identity anchor and becomes
+// an unreadable smudge, at which point giving the space to the editor is the better trade.
+constexpr float kInspectorPreviewMinSize = 120.0f;
+
+// Largest share of the crystal page the preview may take. The editor below it is the reason the
+// page exists, so the preview yields first when the column is short.
+//
+// Why a share and not a fixed size. The page lives in a docked column whose height is the user's to
+// set, and 320 + chrome is more than the whole column at the default split — which put every
+// control of the Crystal tab below the fold, on a page whose entire purpose is those controls. That
+// is not merely a scrolling inconvenience: ImGui culls TABLE ROWS before submitting them, so the
+// shape property table's rows were not just off screen, they were absent.
+constexpr float kInspectorPreviewMaxHeightRatio = 0.45f;
+
+// Side of the preview square for a page with `avail` left to spend, where `chrome_h` is what the
+// preview's own child costs besides the image (the style/reset row and the child's padding) and
+// `pad_x` the horizontal padding inside it.
+//
+// Three bounds, in the order they bind: the design size, the width of the column, and the share of
+// the height the preview is allowed. The floor is applied last and deliberately wins over the ratio
+// — in a column too short for even the floor, shrinking the preview further buys the editor a few
+// pixels and costs it the anchor entirely, so the page scrolls instead.
+static float InspectorPreviewSide(ImVec2 avail, float chrome_h, float pad_x) {
+  const float by_width = avail.x - pad_x * 2.0f;
+  const float by_height = avail.y * kInspectorPreviewMaxHeightRatio - chrome_h;
+  const float side = std::min({ kModalPreviewImageSize, by_width, by_height });
+  return std::max(side, kInspectorPreviewMinSize);
+}
 
 // Advances (or resets, on a new epoch) the preview animation ticker and returns the sample_seed to
 // build this frame. Kept separate from RenderCrystalPreviewPane so the render function stays focused
@@ -569,9 +534,10 @@ static unsigned long long AdvancePreviewAnimSeed(bool has_random) {
 }
 
 // Render the persistent crystal preview pane (3D image + drag interaction +
-// style selector + reset view). Called from the left BeginChild during modal
-// rendering so the preview stays visible across Crystal / Axis / Filter tabs.
-static void RenderCrystalPreviewPane(GuiState& /*state*/) {
+// style selector + reset view). Called from the page's top child so the preview stays visible
+// across Crystal / Axis / Filter tabs. `image_size` is the side of the square to draw — see
+// InspectorPreviewSide for who decides it and why it is not a constant.
+static void RenderCrystalPreviewPane(GuiState& /*state*/, float image_size) {
   auto& cr = g_crystal_buf;
 
   // Advance the animation ticker; a randomized shape re-samples every tick, an unrandomized one
@@ -599,27 +565,26 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/) {
   // -- 3D Preview (horizontally centered inside the left pane) --
   auto tex_id = static_cast<ImTextureID>(g_crystal_renderer.GetTextureId());
   float avail_w = ImGui::GetContentRegionAvail().x;
-  float offset_x = (avail_w - kModalPreviewImageSize) * 0.5f;
+  float offset_x = (avail_w - image_size) * 0.5f;
   if (offset_x > 0.0f) {
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset_x);
   }
   ImVec2 preview_pos = ImGui::GetCursorScreenPos();
-  ImGui::Image(tex_id, ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImVec2(0, 1), ImVec2(1, 0));
+  ImGui::Image(tex_id, ImVec2(image_size, image_size), ImVec2(0, 1), ImVec2(1, 0));
 
   // Face-number overlay: use the same rotation/zoom/size used by the GL render
   // pass above so screen coords align pixel-for-pixel with the FBO texture.
   if (const auto* m = GetLastCrystalMesh(); m != nullptr) {
     float mvp[16];
-    CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(kModalPreviewImageSize),
-                                static_cast<int>(kModalPreviewImageSize), mvp);
-    DrawFaceNumberOverlay(m, g_crystal_rotation, mvp, g_crystal_zoom, preview_pos,
-                          ImVec2(kModalPreviewImageSize, kModalPreviewImageSize), ImGui::GetWindowDrawList(),
-                          crystal_style);
+    CrystalRenderer::ComputeMvp(g_crystal_rotation, g_crystal_zoom, static_cast<int>(image_size),
+                                static_cast<int>(image_size), mvp);
+    DrawFaceNumberOverlay(m, g_crystal_rotation, mvp, g_crystal_zoom, preview_pos, ImVec2(image_size, image_size),
+                          ImGui::GetWindowDrawList(), crystal_style);
   }
 
-  // Overlay InvisibleButton to consume mouse clicks and prevent modal window drag.
+  // Overlay InvisibleButton to consume mouse clicks and prevent window drag.
   ImGui::SetCursorScreenPos(preview_pos);
-  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(kModalPreviewImageSize, kModalPreviewImageSize));
+  ImGui::InvisibleButton("##modal_preview_interact", ImVec2(image_size, image_size));
   HandleCrystalPreviewInteraction(ImGui::IsItemHovered(), ImGui::IsItemActive());
 
   // Style combo + Reset View (single row — Combo / SameLine / SmallButton).
@@ -755,7 +720,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     ResetCrystalShapeParams(cr);
   }
 
-  // OK / Cancel handled at modal level (RenderEditModals).
+  // No OK / Cancel: the page commits every frame (RenderCrystalInspector).
 }
 
 
@@ -827,7 +792,7 @@ static void RenderAxisModal(GuiState& /*state*/) {
   SetNextComboPopupTopMost();
   RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
 
-  // OK / Cancel handled at modal level (RenderEditModals).
+  // No OK / Cancel: the page commits every frame (RenderCrystalInspector).
 }
 
 
@@ -1101,41 +1066,13 @@ static void RenderFilterModal() {
 
   RenderRemoveFilterButton();
 
-  // OK / Cancel handled at modal level (RenderEditModals).
+  // No OK / Cancel: the page commits every frame (RenderCrystalInspector).
 }
 
 
 // ============================================================
 // Public API
 // ============================================================
-
-// True when the unified edit modal is open (any tab). Used by visual-smoke
-// tests to skip FBO drive while the modal owns the FBO via its per-frame
-// g_crystal_renderer.Render() call. Since the preview pane is now always
-// visible (shared across Crystal / Axis / Filter tabs), the gate condition
-// is modal-open rather than crystal-tab-active.
-bool IsEditModalOpen() {
-  return g_active_modal == ActiveModal::kOpen;
-}
-
-EditModalTarget GetEditModalTarget() {
-  if (!IsEditModalOpen()) {
-    return { -1, -1 };
-  }
-  return { g_modal_layer_idx, g_modal_entry_idx };
-}
-
-EditTarget GetActiveTabAsEditTarget() {
-  switch (g_active_tab) {
-    case ActiveTab::kCrystal:
-      return EditTarget::kCrystal;
-    case ActiveTab::kAxis:
-      return EditTarget::kAxis;
-    case ActiveTab::kFilter:
-      return EditTarget::kFilter;
-  }
-  return EditTarget::kCrystal;
-}
 
 namespace {
 // Defined further down alongside the spectrum-modal statics (same anonymous namespace, this TU).
@@ -1144,13 +1081,8 @@ void ResetSpectrumModalStateGlobals();
 
 void ResetModalState() {
   ResetSpectrumModalStateGlobals();  // clear the spectrum-editor statics too (Major: test isolation)
-  g_active_modal = ActiveModal::kNone;
   g_active_tab = ActiveTab::kCrystal;
   g_pending_tab_select = false;
-  // modal_immediate_mode is GuiState-owned; the test harness's DoNew-based
-  // reset overwrites g_state, but we also clear it here for belt-and-braces
-  // (test lambdas that fail mid-flight may skip their own cleanup tails).
-  g_state.modal_immediate_mode = false;
   g_modal_layer_idx = -1;
   g_modal_entry_idx = -1;
   g_modal_view_crystal_id = -1;
@@ -1165,10 +1097,6 @@ void ResetModalState() {
   g_next_summand_row_uid = 0;
   g_filter_initial_present = false;
   g_filter_remove_intent = false;
-  std::memset(g_saved_rotation, 0, sizeof(g_saved_rotation));
-  g_saved_zoom = 1.0f;
-  g_pending_open = false;
-  g_pending_mode_switch = false;
   g_modal_mesh_hash = 0;
   g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
 }
@@ -1202,9 +1130,10 @@ LUMICE_CrystalKind CurrentValidationKind() {
 // snapshots. Since SummandText::operator== only compares `.text`, the parsed
 // factors cache is intentionally excluded — text is the single canonical form.
 //
-// Used by both the tab-label dirty mark in RenderEditModals AND the
-// `buf_changed` gate inside ApplyBuffersToEntry (commit decision) so both
-// consumers share one definition.
+// Read by the `buf_changed` gate inside ApplyBuffersToEntry (commit decision). It used to feed the
+// tab-label " *" dirty mark as well, which is why it is a named predicate rather than an inline
+// compare; that second reader went with the staged mode, and the predicate is kept as one because
+// the commit decision is exactly the kind of thing that should have a name.
 bool IsFilterDirty() {
   if (g_filter_top != g_filter_top_snapshot) {
     return true;
@@ -1363,24 +1292,6 @@ ApplyBuffersResult ApplyBuffersToEntry(GuiState& state) {
   return { true, entry_changed };
 }
 
-// Staged OK path and Immediate per-frame path share the same commit body: apply
-// the buffer to the pool, then invalidate GUI-side caches (thumbnail + crystal
-// mesh hash). The resim/hard-reset lane is derived centrally by
-// gui_state_reconcile.cpp — pool content diffs promote to soft, filter pool /
-// presence changes promote to hard. That covers what the pre-T2 code did via
-// unconditional MarkDirty+MarkStructHardDirty (staged) and the local
-// filter_changed-gated MarkStructHardDirty (immediate); those two paths now share a
-// single source of truth, closing S6.
-void CommitAllBuffers(GuiState& state) {
-  const auto r = ApplyBuffersToEntry(state);
-  if (!r.valid || !r.entry_changed) {
-    return;
-  }
-  // Invalidate by crystal_id: all entries sharing this crystal get a fresh thumbnail.
-  g_thumbnail_cache.Invalidate(state.layers[g_modal_layer_idx].entries[g_modal_entry_idx].crystal_id);
-  g_crystal_mesh_hash = -1;
-}
-
 void CommitAllBuffersImmediate(GuiState& state) {
   const auto r = ApplyBuffersToEntry(state);
   if (!r.valid || !r.entry_changed) {
@@ -1390,41 +1301,6 @@ void CommitAllBuffersImmediate(GuiState& state) {
   g_crystal_mesh_hash = -1;
 }
 
-// Centralized cleanup for every path that causes BeginPopup* to return false
-// on the frame after a close was requested. Three branches:
-//   1. mode-switch close+reopen: consume g_pending_mode_switch, arm
-//      g_pending_open, keep g_active_modal = kOpen, do NOT restore trackball
-//      (we want to resurface the modal on the next frame with all state
-//      intact).
-//   2. Immediate normal close (bottom Close / Esc / click-outside): changes
-//      are already committed every frame, so just clear g_active_modal.
-//      Trackball edits are user-intentional in Immediate mode — don't revert.
-//   3. Staged close (Cancel button / title-bar × / Esc): revert trackball to
-//      the Open-time snapshot and clear g_active_modal. This branch also
-//      covers the deleted-entry race (the in-body guard calls
-//      CloseCurrentPopup when indices go out of range); the trackball restore
-//      is idempotent and harmless when the entry is already gone.
-void HandlePopupClosed(GuiState& state) {
-  if (g_pending_mode_switch) {
-    g_pending_mode_switch = false;
-    g_pending_open = true;
-    // Replay the OpenEditModal tab-select mechanic so the newly reopened
-    // popup forces BeginTabItem(g_active_tab) onto SetSelected on its first
-    // rendered frame. Without this, ImGui's TabBar silently defaults to the
-    // first tab after the ID stack is regenerated post-close+reopen.
-    g_pending_tab_select = true;
-    return;
-  }
-  if (state.modal_immediate_mode) {
-    g_active_modal = ActiveModal::kNone;
-    return;
-  }
-  std::memcpy(g_crystal_rotation, g_saved_rotation, sizeof(g_crystal_rotation));
-  g_crystal_zoom = g_saved_zoom;
-  g_crystal_mesh_hash = -1;
-  g_active_modal = ActiveModal::kNone;
-}
-
 // Renders the layout-toggle button, the TabBar, and the three tab bodies.
 // Called from both the horizontal (right child) and vertical (bottom child)
 // layout branches with identical arguments; layout-dependent geometry is
@@ -1432,13 +1308,13 @@ void HandlePopupClosed(GuiState& state) {
 void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* axis_label, const char* filter_label,
                        ImGuiTabItemFlags crystal_flags, ImGuiTabItemFlags axis_flags, ImGuiTabItemFlags filter_flags) {
   // Note: H/V layout toggle relocated to the bottom button row alongside the
-  // Immediate checkbox for visual consistency (both are view-preference
-  // toggles; gui-polish-v15 round 2 UX feedback). See RenderEditModals below.
+  // Immediate checkbox for visual consistency. Both are gone with the popup — the page has one
+  // arrangement and one commit mode.
   //
   // task-fix-modal-edit-state-leak — per-entry ID scope for all tab *content*.
   // The "Edit Entry" window is a single persistent ImGui window reused for every
   // entry, and the content widgets carry entry-agnostic IDs: filter rows reset
-  // their uid counter to 0 on each OpenEditModal (so the first row is always
+  // their uid counter to 0 on each LoadBuffersFromEntry (so the first row is always
   // "##row_text_0"), and Crystal/Axis fields use fixed labels ("##Height##..").
   // In Immediate mode the "Edit Entry" window is non-blocking, so a crystal-card
   // click (a raw hit-test in panels.cpp — never a real ImGui widget) can switch
@@ -1542,6 +1418,47 @@ bool RenderSharingRow(GuiState& state) {
   return link_armed;
 }
 
+// Whether the entry's pool content differs from what this page last wrote there.
+//
+// The fourth staleness trigger, and the one with the sharpest failure. The other three ask "is the
+// page pointed at something new"; this one asks "did the document move under a page that is
+// pointed at the same thing and has been visible throughout". Revert is the case that forces it:
+// it restores the pool from the last committed snapshot while the page sits there holding the
+// edited value, and the very next per-frame commit writes the edit straight back — so Revert
+// appears to do nothing at all, on exactly the control the user was editing. Loading a document
+// over the top of an open page is the same shape.
+//
+// Comparing against what WE last wrote, rather than against the buffers, is what keeps this from
+// firing on the user's own typing: mid-edit the buffers differ from the pool by construction, and
+// a reload then would fight the keystrokes. `g_buf_last_written` is recorded after every commit,
+// so a difference here means somebody else assigned the slot.
+bool PoolChangedSinceLastCommit(const GuiState& state, int layer_idx, int entry_idx) {
+  if (!g_buf_last_written_valid) {
+    return false;
+  }
+  const auto& entry = state.layers[layer_idx].entries[entry_idx];
+  if (entry.filter_id != g_buf_last_written_filter_id) {
+    return true;
+  }
+  if (state.crystals[entry.crystal_id] != g_buf_last_written_crystal) {
+    return true;
+  }
+  if (entry.filter_id.has_value() && state.filters[*entry.filter_id] != g_buf_last_written_filter) {
+    return true;
+  }
+  return false;
+}
+
+// Record the entry's pool content as this page's own doing, so the check above can tell a later
+// change by somebody else from the one it just made itself.
+void RememberCommittedPool(const GuiState& state, int layer_idx, int entry_idx) {
+  const auto& entry = state.layers[layer_idx].entries[entry_idx];
+  g_buf_last_written_crystal = state.crystals[entry.crystal_id];
+  g_buf_last_written_filter_id = entry.filter_id;
+  g_buf_last_written_filter = entry.filter_id.has_value() ? state.filters[*entry.filter_id] : FilterConfig{};
+  g_buf_last_written_valid = true;
+}
+
 }  // namespace
 
 void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
@@ -1556,7 +1473,8 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
   // newly-selected one.
   const int crystal_id = state.layers[layer_idx].entries[entry_idx].crystal_id;
   const bool stale = layer_idx != g_modal_layer_idx || entry_idx != g_modal_entry_idx ||
-                     crystal_id != g_buf_crystal_id || ImGui::GetFrameCount() != g_inspector_page_last_frame + 1;
+                     crystal_id != g_buf_crystal_id || ImGui::GetFrameCount() != g_inspector_page_last_frame + 1 ||
+                     PoolChangedSinceLastCommit(state, layer_idx, entry_idx);
   if (stale) {
     LoadBuffersFromEntry(state, layer_idx, entry_idx);
   }
@@ -1584,10 +1502,11 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
   // only one that makes sense in a fixed-width column, so the choice is gone rather than defaulted.
   const ImGuiStyle& style = ImGui::GetStyle();
   const float tool_row = ImGui::GetFrameHeightWithSpacing();
-  const float preview_h = kModalPreviewImageSize + tool_row + style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
-  ImGui::BeginChild("##inspector_preview", ImVec2(-FLT_MIN, preview_h), ImGuiChildFlags_None,
+  const float chrome_h = tool_row + style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
+  const float side = InspectorPreviewSide(ImGui::GetContentRegionAvail(), chrome_h, style.WindowPadding.x);
+  ImGui::BeginChild("##inspector_preview", ImVec2(-FLT_MIN, side + chrome_h), ImGuiChildFlags_None,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  RenderCrystalPreviewPane(state);
+  RenderCrystalPreviewPane(state, side);
   ImGui::EndChild();
 
   // No dirty marks on the labels: " *" meant "these edits are not in the document yet", and here
@@ -1599,409 +1518,7 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
   // AC2's "immediate mode" — not a new mechanism, but the one branch of the modal that was already
   // doing this, now the only branch there is.
   CommitAllBuffersImmediate(state);
-}
-
-void RenderEditModals(GuiState& state, GLFWwindow* window) {
-  // Deferred OpenPopup: only Staged mode uses the popup stack. Immediate mode
-  // drives visibility directly via g_active_modal → title_x_open (see below),
-  // so it neither opens nor consults the popup stack.
-  if (g_pending_open && g_active_modal == ActiveModal::kOpen) {
-    if (!state.modal_immediate_mode) {
-      ImGui::OpenPopup("Edit Entry");
-    }
-    g_pending_open = false;
-  }
-
-  // Index validity guard: if the target entry was deleted while modal is open, close it.
-  if (g_active_modal == ActiveModal::kOpen) {
-    bool valid = g_modal_layer_idx >= 0 && g_modal_layer_idx < static_cast<int>(state.layers.size()) &&
-                 g_modal_entry_idx >= 0 &&
-                 g_modal_entry_idx < static_cast<int>(state.layers[g_modal_layer_idx].entries.size());
-    if (!valid) {
-      g_active_modal = ActiveModal::kNone;
-    }
-  }
-
-  // Size constraints: clamp modal max to the workarea of the monitor containing
-  // the window center, so it cannot overflow a small secondary display. When
-  // the helper cannot identify a monitor (headless tests, nullptr window), fall
-  // back to an unbounded max rather than a primary-monitor default (avoids the
-  // multi-monitor "primary bias" anti-pattern).
-  const float min_w = state.modal_layout_vertical ? kEditModalMinWidthVertical : kEditModalMinWidth;
-  const float min_h = state.modal_layout_vertical ? kEditModalMinHeightVertical : 0.0f;
-  // Snap window width when the user toggles H↔V. SetNextWindowSizeConstraints
-  // alone only bounds the allowed range; an already-sized window stays at its
-  // current width if that value is within the new range. Explicit
-  // SetNextWindowSize on the toggle frame forces the width to the new layout's
-  // minimum; height 0 means "auto-fit to content" (AlwaysAutoResize semantics).
-  static bool s_prev_modal_layout_vertical = state.modal_layout_vertical;
-  if (s_prev_modal_layout_vertical != state.modal_layout_vertical) {
-    s_prev_modal_layout_vertical = state.modal_layout_vertical;
-    ImGui::SetNextWindowSize(ImVec2(min_w, 0.0f));
-  }
-  MonitorRect mon{};
-  if (GetCurrentMonitorWorkArea(window, &mon)) {
-    auto max_w = std::max(min_w, static_cast<float>(mon.w - kWindowDecorationMargin));
-    auto max_h = std::max(static_cast<float>(kMinWindowHeight), static_cast<float>(mon.h - kWindowDecorationMargin));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(max_w, max_h));
-  } else {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(min_w, min_h), ImVec2(FLT_MAX, FLT_MAX));
-  }
-  // Mode dispatch: Staged → BeginPopupModal (blocks background, exposes title-bar ×
-  // via p_open). Immediate → ImGui::Begin (regular window — external clicks pass
-  // through, hover/focus work on background UI, window stays visible until an
-  // explicit close via the bottom Close button or the title-bar ×).
-  //
-  // title_x_open initialization is load-bearing for Immediate: Begin uses it as
-  // p_open, so code-driven close paths (Close button, title-bar ×, mode switch)
-  // set g_active_modal = kNone → next frame title_x_open = false → Begin returns
-  // false → cleanup via HandlePopupClosed's !window_open branch. If this were
-  // kept as `true` unconditionally, code-driven close in Immediate would fail
-  // silently (window re-renders every frame with no assertion). Staged branch
-  // is neutral: BeginPopupModal's visibility is governed by the popup stack,
-  // p_open only controls whether the title-bar × renders.
-  // Dual semantics:
-  //   Immediate: doubles as Begin's p_open — drives window visibility. Initial
-  //              value (g_active_modal==kOpen) → true while modal is open,
-  //              → false the frame after any code-driven close (Close button /
-  //              title ×), cleanly triggering !window_open cleanup.
-  //   Staged:    governs only whether the title-bar × glyph renders;
-  //              BeginPopupModal's visibility is determined by the popup stack.
-  bool title_x_open = (g_active_modal == ActiveModal::kOpen);
-  bool window_open = false;
-  // Pin the dispatch mode for this frame. The Immediate-mode checkbox
-  // (rendered later in body) may flip state.modal_immediate_mode mid-frame,
-  // but End/EndPopup must pair with the container we actually opened here.
-  const bool dispatched_immediate = state.modal_immediate_mode;
-  // H0 outer guard: the Immediate path uses ImGui::Begin, which — unlike
-  // BeginPopupModal — keeps a registered ImGuiWindow in g.Windows and
-  // continues rendering a tomb-stone title bar even when *p_open==false,
-  // until the window is fully garbage-collected across frames. The standard
-  // ImGui pattern for closing a window is to skip the entire Begin/End block
-  // at the call site. Guard only the Immediate branch; Staged
-  // BeginPopupModal on an empty popup stack already returns false without
-  // leaving a stray title bar. The !g_pending_mode_switch clause preserves
-  // the Staged→Immediate mode-switch consume path further down (the body
-  // branch that arms g_pending_tab_select needs Begin to run). Once this
-  // guard is in effect, the inner race-case exit
-  // (dispatched_immediate && g_active_modal != kOpen → End+return) is
-  // unreachable; it is retained as an idempotent safety net for deleted-
-  // entry paths and will become reachable again only if this guard is ever
-  // relaxed.
-  if (dispatched_immediate && !title_x_open && !g_pending_mode_switch) {
-    return;
-  }
-  if (dispatched_immediate) {
-    // Keep the window always-on-top when dragged out to an independent OS
-    // viewport. Without this, losing focus to the main GLFW window would
-    // let the host window cover the detached modal. ViewportFlagsOverrideSet
-    // applies only when the window actually becomes its own viewport; it is
-    // a no-op while docked to the main viewport.
-    ImGuiWindowClass window_class;
-    window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_TopMost;
-    ImGui::SetNextWindowClass(&window_class);
-    // Center the modal on the main viewport ONLY on the very first creation
-    // of this window within the process. After that, ImGui's in-memory
-    // window settings remember the user's dragged position across close/
-    // reopen cycles. ImGuiCond_Appearing would re-center every time the
-    // window re-appears, which is not what we want.
-    const ImGuiViewport* main_vp = ImGui::GetMainViewport();
-    ImVec2 center(main_vp->Pos.x + main_vp->Size.x * 0.5f, main_vp->Pos.y + main_vp->Size.y * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    // NoDocking: with ImGuiConfigFlags_ViewportsEnable, this flag prevents docking into
-    // the main window while still allowing the window to live in its own OS viewport when
-    // dragged outside. Without NoDocking, users could accidentally dock the editor into a
-    // main-window split which is not the intended layout.
-    window_open =
-        ImGui::Begin("Edit Entry", &title_x_open,
-                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse);
-  } else {
-    window_open = ImGui::BeginPopupModal("Edit Entry", &title_x_open, ImGuiWindowFlags_AlwaysAutoResize);
-  }
-  if (!window_open) {
-    // ImGui contract: Begin always pairs with End regardless of return value.
-    // BeginPopupModal when it returns false must NOT be paired with EndPopup.
-    if (dispatched_immediate) {
-      ImGui::End();
-    }
-    // Either the container was never opened, or it was closed on the previous
-    // frame. If the latter (or a mode switch is in flight), run centralized
-    // cleanup so mode switch / trackball restore / g_active_modal reset
-    // converge through HandlePopupClosed.
-    if (g_active_modal == ActiveModal::kOpen || g_pending_mode_switch) {
-      HandlePopupClosed(state);
-    }
-    return;
-  }
-  // Title-bar × close:
-  //   Staged: CloseCurrentPopup → next-frame !window_open → HandlePopupClosed's
-  //           Staged-cancel branch (trackball restore + g_active_modal reset).
-  //           Cancel button / × / Esc share this single path.
-  //   Immediate: no popup-stack entry to close — directly reset g_active_modal.
-  //           Next frame Begin returns false → !window_open cleanup branch.
-  if (!title_x_open) {
-    if (dispatched_immediate) {
-      g_active_modal = ActiveModal::kNone;
-    } else {
-      ImGui::CloseCurrentPopup();
-    }
-  }
-  // Race case: the entry was deleted (index guard above set kNone) or user
-  // just clicked the title-bar × in Immediate mode. Close the container body
-  // for this frame; next frame's !window_open path runs HandlePopupClosed.
-  if (g_active_modal != ActiveModal::kOpen) {
-    if (dispatched_immediate) {
-      ImGui::End();
-    } else {
-      ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-    }
-    return;
-  }
-
-  // Staged → Immediate mode-switch consume: because Begin (unlike
-  // BeginPopupModal on an empty stack) returns true on Frame N+1 with
-  // title_x_open=true, !window_open never fires → HandlePopupClosed cannot
-  // observe the switch. Consume g_pending_mode_switch inline here (body path).
-  // This is the structural inverse of the Immediate → Staged direction, where
-  // BeginPopupModal on an empty popup stack returns false and cleanup flows
-  // through HandlePopupClosed naturally. Known asymmetry: Immediate inbound
-  // (body consume) vs Staged inbound (HandlePopupClosed consume) — a direct
-  // consequence of ImGui's popup stack vs regular window dispatch split.
-  // Counterpart for Immediate → Staged direction: HandlePopupClosed's
-  // mode-switch branch (arms g_pending_open + g_pending_tab_select, keeps
-  // g_active_modal=kOpen), invoked from the !window_open path on Frame N+1
-  // when BeginPopupModal sees an empty popup stack.
-  // Invariant: never touch g_active_modal here (it must stay kOpen until a
-  // user-driven close; see F10 in plan).
-  if (dispatched_immediate && g_pending_mode_switch) {
-    g_pending_mode_switch = false;
-    g_pending_tab_select = true;
-  }
-
-  // Snapshot the SetSelected flags BEFORE any BeginTabItem body runs —
-  // each body writes g_active_tab, which would otherwise overwrite the
-  // pending selection before later tabs (e.g. Filter) read it.
-  const ImGuiTabItemFlags crystal_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kCrystal) ?
-                                              ImGuiTabItemFlags_SetSelected :
-                                              ImGuiTabItemFlags_None;
-  const ImGuiTabItemFlags axis_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kAxis) ?
-                                           ImGuiTabItemFlags_SetSelected :
-                                           ImGuiTabItemFlags_None;
-  const ImGuiTabItemFlags filter_flags = (g_pending_tab_select && g_active_tab == ActiveTab::kFilter) ?
-                                             ImGuiTabItemFlags_SetSelected :
-                                             ImGuiTabItemFlags_None;
-
-  // ---- Sharing status row (Link to... / Unlink) ----
-  // Shared verbatim with the inspector's crystal page (RenderSharingRow). The popup's one extra
-  // obligation is closing itself once pick-mode is armed, since its own backdrop would otherwise
-  // sit between the user and the rows they are meant to click.
-  if (RenderSharingRow(state)) {
-    g_active_modal = ActiveModal::kNone;
-    if (!state.modal_immediate_mode) {
-      ImGui::CloseCurrentPopup();
-    }
-  }
-
-  // Per-tab dirty detection. The label picks up a trailing " *" when the
-  // in-flight buffer differs from the snapshot taken at modal-open. All
-  // labels share a fixed `###` suffix — with three hashes ImGui derives the
-  // internal ID purely from the `###suffix` portion, so the display string
-  // can vary ("Crystal" vs "Crystal *") without changing the tab's hash
-  // (otherwise the tab would lose its SelectedTabId the moment dirty flips,
-  // falling back to the first tab and hiding the user's work-in-progress).
-  // filter_dirty: delegate to IsFilterDirty() so the tab-label "*" and the
-  // commit-time `buf_changed` predicate share a single source of truth. Row
-  // text edits go directly through InputText → row.text (no separate char
-  // buffer to mirror any more under H5), so no pre-sync is needed here.
-  const bool crystal_dirty = g_crystal_buf != g_crystal_buf_snapshot;
-  const bool axis_dirty = g_axis_buf[0] != g_axis_buf_snapshot[0] || g_axis_buf[1] != g_axis_buf_snapshot[1] ||
-                          g_axis_buf[2] != g_axis_buf_snapshot[2];
-  const bool filter_dirty = IsFilterDirty();
-  // Immediate mode: changes apply every frame, so "dirty" is not a meaningful
-  // state — suppress the * mark on all tabs regardless of buffer vs snapshot.
-  const bool show_dirty = !state.modal_immediate_mode;
-  const char* crystal_label = (show_dirty && crystal_dirty) ? "Crystal *###crystal_tab" : "Crystal###crystal_tab";
-  const char* axis_label = (show_dirty && axis_dirty) ? "Axis *###axis_tab" : "Axis###axis_tab";
-  const char* filter_label = (show_dirty && filter_dirty) ? "Filter *###filter_tab" : "Filter###filter_tab";
-
-  // Layout dispatch. Horizontal: preview on left, tab bar on right (default).
-  // Vertical: preview on top (full width), tab bar below (full width, scrollable).
-  // Both share the same preview child height and the same RenderModalTabBar body;
-  // only the container geometry and the SameLine/no-SameLine differ.
-  const ImGuiStyle& style = ImGui::GetStyle();
-  const float kPreviewChildW_H = kModalPreviewImageSize + style.WindowPadding.x * 2.0f + 4.0f;
-  const float kToolRow = ImGui::GetFrameHeightWithSpacing();
-  const float kVPad = style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
-  const float kPreviewChildHeight = kModalPreviewImageSize + kToolRow + kVPad;
-  // Content pane height (tab bar + the tallest tab body). Sized to fit the tallest crystal layout —
-  // Pyramid + all 6 Face Distance rows expanded (~16 rows + tab bar) — so that case no longer needs a
-  // scrollbar. Kept a FIXED height (not ImGuiChildFlags_AutoResizeY): a content-driven size grows the
-  // modal downward past the screen bottom as sections/rows expand and it drops the scroll fallback
-  // that genuinely tall content (e.g. a many-row filter, up to kMaxSummandRows) still relies on — so
-  // content taller than this still scrolls, while the fixed size keeps the modal centered on appear.
-  const float kModalContentHeight = kToolRow + 17.0f * ImGui::GetFrameHeightWithSpacing() + kVPad;
-  bool vertical = state.modal_layout_vertical;
-
-  if (vertical) {
-    // Upper pane: preview, full modal width, fixed height.
-    ImGui::BeginChild("##modal_top_pane", ImVec2(-FLT_MIN, kPreviewChildHeight), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    RenderCrystalPreviewPane(state);
-    ImGui::EndChild();
-    // Lower pane: tab bar + body, at kModalContentHeight so the tallest crystal layout fits without a
-    // scrollbar (taller content still scrolls; see the constant's rationale).
-    ImGui::BeginChild("##modal_bottom_pane", ImVec2(-FLT_MIN, kModalContentHeight), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_None);
-    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
-    ImGui::EndChild();
-  } else {
-    // Horizontal: existing layout. Left pane NoScrollbar + NoScrollWithMouse (fixed preview height);
-    // right pane sizes off remaining width and uses kModalContentHeight so the tallest tab content
-    // (Pyramid + all Face Distance rows) fits without a scrollbar (taller content still scrolls).
-    const float right_w = std::max(320.0f, ImGui::GetContentRegionAvail().x - kPreviewChildW_H - style.ItemSpacing.x);
-    ImGui::BeginChild("##modal_left_pane", ImVec2(kPreviewChildW_H, kPreviewChildHeight), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    RenderCrystalPreviewPane(state);
-    ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("##modal_right_pane", ImVec2(right_w, kModalContentHeight), ImGuiChildFlags_None);
-    RenderModalTabBar(state, crystal_label, axis_label, filter_label, crystal_flags, axis_flags, filter_flags);
-    ImGui::EndChild();
-  }
-
-  // Immediate mode: push buffer→entry every frame (diff-gated inside
-  // CommitAllBuffersImmediate; no-op when nothing changed). Esc / click-outside
-  // close are default BeginPopup behaviors — no explicit handling needed.
-  if (state.modal_immediate_mode) {
-    CommitAllBuffersImmediate(state);
-  }
-
-  ImGui::Separator();
-  // Bottom row: mode-specific buttons + Immediate mode checkbox anchored
-  // to the right edge.
-  if (state.modal_immediate_mode) {
-    // Immediate: single Close (no Cancel semantics — changes are already applied).
-    // No CloseCurrentPopup: we are inside ImGui::Begin (regular window), the
-    // popup stack has no "Edit Entry" entry. Setting g_active_modal=kNone
-    // drives the next-frame cleanup via title_x_open=false → Begin returns
-    // false → !window_open branch.
-    if (ImGui::Button("Close##edit_modal", ImVec2(80, 0))) {
-      g_active_modal = ActiveModal::kNone;
-    }
-  } else {
-    // Staged: OK / Cancel.
-    // OK gate: empty raypath is treated as "no filter" (ApplyBuffersToEntry
-    // writes nullopt), so validation only applies when the user actually
-    // typed something. This subsumes the previous "Remove intent" gating
-    // branch without a dedicated flag.
-    bool ok_disabled = false;
-    // ok_tooltip_storage owns the row-index-templated string; ok_tooltip points
-    // into it (or into a static literal). SetTooltip("%s", ok_tooltip) is only
-    // called after `.c_str()` is valid for the duration of the frame — the
-    // storage outlives the IsItemHovered check below.
-    std::string ok_tooltip_storage;
-    const char* ok_tooltip = nullptr;
-    if (!g_filter_remove_intent) {
-      const auto kind = CurrentValidationKind();
-      for (size_t i = 0; i < g_summand_rows.size(); ++i) {
-        const auto v = ValidateSummandText(g_summand_rows[i].text, kind);
-        if (!SummandRowBlocksCommit(v.state)) {
-          continue;
-        }
-        ok_disabled = true;
-        ok_tooltip_storage = SummandRowOkTooltip(i, v);
-        ok_tooltip = ok_tooltip_storage.c_str();
-        break;
-      }
-    }
-
-    ImGui::BeginDisabled(ok_disabled);
-    // Use the wider of the two labels for both buttons so the OK/Cancel pair
-    // stays visually balanced regardless of glyph-width differences.
-    const char* kOkLabel = ICON_FA_CHECK " OK##edit_modal";
-    const char* kCancelLabel = ICON_FA_XMARK " Cancel##edit_modal";
-    float ok_cancel_width =
-        std::max(ImGui::CalcTextSize(kOkLabel, nullptr, true).x, ImGui::CalcTextSize(kCancelLabel, nullptr, true).x) +
-        ImGui::GetStyle().FramePadding.x * 2.0f;
-    if (ImGui::Button(kOkLabel, ImVec2(ok_cancel_width, 0))) {
-      CommitAllBuffers(state);
-      g_active_modal = ActiveModal::kNone;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndDisabled();
-    if (ok_disabled && ok_tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("%s", ok_tooltip);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(kCancelLabel, ImVec2(ok_cancel_width, 0))) {
-      // Cleanup (trackball restore, g_active_modal reset) is delegated to
-      // HandlePopupClosed on the next frame via the !window_open path, so
-      // Cancel / title-bar × / Esc all share a single code path.
-      ImGui::CloseCurrentPopup();
-    }
-  }
-
-  // View-preference toggles (Vertical layout + Immediate), right-aligned on the
-  // button row. Both are checkboxes for visual consistency: neither marks the
-  // file dirty, both affect UI presentation only.
-  ImGui::SameLine();
-  constexpr float kViewToggleGroupWidth = 210.0f;  // "Vertical" + "Immediate" checkboxes + padding
-  const float avail = ImGui::GetContentRegionAvail().x;
-  if (avail > kViewToggleGroupWidth) {
-    ImGui::Dummy(ImVec2(avail - kViewToggleGroupWidth, 0));
-    ImGui::SameLine();
-  }
-  // Vertical layout toggle (view preference — does NOT mark the file dirty).
-  // Checked = stacked layout (preview on top); unchecked = side-by-side.
-  Checkbox("Vertical##layout_toggle", &state.modal_layout_vertical);
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("%s", state.modal_layout_vertical ? "Stacked layout (preview on top)" :
-                                                          "Side-by-side layout (preview on left)");
-  }
-  ImGui::SameLine();
-  // ImGui::Checkbox returns true only on the frame the user actually toggled
-  // the value, so checking the return alone is sufficient to detect a change.
-  if (Checkbox("Immediate##edit_modal", &state.modal_immediate_mode)) {
-    g_pending_mode_switch = true;
-    if (state.modal_immediate_mode) {
-      // Staged → Immediate: commit in-flight buffer to state so any pending
-      // edits become the live baseline. Use the Immediate path (not
-      // CommitAllBuffers) to avoid MarkStructHardDirty clearing the display on
-      // crystal-only changes — that would zero infinite-rays accumulation
-      // at the exact moment the user wants to start observing live changes.
-      CommitAllBuffersImmediate(state);
-      // Current frame is still inside BeginPopupModal (dispatch at frame-start
-      // used the old mode). CloseCurrentPopup keeps the popup stack clean;
-      // Frame N+1 enters the Immediate Begin branch and consumes
-      // g_pending_mode_switch inline (see race-case guard + inline consume).
-      ImGui::CloseCurrentPopup();
-    } else {
-      // Immediate → Staged: re-snapshot the current buffer state as the new
-      // dirty-compare baseline (dirty-mark starts from zero going forward).
-      SnapshotAllBuffers(state);
-      // Current frame is still inside ImGui::Begin (dispatch at frame-start
-      // used the old mode). Do NOT call CloseCurrentPopup — the popup stack
-      // has no "Edit Entry" entry to close. Flow:
-      //   Frame N+1: Staged BeginPopupModal on empty stack → returns false →
-      //              !window_open → HandlePopupClosed's mode-switch branch
-      //              keeps g_active_modal=kOpen, arms g_pending_open +
-      //              g_pending_tab_select.
-      //   Frame N+2: L713 reopen gate fires → OpenPopup + BeginPopupModal
-      //              return true same frame → modal visible with tab replay.
-      // Invariant: do NOT touch g_active_modal here (must stay kOpen for the
-      // reopen gate to fire in Frame N+2).
-    }
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Apply parameter changes to simulation in real-time");
-  }
-
-  if (dispatched_immediate) {
-    ImGui::End();
-  } else {
-    ImGui::EndPopup();
-  }
+  RememberCommittedPool(state, layer_idx, entry_idx);
 }
 
 // ========== Custom Spectrum Modal ==========

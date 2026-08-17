@@ -63,7 +63,6 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
 }
 
 // ---- Edit request state ----
-EditRequest g_edit_request;
 
 }  // namespace
 
@@ -512,7 +511,7 @@ bool RaysBudgetControl(GuiState& state, float total_width) {
 // with the modal when the modal is detached into its own OS viewport. Without
 // this, combo popups default to normal level (0) while the detached modal sits
 // at NSFloatingWindowLevel (3, set via the modal's own SetNextWindowClass /
-// ImGuiViewportFlags_TopMost in RenderEditModals), causing the popup to render
+// ImGuiViewportFlags_TopMost on a detached modal), causing the popup to render
 // behind the modal — invisible and click-throughable. Must be called before
 // every modal-internal `BeginCombo` / `Combo` / `RenderAxisDist` call site.
 //
@@ -1054,19 +1053,15 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
 }
 
 
-// ---- Selection and edit accessors ----
+// ---- Selection reset ----
 
-const EditRequest& GetEditRequest() {
-  return g_edit_request;
-}
-
-void ResetEditRequest() {
-  g_edit_request = EditRequest{};
-}
-
-void ResetPendingDeleteState() {
-  g_edit_request = EditRequest{};
-}
+// Kept as a no-op rather than deleted, and the name is now doubly wrong — it reset neither a
+// pending delete (that went years ago) nor, since the edit modal retired, an edit request. What it
+// still is, is the one symbol every gui_test teardown calls to say "the left panel owns nothing
+// across cases". Deleting it means editing every one of those teardowns; leaving it means the day
+// this panel acquires cross-case state again, there is already a place for it. That day is the
+// only thing that justifies the symbol, so if it has not come by the next cleanup pass, delete it.
+void ResetPendingDeleteState() {}
 
 
 // ========== Document tree ==========

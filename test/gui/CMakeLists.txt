@@ -32,7 +32,17 @@ add_executable(gui_test
     visual/test_preview_pixels.cpp
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
-    visual/test_gui_modal_layout.cpp
+    # visual/test_gui_modal_layout.cpp — OUT OF THE BUILD, not deleted.
+    #
+    # Its four scenes photograph the "Edit Entry" window's internal layout, and that window no
+    # longer exists: the crystal / axis / filter editors are the document inspector's crystal page.
+    # The scenes therefore have no subject, and the file cannot compile — it drives OpenEditModal.
+    #
+    # Left in the tree rather than removed because deciding what replaces it is a separate piece of
+    # work (the reference images under test/gui/references/, the `modal_layout` entry in
+    # scripts/regen_gui_test_refs.py's GROUPS, and its thresholds in _thresholds.json are all still
+    # there and all still name it). Whoever picks that up needs the scene table and the capture
+    # protocol in this file, and reconstructing them from git history would be pure waste.
     visual/test_gui_defaults_panel.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
