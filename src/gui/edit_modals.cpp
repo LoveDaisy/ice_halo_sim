@@ -1568,6 +1568,18 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
     // while they choose what to link TO.
   }
 
+  // Weight (relative ray share within this layer): the one Row-4 control from the old card/modal
+  // that edits `entry.proportion` directly rather than through the Crystal/Axis/Filter buffers —
+  // it is an entry property, not a crystal one, so it lives here next to the sharing row instead of
+  // inside a tab. The tree row that used to host this slider now shows the value read-only (see
+  // RenderEntryRow in panels.cpp), pointing here as its replacement.
+  {
+    auto& entry = state.layers[layer_idx].entries[entry_idx];
+    char weight_label[32];
+    snprintf(weight_label, sizeof(weight_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
+    SliderWithInput(weight_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+  }
+
   // Preview above, tabs below — the "vertical" arrangement the modal offered as an option is the
   // only one that makes sense in a fixed-width column, so the choice is gone rather than defaulted.
   const ImGuiStyle& style = ImGui::GetStyle();

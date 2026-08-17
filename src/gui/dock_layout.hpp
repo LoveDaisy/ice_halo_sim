@@ -44,7 +44,7 @@ constexpr const char* kRightPanelWindowName = "##RightPanel";
 // DockNodeTreeUpdatePosSize recurses from the root every frame and distributes each split node's
 // size to its children), so collapsing the column does not need to know it has two halves.
 struct DockPanelNodeIds {
-  ImGuiID left = 0;
+  ImGuiID left = 0;  // Parent split node, NOT a leaf — no window docks into `left` itself; see above.
   ImGuiID document_tree = 0;
   ImGuiID document_inspector = 0;
   ImGuiID right = 0;
