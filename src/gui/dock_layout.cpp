@@ -36,6 +36,29 @@ bool g_reset_layout_requested = false;
 // than recomputed by every caller that needs to look the node up.
 ImGuiID g_dockspace_id = 0;
 
+// The node a panel window currently lives in, or 0 if it lives in none. Reading it back from the
+// window is what makes a layout restored from the .ini usable: that path never runs the builder, so
+// the IDs it hands out are the ones the settings file recorded, not the ones any build produced. It
+// also means a panel dragged to a different node keeps working, without a cache to invalidate.
+// DockId rather than DockNode covers the frames after settings are loaded but before the window's
+// first Begin, where the binding exists and the node pointer is not yet resolved.
+ImGuiID DockedNodeIdOf(const char* window_name) {
+  const ImGuiWindow* window = ImGui::FindWindowByName(window_name);
+  if (window == nullptr) {
+    return 0;
+  }
+  return window->DockNode != nullptr ? window->DockNode->ID : window->DockId;
+}
+
+void RefreshPanelNodeIds() {
+  if (const ImGuiID left = DockedNodeIdOf(kLeftPanelWindowName)) {
+    g_panel_node_ids.left = left;
+  }
+  if (const ImGuiID right = DockedNodeIdOf(kRightPanelWindowName)) {
+    g_panel_node_ids.right = right;
+  }
+}
+
 }  // namespace
 
 void ApplyDockingConfig(ImGuiIO& io) {
@@ -83,6 +106,7 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
   const ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspace_id);
   const bool already_built = node != nullptr && node->IsSplitNode();
   if (already_built && !g_reset_layout_requested) {
+    RefreshPanelNodeIds();
     return;
   }
   g_reset_layout_requested = false;
@@ -114,8 +138,8 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
 
   // ##PreviewPanel is intentionally NOT docked -- see kDockSpaceFlags. It is positioned over the
   // (permanently empty) central node by GetCentralNodeRect().
-  ImGui::DockBuilderDockWindow("##LeftPanel", left_id);
-  ImGui::DockBuilderDockWindow("##RightPanel", right_id);
+  ImGui::DockBuilderDockWindow(kLeftPanelWindowName, left_id);
+  ImGui::DockBuilderDockWindow(kRightPanelWindowName, right_id);
   ImGui::DockBuilderFinish(dockspace_id);
 
   g_panel_node_ids.left = left_id;
@@ -136,6 +160,11 @@ void ResizePanelNode(ImGuiID node_id, ImVec2 size) {
   }
   ImGui::DockBuilderSetNodeSize(node_id, size);
   ImGui::DockBuilderFinish(node_id);
+}
+
+float GetPanelNodeWidth(ImGuiID node_id) {
+  const ImGuiDockNode* node = node_id != 0 ? ImGui::DockBuilderGetNode(node_id) : nullptr;
+  return node != nullptr ? node->Size.x : 0.0f;
 }
 
 bool GetCentralNodeRect(ImVec2* out_pos, ImVec2* out_size) {

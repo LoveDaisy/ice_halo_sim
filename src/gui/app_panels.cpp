@@ -513,23 +513,37 @@ void RenderCollapsedStrip(const char* btn_label, bool* collapsed) {
   }
 }
 
-// A side panel's collapsed/expanded state is now the width of its dock node. Two things about the
+// Which collapse state has already been written to which node. Per panel, kept by the caller.
+struct PanelCollapseTracker {
+  ImGuiID node_id = 0;
+  bool applied = false;
+};
+
+// A side panel's collapsed/expanded state is now the width of its dock node. Three things about the
 // shape of this:
 //   - It writes only on a transition, never every frame. A per-frame DockBuilderSetNodeSize would
 //     silently undo a splitter drag on the very next frame, i.e. the panels would look resizable and
 //     not be.
-//   - The "have I applied this yet" marker is the caller's own static rather than a
-//     previous-frame copy of the flag. Anything that resets the flag from outside the render path
-//     (ResetTestState between gui_test cases, View -> Reset Layout) then reads as an ordinary
-//     transition on the next frame instead of being missed.
-// The node ID is read fresh from dock_layout on every call, never cached: a Reset Layout rebuilds
-// the tree and hands out new IDs, and resizing the old one would silently do nothing.
+//   - The node ID is read fresh from dock_layout on every call, never cached: a Reset Layout
+//     rebuilds the tree and hands out new IDs, and resizing the old one would silently do nothing.
+//   - When the node changes (first frame, or a rebuild), the marker is seeded from the layout rather
+//     than from a default. The interactive app persists the dock tree but not GuiState, so a session
+//     that quit with a panel collapsed comes back with a strip-wide node and a flag that says
+//     expanded; a marker starting at "expanded" would agree with the flag, see no transition, and
+//     leave the panel rendering its full content inside a 20 px column.
 void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_width, float node_height,
-                             bool* applied_collapsed) {
-  if (node_id == 0 || collapsed == *applied_collapsed) {
+                             PanelCollapseTracker* tracker) {
+  if (node_id == 0) {
     return;
   }
-  *applied_collapsed = collapsed;
+  if (tracker->node_id != node_id) {
+    tracker->node_id = node_id;
+    tracker->applied = GetPanelNodeWidth(node_id) <= kCollapseBtnSize;
+  }
+  if (collapsed == tracker->applied) {
+    return;
+  }
+  tracker->applied = collapsed;
   ResizePanelNode(node_id, ImVec2(collapsed ? kCollapseBtnSize : expanded_width, node_height));
 }
 
@@ -544,16 +558,16 @@ constexpr ImGuiWindowFlags kSidePanelBaseFlags =
 void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
-  static bool s_collapse_applied = false;
+  static PanelCollapseTracker s_collapse;
   ApplyPanelCollapseWidth(GetPanelNodeIds().left, g_state.left_panel_collapsed, kLeftPanelWidth, panel_height,
-                          &s_collapse_applied);
+                          &s_collapse);
 
   if (g_state.left_panel_collapsed) {
     // The window is still submitted, holding a strip-wide dock node, rather than skipped: a docked
     // window that stops submitting makes its node invisible, and the neighbours take the space back
     // the same frame — the strip would end up on top of the preview instead of beside it.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("##LeftPanel", nullptr,
+    ImGui::Begin(kLeftPanelWindowName, nullptr,
                  kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
@@ -572,7 +586,7 @@ void RenderLeftPanel(float window_height) {
   std::optional<GuiState::EntryRef> pick_source_at_entry =
       pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
 
-  ImGui::Begin("##LeftPanel", nullptr,
+  ImGui::Begin(kLeftPanelWindowName, nullptr,
                kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
@@ -678,21 +692,21 @@ void RenderLeftPanel(float window_height) {
 void RenderRightPanel(GLFWwindow* window, float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
-  static bool s_collapse_applied = false;
+  static PanelCollapseTracker s_collapse;
   ApplyPanelCollapseWidth(GetPanelNodeIds().right, g_state.right_panel_collapsed, kRightPanelWidth, panel_height,
-                          &s_collapse_applied);
+                          &s_collapse);
 
   if (g_state.right_panel_collapsed) {
     // See RenderLeftPanel for why the window is still submitted while collapsed.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("##RightPanel", nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
+    ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
     RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
     ImGui::End();
     return;
   }
 
-  ImGui::Begin("##RightPanel", nullptr, kSidePanelBaseFlags);
+  ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {

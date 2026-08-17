@@ -22,9 +22,15 @@ namespace lumice::gui {
 //     from ImGui::GetWindowSize() like any other window; adding a second way to ask for that size
 //     would create a value that can disagree with the window's actual geometry.
 
-// IDs of the two side dock nodes of the default layout. Valid only after BuildDefaultDockLayout()
-// has executed at least once; before that both fields are 0 (a value no dock node ever has), and
-// callers must treat 0 as "layout not built yet" rather than as a node.
+// The two side panels' ImGui window names. Defined here because this module has to name them in
+// order to dock them, and a second spelling in app_panels.cpp's Begin calls would dock a window that
+// does not exist — silently, since docking a never-submitted window is not an error.
+constexpr const char* kLeftPanelWindowName = "##LeftPanel";
+constexpr const char* kRightPanelWindowName = "##RightPanel";
+
+// IDs of the dock nodes the two side panels currently occupy. Valid only after
+// BuildDefaultDockLayout() has run at least once; before that both fields are 0 (a value no dock
+// node ever has), and callers must treat 0 as "layout not built yet" rather than as a node.
 struct DockPanelNodeIds {
   ImGuiID left = 0;
   ImGuiID right = 0;
@@ -49,12 +55,22 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h);
 // set it directly would be a second owner of "when does the layout get rebuilt".
 void RequestDockLayoutReset();
 
-// Current side-node IDs. See DockPanelNodeIds for the not-built-yet contract.
+// Current side-node IDs. See DockPanelNodeIds for the not-built-yet contract. Refreshed by
+// BuildDefaultDockLayout on every frame, so a layout that came back from the .ini (which never goes
+// through the builder) reports the nodes it actually restored, not the ones a previous run built.
 const DockPanelNodeIds& GetPanelNodeIds();
 
 // Sets a dock node's size, e.g. to collapse a side panel to a narrow strip. This is the only way for
 // code outside this module to move a dock node; the DockBuilder call itself stays here.
 void ResizePanelNode(ImGuiID node_id, ImVec2 size);
+
+// Current width of a dock node, or 0 when there is no such node.
+//
+// This is not a general geometry service, and does not contradict the rule above that a docked
+// window reads its size from ImGui::GetWindowSize(): it answers a question about the layout BEFORE
+// the window exists — after a restore from the .ini, the first frame has a dock tree and no windows
+// at all — which no window can be asked. Per-frame geometry still comes from the window.
+float GetPanelNodeWidth(ImGuiID node_id);
 
 // Rectangle of the dockspace's central node, in main-viewport-local coordinates. The central node is
 // kept empty on purpose (ImGuiDockNodeFlags_PassthruCentralNode + NoDockingOverCentralNode), so this
