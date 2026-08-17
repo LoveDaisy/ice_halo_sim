@@ -104,3 +104,39 @@ docking 基底已经就位，形态**刻意未变**（面板组织、编辑 moda
   参考图绝不能依赖跑测机器上碰巧存在的布局文件。**新增视觉参考场景时不要"顺手打开"测试侧的持久化。**
 
 - 测试影响：`modal_layout` 参考组随编辑模态退役而废弃（其覆盖的控件布局命题由检视器侧的新参考组接手）；`defaults_panel_layout` 的 Settings 面板不在本文范围、暂不受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考随每步 shell 改动失效，重拍税一次性付清于 shell 收尾（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
+
+### 7.2 执行簇 as-built（顶栏，§3 已落地）
+
+§3 的执行簇已建成，三处细节属 §6 的落地自由度、由实现侧定案，写在这里免得下一个人重新推一遍：
+
+- **顶栏是两行，不是一行**。§1 的 ASCII 图把文件簇、执行簇、窗口簇画在一行，那是形态示意；一行装不下
+  是实测而非估计——chrome（面板折叠 / New / Open / Save / Colors / Colored / Settings / View）本身约
+  700 px，执行簇再加约 800 px，连 1600 px 的默认窗口都溢出，更不用说 `kMinWindowWidth`。定案：
+  **第一行 chrome，第二行执行簇**（Run/Stop · dirty 芯片 + Revert · Rays · Max hits · Use GPU · 进度），
+  按生命周期分行，与三区划分同一条组织原则。`kTopBarHeight` 因此从 40 变 64
+  （= `WindowPadding.y*2 + FrameHeight*2 + ItemSpacing.y` = 57 取整留余）。执行簇整行约 985 px，
+  在 1024 px 下**仍完整装下**（实测，非估算）；再窄则裁掉行尾，不重排——Run、dirty 芯片、光线预算这三个
+  最常用的留在最左。
+- **⭐ Rays ∞ 档位：档位边界闭在 ∞ 一侧，所以最大有限值靠拖拽结构上不可达**。轨道 `[0, 0.88)` 映射有限域
+  `[min, max)`，`[0.88, 1]` 是显示 "until stopped" 的档位。这不是「像素精度不够所以很难拖到」，而是映射本身
+  就取不到 `max`——**这正是「输入框必须始终可编辑」的对偶**，两条一起才让 ∞ 保持为终止语义而不是
+  「一个很大的数」（约束出处 `doc/gui-visual-language.md` §4.5）。任何让轨道顶端吸附到 `max` 的「顺手改进」
+  都会同时废掉这两条。
+  另一条同样容易被改掉的性质：**拖进档位时要还原拖拽前的有限值**。ImGui 滑条每帧从指针绝对位置反算值，
+  所以「从 5 M 拖到最右」这条路径本身会把 5 一路改写成接近 100；不还原，用户就带着一个自己没输过的数字
+  进入 ∞。这条性质原本属于被退役的 `Infinite rays` 复选框，它不因为复选框没了而失效。
+- **dirty 芯片没有自己的字段清单**。判据是 `IsModified(sim_state)` ← `dirty` ←
+  `DiffAgainstCommitBaseline`，全链单一。值得知道的边界：`gui_state_tiers.hpp` 的 tier 表以**整个 struct**
+  为一行，而提交基线只捕获 `renderer` 的 re-sim 投影（`RenderConfigResimFields`：分辨率 / 背景 / 光线色 /
+  不透明度）——所以改 `renderer.fov` **不会**点亮芯片，改 `renderer.sim_resolution_index` 会。芯片跟随的是
+  更细、也更权威的那个投影；tier 表在 struct 粒度上是治理文档，不是运行判据。
+- **芯片与 Revert 是两个动作，不合并**：芯片带着新配置重跑，Revert 把新配置扔掉；合并等于删掉后者。
+  芯片在运行中天然不可见——`ReconcileSimState` 只从 `kDone` 产生 `kModified`，`kSimulating` / `kStopping`
+  不被 dirty 降级，运行中的编辑走 `main.cpp` 的节流自动提交。
+- **进度槽**：有限预算画 `ImGui::ProgressBar(已追迹 / 预算)`；∞ 档位不画条、只写 "until stopped"——满条读作
+  「已完成」、空条读作「卡住」，∞ 本来就没有分母。两个分支占同一固定宽度，行长不随运行状态跳动。
+  状态指示文字（Ready / Simulating… / Done / Modified）**留在状态栏**，与 §1 的 ASCII 图一致。
+- 测试影响：执行簇的用例住 `test/gui/functional/test_execution_cluster.cpp`（按字段用途切分：这一次跑多狠
+  归执行簇，会被保存的文档字段留 `test_scene_controls.cpp`）。`kTopBarHeight` 变化会改变 `visual` 组
+  `left_panel` 参考图的捕获高度（`test_gui_main.cpp` 的回读按 `fb_h - (kTopBarHeight + kStatusBarHeight)*sy`
+  算），该参考图与 `capture_harness` 整帧一并进入 shell 收尾的一次性重拍。
