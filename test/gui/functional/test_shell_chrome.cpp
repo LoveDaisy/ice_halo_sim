@@ -1,5 +1,5 @@
-// The window's chrome: the top bar's shape, the collapse strips, and where the log panel sits in
-// the stack.
+// The window's chrome: the top bar's shape, the collapse strips, the splitter between a side panel
+// and the viewport, and where the log panel sits in the stack.
 //
 // What this suite is for. These are the parts of the shell that have no state of their own — they
 // are about where things are and what is on top of what, which is a property of a rendered frame
@@ -105,6 +105,80 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       left = ctx->GetWindowByRef("##LeftPanel");
       IM_CHECK(left != nullptr);
       IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+    };
+  }
+
+  // The side panels are dock nodes, so the seam between a panel and the viewport is a splitter the
+  // user can drag. That is the whole point of the docking substrate, and nothing else in the suite
+  // states it — a regression that froze the splitter (or left the panels placed by arithmetic again)
+  // would show up as every other case still passing.
+  //
+  // The preview is checked alongside the panel because the two are one proposition: the viewport is
+  // placed from the central dock node's rectangle, so a panel that resizes while the preview stays
+  // put means the preview is still being derived from the width constants.
+  //
+  // The preview WINDOW's rectangle is what is read, not g_preview_vp: the GL viewport is only
+  // published when there is something to draw into it, and this case has no simulation result. The
+  // two come from the same central-node rect one line apart in RenderPreviewPanel.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "shell_chrome", "dragging_the_left_splitter_resizes_the_panel_and_the_preview");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+      ImGuiWindow* preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      const float preview_x_before = preview->Pos.x;
+      const float preview_w_before = preview->Size.x;
+
+      // The splitter sits in the gap immediately right of the panel; aim at its middle, which is
+      // half of style.DockingSeparatorSize past the panel's right edge.
+      const ImGuiViewport* vp = ImGui::GetMainViewport();
+      const float seam_x = gui::kLeftPanelWidth + ImGui::GetStyle().DockingSeparatorSize * 0.5f;
+      const float seam_y = vp->Size.y * 0.5f;
+      constexpr float kDragBy = 60.0f;
+
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x, vp->Pos.y + seam_y));
+      ctx->MouseDown(0);
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x + kDragBy, vp->Pos.y + seam_y));
+      ctx->MouseUp(0);
+      ctx->Yield(3);
+
+      left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      // Not an exact width: the splitter lands where the pointer left it, and ImGui truncates the
+      // resulting node sizes. What must be true is that the drag moved the panel, and moved it the
+      // way it was dragged.
+      IM_CHECK_GT(left->Size.x, gui::kLeftPanelWidth);
+      preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      IM_CHECK_GT(preview->Pos.x, preview_x_before);
+      IM_CHECK_LT(preview->Size.x, preview_w_before);
+
+      // Drag back, for two reasons. It states that a splitter drag is reversible — a resize that
+      // quantises differently in each direction leaves the user unable to get their layout back. And
+      // it is how this case cleans up after itself: the dock layout outlives ResetTestState, so a
+      // panel left 60 px wider would be the width every later case (including the ones comparing
+      // against reference images) runs at. Restoring by dragging rather than by rebuilding the
+      // layout keeps the panels docked throughout; a rebuild costs the next case a frame in which
+      // the panels' child windows are not submitted.
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x + kDragBy, vp->Pos.y + seam_y));
+      ctx->MouseDown(0);
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x, vp->Pos.y + seam_y));
+      ctx->MouseUp(0);
+      ctx->Yield(3);
+
+      left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+      preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      IM_CHECK_EQ(preview->Pos.x, preview_x_before);
+      IM_CHECK_EQ(preview->Size.x, preview_w_before);
     };
   }
 

@@ -136,6 +136,12 @@ void ResetTestState() {
   gui::g_crystal_style = 1;
   gui::g_state.left_panel_collapsed = false;
   gui::g_state.right_panel_collapsed = false;
+  // NOTE: panel geometry is a dock layout now, and the dock layout outlives g_state — a case that
+  // moves a splitter hands the next case a different panel width unless it puts it back. This reset
+  // deliberately does NOT rebuild the layout to enforce that: DockBuilderRemoveNode undocks and
+  // re-docks the panels, and for the frame after that their child windows are not submitted, so
+  // every case paying two frames here would turn "the card is there" into a race. The one case that
+  // moves a splitter restores it by dragging back — see shell_chrome's splitter case.
   // Modal view preferences: pin to legacy defaults (H + Staged) for test
   // determinism. Production defaults changed to V + Immediate in
   // gui-polish-v15 round 2; individual tests opt-in explicitly as needed.
