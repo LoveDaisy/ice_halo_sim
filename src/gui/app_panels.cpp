@@ -72,15 +72,27 @@
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):
-//     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
-//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars.
-//     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
+//     - "##DockHost" — the transparent host carrying the main DockSpace
+//       (dock_layout.cpp). Draws nothing itself; the dockspace paints the
+//       panel background over everything except its central node.
+//     - "##LeftPanel" / "##RightPanel" — docked INTO that dockspace. Their
+//       position and size come from their dock nodes; they no longer carry
+//       NoMove/NoResize because they no longer place themselves.
+//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars, outside the
+//       dockspace, still placed by SetNextPanelGeometry.
+//     - "##PreviewPanel" — transparent (NoBackground) and pinned over the
+//       dockspace's deliberately-empty central node; the OpenGL preview
 //       shader is rendered into this region between ImGui::Render and
 //       SwapBuffers in main.cpp.
 //     Within this cluster, push_front means the LATEST Begin'd window ends
 //     up at index 0 (bottom). Visual order within the cluster is therefore
 //     the REVERSE of main.cpp Render* call order. Cluster members do not
-//     overlap each other, so this internal ordering has no visual effect.
+//     overlap each other, so this internal ordering has no visual effect —
+//     and for the three that are now dock nodes / the central node, docking
+//     enforces that non-overlap rather than the call order merely happening
+//     to produce it. Measured, not assumed: shell_chrome's
+//     "the_log_panel_can_come_forward_over_the_side_panels" still reports the
+//     log panel above the docked left panel in g.Windows.
 //
 // -----------------------------------------------------------------------------
 // CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
@@ -95,7 +107,11 @@
 //   3. If Layer 3 (floating): do NOT add NoBringToFrontOnFocus. The window
 //      will be push_back'd on creation and naturally float above the
 //      background cluster, and clicks will splice it to the very top.
-//   4. Code-review must reject any new Begin not registered here, or any
+//   4. Decide whether it may be docked. Anything that is not one of the
+//      dockspace's own panels needs ImGuiWindowFlags_NoDocking: dragged into
+//      the DockSpace it would take space from the default layout and have no
+//      way back except View -> Reset Layout.
+//   5. Code-review must reject any new Begin not registered here, or any
 //      main.cpp Render* call order that contradicts this model.
 //
 // SCOPE of this convention:
@@ -478,58 +494,70 @@ void RenderTopBar(float window_width) {
 namespace {
 constexpr float kCollapseBtnSize = 20.0f;
 
-// Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
-// Returns true if clicked. Coordinates are viewport-local; under multi-viewport
-// the main-viewport origin is applied to reach absolute screen space used by
-// ForegroundDrawList and io.MousePos.
-bool OverlayButton(const char* label, float local_x, float local_y) {
-  ImVec2 pos = MainVpPos(local_x, local_y);
-  ImVec2 max(pos.x + kCollapseBtnSize, pos.y + kCollapseBtnSize);
-
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
-  ImGuiIO& io = ImGui::GetIO();
-  // The collapse strip is drawn directly to ForegroundDrawList without a Begin(), so no
-  // ImGui window exists to gate against. Fall back to WantCaptureMouse, which is set by
-  // NewFrame() when any real ImGui window (e.g. Colors) sits under the cursor. This
-  // prevents click-through when a floating window covers the strip
-  // (task-color-window-mouse-capture).
-  bool hovered = !io.WantCaptureMouse &&
-                 (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
-  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-
-  ImU32 bg_col = ImGui::GetColorU32(clicked ? ImGuiCol_ButtonActive :
-                                    hovered ? ImGuiCol_ButtonHovered :
-                                              ImGuiCol_Button);
-  fg->AddRectFilled(pos, max, bg_col, 3.0f);
-
-  ImVec2 text_size = ImGui::CalcTextSize(label);
-  float tx = pos.x + (kCollapseBtnSize - text_size.x) * 0.5f;
-  float ty = pos.y + (kCollapseBtnSize - text_size.y) * 0.5f;
-  fg->AddText(ImVec2(tx, ty), ImGui::GetColorU32(ImGuiCol_Text), label);
-
-  return clicked;
-}
-
-// Draw the collapsed strip background + expand button via foreground draw list.
-// No ImGui window needed — avoids WindowMinSize issues. Coordinates are
-// viewport-local (see OverlayButton comment).
-void RenderCollapsedStrip(const char* btn_label, float strip_x, float strip_y, float strip_h, bool* collapsed) {
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
-  ImVec2 strip_min = MainVpPos(strip_x, strip_y);
-  ImVec2 strip_max = MainVpPos(strip_x + kCollapseBtnSize, strip_y + strip_h);
-  fg->AddRectFilled(strip_min, strip_max, ImGui::GetColorU32(ImGuiCol_WindowBg));
-  float btn_y = strip_y + (strip_h - kCollapseBtnSize) * 0.5f;
-  if (OverlayButton(btn_label, strip_x, btn_y)) {
+// The expand button of a collapsed side panel: an ordinary ImGui button, vertically centred in the
+// panel's own (now kCollapseBtnSize-wide) window. Call between that window's Begin and End.
+//
+// It used to be drawn straight to the ForegroundDrawList, with hit-testing done by hand and gated on
+// `!io.WantCaptureMouse` — a stand-in for "no floating window is over the strip", which worked only
+// because nothing else was submitted where the strip sat. Under docking the strip's rectangle always
+// belongs to a dock node, so that gate is false whenever the pointer is on the button and the panel
+// could never be brought back. Letting ImGui hit-test a real widget answers the original question
+// (is something above this?) properly, by z-order, instead of by proxy.
+void RenderCollapsedStrip(const char* btn_label, bool* collapsed) {
+  // Centre the square button in the strip; the window itself supplies the strip's background, so
+  // there is nothing left to draw by hand.
+  const float btn_y = (ImGui::GetWindowHeight() - kCollapseBtnSize) * 0.5f;
+  ImGui::SetCursorPos(ImVec2(0.0f, btn_y));
+  if (ImGui::Button(btn_label, ImVec2(kCollapseBtnSize, kCollapseBtnSize))) {
     *collapsed = false;
   }
 }
+
+// A side panel's collapsed/expanded state is now the width of its dock node. Two things about the
+// shape of this:
+//   - It writes only on a transition, never every frame. A per-frame DockBuilderSetNodeSize would
+//     silently undo a splitter drag on the very next frame, i.e. the panels would look resizable and
+//     not be.
+//   - The "have I applied this yet" marker is the caller's own static rather than a
+//     previous-frame copy of the flag. Anything that resets the flag from outside the render path
+//     (ResetTestState between gui_test cases, View -> Reset Layout) then reads as an ordinary
+//     transition on the next frame instead of being missed.
+// The node ID is read fresh from dock_layout on every call, never cached: a Reset Layout rebuilds
+// the tree and hands out new IDs, and resizing the old one would silently do nothing.
+void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_width, float node_height,
+                             bool* applied_collapsed) {
+  if (node_id == 0 || collapsed == *applied_collapsed) {
+    return;
+  }
+  *applied_collapsed = collapsed;
+  ResizePanelNode(node_id, ImVec2(collapsed ? kCollapseBtnSize : expanded_width, node_height));
+}
+
+// Shared by both side panels. NoMove / NoResize are gone: position and size are the dock node's job
+// now, and leaving them on would be a claim about geometry this code no longer makes.
+// NoBringToFrontOnFocus is kept — the panels stay in the background cluster described at the top of
+// this file, below every floating window.
+constexpr ImGuiWindowFlags kSidePanelBaseFlags =
+    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 }  // namespace
 
 void RenderLeftPanel(float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
+  static bool s_collapse_applied = false;
+  ApplyPanelCollapseWidth(GetPanelNodeIds().left, g_state.left_panel_collapsed, kLeftPanelWidth, panel_height,
+                          &s_collapse_applied);
+
   if (g_state.left_panel_collapsed) {
-    RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
+    // The window is still submitted, holding a strip-wide dock node, rather than skipped: a docked
+    // window that stops submitting makes its node invisible, and the neighbours take the space back
+    // the same frame — the strip would end up on top of the preview instead of beside it.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("##LeftPanel", nullptr,
+                 kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
+    ImGui::End();
     return;
   }
 
@@ -544,11 +572,8 @@ void RenderLeftPanel(float window_height) {
   std::optional<GuiState::EntryRef> pick_source_at_entry =
       pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
 
-  SetNextPanelGeometry(0, kTopBarHeight, kLeftPanelWidth, panel_height);
   ImGui::Begin("##LeftPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+               kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
   // the active-pick state and the Esc instruction. The actual click target is
@@ -650,20 +675,24 @@ void RenderLeftPanel(float window_height) {
   ImGui::End();
 }
 
-void RenderRightPanel(GLFWwindow* window, float window_width, float window_height) {
+void RenderRightPanel(GLFWwindow* window, float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
+  static bool s_collapse_applied = false;
+  ApplyPanelCollapseWidth(GetPanelNodeIds().right, g_state.right_panel_collapsed, kRightPanelWidth, panel_height,
+                          &s_collapse_applied);
+
   if (g_state.right_panel_collapsed) {
-    RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, window_width - kCollapseBtnSize, kTopBarHeight, panel_height,
-                         &g_state.right_panel_collapsed);
+    // See RenderLeftPanel for why the window is still submitted while collapsed.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("##RightPanel", nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
+    RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
+    ImGui::End();
     return;
   }
 
-  float panel_x = window_width - kRightPanelWidth;
-  SetNextPanelGeometry(panel_x, kTopBarHeight, kRightPanelWidth, panel_height);
-  ImGui::Begin("##RightPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  ImGui::Begin("##RightPanel", nullptr, kSidePanelBaseFlags);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -995,15 +1024,37 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 }
 
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
-  float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
-  float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
-  float panel_x = left_w;
-  float panel_width = window_width - left_w - right_w;
+  // The preview sits over the dockspace's central node, which dock_layout keeps permanently empty so
+  // the GL shader drawn between ImGui::Render and SwapBuffers shows through it. Taking the rect from
+  // the node instead of recomputing it from the panel-width constants is what makes the preview
+  // follow a splitter drag; the constants only describe the DEFAULT layout now.
+  //
+  // The fallback covers the frames before the first BuildDefaultDockLayout call (and any state where
+  // the tree has not been split): the pre-docking arithmetic, which is exactly right for the default
+  // layout — not a stale rect carried over from an earlier frame.
+  float panel_x = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
+  float panel_y = kTopBarHeight;
+  float panel_width = window_width - panel_x - (g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth);
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-  SetNextPanelGeometry(panel_x, kTopBarHeight, panel_width, panel_height);
+  {
+    ImVec2 central_pos;
+    ImVec2 central_size;
+    if (GetCentralNodeRect(&central_pos, &central_size)) {
+      panel_x = central_pos.x;
+      panel_y = central_pos.y;
+      panel_width = central_size.x;
+      panel_height = central_size.y;
+    }
+  }
+  SetNextPanelGeometry(panel_x, panel_y, panel_width, panel_height);
+  // NoDocking: this window is pinned to the central node, it is not docked INTO it. Letting the user
+  // dock it would fill the central node, and imgui only punches the passthru hole while that node is
+  // empty — the preview would paint itself out of existence. (It is also unreachable by dragging
+  // today, having neither a title bar nor NoMove cleared; the flag states the constraint rather than
+  // leaving it to be re-derived.)
   ImGui::Begin("##PreviewPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDocking |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Renderer invariants (previously in RenderViewBar, runs every frame).
@@ -1036,7 +1087,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // Store viewport for deferred rendering
     g_preview_vp.active = true;
     g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
-    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
+    // OpenGL Y is bottom-up: measure from the window's bottom edge to the panel's bottom edge. This
+    // used to read kStatusBarHeight directly, which was the same number only while the panel was
+    // guaranteed to end exactly at the status bar.
+    g_preview_vp.vp_y = static_cast<int>((window_height - (panel_y + panel_height)) * scale_y);
     g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
     g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
     auto& pp = g_preview_vp.params;
@@ -1147,11 +1201,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
       // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
       // draw list coordinates are absolute screen space, not relative to the host GLFW window.
-      // Anchor (panel_x, kTopBarHeight) through MainVpPos() so labels stay glued to the
+      // Anchor (panel_x, panel_y) through MainVpPos() so labels stay glued to the
       // preview viewport when the host window is dragged or sits on a non-primary monitor.
       // Note: the export_fbo_renderer.cpp path passes (0, 0, w, h) intentionally — it owns a
       // self-allocated ImDrawList targeting an off-screen FBO and must NOT add this offset.
-      ImVec2 vp_origin = MainVpPos(panel_x, kTopBarHeight);
+      ImVec2 vp_origin = MainVpPos(panel_x, panel_y);
       float vp_sx = vp_origin.x;
       float vp_sy = vp_origin.y;
       float vp_sw = panel_width;
@@ -1658,8 +1712,12 @@ void RenderLogPanel(float window_width, float window_height) {
   // push_front (= bottom of g.Windows) and others via push_back (= top), so
   // adding the flag here would push LogPanel into the background cluster
   // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
-  ImGui::Begin("##LogPanel", &g_state.log_panel_open,
-               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+  // NoDocking: this panel keeps its own fixed geometry above the status bar. Without the flag a user
+  // could drag it into the main DockSpace, where it would take space away from the three panels the
+  // default layout is built from and never come back on its own.
+  ImGui::Begin(
+      "##LogPanel", &g_state.log_panel_open,
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking);
 
   // Config controls row
   static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };

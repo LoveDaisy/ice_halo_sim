@@ -76,5 +76,9 @@
 ## 7. 与 docking 迁移的关系及顺序
 
 - **本文就是 docking 迁移的设计输入**：迁移不做「现状面板的机械搬运然后再重组」——那是同一个 shell 改两遍。基底迁移（面板进 dock 节点、测试保绿）之后，各区按本文形态重建。
+- **基底已落地（as-built）**，三条边界值得后来者直接接手，不必重新查证：
+  - **顶栏与状态栏不是 dock 节点**，是夹住 DockSpace 的固定几何 chrome（`SetNextPanelGeometry`）。理由是 §1 里两者的定位——执行簇与状态展示——本就是固定 chrome，不是可被用户拖散的「文档」；真做成可拖拽节点，用户能把 Run 按钮拖到画面中间甚至拖没。
+  - **中心节点永久保持为空**（`PassthruCentralNode | NoDockingOverCentralNode`），视口窗口钉在它的矩形上而不是 dock 进去。这不是风格选择：ImGui 只在中心节点为空时才在 dockspace 背景上开洞，一旦有窗口 dock 进中心节点，`ImGuiCol_WindowBg` 会填满整个 dockspace 把 GL 预览盖住。§1 的「图像区 = 视口」因此在机制上也成立——视口不是一个可以被拖走或被别的面板顶掉的工具窗。
+  - **`DockBuilder*` 只允许出现在 `src/gui/dock_layout.cpp`**：docking 配置与默认布局若在 app 与 gui_test 各写一遍，参考图截出来的布局与真 app 就只是碰巧一致。与视觉语言收敛到 `theme.cpp` 同一条纪律。
 - 纯视觉语言（字体/调色板/节奏/语义色）与本文正交，按 `doc/gui-visual-language.md` §6 先行落地。
 - 测试影响：`modal_layout` 参考组随编辑模态退役而废弃（其覆盖的控件布局命题由检视器侧的新参考组接手）；`defaults_panel_layout` 的 Settings 面板不在本文范围、暂不受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考随每步 shell 改动失效，重拍税一次性付清于 shell 收尾（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。

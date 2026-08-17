@@ -396,7 +396,7 @@ void ToggleCompositePreview(GuiState& state);
 // Panel rendering
 void RenderTopBar(float window_width);
 void RenderLeftPanel(float window_height);
-void RenderRightPanel(GLFWwindow* window, float window_width, float window_height);
+void RenderRightPanel(GLFWwindow* window, float window_height);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);

@@ -57,12 +57,12 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
   // half of it is not a feature: a panel that collapses and cannot be restored is a panel the user
   // has lost.
   //
-  // The strip's button is drawn with an explicit screen position rather than by the layout, so the
-  // click below is placed from the same geometry the drawing code uses. That is deliberate: the
-  // button is an OverlayButton gated on `!io.WantCaptureMouse`, and the point of clicking it by
-  // POSITION is that the gate is evaluated for a real pointer at a real place. Its occluded half —
-  // the same gate correctly swallowing a click under a floating window — is the entry card's, in
-  // functional/test_entry_management.cpp.
+  // The strip's button is clicked by POSITION rather than by item path, and stays that way now that
+  // the button is an ordinary widget in the collapsed panel's own window: the proposition is that a
+  // real pointer at the place a user would aim at reaches it, which is exactly what an unreachable
+  // expand button breaks. The geometry below is therefore derived the same way the drawing code
+  // derives it. Its occluded counterpart — a click under a floating window correctly NOT reaching
+  // the background — is the entry card's, in functional/test_entry_management.cpp.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "shell_chrome", "collapsing_the_left_panel_hides_it_and_the_strip_brings_it_back");
@@ -72,21 +72,27 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       IM_CHECK(!gui::g_state.left_panel_collapsed);
       IM_CHECK(ctx->GetWindowByRef("##LeftPanel") != nullptr);
 
+      // The strip spans the space between the top bar and the status bar, with a square button
+      // centred vertically in it (RenderCollapsedStrip, src/gui/app_panels.cpp). kCollapseBtnSize is
+      // file-local there and is mirrored here rather than exported for one test.
+      constexpr float kCollapseBtnSize = 20.0f;
+
       // The toggle's label carries the chevron that points the way it will move, so the path
       // depends on the current state — expanded here.
       ctx->ItemClick("##TopBar/" ICON_FA_CHEVRON_LEFT "##left_panel_toggle");
       ctx->Yield(3);
       IM_CHECK(gui::g_state.left_panel_collapsed);
-      // The window is not merely empty — RenderLeftPanel returns before Begin, so it stops being
-      // submitted at all and the preview gains the space.
+      // What "collapsed" means is that the panel gives its column up to the preview, and the width
+      // is what says so. It used to be checked as "the window stops being submitted at all", which
+      // was true of the fixed-coordinate layout but is not a property of collapsing: the panel is a
+      // dock node now, and a docked window that stops being submitted takes its node out of the
+      // layout entirely — the column would go to the preview and the strip would end up drawn on top
+      // of it rather than beside it.
       ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
-      IM_CHECK(left == nullptr || !left->WasActive);
+      IM_CHECK(left != nullptr);
+      IM_CHECK_LE(left->Size.x, kCollapseBtnSize);
 
-      // The strip spans the space between the top bar and the status bar, with a square button
-      // centred vertically in it (RenderCollapsedStrip, src/gui/app_panels.cpp). kCollapseBtnSize is
-      // file-local there and is mirrored here rather than exported for one test.
       const ImGuiViewport* vp = ImGui::GetMainViewport();
-      constexpr float kCollapseBtnSize = 20.0f;
       const float strip_h = vp->Size.y - gui::kTopBarHeight - gui::kStatusBarHeight;
       const float btn_y = gui::kTopBarHeight + (strip_h - kCollapseBtnSize) * 0.5f;
       ctx->MouseMoveToPos(ImVec2(vp->Pos.x + kCollapseBtnSize * 0.5f, vp->Pos.y + btn_y + kCollapseBtnSize * 0.5f));
@@ -94,7 +100,11 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       IM_CHECK(!gui::g_state.left_panel_collapsed);
-      IM_CHECK(ctx->GetWindowByRef("##LeftPanel") != nullptr);
+      // The other half of the round trip: the column comes back at its default width, not at some
+      // width the collapse left behind.
+      left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
     };
   }
 

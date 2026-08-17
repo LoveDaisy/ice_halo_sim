@@ -389,9 +389,9 @@ int main(int argc, char** argv) {
     // which stay fixed-geometry chrome outside the dockspace.
     const float dock_host_height = layout_height - gui::kTopBarHeight - gui::kStatusBarHeight;
     const ImGuiID dockspace_id = gui::RenderDockSpaceHost(0.0f, gui::kTopBarHeight, layout_width, dock_host_height);
-    (void)dockspace_id;  // BuildDefaultDockLayout is wired in the next step.
+    gui::BuildDefaultDockLayout(dockspace_id, layout_width, dock_host_height);
     gui::RenderLeftPanel(layout_height);
-    gui::RenderRightPanel(window, layout_width, layout_height);
+    gui::RenderRightPanel(window, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderColorWindow(gui::g_state, gui::g_server);
