@@ -758,7 +758,7 @@ void RenderDocumentTree() {
 
   // ---- Row scroll area (fills panel above the toolbar) ----
   ImGui::BeginChild("##TreeScroll", ImVec2(0, rows_h), ImGuiChildFlags_None);
-  RenderScatteringSection(g_state);
+  RenderDocumentTreeRows(g_state);
   ImGui::EndChild();
 
   // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
@@ -786,50 +786,30 @@ void RenderDocumentTree() {
     g_thumbnail_cache.OnLayerStructureChanged();
   }
 
-  // Process edit request: open modal if an edit button or card area was clicked
-  if (GetEditRequest().target != EditTarget::kNone) {
-    const auto& req = GetEditRequest();
-    if (req.target == EditTarget::kCard) {
-      const auto modal_tgt = GetEditModalTarget();
-      if (!IsEditModalOpen() || modal_tgt.layer_idx != req.layer_idx || modal_tgt.entry_idx != req.entry_idx) {
-        EditRequest resolved = req;
-        resolved.target = IsEditModalOpen() ? GetActiveTabAsEditTarget() : EditTarget::kCrystal;
-        OpenEditModal(resolved, g_state);
-      }
-    } else {
-      OpenEditModal(req, g_state);
-    }
-    ResetEditRequest();
-  }
-
   // Pick-mode cancel: blank area / panel-switch click.
-  // If pick is still active after cards are rendered (no card's InvisibleButton consumed
-  // the click), a left mouse click anywhere cancels pick. Covers clicking blank space in
-  // the LeftPanel, the right panel, or any non-card widget. Esc was handled at frame start.
+  // If pick is still active after the rows are rendered (no row's Selectable consumed the click), a
+  // left mouse click anywhere cancels pick. Covers clicking blank space in the tree, the inspector,
+  // the right panel, or any non-row widget. Esc was handled at frame start.
   if (g_state.pick_link_source.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     g_state.pick_link_source.reset();
-    pick_source_at_entry.reset();  // suppress spurious modal re-open
+    pick_source_at_entry.reset();  // suppress the spurious re-select below
   }
 
-  // Pick-mode completion: if pick was active at frame entry but is now reset
-  // (cleared by RenderEntryCard's pick-click handler), re-open the modal on
-  // the SOURCE entry so the user resumes editing where they started. The
-  // editing entry's crystal_id was just re-bound to the clicked card's
-  // crystal, so also reset the singleton trackball view to that crystal's
-  // default orientation — otherwise the modal preview keeps the old
-  // crystal's rotation while the thumbnail (which always renders from the
-  // entry's axis distribution) shows the new one. Cancel paths
-  // (Esc / blank-area click) clear pick_source_at_entry and skip this
-  // branch, so view reset only fires when a link was actually applied.
+  // Pick-mode completion: if pick was active at frame entry but is now reset (cleared by
+  // RenderEntryRow's pick-click handler), put the selection back on the SOURCE entry so the user
+  // resumes editing where they started — the inspector is showing whatever the selection names, and
+  // leaving it on the row that was merely clicked as a model would silently move the edit target.
+  // The source entry's crystal_id was just re-bound to the clicked row's crystal, so also reset the
+  // singleton trackball view to that crystal's default orientation — otherwise the inspector's
+  // preview keeps the old crystal's rotation while the thumbnail (which always renders from the
+  // entry's axis distribution) shows the new one. Cancel paths (Esc / blank-area click) clear
+  // pick_source_at_entry and skip this branch, so the view reset only fires when a link was
+  // actually applied.
   if (pick_source_at_entry.has_value() && !g_state.pick_link_source.has_value()) {
     const auto& src = *pick_source_at_entry;
     const auto& editing_entry = g_state.layers[src.layer_idx].entries[src.entry_idx];
     ResetCrystalViewToCrystal(g_state.crystals[editing_entry.crystal_id]);
-    EditRequest reopen;
-    reopen.target = EditTarget::kCrystal;
-    reopen.layer_idx = src.layer_idx;
-    reopen.entry_idx = src.entry_idx;
-    OpenEditModal(reopen, g_state);
+    g_state.SelectCrystal(src.layer_idx, src.entry_idx);
   }
 
   ImGui::End();

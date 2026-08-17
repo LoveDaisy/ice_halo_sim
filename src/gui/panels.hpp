@@ -158,16 +158,22 @@ std::string FilterSummary(const std::optional<FilterConfig>& f);
 
 // ---- Panel rendering ----
 
-// Render a single entry card within a layer. Returns true if the delete button was clicked.
-bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx);
+// Render one entry as a compact tree row: thumbnail, "Type · AxisPreset", the weight, the sharing
+// and filter badges, and hover-revealed duplicate / delete. Clicking the row selects the entry (or,
+// while a pick is in flight, completes the link). Returns true if the delete button was clicked;
+// the caller performs the erase, because deleting inside the loop that renders the rows would
+// invalidate it.
+bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx);
 
-// Render a full layer (collapsing header + entry cards + controls).
+// Render a full layer: a foldable tree node (arrow folds, row selects) plus its entry rows and the
+// "+ Crystal" button.
 void RenderLayer(GuiState& state, int layer_idx);
 
-// Scattering section (layer management, rendered inside left panel scroll area).
-void RenderScatteringSection(GuiState& state);
+// The document tree's contents — Sun, Camera, then the scattering layers. Rendered inside the
+// document-tree window's scroll area (app_panels.cpp).
+void RenderDocumentTreeRows(GuiState& state);
 
-// Scene controls (Sun + Simulation) rendered in the right panel Scene group.
+// Sun controls, rendered on the inspector's Sun page.
 void RenderSceneControls(GuiState& state);
 
 // Reset all panel editing state: edit request, selection indices.

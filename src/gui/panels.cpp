@@ -1069,244 +1069,179 @@ void ResetPendingDeleteState() {
 }
 
 
-// ========== Entry Card ==========
+// ========== Document tree ==========
+//
+// The left column's master half (doc/gui-layout-architecture.md §2). What used to be here was a
+// list of four-line cards, each carrying three "Edit" buttons that opened a blocking modal. The
+// cards are gone: a tree row's job is to NAME an item and to say which one is being edited, and
+// everything that used to need a button now happens because the row is selected and the inspector
+// below is showing it.
+//
+// Row identity and the two gestures that must not collide. A layer row can be folded (its
+// crystals appear or disappear) and it can be selected (the inspector shows its probability).
+// These are different questions and ImGui already separates them:
+// ImGuiTreeNodeFlags_OpenOnArrow routes a click on the triangle to folding and a click anywhere
+// else on the row to selection, with ImGui::IsItemToggledOpen() telling the two apart afterwards.
+// Rolling our own hit test here would be re-deriving that.
 
-bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
-  auto& entry = state.layers[layer_idx].entries[entry_idx];
+namespace {
 
-  // ---- Pick-mode: detect whether we're targeting this card ----
-  // When state.pick_link_source is set, every card becomes a click-target for
-  // completing the eyedropper share. Source card and already-shared cards are
-  // disabled (would be a no-op). The actual click handling happens at the
-  // bottom of RenderEntryCard via an InvisibleButton overlay that covers the
-  // card body.
-  const bool pick_active = state.pick_link_source.has_value();
-  bool pick_target_disabled = false;
-  if (pick_active) {
-    const auto& src_ref = *state.pick_link_source;
-    if (src_ref.layer_idx == layer_idx && src_ref.entry_idx == entry_idx) {
-      pick_target_disabled = true;  // can't link to self
-    } else if (src_ref.layer_idx >= 0 && src_ref.layer_idx < static_cast<int>(state.layers.size()) &&
-               src_ref.entry_idx >= 0 &&
-               src_ref.entry_idx < static_cast<int>(state.layers[src_ref.layer_idx].entries.size())) {
-      const auto& src_entry = state.layers[src_ref.layer_idx].entries[src_ref.entry_idx];
-      if (entry.crystal_id == src_entry.crystal_id && entry.filter_id == src_entry.filter_id) {
-        pick_target_disabled = true;  // already shared
-      }
-    }
+// A tree row is one frame tall, and its thumbnail is a square of that height. Deriving the row
+// height from the font rather than fixing it in pixels is what keeps the tree legible if the
+// theme's font size changes — the same reason the cards used GetFrameHeightWithSpacing().
+float TreeRowHeight() {
+  return ImGui::GetFrameHeight();
+}
+
+// Draw the crystal thumbnail for `crystal_id` as a `side`-pixel square at the current cursor, and
+// advance the cursor past it. A crystal whose thumbnail has not been rendered yet gets the same
+// grey placeholder the cards used, so a row never collapses to a different height while the
+// thumbnail queue catches up.
+void DrawRowThumbnail(int crystal_id, float side) {
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 br(p.x + side, p.y + side);
+  if (const auto tex = g_thumbnail_cache.GetTexture(crystal_id); tex != 0) {
+    // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
+    dl->AddImage(static_cast<ImTextureID>(tex), p, br, ImVec2(0, 1), ImVec2(1, 0));
+  } else {
+    dl->AddRectFilled(p, br, IM_COL32(60, 60, 60, 255));
   }
+  dl->AddRect(p, br, IM_COL32(100, 100, 100, 255));
+  ImGui::Dummy(ImVec2(side, side));
+}
+
+// Whether this entry may be clicked to complete an in-flight pick. Two entries cannot be linked to
+// themselves, and an entry already sharing the source's ids would be a no-op — both were disabled
+// as click targets on the cards and stay disabled here.
+bool PickTargetDisabled(const GuiState& state, int layer_idx, int entry_idx) {
+  if (!state.pick_link_source.has_value()) {
+    return false;
+  }
+  const auto& src_ref = *state.pick_link_source;
+  if (src_ref.layer_idx == layer_idx && src_ref.entry_idx == entry_idx) {
+    return true;  // can't link to self
+  }
+  if (src_ref.layer_idx < 0 || src_ref.layer_idx >= static_cast<int>(state.layers.size()) || src_ref.entry_idx < 0 ||
+      src_ref.entry_idx >= static_cast<int>(state.layers[src_ref.layer_idx].entries.size())) {
+    return false;
+  }
+  const auto& src_entry = state.layers[src_ref.layer_idx].entries[src_ref.entry_idx];
+  const auto& entry = state.layers[layer_idx].entries[entry_idx];
+  return entry.crystal_id == src_entry.crystal_id && entry.filter_id == src_entry.filter_id;
+}
+
+// A fixed, index-free row for one of the document's singletons. Returns nothing: the click writes
+// the selection directly, because there is no deferred-deletion dance to sequence it with.
+void RenderSingletonRow(GuiState& state, const char* label, GuiState::SelectionKind kind) {
+  const bool selected = state.selection.kind == kind;
+  if (ImGui::Selectable(label, selected)) {
+    state.selection = GuiState::DocumentSelection{ kind, -1, -1 };
+  }
+}
+
+}  // namespace
+
+bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
+  auto& entry = state.layers[layer_idx].entries[entry_idx];
+  const bool pick_active = state.pick_link_source.has_value();
+  const bool pick_disabled = PickTargetDisabled(state, layer_idx, entry_idx);
 
   ImGui::PushID(entry_idx);
 
-  // Active highlight: when the unified edit modal is bound to this entry,
-  // thicken the child border and tint it with the focus accent color so the
-  // user can trace which card the open modal corresponds to. The lifecycle is
-  // strictly tied to IsEditModalOpen() — close paths (OK / Cancel / auto-close
-  // via index-validity guard) flip the gate, no extra reset needed here.
-  bool active = false;
-  if (IsEditModalOpen()) {
-    auto target = GetEditModalTarget();
-    active = (target.layer_idx == layer_idx && target.entry_idx == entry_idx);
+  const float row_h = TreeRowHeight();
+  const float spacing_x = ImGui::GetStyle().ItemSpacing.x;
+  const ImVec2 row_pos = ImGui::GetCursorScreenPos();
+
+  // The row's hit target is a full-width Selectable drawn FIRST, with AllowOverlap so the
+  // thumbnail, the labels and the hover buttons that follow can all sit on top of it and still be
+  // hit-tested in preference to it. Drawing it first also means its selected/hovered fill is the
+  // row's background rather than a rectangle over the content.
+  //
+  // While a pick is in flight, a row that cannot be the target is disabled rather than merely
+  // inert: a click landing on it would otherwise fall through to the blank-area handler and cancel
+  // the pick, which reads as "the click did nothing and also lost my pick mode".
+  const bool selected = state.selection.kind == GuiState::SelectionKind::kCrystal &&
+                        state.selection.layer_idx == layer_idx && state.selection.entry_idx == entry_idx;
+  if (pick_active && pick_disabled) {
+    ImGui::BeginDisabled();
   }
-  if (active) {
-    // Plan B fallback: if the NavHighlight token's contrast against
-    // ImGuiCol_Border becomes insufficient under a future theme, replace the
-    // pushed color with IM_COL32(80, 160, 255, 255) per plan §7 Risk 1
-    // (cool-blue accent, no family clash with red Delete or neutral Duplicate).
-    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_NavHighlight));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
+  const bool row_clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, row_h));
+  if (pick_active && pick_disabled) {
+    ImGui::EndDisabled();
   }
-
-  // ---- Co-shared highlight ----
-  // If an edit modal is open on a *different* card whose (crystal_id, filter_id)
-  // matches this card's, render a co-shared border tint so the user sees which
-  // cards their in-flight edit will affect. Distinct from `active` (modal owns
-  // *this* card) — uses a warmer accent to differentiate.
-  bool co_shared = false;
-  if (!active && IsEditModalOpen()) {
-    auto target = GetEditModalTarget();
-    if (target.layer_idx >= 0 && target.layer_idx < static_cast<int>(state.layers.size()) && target.entry_idx >= 0 &&
-        target.entry_idx < static_cast<int>(state.layers[target.layer_idx].entries.size())) {
-      const auto& tgt_entry = state.layers[target.layer_idx].entries[target.entry_idx];
-      if (entry.crystal_id == tgt_entry.crystal_id && entry.filter_id == tgt_entry.filter_id) {
-        co_shared = true;
-      }
-    }
-  }
-  if (co_shared) {
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.65f, 0.2f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
-  }
-
-  ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-
-  // Previous-frame hover state controls the alpha of the hover-action buttons
-  // (always-render + alpha transition to keep click paths stable).
-  ImGuiID hover_persist_id = ImGui::GetID("##card_hover_persist");
-  bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
-
-  // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
-  // otherwise Row 0-2 buttons would overlap the Weight slider in Row 3.
-  float row_h = ImGui::GetFrameHeightWithSpacing();
-  float spacing_x = ImGui::GetStyle().ItemSpacing.x;
-  float spacing_y = ImGui::GetStyle().ItemSpacing.y;
-
-  // Thumbnail display size matches the right column's content height:
-  // top of Row 0 (= thumb_pos.y) to bottom of Row 3 (= row_h*4 - spacing_y).
-  // Square (W=H) so the crystal aspect is preserved. kThumbnailSize is the FBO
-  // render resolution; ImGui scales the texture to thumb_display_size on draw.
-  float thumb_display_size = row_h * 4.0f - spacing_y;
-
-  // Left column: crystal thumbnail (or grey placeholder if not yet rendered)
-  ImVec2 thumb_pos = ImGui::GetCursorScreenPos();
-  ImDrawList* draw_list = ImGui::GetWindowDrawList();
-  auto thumb_tex = g_thumbnail_cache.GetTexture(entry.crystal_id);
-  ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
-  if (thumb_tex != 0) {
-    // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
-    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0));
-  } else {
-    draw_list->AddRectFilled(thumb_pos, thumb_br, IM_COL32(60, 60, 60, 255));
-  }
-  draw_list->AddRect(thumb_pos, thumb_br, IM_COL32(100, 100, 100, 255));
-
-  // Right column — layout matches SliderWithInput's three-column model:
-  //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
-  // so Row 1-3 align column boundaries with Row 4 automatically.
-  float right_x = thumb_pos.x + thumb_display_size + spacing_x;
-  float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
-  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
-
-  auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
-                      const char* row_label, bool clip_text, const char* tooltip = nullptr) {
-    ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
-    ImGui::SetCursorScreenPos(line_start);
-    if (clip_text) {
-      ImVec2 clip_min = line_start;
-      ImVec2 clip_max(line_start.x + text_w, line_start.y + ImGui::GetTextLineHeight() + 2.0f);
-      ImGui::PushClipRect(clip_min, clip_max, true);
-      ImGui::TextUnformatted(text_content);
-      ImGui::PopClipRect();
+  if (row_clicked) {
+    if (pick_active) {
+      // "Link A to B" semantics: A (the entry whose inspector opened the picker — pick_link_source)
+      // adopts B's (the clicked row's) crystal/filter ids. So in ApplyPickLink(source, target) the
+      // CLICKED row is the source (model) and pick_link_source is the target (modified).
+      //
+      // Effects are derived centrally by ReconcileGuiEffects: rebinding entry.filter_id shows up as
+      // a `layers` diff (soft), and a filter presence-toggle (nullopt↔some) is caught by
+      // AnyEntryFilterPresenceChanged (hard) — see gui_state_reconcile.cpp. Pure some(A)→some(B)
+      // rebinding stays soft, matching pre-migration behavior.
+      const auto pick_source_ref = *state.pick_link_source;
+      ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
+      state.pick_link_source.reset();
     } else {
-      ImGui::TextUnformatted(text_content);
+      state.SelectCrystal(layer_idx, entry_idx);
     }
-    // Optional hover tooltip — shows the full multi-row SoP for non-degenerate
-    // filters where the summary line is inherently lossy (only the first row
-    // + "(+N more)" fits). Follows the same "TextUnformatted then IsItemHovered"
-    // pattern as the fa-link badge below.
-    if (tooltip != nullptr && ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", tooltip);
-    }
-    ImGui::SameLine();
-    ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
-    if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
-      g_edit_request = { target, layer_idx, entry_idx };
-    }
-    ImGui::SameLine();
-    ImGui::TextUnformatted(row_label);
-  };
+  }
+  const bool row_hovered = ImGui::IsItemHovered();
 
-  // Row 1: Crystal type (resolved from pool)
+  // ---- Row content, drawn over the Selectable ----
+  ImGui::SetCursorScreenPos(row_pos);
+  DrawRowThumbnail(entry.crystal_id, row_h);
+  ImGui::SameLine(0.0f, spacing_x);
+
+  // Identity text: the two things that distinguish one crystal from another at a glance, which is
+  // what the card's first two rows said with a label column each. Vertically centred against the
+  // thumbnail rather than sitting at its top edge.
   const CrystalConfig& crystal_ref = state.crystals[entry.crystal_id];
   const char* type_name = (crystal_ref.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
-  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "Crystal", false);
+  const std::string preset = AxisPresetName(crystal_ref);
+  const float text_y = row_pos.y + (row_h - ImGui::GetTextLineHeight()) * 0.5f;
+  ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, text_y));
+  ImGui::Text("%s · %s", type_name, preset.c_str());
 
-  // Row 2: Axis preset (resolved from pool)
-  std::string preset = AxisPresetName(crystal_ref);
-  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
+  // ---- Right-edge badges and hover actions ----
+  // Laid out from the right edge inward so the identity text keeps whatever is left. Delete and
+  // duplicate are revealed by hover (alpha, not omission — the click paths stay in the ImGui tree
+  // so hit-testing does not change between frames, which is what kept the cards' fast-swipe
+  // mitigation stable); the link badge and the filter badge are persistent state indicators and
+  // are always visible.
+  const float frame_pad_x = ImGui::GetStyle().FramePadding.x;
+  const float btn_w =
+      std::max(ImGui::CalcTextSize(ICON_FA_COPY).x, ImGui::CalcTextSize(ICON_FA_XMARK).x) + frame_pad_x * 2.0f;
+  const ImVec2 win_pos = ImGui::GetWindowPos();
+  const float right_edge = win_pos.x + ImGui::GetWindowContentRegionMax().x;
+  float x = right_edge - btn_w;
+  const float btn_y = row_pos.y + (row_h - ImGui::GetFrameHeight()) * 0.5f;
 
-  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button).
-  // For non-degenerate SoP (>1 row or >1 factor), build a tooltip listing every
-  // row's canonical text so users can see the full predicate without opening
-  // the modal.
-  std::optional<FilterConfig> filter_opt;
-  if (entry.filter_id.has_value()) {
-    filter_opt = state.filters[*entry.filter_id];
-  }
-  std::string filter_text = FilterSummary(filter_opt);
-  std::string filter_tooltip_storage;
-  const char* filter_tooltip = nullptr;
-  if (filter_opt.has_value() && !filter_opt->IsDegenerateSingleFactor()) {
-    // Card tooltip visibility is intentionally gated by IsDegenerateSingleFactor()
-    // (i.e. only shown for genuinely non-degenerate multi-row / multi-factor
-    // filters), whereas the editor-side live preview uses a different, wider
-    // gate (any non-blank row). The formatting is shared via
-    // FormatSopExpansionPreview so both call sites cannot drift, but the
-    // visibility policy stays deliberately different — see edit_modals.cpp
-    // RenderSummandRowList for the editor gate rationale.
-    filter_tooltip_storage = gui::FormatSopExpansionPreview(filter_opt->param);
-    filter_tooltip = filter_tooltip_storage.c_str();
-  }
-  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true, filter_tooltip);
-
-  // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
-  ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
-  char prop_label[32];
-  snprintf(prop_label, sizeof(prop_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
-  SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
-
-  // Hover action buttons: stacked vertically at the right edge of the card —
-  // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
-  // driven by previous-frame hover state; buttons are always in the ImGui tree
-  // so click paths remain stable, only visibility transitions.
-  //
-  // Fast-swipe mitigation: vertical stacking (v6/card-layout-v2) prevents a
-  // single horizontal swipe from crossing the always-hit-tested Delete button,
-  // which was the original backlog concern. Confirm dialog / undo intentionally
-  // avoided — v5 verified that BeginDisabled(!hover_prev) and clicked+hover_prev
-  // both break imgui_test_engine MouseMove+Yield+ItemClick timing.
-  //
-  // AutoResizeY first-frame drift (backlog Minor 3): ImGuiChildFlags_AutoResizeY
-  // only auto-fits the Y dimension; X is driven by the parent layout and stable
-  // on the first frame. The Y coordinates (del_y/dup_y) anchor to card_top, not
-  // WindowSize.y, so they are also frame-stable. No positional fix needed.
-  //
-  // Coordinate strategy:
-  //   x: card_right - btn_w - kHoverBtnPad
-  //   delete y: card_top + kHoverBtnPad
-  //   duplicate y: delete_y + btn_h + kHoverBtnGap
-  char dup_id[32];
-  char del_id[32];
-  snprintf(dup_id, sizeof(dup_id), ICON_FA_COPY "##dup_%d_%d", layer_idx, entry_idx);
-  snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##del_%d_%d", layer_idx, entry_idx);
-
-  float frame_pad_x = ImGui::GetStyle().FramePadding.x;
-  float dup_glyph_w = ImGui::CalcTextSize(ICON_FA_COPY).x;
-  float del_glyph_w = ImGui::CalcTextSize(ICON_FA_XMARK).x;
-  float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
-  float btn_h = ImGui::GetFrameHeight();
-  constexpr float kHoverBtnPad = 2.0f;
-  ImVec2 card_win_pos = ImGui::GetWindowPos();
-  ImVec2 card_win_sz = ImGui::GetWindowSize();
-  float btn_x = card_win_pos.x + card_win_sz.x - btn_w - kHoverBtnPad;
-  float del_y = card_win_pos.y + kHoverBtnPad;
-  float dup_y = del_y + btn_h + kHoverBtnGap;
-
-  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hover_prev ? 1.0f : 0.0f);
-  // Delete button (top): red when enabled (destructive action); auto-greyed when
-  // disabled (only one entry in layer — cannot remove last entry).
-  ImGui::SetCursorScreenPos(ImVec2(btn_x, del_y));
-  bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
+  bool delete_clicked = false;
+  const bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
+  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, row_hovered ? 1.0f : 0.0f);
+  ImGui::SetCursorScreenPos(ImVec2(x, btn_y));
   if (can_delete_entry) {
     PushDestructiveStyle();
   } else {
     ImGui::BeginDisabled();
   }
-  bool delete_clicked = ImGui::SmallButton(del_id);
+  delete_clicked = ImGui::SmallButton(ICON_FA_XMARK "##del");
   if (can_delete_entry) {
     PopDestructiveStyle();
   } else {
     ImGui::EndDisabled();
   }
-  // Duplicate button (below)
-  ImGui::SetCursorScreenPos(ImVec2(btn_x, dup_y));
-  bool dup_clicked = ImGui::SmallButton(dup_id);
+  x -= btn_w + kHoverBtnGap;
+  ImGui::SetCursorScreenPos(ImVec2(x, btn_y));
+  const bool dup_clicked = ImGui::SmallButton(ICON_FA_COPY "##dup");
   ImGui::PopStyleVar();
 
   if (dup_clicked) {
-    // Duplicate = clone-to-pool: append new CrystalConfig (and new FilterConfig
-    // if present) so the dup'd entry is fully independent. Capture pool copies
-    // BEFORE push_back to avoid dangling references if vector reallocates.
+    // Duplicate = clone-to-pool: append new CrystalConfig (and new FilterConfig if present) so the
+    // dup'd entry is fully independent. Capture pool copies BEFORE push_back to avoid dangling
+    // references if the vector reallocates.
     CrystalConfig cloned_crystal = state.crystals[entry.crystal_id];
     std::optional<FilterConfig> cloned_filter;
     if (entry.filter_id.has_value()) {
@@ -1320,115 +1255,81 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
       new_entry.filter_id = static_cast<int>(state.filters.size());
       state.filters.push_back(std::move(*cloned_filter));
     }
-    auto& entries = state.layers[layer_idx].entries;
-    entries.push_back(new_entry);
+    state.layers[layer_idx].entries.push_back(new_entry);
     g_thumbnail_cache.OnLayerStructureChanged();
   }
 
-  // Persist hover state for next frame (computed while still inside the child
-  // window so widget hover does not disqualify it).
-  bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
-  ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
-
-  // ---- fa-link badge (static sharing indicator) ----
-  // Drawn AFTER all inner widgets but BEFORE the pick-mode overlay so it shows
-  // through the click-through invisible button. Predicate: (crystal_id,
-  // filter_id) is shared by 2+ entries across all layers (this card included).
-  {
-    const int shared = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
-    if (shared >= 2) {
-      // Anchor: third slot in the right-edge column, directly below the
-      // hover-revealed Delete (top) / Duplicate (middle) buttons. Stays
-      // visible regardless of hover (it's a persistent state indicator, not
-      // an action). Horizontally centered within the column for visual
-      // alignment with the buttons above.
-      const float glyph_w = ImGui::CalcTextSize(ICON_FA_LINK).x;
-      const float badge_x = btn_x + (btn_w - glyph_w) * 0.5f;
-      const float badge_y = dup_y + btn_h + kHoverBtnGap;
-      ImGui::SetCursorScreenPos(ImVec2(badge_x, badge_y));
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
-      ImGui::TextUnformatted(ICON_FA_LINK);
-      ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) {
-        std::string list;
-        for (int li = 0; li < static_cast<int>(state.layers.size()); ++li) {
-          for (int ei = 0; ei < static_cast<int>(state.layers[li].entries.size()); ++ei) {
-            const auto& other = state.layers[li].entries[ei];
-            if (other.crystal_id == entry.crystal_id && other.filter_id == entry.filter_id) {
-              if (li == layer_idx && ei == entry_idx) {
-                continue;  // skip self in the tooltip list
-              }
-              if (!list.empty()) {
-                list += "\n";
-              }
-              list += "Layer " + std::to_string(li) + " / Entry " + std::to_string(ei);
-            }
+  // Sharing badge: (crystal_id, filter_id) referenced by 2+ entries across all layers, this one
+  // included. Persistent, not hover-revealed — it says something about the document, not about
+  // what the pointer is over.
+  const int shared = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
+  if (shared >= 2) {
+    x -= ImGui::CalcTextSize(ICON_FA_LINK).x + kHoverBtnGap * 2.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x, text_y));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+    ImGui::TextUnformatted(ICON_FA_LINK);
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+      std::string list;
+      for (int li = 0; li < static_cast<int>(state.layers.size()); ++li) {
+        for (int ei = 0; ei < static_cast<int>(state.layers[li].entries.size()); ++ei) {
+          const auto& other = state.layers[li].entries[ei];
+          if (other.crystal_id != entry.crystal_id || other.filter_id != entry.filter_id) {
+            continue;
           }
+          if (li == layer_idx && ei == entry_idx) {
+            continue;  // skip self in the tooltip list
+          }
+          if (!list.empty()) {
+            list += "\n";
+          }
+          list += "Layer " + std::to_string(li) + " / Entry " + std::to_string(ei);
         }
-        if (list.empty()) {
-          list = "(no other entries)";
-        }
-        ImGui::SetTooltip("Shared with:\n%s", list.c_str());
+      }
+      if (list.empty()) {
+        list = "(no other entries)";
+      }
+      ImGui::SetTooltip("Shared with:\n%s", list.c_str());
+    }
+  }
+
+  // Filter badge: the card spent a whole row on the filter's summary text; a compact row cannot,
+  // and the inspector's Filter tab is one click away. What the row still has to say is WHETHER a
+  // filter is attached at all — a crystal quietly filtered down to nothing looks, in the render,
+  // exactly like a crystal that is not contributing for physical reasons. The summary itself moves
+  // to the badge's tooltip, where it is complete rather than clipped.
+  if (entry.filter_id.has_value()) {
+    x -= ImGui::CalcTextSize(ICON_FA_FILTER).x + kHoverBtnGap * 2.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x, text_y));
+    ImGui::TextUnformatted(ICON_FA_FILTER);
+    if (ImGui::IsItemHovered()) {
+      const auto& fc = state.filters[*entry.filter_id];
+      if (fc.IsDegenerateSingleFactor()) {
+        ImGui::SetTooltip("%s", FilterSummary(std::optional<FilterConfig>{ fc }).c_str());
+      } else {
+        ImGui::SetTooltip("%s", gui::FormatSopExpansionPreview(fc.param).c_str());
       }
     }
   }
 
-  // ---- Card-area click handling ----
-  // Detect a click anywhere inside the card area via a non-layout-affecting
-  // rect query. We previously used SetCursorScreenPos(card_win_pos) +
-  // InvisibleButton(card_win_sz), but that combination drives an AutoResizeY
-  // feedback loop: GetWindowSize() includes the child's padding, the button
-  // advances the cursor by `pos + size`, AutoResizeY grows the child to fit,
-  // next frame GetWindowSize() returns the new larger size, and the card
-  // expands unboundedly while pick mode is active.
-  //
-  // !IsAnyItemHovered() preserves hit priority for the inner widgets
-  // (Edit / Duplicate / Delete): when one of them is hovered, the click is
-  // routed to it and pick-mode cancellation runs via the blank-area handler
-  // in app_panels.cpp instead.
-  if (pick_active) {
-    if (!pick_target_disabled) {
-      const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
-      // IsWindowHovered() gates against floating windows (e.g. Colors) covering the card:
-      // ImGui's FindHoveredWindow already resolved z-order for this frame, and returns false
-      // here when the ##card child is not the top-most window under the cursor. AND with the
-      // existing rect test keeps no-overlap behavior identical (task-color-window-mouse-capture).
-      if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(card_win_pos, card_max) &&
-          ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
-        // "Link A to B" semantics: A (the entry whose modal opened the picker —
-        // pick_link_source) adopts B's (the clicked card's) crystal/filter ids.
-        // So in ApplyPickLink(source, target) the *clicked card* is the source
-        // (model) and pick_link_source is the target (modified).
-        const auto pick_source_ref = *state.pick_link_source;
-        ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
-        state.pick_link_source.reset();
-        // Effects derived centrally by ReconcileGuiEffects: rebinding entry.filter_id
-        // shows up as a `layers` diff (soft), and filter presence-toggle (nullopt↔some)
-        // is caught by AnyEntryFilterPresenceChanged (hard) — see gui_state_reconcile.cpp.
-        // Pure some(A)→some(B) rebinding stays soft, matching pre-migration behavior.
-        // No explicit Invalidate: editing entry now shares clicked card's
-        // crystal_id; that crystal already has a cache entry from this frame.
-      }
-    }
-  } else {
-    const ImVec2 card_max(card_win_pos.x + card_win_sz.x, card_win_pos.y + card_win_sz.y);
-    // See pick-mode branch above for IsWindowHovered() rationale.
-    if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(card_win_pos, card_max) &&
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered()) {
-      g_edit_request = { EditTarget::kCard, layer_idx, entry_idx };
+  // Weight, right-aligned before the badges. Read-only here: the slider it replaces lives on the
+  // inspector's crystal page, because a drag target inside a one-line selectable row competes with
+  // the row's own click.
+  {
+    char weight_text[16];
+    snprintf(weight_text, sizeof(weight_text), "%.0f", static_cast<double>(entry.proportion));
+    x -= ImGui::CalcTextSize(weight_text).x + kHoverBtnGap * 2.0f;
+    ImGui::SetCursorScreenPos(ImVec2(x, text_y));
+    ImGui::TextDisabled("%s", weight_text);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Weight (relative ray share within this layer)");
     }
   }
 
-  ImGui::EndChild();  // ##card — must be unconditional
-
-  if (active) {
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-  }
-  if (co_shared) {
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-  }
+  // Restore the layout cursor: everything after the Selectable was positioned absolutely, so the
+  // row must hand the next row a cursor that sits below it rather than wherever the last badge
+  // happened to land.
+  ImGui::SetCursorScreenPos(ImVec2(row_pos.x, row_pos.y + row_h + ImGui::GetStyle().ItemSpacing.y));
 
   ImGui::PopID();
   return delete_clicked;
@@ -1445,13 +1346,27 @@ void RenderLayer(GuiState& state, int layer_idx) {
   char header_label[32];
   snprintf(header_label, sizeof(header_label), "Layer %d", layer_idx + 1);
 
-  bool header_open =
-      ImGui::CollapsingHeader(header_label, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+  // OpenOnArrow is what keeps folding and selecting apart: the triangle folds, the rest of the row
+  // selects. SpanAvailWidth makes the selectable region the whole row rather than just the label's
+  // text, so the two gestures partition the row instead of leaving dead space between them.
+  const bool selected =
+      state.selection.kind == GuiState::SelectionKind::kLayer && state.selection.layer_idx == layer_idx;
+  ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen |
+                             ImGuiTreeNodeFlags_AllowOverlap;
+  if (selected) {
+    flags |= ImGuiTreeNodeFlags_Selected;
+  }
+  const bool header_open = ImGui::TreeNodeEx("##layer", flags, "%s", header_label);
+  // IsItemToggledOpen() is the discriminator ImGui provides for exactly this: it is true on the
+  // frame the arrow (or a double click) changed the fold state, and false when the click was a
+  // plain selection. Without it, folding a layer would also select it.
+  if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+    state.SelectLayer(layer_idx);
+  }
 
   // Right-aligned delete button on the header row. Only enabled when more than
   // one layer exists (the scattering model requires at least one layer).
-  char layer_del_id[32];
-  snprintf(layer_del_id, sizeof(layer_del_id), ICON_FA_XMARK "##layer_%d", layer_idx);
   bool can_delete_layer = state.layers.size() > 1;
   float layer_del_w = ImGui::CalcTextSize(ICON_FA_XMARK).x + ImGui::GetStyle().FramePadding.x * 2.0f;
   ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
@@ -1460,7 +1375,7 @@ void RenderLayer(GuiState& state, int layer_idx) {
   } else {
     ImGui::BeginDisabled();
   }
-  bool layer_delete_clicked = ImGui::SmallButton(layer_del_id);
+  bool layer_delete_clicked = ImGui::SmallButton(ICON_FA_XMARK "##layer_del");
   if (can_delete_layer) {
     PopDestructiveStyle();
   } else {
@@ -1469,59 +1384,25 @@ void RenderLayer(GuiState& state, int layer_idx) {
   if (layer_delete_clicked && can_delete_layer) {
     state.layers.erase(state.layers.begin() + layer_idx);
     g_thumbnail_cache.OnLayerStructureChanged();
+    // The selection may now name an entry in a layer that no longer exists, or — worse, because it
+    // stays in range — an entry that shifted under it. Clearing is the only answer that cannot be
+    // wrong; re-pointing it at "the layer that took this index" would be inventing an intent the
+    // user did not express.
+    if (state.selection.layer_idx == layer_idx || state.selection.layer_idx > layer_idx) {
+      state.SelectNone();
+    }
+    if (header_open) {
+      ImGui::TreePop();
+    }
     ImGui::PopID();
     return;  // Skip rendering the rest; layer has been erased.
   }
 
   if (header_open) {
-    // Multi-scatter probability slider — four states covering both footguns:
-    //   (a) last layer & prob≈0  → slider disabled (locked at correct 0)
-    //   (b) last layer & prob>0  → slider enabled + warning icon (came from a
-    //       hand-written config; we don't silently rewrite the file value, so
-    //       let the user drag it back to 0)
-    //   (c) non-last layer & prob≈0 → slider enabled + warning icon (the next
-    //       layer will receive no rays — footgun #2)
-    //   (d) otherwise → plain slider
-    // Zero-detection uses IsProbZero (epsilon) rather than == 0.0f — slider
-    // drags can produce sub-step floats that would sneak past a strict check.
-    char prob_id[32];
-    snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
-    bool is_last_layer = layer_idx == static_cast<int>(state.layers.size()) - 1;
-    bool prob_is_zero = IsProbZero(layer.probability);
-    bool disable_slider = is_last_layer && prob_is_zero;
-    ImGui::BeginDisabled(disable_slider);
-    ImGui::BeginGroup();
-    SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
-    ImGui::EndGroup();
-    ImGui::EndDisabled();
-    const char* prob_tip = nullptr;
-    if (disable_slider) {
-      prob_tip = "Last layer: all filter-pass rays are effective output; prob does not apply.";
-    } else if (is_last_layer && !prob_is_zero) {
-      prob_tip =
-          "Last layer has prob > 0: that fraction of rays will be discarded (no next layer to receive them). Set to 0.";
-    } else if (!is_last_layer && prob_is_zero) {
-      prob_tip = "prob = 0 means no rays reach the next scattering layer (it will be effectively dead).";
-    } else {
-      prob_tip = "Fraction of rays continuing to the next layer.";
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("%s", prob_tip);
-    }
-    bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
-    if (show_warning_icon) {
-      ImGui::SameLine();
-      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", prob_tip);
-      }
-    }
-
-    // Render entry cards with deferred deletion
+    // Render entry rows with deferred deletion
     int pending_delete_entry = -1;
     for (int i = 0; i < static_cast<int>(layer.entries.size()); i++) {
-      ImGui::Spacing();
-      bool del = RenderEntryCard(state, layer_idx, i);
+      bool del = RenderEntryRow(state, layer_idx, i);
       if (del) {
         pending_delete_entry = i;
       }
@@ -1531,34 +1412,51 @@ void RenderLayer(GuiState& state, int layer_idx) {
     if (pending_delete_entry >= 0 && layer.entries.size() > 1) {
       layer.entries.erase(layer.entries.begin() + pending_delete_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
+      // Same reasoning as the layer-delete case above: an entry index at or past the deleted one
+      // now names a different entry.
+      if (state.selection.kind == GuiState::SelectionKind::kCrystal && state.selection.layer_idx == layer_idx &&
+          state.selection.entry_idx >= pending_delete_entry) {
+        state.SelectNone();
+      }
     }
 
     // Add entry button. Bind the new entry to a fresh pool slot so it is
     // independent by default — using EntryCard's default (crystal_id = 0)
     // would silently link the new entry to whichever entry already references
     // slot 0, making +Crystal look like "implicit Link to entry 0".
-    ImGui::Spacing();
-    char add_id[32];
-    snprintf(add_id, sizeof(add_id), "+ Crystal##layer_%d", layer_idx);
-    if (ImGui::SmallButton(add_id)) {
+    if (ImGui::SmallButton("+ Crystal##add")) {
       EntryCard new_entry;
       new_entry.crystal_id = static_cast<int>(state.crystals.size());
       state.crystals.emplace_back();
       layer.entries.push_back(new_entry);
       g_thumbnail_cache.OnLayerStructureChanged();
+      // Selecting what was just created is the point of creating it — otherwise the inspector goes
+      // on showing the previous crystal and the new one has to be hunted for in the tree.
+      state.SelectCrystal(layer_idx, static_cast<int>(layer.entries.size()) - 1);
     }
+    ImGui::TreePop();
   }
 
   ImGui::PopID();
 }
 
 
-// ========== Scattering Section (layer management) ==========
+// ========== Document tree rows ==========
 
-void RenderScatteringSection(GuiState& state) {
+void RenderDocumentTreeRows(GuiState& state) {
+  // The document's two singletons come first, in the order the light travels: the sun makes the
+  // rays, the camera sees them, and everything between is the scattering stack below.
+  RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun);
+  RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera);
+  ImGui::Separator();
+
   for (int i = 0; i < static_cast<int>(state.layers.size()); i++) {
     RenderLayer(state, i);
-    ImGui::Spacing();
+    // A layer erased mid-loop shortens the vector under us; re-read rather than trusting the
+    // cached bound. (RenderLayer returns early after erasing, so at most one goes per frame.)
+    if (i >= static_cast<int>(state.layers.size())) {
+      break;
+    }
   }
 }
 
