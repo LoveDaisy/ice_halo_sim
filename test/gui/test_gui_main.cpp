@@ -714,6 +714,7 @@ int main(int argc, char** argv) {
     gui::RenderDocumentInspector();
     gui::RenderRightPanel(window);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
+    gui::RenderDisplayStrip(window, layout_width, layout_height);
     if (g_enable_log_panel) {
       gui::RenderLogPanel(layout_width, layout_height);
     }

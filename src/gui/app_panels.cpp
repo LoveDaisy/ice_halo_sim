@@ -26,6 +26,7 @@
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
+#include "gui/window_sizing.hpp"  // SplitViewportForDisplayStrip — the preview/strip split's single owner
 #include "imgui.h"
 #include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
 
@@ -89,6 +90,10 @@
 //       dockspace's deliberately-empty central node; the OpenGL preview
 //       shader is rendered into this region between ImGui::Render and
 //       SwapBuffers in main.cpp.
+//     - "##DisplayStrip" — the Grade / Overlays / Components tabs, opaque and
+//       pinned to the BOTTOM of that same central node; the preview gives up
+//       exactly this band (SplitViewportForDisplayStrip, window_sizing.hpp).
+//       Fixed-geometry chrome like the bars, not a dock node — hence NoDocking.
 //     Within this cluster, push_front means the LATEST Begin'd window ends
 //     up at index 0 (bottom). Visual order within the cluster is therefore
 //     the REVERSE of main.cpp Render* call order. Cluster members do not
@@ -1368,29 +1373,56 @@ void RenderRightPanel(GLFWwindow* window) {
   ImGui::End();
 }
 
-void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
-  // The preview sits over the dockspace's central node, which dock_layout keeps permanently empty so
-  // the GL shader drawn between ImGui::Render and SwapBuffers shows through it. Taking the rect from
-  // the node instead of recomputing it from the panel-width constants is what makes the preview
-  // follow a splitter drag; the constants only describe the DEFAULT layout now.
-  //
-  // The fallback covers the frames before the first BuildDefaultDockLayout call (and any state where
-  // the tree has not been split): the pre-docking arithmetic, which is exactly right for the default
-  // layout — not a stale rect carried over from an earlier frame.
-  float panel_x = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
-  float panel_y = kTopBarHeight;
-  float panel_width = window_width - panel_x - (g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth);
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-  {
-    ImVec2 central_pos;
-    ImVec2 central_size;
-    if (GetCentralNodeRect(&central_pos, &central_size)) {
-      panel_x = central_pos.x;
-      panel_y = central_pos.y;
-      panel_width = central_size.x;
-      panel_height = central_size.y;
-    }
+namespace {
+
+// The rectangle the preview and the display strip share: the dockspace's central node, which
+// dock_layout keeps permanently empty so the GL shader drawn between ImGui::Render and SwapBuffers
+// shows through it. Taking the rect from the node instead of recomputing it from the panel-width
+// constants is what makes both windows follow a splitter drag; the constants only describe the
+// DEFAULT layout now.
+//
+// The fallback covers the frames before the first BuildDefaultDockLayout call (and any state where
+// the tree has not been split): the pre-docking arithmetic, which is exactly right for the default
+// layout — not a stale rect carried over from an earlier frame.
+//
+// Shared by the two windows rather than computed in each: they are stacked inside this one band, so
+// a fallback that drifted between them would put a seam in a place only one of them knows about.
+struct CentralBand {
+  float x = 0.0f;
+  float y = 0.0f;
+  float w = 0.0f;
+  float h = 0.0f;
+};
+
+CentralBand GetCentralBand(float window_width, float window_height) {
+  CentralBand band;
+  band.x = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
+  band.y = kTopBarHeight;
+  band.w = window_width - band.x;
+  band.h = window_height - kTopBarHeight - kStatusBarHeight;
+
+  ImVec2 central_pos;
+  ImVec2 central_size;
+  if (GetCentralNodeRect(&central_pos, &central_size)) {
+    band.x = central_pos.x;
+    band.y = central_pos.y;
+    band.w = central_size.x;
+    band.h = central_size.y;
   }
+  return band;
+}
+
+}  // namespace
+
+void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
+  const CentralBand band = GetCentralBand(window_width, window_height);
+  // The strip takes the bottom of the band; what is left is the preview. Complementary by
+  // construction — see SplitViewportForDisplayStrip (window_sizing.hpp).
+  const ViewportStripSplit split = SplitViewportForDisplayStrip(band.y, band.h, kDisplayStripHeight);
+  float panel_x = band.x;
+  float panel_y = band.y;
+  float panel_width = band.w;
+  float panel_height = split.preview_h;
   SetNextPanelGeometry(panel_x, panel_y, panel_width, panel_height);
   // NoDocking: this window is pinned to the central node, it is not docked INTO it. Letting the user
   // dock it would fill the central node, and imgui only punches the passthru hole while that node is
@@ -1620,6 +1652,41 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   }
 
   ImGui::End();
+}
+
+void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_height) {
+  const CentralBand band = GetCentralBand(window_width, window_height);
+  const ViewportStripSplit split = SplitViewportForDisplayStrip(band.y, band.h, kDisplayStripHeight);
+
+  SetNextPanelGeometry(band.x, split.strip_y, band.w, split.strip_h);
+  // Fixed-geometry chrome, like the top bar and the status bar and unlike the document column: it is
+  // glued to the viewport's bottom edge because that is where it says something about the picture
+  // above it (doc/gui-layout-architecture.md §4). NoDocking states that — dragged into the dockspace
+  // it would take space from the layout with no way back except View -> Reset Layout. A background
+  // (no NoBackground flag) is deliberate: the strip is chrome, not a hole onto the GL preview.
+  ImGui::Begin("##DisplayStrip", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoDocking |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  if (ImGui::BeginTabBar("##DisplayStripTabs")) {
+    if (ImGui::BeginTabItem("Grade")) {
+      ImGui::TextDisabled("Grade (placeholder)");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Overlays")) {
+      ImGui::TextDisabled("Overlays (placeholder)");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Components")) {
+      ImGui::TextDisabled("Components (placeholder)");
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  ImGui::End();
+  (void)window;
 }
 
 void RenderStatusBar(float window_width, float window_height) {

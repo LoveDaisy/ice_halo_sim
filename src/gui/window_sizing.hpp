@@ -21,6 +21,34 @@ inline std::pair<int, int> ClampWindowSizeToWorkarea(int desired_w, int desired_
   return { std::min(desired_w, max_w), std::min(desired_h, max_h) };
 }
 
+// Vertical split of the band between the top bar and the status bar (the dockspace's central node)
+// into the preview region and the display strip that sits along its bottom edge.
+//
+// Returned as ONE value on purpose. The two rectangles have to be exactly complementary — the strip
+// starts where the preview stops — and computing them independently is how a gap (a band of stale
+// framebuffer between them) or an overlap (ImGui chrome painted over the GL preview) gets in. Both
+// are invisible to a test that checks only one of the two rects, so the arithmetic has a single
+// owner and the invariant is stated here rather than re-derived at each call site.
+struct ViewportStripSplit {
+  float preview_h = 0.0f;  // Preview height, measured down from the band's top edge.
+  float strip_y = 0.0f;    // Strip's top edge, in the same space as the band's y.
+  float strip_h = 0.0f;    // Strip height. Below the requested height only when the band cannot hold it.
+};
+
+// Pure function. `band_y` / `band_h` describe the central band; `requested_strip_h` is
+// kDisplayStripHeight at every production call site. A band shorter than the strip yields the whole
+// band to the strip (preview_h == 0) rather than a negative preview.
+//
+// Invariants, both relied on by callers: preview_h + strip_h == band_h, and
+// strip_y == band_y + preview_h.
+inline ViewportStripSplit SplitViewportForDisplayStrip(float band_y, float band_h, float requested_strip_h) {
+  ViewportStripSplit out{};
+  out.strip_h = std::clamp(requested_strip_h, 0.0f, std::max(0.0f, band_h));
+  out.preview_h = std::max(0.0f, band_h) - out.strip_h;
+  out.strip_y = band_y + out.preview_h;
+  return out;
+}
+
 // POD describing a monitor's workarea in virtual screen coordinates.
 struct MonitorRect {
   int x;

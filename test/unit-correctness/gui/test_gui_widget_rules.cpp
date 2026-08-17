@@ -480,6 +480,7 @@ TEST(SliderMapping, EachLawIsInvertibleAndNeverGoesBackwards) {
 using lumice::gui::AspectFitResult;
 using lumice::gui::ClampWindowSizeToWorkarea;
 using lumice::gui::kAspectClampTolerance;
+using lumice::gui::kDisplayStripHeight;
 using lumice::gui::kLeftPanelWidth;
 using lumice::gui::kMinWindowHeight;
 using lumice::gui::kMinWindowWidth;
@@ -489,6 +490,8 @@ using lumice::gui::kTopBarHeight;
 using lumice::gui::MonitorRect;
 using lumice::gui::ResolveAspectFit;
 using lumice::gui::SelectMonitorIndexByCenter;
+using lumice::gui::SplitViewportForDisplayStrip;
+using lumice::gui::ViewportStripSplit;
 
 // The startup window size, over the workareas that decide it. A 50px margin comes off each
 // dimension before the desired size is honoured, and kMinWindow{Width,Height} is a floor beneath
@@ -616,6 +619,53 @@ TEST(AspectFitTest, PanelsCollapsedReducesOverhead) {
   // Collapsing panels shouldn't make the achieved ratio worse on a small
   // screen — preview region grows toward the full window width.
   EXPECT_GE(collapsed.achieved_preview_ratio, expanded.achieved_preview_ratio);
+}
+
+// ========== Viewport / display-strip split ==========
+//
+// The preview and the display strip stack inside one band, and the only property that cannot be
+// seen by looking at either window alone is that they are COMPLEMENTARY: a one-pixel gap shows the
+// framebuffer behind them, a one-pixel overlap paints ImGui chrome over the GL preview, and both
+// look plausible in a screenshot of either half. That is why the split has a single owner and why
+// this asserts the relation rather than the two rects' individual values.
+TEST(ViewportStripSplitTest, ThePreviewAndTheStripExactlyPartitionTheBand) {
+  struct Case {
+    const char* name;
+    float band_y;
+    float band_h;
+    float strip_h;
+  };
+  const Case kCases[] = {
+    { "default 1600x980 window", kTopBarHeight, 980.0f - kTopBarHeight - kStatusBarHeight, kDisplayStripHeight },
+    { "minimum-height window", kTopBarHeight, kMinWindowHeight - kTopBarHeight - kStatusBarHeight,
+      kDisplayStripHeight },
+    { "band offset by a dragged splitter", 137.0f, 400.0f, kDisplayStripHeight },
+    // Degenerate bands: the strip may not push the preview to a negative height, and it may not
+    // start outside the band it was given.
+    { "band shorter than the strip", kTopBarHeight, 40.0f, kDisplayStripHeight },
+    { "band of zero height", kTopBarHeight, 0.0f, kDisplayStripHeight },
+  };
+  for (const Case& c : kCases) {
+    const ViewportStripSplit split = SplitViewportForDisplayStrip(c.band_y, c.band_h, c.strip_h);
+    EXPECT_GE(split.preview_h, 0.0f) << c.name;
+    EXPECT_GE(split.strip_h, 0.0f) << c.name;
+    // The strip starts exactly where the preview stops...
+    EXPECT_FLOAT_EQ(split.strip_y, c.band_y + split.preview_h) << c.name;
+    // ...and together they cover the band, no more and no less.
+    EXPECT_FLOAT_EQ(split.preview_h + split.strip_h, std::max(0.0f, c.band_h)) << c.name;
+    EXPECT_LE(split.strip_h, c.strip_h) << c.name;
+  }
+}
+
+// A band with room to spare gives the strip its full requested height — the strip is FIXED, so a
+// taller window must grow the preview, never the strip. (The partition test above is satisfied by a
+// split that hands the strip everything, which is why this is asserted separately.)
+TEST(ViewportStripSplitTest, TheStripKeepsItsFixedHeightWhileTheBandCanHoldIt) {
+  const ViewportStripSplit small = SplitViewportForDisplayStrip(kTopBarHeight, 400.0f, kDisplayStripHeight);
+  const ViewportStripSplit large = SplitViewportForDisplayStrip(kTopBarHeight, 1200.0f, kDisplayStripHeight);
+  EXPECT_FLOAT_EQ(small.strip_h, kDisplayStripHeight);
+  EXPECT_FLOAT_EQ(large.strip_h, kDisplayStripHeight);
+  EXPECT_GT(large.preview_h, small.preview_h);
 }
 
 // Pathological case: chrome eats 100% of available height → helper must not

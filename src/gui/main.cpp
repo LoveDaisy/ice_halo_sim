@@ -394,6 +394,7 @@ int main(int argc, char** argv) {
     gui::RenderDocumentInspector();
     gui::RenderRightPanel(window);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
+    gui::RenderDisplayStrip(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
     gui::RenderColorWindow(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);

@@ -40,6 +40,14 @@ constexpr float kRightPanelWidth = 300.0f;
 // reference re-shoot for that group.
 constexpr float kTopBarHeight = 64.0f;
 constexpr float kStatusBarHeight = 28.0f;
+// The display strip under the viewport (Grade / Overlays / Components tabs, RenderDisplayStrip in
+// app_panels.cpp). Like kTopBarHeight this is MEASURED, not estimated: it is the height at which the
+// tallest tab (Grade, with the conditional "Screen too small" warning showing) fits without a
+// scrollbar — tab bar + WindowPadding.y*2 + the tab's own rows, read off a real capture.
+// It is a fixed height on purpose: a strip that grew and shrank with the selected tab would move the
+// viewport's bottom edge every time the user switched tabs. Tabs whose content exceeds it scroll
+// inside their own child region instead.
+constexpr float kDisplayStripHeight = 176.0f;
 
 // Live-edit timing constants
 // Invariant: kCommitIntervalMs >= kPollIntervalMs (commit should not be faster than poll)

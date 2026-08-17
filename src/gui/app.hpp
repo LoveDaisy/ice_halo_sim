@@ -403,6 +403,10 @@ void RenderDocumentTree();
 void RenderDocumentInspector();
 void RenderRightPanel(GLFWwindow* window);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
+// The display strip along the viewport's bottom edge: Grade / Overlays / Components
+// (doc/gui-layout-architecture.md §4). Takes the same window size as RenderPreviewPanel because the
+// two split one band between them and must agree on where it is; call it right after the preview.
+void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_height);
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
 // task-cleanup-hardening AC4: Save-modified prompt. Rendered once per frame
