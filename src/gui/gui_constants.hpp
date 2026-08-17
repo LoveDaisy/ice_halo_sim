@@ -32,8 +32,9 @@ constexpr float kRightPanelWidth = 300.0f;
 //
 // MAINTAINER: this constant is the input to every fixed-chrome geometry calculation in the app —
 // the dock host's origin and height (main.cpp / test_gui_main.cpp), the side panels' y and height
-// (RenderLeftPanel / RenderRightPanel call sites in app_panels.cpp), the collapsed-strip button
-// centring (RenderCollapsedStrip's callers), and the aspect-fit solver (ResolveAspectFit, app.cpp).
+// (RenderDocumentTree / RenderDocumentInspector / RenderRightPanel call sites in app_panels.cpp),
+// the collapsed-strip button centring (RenderCollapsedStrip's callers), and the aspect-fit solver
+// (ResolveAspectFit, app.cpp).
 // Changing it also changes the pixel height of the `visual` group's left_panel reference capture
 // (test_gui_main.cpp's left-panel readback derives rh from it), so a change here requires a
 // reference re-shoot for that group.
@@ -59,7 +60,7 @@ constexpr int kPollIntervalMs = 20;  // Server poll interval (T_poll, ms). Short
 constexpr int kIdleHeartbeatIntervalMs = 500;
 static_assert(kIdleHeartbeatIntervalMs > kPollIntervalMs,
               "the idle heartbeat must be a throttled-DOWN cadence relative to the running poll");
-// Crystal edit-modal preview animation tick (ms between successive sample_seed advances while a
+// Crystal inspector preview animation tick (ms between successive sample_seed advances while a
 // shape distribution is active). ~3.3 Hz sits in the 2-4 Hz visual-comfort band (faster reads as
 // noise); it is a pure UX cadence choice, not a correctness constraint.
 constexpr int kCrystalPreviewAnimIntervalMs = 300;
@@ -96,19 +97,13 @@ constexpr int kMaxThumbnailUpdatesPerFrame = 2;
 // Vertical gap between stacked hover-action buttons (Delete on top, Duplicate below).
 constexpr float kHoverBtnGap = 4.0f;
 
-// Border thickness applied to the entry card while its edit modal is open.
-// Default ImGui ChildBorderSize is 1.0f; 2.0f provides a clearly visible
-// distinction without over-thickening. Consumed by RenderEntryCard via
-// PushStyleVar(ImGuiStyleVar_ChildBorderSize).
-constexpr float kActiveCardBorder = 2.0f;
-
 // Default camera zoom for the crystal renderer. Lower value → crystal fills
 // more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
-// the thumbnail cache and the edit-modal preview so the crystal does not
-// visually jump when opening the modal.
+// the thumbnail cache and the inspector's preview so the crystal does not
+// visually jump when a row is selected.
 constexpr float kDefaultCrystalZoom = 1.4f;
 
-// Camera elevation (downward pitch) for the modal/thumbnail crystal preview,
+// Camera elevation (downward pitch) for the inspector/thumbnail crystal preview,
 // in degrees. The camera sits at world (0, -dist, dist·tan(kCameraTiltDeg))
 // looking at the origin, with world +z up. Implemented as a fixed rotation
 // V_rot = Rx(+kCameraTiltDeg) inside CrystalRenderer::BuildViewRotation —

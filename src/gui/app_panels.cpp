@@ -58,11 +58,14 @@
 //
 //   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus,
 //            so push_back on creation -> floats above the background cluster):
-//     - Staged "Edit Entry" (BeginPopupModal, on ImGui popup stack -> always top)
-//     - Immediate "Edit Entry" (ImGui::Begin regular window)
-//     - "Unsaved Changes" (BeginPopupModal)
+//     - "Unsaved Changes" (BeginPopupModal), and the other popups beside it:
+//       "Save Modified Config", "Overwrite Config File", "Import Warning",
+//       "Warning", "Custom Spectrum", the Settings panel.
+//       The per-entry "Edit Entry" window used to head this list in both its
+//       forms; it is gone — the crystal / axis / filter editors are a page of
+//       "##DocumentInspector" in the background cluster below.
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
-//       above the LeftPanel / RightPanel cluster.
+//       above the document column / RightPanel cluster.
 //     - ICON_FA_PALETTE " Colors" (color_window.cpp:508) — user-toggleable
 //       floating window. Manual click detection in the background cluster
 //       (e.g. RenderEntryCard's IsMouseHoveringRect path) MUST gate on
@@ -2053,7 +2056,7 @@ void RenderLogPanel(float window_width, float window_height) {
   // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via
   // push_front (= bottom of g.Windows) and others via push_back (= top), so
   // adding the flag here would push LogPanel into the background cluster
-  // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
+  // BELOW the document column / RightPanel — the opposite of the desired stacking.
   // NoDocking: this panel keeps its own fixed geometry above the status bar. Without the flag a user
   // could drag it into the main DockSpace, where it would take space away from the three panels the
   // default layout is built from and never come back on its own.
