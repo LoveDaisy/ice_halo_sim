@@ -175,10 +175,12 @@ bool IsRowChecked(const std::string& key_path) {
 // loaded value until some control touches it. A control TOUCHING it is also what makes most fields
 // unreachable — SliderWithInput ends with an unconditional std::clamp and the main UI calls it
 // every frame, so an out-of-range alpha is pulled back inside the domain on the first frame after
-// load. The reachable fields are therefore precisely the ones with no main-UI control at all
-// (renderer.opacity today), plus anything a user reaches before its owning panel section is drawn.
-// That inversion is worth knowing when writing a test for this: the "obvious" field to poison is
-// the one that cannot hold the poison.
+// load. The reachable fields are therefore the ones no control TOUCHES per frame, which is a wider
+// set than the ones with no control: renderer.opacity has none at all, while the four overlay
+// alphas have one that lives in the display strip's Overlays tab — and ImGui does not submit an
+// unselected tab's contents, so their clamp runs only on the frames that tab is showing. Add
+// anything a user reaches before its owning panel section is drawn. That inversion is worth knowing
+// when writing a test for this: the "obvious" field to poison is often the one that cannot hold it.
 //
 // Written here rather than in defaults_diff.cpp on purpose: the domain comes from the field-editor
 // registry, and that file's stated boundary is that it walks JSON and knows nothing about controls.
