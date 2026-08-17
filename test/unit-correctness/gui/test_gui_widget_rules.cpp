@@ -484,7 +484,6 @@ using lumice::gui::kDisplayStripHeight;
 using lumice::gui::kLeftPanelWidth;
 using lumice::gui::kMinWindowHeight;
 using lumice::gui::kMinWindowWidth;
-using lumice::gui::kRightPanelWidth;
 using lumice::gui::kStatusBarHeight;
 using lumice::gui::kTopBarHeight;
 using lumice::gui::MonitorRect;
@@ -556,9 +555,11 @@ TEST(MonitorSelectionTest, TheCenterPointPicksExactlyOneMonitorWithHalfOpenBound
 
 // ========== Aspect-fit clamp detection (screen-too-small feedback) ==========
 //
-// Tests use the production layout constants (kLeftPanelWidth=400, kRightPanelWidth=300,
-// kTopBarHeight=40, kStatusBarHeight=28) so they exercise the same arithmetic
-// path as ApplyAspectRatio.
+// Tests use the production layout constants (kLeftPanelWidth, kDisplayStripHeight, kTopBarHeight,
+// kStatusBarHeight) so they exercise the same arithmetic path as ApplyAspectRatio. Note which axis
+// each one is on: the document column is the only horizontal overhead, while the strip under the
+// viewport joins the top bar and the status bar as vertical overhead — that regrouping is the whole
+// of what changed here when the right panel retired.
 
 namespace {
 constexpr float kCollapsedStripWidth = 20.0f;  // Mirror app.cpp's local constant.
@@ -580,16 +581,23 @@ TEST(AspectFitTest, TheClampFlagAlwaysMirrorsTheDeviationItReports) {
   };
   const Case kCases[] = {
     { "wide monitor easily fits 2:1", 1600, 2.0f, 2880, 1800, 0 },
-    // 1280x720 picking 2:1: the preview region cannot reach it, because the chrome (panels + top
-    // bar + status bar) eats too much.
-    { "small screen cannot fit 2:1", 1280, 2.0f, 1280, 720, 1 },
+    // 1280x720 picking 2:1 USED to be the must-not-fit row, and is pinned the other way now
+    // deliberately: retiring the right panel returned 300 px of width to the preview, and the
+    // display strip that replaced it took 176 px of height — on this screen the trade lands 2:1
+    // exactly on target (880x440 in a 1280x708 window). The row stays, with its polarity flipped,
+    // because "the chrome got narrower" is the change this task made and a row asserting it is
+    // worth more than a deleted one.
+    { "small screen now fits 2:1 after the chrome trade", 1280, 2.0f, 1280, 720, 0 },
+    // The must-not-fit polarity, restated at the ratio this screen genuinely cannot reach: 3:1
+    // needs a preview 1116 px wide, and the recalc gate rejects the 1516 px window that would take.
+    { "small screen cannot fit 3:1", 1280, 3.0f, 1280, 720, 1 },
     { "small screen, 16:9", 1280, 16.0f / 9.0f, 1280, 720, -1 },
     // Portrait: the ratio < 1 branch is height-driven, so preview_h grows past the screen if
     // anything rather than preview_w.
     { "portrait on a wide monitor", 1600, 0.5f, 2880, 1800, -1 },
   };
   for (const Case& c : kCases) {
-    AspectFitResult fit = ResolveAspectFit(c.win_w, c.ratio, c.work_w, c.work_h, kLeftPanelWidth, kRightPanelWidth,
+    AspectFitResult fit = ResolveAspectFit(c.win_w, c.ratio, c.work_w, c.work_h, kLeftPanelWidth, kDisplayStripHeight,
                                            kTopBarHeight, kStatusBarHeight);
     EXPECT_FLOAT_EQ(fit.requested_preview_ratio, c.ratio) << c.name;
     const float deviation = std::abs(fit.achieved_preview_ratio - c.ratio) / c.ratio;
@@ -605,18 +613,23 @@ TEST(AspectFitTest, TheClampFlagAlwaysMirrorsTheDeviationItReports) {
   }
 }
 
-// Collapsed panels → less chrome → small monitor can now fit 2:1 closer.
+// Collapsed column → less horizontal chrome → small monitor can now fit 2:1 closer.
 // We don't assert clamp polarity strictly (depends on numerics), but assert
 // the helper consumes the reduced overhead by producing a *less* clamped
-// achieved ratio than the equivalent expanded-panels case.
-TEST(AspectFitTest, PanelsCollapsedReducesOverhead) {
+// achieved ratio than the equivalent expanded-column case.
+//
+// One side of the chrome, not two, since the right panel retired: the strip's bottom_h is held
+// FIXED across the pair on purpose, so what the comparison isolates is the horizontal overhead
+// alone. (The strip does not collapse — it is fixed chrome — so varying it here would assert
+// something the UI cannot do.)
+TEST(AspectFitTest, CollapsingTheColumnReducesOverhead) {
   AspectFitResult expanded = ResolveAspectFit(/*current_win_w=*/1280, /*ratio=*/2.0f,
-                                              /*work_w=*/1280, /*work_h=*/720, kLeftPanelWidth, kRightPanelWidth,
+                                              /*work_w=*/1280, /*work_h=*/720, kLeftPanelWidth, kDisplayStripHeight,
                                               kTopBarHeight, kStatusBarHeight);
   AspectFitResult collapsed = ResolveAspectFit(/*current_win_w=*/1280, /*ratio=*/2.0f,
                                                /*work_w=*/1280, /*work_h=*/720, kCollapsedStripWidth,
-                                               kCollapsedStripWidth, kTopBarHeight, kStatusBarHeight);
-  // Collapsing panels shouldn't make the achieved ratio worse on a small
+                                               kDisplayStripHeight, kTopBarHeight, kStatusBarHeight);
+  // Collapsing the column shouldn't make the achieved ratio worse on a small
   // screen — preview region grows toward the full window width.
   EXPECT_GE(collapsed.achieved_preview_ratio, expanded.achieved_preview_ratio);
 }
@@ -673,7 +686,7 @@ TEST(ViewportStripSplitTest, TheStripKeepsItsFixedHeightWhileTheBandCanHoldIt) {
 TEST(AspectFitTest, ChromeExceedsHeightYieldsBenignDefault) {
   AspectFitResult fit =
       ResolveAspectFit(/*current_win_w=*/1280, /*ratio=*/2.0f,
-                       /*work_w=*/1280, /*work_h=*/kMinWindowHeight, kLeftPanelWidth, kRightPanelWidth,
+                       /*work_w=*/1280, /*work_h=*/kMinWindowHeight, kLeftPanelWidth, /*bottom_h=*/0.0f,
                        /*topbar_h=*/kMinWindowHeight,
                        /*statusbar_h=*/0.0f);
   // Whatever the achieved ratio is, was_clamped must be deterministic (not

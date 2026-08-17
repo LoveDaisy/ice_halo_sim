@@ -86,7 +86,7 @@ inline constexpr float kAspectClampTolerance = 0.05f;
 //
 // `achieved_preview_ratio` is the ratio of the preview region after the
 // final clamp; in practice this equals
-//   (target_w - left_w - right_w) / (target_h - topbar_h - statusbar_h)
+//   (target_w - left_w) / (target_h - bottom_h - topbar_h - statusbar_h)
 // using the floats *before* truncation to int target_w/target_h, so the
 // comparison against `requested_preview_ratio` is not noised by the int cast.
 //
@@ -119,17 +119,23 @@ struct AspectFitResult {
 //   * Apply portrait flip (1/ratio) before passing in.
 //   * Pre-resolve `work_w`, `work_h` via SelectMonitorIndexByCenter +
 //     glfwGetMonitorWorkarea (kept out of this helper to preserve purity).
+//
+// AXES of the four overhead parameters, spelled out because their order does not say it: `left_w`
+// is the only HORIZONTAL one (the document column). `bottom_h`, `topbar_h` and `statusbar_h` are
+// all VERTICAL — the display strip under the viewport, the top bar and the status bar. `bottom_h`
+// sits next to `left_w` for continuity with the signature it replaced (where the second parameter
+// was the right panel's width), not because it shares its axis.
 inline AspectFitResult ResolveAspectFit(int current_win_w, float ratio, int work_w, int work_h, float left_w,
-                                        float right_w, float topbar_h, float statusbar_h) {
+                                        float bottom_h, float topbar_h, float statusbar_h) {
   AspectFitResult out{};
   out.requested_preview_ratio = ratio;
 
   // Mirror the legacy derivation: preview_w from current win_w minus panels;
   // target_h = preview_h + chrome; target_w starts as the unchanged win_w.
-  float preview_w = std::max(1.0f, static_cast<float>(current_win_w) - left_w - right_w);
+  float preview_w = std::max(1.0f, static_cast<float>(current_win_w) - left_w);
   float preview_h = preview_w / ratio;
   int target_w = current_win_w;
-  auto target_h = static_cast<int>(preview_h + topbar_h + statusbar_h);
+  auto target_h = static_cast<int>(preview_h + bottom_h + topbar_h + statusbar_h);
 
   target_w = std::clamp(target_w, kMinWindowWidth, work_w);
   target_h = std::clamp(target_h, kMinWindowHeight, work_h);
@@ -139,10 +145,10 @@ inline AspectFitResult ResolveAspectFit(int current_win_w, float ratio, int work
   // we keep that gate so the caller's glfwSetWindowSize never overflows.
   // When the gate rejects, was_clamped will be set below via the achieved-
   // ratio comparison rather than relying on the gate as a signal.
-  float actual_preview_h = static_cast<float>(target_h) - topbar_h - statusbar_h;
+  float actual_preview_h = static_cast<float>(target_h) - bottom_h - topbar_h - statusbar_h;
   if (actual_preview_h > 0.0f) {
     float actual_preview_w_candidate = actual_preview_h * ratio;
-    int recalc_w = static_cast<int>(actual_preview_w_candidate + left_w + right_w);
+    int recalc_w = static_cast<int>(actual_preview_w_candidate + left_w);
     if (recalc_w >= kMinWindowWidth && recalc_w <= work_w) {
       target_w = recalc_w;
     }
@@ -151,8 +157,8 @@ inline AspectFitResult ResolveAspectFit(int current_win_w, float ratio, int work
   // Compute achieved preview ratio from the final target_{w,h} we will hand
   // to glfwSetWindowSize. Use floats for the achieved-ratio numerator/denom
   // so cmp with requested_preview_ratio is not noised by int truncation.
-  float achieved_preview_w = static_cast<float>(target_w) - left_w - right_w;
-  float achieved_preview_h = static_cast<float>(target_h) - topbar_h - statusbar_h;
+  float achieved_preview_w = static_cast<float>(target_w) - left_w;
+  float achieved_preview_h = static_cast<float>(target_h) - bottom_h - topbar_h - statusbar_h;
   if (achieved_preview_h <= 0.0f || achieved_preview_w <= 0.0f) {
     // Pathological panel widths — pretend we hit the target so we don't
     // surface a misleading warning. Caller should never hit this in practice
