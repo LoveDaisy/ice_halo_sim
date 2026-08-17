@@ -401,12 +401,19 @@ void RenderTopBar(float window_width);
 // click is answered in the same frame it happens rather than one frame later.
 void RenderDocumentTree();
 void RenderDocumentInspector();
-void RenderRightPanel(GLFWwindow* window);
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height);
 // The display strip along the viewport's bottom edge: Grade / Overlays / Components
 // (doc/gui-layout-architecture.md §4). Takes the same window size as RenderPreviewPanel because the
 // two split one band between them and must agree on where it is; call it right after the preview.
 void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_height);
+
+// Test-only: ask the strip to show the Grade tab again on the next frame.
+//
+// Which tab is selected lives in ImGui's TabBar and outlives GuiState, so a case that switches to
+// Overlays hands the next case a strip showing Overlays — and a tab that is not selected is not
+// SUBMITTED, so the next case's items are not merely off-screen, they do not exist. Same hazard,
+// and the same remedy, as the window-scroll reset in the harness's ResetTestState.
+void ResetDisplayStripSelectionForTest();
 void RenderStatusBar(float window_width, float window_height);
 void RenderUnsavedPopup(GLFWwindow* window);
 // task-cleanup-hardening AC4: Save-modified prompt. Rendered once per frame

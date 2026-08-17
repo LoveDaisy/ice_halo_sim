@@ -104,7 +104,6 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "zenith_nadir_radius_px",     FieldTier::kView,       false },
     // Panel layout
     { "left_panel_collapsed",       FieldTier::kView,       false },
-    { "right_panel_collapsed",      FieldTier::kView,       false },
     { "document_tree_folded",       FieldTier::kView,       false },
     { "document_inspector_folded",  FieldTier::kView,       false },
     { "modal_layout_vertical",      FieldTier::kView,       false },

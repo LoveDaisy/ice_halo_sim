@@ -249,7 +249,7 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
   // (1-3), and single orthographic (8) all carry view matrix; dual fisheye (4-6),
   // rectangular (7), and dual orthographic (9) skip it. Reusing LensIsFullSky as the
   // single source of truth keeps WorldDirToPixel coupled to the same lens-class
-  // policy as RenderRightPanel / RenderPreviewPanel.
+  // policy as RenderDisplayStrip / RenderPreviewPanel.
   float dx = wx, dy = wy, dz = wz;
   bool needs_view = !LensIsFullSky(lens_type);
   if (needs_view) {

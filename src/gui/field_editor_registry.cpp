@@ -523,7 +523,6 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.zenith_nadir_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
 
     // ---- panel state ----
-    map.emplace("right_panel_collapsed", BoolField([](GuiState& s) { return &s.right_panel_collapsed; }));
     map.emplace("modal_layout_vertical", BoolField([](GuiState& s) { return &s.modal_layout_vertical; }));
 
     return map;

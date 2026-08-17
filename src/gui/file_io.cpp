@@ -2564,7 +2564,6 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_zenith_nadir_radius_px"] = state.zenith_nadir_radius_px;
 
   // Panel state
-  root["right_panel_collapsed"] = state.right_panel_collapsed;
   root["modal_layout_vertical"] = state.modal_layout_vertical;
 
   // Schema version. v=2 added the filter `type` discriminator; v=3
@@ -2790,7 +2789,6 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", GuiState{}.zenith_nadir_radius_px);
 
   // Panel state
-  state.right_panel_collapsed = root.value("right_panel_collapsed", GuiState{}.right_panel_collapsed);
   state.modal_layout_vertical = root.value("modal_layout_vertical", GuiState{}.modal_layout_vertical);
 
   return true;

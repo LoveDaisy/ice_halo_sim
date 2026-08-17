@@ -355,15 +355,13 @@ int main(int argc, char** argv) {
     }
     // Save panel collapse state before any mutations (keyboard shortcuts + button clicks during rendering).
     bool prev_left_collapsed = gui::g_state.left_panel_collapsed;
-    bool prev_right_collapsed = gui::g_state.right_panel_collapsed;
 
-    // Panel collapse shortcuts: [ for left panel, ] for right panel
+    // Panel collapse shortcut: [ for the document column. There is no ] any more — the right panel
+    // it folded is gone, and the strip that replaced its contents is fixed chrome with no collapse
+    // of its own.
     if (!io.WantCaptureKeyboard) {
       if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) {
         gui::g_state.left_panel_collapsed = !gui::g_state.left_panel_collapsed;
-      }
-      if (ImGui::IsKeyPressed(ImGuiKey_RightBracket)) {
-        gui::g_state.right_panel_collapsed = !gui::g_state.right_panel_collapsed;
       }
     }
 
@@ -392,7 +390,6 @@ int main(int argc, char** argv) {
     gui::BuildDefaultDockLayout(dockspace_id, layout_width, dock_host_height);
     gui::RenderDocumentTree();
     gui::RenderDocumentInspector();
-    gui::RenderRightPanel(window);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderDisplayStrip(window, layout_width, layout_height);
     gui::RenderLogPanel(layout_width, layout_height);
@@ -407,8 +404,7 @@ int main(int argc, char** argv) {
     gui::RenderGuiWarningPopup();
 
     // Reset aspect ratio to Free when panel collapse state changes (window size doesn't adjust automatically).
-    if (gui::g_state.left_panel_collapsed != prev_left_collapsed ||
-        gui::g_state.right_panel_collapsed != prev_right_collapsed) {
+    if (gui::g_state.left_panel_collapsed != prev_left_collapsed) {
       gui::g_state.aspect_preset = gui::AspectPreset::kFree;
     }
 

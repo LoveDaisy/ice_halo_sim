@@ -22,17 +22,21 @@ namespace lumice::gui {
 //     from ImGui::GetWindowSize() like any other window; adding a second way to ask for that size
 //     would create a value that can disagree with the window's actual geometry.
 
-// The side panels' ImGui window names. Defined here because this module has to name them in
+// The docked panels' ImGui window names. Defined here because this module has to name them in
 // order to dock them, and a second spelling in app_panels.cpp's Begin calls would dock a window that
 // does not exist — silently, since docking a never-submitted window is not an error.
 //
-// The left column is TWO windows, not one: the document tree (master) above and the inspector
+// The document column is TWO windows, not one: the document tree (master) above and the inspector
 // (detail) below, split by a native docking separator. The single "##LeftPanel" they replaced is
 // gone rather than kept as the tree's name — a name that says "left panel" would make the pair's
 // asymmetry (one of them happens to keep the old name) look like a hierarchy that does not exist.
+//
+// They are also the only two. The right panel that once balanced the column is gone: its Scene/View
+// groups became inspector pages (doc/gui-layout-architecture.md §2) and its display groups became
+// the strip under the viewport (§4), which is fixed chrome rather than a dock node — so the
+// dockspace now splits once, into the document column and the central node.
 constexpr const char* kDocumentTreeWindowName = "##DocumentTree";
 constexpr const char* kDocumentInspectorWindowName = "##DocumentInspector";
-constexpr const char* kRightPanelWindowName = "##RightPanel";
 
 // IDs of the dock nodes the side panels currently occupy. Valid only after
 // BuildDefaultDockLayout() has run at least once; before that every field is 0 (a value no dock
@@ -47,7 +51,6 @@ struct DockPanelNodeIds {
   ImGuiID left = 0;  // Parent split node, NOT a leaf — no window docks into `left` itself; see above.
   ImGuiID document_tree = 0;
   ImGuiID document_inspector = 0;
-  ImGuiID right = 0;
 };
 
 // Fraction of the document column's height given to the inspector by the default layout. The tree

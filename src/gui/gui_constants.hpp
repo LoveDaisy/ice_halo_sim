@@ -4,7 +4,7 @@
 namespace lumice::gui {
 
 // Layout constants
-// Initial window size. Height is bound to the right-panel content footprint:
+// Initial window size. Height is bound to the document column's content footprint:
 // when adding new control groups / expanding existing groups, re-evaluate this
 // constant to avoid spawning a scrollbar on fresh install. On constrained
 // displays (e.g. 1080p + large Dock, Windows 125% scaling), main.cpp clamps
@@ -21,7 +21,6 @@ constexpr int kMinWindowHeight = 640;
 // decoration on macOS/Windows/Linux with ~1.5x buffer.
 constexpr int kWindowDecorationMargin = 50;
 constexpr float kLeftPanelWidth = 400.0f;
-constexpr float kRightPanelWidth = 300.0f;
 // The top bar is TWO rows: chrome (panel toggles / New / Open / Save / Colors / Settings / View) on
 // the first, the execution cluster (Run / Stop / dirty chip / Revert / Rays / Max hits / Use GPU /
 // run status) on the second. One row was measured not to fit: the chrome row alone is ~700 px and
@@ -31,10 +30,10 @@ constexpr float kRightPanelWidth = 300.0f;
 // single-row value carried.
 //
 // MAINTAINER: this constant is the input to every fixed-chrome geometry calculation in the app —
-// the dock host's origin and height (main.cpp / test_gui_main.cpp), the side panels' y and height
-// (RenderDocumentTree / RenderDocumentInspector / RenderRightPanel call sites in app_panels.cpp),
-// the collapsed-strip button centring (RenderCollapsedStrip's callers), and the aspect-fit solver
-// (ResolveAspectFit, app.cpp).
+// the dock host's origin and height (main.cpp / test_gui_main.cpp), the document column's y and
+// height (RenderDocumentTree / RenderDocumentInspector call sites in app_panels.cpp), the
+// viewport/display-strip band (GetCentralBand, app_panels.cpp), the collapsed-strip button centring
+// (RenderCollapsedStrip's callers), and the aspect-fit solver (ResolveAspectFit, app.cpp).
 // Changing it also changes the pixel height of the `visual` group's left_panel reference capture
 // (test_gui_main.cpp's left-panel readback derives rh from it), so a change here requires a
 // reference re-shoot for that group.

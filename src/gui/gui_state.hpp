@@ -466,7 +466,7 @@ inline ViewDefaults DefaultViewParamsFor(int lens_type) {
     // Globe is outside-in: az=0 puts the camera behind the sphere. Default az=-180
     // so View Reset shows the same forward direction as non-Globe lenses at az=0.
     // Lens-combo direction continuity is handled separately by the transform formula
-    // in RenderRightPanel (app_panels.cpp), not by this default.
+    // in RenderCameraControls (app_panels.cpp), not by this default.
     azimuth = -180.0f;
   }
   // Orthographic single + dual already fall through to 90; no extra branch.
@@ -1121,9 +1121,7 @@ struct GuiState {
   }
 
   // Panel state (view preference — does not call MarkDirty)
-  // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
-  bool right_panel_collapsed = false;
   // The two halves of the document column, folded to their header strips. Distinct from
   // left_panel_collapsed, which folds the column as a whole: these hand the height to the OTHER
   // half rather than to the preview, which is the point of the pair being in one column
@@ -1238,7 +1236,7 @@ struct GuiState {
   //   MarkStructHardDirty, so Revert must restore them; the field was missing from the
   //   original 2026-04 audit and re-added by task-349.2 (Step 2 of plan §3.4).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   left_panel_collapsed, right_panel_collapsed, show_composite_preview,
+  //   left_panel_collapsed, show_composite_preview,
   //   raypath_color_mode — display state via PushDisplayState, not through MarkDirty),
   //   runtime state (sim_state, run_intent, committed_epoch, display_epoch_floor,
   //   last_uploaded_texture_serial, last_uploaded_as_composite, stats_*, snapshot_intensity,

@@ -68,9 +68,6 @@ void RefreshPanelNodeIds() {
   if (const ImGuiID inspector = DockedNodeIdOf(kDocumentInspectorWindowName)) {
     g_panel_node_ids.document_inspector = inspector;
   }
-  if (const ImGuiID right = DockedNodeIdOf(kRightPanelWindowName)) {
-    g_panel_node_ids.right = right;
-  }
 }
 
 }  // namespace
@@ -134,20 +131,16 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
   // truncation inside DockBuilderSplitNode cannot make the panels a pixel narrower than the rest of
   // the GUI (aspect-ratio fitting, the left-panel capture rect) computes with.
   //
-  // Ratio math needs `w` at least kLeftPanelWidth + kRightPanelWidth + a nonzero center strip, or
-  // the second split's ratio reaches >=1 (first split alone already saturates it) and its
-  // denominator can go negative — DockBuilderSplitNode's size_ratio_for_node_at_dir asserts on that
-  // in a debug ImGui build, and produces an undefined negative-width node otherwise. `kMinWindowWidth`
-  // (main.cpp's GLFW size hint) already keeps the real app window above this floor, but this function
-  // also runs for whatever `w` a caller passes, so the clamp is local rather than relying on that.
-  const float ratio_w = std::max(w, kLeftPanelWidth + kRightPanelWidth + 1.0f);
+  // Ratio math needs `w` at least kLeftPanelWidth + a nonzero center strip, or the split's ratio
+  // reaches >=1 and DockBuilderSplitNode's size_ratio_for_node_at_dir asserts on it in a debug ImGui
+  // build (and produces an undefined negative-width node otherwise). `kMinWindowWidth` (main.cpp's
+  // GLFW size hint) already keeps the real app window above this floor, but this function also runs
+  // for whatever `w` a caller passes, so the clamp is local rather than relying on that.
+  const float ratio_w = std::max(w, kLeftPanelWidth + 1.0f);
   ImGuiID center_id = dockspace_id;
   const ImGuiID left_id =
       ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Left, kLeftPanelWidth / ratio_w, nullptr, &center_id);
-  const ImGuiID right_id = ImGui::DockBuilderSplitNode(
-      center_id, ImGuiDir_Right, kRightPanelWidth / (ratio_w - kLeftPanelWidth), nullptr, &center_id);
   ImGui::DockBuilderSetNodeSize(left_id, ImVec2(kLeftPanelWidth, h));
-  ImGui::DockBuilderSetNodeSize(right_id, ImVec2(kRightPanelWidth, h));
 
   // Second split, inside the left column: the document tree on top, the inspector below. This is
   // the master-detail pair of doc/gui-layout-architecture.md §2, and it is built out of a real
@@ -161,25 +154,24 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
 
   // No tab bar: this layout keeps the panels looking exactly like the fixed strips they replace,
   // and a single-window node would otherwise grow a tab header the previous layout never had. The
-  // flag goes on the three LEAF nodes; the left column's parent is a split node, which has no tab
+  // flag goes on the two LEAF nodes; the left column's parent is a split node, which has no tab
   // bar of its own to suppress.
-  for (const ImGuiID leaf : { tree_id, inspector_id, right_id }) {
+  for (const ImGuiID leaf : { tree_id, inspector_id }) {
     if (ImGuiDockNode* node_ptr = ImGui::DockBuilderGetNode(leaf)) {
       node_ptr->SetLocalFlags(node_ptr->LocalFlags | ImGuiDockNodeFlags_NoTabBar);
     }
   }
 
-  // ##PreviewPanel is intentionally NOT docked -- see kDockSpaceFlags. It is positioned over the
-  // (permanently empty) central node by GetCentralNodeRect().
+  // ##PreviewPanel and ##DisplayStrip are intentionally NOT docked -- see kDockSpaceFlags. They are
+  // positioned over the (permanently empty) central node by GetCentralNodeRect(), the preview above
+  // and the strip along its bottom edge.
   ImGui::DockBuilderDockWindow(kDocumentTreeWindowName, tree_id);
   ImGui::DockBuilderDockWindow(kDocumentInspectorWindowName, inspector_id);
-  ImGui::DockBuilderDockWindow(kRightPanelWindowName, right_id);
   ImGui::DockBuilderFinish(dockspace_id);
 
   g_panel_node_ids.left = left_id;
   g_panel_node_ids.document_tree = tree_id;
   g_panel_node_ids.document_inspector = inspector_id;
-  g_panel_node_ids.right = right_id;
 }
 
 void RequestDockLayoutReset() {

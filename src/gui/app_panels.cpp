@@ -66,7 +66,7 @@
 //       forms; it is gone — the crystal / axis / filter editors are a page of
 //       "##DocumentInspector" in the background cluster below.
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
-//       above the document column / RightPanel cluster.
+//       above the document column / display strip cluster.
 //     - ICON_FA_PALETTE " Colors" (color_window.cpp:508) — user-toggleable
 //       floating window. Manual click detection in the background cluster
 //       (e.g. RenderEntryCard's IsMouseHoveringRect path) MUST gate on
@@ -79,10 +79,10 @@
 //     - "##DockHost" — the transparent host carrying the main DockSpace
 //       (dock_layout.cpp). Draws nothing itself; the dockspace paints the
 //       panel background over everything except its central node.
-//     - "##DocumentTree" / "##DocumentInspector" / "##RightPanel" — docked
+//     - "##DocumentTree" / "##DocumentInspector" — docked
 //       INTO that dockspace. Their position and size come from their dock
 //       nodes; they no longer carry NoMove/NoResize because they no longer
-//       place themselves. The first two share the left column, one above the
+//       place themselves. The two share the document column, one above the
 //       other, with a native separator between them.
 //     - "##TopBar" / "##StatusBar" — fixed top/bottom bars, outside the
 //       dockspace, still placed by SetNextPanelGeometry.
@@ -370,7 +370,6 @@ void RenderTopBar(float window_width) {
   // `busy` gates the file operations: New/Open/Save stay disabled while the backend is still
   // draining an async Stop (kStopping), not just while simulating.
   const bool busy = IsBusy(g_state.sim_state);
-  const auto& style = ImGui::GetStyle();
 
   // File operations — New/Open disabled while busy (simulating OR async Stop draining); Save menu
   // itself stays enabled so read-only exports (Screenshot / Dual Fisheye Equal Area /
@@ -596,33 +595,14 @@ void RenderTopBar(float window_width) {
   if (ImGui::BeginPopup("ViewMenu")) {
     if (ImGui::MenuItem("Reset Layout")) {
       RequestDockLayoutReset();
-      // A reset that left the panels collapsed would not be a reset: collapse is view state, and the
-      // rebuilt layout restores both panels to their default width regardless. Clearing the flags
-      // here keeps the marker and the geometry from disagreeing. The collapse-tracking in
-      // RenderDocumentTree / RenderRightPanel sees this as an ordinary expand and asks for the width
-      // the rebuild already produced, so the two agree rather than fight.
+      // A reset that left the column collapsed would not be a reset: collapse is view state, and the
+      // rebuilt layout restores the column to its default width regardless. Clearing the flag here
+      // keeps the marker and the geometry from disagreeing. The collapse-tracking in
+      // RenderDocumentTree sees this as an ordinary expand and asks for the width the rebuild
+      // already produced, so the two agree rather than fight.
       g_state.left_panel_collapsed = false;
-      g_state.right_panel_collapsed = false;
     }
     ImGui::EndPopup();
-  }
-
-  // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
-  // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
-  // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
-  {
-    const char* right_toggle_label = g_state.right_panel_collapsed ? ICON_FA_CHEVRON_LEFT "##right_panel_toggle" :
-                                                                     ICON_FA_CHEVRON_RIGHT "##right_panel_toggle";
-    // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
-    float w_expanded = ImGui::CalcTextSize(ICON_FA_CHEVRON_RIGHT "##right_panel_toggle", nullptr, true).x;
-    float w_collapsed = ImGui::CalcTextSize(ICON_FA_CHEVRON_LEFT "##right_panel_toggle", nullptr, true).x;
-    float btn_w = std::max(w_expanded, w_collapsed) + style.FramePadding.x * 2.0f;
-    float right_edge = ImGui::GetWindowContentRegionMax().x;
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(right_edge - btn_w);
-    if (ImGui::Button(right_toggle_label)) {
-      g_state.right_panel_collapsed = !g_state.right_panel_collapsed;
-    }
   }
 
   // ---- Row 2: the execution cluster. No SameLine, so it starts on a fresh line; kTopBarHeight is
@@ -1127,252 +1107,6 @@ void RenderDocumentInspector() {
   ImGui::End();
 }
 
-void RenderRightPanel(GLFWwindow* window) {
-  static PanelCollapseTracker s_collapse;
-
-  if (g_state.right_panel_collapsed) {
-    // See RenderDocumentTree for why the window is still submitted while collapsed.
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
-    ImGui::PopStyleVar();
-    ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().right, true, kRightPanelWidth, &s_collapse);
-    RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
-    ImGui::End();
-    return;
-  }
-
-  ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
-  ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().right, false, kRightPanelWidth, &s_collapse);
-
-  // The Scene (Sun) and View (Camera) groups that used to open this panel are gone from it. Both
-  // describe the DOCUMENT — what is being simulated, and from where — so they moved into the
-  // document column's inspector, next to the layers and crystals they belong with
-  // (doc/gui-layout-architecture.md §2). What is left below is display state: how the accumulated
-  // result is shown. Its own move, to a strip under the viewport, is 456.4's.
-
-  // Copy-model renderer: GuiState always owns a valid renderer by default construction.
-  auto& r = g_state.renderer;
-
-  // ---- Display Group ----
-  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Rendering");
-    // Rust-tinted input: changing Resolution re-runs the simulation and discards accumulated rays.
-    // The warning is the point — see doc/gui-visual-language.md §7.
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, WarningFillColor(0.6f));
-    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
-    }
-    ImGui::BeginGroup();
-    const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
-    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
-                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
-    ImGui::EndGroup();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Exposure value offset for display brightness");
-    }
-
-    ImGui::SeparatorText("Aspect Ratio");
-    int preset_idx = static_cast<int>(g_state.aspect_preset);
-    const char* preview_label = kAspectPresetNames[preset_idx];
-    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
-      for (int i = 0; i < kAspectPresetCount; i++) {
-        bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
-        ImGui::BeginDisabled(disabled);
-        bool selected = (i == preset_idx);
-        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
-          g_state.aspect_preset = static_cast<AspectPreset>(i);
-          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndDisabled();
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::BeginDisabled(AspectFlipDisabled(g_state.aspect_preset));
-    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-    if (ImGui::Button(flip_label)) {
-      g_state.aspect_portrait = !g_state.aspect_portrait;
-      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-    }
-    ImGui::EndDisabled();
-
-    // Screen-too-small warning: rendered only when the requested aspect could
-    // not be honored AND the user is still on a non-Free preset (the
-    // ApplyAspectRatio path already clears aspect_clamp on Free / kMatchBg-no-bg,
-    // but we re-check here so a stale signal from a missed callback path
-    // cannot leak through).
-    if (g_state.aspect_clamp.was_clamped && g_state.aspect_preset != AspectPreset::kFree) {
-      // Disabled Selectable for the static header (ImGui::Text* widgets are
-      // emitted with id=0 so they cannot be located by the GUI test engine;
-      // disabled Selectable still calls ItemAdd with a real ID derived from
-      // the label, so it is addressable while remaining non-interactive).
-      // Dynamic ratio detail follows as a plain Text below.
-      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
-      ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
-      ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
-                  g_state.aspect_clamp.requested_preview_ratio);
-      ImGui::PopStyleColor();
-    }
-
-    ImGui::SeparatorText("Background");
-    if (ImGui::Button("Load Bg##display")) {
-      DoLoadBackground(window);
-    }
-    ImGui::SameLine();
-    bool no_bg = !g_preview.HasBackground();
-    ImGui::BeginDisabled(no_bg);
-    if (ImGui::Button("Clear##display_bg")) {
-      DoClearBackground();
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(no_bg);
-    Checkbox("Show##display_bg", &g_state.bg_show);
-    // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
-    // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
-    // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
-    // disabled state is idempotent.
-    const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
-    ImGui::BeginDisabled(!bg_alpha_c.enabled);
-    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
-                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    ImGui::PopItemWidth();
-  }
-
-  // ---- Overlay Group ----
-  if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Auxiliary Lines");
-    // Per-overlay row layout: color picker + name (variable width) + Line / Label
-    // checkboxes anchored at fixed X so the two checkbox columns align across rows
-    // even though the name column has different widths (Horizon / Grid / Angular Distance).
-    // Second row: Alpha slider.
-    const ImGuiStyle& style = ImGui::GetStyle();
-    // Anchor checkbox columns at fixed X derived from the longest overlay name
-    // plus widget metrics. The trailing pad (ItemSpacing.x × 2) protects against
-    // ColorEdit3 / CalcTextSize sub-pixel rounding under HiDPI so the long name
-    // ("Angular Distance") never overlaps the Line checkbox.
-    float color_w = ImGui::GetFrameHeight();                       // ColorEdit3 NoInputs is a frame_h square
-    float name_col_w = ImGui::CalcTextSize("Angular Distance").x;  // widest overlay name
-    float check_box_w = ImGui::GetFrameHeight();                   // checkbox tick area
-    float line_text_w = ImGui::CalcTextSize("Line").x;
-    float line_col_x = color_w + style.ItemSpacing.x + name_col_w + style.ItemSpacing.x * 2.0f;
-    float label_col_x = line_col_x + check_box_w + style.ItemInnerSpacing.x + line_text_w + style.ItemSpacing.x * 2.0f;
-
-    auto overlay_row = [&](const char* name, const char* color_id, float* color, const char* line_id, bool* line_v,
-                           const char* label_id, bool* label_v) {
-      ImGui::ColorEdit3(color_id, color, ImGuiColorEditFlags_NoInputs);
-      ImGui::SameLine();
-      ImGui::TextUnformatted(name);
-      ImGui::SameLine(line_col_x);
-      Checkbox(line_id, line_v);
-      ImGui::SameLine(label_col_x);
-      Checkbox(label_id, label_v);
-    };
-
-    overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
-                "Label##horizon", &g_state.show_horizon_label);
-    const FieldEditorConstraint horizon_a_c = ConstraintFor("overlay_horizon_alpha", g_state);
-    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, static_cast<float>(horizon_a_c.min_value),
-                    static_cast<float>(horizon_a_c.max_value), horizon_a_c.fmt, horizon_a_c.scale);
-
-    overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
-                &g_state.show_grid_label);
-    const FieldEditorConstraint grid_a_c = ConstraintFor("overlay_grid_alpha", g_state);
-    SliderWithInput("Alpha##grid", &g_state.grid_alpha, static_cast<float>(grid_a_c.min_value),
-                    static_cast<float>(grid_a_c.max_value), grid_a_c.fmt, grid_a_c.scale);
-
-    overlay_row("Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
-                &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
-    const FieldEditorConstraint sun_a_c = ConstraintFor("overlay_sun_circles_alpha", g_state);
-    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, static_cast<float>(sun_a_c.min_value),
-                    static_cast<float>(sun_a_c.max_value), sun_a_c.fmt, sun_a_c.scale);
-
-    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
-      if (ImGui::Button("Edit Angles...##overlay")) {
-        ImGui::OpenPopup("SunCirclesEdit");
-      }
-      if (ImGui::BeginPopup("SunCirclesEdit")) {
-        bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
-
-        // Preset buttons
-        const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-        for (float p : presets) {
-          const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
-          char label[16];
-          std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-          ImGui::BeginDisabled(already || at_limit);
-          if (ImGui::Button(label)) {
-            g_state.sun_circle_angles.push_back(p);
-            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-          }
-          ImGui::EndDisabled();
-          ImGui::SameLine();
-        }
-        ImGui::NewLine();
-
-        // Custom angle input
-        static float custom_angle = 22.0f;
-        ImGui::PushItemWidth(60.0f);
-        ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(at_limit);
-        if (ImGui::Button("+##add_circle")) {
-          custom_angle = ClampSunCircleAngle(custom_angle);
-          g_state.sun_circle_angles.push_back(custom_angle);
-          std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-        }
-        ImGui::EndDisabled();
-
-        // Current list with delete buttons
-        ImGui::Separator();
-        int remove_idx = -1;
-        for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-          ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
-          ImGui::SameLine();
-          char del_label[32];
-          std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
-          if (ImGui::SmallButton(del_label)) {
-            remove_idx = i;
-          }
-        }
-        if (remove_idx >= 0) {
-          g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-        }
-
-        ImGui::EndPopup();
-      }
-    }
-
-    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
-    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
-    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Zenith/Nadir");
-    ImGui::SameLine(line_col_x);
-    Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
-    const FieldEditorConstraint zn_a_c = ConstraintFor("overlay_zenith_nadir_alpha", g_state);
-    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, static_cast<float>(zn_a_c.min_value),
-                    static_cast<float>(zn_a_c.max_value), zn_a_c.fmt, zn_a_c.scale);
-    const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
-                    static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
-
-    ImGui::PopItemWidth();
-  }
-
-  ImGui::End();
-}
-
 namespace {
 
 // The rectangle the preview and the display strip share: the dockspace's central node, which
@@ -1654,6 +1388,393 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   ImGui::End();
 }
 
+namespace {
+
+// Width of the sim-tier marker bar, in pixels. Thin on purpose: the old form filled the whole input
+// with rust, which read as "this control is broken" rather than "editing it costs you the run".
+constexpr float kSimTierEdgeWidth = 3.0f;
+
+// Armed by ResetDisplayStripSelectionForTest, consumed by the Grade tab's flags on the next frame.
+// Which tab is selected lives in ImGui's TabBar, not here, so "put it back on Grade" cannot be an
+// assignment — it has to be a request the next render honours (same shape, and the same reason, as
+// edit_modals.cpp's g_pending_tab_select).
+bool g_strip_select_grade = false;
+
+// The sim-tier marker: a bar along the LEADING edge of the control just submitted, saying "editing
+// this re-runs the simulation and discards the accumulated rays" (doc/gui-visual-language.md §7,
+// doc/gui-layout-architecture.md §4).
+//
+// It is the same statement as the top bar's dirty chip, read at a different moment. The chip
+// reports that a sim-tier field HAS been edited — IsModified, fed by DiffAgainstCommitBaseline over
+// GuiState::ConfigSnapshot, whose RenderConfig half is RenderConfigResimFields (gui_state.hpp).
+// This marker says which control would produce that. The two cannot share one runtime value (one is
+// a property of a field, the other of the document's state), so what keeps them from drifting is
+// that both name the same registry: marking a control whose field RenderConfigResimFields does not
+// carry would light up a control the chip never answers for. That registry holds four fields
+// (sim_resolution_index, background, ray_color, opacity), of which sim_resolution_index is the only
+// one this strip offers a control for — the other three are reachable today only through the
+// Settings panel's field registry. The classifier side of it is pinned by
+// unit-correctness/gui/test_state_reconcile.cpp's "renderer.sim_resolution_index" row.
+//
+// Call directly after the control it marks — it reads ImGui's last-item rectangle, and it does not
+// disturb it, so an IsItemHovered() tooltip after this call still belongs to the control.
+void MarkSimTierEdge() {
+  const ImVec2 lo = ImGui::GetItemRectMin();
+  const ImVec2 hi = ImGui::GetItemRectMax();
+  ImGui::GetWindowDrawList()->AddRectFilled(lo, ImVec2(lo.x + kSimTierEdgeWidth, hi.y),
+                                            ImGui::ColorConvertFloat4ToU32(WarningTextColor()),
+                                            ImGui::GetStyle().FrameRounding, ImDrawFlags_RoundCornersLeft);
+}
+
+// Every tab's body goes in a child region of its own. The strip is a FIXED height (see
+// kDisplayStripHeight) so that switching tabs cannot move the viewport's bottom edge; a tab whose
+// content does not fit therefore has to scroll inside the strip rather than resize it. Without the
+// child, an over-tall tab would simply be clipped, with nothing on screen saying so.
+void BeginStripTabContent(const char* id) {
+  ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
+}
+
+// The Grade tab: how the accumulated result is rendered and shown — the former right panel's
+// Display group, minus its own collapsing header (the tab is the group boundary now).
+//
+// Laid out across the strip rather than down it: three groups side by side, each two rows tall.
+// The strip is wide and short by construction, and the old one-control-per-row column would have
+// made it four rows tall — which is height taken from the viewport for a shape that does not need
+// it. Column widths stretch, so the same layout holds down to kMinWindowWidth.
+void RenderGradeTab(GLFWwindow* window) {
+  // Copy-model renderer: GuiState always owns a valid renderer by default construction.
+  auto& r = g_state.renderer;
+  const ImGuiStyle& style = ImGui::GetStyle();
+
+  // ONE sub-heading for the whole group (doc/gui-visual-language.md §4.6): the three it replaces
+  // ("Rendering" / "Aspect Ratio" / "Background") each headed a single row, which is less than a
+  // sub-heading has to earn. What they separated is now separated by the columns themselves.
+  ImGui::SeparatorText("Rendering");
+
+  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingStretchSame)) {
+    ImGui::TableNextRow();
+
+    // ---- Column 1: the image the simulation renders, and how bright it is shown.
+    ImGui::TableSetColumnIndex(0);
+    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
+    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
+    MarkSimTierEdge();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+    }
+    ImGui::BeginGroup();
+    const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
+    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
+                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
+    ImGui::EndGroup();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Exposure value offset for display brightness");
+    }
+    ImGui::PopItemWidth();
+
+    // ---- Column 2: the aspect ratio the preview region is fitted to.
+    ImGui::TableSetColumnIndex(1);
+    int preset_idx = static_cast<int>(g_state.aspect_preset);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    // The orientation button MODIFIES the preset, so it shares the preset's row (AC4 /
+    // doc/gui-visual-language.md §4.6). It used to sit on a row of its own, which read as a second,
+    // independent control. Item width is what is left of the cell after the button and the trailing
+    // "Preset" label — the negative-width idiom above cannot express "minus a widget I have not
+    // submitted yet".
+    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+    const float flip_w = ImGui::CalcTextSize(flip_label).x + style.FramePadding.x * 2.0f;
+    const float preset_w =
+        std::max(60.0f, ImGui::GetContentRegionAvail().x - flip_w - kLabelColWidth - style.ItemSpacing.x * 2.0f);
+    ImGui::SetNextItemWidth(preset_w);
+    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
+        ImGui::BeginDisabled(disabled);
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndDisabled();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(AspectFlipDisabled(g_state.aspect_preset));
+    if (ImGui::Button(flip_label)) {
+      g_state.aspect_portrait = !g_state.aspect_portrait;
+      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
+
+    // Screen-too-small warning: rendered only when the requested aspect could
+    // not be honored AND the user is still on a non-Free preset (the
+    // ApplyAspectRatio path already clears aspect_clamp on Free / kMatchBg-no-bg,
+    // but we re-check here so a stale signal from a missed callback path
+    // cannot leak through).
+    if (g_state.aspect_clamp.was_clamped && g_state.aspect_preset != AspectPreset::kFree) {
+      // Disabled Selectable for the static header (ImGui::Text* widgets are
+      // emitted with id=0 so they cannot be located by the GUI test engine;
+      // disabled Selectable still calls ItemAdd with a real ID derived from
+      // the label, so it is addressable while remaining non-interactive).
+      // Dynamic ratio detail follows as a plain Text below.
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
+      ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
+      ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
+                  g_state.aspect_clamp.requested_preview_ratio);
+      ImGui::PopStyleColor();
+    }
+
+    // ---- Column 3: the background image shown under the result.
+    ImGui::TableSetColumnIndex(2);
+    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
+    if (ImGui::Button("Load Bg##display")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    if (ImGui::Button("Clear##display_bg")) {
+      DoClearBackground();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(no_bg);
+    Checkbox("Show##display_bg", &g_state.bg_show);
+    // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
+    // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
+    // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
+    // disabled state is idempotent.
+    const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
+    ImGui::BeginDisabled(!bg_alpha_c.enabled);
+    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
+                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
+
+    ImGui::EndTable();
+  }
+}
+
+// The angle list behind the Angular Distance row's fold: presets, a custom-angle input, and the
+// current list with per-entry delete.
+//
+// A named function rather than statements inside the row loop. A table row IS a loop body here, so
+// a popup written inline would be built once per row — four popups sharing one name, of which the
+// last one submitted wins. Having exactly one construction site is a property worth being able to
+// check by reading, not by trusting the loop's shape to stay what it is today.
+void RenderSunCirclesAnglePopup() {
+  bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
+
+  // Preset buttons
+  const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+  for (float p : presets) {
+    const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
+    char label[16];
+    std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
+    ImGui::BeginDisabled(already || at_limit);
+    if (ImGui::Button(label)) {
+      g_state.sun_circle_angles.push_back(p);
+      std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+  }
+  ImGui::NewLine();
+
+  // Custom angle input
+  static float custom_angle = 22.0f;
+  ImGui::PushItemWidth(60.0f);
+  ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(at_limit);
+  if (ImGui::Button("+##add_circle")) {
+    custom_angle = ClampSunCircleAngle(custom_angle);
+    g_state.sun_circle_angles.push_back(custom_angle);
+    std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+  }
+  ImGui::EndDisabled();
+
+  // Current list with delete buttons
+  ImGui::Separator();
+  int remove_idx = -1;
+  for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+    ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+    ImGui::SameLine();
+    char del_label[32];
+    std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+    if (ImGui::SmallButton(del_label)) {
+      remove_idx = i;
+    }
+  }
+  if (remove_idx >= 0) {
+    g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+  }
+}
+
+// The pixel radius behind the Zenith/Nadir row's fold. It is the one field only that row has, and
+// giving it a column of its own would have cost every other row an empty cell (and the name column
+// the width) to say something about one of the four — the fold is what buys "Angular Distance" its
+// uncut name (doc/gui-visual-language.md §4.4).
+void RenderZenithNadirRadiusPopup() {
+  const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
+  SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
+                  static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
+}
+
+// What a row's fold holds, when it holds anything. Two of the four overlays have a field the others
+// do not, and they are not the same field.
+enum class OverlayFold {
+  kNone,
+  kSunCircleAngles,
+  kZenithNadirRadius,
+};
+
+// One auxiliary line, as the table reads it. Every row answers the same questions — colour, name,
+// line, text label, opacity — which is exactly why the table is the right shape for them
+// (doc/gui-visual-language.md §4.4). `label` is null for a row that draws no text label at all;
+// that cell is then left EMPTY rather than filled with a disabled control or an explanatory word,
+// because "this one has no text" is what an empty cell in a labelled column already says.
+struct OverlayRowSpec {
+  const char* name;
+  const char* color_id;
+  float* color;
+  const char* line_id;
+  bool* line;
+  const char* label_id;  // null ⇒ no text label for this overlay; the cell stays empty.
+  bool* label;
+  const char* alpha_id;
+  const char* alpha_field;
+  float* alpha;
+  // Triple hash, unlike every other id above, and not a slip: the fold button's label carries a
+  // visible glyph, and ImGui hashes the WHOLE label for "glyph##suffix" — the id would then contain
+  // the icon codepoint, so renaming the icon would silently rename the item. "###suffix" hashes the
+  // suffix alone. Null for a row with no fold.
+  const char* fold_id;
+  OverlayFold fold;
+};
+
+// The Overlays tab: the four auxiliary lines drawn over the preview, as one table.
+//
+// It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
+// their checkboxes at an x computed from the width of the longest name — an arrangement in which
+// adding a name longer than "Angular Distance" silently overlapped the Line column.
+void RenderOverlaysTab() {
+  const OverlayRowSpec rows[] = {
+    { "Horizon", "##horizon_color", g_state.horizon_color, "##horizon_line", &g_state.show_horizon_line,
+      "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha", "overlay_horizon_alpha",
+      &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
+    { "Grid", "##grid_color", g_state.grid_color, "##grid_line", &g_state.show_grid_line, "##grid_label",
+      &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
+      OverlayFold::kNone },
+    { "Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "##sun_circles_line",
+      &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
+      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", OverlayFold::kSunCircleAngles },
+    // The marker pair: pixel-space dots at the zenith and the nadir. No text label — hence a null
+    // label id — and the only row with a radius.
+    { "Zenith/Nadir", "##zenith_nadir_color", g_state.zenith_nadir_color, "##zenith_nadir_line",
+      &g_state.show_zenith_nadir_line, nullptr, nullptr, "##zenith_nadir_alpha", "overlay_zenith_nadir_alpha",
+      &g_state.zenith_nadir_alpha, "###zenith_nadir_fold", OverlayFold::kZenithNadirRadius },
+  };
+
+  const float swatch_w = ImGui::GetFrameHeight();
+  const float check_w = ImGui::GetFrameHeight();
+  const float fold_w = ImGui::GetFrameHeight();
+  constexpr float kAlphaColWidth = 90.0f;
+
+  // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
+  // every other column states the width it needs, and whatever is left goes to the names — rather
+  // than the names getting what is left over after an x anchor derived from the longest of them.
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+  // Capped width, not the strip's full width. The strip is as wide as the viewport (~1200 px on the
+  // default window), and a table stretched across all of it puts a row's name at one end and the
+  // checkboxes that belong to it at the other, with a screen's worth of empty row in between —
+  // measured on a capture before this cap existed. The cap is a maximum, not a fixed width: below
+  // it the table still shrinks with the window, so the Name column's stretch keeps doing the job
+  // the fixed columns' declared widths leave it (see the note above kFlags).
+  constexpr float kMaxTableWidth = 560.0f;
+  const ImVec2 outer_size(std::min(ImGui::GetContentRegionAvail().x, kMaxTableWidth), 0.0f);
+  if (!ImGui::BeginTable("##OverlaysTable", 6, kFlags, outer_size)) {
+    return;
+  }
+  ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
+  ImGui::TableSetupColumn("Overlay", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
+  ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
+  ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+  ImGui::TableHeadersRow();
+
+  for (const OverlayRowSpec& row : rows) {
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(row.name);
+
+    ImGui::TableSetColumnIndex(2);
+    Checkbox(row.line_id, row.line);
+
+    // Empty cell, on purpose — see OverlayRowSpec::label.
+    if (row.label != nullptr) {
+      ImGui::TableSetColumnIndex(3);
+      Checkbox(row.label_id, row.label);
+    }
+
+    ImGui::TableSetColumnIndex(4);
+    const FieldEditorConstraint alpha_c = ConstraintFor(row.alpha_field, g_state);
+    // A single DragFloat rather than the [slider][input] pair the panel used: the pair needs about
+    // twice this cell's width, and the width it would take comes straight off the name column
+    // (doc/gui-visual-language.md §7 records the cell-sized single control as the verified form).
+    // AlwaysClamp so the ctrl+click text entry honours the registry's domain like the drag does.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::DragFloat(row.alpha_id, row.alpha, 0.005f, static_cast<float>(alpha_c.min_value),
+                     static_cast<float>(alpha_c.max_value), alpha_c.fmt, ImGuiSliderFlags_AlwaysClamp);
+
+    if (row.fold == OverlayFold::kNone) {
+      continue;  // Empty fold cell: this overlay has no field the others lack.
+    }
+    ImGui::TableSetColumnIndex(5);
+    // The angle list is offered only while the circles are actually drawn — editing the angles of
+    // something invisible is a control with no feedback. The radius has no such gate: the markers'
+    // own Line checkbox is right there in the same row.
+    const bool circles_shown = g_state.show_sun_circles_line || g_state.show_sun_circles_label;
+    if (row.fold == OverlayFold::kSunCircleAngles && !circles_shown) {
+      continue;
+    }
+    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
+      ImGui::OpenPopup(row.fold_id);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(row.fold == OverlayFold::kSunCircleAngles ? "Edit angles" : "Marker radius");
+    }
+    if (ImGui::BeginPopup(row.fold_id)) {
+      if (row.fold == OverlayFold::kSunCircleAngles) {
+        RenderSunCirclesAnglePopup();
+      } else {
+        RenderZenithNadirRadiusPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  ImGui::EndTable();
+}
+
+}  // namespace
+
+void ResetDisplayStripSelectionForTest() {
+  g_strip_select_grade = true;
+}
+
 void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_height) {
   const CentralBand band = GetCentralBand(window_width, window_height);
   const ViewportStripSplit split = SplitViewportForDisplayStrip(band.y, band.h, kDisplayStripHeight);
@@ -1670,23 +1791,36 @@ void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_hei
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   if (ImGui::BeginTabBar("##DisplayStripTabs")) {
-    if (ImGui::BeginTabItem("Grade")) {
-      ImGui::TextDisabled("Grade (placeholder)");
+    const ImGuiTabItemFlags grade_flags = g_strip_select_grade ? ImGuiTabItemFlags_SetSelected : 0;
+    g_strip_select_grade = false;
+    if (ImGui::BeginTabItem("Grade", nullptr, grade_flags)) {
+      BeginStripTabContent("##GradeTab");
+      RenderGradeTab(window);
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Overlays")) {
-      ImGui::TextDisabled("Overlays (placeholder)");
+      BeginStripTabContent("##OverlaysTab");
+      RenderOverlaysTab();
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
+    // A reserved slot, and deliberately nothing more. What goes here is the per-raypath colour
+    // analysis of doc/gui-custom-spectrum-and-raypath-color.md — a legend of one row per light-path
+    // component, the same shape as the Overlays table above it. The slot exists now because the
+    // strip's edge and height were chosen to fit that future tenant (see kDisplayStripHeight and
+    // the strip's bottom-edge placement, doc/gui-layout-architecture.md §4/§6); leaving it out
+    // would have made "does this layout hold it" unanswerable until the day it lands.
     if (ImGui::BeginTabItem("Components")) {
-      ImGui::TextDisabled("Components (placeholder)");
+      BeginStripTabContent("##ComponentsTab");
+      ImGui::TextDisabled("Light-path component analysis lands here.");
+      ImGui::EndChild();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
   }
 
   ImGui::End();
-  (void)window;
 }
 
 void RenderStatusBar(float window_width, float window_height) {
@@ -2123,9 +2257,9 @@ void RenderLogPanel(float window_width, float window_height) {
   // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via
   // push_front (= bottom of g.Windows) and others via push_back (= top), so
   // adding the flag here would push LogPanel into the background cluster
-  // BELOW the document column / RightPanel — the opposite of the desired stacking.
+  // BELOW the document column / display strip — the opposite of the desired stacking.
   // NoDocking: this panel keeps its own fixed geometry above the status bar. Without the flag a user
-  // could drag it into the main DockSpace, where it would take space away from the three panels the
+  // could drag it into the main DockSpace, where it would take space away from the panels the
   // default layout is built from and never come back on its own.
   ImGui::Begin(
       "##LogPanel", &g_state.log_panel_open,
