@@ -38,7 +38,17 @@ const char* const kInteract = "**/##preview_interact";
 // GuiFunc is for.
 bool g_upload_done = false;
 
+// Frames to withhold the upload for, so a case can watch the empty state first and the result
+// afterwards within one document. Counted down here rather than gated by a bool a case has to clear
+// again: a case that fails an assert never runs its own cleanup, and a counter that drains on its
+// own cannot hand a later case a preview that stays empty forever.
+int g_upload_delay_frames = 0;
+
 void UploadSynthTexture(ImGuiTestContext*) {
+  if (g_upload_delay_frames > 0) {
+    g_upload_delay_frames--;
+    return;
+  }
   if (!g_upload_done) {
     InitSynthTexture();
     gui::g_preview.UploadTexture(g_synth_tex.data(), kSynthTexW, kSynthTexH);
@@ -74,16 +84,25 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
   // previewing one, and the panel keeps "the surface exists only when there is something to
   // interact with".
   //
-  // The two halves that could each pass alone are asserted together on purpose: the marker is
-  // forced on (it has no user toggle to follow), while the horizon line is NOT — it is read from
-  // the toggle, set to a non-default value here so "follows the toggle" cannot be satisfied by a
-  // hardcoded false.
+  // Which lines appear is asserted in BOTH directions in the same case on purpose. The empty
+  // state's sky coordinate system is the three the blueprint enumerates — horizon, angular-distance
+  // circles, sun marker (doc/gui-layout-architecture.md §4) — and those are forced on with every
+  // user toggle deliberately left OFF here, which is the only setting under which "forced" is
+  // distinguishable from "happened to follow a toggle that was on". The grid is NOT enumerated and
+  // so still follows its toggle; asserting only the forced half would pass just as well if the
+  // forcing had been applied to every line indiscriminately, and asserting only the grid half would
+  // pass on the pre-456.7 behaviour where nothing was forced at all.
+  //
+  // The toggles are then re-read AFTER the frame: forcing is a presentation-layer override on the
+  // per-frame decoration, and a version of it that reached back into GuiState would still satisfy
+  // every assertion above while silently rewriting what the user sees once a result arrives.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_preview_frames_the_sky_it_has_not_rendered");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      gui::g_state.show_horizon_line = true;
+      gui::g_state.show_horizon_line = false;
       gui::g_state.show_grid_line = false;
+      gui::g_state.show_sun_circles_line = false;
       ctx->Yield(3);
 
       IM_CHECK(!gui::g_preview.HasTexture());
@@ -96,8 +115,10 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       const auto& ov = gui::g_preview_vp.params.overlay;
       IM_CHECK(ov.show_sun_marker);
       IM_CHECK_NE(ov.sun_marker_screen_pos[1], gui::kOverlaySentinel);
-      // The user's own toggles still decide, in both directions.
+      // Enumerated by the blueprint => drawn even though the user's toggle says otherwise.
       IM_CHECK(ov.show_horizon);
+      IM_CHECK(ov.show_sun_circles);
+      // Not enumerated => still the user's call, and the user said no.
       IM_CHECK(!ov.show_grid);
       // ...at half the intensity they were set at, which is what separates "framed and waiting"
       // from "rendered". The marker's own alpha is not scaled — it has no full-strength
@@ -106,8 +127,84 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       IM_CHECK_LT(std::fabs(ov.grid_alpha - gui::g_state.grid_alpha * 0.5f), 1e-5f);
       IM_CHECK_LT(std::fabs(ov.sun_circles_alpha - gui::g_state.sun_circles_alpha * 0.5f), 1e-5f);
       IM_CHECK_LT(std::fabs(ov.zenith_nadir_alpha - gui::g_state.zenith_nadir_alpha * 0.5f), 1e-5f);
+      // The stored toggles came through the forced frame untouched.
+      IM_CHECK(!gui::g_state.show_horizon_line);
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
+      IM_CHECK(!gui::g_state.show_grid_line);
       // No interaction surface: there is nothing to drag.
       IM_CHECK(!ctx->ItemExists(kInteract));
+    };
+  }
+
+  // The grid half of the same claim, read from the side the case above cannot reach. There, every
+  // toggle was off, so "the grid follows its toggle" and "the grid is forced off" produce identical
+  // pixels; only a grid switched ON separates them. It is switched on while the other two stay off,
+  // so the frame carries the two rules disagreeing about the same document — a forcing that had
+  // been widened to cover the grid, or narrowed to cover nothing, fails here rather than in review.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_preview_still_obeys_the_grid_toggle");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.show_horizon_line = false;
+      gui::g_state.show_sun_circles_line = false;
+      gui::g_state.show_grid_line = true;
+      ctx->Yield(3);
+
+      IM_CHECK(!gui::g_preview.HasTexture());  // the premise: this is the empty state
+      const auto& ov = gui::g_preview_vp.params.overlay;
+      IM_CHECK(ov.show_grid);         // the user asked for it
+      IM_CHECK(ov.show_horizon);      // the blueprint asks for it
+      IM_CHECK(ov.show_sun_circles);  // likewise
+      IM_CHECK(!gui::g_state.show_horizon_line);
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
+      IM_CHECK(gui::g_state.show_grid_line);
+    };
+  }
+
+  // The round trip, which is where the "presentation layer only" rule is worth something to a user:
+  // the empty state's forcing has to leave nothing behind once a result arrives. Asserted on the
+  // DECORATION after the texture upload, not merely on GuiState — a forcing that wrote back to
+  // GuiState and a forcing that leaked into the post-empty decoration are different defects, and
+  // only the second is what the user would actually see.
+  //
+  // The three toggles are given three different values, all non-default in the sense that matters
+  // (each disagrees with what the empty state would have forced), so a decoration rebuilt from a
+  // single wrong constant cannot match by luck.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "preview_viewport", "leaving_the_empty_state_restores_the_users_own_toggles");
+    t->GuiFunc = UploadSynthTexture;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_upload_done = false;
+      // Hold the upload back long enough to read the empty state, then let it land. Without this
+      // the GuiFunc uploads on the very next frame and the "before" half of the round trip is never
+      // on screen to be left.
+      g_upload_delay_frames = 4;
+      gui::g_state.show_horizon_line = false;
+      gui::g_state.show_grid_line = true;
+      gui::g_state.show_sun_circles_line = false;
+      ctx->Yield(3);
+
+      IM_CHECK(!gui::g_preview.HasTexture());  // the premise: the empty state came first
+      {
+        const auto& empty_ov = gui::g_preview_vp.params.overlay;
+        IM_CHECK(empty_ov.show_horizon);  // forced, against the toggle
+        IM_CHECK(empty_ov.show_sun_circles);
+      }
+      IM_CHECK(!gui::g_state.show_horizon_line);
+      IM_CHECK(gui::g_state.show_grid_line);
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
+
+      ctx->Yield(6);
+      IM_CHECK(gui::g_preview.HasTexture());  // the premise: this is no longer the empty state
+      const auto& ov = gui::g_preview_vp.params.overlay;
+      IM_CHECK(!ov.show_horizon);
+      IM_CHECK(ov.show_grid);
+      IM_CHECK(!ov.show_sun_circles);
+      IM_CHECK(!gui::g_state.show_horizon_line);
+      IM_CHECK(gui::g_state.show_grid_line);
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
     };
   }
 

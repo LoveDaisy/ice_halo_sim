@@ -1153,8 +1153,8 @@ CentralBand GetCentralBand(float window_width, float window_height) {
 // document's, and the offset between them IS the "this result is out of date" signal, read at the
 // same moment as the top bar's dirty chip (doc/gui-layout-architecture.md §4).
 //
-// Deliberately pure: the empty state's own presentation (half intensity, forced sun marker) is a
-// post-processing step the caller applies to the returned value. Pushing it in here as a couple of
+// Deliberately pure: the empty state's own presentation (half intensity, forced sky coordinate
+// system) is a post-processing step the caller applies to the returned value. Pushing it in here as a couple of
 // mode parameters would make every other call site pass constants that only exist to say "I am not
 // the empty state".
 OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjection& vp, int vp_w, int vp_h) {
@@ -1215,8 +1215,24 @@ OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjectio
 // the whole distinction the empty state is drawing. A starting point, not a derived constant.
 constexpr float kEmptyStateOverlayAlphaScale = 0.5f;
 
-// Turn a document's overlay into the empty state's version of itself: the same lines, dimmer, plus
-// the sun marker.
+// Turn a document's overlay into the empty state's version of itself: every line the empty state
+// owes the user, dimmer.
+//
+// Which lines those are is not a taste call — doc/gui-layout-architecture.md §4 enumerates the
+// empty-state sky coordinate system as horizon, angular-distance circles and sun marker, so those
+// three are forced on here regardless of the show_*_line toggles. The grid and the zenith/nadir
+// markers are NOT in that enumeration, so they keep following the toggles, in the empty state
+// exactly as over a result. The asymmetry is the point rather than an oversight: a show_*_line
+// toggle means "do not clutter the image I rendered", a preference about a RESULT. An empty state
+// has no result to clutter, and the one thing it is for — telling the user where the 22 degree halo
+// will land before they press Run — is the very line the default-off sun_circles toggle would
+// suppress.
+//
+// Forcing happens on the caller's per-frame copy of the decoration, never on GuiState: the argument
+// is the local value RenderPreviewPanel just derived via BuildOverlayDecoration, and this function
+// is handed no GuiState to write back to. Leaving the empty state and returning to a result
+// therefore restores the user's own toggles by construction, not by anyone remembering to undo
+// anything.
 //
 // The marker's alpha is NOT scaled. The four alphas above are user settings, chosen for legibility
 // on top of a rendered image, so halving them is what "dimmer than that" means. The marker has no
@@ -1227,6 +1243,8 @@ void ApplyEmptyStatePresentation(OverlayDecoration* ov) {
   ov->grid_alpha *= kEmptyStateOverlayAlphaScale;
   ov->sun_circles_alpha *= kEmptyStateOverlayAlphaScale;
   ov->zenith_nadir_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->show_horizon = true;
+  ov->show_sun_circles = true;
   ov->show_sun_marker = true;
 }
 
