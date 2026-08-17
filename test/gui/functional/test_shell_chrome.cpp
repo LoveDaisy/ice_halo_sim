@@ -108,6 +108,37 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The View menu's Reset Layout item is the other entry point into the same round trip, and the
+  // one nothing else in the suite covers: its click handler clears both collapse flags in the same
+  // frame it requests the rebuild (app_panels.cpp's ViewMenu handler), specifically so a reset
+  // cannot leave the marker and the geometry disagreeing — "flag still says collapsed, node is back
+  // at full width" is exactly the split state that would go unnoticed without this case, since the
+  // strip button round trip above never exercises Reset Layout at all.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "shell_chrome", "reset_layout_clears_a_collapsed_left_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("##TopBar/" ICON_FA_CHEVRON_LEFT "##left_panel_toggle");
+      ctx->Yield(3);
+      IM_CHECK(gui::g_state.left_panel_collapsed);
+      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_LT(left->Size.x, gui::kLeftPanelWidth);
+
+      ctx->ItemClick("##TopBar/View");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Reset Layout");
+      ctx->Yield(3);
+
+      IM_CHECK(!gui::g_state.left_panel_collapsed);
+      left = ctx->GetWindowByRef("##LeftPanel");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+    };
+  }
+
   // The side panels are dock nodes, so the seam between a panel and the viewport is a splitter the
   // user can drag. That is the whole point of the docking substrate, and nothing else in the suite
   // states it — a regression that froze the splitter (or left the panels placed by arithmetic again)

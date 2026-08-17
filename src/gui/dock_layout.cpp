@@ -1,5 +1,7 @@
 #include "gui/dock_layout.hpp"
 
+#include <algorithm>
+
 #include "gui/gui_constants.hpp"
 #include "imgui_internal.h"
 
@@ -119,11 +121,19 @@ void BuildDefaultDockLayout(ImGuiID dockspace_id, float w, float h) {
   // from them, and the exact node sizes are written back straight after the splits so that
   // truncation inside DockBuilderSplitNode cannot make the panels a pixel narrower than the rest of
   // the GUI (aspect-ratio fitting, the left-panel capture rect) computes with.
+  //
+  // Ratio math needs `w` at least kLeftPanelWidth + kRightPanelWidth + a nonzero center strip, or
+  // the second split's ratio reaches >=1 (first split alone already saturates it) and its
+  // denominator can go negative — DockBuilderSplitNode's size_ratio_for_node_at_dir asserts on that
+  // in a debug ImGui build, and produces an undefined negative-width node otherwise. `kMinWindowWidth`
+  // (main.cpp's GLFW size hint) already keeps the real app window above this floor, but this function
+  // also runs for whatever `w` a caller passes, so the clamp is local rather than relying on that.
+  const float ratio_w = std::max(w, kLeftPanelWidth + kRightPanelWidth + 1.0f);
   ImGuiID center_id = dockspace_id;
   const ImGuiID left_id =
-      ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Left, kLeftPanelWidth / w, nullptr, &center_id);
-  const ImGuiID right_id = ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Right,
-                                                       kRightPanelWidth / (w - kLeftPanelWidth), nullptr, &center_id);
+      ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Left, kLeftPanelWidth / ratio_w, nullptr, &center_id);
+  const ImGuiID right_id = ImGui::DockBuilderSplitNode(
+      center_id, ImGuiDir_Right, kRightPanelWidth / (ratio_w - kLeftPanelWidth), nullptr, &center_id);
   ImGui::DockBuilderSetNodeSize(left_id, ImVec2(kLeftPanelWidth, h));
   ImGui::DockBuilderSetNodeSize(right_id, ImVec2(kRightPanelWidth, h));
 

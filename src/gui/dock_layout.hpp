@@ -36,7 +36,8 @@ struct DockPanelNodeIds {
   ImGuiID right = 0;
 };
 
-// Enables ImGuiConfigFlags_DockingEnable. Call once, right after ImGui::CreateContext().
+// Enables ImGuiConfigFlags_DockingEnable. Call once, early during IO setup (alongside the other
+// io.ConfigFlags assignments), before the first ImGui::NewFrame().
 void ApplyDockingConfig(ImGuiIO& io);
 
 // Renders the full-bleed, transparent host window that carries the main DockSpace, and returns the

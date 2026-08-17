@@ -555,12 +555,8 @@ constexpr ImGuiWindowFlags kSidePanelBaseFlags =
     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 }  // namespace
 
-void RenderLeftPanel(float window_height) {
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-
+void RenderLeftPanel() {
   static PanelCollapseTracker s_collapse;
-  ApplyPanelCollapseWidth(GetPanelNodeIds().left, g_state.left_panel_collapsed, kLeftPanelWidth, panel_height,
-                          &s_collapse);
 
   if (g_state.left_panel_collapsed) {
     // The window is still submitted, holding a strip-wide dock node, rather than skipped: a docked
@@ -570,6 +566,14 @@ void RenderLeftPanel(float window_height) {
     ImGui::Begin(kLeftPanelWindowName, nullptr,
                  kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
+    // The node height comes from this window's own GetWindowSize(), read after Begin, rather than
+    // from an arithmetic stand-in like window_height - kTopBarHeight - kStatusBarHeight. That
+    // expression happens to be equal today only because the side nodes are split horizontally and
+    // span the full dock host; introduce a horizontal split and it silently becomes stale geometry
+    // that nothing checks. The window is the single source for its own size.
+    // Consequence, by design: a resize written here lands on the dock node starting next frame,
+    // like every other transition-triggered ResizePanelNode call.
+    ApplyPanelCollapseWidth(GetPanelNodeIds().left, true, kLeftPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
     ImGui::End();
     return;
@@ -588,6 +592,7 @@ void RenderLeftPanel(float window_height) {
 
   ImGui::Begin(kLeftPanelWindowName, nullptr,
                kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ApplyPanelCollapseWidth(GetPanelNodeIds().left, false, kLeftPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
   // the active-pick state and the Esc instruction. The actual click target is
@@ -689,24 +694,23 @@ void RenderLeftPanel(float window_height) {
   ImGui::End();
 }
 
-void RenderRightPanel(GLFWwindow* window, float window_height) {
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-
+void RenderRightPanel(GLFWwindow* window) {
   static PanelCollapseTracker s_collapse;
-  ApplyPanelCollapseWidth(GetPanelNodeIds().right, g_state.right_panel_collapsed, kRightPanelWidth, panel_height,
-                          &s_collapse);
 
   if (g_state.right_panel_collapsed) {
     // See RenderLeftPanel for why the window is still submitted while collapsed.
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
+    // See RenderLeftPanel for why node_height is read here rather than passed in.
+    ApplyPanelCollapseWidth(GetPanelNodeIds().right, true, kRightPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
     ImGui::End();
     return;
   }
 
   ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
+  ApplyPanelCollapseWidth(GetPanelNodeIds().right, false, kRightPanelWidth, ImGui::GetWindowSize().y, &s_collapse);
 
   // ---- Scene Group ----
   if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
