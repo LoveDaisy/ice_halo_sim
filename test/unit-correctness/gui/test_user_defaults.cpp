@@ -200,7 +200,6 @@ TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
     { "zenith_nadir_color", "overlay_zenith_nadir_color" },
     { "zenith_nadir_alpha", "overlay_zenith_nadir_alpha" },
     { "zenith_nadir_radius_px", "overlay_zenith_nadir_radius_px" },
-    { "right_panel_collapsed", "right_panel_collapsed" },
     { "modal_layout_vertical", "modal_layout_vertical" },
     { "left_panel_collapsed", nullptr },
     { "document_tree_folded", nullptr },

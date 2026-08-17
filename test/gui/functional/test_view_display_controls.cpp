@@ -1,8 +1,10 @@
 // The camera and display controls — what the preview shows and at what shape, as opposed to what
 // the simulation computes.
 //
-// Where they live, which is now two places. The Display and Overlay groups are still the right
-// panel's own (`##RightPanel`). The View group is not: it became the document column inspector's
+// Where they live, which is now two places. The Display group became the Grade tab of the display
+// strip under the viewport (`##DisplayStrip`), and the Overlay group the Overlays tab beside it —
+// functional/test_overlay_controls.cpp covers that one. The View group is not there at all: it
+// became the document column inspector's
 // Camera page (`##DocumentInspector`), because a lens and a pose are saved with the scene and
 // describe the document rather than the session (doc/gui-layout-architecture.md §2). Its cases
 // stayed here, because what they assert — which slider applies under which lens, and what a typed
@@ -145,63 +147,63 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P19. The groups fold independently and start open, so a user who collapses one to get at
-  // another does not find the second gone too. Asserted through an item inside each group, because
-  // "the header is closed" and "its contents are not submitted" are the same claim and the second
-  // is the one that matters.
+  // P19, restated for the shape that replaced the folding headers. The two groups that used to be
+  // CollapsingHeaders in one column are TABS of the display strip now, so "they fold independently"
+  // is not a property this UI can have: the strip shows exactly one of them at a time. What
+  // survives the change is the half of the proposition that was ever load-bearing — that each
+  // group's controls are reachable, and that reaching one does not take the others' place
+  // permanently — plus a claim the old form could not make: the strip starts on Grade, so the
+  // controls a user sees without touching anything are the display ones.
   //
-  // Two groups, not the four this case was written for. Scene (Sun) and View (Camera) left this
-  // panel for the document column's inspector, where they are PAGES selected from the tree rather
-  // than headers folded in place — there is no fold gesture on them to be independent of. What
-  // survives the move is the proposition about the groups that are still folded here; the pages'
-  // own reachability is functional/test_document_column.cpp's.
+  // Asserted through an item inside each tab, because "the tab is selected" and "its contents are
+  // submitted" are the same claim and the second is the one that matters. Three tabs, not the four
+  // headers this case was written for: Scene (Sun) and View (Camera) left for the document column's
+  // inspector (functional/test_document_column.cpp), and Components joined as a reserved slot.
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "view_display_controls", "the_panel_groups_fold_independently_and_start_open");
+        IM_REGISTER_TEST(engine, "view_display_controls", "the_strip_shows_one_tab_at_a_time_starting_on_grade");
     t->TestFunc = [](ImGuiTestContext* ctx) {
-      struct Group {
-        const char* header;
-        const char* member;  // an item that exists only while that group is expanded
+      struct Tab {
+        const char* label;
+        std::string member;  // an item that exists only while that tab is showing
       };
-      const Group kGroups[] = {
-        { "**/Display", "**/##EV##display_input" },
-        { "**/Overlay", "**/Line##horizon" },
+      const Tab kTabs[] = {
+        { "Grade", "**/##EV##display_input" },
+        { "Overlays", "**/##horizon_line" },
+        // The reserved slot has no controls at all by design, so the tab button itself is the only
+        // thing to point at — which is exactly the claim worth making about it (AC1: the slot is
+        // there, and switching to it does not break the strip).
+        { "Components", std::string(kDisplayStripTabPrefix) + "Components" },
       };
 
       ResetTestState();
       ctx->Yield(3);
-      for (const Group& g : kGroups) {
-        if (!ctx->ItemExists(g.member)) {
-          IM_ERRORF("%s does not start expanded: %s is missing", g.header, g.member);
-        }
 
-        if (ctx->IsError()) {
-          break;
-        }
-      }
+      // Untouched, the strip is on Grade.
+      IM_CHECK(ctx->ItemExists(kTabs[0].member.c_str()));
+      IM_CHECK(!ctx->ItemExists(kTabs[1].member.c_str()));
 
-      // Collapse each in turn and check that only that one closed.
-      for (const Group& target : kGroups) {
-        ctx->ItemClose(target.header);
-        ctx->Yield(3);
-        for (const Group& g : kGroups) {
-          const bool present = ctx->ItemExists(g.member);
-          const bool expected = &g != &target;
+      for (const Tab& target : kTabs) {
+        OpenDisplayStripTab(ctx, target.label);
+        for (const Tab& other : kTabs) {
+          const bool present = ctx->ItemExists(other.member.c_str());
+          const bool expected = (&other == &target) || (&other == &kTabs[2]);  // the tab button is always there
           if (present != expected) {
-            IM_ERRORF("with %s collapsed, %s is %s", target.header, g.member, present ? "still there" : "gone too");
+            IM_ERRORF("with %s showing, %s is %s", target.label, other.member.c_str(),
+                      present ? "still there" : "gone");
           }
 
           if (ctx->IsError()) {
             break;
           }
         }
-        ctx->ItemOpen(target.header);
-        ctx->Yield(3);
 
         if (ctx->IsError()) {
           break;
         }
       }
+
+      OpenDisplayStripTab(ctx, "Grade");
     };
   }
 

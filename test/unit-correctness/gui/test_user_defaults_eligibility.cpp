@@ -45,7 +45,11 @@ namespace {
 // names a (layer, entry) inside the document currently open, so a saved copy would restore onto a
 // different document and select something unrelated. Ineligible for the same reason
 // pick_link_source is.
-constexpr std::size_t kExpectedGovernedFieldCount = 69;
+// 68 since right_panel_collapsed was DELETED along with the right panel itself: its display groups
+// became the strip under the viewport, which is fixed chrome with no collapse of its own, so the
+// field had nothing left to describe. The count going DOWN is the first time this constant has
+// moved that way — it is a governed-field census, not a high-water mark.
+constexpr std::size_t kExpectedGovernedFieldCount = 68;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -116,7 +120,6 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     // namespace 1 — kView fields that ARE serialized (default lens / overlays / background).
     { "bg_alpha", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "aspect_preset", DefaultEligibility::kEligible, IneligibleReason::kNone },
-    { "right_panel_collapsed", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_zenith_nadir_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },

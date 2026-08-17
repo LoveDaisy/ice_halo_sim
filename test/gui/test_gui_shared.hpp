@@ -342,6 +342,23 @@ void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0)
 void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
 void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
 
+// Path prefix of a display strip TAB BUTTON, for the one case that has to point at a tab rather
+// than at something inside it. Note the second segment: BeginTabBar pushes an override ID, so a tab
+// item's id is hashed under the tab bar's, NOT under the window's — "//##DisplayStrip/Grade" finds
+// nothing, and finds it silently (ItemExists just answers false).
+inline constexpr const char* kDisplayStripTabPrefix = "//##DisplayStrip/##DisplayStripTabs/";
+
+// Select one of the display strip's tabs ("Grade" / "Overlays" / "Components") and pump the frames
+// its contents need to be submitted.
+//
+// A case that reads anything in the strip has to call this first, and the reason is stronger than
+// convenience: ImGui does not submit an unselected tab's contents at all, so those items do not
+// exist rather than merely sitting out of view — `!ItemExists` would then be satisfied by "another
+// tab is showing" as readily as by "the control is not offered", which is what several of these
+// cases are actually asserting. ResetTestState puts the strip back on Grade, so a case that wants
+// Grade need not call this; one that wants any other tab must.
+void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label);
+
 // The document column's two halves are docked windows a few hundred pixels tall showing content
 // that is routinely taller — a Pyramid with its Face Distance section expanded, a scene with more
 // rows than the tree's half can show — so both scroll, by design. The two helpers below find an

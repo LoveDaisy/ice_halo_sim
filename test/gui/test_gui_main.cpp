@@ -195,7 +195,6 @@ void ResetTestState() {
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
   gui::g_state.left_panel_collapsed = false;
-  gui::g_state.right_panel_collapsed = false;
   // NOTE: panel geometry is a dock layout now, and the dock layout outlives g_state — a case that
   // moves a splitter hands the next case a different panel width unless it puts it back. This reset
   // deliberately does NOT rebuild the layout to enforce that: DockBuilderRemoveNode undocks and
@@ -215,6 +214,11 @@ void ResetTestState() {
     inspector->Scroll.y = 0.0f;
     inspector->ScrollTarget.y = 0.0f;
   }
+  // The display strip's selected tab outlives g_state exactly as a window's scroll does, and with a
+  // sharper consequence: an unselected tab's contents are never submitted, so a case left on
+  // Overlays hands the next case a Grade tab whose items do not exist at all. See the seam's
+  // declaration in app.hpp for why this is a request rather than an assignment.
+  gui::ResetDisplayStripSelectionForTest();
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
 
@@ -293,6 +297,12 @@ void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
 
 void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
   OpenEntryTab(ctx, layer_idx, entry_idx, "**/###filter_tab");
+}
+
+// See the contract note in test_gui_shared.hpp.
+void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label) {
+  ctx->ItemClick((std::string(kDisplayStripTabPrefix) + tab_label).c_str());
+  ctx->Yield(2);
 }
 
 // See the contract note in test_gui_shared.hpp for why this is a destructor rather than three
@@ -712,7 +722,6 @@ int main(int argc, char** argv) {
     gui::BuildDefaultDockLayout(dockspace_id, layout_width, dock_host_height);
     gui::RenderDocumentTree();
     gui::RenderDocumentInspector();
-    gui::RenderRightPanel(window);
     gui::RenderPreviewPanel(window, layout_width, layout_height);
     gui::RenderDisplayStrip(window, layout_width, layout_height);
     if (g_enable_log_panel) {
