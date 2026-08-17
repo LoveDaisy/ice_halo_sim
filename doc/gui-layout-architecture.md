@@ -133,9 +133,11 @@ docking 基底已经就位，形态**刻意未变**（面板组织、编辑 moda
 - **芯片与 Revert 是两个动作，不合并**：芯片带着新配置重跑，Revert 把新配置扔掉；合并等于删掉后者。
   芯片在运行中天然不可见——`ReconcileSimState` 只从 `kDone` 产生 `kModified`，`kSimulating` / `kStopping`
   不被 dirty 降级，运行中的编辑走 `main.cpp` 的节流自动提交。
-- **进度槽**：有限预算画 `ImGui::ProgressBar(已追迹 / 预算)`；∞ 档位不画条、只写 "until stopped"——满条读作
-  「已完成」、空条读作「卡住」，∞ 本来就没有分母。两个分支占同一固定宽度，行长不随运行状态跳动。
-  状态指示文字（Ready / Simulating… / Done / Modified）**留在状态栏**，与 §1 的 ASCII 图一致。
+- **进度槽**：有限预算画 `ImGui::ProgressBar(已追迹 / 预算)`；∞ 档位**整个槽连同前面的分隔条一起不画**。
+  两条理由，第二条更容易被写错：没有分母的条只能说谎（满条读作「已完成」、空条读作「卡住」），而且光线预算
+  控件已经在同一行写着 "until stopped"，进度槽再写一遍不增加任何信息、只会被读成渲染故障。它是行尾最后一项，
+  所以省略不会让任何东西移位。状态指示文字（Ready / Simulating… / Done / Modified）**留在状态栏**，
+  与 §1 的 ASCII 图一致。
 - 测试影响：执行簇的用例住 `test/gui/functional/test_execution_cluster.cpp`（按字段用途切分：这一次跑多狠
   归执行簇，会被保存的文档字段留 `test_scene_controls.cpp`）。`kTopBarHeight` 变化会改变 `visual` 组
   `left_panel` 参考图的捕获高度（`test_gui_main.cpp` 的回读按 `fb_h - (kTopBarHeight + kStatusBarHeight)*sy`

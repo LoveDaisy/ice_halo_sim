@@ -309,16 +309,19 @@ void RenderExecutionCluster() {
 
   // ---- Run progress ----
   // The fraction is derived, not stored: rays traced so far against the budget this run was asked
-  // for. An infinite run has no denominator and therefore no progress — rather than invent one
-  // (a full bar reads as "finished", an empty one as "stuck"), the slot says what the run is doing.
-  // Both branches occupy the same fixed width so the row's length does not depend on run state.
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
-  if (g_state.sim.infinite) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("until stopped");
-  } else {
+  // for.
+  //
+  // An infinite run gets NO slot at all, not an "until stopped" one. Two reasons, and the second is
+  // the one that is easy to get wrong: a bar with no denominator has to lie (a full one reads as
+  // "finished", an empty one as "stuck"), and the ray-budget control three slots to the left is
+  // already showing the words "until stopped" — a second copy in the same row says nothing the
+  // first did not and reads as a rendering fault. Dropping the trailing separator too keeps the row
+  // ending cleanly rather than on a dangling divider. Nothing shifts as a result: this is the last
+  // item in the row.
+  if (!g_state.sim.infinite) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
     const double target = static_cast<double>(g_state.sim.ray_num_millions) * 1e6;
     const double done = static_cast<double>(g_state.stats_sim_ray_num);
     const float fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
