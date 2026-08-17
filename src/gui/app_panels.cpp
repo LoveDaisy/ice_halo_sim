@@ -647,13 +647,30 @@ void RenderCollapsedStrip(const char* btn_label, bool* collapsed) {
 }
 
 // Which collapse state has already been written to which node. Per panel, kept by the caller.
+//
+// `restore_extent` is what the node measured along the folding axis the moment it was folded, and
+// it is why unfolding does not have to guess. For the side panels the guess would merely be stale
+// (a dragged width snapping back to the default); for the document column's halves there is no
+// constant to guess WITH — their expanded height is a fraction of a column whose own height is the
+// window's. Zero means "never folded on this node", which is the state after a layout rebuild hands
+// out new IDs, and then the caller's default is the only answer available.
 struct PanelCollapseTracker {
   ImGuiID node_id = 0;
   bool applied = false;
+  float restore_extent = 0.0f;
 };
 
-// A side panel's collapsed/expanded state is now the width of its dock node. Four things about the
-// shape of this:
+// Which extent of a dock node a collapse writes. The document column's two halves fold along the
+// other axis from the side panels, and the arithmetic is otherwise identical — see ApplyPanelCollapse.
+enum class CollapseAxis { kWidth, kHeight };
+
+// A collapsed panel's extent along the folding axis. Width: the strip that holds the chevron that
+// brings it back. Height: enough for the half's header row, which is what stays visible when a half
+// folds — the column keeps saying what is folded, where a bare 20 px strip would not.
+constexpr float kFoldedHalfHeight = 26.0f;
+
+// A panel's collapsed/expanded state is the size of its dock node along one axis. Four things about
+// the shape of this:
 //   - It writes only on a transition, never every frame. A per-frame DockBuilderSetNodeSize would
 //     silently undo a splitter drag on the very next frame, i.e. the panels would look resizable and
 //     not be.
@@ -670,23 +687,39 @@ struct PanelCollapseTracker {
 //     it. Writing that half back would shrink the column a little further on every collapse. A
 //     node that cannot be measured (height 0, i.e. the id no longer resolves) leaves the marker
 //     untouched so the transition is retried rather than swallowed.
-void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_width, PanelCollapseTracker* tracker) {
+// One implementation for both axes rather than a width version and a near-copy height version.
+// Nothing in the body was specific to width: the folding extent and the extent carried through
+// unchanged are the only two quantities, and which of them is x is a parameter. (plan §3 point 3
+// asked for this evaluation explicitly — the merge is clean, so there is no second copy to keep in
+// step.)
+void ApplyPanelCollapse(CollapseAxis axis, ImGuiID node_id, bool collapsed, float expanded_extent,
+                        PanelCollapseTracker* tracker) {
   if (node_id == 0) {
     return;
   }
+  const bool horizontal = axis == CollapseAxis::kWidth;
+  const float folded_extent = horizontal ? kCollapseBtnSize : kFoldedHalfHeight;
+  const float along = horizontal ? GetPanelNodeWidth(node_id) : GetPanelNodeHeight(node_id);
   if (tracker->node_id != node_id) {
     tracker->node_id = node_id;
-    tracker->applied = GetPanelNodeWidth(node_id) <= kCollapseBtnSize;
+    tracker->applied = along <= folded_extent;
   }
   if (collapsed == tracker->applied) {
     return;
   }
-  const float node_height = GetPanelNodeHeight(node_id);
-  if (node_height <= 0.0f) {
+  const float across = horizontal ? GetPanelNodeHeight(node_id) : GetPanelNodeWidth(node_id);
+  if (across <= 0.0f) {
     return;
   }
   tracker->applied = collapsed;
-  ResizePanelNode(node_id, ImVec2(collapsed ? kCollapseBtnSize : expanded_width, node_height));
+  float new_along;
+  if (collapsed) {
+    tracker->restore_extent = along;
+    new_along = folded_extent;
+  } else {
+    new_along = tracker->restore_extent > folded_extent ? tracker->restore_extent : expanded_extent;
+  }
+  ResizePanelNode(node_id, horizontal ? ImVec2(new_along, across) : ImVec2(across, new_along));
 }
 
 // Shared by both side panels. NoMove / NoResize are gone: position and size are the dock node's job
@@ -695,6 +728,38 @@ void ApplyPanelCollapseWidth(ImGuiID node_id, bool collapsed, float expanded_wid
 // this file, below every floating window.
 constexpr ImGuiWindowFlags kSidePanelBaseFlags =
     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+// A document-column half's section header, and the control that folds it. Returns true on the frame
+// the user asked to toggle the fold.
+//
+// It doubles as the page title, which for the inspector is load-bearing: the inspector is the only
+// thing on screen that says which item the controls below are editing — the tree's highlight says
+// it too, but the tree can be scrolled away from the selected row, or folded flat, while the
+// inspector still shows it.
+//
+// The whole row is the hit target rather than just the chevron (doc/gui-layout-architecture.md §5:
+// clicking the section header folds the section). A full-width Selectable gives that, and gives the
+// hover highlight that says the row is a target at all.
+//
+// `id` is a fixed string per half, kept out of the visible label with `###`, so the identity does
+// not move when the chevron flips or the crystal page retitles itself on every selection.
+bool RenderHalfFoldHeader(const char* icon, const char* text, const char* id, bool folded) {
+  char label[96];
+  snprintf(label, sizeof(label), "%s  %s  %s###%s", folded ? ICON_FA_CHEVRON_RIGHT : ICON_FA_CHEVRON_DOWN, icon, text,
+           id);
+  const bool toggled = ImGui::Selectable(label);
+  ImGui::Separator();
+  return toggled;
+}
+
+// Height to give a half when it unfolds and the tracker has nothing remembered — the default split
+// of whatever the column measures right now. Not a constant, because the column's height is the
+// window's: a fixed number would be wrong on every window size but one.
+float DefaultHalfHeight(bool inspector) {
+  const float column_h = GetPanelNodeHeight(GetPanelNodeIds().left);
+  const float ratio = inspector ? kDocumentInspectorHeightRatio : 1.0f - kDocumentInspectorHeightRatio;
+  return column_h * ratio;
+}
 }  // namespace
 
 void RenderDocumentTree() {
@@ -714,7 +779,7 @@ void RenderDocumentTree() {
     // Collapse resizes the column's PARENT node, not this window's own node — see
     // DockPanelNodeIds. Consequence, by design: a resize written here lands on the dock node
     // starting next frame, like every other transition-triggered ResizePanelNode call.
-    ApplyPanelCollapseWidth(GetPanelNodeIds().left, true, kLeftPanelWidth, &s_collapse);
+    ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().left, true, kLeftPanelWidth, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
     ImGui::End();
     return;
@@ -731,9 +796,32 @@ void RenderDocumentTree() {
   std::optional<GuiState::EntryRef> pick_source_at_entry =
       pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
 
+  // Arming pick unfolds the halves, because the tree's rows ARE the click targets pick is waiting
+  // for. Without this, "Link to..." pressed from a page while the tree is folded arms a mode whose
+  // only exit is Esc — the thing the user was told to click is not on screen.
+  if (pick_active_at_entry) {
+    g_state.FoldDocumentHalves(false, false);
+  }
+
   ImGui::Begin(kDocumentTreeWindowName, nullptr,
                kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-  ApplyPanelCollapseWidth(GetPanelNodeIds().left, false, kLeftPanelWidth, &s_collapse);
+  ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().left, false, kLeftPanelWidth, &s_collapse);
+
+  // The half's own fold, distinct from the whole-column collapse handled above: this one gives the
+  // height to the inspector rather than to the preview.
+  static PanelCollapseTracker s_fold;
+  if (RenderHalfFoldHeader(ICON_FA_LIST, "Document", "tree_fold", g_state.document_tree_folded)) {
+    g_state.FoldDocumentHalves(!g_state.document_tree_folded, false);
+  }
+  ApplyPanelCollapse(CollapseAxis::kHeight, GetPanelNodeIds().document_tree, g_state.document_tree_folded,
+                     DefaultHalfHeight(/*inspector=*/false), &s_fold);
+  if (g_state.document_tree_folded) {
+    // Everything below is skipped, header included in what stays: the node is now a strip the
+    // height of that one row, and submitting rows into it would only give the window a scrollbar
+    // over content nobody asked to see.
+    ImGui::End();
+    return;
+  }
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
   // the active-pick state and the Esc instruction. The actual click target is
@@ -924,16 +1012,6 @@ void RenderCameraControls() {
   ImGui::PopItemWidth();
 }
 
-// The page title. Every page gets one, because the inspector is the only thing on screen that says
-// which item the controls below are editing — the tree's highlight says it too, but the tree can be
-// scrolled away from the selected row while the inspector still shows it.
-void InspectorTitle(const char* icon, const char* text) {
-  ImGui::TextUnformatted(icon);
-  ImGui::SameLine();
-  ImGui::TextUnformatted(text);
-  ImGui::Separator();
-}
-
 }  // namespace
 
 void RenderDocumentInspector() {
@@ -973,19 +1051,55 @@ void RenderDocumentInspector() {
     ImGui::SetScrollY(0.0f);
   }
 
+  // The header names the page, so it is composed before anything is drawn — including in the folded
+  // case, where it is the only thing drawn and therefore the only thing still saying what the
+  // column has selected.
+  const char* icon = ICON_FA_CIRCLE_INFO;
+  char title[64] = "Inspector";
   switch (sel.kind) {
     case GuiState::SelectionKind::kSun:
-      InspectorTitle(ICON_FA_SUN, "Sun");
+      icon = ICON_FA_SUN;
+      snprintf(title, sizeof(title), "Sun");
+      break;
+    case GuiState::SelectionKind::kCamera:
+      icon = ICON_FA_CAMERA;
+      snprintf(title, sizeof(title), "Camera");
+      break;
+    case GuiState::SelectionKind::kLayer:
+      icon = ICON_FA_LAYER_GROUP;
+      snprintf(title, sizeof(title), "Layer %d", sel.layer_idx + 1);
+      break;
+    case GuiState::SelectionKind::kCrystal: {
+      const auto& entry = g_state.layers[sel.layer_idx].entries[sel.entry_idx];
+      const CrystalConfig& cr = g_state.crystals[entry.crystal_id];
+      icon = ICON_FA_GEM;
+      snprintf(title, sizeof(title), "%s  ·  L%d/%d", cr.type == CrystalType::kPrism ? "Prism" : "Pyramid",
+               sel.layer_idx + 1, sel.entry_idx + 1);
+      break;
+    }
+    case GuiState::SelectionKind::kNone:
+      break;
+  }
+
+  static PanelCollapseTracker s_fold;
+  if (RenderHalfFoldHeader(icon, title, "inspector_fold", g_state.document_inspector_folded)) {
+    g_state.FoldDocumentHalves(false, !g_state.document_inspector_folded);
+  }
+  ApplyPanelCollapse(CollapseAxis::kHeight, GetPanelNodeIds().document_inspector, g_state.document_inspector_folded,
+                     DefaultHalfHeight(/*inspector=*/true), &s_fold);
+  if (g_state.document_inspector_folded) {
+    ImGui::End();
+    return;
+  }
+
+  switch (sel.kind) {
+    case GuiState::SelectionKind::kSun:
       RenderSunControls(g_state);
       break;
     case GuiState::SelectionKind::kCamera:
-      InspectorTitle(ICON_FA_CAMERA, "Camera");
       RenderCameraControls();
       break;
-    case GuiState::SelectionKind::kLayer: {
-      char title[32];
-      snprintf(title, sizeof(title), "Layer %d", sel.layer_idx + 1);
-      InspectorTitle(ICON_FA_LAYER_GROUP, title);
+    case GuiState::SelectionKind::kLayer:
       // The erase is the caller's, not the page's — see RenderLayerInspector. Doing it here also
       // keeps it after the tree has finished iterating this frame's layers.
       if (RenderLayerInspector(g_state, sel.layer_idx)) {
@@ -994,17 +1108,9 @@ void RenderDocumentInspector() {
         g_state.SelectNone();
       }
       break;
-    }
-    case GuiState::SelectionKind::kCrystal: {
-      const auto& entry = g_state.layers[sel.layer_idx].entries[sel.entry_idx];
-      const CrystalConfig& cr = g_state.crystals[entry.crystal_id];
-      char title[64];
-      snprintf(title, sizeof(title), "%s  ·  L%d/%d", cr.type == CrystalType::kPrism ? "Prism" : "Pyramid",
-               sel.layer_idx + 1, sel.entry_idx + 1);
-      InspectorTitle(ICON_FA_GEM, title);
+    case GuiState::SelectionKind::kCrystal:
       RenderCrystalInspector(g_state, sel.layer_idx, sel.entry_idx);
       break;
-    }
     case GuiState::SelectionKind::kNone:
       ImGui::TextDisabled("Select an item in the tree above.");
       break;
@@ -1021,14 +1127,14 @@ void RenderRightPanel(GLFWwindow* window) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
-    ApplyPanelCollapseWidth(GetPanelNodeIds().right, true, kRightPanelWidth, &s_collapse);
+    ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().right, true, kRightPanelWidth, &s_collapse);
     RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, &g_state.right_panel_collapsed);
     ImGui::End();
     return;
   }
 
   ImGui::Begin(kRightPanelWindowName, nullptr, kSidePanelBaseFlags);
-  ApplyPanelCollapseWidth(GetPanelNodeIds().right, false, kRightPanelWidth, &s_collapse);
+  ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().right, false, kRightPanelWidth, &s_collapse);
 
   // The Scene (Sun) and View (Camera) groups that used to open this panel are gone from it. Both
   // describe the DOCUMENT — what is being simulated, and from where — so they moved into the

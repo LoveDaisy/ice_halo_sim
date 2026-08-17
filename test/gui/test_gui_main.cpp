@@ -84,32 +84,52 @@ std::vector<unsigned char> g_synth_tex;
 
 // ========== Shared function definitions ==========
 
-// See the declaration in test_gui_shared.hpp for why these exist.
-ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
-  ImGuiTestItemInfo info = ctx->ItemInfo(ref, ImGuiTestOpFlags_NoError);
+namespace {
+
+// Walk `window_ref` from the top in half-window steps, stopping at the first offset where
+// `item_ref` resolves, and LEAVE the scroll there. Returns the info, whose ID is 0 if it never
+// resolved.
+//
+// Half-window steps rather than a jump to the bottom because the target may be anywhere and only
+// the band on screen is findable; each band has to be visited.
+ImGuiTestItemInfo ScrollUntilFound(ImGuiTestContext* ctx, const char* window_ref, const char* item_ref) {
+  ImGuiTestItemInfo info = ctx->ItemInfo(item_ref, ImGuiTestOpFlags_NoError);
   if (info.ID != 0) {
     return info;
   }
-  ImGuiWindow* page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
-  if (page == nullptr || page->ScrollMax.y <= 0.0f) {
+  // WindowInfo rather than GetWindowByRef: a CHILD window's ImGuiID is the hash of the mangled name
+  // ImGui builds for it ("Parent/id_XXXXXXXX"), not the hash of the path a caller writes, so the
+  // straightforward lookup silently returns null for exactly the windows that scroll here.
+  ImGuiWindow* scroller = ctx->WindowInfo(window_ref, ImGuiTestOpFlags_NoError).Window;
+  if (scroller == nullptr || scroller->ScrollMax.y <= 0.0f) {
     return info;
   }
-  // Walk the page in half-window steps rather than jumping to the bottom: the target may be
-  // anywhere, and a row is only submitted while it is within the clip rect, so every band has to be
-  // visited. The scroll is restored afterwards so a lookup cannot decide what the next assertion in
-  // the same case sees.
-  const float restore = page->Scroll.y;
-  const float step = ImMax(page->Size.y * 0.5f, 1.0f);
-  for (float y = 0.0f; y <= page->ScrollMax.y + step; y += step) {
-    page->Scroll.y = ImMin(y, page->ScrollMax.y);
+  const float step = ImMax(scroller->Size.y * 0.5f, 1.0f);
+  for (float y = 0.0f; y <= scroller->ScrollMax.y + step; y += step) {
+    scroller->Scroll.y = ImMin(y, scroller->ScrollMax.y);
     ctx->Yield(2);
-    info = ctx->ItemInfo(ref, ImGuiTestOpFlags_NoError);
+    info = ctx->ItemInfo(item_ref, ImGuiTestOpFlags_NoError);
     if (info.ID != 0) {
       break;
     }
+    scroller = ctx->WindowInfo(window_ref, ImGuiTestOpFlags_NoError).Window;
+    if (scroller == nullptr) {
+      break;
+    }
   }
+  return info;
+}
+
+}  // namespace
+
+// See the declaration in test_gui_shared.hpp for why these exist.
+ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
+  ImGuiWindow* page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+  const float restore = page != nullptr ? page->Scroll.y : 0.0f;
+  const ImGuiTestItemInfo info = ScrollUntilFound(ctx, gui::kDocumentInspectorWindowName, ref);
+  // Restored so a read-only lookup cannot decide what the next assertion in the same case sees.
   page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
-  if (page != nullptr) {
+  if (page != nullptr && page->Scroll.y != restore) {
     page->Scroll.y = restore;
     ctx->Yield(2);
   }
@@ -118,6 +138,10 @@ ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
 
 bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref) {
   return InspectorItemInfo(ctx, ref).ID != 0;
+}
+
+bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref) {
+  return ScrollUntilFound(ctx, kTreeScrollRef, ref).ID != 0;
 }
 
 // See the declaration in test_gui_shared.hpp for why this exists and who consumes it.

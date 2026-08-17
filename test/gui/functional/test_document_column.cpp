@@ -119,12 +119,21 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       const float inspector_y_before = inspector->Pos.y;
       const float inspector_h_before = inspector->Size.y;
 
-      ctx->ScrollToBottom(gui::kDocumentTreeWindowName);
+      // The scroller is the tree's CHILD, not the tree window: the tree window is NoScrollbar and
+      // sizes the child to its own content region, so its own ScrollMax is zero and asking it to
+      // scroll does nothing at all. Scrolling the wrong window here is not a smaller version of
+      // this test — it is a test that cannot fail, because the assertions below all hold when
+      // nothing moved.
+      ImGuiWindow* scroller = ctx->WindowInfo(kTreeScrollRef).Window;
+      IM_CHECK(scroller != nullptr);
+      IM_CHECK_GT(scroller->ScrollMax.y, 0.0f);  // premise: the tree really does overflow its half
+      ctx->ScrollToBottom(scroller->ID);
       ctx->Yield(3);
 
       // The tree scrolled...
-      tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
-      IM_CHECK(tree != nullptr);
+      scroller = ctx->WindowInfo(kTreeScrollRef).Window;
+      IM_CHECK(scroller != nullptr);
+      IM_CHECK_GT(scroller->Scroll.y, 0.0f);
       // ...and the inspector did not move or resize because of it. A shared scroll region would
       // have slid the inspector up as the tree's content advanced.
       inspector = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
@@ -132,7 +141,16 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(inspector->Pos.y, inspector_y_before);
       IM_CHECK_EQ(inspector->Size.y, inspector_h_before);
 
-      ctx->ScrollToTop(gui::kDocumentTreeWindowName);
+      // And the reverse: scrolling the inspector leaves the tree where it is.
+      const float tree_scroll = scroller->Scroll.y;
+      ctx->ScrollToBottom(gui::kDocumentInspectorWindowName);
+      ctx->Yield(3);
+      scroller = ctx->WindowInfo(kTreeScrollRef).Window;
+      IM_CHECK(scroller != nullptr);
+      IM_CHECK_EQ(scroller->Scroll.y, tree_scroll);
+
+      ctx->ScrollToTop(scroller->ID);
+      ctx->ScrollToTop(gui::kDocumentInspectorWindowName);
       ctx->Yield(2);
     };
   }
@@ -195,6 +213,101 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // AC3, part 3: folding a half at its section header gives the height to the OTHER half, and
+  // unfolding gives it back. This is the behaviour that distinguishes the pair-in-one-column from
+  // two independent panels — the column's total height does not change, the split inside it does.
+  //
+  // Driven through the header row's own click rather than by setting the flags, because the header
+  // is the mechanism under test: it is a Selectable whose visible text changes every time the
+  // selection retitles the page, and the `###` id that keeps it one control across those retitles
+  // is exactly the kind of thing that fails silently.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "folding_a_half_hands_its_height_to_the_other");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(2, 3);
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(4);
+
+      ImGuiWindow* tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      ImGuiWindow* inspector = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+      IM_CHECK(tree != nullptr);
+      IM_CHECK(inspector != nullptr);
+      const float tree_h_before = tree->Size.y;
+      const float inspector_h_before = inspector->Size.y;
+      const float column_h_before = tree_h_before + inspector_h_before;
+      IM_CHECK_GT(inspector_h_before, 0.0f);  // premise: there is height to hand over
+
+      // Fold the tree. Its node becomes the header strip; the inspector takes the rest.
+      ctx->ItemClick("**/###tree_fold");
+      ctx->Yield(4);
+      IM_CHECK(gui::g_state.document_tree_folded);
+      IM_CHECK(!gui::g_state.document_inspector_folded);
+      tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      inspector = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+      IM_CHECK(tree != nullptr);
+      IM_CHECK(inspector != nullptr);
+      IM_CHECK_LT(tree->Size.y, tree_h_before);
+      IM_CHECK_GT(inspector->Size.y, inspector_h_before);
+      // The column did not grow to make room — the height came from the other half. A few pixels
+      // of slack for the separator and ImGui's integer node sizes.
+      IM_CHECK_LT(ImFabs((tree->Size.y + inspector->Size.y) - column_h_before), 4.0f);
+
+      // Unfold, and the split comes back to where it was rather than to some default.
+      ctx->ItemClick("**/###tree_fold");
+      ctx->Yield(4);
+      IM_CHECK(!gui::g_state.document_tree_folded);
+      tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      inspector = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+      IM_CHECK(tree != nullptr);
+      IM_CHECK(inspector != nullptr);
+      IM_CHECK_EQ(tree->Size.y, tree_h_before);
+      IM_CHECK_EQ(inspector->Size.y, inspector_h_before);
+
+      // The other direction, and the invariant that only one half is ever folded: folding the
+      // inspector while the tree is folded must leave exactly one of them folded, not both.
+      gui::g_state.FoldDocumentHalves(/*tree_folded=*/true, /*inspector_folded=*/false);
+      ctx->Yield(3);
+      ctx->ItemClick("**/###inspector_fold");
+      ctx->Yield(4);
+      IM_CHECK(gui::g_state.document_inspector_folded);
+      IM_CHECK(!gui::g_state.document_tree_folded);
+      tree = ctx->GetWindowByRef(gui::kDocumentTreeWindowName);
+      IM_CHECK(tree != nullptr);
+      IM_CHECK_GT(tree->Size.y, tree_h_before);
+
+      // Put the column back for the cases after this one: the dock layout outlives ResetTestState.
+      ctx->ItemClick("**/###inspector_fold");
+      ctx->Yield(4);
+      IM_CHECK(!gui::g_state.document_inspector_folded);
+    };
+  }
+
+  // The tree's rows are what pick mode is waiting to be clicked, so arming it has to put them on
+  // screen. Folded away, "Link to..." would arm a mode whose only exit is Esc.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "arming_pick_mode_unfolds_the_tree");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 2);
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+
+      gui::g_state.FoldDocumentHalves(/*tree_folded=*/true, /*inspector_folded=*/false);
+      ctx->Yield(3);
+      IM_CHECK(gui::g_state.document_tree_folded);
+      IM_CHECK(!ctx->ItemExists("**/##row_0_1"));  // premise: the rows really are away
+
+      gui::g_state.pick_link_source = gui::GuiState::EntryRef{ 0, 0 };
+      ctx->Yield(3);
+      IM_CHECK(!gui::g_state.document_tree_folded);
+      IM_CHECK(ctx->ItemExists("**/##row_0_1"));  // the target the user was told to click
+
+      gui::g_state.pick_link_source.reset();
+      ctx->Yield(2);
+    };
+  }
+
   // Clicking a row is what selects it, and the inspector follows. Asserted through the real click
   // rather than by writing g_state.selection, because the click path is the half that can break on
   // its own: the row is a Selectable with the thumbnail, the labels and two buttons drawn over it,
@@ -208,6 +321,9 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kNone);
 
+      // The last row of a scene built to overflow the tree's half — see test_gui_shared.hpp for why
+      // ItemClick cannot reach it on its own.
+      IM_CHECK(ScrollTreeTo(ctx, "**/##row_1_2"));
       ctx->ItemClick("**/##row_1_2");
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCrystal);
@@ -218,13 +334,17 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemExists("**/###axis_tab"));
       IM_CHECK(ctx->ItemExists("**/###filter_tab"));
 
-      // The two singleton rows answer the same way, and each replaces the previous page.
+      // The two singleton rows answer the same way, and each replaces the previous page. They sit
+      // at the TOP of the tree, which the scroll above left at the bottom — hence the same helper
+      // again rather than a bare click.
+      IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_SUN " Sun"));
       ctx->ItemClick("**/" ICON_FA_SUN " Sun");
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kSun);
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
       IM_CHECK(ctx->ItemExists("**/##Altitude_input"));
 
+      IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_CAMERA " Camera"));
       ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);

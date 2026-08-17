@@ -342,24 +342,35 @@ void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0)
 void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
 void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
 
-// Locate an item in the document inspector, scrolling the page if it is not on screen.
+// The document column's two halves are docked windows a few hundred pixels tall showing content
+// that is routinely taller — a Pyramid with its Face Distance section expanded, a scene with more
+// rows than the tree's half can show — so both scroll, by design. The two helpers below find an
+// item in one of them regardless of where it currently sits.
 //
-// Why this is needed at all, and why only here. The inspector is a docked window a few hundred
-// pixels tall showing an editor that is routinely taller — a Pyramid with its Face Distance section
-// expanded runs to about 660 px in a 490 px column — so the page scrolls, by design. ImGui culls
-// TABLE ROWS whose rectangle falls outside the host clip rect BEFORE submitting their contents, so
-// a row scrolled out of view is not merely off screen: its widgets are never submitted, never reach
-// the test engine's item registry, and ItemExists / ItemInfo answer "no such item" rather than
-// "not visible". (Non-table items are registered even when clipped, which is why the Face Distance
-// header can be found while the rows above it cannot — a difference that reads as nonsense until
-// you know it is ItemAdd's clipping early-out vs. TableBeginRow's SkipItems.)
+// WHY A SCROLLED-AWAY ITEM CANNOT BE FOUND AT ALL, which is not obvious and is stronger than "it is
+// off screen". A `**/name` lookup is resolved by LABEL, and a widget hands its label to the test
+// engine on its last line — `IMGUI_TEST_ENGINE_ITEM_INFO(id, label, ...)` — which is AFTER the
+// early-out it takes when its rectangle does not overlap the clip rect (see the tail of
+// ImGui::Selectable, and every other widget built the same way). So for a clipped item the engine
+// learns the id but never the label, and ItemInfo / ItemExists / ItemClick alike answer "no such
+// item" rather than "not visible". Table rows are the same story one level up and worse: ImGui
+// culls the ROW before submitting its contents, so the widgets are never created either.
 //
-// ItemClick and the other ItemAction verbs already scroll to their target, so they were never
-// affected; it is exactly the read-only queries that need this. The modal these pages replaced
-// never hit the problem because it sized its content pane to fit its tallest tab, a luxury a docked
-// column does not have.
+// The consequence worth remembering: this affects the ACTION verbs too, not only the read-only
+// queries. ItemClick scrolls to a target it has found; it cannot find one it has never been told
+// the name of. The modal these pages replaced never hit any of this because it sized its content
+// pane to fit its tallest tab — a luxury a docked column does not have.
 ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref);
 bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref);
+
+// The tree half's scrolling region. Named here because the rows live in a child window, so the
+// scroll that matters is the child's, not the tree window's.
+inline constexpr const char* kTreeScrollRef = "##DocumentTree/##TreeScroll";
+
+// Scroll the tree until `ref` resolves and LEAVE it there, so an ItemClick can follow. Returns
+// whether it resolved. The counterpart to InspectorItemInfo for the other half — and unlike it,
+// this one does not restore the scroll, because its whole purpose is to set up an action.
+bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref);
 
 // ========== Register function declarations ==========
 

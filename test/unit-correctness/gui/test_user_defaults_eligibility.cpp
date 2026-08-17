@@ -45,7 +45,7 @@ namespace {
 // names a (layer, entry) inside the document currently open, so a saved copy would restore onto a
 // different document and select something unrelated. Ineligible for the same reason
 // pick_link_source is.
-constexpr std::size_t kExpectedGovernedFieldCount = 67;
+constexpr std::size_t kExpectedGovernedFieldCount = 69;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -130,6 +130,8 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "log_to_file", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "log_panel_open", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "left_panel_collapsed", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
+    { "document_tree_folded", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
+    { "document_inspector_folded", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     // Not in any persisted schema.
     { "raypath_color_mode", DefaultEligibility::kIneligible, IneligibleReason::kNotSerialized },
     // Session / derived.

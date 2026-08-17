@@ -1124,6 +1124,24 @@ struct GuiState {
   // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
   bool right_panel_collapsed = false;
+  // The two halves of the document column, folded to their header strips. Distinct from
+  // left_panel_collapsed, which folds the column as a whole: these hand the height to the OTHER
+  // half rather than to the preview, which is the point of the pair being in one column
+  // (doc/gui-layout-architecture.md §2 — the tree and the inspector take turns needing the room).
+  //
+  // At most one of the two is ever true; the setter below is what makes that a property of the
+  // state rather than a rule each call site remembers. Both folded would leave a column of two
+  // header strips and nothing else — reachable in one click from a UI that let it happen, and
+  // useless.
+  bool document_tree_folded = false;
+  bool document_inspector_folded = false;
+
+  // Fold one half of the document column, unfolding the other. Passing false to both is how a
+  // caller says "show both halves"; there is no state in which neither is showing.
+  void FoldDocumentHalves(bool tree_folded, bool inspector_folded) {
+    document_tree_folded = tree_folded && !inspector_folded;
+    document_inspector_folded = inspector_folded && !tree_folded;
+  }
   // ORPHANED, deliberately — and unlike modal_immediate_mode above, this one IS persisted, so the
   // orphan is visible in every .lmc written from now on.
   //

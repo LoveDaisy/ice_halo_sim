@@ -203,6 +203,8 @@ TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
     { "right_panel_collapsed", "right_panel_collapsed" },
     { "modal_layout_vertical", "modal_layout_vertical" },
     { "left_panel_collapsed", nullptr },
+    { "document_tree_folded", nullptr },
+    { "document_inspector_folded", nullptr },
     { "gui_log_level", nullptr },
     { "core_log_level", nullptr },
     { "log_to_file", nullptr },
@@ -244,7 +246,7 @@ TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
     constant_difference.insert(name);
   }
   EXPECT_TRUE(recomputed_difference == constant_difference);
-  EXPECT_EQ(recomputed_difference.size(), static_cast<size_t>(5));
+  EXPECT_EQ(recomputed_difference.size(), static_cast<size_t>(7));
 }
 
 // ================================================================================
