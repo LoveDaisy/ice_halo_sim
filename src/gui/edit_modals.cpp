@@ -132,6 +132,28 @@ static int g_modal_layer_idx = -1;
 static int g_modal_view_crystal_id = -1;
 static int g_modal_entry_idx = -1;
 
+// The crystal_id the buffers were last filled from, and the frame on which the inspector's crystal
+// page was last submitted. Together with (g_modal_layer_idx, g_modal_entry_idx) these are the
+// reload trigger for a persistent editor, which — unlike a popup — has no open event to hang
+// initialisation off.
+//
+// Why three conditions and not just "the selection changed":
+//   * (layer, entry) changed — the obvious one: a different row was clicked.
+//   * crystal_id changed under a FIXED (layer, entry) — completing a pick rebinds this entry to
+//     another pool slot without moving the selection. Miss this and the very next per-frame commit
+//     writes the OLD crystal straight over the one the user just linked to.
+//   * the page was not submitted on the previous frame — anything that edits the document while the
+//     page is hidden (loading a .lmc, the defaults panel) would otherwise be silently reverted by
+//     the first commit after it comes back. Re-reading on the visibility edge is the same "read the
+//     entry when the editor appears" rule the popup got for free from OpenEditModal.
+//
+// The visibility edge is derived from ImGui's frame counter rather than from a flag the caller has
+// to clear on the way out: a flag would make correctness depend on every future non-crystal branch
+// of the inspector remembering to reset it, and the one that forgets fails silently, by reverting
+// an edit made elsewhere.
+static int g_buf_crystal_id = -1;
+static int g_inspector_page_last_frame = -1000;
+
 // Active tab is updated each frame inside the corresponding BeginTabItem true-branch
 // (ImGui doesn't auto-write user state). The OpenEditModal path always sets it
 // explicitly together with g_pending_tab_select=true to drive first-frame selection;
@@ -380,26 +402,22 @@ void SnapshotAllBuffers(const GuiState& state) {
 // OpenEditModal — called from RenderLeftPanel on EditRequest
 // ============================================================
 
-void OpenEditModal(const EditRequest& req, GuiState& state) {
-  if (req.target == EditTarget::kNone) {
-    return;
-  }
+namespace {
 
-  // Validate index
-  int ly = req.layer_idx;
-  int en = req.entry_idx;
-  if (ly < 0 || ly >= static_cast<int>(state.layers.size())) {
-    return;
-  }
-  if (en < 0 || en >= static_cast<int>(state.layers[ly].entries.size())) {
-    return;
-  }
-
+// Point the edit buffers at entry (ly, en) and fill them from it.
+//
+// This is the whole of what "opening" an editor ever meant: there is no window to raise, only a
+// question of which entry the buffers describe. It is called from OpenEditModal (the retiring popup
+// path) and, on the selection edge, from RenderCrystalInspector — the inspector has no open/close
+// lifecycle of its own, so "the user selected a different crystal" is its only initialisation
+// trigger. Caller guarantees the indices are in range.
+void LoadBuffersFromEntry(GuiState& state, int ly, int en) {
   auto& entry = state.layers[ly].entries[en];
   g_modal_layer_idx = ly;
   g_modal_entry_idx = en;
+  g_buf_crystal_id = entry.crystal_id;
 
-  // Initialize all three buffers (regardless of req.target) so any tab the user
+  // Initialize all three buffers (regardless of which tab is showing) so any tab the user
   // switches to shows the entry's current values. Modal-level OK commits all
   // three atomically; Cancel discards all.
   //
@@ -456,6 +474,26 @@ void OpenEditModal(const EditRequest& req, GuiState& state) {
   g_saved_zoom = g_crystal_zoom;
   g_modal_mesh_hash = 0;    // Force mesh update on first frame
   g_modal_preview_epoch++;  // New preview session: reset the animation ticker (epoch-keyed)
+}
+
+}  // namespace
+
+void OpenEditModal(const EditRequest& req, GuiState& state) {
+  if (req.target == EditTarget::kNone) {
+    return;
+  }
+
+  // Validate index
+  int ly = req.layer_idx;
+  int en = req.entry_idx;
+  if (ly < 0 || ly >= static_cast<int>(state.layers.size())) {
+    return;
+  }
+  if (en < 0 || en >= static_cast<int>(state.layers[ly].entries.size())) {
+    return;
+  }
+
+  LoadBuffersFromEntry(state, ly, en);
 
   switch (req.target) {
     case EditTarget::kCrystal:
@@ -1451,7 +1489,105 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
   }
 }
 
+// The sharing status row: how many other entries are backed by this entry's (crystal_id, filter_id)
+// pair, plus the two controls that change that. Returns true when "Link to..." was pressed, which
+// is the one thing the two hosts answer differently — the popup has to close itself, the inspector
+// has nothing to close.
+bool RenderSharingRow(GuiState& state) {
+  const int ly = g_modal_layer_idx;
+  const int en = g_modal_entry_idx;
+  if (ly < 0 || ly >= static_cast<int>(state.layers.size()) || en < 0 ||
+      en >= static_cast<int>(state.layers[ly].entries.size())) {
+    return false;
+  }
+  bool link_armed = false;
+  const auto& cur_entry = state.layers[ly].entries[en];
+  const int shared_with = CountEntriesSharing(state, cur_entry.crystal_id, cur_entry.filter_id) - 1;
+  if (shared_with > 0) {
+    ImGui::TextDisabled("Shared with %d other entr%s", shared_with, shared_with == 1 ? "y" : "ies");
+  } else {
+    ImGui::TextDisabled("Not shared");
+  }
+  ImGui::SameLine();
+  // "Link to..." — commit the current buffer, then arm pick-mode.
+  if (ImGui::SmallButton("Link to...##share")) {
+    CommitAllBuffersImmediate(state);
+    state.pick_link_source = GuiState::EntryRef{ ly, en };
+    link_armed = true;
+  }
+  if (shared_with > 0) {
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Unlink##share")) {
+      // Commit pending edits BEFORE forking pool slots so the active edit
+      // doesn't carry over to the other entries we were sharing with.
+      CommitAllBuffersImmediate(state);
+      if (UnlinkEntryFromPool(state, ly, en)) {
+        // Re-read the just-cloned slot into the edit buffer so g_crystal_buf
+        // (etc.) match the new entry, not the stale shared slot.
+        const auto& fresh_entry = state.layers[ly].entries[en];
+        const CrystalConfig& src_crystal = state.crystals[fresh_entry.crystal_id];
+        g_crystal_buf = src_crystal;
+        g_axis_buf[0] = src_crystal.zenith;
+        g_axis_buf[1] = src_crystal.azimuth;
+        g_axis_buf[2] = src_crystal.roll;
+        g_buf_crystal_id = fresh_entry.crystal_id;
+        SnapshotAllBuffers(state);
+        // No manual MarkDirty: UnlinkEntryFromPool appends to state.crystals/
+        // state.filters pool, so the reconciler's crystals/filters diff catches
+        // the change on the next frame's ReconcileGuiEffects tick.
+      }
+    }
+  }
+  ImGui::Separator();
+  return link_armed;
+}
+
 }  // namespace
+
+void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
+  if (layer_idx < 0 || layer_idx >= static_cast<int>(state.layers.size()) || entry_idx < 0 ||
+      entry_idx >= static_cast<int>(state.layers[layer_idx].entries.size())) {
+    return;
+  }
+
+  // Retarget BEFORE anything else in the frame. The order is the whole safety property: the commit
+  // at the bottom writes the buffers into whichever entry (g_modal_layer_idx, g_modal_entry_idx)
+  // names, so a reload that happened after it would write the previously-selected crystal into the
+  // newly-selected one.
+  const int crystal_id = state.layers[layer_idx].entries[entry_idx].crystal_id;
+  const bool stale = layer_idx != g_modal_layer_idx || entry_idx != g_modal_entry_idx ||
+                     crystal_id != g_buf_crystal_id || ImGui::GetFrameCount() != g_inspector_page_last_frame + 1;
+  if (stale) {
+    LoadBuffersFromEntry(state, layer_idx, entry_idx);
+  }
+  g_inspector_page_last_frame = ImGui::GetFrameCount();
+
+  if (RenderSharingRow(state)) {
+    // Pick mode is armed; the tree's rows are the click targets now. Nothing to close — the page
+    // stays exactly where it is, which is the point: the user can see what they are linking FROM
+    // while they choose what to link TO.
+  }
+
+  // Preview above, tabs below — the "vertical" arrangement the modal offered as an option is the
+  // only one that makes sense in a fixed-width column, so the choice is gone rather than defaulted.
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float tool_row = ImGui::GetFrameHeightWithSpacing();
+  const float preview_h = kModalPreviewImageSize + tool_row + style.WindowPadding.y * 2.0f + style.ItemSpacing.y;
+  ImGui::BeginChild("##inspector_preview", ImVec2(-FLT_MIN, preview_h), ImGuiChildFlags_None,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  RenderCrystalPreviewPane(state);
+  ImGui::EndChild();
+
+  // No dirty marks on the labels: " *" meant "these edits are not in the document yet", and here
+  // they always are. The `###` suffixes stay so the tab identity does not depend on the text.
+  RenderModalTabBar(state, "Crystal###crystal_tab", "Axis###axis_tab", "Filter###filter_tab", ImGuiTabItemFlags_None,
+                    ImGuiTabItemFlags_None, ImGuiTabItemFlags_None);
+
+  // Push buffers → entry every frame (diff-gated inside; a no-op when nothing changed). This is
+  // AC2's "immediate mode" — not a new mechanism, but the one branch of the modal that was already
+  // doing this, now the only branch there is.
+  CommitAllBuffersImmediate(state);
+}
 
 void RenderEditModals(GuiState& state, GLFWwindow* window) {
   // Deferred OpenPopup: only Staged mode uses the popup stack. Immediate mode
@@ -1645,54 +1781,13 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
                                              ImGuiTabItemFlags_None;
 
   // ---- Sharing status row (Link to... / Unlink) ----
-  // Header above the tab bar showing how many entries share this card's
-  // (crystal_id, filter_id) pair. "Link to..." starts pick-mode; "Unlink"
-  // forks the pool slots so this entry becomes independent.
-  {
-    const int ly = g_modal_layer_idx;
-    const int en = g_modal_entry_idx;
-    if (ly >= 0 && ly < static_cast<int>(state.layers.size()) && en >= 0 &&
-        en < static_cast<int>(state.layers[ly].entries.size())) {
-      const auto& cur_entry = state.layers[ly].entries[en];
-      const int shared_with = CountEntriesSharing(state, cur_entry.crystal_id, cur_entry.filter_id) - 1;
-      if (shared_with > 0) {
-        ImGui::TextDisabled("Shared with %d other entr%s", shared_with, shared_with == 1 ? "y" : "ies");
-      } else {
-        ImGui::TextDisabled("Not shared");
-      }
-      ImGui::SameLine();
-      // "Link to..." — commit current buffer, arm pick-mode, close modal.
-      if (ImGui::SmallButton("Link to...##share")) {
-        CommitAllBuffersImmediate(state);
-        state.pick_link_source = GuiState::EntryRef{ ly, en };
-        g_active_modal = ActiveModal::kNone;
-        if (!state.modal_immediate_mode) {
-          ImGui::CloseCurrentPopup();
-        }
-      }
-      if (shared_with > 0) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Unlink##share")) {
-          // Commit pending edits BEFORE forking pool slots so the active edit
-          // doesn't carry over to the other entries we were sharing with.
-          CommitAllBuffersImmediate(state);
-          if (UnlinkEntryFromPool(state, ly, en)) {
-            // Re-read the just-cloned slot into the modal buffer so g_crystal_buf
-            // (etc.) match the new entry, not the stale shared slot.
-            const auto& fresh_entry = state.layers[ly].entries[en];
-            const CrystalConfig& src_crystal = state.crystals[fresh_entry.crystal_id];
-            g_crystal_buf = src_crystal;
-            g_axis_buf[0] = src_crystal.zenith;
-            g_axis_buf[1] = src_crystal.azimuth;
-            g_axis_buf[2] = src_crystal.roll;
-            SnapshotAllBuffers(state);
-            // No manual MarkDirty: UnlinkEntryFromPool appends to state.crystals/
-            // state.filters pool, so the reconciler's crystals/filters diff catches
-            // the change on the next frame's ReconcileGuiEffects tick.
-          }
-        }
-      }
-      ImGui::Separator();
+  // Shared verbatim with the inspector's crystal page (RenderSharingRow). The popup's one extra
+  // obligation is closing itself once pick-mode is armed, since its own backdrop would otherwise
+  // sit between the user and the rows they are meant to click.
+  if (RenderSharingRow(state)) {
+    g_active_modal = ActiveModal::kNone;
+    if (!state.modal_immediate_mode) {
+      ImGui::CloseCurrentPopup();
     }
   }
 

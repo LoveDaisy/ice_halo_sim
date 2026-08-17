@@ -22,6 +22,7 @@
 
 #include <string>
 
+#include "IconsFontAwesome6.h"
 #include "gui/dock_layout.hpp"
 #include "gui/gui_constants.hpp"
 #include "imgui_internal.h"
@@ -191,6 +192,167 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK(inspector != nullptr);
       IM_CHECK_EQ(tree->Size.y, tree_h_before);
       IM_CHECK_EQ(inspector->Size.y, inspector_h_before);
+    };
+  }
+
+  // Clicking a row is what selects it, and the inspector follows. Asserted through the real click
+  // rather than by writing g_state.selection, because the click path is the half that can break on
+  // its own: the row is a Selectable with the thumbnail, the labels and two buttons drawn over it,
+  // so "the row is still what gets hit" is a claim about that overlap, not about the selection
+  // model.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "clicking_a_row_selects_it_and_the_inspector_follows");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(2, 3);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kNone);
+
+      ctx->ItemClick("**/##row_1_2");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCrystal);
+      IM_CHECK_EQ(gui::g_state.selection.layer_idx, 1);
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 2);
+      // ...and the inspector is showing that entry's editor, not the empty state.
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
+      IM_CHECK(ctx->ItemExists("**/###axis_tab"));
+      IM_CHECK(ctx->ItemExists("**/###filter_tab"));
+
+      // The two singleton rows answer the same way, and each replaces the previous page.
+      ctx->ItemClick("**/" ICON_FA_SUN " Sun");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kSun);
+      IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
+      IM_CHECK(ctx->ItemExists("**/##Altitude_input"));
+
+      ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);
+      IM_CHECK(ctx->ItemExists("**/##FOV##view_input"));
+    };
+  }
+
+  // AC2. The inspector has no confirm step: a typed value is in the document on the next frame.
+  // This is the proposition the whole migration turns on — the modal offered this behaviour as one
+  // of two modes, and what replaced it must not have quietly reverted to the other.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "an_edit_reaches_the_document_without_any_confirm");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 2);
+      gui::g_state.SelectCrystal(0, 1);
+      ctx->Yield(3);
+
+      const int crystal_id = gui::g_state.layers[0].entries[1].crystal_id;
+      const float before = gui::g_state.crystals[crystal_id].height.center;
+      ctx->ItemInputValue("**/##Height##modal_cr_input", before + 3.0f);
+      ctx->Yield(2);
+
+      // No OK, no Close, nothing dismissed — and the pool already has it.
+      IM_CHECK_EQ(gui::g_state.crystals[crystal_id].height.center, before + 3.0f);
+      IM_CHECK(ctx->ItemExists("**/###crystal_tab"));  // premise: the page never went away
+    };
+  }
+
+  // task338's lesson, re-anchored on the mechanism that replaced the modal. The page is ONE
+  // persistent window reused for every entry, so the thing that keeps an in-flight edit from
+  // landing in the next entry is the per-(layer, entry) id scope around the tab bodies. Losing it
+  // fails silently — the value simply appears under a crystal the user never edited.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "switching_rows_does_not_leak_the_previous_edit");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 2);
+      const int id0 = gui::g_state.layers[0].entries[0].crystal_id;
+      const int id1 = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(id0, id1);  // premise: separate pool slots, so a leak is observable
+
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+      const float base0 = gui::g_state.crystals[id0].height.center;
+      const float base1 = gui::g_state.crystals[id1].height.center;
+      ctx->ItemInputValue("**/##Height##modal_cr_input", base0 + 2.0f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
+
+      // Move to the other row WITHOUT dismissing anything — there is nothing to dismiss, which is
+      // exactly the condition the modal never had to survive.
+      ctx->ItemClick("**/##row_0_1");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.crystals[id1].height.center, base1);
+      // The page is now showing entry 1's value, not entry 0's.
+      IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
+
+      // And an edit here lands here only.
+      ctx->ItemInputValue("**/##Height##modal_cr_input", base1 + 5.0f);
+      ctx->Yield(2);
+      IM_CHECK_EQ(gui::g_state.crystals[id1].height.center, base1 + 5.0f);
+      IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
+    };
+  }
+
+  // The reload trigger that is NOT a selection change. Completing a pick rebinds the selected
+  // entry to a different pool slot while the selection itself stays put, so a page that only
+  // reloads when (layer, entry) changes goes on holding the old crystal — and its next per-frame
+  // commit writes that old crystal straight over the one the user just linked to. The failure is
+  // silent and destructive, which is why it gets its own case rather than a line in another.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "completing_a_pick_reloads_the_page_onto_the_new_slot");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 2);
+      const int id0 = gui::g_state.layers[0].entries[0].crystal_id;
+      const int id1 = gui::g_state.layers[0].entries[1].crystal_id;
+      // Make the two slots tell each other apart by a value the page displays.
+      gui::g_state.crystals[id1].height.center = gui::g_state.crystals[id0].height.center + 7.0f;
+      const float model_h = gui::g_state.crystals[id1].height.center;
+
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+      ctx->ItemClick("**/Link to...##share");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.pick_link_source.has_value());
+
+      // Entry 0 adopts entry 1's slot.
+      ctx->ItemClick("**/##row_0_1");
+      ctx->Yield(4);
+      IM_CHECK(!gui::g_state.pick_link_source.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, id1);
+      // The selection came back to the source entry, and — the point of the case — several frames
+      // of per-frame commits later the shared slot still holds the model's value rather than
+      // having been overwritten from a stale buffer.
+      IM_CHECK_EQ(gui::g_state.selection.layer_idx, 0);
+      IM_CHECK_EQ(gui::g_state.selection.entry_idx, 0);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.crystals[id1].height.center, model_h);
+    };
+  }
+
+  // The other reload trigger: the page reappearing. Anything that edits the document while the
+  // crystal page is hidden — a load, the defaults panel — leaves the buffers describing a state
+  // that is no longer the document's, and the first commit after the page comes back would put it
+  // there. Deselecting and reselecting is the cheapest way to state that, and it is also the shape
+  // a user hits by clicking Sun and then clicking back.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "the_page_rereads_the_entry_when_it_comes_back");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      const int id0 = gui::g_state.layers[0].entries[0].crystal_id;
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+
+      // Away from the page, then change the document behind its back the way another panel would.
+      gui::g_state.SelectSun();
+      ctx->Yield(3);
+      const float external = gui::g_state.crystals[id0].height.center + 4.0f;
+      gui::g_state.crystals[id0].height.center = external;
+      ctx->Yield(2);
+
+      // Back to the page. It must adopt what the document says, not overwrite it.
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, external);
     };
   }
 }

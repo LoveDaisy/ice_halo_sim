@@ -963,6 +963,16 @@ void RenderDocumentInspector() {
     sel.kind = GuiState::SelectionKind::kNone;
   }
 
+  // A page swap starts at the top of the new page. The window is one persistent ImGui window
+  // showing four different documents' worth of controls, so without this it opens the next page at
+  // whatever offset the last one was left at — reliably hiding the top of a page whenever the
+  // previous one was taller, which is exactly when the user was last scrolling.
+  static GuiState::DocumentSelection s_shown;
+  if (sel != s_shown) {
+    s_shown = sel;
+    ImGui::SetScrollY(0.0f);
+  }
+
   switch (sel.kind) {
     case GuiState::SelectionKind::kSun:
       InspectorTitle(ICON_FA_SUN, "Sun");
@@ -985,10 +995,16 @@ void RenderDocumentInspector() {
       }
       break;
     }
-    case GuiState::SelectionKind::kCrystal:
-      // Filled in by Step 4 (the crystal page absorbs the three edit modals).
-      InspectorTitle(ICON_FA_GEM, "Crystal");
+    case GuiState::SelectionKind::kCrystal: {
+      const auto& entry = g_state.layers[sel.layer_idx].entries[sel.entry_idx];
+      const CrystalConfig& cr = g_state.crystals[entry.crystal_id];
+      char title[64];
+      snprintf(title, sizeof(title), "%s  ·  L%d/%d", cr.type == CrystalType::kPrism ? "Prism" : "Pyramid",
+               sel.layer_idx + 1, sel.entry_idx + 1);
+      InspectorTitle(ICON_FA_GEM, title);
+      RenderCrystalInspector(g_state, sel.layer_idx, sel.entry_idx);
       break;
+    }
     case GuiState::SelectionKind::kNone:
       ImGui::TextDisabled("Select an item in the tree above.");
       break;

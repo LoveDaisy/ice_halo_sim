@@ -1166,12 +1166,25 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   if (pick_active && pick_disabled) {
     ImGui::BeginDisabled();
   }
-  const bool row_clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, row_h));
+  // The label carries the indices even though PushID above already makes the id unique. The
+  // difference is addressability: an id that differs only by a pushed integer cannot be named in a
+  // gui_test path, so every row would answer to the same wildcard and the first one would win. The
+  // buttons on the card this row replaced carried their indices for the same reason.
+  char row_id[32];
+  snprintf(row_id, sizeof(row_id), "##row_%d_%d", layer_idx, entry_idx);
+  const bool row_clicked = ImGui::Selectable(row_id, selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, row_h));
+  // Completing a pick has to happen on PRESS, not on the Selectable's release. The blank-area
+  // cancel in RenderDocumentTree tests IsMouseClicked, which is a press, and it runs after these
+  // rows in the same frame: a release-triggered completion is therefore always beaten to it by the
+  // cancel, and every pick ends as "nothing happened and I lost pick mode". The cards this row
+  // replaced hit-tested the press for the same reason, which is why the defect only appeared when
+  // the hand-rolled hit test became a real widget.
+  const bool row_pressed = ImGui::IsItemClicked(ImGuiMouseButton_Left);
   if (pick_active && pick_disabled) {
     ImGui::EndDisabled();
   }
-  if (row_clicked) {
-    if (pick_active) {
+  if (pick_active) {
+    if (row_pressed) {
       // "Link A to B" semantics: A (the entry whose inspector opened the picker — pick_link_source)
       // adopts B's (the clicked row's) crystal/filter ids. So in ApplyPickLink(source, target) the
       // CLICKED row is the source (model) and pick_link_source is the target (modified).
@@ -1183,9 +1196,9 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
       const auto pick_source_ref = *state.pick_link_source;
       ApplyPickLink(state, GuiState::EntryRef{ layer_idx, entry_idx }, pick_source_ref);
       state.pick_link_source.reset();
-    } else {
-      state.SelectCrystal(layer_idx, entry_idx);
     }
+  } else if (row_clicked) {
+    state.SelectCrystal(layer_idx, entry_idx);
   }
   const bool row_hovered = ImGui::IsItemHovered();
 
@@ -1218,6 +1231,11 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   float x = right_edge - btn_w;
   const float btn_y = row_pos.y + (row_h - ImGui::GetFrameHeight()) * 0.5f;
 
+  char dup_id[32];
+  char del_id[32];
+  snprintf(dup_id, sizeof(dup_id), ICON_FA_COPY "##dup_%d_%d", layer_idx, entry_idx);
+  snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##del_%d_%d", layer_idx, entry_idx);
+
   bool delete_clicked = false;
   const bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, row_hovered ? 1.0f : 0.0f);
@@ -1227,7 +1245,7 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   } else {
     ImGui::BeginDisabled();
   }
-  delete_clicked = ImGui::SmallButton(ICON_FA_XMARK "##del");
+  delete_clicked = ImGui::SmallButton(del_id);
   if (can_delete_entry) {
     PopDestructiveStyle();
   } else {
@@ -1235,7 +1253,7 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   }
   x -= btn_w + kHoverBtnGap;
   ImGui::SetCursorScreenPos(ImVec2(x, btn_y));
-  const bool dup_clicked = ImGui::SmallButton(ICON_FA_COPY "##dup");
+  const bool dup_clicked = ImGui::SmallButton(dup_id);
   ImGui::PopStyleVar();
 
   if (dup_clicked) {
@@ -1375,7 +1393,9 @@ void RenderLayer(GuiState& state, int layer_idx) {
   } else {
     ImGui::BeginDisabled();
   }
-  bool layer_delete_clicked = ImGui::SmallButton(ICON_FA_XMARK "##layer_del");
+  char layer_del_id[32];
+  snprintf(layer_del_id, sizeof(layer_del_id), ICON_FA_XMARK "##layer_%d", layer_idx);
+  bool layer_delete_clicked = ImGui::SmallButton(layer_del_id);
   if (can_delete_layer) {
     PopDestructiveStyle();
   } else {
@@ -1424,7 +1444,9 @@ void RenderLayer(GuiState& state, int layer_idx) {
     // independent by default — using EntryCard's default (crystal_id = 0)
     // would silently link the new entry to whichever entry already references
     // slot 0, making +Crystal look like "implicit Link to entry 0".
-    if (ImGui::SmallButton("+ Crystal##add")) {
+    char add_id[32];
+    snprintf(add_id, sizeof(add_id), "+ Crystal##layer_%d", layer_idx);
+    if (ImGui::SmallButton(add_id)) {
       EntryCard new_entry;
       new_entry.crystal_id = static_cast<int>(state.crystals.size());
       state.crystals.emplace_back();
@@ -1463,7 +1485,9 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
   const bool disable_slider = is_last_layer && prob_is_zero;
   ImGui::BeginDisabled(disable_slider);
   ImGui::BeginGroup();
-  SliderWithInput("Prob.", &layer.probability, 0.0f, 1.0f, "%.2f");
+  char prob_id[32];
+  snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
+  SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
   ImGui::EndGroup();
   ImGui::EndDisabled();
   const char* prob_tip = nullptr;

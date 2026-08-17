@@ -9,6 +9,15 @@ struct GuiState;
 struct EditRequest;
 enum class EditTarget;
 
+// Render the document inspector's crystal page for entry (layer_idx, entry_idx): the sharing row,
+// the crystal preview, and the Crystal / Axis / Filter tabs. Out-of-range indices draw nothing.
+//
+// This is the persistent-editor replacement for the three edit modals. It has no open or close
+// event: the tree's selection IS the question of which entry is being edited, so the page reloads
+// its buffers when that answer changes (or when the page reappears) and pushes them back into the
+// document every frame. There is consequently no "confirm" — see doc/gui-layout-architecture.md §2.
+void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx);
+
 // Process an edit request from the card UI. Must be called from the left panel
 // after detecting a non-None EditRequest (before ResetEditRequest).
 void OpenEditModal(const EditRequest& req, GuiState& state);
