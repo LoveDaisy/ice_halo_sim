@@ -103,7 +103,7 @@ docking 基底已经就位，形态**刻意未变**（面板组织、编辑 moda
   `io.IniFilename` 恒为 `nullptr`。这条分叉是刻意的，与 gui_test 默认禁用个人默认值同一条隔离纪律：
   参考图绝不能依赖跑测机器上碰巧存在的布局文件。**新增视觉参考场景时不要"顺手打开"测试侧的持久化。**
 
-- 测试影响：`modal_layout` 参考组随编辑模态退役而废弃（其覆盖的控件布局命题由检视器侧的新参考组接手）；`defaults_panel_layout` 的 Settings 面板不在本文范围、暂不受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考随每步 shell 改动失效，重拍税一次性付清于 shell 收尾（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
+- 测试影响：`modal_layout` 参考组随编辑模态退役而废弃，其覆盖的控件布局命题由检视器侧的新参考组 `crystal_inspector_layout` 接手（同一套 4 景、同一种 `##DocumentInspector` 在屏子区域截图技术），显示条的 Overlays 表另立 `display_strip_layout`（1 景）——两者均已实测进 CI 白名单（`doc/testing-architecture.md` §4.6）；`defaults_panel_layout` 的 Settings 面板不在本文范围、未受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考已随 shell 收尾重拍（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
 
 ### 7.2 执行簇 as-built（顶栏，§3 已落地）
 

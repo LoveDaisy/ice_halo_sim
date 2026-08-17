@@ -501,33 +501,40 @@ what a red obliges you to do, and — stated rather than left implicit — which
 layer are still nobody's gate but yours.
 
 **What executes in CI, and what does not.** The `Ubuntu x86_64` leg of the `build` job installs
-Xvfb + Mesa's llvmpipe software rasterizer and runs `gui_test`'s `modal_layout` and
-`defaults_panel_layout` reference groups under it. That leg is already a required status check,
-so this needs no new branch-protection context: those ten scenes now block a merge the same way
-`ctest` does. Coverage was chosen on measurement, not on convenience:
+Xvfb + Mesa's llvmpipe software rasterizer and runs `gui_test`'s `crystal_inspector_layout`,
+`display_strip_layout` and `defaults_panel_layout` reference groups under it. That leg is already a
+required status check, so this needs no new branch-protection context: those eleven scenes now
+block a merge the same way `ctest` does. Coverage was chosen on measurement, not on convenience:
 
 | Reference group | Linux + llvmpipe vs. the macOS-captured reference | In CI? |
 |---|---|---|
 | `defaults_panel_layout` (6 scenes) | **60.56–61.99 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
-| `modal_layout` (4 scenes) | **46.88–47.96 dB** on the real amd64 runner, vs. a 40 dB floor; bit-identical across 5 arm64 runs | yes |
+| `crystal_inspector_layout` (4 scenes) | 49.84–50.28 dB on an arm64 proxy, vs. a 40 dB floor; bit-identical across 5 runs. Replaces `modal_layout` (retired with the edit-modal popup it covered — the control-layout proposition moved to the document inspector's crystal page, `doc/gui-layout-architecture.md` §2); awaiting its first real-runner confirmation | yes |
+| `display_strip_layout` (1 scene) | 69.01 dB on an arm64 proxy, vs. a 40 dB floor; bit-identical across 5 runs; awaiting its first real-runner confirmation | yes |
 | `lens_proj` (6 scenes) | 19.49–27.72 dB — every scene **above** its macOS-calibrated threshold, by 0.88–1.49 dB | no, see below |
 | `screenshot`/`visual` crystal scenes (3) | 34.78–35.94 dB vs. a 40 dB floor | no — not portable |
-| `capture_harness` `fullframe` | 21.92 dB vs. a 40 dB floor | no — not portable |
+| `capture_harness` `fullframe` | 21.92–33.46 dB vs. a 40 dB floor (arm64 proxy figure re-measured after the shell reorg's whole-window reshoot; still red, consistent with the crystal-preview rasterization gap the row above already names) | no — not portable |
 
-**The amd64 confirmation, and what it changed.** The two in-CI rows above now carry numbers from
-the real `ubuntu-24.04` runner (the CI step's own log, 12/12 scenes passed). The comparison against
-the arm64 figures they replaced is worth keeping, because it is the only measurement of how far
-that substitution actually travelled:
+**The amd64 confirmation, and what it changed.** `defaults_panel_layout`'s row above carries
+numbers from the real `ubuntu-24.04` runner (the CI step's own log, 12/12 scenes passed at the time
+`modal_layout` was still its CI companion). The comparison against the arm64 figures it replaced is
+worth keeping, because it is the only measurement of how far that substitution actually travelled:
 
 | Group | arm64 container (proxy) | amd64 runner (real) | Delta |
 |---|---|---|---|
 | `defaults_panel_layout` | 60.56–61.99 dB | 60.56–61.99 dB | none — identical |
-| `modal_layout` | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
+| `modal_layout` (retired) | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
 
-So the proxy was exact for one group and off by about a quarter of a dB for the other. Neither
-outcome threatens the conclusion — the tightest real margin is 46.88 dB against a 40 dB floor,
-6.88 dB of headroom — but the second row is why the caveat below was worth writing rather than
-assuming portability. The remaining rows are still arm64-only: nothing runs them on amd64.
+So the proxy was exact for one group and off by about a quarter of a dB for the other, on the two
+groups that have ever run on the real runner. `modal_layout` itself is gone, but the row is kept
+because it is the only evidence on record for how far an arm64 proxy can drift from the amd64
+target: worth re-checking once `crystal_inspector_layout` (`modal_layout`'s structural successor —
+same capture technique, same deterministic-scene shape) gets its own first real-runner data point.
+Neither outcome threatens the conclusion — the tightest real margin recorded so far is 46.88 dB
+against a 40 dB floor, 6.88 dB of headroom, and `crystal_inspector_layout`'s own arm64-proxy margin
+(9.84 dB) is comfortably in the same range — but the drift is why the caveat below was worth writing
+rather than assuming portability. The remaining rows, including both new groups until their first
+CI run, are still arm64-only: nothing runs them on amd64 yet.
 
 **A caveat the table cannot carry silently.** Every number below, and every arm64 figure above,
 was measured on an **arm64**
@@ -1005,7 +1012,7 @@ health items that must not be moved/deleted casually.
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`, `test_metal_root_gen`, `test_metal_trace_backend`, `test_metal_filter_match_parity`(.mm), `test_cpu_trace_backend` | `test_metal_exit_seam_parity`, `test_metal_batch_invariance`, `test_device_gen_default_path`, `test_cpu_backend_route`, **projection subsystem** (315.5): `test_metal_projection_parity`, `test_cuda_projection_parity` (shared `_projection_battery.py`) | — | `_parity_metrics.py` is the single source of parity metrics — **DO_NOT_MIGRATE_INDEPENDENTLY** (move with its dependents). Energy-conservation + cross-seed double gate is a 267.3 reinforcement — **DO NOT DELETE**. The `test_metal_batch_invariance` exit-conservation `xfail` is **legitimate** (worst-case drain not yet landed) — do not "fix" it by deleting. `_projection_battery.py` is the shared per-projection battery (oracle = legacy CPU) — move with `test_{metal,cuda}_projection_parity`. |
 | **e2e-correctness** | `test/e2e-correctness/` (flat) | — | `test_smoke`, `test_cli`, `test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/` (flat) | (no standalone C++ perf target; CI `Benchmark` step runs `--benchmark`) | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_defaults_panel`, `test_gui_lens_projection`, `test_gui_modal_layout`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
+| **gui** | `test/gui/<tag>/` (functional/visual/responsiveness) | — | `test_metal_gui_acceptance` (G4; gui layer, runs via pytest harness) | `functional/`: `test_background_overlay`, `test_color_window`, `test_defaults_panel`, `test_edit_modal`, `test_entry_management`, `test_export`, `test_file_ops`, `test_filter_editor`, `test_gui_face_number_overlay`, `test_gui_overlay_labels`, `test_gui_preview_animation`, `test_gui_sim_smoke`, `test_log_panel`, `test_overlay_controls`, `test_preview_texture`, `test_preview_viewport`, `test_run_lifecycle`, `test_scene_controls`, `test_shell_chrome`, `test_status_bar`, `test_view_display_controls`; `visual/`: `test_gui_capture_smoke`, `test_gui_crystal_inspector_layout`, `test_gui_defaults_panel`, `test_gui_display_strip_layout`, `test_gui_lens_projection`, `test_preview_pixels`; `responsiveness/`: **`test_gui_perf`**; harness (flat under `test/gui/`): `test_gui_main`, `test_screenshot`, `test_gui_shared` | `test_gui_perf` oracle = absolute frame budget (§4.4), not throughput-vs-legacy. `functional/` no longer includes an `interaction`-named catch-all — its former contents are now split by driven window/panel across the files above, or moved out to `unit-correctness`/`composition-correctness` when the case needed no live frame (§1.7). |
 | **regression-sentinel** | `test/regression-sentinel/` (flat) | — | `test_capi_sentinel_overflow`, `test_ms_filter_leak`, `test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` guard real bugs via issue repro — **DO NOT alter the scenario**. `test_ms_filter_leak` is also parity-related; its **primary** purpose is sentinel (multi-purpose → classify by primary purpose). |
 
 **Multi-purpose tie-break rule**: when a test serves more than one purpose, classify it by its

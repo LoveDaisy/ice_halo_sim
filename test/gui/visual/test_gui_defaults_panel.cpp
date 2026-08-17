@@ -15,10 +15,10 @@
 // green. That last one is not hypothetical: it is the defect this task's own implementation hit.
 //
 // Capture path: the DEFAULT framebuffer through g_fullframe_capture's sub-region protocol, using
-// the live ImGui window rectangle of the modal — the same technique as modal_layout, and for the
-// same reason (the thing under test is how ImGui laid the panel out on screen). The consequence is
-// the same too: these references are tied to the harness window size, the font atlas and the ImGui
-// style, and any of those moving is a legitimate reason to re-run
+// the live ImGui window rectangle of the modal — the same technique as crystal_inspector_layout,
+// and for the same reason (the thing under test is how ImGui laid the panel out on screen). The
+// consequence is the same too: these references are tied to the harness window size, the font
+// atlas and the ImGui style, and any of those moving is a legitimate reason to re-run
 // scripts/regen_gui_test_refs.py --group defaults_panel_layout.
 //
 // Isolation: every scene installs an explicit, freshly emptied user-config directory. Without it
@@ -82,8 +82,8 @@ constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
 
 // Where the modal is parked before the capture. ImGui remembers a window's position for the whole
 // process, so without pinning it the captured rectangle would depend on which earlier test last
-// moved a window — the same trap modal_layout documents. Arbitrary except that the 760x560 panel
-// must fit inside the 1600x980 harness window from here.
+// moved a window. Arbitrary except that the 760x560 panel must fit inside the 1600x980 harness
+// window from here.
 constexpr float kPanelParkX = 40.0f;
 constexpr float kPanelParkY = 40.0f;
 

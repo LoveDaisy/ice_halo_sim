@@ -38,7 +38,7 @@ namespace {
 // The repo-wide floor for a deterministic GL comparison. Not a calibrated mean − 4σ: these scenes
 // render pixel-identical run to run, so there is no finite PSNR distribution to take a statistic
 // from, and bit-exactness cannot be demanded of an image compared on another machine. The same
-// number is used by capture_harness/fullframe and by the modal_layout scenes.
+// number is used by capture_harness/fullframe and by the crystal_inspector_layout scenes.
 constexpr double kDeterministicThresholdDb = 40.0;
 
 // Rebuild the crystal mesh (if changed) and render it into g_crystal_renderer's FBO so the capture
@@ -78,7 +78,7 @@ void CrystalCaptureGuiFunc(ImGuiTestContext* /*ctx*/) {
 
 // One committed crystal-preview reference.
 //
-// The names carry a `crystal_preview_` prefix because the modal_layout reference group already owns
+// The names carry a `crystal_preview_` prefix because the crystal_inspector_layout reference group already owns
 // scenes called `crystal_prism` and `crystal_pyramid`. Nothing breaks if they collide — the regen
 // driver attributes PSNR lines by the `[<group>]` tag, and this suite's tag is `visual` — but
 // `--filter crystal_prism` would select both suites, and a stderr log would show two lines a reader

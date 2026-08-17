@@ -134,4 +134,4 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 - `gui_test` 的 `capture_harness/fullframe` 用例抓取 `ResetTestState()` 之后的整帧默认界面，且 `SavePng` 在 PSNR 比对**之前**执行 —— 主题一改必然比对失败，但**图照样产出**。配 `--export-dir` + `--keep-export-png` 即可批量取图。
 - **必须保留一个控制项**：未改动的基线变体应当**通过**现有 PSNR 门禁。它一旦不通过，说明改动动了不该动的像素，此时所有对比失效。原型全过程中该控制项持续为绿。
 - ⚠️ **测试绿灯对未走到的路径零覆盖**。原型中曾出现一次 `Missing EndGroup()`（右面板整个渲染成 ImGui 断言框），而当时 287/287 gui_test 全绿——因为测试跑的是基线主题，新路径根本没有被执行。**抓到它的是截图，不是测试。**
-- **参考图重拍是有税的**：任何主题改动都会使 on-screen 的视觉回归参考图（`modal_layout`、`defaults_panel_layout`、`capture_harness`）失效并需重拍；`lens_proj` 走离屏 FBO、不含 chrome，不受影响。⇒ **视觉方案应一次定稿再落地，不要连续多次微调**，否则每次都要付一遍重拍成本。
+- **参考图重拍是有税的**：任何主题改动都会使 on-screen 的视觉回归参考图（`crystal_inspector_layout`、`display_strip_layout`、`defaults_panel_layout`、`capture_harness`）失效并需重拍；`lens_proj` 走离屏 FBO、不含 chrome，不受影响。⇒ **视觉方案应一次定稿再落地，不要连续多次微调**，否则每次都要付一遍重拍成本。

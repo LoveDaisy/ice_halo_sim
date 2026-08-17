@@ -644,6 +644,8 @@ int main(int argc, char** argv) {
   RegisterSimE2eSmokeTests(engine);
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
+  RegisterCrystalInspectorLayoutTests(engine);
+  RegisterDisplayStripLayoutTests(engine);
   RegisterLensProjectionTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 

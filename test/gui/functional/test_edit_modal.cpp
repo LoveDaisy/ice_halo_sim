@@ -12,9 +12,9 @@
 // blank row lowers to, and when OK is gated are functional/test_filter_editor.cpp; the axis-preset
 // classifier and the factory-vs-user zenith it resolves to are
 // unit-correctness/gui/test_axis_presets.cpp; whether an edited document survives a save and reload
-// is composition-correctness/gui/test_document_roundtrip_chain.cpp; the modal's committed pixel
-// layout is visual/test_gui_modal_layout.cpp, whose four reference images this file must not
-// disturb. Nothing below restates any of them.
+// is composition-correctness/gui/test_document_roundtrip_chain.cpp; the page's committed pixel
+// layout is visual/test_gui_crystal_inspector_layout.cpp, whose four reference images this file
+// must not disturb. Nothing below restates any of them.
 //
 // One thing this file asserts that reads like core's job: the sync-group leader. It is here because
 // the GUI carries its own mirror of core's rule (it must, to show the user the value a join will

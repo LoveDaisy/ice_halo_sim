@@ -396,30 +396,35 @@ sync_group 子表钉子。若把这些期望改写成调用 `ShapeScalarSyncKeyN
 沉默里——这一层还有哪些部分除了你没有任何闸门。
 
 **CI 里真跑什么、不跑什么。** `build` job 的 `Ubuntu x86_64` 腿装 Xvfb + Mesa llvmpipe 软件光栅化器，
-在其下跑 `gui_test` 的 `modal_layout` 与 `defaults_panel_layout` 两个参考图组。这条腿本来就是 required
-status check，所以不需要新增 branch-protection context：这十个场景现在与 `ctest` 一样能挡住合入。
-覆盖面是按实测选的，不是按方便选的：
+在其下跑 `gui_test` 的 `crystal_inspector_layout`、`display_strip_layout` 与 `defaults_panel_layout`
+三个参考图组。这条腿本来就是 required status check，所以不需要新增 branch-protection context：这
+十一个场景现在与 `ctest` 一样能挡住合入。覆盖面是按实测选的，不是按方便选的：
 
 | 参考图组 | Linux + llvmpipe 对 macOS 拍摄的参考图 | 进 CI？ |
 |---|---|---|
 | `defaults_panel_layout`（6 景） | **60.56–61.99 dB**（真实 amd64 runner），地板 40 dB；arm64 下 5 次重复逐位相同 | 是 |
-| `modal_layout`（4 景） | **46.88–47.96 dB**（真实 amd64 runner），地板 40 dB；arm64 下 5 次重复逐位相同 | 是 |
+| `crystal_inspector_layout`（4 景） | 49.84–50.28 dB（arm64 代理），地板 40 dB；5 次重复逐位相同。接替 `modal_layout`（随编辑 modal 弹窗退役——其控件布局命题移到了文档检视器的晶体页，`doc/gui-layout-architecture.md` §2）；尚待首次真实 runner 确认 | 是 |
+| `display_strip_layout`（1 景） | 69.01 dB（arm64 代理），地板 40 dB；5 次重复逐位相同；尚待首次真实 runner 确认 | 是 |
 | `lens_proj`（6 景） | 19.49–27.72 dB——每一景都**高于**按 macOS 标定的阈值 0.88–1.49 dB | 否，见下 |
 | `screenshot`/`visual` 的晶体场景（3 景） | 34.78–35.94 dB，地板 40 dB | 否——不可移植 |
-| `capture_harness` 的 `fullframe` | 21.92 dB，地板 40 dB | 否——不可移植 |
+| `capture_harness` 的 `fullframe` | 21.92–33.46 dB，地板 40 dB（shell 重组整帧重拍后的 arm64 代理复测；仍红，与上一行同源的晶体预览光栅化差距一致） | 否——不可移植 |
 
-**amd64 确认，以及它改变了什么。** 上表两个进 CI 的组现在填的是真实 `ubuntu-24.04` runner 的数字
-（取自 CI 步骤自身日志，12/12 景通过）。与它们替换掉的 arm64 数字的对照值得留下，因为这是**唯一一次
-实测那个代理环境到底外推了多远**：
+**amd64 确认，以及它改变了什么。** 上表 `defaults_panel_layout` 一行填的是真实 `ubuntu-24.04`
+runner 的数字（取自 CI 步骤自身日志，12/12 景通过，测量时 `modal_layout` 还是它在 CI 里的同伴）。
+与它替换掉的 arm64 数字的对照值得留下，因为这是**唯一一次实测那个代理环境到底外推了多远**：
 
 | 组 | arm64 容器（代理） | amd64 runner（真实） | 差 |
 |---|---|---|---|
 | `defaults_panel_layout` | 60.56–61.99 dB | 60.56–61.99 dB | 无——完全相同 |
-| `modal_layout` | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
+| `modal_layout`（已退役） | 47.12–48.23 dB | 46.88–47.96 dB | ≈ −0.27 dB |
 
-即：代理对一个组精确命中，对另一个组差约四分之一 dB。两个结果都不动摇结论——最紧的真实余量是
-46.88 dB 对 40 dB 地板，余 6.88 dB——但第二行正说明下面那条告诫值得写，而不是想当然地假定可移植。
-其余各行仍然只有 arm64 数字：没有任何东西在 amd64 上跑它们。
+即：在唯二跑过真实 runner 的两个组里，代理对一个组精确命中，对另一个组差约四分之一 dB。
+`modal_layout` 本身已经不在了，但这一行留着——它是目前唯一一条「arm64 代理能偏离 amd64 目标多远」
+的实测证据，等 `crystal_inspector_layout`（`modal_layout` 的结构继承者：同一套截图技术、同一种
+确定性场景形态）拿到自己的首次真实 runner 数据后值得回头核对。两个结果都不动摇结论——目前记录在案
+最紧的真实余量是 46.88 dB 对 40 dB 地板，余 6.88 dB，`crystal_inspector_layout` 自己的 arm64 代理
+余量（9.84 dB）也落在同一量级——但这点漂移正说明下面那条告诫值得写，而不是想当然地假定可移植。
+其余各行、以及两个新组在各自首次 CI 跑之前，都仍然只有 arm64 数字：没有任何东西在 amd64 上跑它们。
 
 **这张表没法沉默带过的一条告诫。** 下面每个数字、以及上表里的 arm64 数字，都测自一个 **arm64**
 Docker 容器（`ubuntu:24.04` +
@@ -790,7 +795,7 @@ ImGuiTestEngine 的 `IM_CHECK*`），会在第一行失败时就中止**整个�
 | **parity-cross-backend** | `test/parity-cross-backend/<subsystem>/` | `test_metal_trace_parity`、`test_metal_root_gen`、`test_metal_trace_backend`、`test_metal_filter_match_parity`(.mm)、`test_cpu_trace_backend` | `test_metal_exit_seam_parity`、`test_metal_batch_invariance`、`test_device_gen_default_path`、`test_cpu_backend_route`、**projection 子系统**（315.5）：`test_metal_projection_parity`、`test_cuda_projection_parity`（共用 `_projection_battery.py`） | — | `_parity_metrics.py` 是 parity 指标单一真源——**DO_NOT_MIGRATE_INDEPENDENTLY**（与其依赖者一起移）。能量守恒 + 跨 seed 双门是 267.3 补强——**勿删**。`test_metal_batch_invariance` 的能量守恒 `xfail` 是**合法的**（worst-case drain 未落地）——勿当 bug "修"掉。`_projection_battery.py` 是共享的 per-projection battery（oracle = legacy CPU）——与 `test_{metal,cuda}_projection_parity` 一起移。 |
 | **e2e-correctness** | `test/e2e-correctness/`（平铺） | — | `test_smoke`、`test_cli`、`test_raypath_equivalence` | — | — |
 | **performance** | `test/performance/`（平铺） | （无独立 C++ perf target；CI `Benchmark` 步骤跑 `--benchmark`） | `test_metal_throughput` | — | — |
-| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `functional/`：`test_background_overlay`、`test_color_window`、`test_defaults_panel`、`test_edit_modal`、`test_entry_management`、`test_export`、`test_file_ops`、`test_filter_editor`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_preview_animation`、`test_gui_sim_smoke`、`test_log_panel`、`test_overlay_controls`、`test_preview_texture`、`test_preview_viewport`、`test_run_lifecycle`、`test_scene_controls`、`test_shell_chrome`、`test_status_bar`、`test_view_display_controls`；`visual/`：`test_gui_capture_smoke`、`test_gui_defaults_panel`、`test_gui_lens_projection`、`test_gui_modal_layout`、`test_preview_pixels`；`responsiveness/`：**`test_gui_perf`**；harness（平铺于 `test/gui/`）：`test_gui_main`、`test_screenshot`、`test_gui_shared` | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。`functional/` 不再有一个以 `interaction` 命名的杂物间——它原来的内容现已按上表被驱动的窗口/面板拆开，或者在用例不需要真实帧时移出到 `unit-correctness`/`composition-correctness`（§1.7）。 |
+| **gui** | `test/gui/<tag>/`（功能/视觉/响应） | — | `test_metal_gui_acceptance`（G4；gui 层，走 pytest harness） | `functional/`：`test_background_overlay`、`test_color_window`、`test_defaults_panel`、`test_edit_modal`、`test_entry_management`、`test_export`、`test_file_ops`、`test_filter_editor`、`test_gui_face_number_overlay`、`test_gui_overlay_labels`、`test_gui_preview_animation`、`test_gui_sim_smoke`、`test_log_panel`、`test_overlay_controls`、`test_preview_texture`、`test_preview_viewport`、`test_run_lifecycle`、`test_scene_controls`、`test_shell_chrome`、`test_status_bar`、`test_view_display_controls`；`visual/`：`test_gui_capture_smoke`、`test_gui_crystal_inspector_layout`、`test_gui_defaults_panel`、`test_gui_display_strip_layout`、`test_gui_lens_projection`、`test_preview_pixels`；`responsiveness/`：**`test_gui_perf`**；harness（平铺于 `test/gui/`）：`test_gui_main`、`test_screenshot`、`test_gui_shared` | `test_gui_perf` oracle = 绝对帧预算（§4.4），非吞吐对 legacy。`functional/` 不再有一个以 `interaction` 命名的杂物间——它原来的内容现已按上表被驱动的窗口/面板拆开，或者在用例不需要真实帧时移出到 `unit-correctness`/`composition-correctness`（§1.7）。 |
 | **regression-sentinel** | `test/regression-sentinel/`（平铺） | — | `test_capi_sentinel_overflow`、`test_ms_filter_leak`、`test_errors` | — | `test_capi_sentinel_overflow` / `test_ms_filter_leak` 用 issue 复现守真 bug——**勿改场景**。`test_ms_filter_leak` 也与 parity 相关；其**主** purpose 是 sentinel（多 purpose → 按主 purpose 归类）。 |
 
 **多 purpose 裁决规则**：一个测试服务多个 purpose 时，按其**主** purpose 归类（最直接守护其回归的

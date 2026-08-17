@@ -419,5 +419,7 @@ void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
+void RegisterCrystalInspectorLayoutTests(ImGuiTestEngine* engine);
+void RegisterDisplayStripLayoutTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP
