@@ -25,6 +25,7 @@
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
+#include "gui/dock_layout.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
@@ -434,6 +435,10 @@ int main(int argc, char** argv) {
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  gui::ApplyDockingConfig(io);
+  // Deliberately NOT mirroring src/gui/main.cpp's layout persistence: this is the same isolation
+  // rule as --user-config defaulting to kDisabled here. A reference image must not depend on a
+  // layout file that happens to exist on the machine that captured it.
   io.IniFilename = nullptr;
 
   gui::ApplyVisualLanguage(io);
@@ -605,6 +610,11 @@ int main(int argc, char** argv) {
     auto layout_height = static_cast<float>(win_h);
 
     gui::RenderTopBar(layout_width);
+    // Mirrors src/gui/main.cpp: same call, same arguments, so the dock layout a screenshot is taken
+    // from is the product's layout rather than a harness-local copy of it.
+    const float dock_host_height = layout_height - gui::kTopBarHeight - gui::kStatusBarHeight;
+    const ImGuiID dockspace_id = gui::RenderDockSpaceHost(0.0f, gui::kTopBarHeight, layout_width, dock_host_height);
+    (void)dockspace_id;  // BuildDefaultDockLayout is wired in the next step.
     gui::RenderLeftPanel(layout_height);
     gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);

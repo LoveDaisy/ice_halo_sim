@@ -16,6 +16,7 @@
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
+#include "gui/dock_layout.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gl_common.h"
@@ -162,7 +163,26 @@ int main(int argc, char** argv) {
   // Multi-viewport: lets Immediate-mode Edit Entry be dragged outside main window.
   // Staged BeginPopupModal keeps main-viewport constraint by ImGui semantics.
   io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-  io.IniFilename = nullptr;  // Disable imgui.ini persistence (also suppresses viewport position persistence)
+  gui::ApplyDockingConfig(io);
+
+  // Layout persistence. ImGui's own default ("imgui.ini") resolves against the process working
+  // directory, so the same installed app would remember a different layout depending on where it
+  // was launched from; the per-user config directory is the one place this project already treats
+  // as "this user's settings". io.IniFilename is not copied by ImGui, so the string has to outlive
+  // the context — hence the static.
+  //
+  // No writable directory (--no-user-config, or an OS that gave us nothing to anchor to) degrades
+  // to nullptr, which is exactly the behavior this app had before docking existed: no persistence,
+  // no new failure mode.
+  static std::string s_layout_ini_path;
+  if (const auto config_dir = gui::GetActiveUserConfigDir()) {
+    s_layout_ini_path = lumice::PathToU8(*config_dir / "lumice_layout.ini");
+    io.IniFilename = s_layout_ini_path.c_str();
+    GUI_LOG_INFO("[GUI] Layout persistence: '{}'", s_layout_ini_path);
+  } else {
+    io.IniFilename = nullptr;
+    GUI_LOG_INFO("[GUI] Layout persistence: disabled (no writable user config directory)");
+  }
 
   gui::ApplyVisualLanguage(io);
 
@@ -364,6 +384,12 @@ int main(int argc, char** argv) {
     auto layout_height = static_cast<float>(win_h);
 
     gui::RenderTopBar(layout_width);
+    // The DockSpace host must be submitted before any window that docks into it, so that the nodes
+    // exist when those windows call Begin. It spans the band between the top bar and the status bar,
+    // which stay fixed-geometry chrome outside the dockspace.
+    const float dock_host_height = layout_height - gui::kTopBarHeight - gui::kStatusBarHeight;
+    const ImGuiID dockspace_id = gui::RenderDockSpaceHost(0.0f, gui::kTopBarHeight, layout_width, dock_host_height);
+    (void)dockspace_id;  // BuildDefaultDockLayout is wired in the next step.
     gui::RenderLeftPanel(layout_height);
     gui::RenderRightPanel(window, layout_width, layout_height);
     gui::RenderPreviewPanel(window, layout_width, layout_height);

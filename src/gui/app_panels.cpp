@@ -14,6 +14,7 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/destructive_style.hpp"
+#include "gui/dock_layout.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
@@ -428,6 +429,29 @@ void RenderTopBar(float window_width) {
   ImGui::SameLine();
   if (ImGui::Button(ICON_FA_GEAR " Settings")) {
     OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
+  }
+
+  // View menu. It exists because panel geometry became user-editable (the panels are dock nodes and
+  // their splitters are draggable, and the arrangement persists across runs) — "I dragged the layout
+  // into a state I cannot undo" is the one objection to persisting it, and this is the answer to it.
+  // Same popup-button shape as Save above rather than a real menu bar, which the top bar has never
+  // had.
+  ImGui::SameLine();
+  if (ImGui::Button("View")) {
+    ImGui::OpenPopup("ViewMenu");
+  }
+  if (ImGui::BeginPopup("ViewMenu")) {
+    if (ImGui::MenuItem("Reset Layout")) {
+      RequestDockLayoutReset();
+      // A reset that left the panels collapsed would not be a reset: collapse is view state, and the
+      // rebuilt layout restores both panels to their default width regardless. Clearing the flags
+      // here keeps the marker and the geometry from disagreeing. The collapse-tracking in
+      // RenderLeftPanel / RenderRightPanel sees this as an ordinary expand and asks for the width
+      // the rebuild already produced, so the two agree rather than fight.
+      g_state.left_panel_collapsed = false;
+      g_state.right_panel_collapsed = false;
+    }
+    ImGui::EndPopup();
   }
 
   // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
