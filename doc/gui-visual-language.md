@@ -210,7 +210,41 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
   - 复合行（Camera 的 Upper/Full/Lower + Front、Crystal 的 Prism/Pyramid、Filter 的
     Filter In/Out 与 P/B/D）用的是同一个 `PropertyRow`：控件列里放多个 `SameLine` 控件即可，
     没有为它们另开一层封装 —— 一行标签加一列内容，这个形状本身就够用。
-- **左面板空区** —— 见 §2 第 6 条。
+- ~~**左面板空区**~~ —— **部分收口**（457.5）。§2 第 6 条把这条判为信息架构问题而非样式问题，
+  这一点没有变；变的是"有东西可显示"这一半在文档树里已经兑现：Sun / Camera / Layer / Crystal
+  四类行的右缘各挂一段暗色次级值（`20.0°` / `Linear` / `P 1.00` / `w 100`），随字段编辑逐帧
+  刷新。左栏的空**面积**没有变小——收口的是"光杆行不携带信息"这一半。真正的面积问题仍只能靠
+  docking + 新功能解决，见 §6。
+  - **四类行共用四个具名格式化函数**（`Format*TreeMeta`，`src/gui/panels.hpp`），而不是四处
+    就地 `snprintf`：ImGui 的裸 `Text*` 提交时 id 为 0，gui_test 读不回它画了什么，所以
+    "格式对不对"这一半必须由可直接调用的纯函数承担——与 `FilterSummary` /
+    `FormatSamplingSegment` 同一手法。**诚实边界**：没有任何断言会因为渲染点的
+    `TextDisabled` 调用被删掉而变红（Layer 行是唯一例外，它的删除按钮定位在 meta 下游）；
+    "字符串确实上屏"由参考图承担。
+  - **两种右缘定位机制是刻意的**：Sun / Camera 走绝对定位覆盖在 `Selectable` 之上（`RenderEntryRow`
+    的徽标早就是这么画的），Layer 走 `SameLine` 链（它的删除按钮本就是这么定位的）。各自匹配
+    所在行的既有约定，不是待统一的疏漏。Selectable / TreeNodeEx 的 label 参数逐字未动，因此
+    既有 gui_test 里以行标签寻址的路径零改动。
+
+- ~~**`text_dim` 档只有零星消费者**~~ —— **已收口**（457.5）。全 `src/gui/` 用户可见文字过了一遍，
+  判据只有一条：**这段文字是内容，还是关于内容的说明**。落暗档的四类是单位/前置与行内字段标签、
+  提示与说明段落、meta（分辨率·镜头·FOV、日志文件路径、计数）、次级与派生值（树行 meta、SoP 展开
+  预览、运行计数）；**保持主档**的是身份文字（`Prism · Random`、设置项 key、Overlays 行名、文件名）、
+  modal 主消息（未保存确认、导入警告、覆盖警告）、以及语义色文字（good / warning / destructive，
+  `semantic_colors.hpp` 自有 owner，本次不进入）。消费点由 20 处增至 45 处（`TextDisabled` 调用 17→38，加上把同一色槽压进 `TextWrapped` 的调用点 3→7）。
+  - **只动明度、不动色相/饱和度**：暗档一律经 `ImGuiCol_TextDisabled`（`theme.cpp` 由
+    `Palette::text_dim` 赋值），没有新增色值。`TextWrapped` 没有 disabled 变体，四处说明段落因此
+    在调用点压入同一个色槽（`defaults_panel.cpp` 的 `DimTextWrapped`），仍是同一个值。
+  - **修好了一处同行不一致**：顶栏 `Max hits` 的标签走 `InlineFieldLabel`（暗），而它旁边的
+    `Rays(M)` 走 `FinishSliderLayout`（主档）——同一行两个字段标签两个档位。滑条尾随标签现在也
+    走暗档。
+  - **数值文本走等宽字型：核实后不做**（457.5 顺带项）。字体图集里只有正文 Roboto Medium 与
+    FontAwesome 图标两个实例，没有现成等宽字体；ImGui 的 `AddFontDefault()`（ProggyClean）在
+    正常路径上从不被调用，用它等于新增字体实例，而这一项的前提就是不新增字号/字体实例。
+    更要紧的是**收益已经拿到了**：实测 Roboto Medium 在 15 px 下十个数字的 advance 全部是
+    8.000 px（等宽数字），所以"数值纵向对齐"这个等宽字型的主要卖点，当前字体本就提供。
+    仍不齐的只有 `.` 与空格（各 4.000 px，半个数字宽），即小数点两侧的位移——不足以为它引入
+    第二个字体实例。
 
 - ~~**铬件（顶栏 / 进度条 / 状态栏）本身没有秩序**~~ —— **已收口**（457.4）。宽度 token 化解决的是
   "控件多宽由谁决定"，铬件这一层剩下的是**分组与分隔的形态**，它由四件事组成：

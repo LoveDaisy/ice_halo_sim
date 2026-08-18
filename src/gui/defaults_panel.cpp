@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdio>
 #include <map>
@@ -25,6 +26,21 @@
 namespace lumice::gui {
 
 namespace {
+
+// Explanatory prose, at the dim tier. ImGui has no TextDisabled counterpart that wraps, so the
+// colour is pushed around TextWrapped by hand — the same construction the filter editor's syntax
+// hint uses (edit_modals.cpp). Every paragraph in this panel says how the panel works rather than
+// what the document holds, which is what puts it below the settings themselves.
+void DimTextWrapped(const char* fmt, ...) IM_FMTARGS(1);
+
+void DimTextWrapped(const char* fmt, ...) {
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  va_list args;
+  va_start(args, fmt);
+  ImGui::TextWrappedV(fmt, args);
+  va_end(args);
+  ImGui::PopStyleColor();
+}
 
 // ------------------------------------------------------------------------------------------------
 // Panel session state.
@@ -658,7 +674,7 @@ void RefreshPresetStdBuffers() {
 void RenderReadOnlyAxisRow(const char* axis_label, const AxisDist& dist) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
-  ImGui::TextUnformatted(axis_label);
+  ImGui::TextDisabled("%s", axis_label);
 
   ImGui::TableNextColumn();
   ImGui::BeginDisabled();
@@ -697,7 +713,7 @@ void RenderEditableZenithRow(const AxisPresetEntry& entry) {
 
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
-  ImGui::TextUnformatted("Zenith");
+  ImGui::TextDisabled("Zenith");
 
   ImGui::TableNextColumn();
   ImGui::BeginDisabled();
@@ -781,13 +797,13 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
     // AC7: no input that would be ignored. Random is three uniform-360 axes — there is no narrow
     // distribution to retune, and a box that accepted a number and discarded it would be worse
     // than saying so.
-    ImGui::TextWrapped(
+    DimTextWrapped(
         "%s has no adjustable value: it is defined as three full-360 uniform axes, so there is no "
         "spread to tune. The values below are shown for reference.",
         entry.label);
   } else {
-    ImGui::TextWrapped("Zenith std must stay %s, otherwise this stops being recognised as %s.",
-                       DescribeAxisPresetZenithStdDomain(entry.id).c_str(), entry.label);
+    DimTextWrapped("Zenith std must stay %s, otherwise this stops being recognised as %s.",
+                   DescribeAxisPresetZenithStdDomain(entry.id).c_str(), entry.label);
   }
 
   constexpr ImGuiTableFlags kFlags =
@@ -840,7 +856,7 @@ void RenderPresetEntry(const AxisPresetEntry& entry) {
 }
 
 void RenderPresetLibrary() {
-  ImGui::TextWrapped(
+  DimTextWrapped(
       "Retune a built-in preset so its button writes your value. The allowed range per preset is "
       "what keeps the preset recognisable as itself; a value outside it is adjusted to the nearest "
       "one that is, and said so.");
@@ -934,7 +950,7 @@ void RenderDefaultsPanel(GuiState& state) {
     return;
   }
 
-  ImGui::TextWrapped(
+  DimTextWrapped(
       "These are the settings a NEW document starts from. Adopting a change writes it to your "
       "personal defaults file; opening an existing file always uses the values in that file.");
   ImGui::Separator();

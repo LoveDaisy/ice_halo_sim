@@ -448,10 +448,12 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   return slider_w;
 }
 
-// Render the label text after slider + input.
+// Render the label text after slider + input. Dim, like every other field label in this app
+// (PropertyRow's label column, app_panels.cpp's InlineFieldLabel): a name that never changes is
+// what you read once to find the control, not what you come back to read.
 static void FinishSliderLayout(const char* display_label) {
   ImGui::SameLine();
-  ImGui::TextUnformatted(display_label);
+  ImGui::TextDisabled("%s", display_label);
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
@@ -779,12 +781,19 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
 
 
 void ShapeTableParamLabel(const char* label) {
+  // Dim: this is the shape table's label column, which plays the part PropertyRow's label cell
+  // plays everywhere else. TextDisabled takes no length-delimited overload, so the "##" cut is made
+  // into a buffer first rather than by passing an end pointer.
   const char* hash_pos = strstr(label, "##");
-  if (hash_pos) {
-    ImGui::TextUnformatted(label, hash_pos);
-  } else {
-    ImGui::TextUnformatted(label);
+  if (hash_pos == nullptr) {
+    ImGui::TextDisabled("%s", label);
+    return;
   }
+  char display_buf[64];
+  const std::size_t len = std::min(static_cast<std::size_t>(hash_pos - label), sizeof(display_buf) - 1);
+  std::memcpy(display_buf, label, len);
+  display_buf[len] = '\0';
+  ImGui::TextDisabled("%s", display_buf);
 }
 
 

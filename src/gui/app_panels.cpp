@@ -2181,13 +2181,13 @@ void RenderStatusBar(float window_width, float window_height) {
   {
     const auto& rc = g_state.renderer;
     const int res = kSimResolutions[rc.sim_resolution_index];
-    ImGui::Text("%dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
+    ImGui::TextDisabled("%dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
   }
 
   MiddleDot();
 
   if (g_state.current_file_path.empty()) {
-    ImGui::TextUnformatted("No file");
+    ImGui::TextDisabled("No file");
   } else {
     const auto filename = g_state.current_file_path.filename().u8string();
     if (g_state.dirty) {
@@ -2218,9 +2218,9 @@ void RenderStatusBar(float window_width, float window_height) {
     ImGui::SameLine(ImGui::GetWindowWidth() - cluster_w - style.WindowPadding.x);
 
     if (!total_rays.empty()) {
-      ImGui::TextUnformatted(total_rays.c_str());
+      ImGui::TextDisabled("%s", total_rays.c_str());
       MiddleDot();
-      ImGui::TextUnformatted(sampling.c_str());
+      ImGui::TextDisabled("%s", sampling.c_str());
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
                                                       g_state.stats_sim_ray_num)
@@ -2299,7 +2299,7 @@ void RenderExportOverwriteConfirmPopup() {
   }
 
   if (ImGui::BeginPopupModal("Overwrite Config File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("A file already exists at:");
+    ImGui::TextDisabled("A file already exists at:");
     ImGui::TextUnformatted(PathToU8(g_pending_export_json_path).c_str());
     ImGui::Separator();
     ImGui::TextUnformatted(kExportOverwriteWarningText);
@@ -2576,7 +2576,7 @@ void RenderLogPanel(float window_width, float window_height) {
                                                LUMICE_LOG_INFO,  LUMICE_LOG_WARNING, LUMICE_LOG_ERROR,
                                                LUMICE_LOG_OFF };
 
-  ImGui::Text("GUI");
+  ImGui::TextDisabled("GUI");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 7)) {
@@ -2585,7 +2585,7 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
-  ImGui::Text("Core");
+  ImGui::TextDisabled("Core");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##CoreLevel", &g_state.core_log_level, kLevelNames, 7)) {

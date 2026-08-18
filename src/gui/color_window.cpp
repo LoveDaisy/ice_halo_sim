@@ -333,7 +333,7 @@ void RenderCompositeModeCombo(GuiState& state) {
   if (mode < 0 || mode >= 3) {
     mode = 0;
   }
-  ImGui::TextUnformatted("Composite:");
+  ImGui::TextDisabled("Composite:");
   ImGui::SameLine();
   ImGui::PushItemWidth(120);
   if (ImGui::Combo("##ColorMode", &mode, kModeNames, 3)) {
@@ -936,7 +936,7 @@ void RenderColorWindow(GuiState& state, LUMICE_Server* server) {
       // combine any/all
       static const char* const kCombineNames[] = { "any", "all" };
       int combine_val = std::clamp(cls.combine, 0, 1);
-      ImGui::TextUnformatted("Combine:");
+      ImGui::TextDisabled("Combine:");
       ImGui::SameLine();
       ImGui::PushItemWidth(80);
       if (ImGui::Combo("##combine", &combine_val, kCombineNames, 2)) {

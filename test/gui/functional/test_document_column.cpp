@@ -26,6 +26,7 @@
 #include "gui/dock_layout.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/panels.hpp"
+#include "gui/theme.hpp"
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"
 
@@ -538,6 +539,34 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
   // of a string with no id. The one exception is the layer row, whose delete button IS positioned
   // relative to the meta and is asserted below. That the strings reach the screen at all is covered
   // by pixels instead — the tree is inside capture_harness/fullframe and visual/left_panel.
+  //
+  // The tier the meta is drawn AT, which is the other half of the same feature. TextDisabled reads
+  // ImGuiCol_TextDisabled by construction, so what is worth asserting is not which call was made
+  // but that the slot it reads is (a) a real second tier rather than the same colour as body text,
+  // and (b) the theme's own value rather than a shade invented at some call site and pushed over
+  // it. ApplyStyle into a scratch style is what makes (b) checkable without exporting the palette:
+  // it is the same seam theme_coverage uses.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "the_dim_tier_is_the_themes_own_second_text_color");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield();
+
+      const ImVec4 live_dim = ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+      const ImVec4 live_text = ImGui::GetStyle().Colors[ImGuiCol_Text];
+      IM_CHECK(live_dim.x != live_text.x || live_dim.y != live_text.y || live_dim.z != live_text.z ||
+               live_dim.w != live_text.w);
+
+      ImGuiStyle scratch;
+      gui::ApplyStyle(scratch);
+      const ImVec4 themed_dim = scratch.Colors[ImGuiCol_TextDisabled];
+      IM_CHECK_EQ(live_dim.x, themed_dim.x);
+      IM_CHECK_EQ(live_dim.y, themed_dim.y);
+      IM_CHECK_EQ(live_dim.z, themed_dim.z);
+      IM_CHECK_EQ(live_dim.w, themed_dim.w);
+    };
+  }
+
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "each_row_kind_formats_its_own_secondary_value");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -601,10 +630,6 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       gui::g_state.SelectLayer(0);
       ctx->Yield(3);
 
-      const ImGuiTestItemInfo del_before = ctx->ItemInfo("**/" ICON_FA_XMARK "##layer_0");
-      IM_CHECK(del_before.ID != 0);
-      IM_CHECK(!IsDisabled(del_before));
-
       const float before = gui::g_state.layers[0].probability;
       const std::string meta_before = gui::FormatLayerTreeMeta(before);
       ctx->ItemInputValue("**/##Prob.##layer_0", 0.25f);
@@ -612,13 +637,19 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.layers[0].probability, 0.25f);
       IM_CHECK_STR_NE(meta_before.c_str(), gui::FormatLayerTreeMeta(gui::g_state.layers[0].probability).c_str());
 
-      // Same place, still clickable. A wider or narrower meta string must not push it: the button's
-      // own offset is measured from the right edge and the meta is placed to its left.
-      const ImGuiTestItemInfo del_after = ctx->ItemInfo("**/" ICON_FA_XMARK "##layer_0");
-      IM_CHECK_EQ(del_after.ID, del_before.ID);
-      IM_CHECK(!IsDisabled(del_after));
-      IM_CHECK_LT(ImFabs(del_after.RectFull.Min.x - del_before.RectFull.Min.x), 0.5f);
-      IM_CHECK_LT(ImFabs(del_after.RectFull.Max.x - del_before.RectFull.Max.x), 0.5f);
+      // Still pinned to the right edge of the tree's scrolling child, and still clickable. This is
+      // stated absolutely rather than as a before/after comparison on purpose: the meta text is
+      // drawn from the same SameLine chain that places this button, so a version of that insertion
+      // that let the text push the button would leave the button wherever the text ended — which a
+      // self-comparison cannot see, because both samples would be equally wrong. A red-state probe
+      // confirmed exactly that (a comparison-only form of this check stayed green against a
+      // deliberately broken insertion; this form goes red).
+      const ImGuiTestItemInfo del = ctx->ItemInfo("**/" ICON_FA_XMARK "##layer_0");
+      IM_CHECK(del.ID != 0);
+      IM_CHECK(!IsDisabled(del));
+      ImGuiWindow* scroller = ctx->WindowInfo(kTreeScrollRef).Window;
+      IM_CHECK(scroller != nullptr);
+      IM_CHECK_LT(ImFabs(del.RectFull.Max.x - scroller->ContentRegionRect.Max.x), 2.0f);
     };
   }
 

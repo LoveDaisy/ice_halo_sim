@@ -719,7 +719,7 @@ static void RenderAxisModal(GuiState& /*state*/) {
   // never scrolls horizontally — doc/gui-visual-language.md §4.7). Wrapping is measured before
   // drawing rather than by drawing and backing out: SmallButton's width is exactly its text plus
   // FramePadding.x on each side, so it is known without submitting the item.
-  ImGui::TextUnformatted("Presets:");
+  ImGui::TextDisabled("Presets:");
   const ImGuiStyle& style = ImGui::GetStyle();
   const float content_right_x = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
   float last_item_right_x = ImGui::GetItemRectMax().x;
@@ -970,7 +970,7 @@ static void RenderSummandRowList() {
     ImGui::Separator();
     ImGui::TextDisabled("Preview:");
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(FormatSopExpansionPreview(live_sop).c_str());
+    ImGui::TextDisabled("%s", FormatSopExpansionPreview(live_sop).c_str());
     ImGui::PopTextWrapPos();
 
     // task-gui-feedback-affordances Step 3 (AC4): show the post-Cartesian
@@ -1626,7 +1626,7 @@ void RenderSpectrumModal(GuiState& state) {
     return;
   }
 
-  ImGui::TextUnformatted("Discrete wavelength/weight list");
+  ImGui::TextDisabled("Discrete wavelength/weight list");
   ImGui::Separator();
 
   // No in-modal "import preset": this editor does discrete wavelength editing only. Preset spectra
@@ -1670,7 +1670,7 @@ void RenderSpectrumModal(GuiState& state) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
+  ImGui::TextDisabled("%d / %d entries", cur_count, kSpectrumHardMax);
 
   if (cur_count > kSpectrumSoftWarnCount) {
     ImGui::TextColored(WarningTextColor(), "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.",
