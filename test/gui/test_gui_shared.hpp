@@ -290,14 +290,17 @@ void StopPerfSimulation();
 bool IsDisabled(const ImGuiTestItemInfo& info);
 
 // Read the live rectangle of a named window out of the DEFAULT framebuffer, through
-// g_fullframe_capture's sub-region protocol. Returns false if the window is not submitted this
-// frame, if the rectangle would fall outside the framebuffer, or if the readback did not land.
+// g_fullframe_capture's sub-region protocol. The rectangle is clamped to the framebuffer, so a
+// chrome window that overhangs an edge yields the part of it that was on screen. Returns false if
+// the window is not submitted this frame, if the clamped rectangle is empty, or if the readback did
+// not land.
 //
 // Output is RGBA, four bytes per pixel, origin bottom-left, sized in FRAMEBUFFER pixels — which is
 // twice the ImGui size on a Retina display, so a caller indexing into it must use *out_w / *out_h
 // rather than the window's ImGui size. The coordinate flip and the Retina scaling are the whole
-// reason this is shared: four call sites had already open-coded the same six lines of arithmetic,
-// and getting the y flip subtly wrong yields a plausible-looking capture of the wrong band.
+// reason this is shared: the same arithmetic is open-coded at several capture sites, and getting
+// the y flip subtly wrong yields a plausible-looking capture of the wrong band. New capture sites
+// should call this rather than write it again.
 //
 // The caller is responsible for settling the frame first (and for parking the mouse if a tooltip
 // would otherwise land in the rectangle).

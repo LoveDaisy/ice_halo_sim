@@ -191,6 +191,19 @@ void Hairline() {
   ImGui::SameLine();
 }
 
+// The divider between two segments of the status bar. A middle dot, not the pipe the row used to
+// print: the segments there are readouts rather than groups of controls, and a dot between two
+// short phrases separates them without drawing a line through a 28 px row. Same call shape as
+// Hairline() — it claims its own slot and leaves the cursor on the line — and kMiddleDot is what a
+// caller measuring a cluster must budget for it.
+constexpr const char* kMiddleDot = "\xC2\xB7";  // U+00B7, inside the body font's default range
+
+void MiddleDot() {
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", kMiddleDot);
+  ImGui::SameLine();
+}
+
 // Widths of the shapes a chrome row lays out, for a cluster that must be measured before it is
 // drawn — which is what right-aligning a run of SameLine items costs, since the run's starting x
 // depends on its total width. Each mirrors the geometry of the ImGui call it is named after
@@ -2078,84 +2091,105 @@ void RenderStatusBar(float window_width, float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-  // Status indicator
-  switch (g_state.sim_state) {
-    case SimState::kIdle:
-      ImGui::TextColored(GoodTextColor(), "Ready");
-      break;
-    case SimState::kSimulating:
-      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
-      break;
-    case SimState::kStopping:
-      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Stopping...");
-      break;
-    case SimState::kDone:
-      ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");
-      break;
-    case SimState::kModified:
-      ImGui::TextColored(WarningTextColor(), "Modified");
-      break;
-  }
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float spacing = style.ItemSpacing.x;
 
-  // Stats
+  // The row reads left to right as "what is happening / to what / in which file", and right to
+  // left as "how much has been traced / where the log is". The two counters below therefore belong
+  // to the right cluster, and a right-aligned run of items has to know its own width before it can
+  // place its first item — so they are formatted here, before anything is drawn, and the block that
+  // draws them further down consumes exactly these strings. Measuring one string and drawing
+  // another is how a cluster like this ends up hanging off the window edge.
+  std::string total_rays;
+  std::string sampling;
   if (g_state.stats_sim_ray_num > 0) {
-    ImGui::SameLine();
-    LUMICE_RayCount n = g_state.stats_sim_ray_num;
+    const LUMICE_RayCount n = g_state.stats_sim_ray_num;
     char buf[64];
-    // "Total" is the summed count over all discrete wavelengths. Since task-323
-    // `ray_num` is itself the requested total; the actual traced count reported
-    // here is ceil(ray_num / N_wavelengths) × N_wavelengths (may overshoot by <N).
+    // "Total" is the summed count over all discrete wavelengths. `ray_num` is itself the requested
+    // total, so the actual traced count reported here is ceil(ray_num / N_wavelengths) x
+    // N_wavelengths (it may overshoot by fewer than N).
     if (n >= 1'000'000'000ULL) {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^9", n / 1e9);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^9", n / 1e9);
     } else if (n >= 1'000'000ULL) {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^6", n / 1e6);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^6", n / 1e6);
     } else {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^3", n / 1e3);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^3", n / 1e3);
     }
-    ImGui::Text("%s", buf);
+    total_rays = buf;
 
-    // Sampling density. Deliberately inside the SAME `stats_sim_ray_num > 0` gate as "Total rays"
-    // above and under no additional condition of its own: whether a dimension is randomized is
-    // exactly what this readout is for, so hiding it when a dimension is fixed would suppress the
-    // answer in the case the user most needs it ("1 per 5.4 x10^6 rays" IS the explanation for an
-    // over-sharp render). The shared gate only asks "has a run happened", which is orthogonal.
+    // Sampling density. Deliberately under the SAME "a run has happened" gate as "Total rays" and
+    // under no additional condition of its own: whether a dimension is randomized is exactly what
+    // this readout is for, so hiding it when a dimension is fixed would suppress the answer in the
+    // case the user most needs it ("1 per 5.4 x10^6 rays" IS the explanation for an over-sharp
+    // render).
     //
-    // Plain text on purpose: no progress bar, no color grading, no check/cross. Neither counter has
-    // a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
+    // Plain text on purpose: no progress bar, no colour grading, no check/cross. Neither counter
+    // has a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
     // route -- so any better/worse styling here would manufacture false alarms.
+    //
     // NOTE: this segment builds its text in a pure function (app.cpp) while "Total rays" above
-    // formats inline. The inconsistency is deliberate, not an oversight — do NOT "unify" it by
+    // formats inline. The inconsistency is deliberate, not an oversight -- do NOT "unify" it by
     // inlining this one. `ImGui::Text`/`TextUnformatted` submit an item ID of 0, so a test cannot
     // address the rendered string through the item API; extracting the text lets the string itself
     // be asserted, with a separate pixel test proving it reaches the framebuffer. A future status
     // bar segment that wants test coverage should follow THIS pattern rather than the inline one.
-    ImGui::SameLine();
-    const std::string sampling =
+    sampling =
         FormatSamplingSegment(g_state.stats_crystal_num, g_state.stats_orientation_num, g_state.stats_sim_ray_num);
-    ImGui::TextUnformatted(sampling.c_str());
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
-                                                    g_state.stats_sim_ray_num)
-                                  .c_str());
+  }
+
+  // ---- Left cluster: state, scene, file ----
+  //
+  // The state leads with a filled dot in its own colour. The word alone had to carry the state
+  // through colour applied to the text itself, which is the weakest place to put it: at 15 px a
+  // coloured word is a few dozen tinted pixels competing with everything else on the row, and the
+  // reader has to be looking AT it to see the colour. A dot is a solid disc of that colour with
+  // nothing else in it -- it is the same information, made legible peripherally, and it costs one
+  // glyph.
+  {
+    const char* label = nullptr;
+    ImVec4 color(1.0f, 1.0f, 1.0f, 1.0f);
+    switch (g_state.sim_state) {
+      case SimState::kIdle:
+        label = ICON_FA_CIRCLE " Ready";
+        color = GoodTextColor();
+        break;
+      case SimState::kSimulating:
+        label = ICON_FA_CIRCLE " Simulating...";
+        color = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+        break;
+      case SimState::kStopping:
+        label = ICON_FA_CIRCLE " Stopping...";
+        color = ImVec4(1.0f, 0.6f, 0.0f, 1.0f);
+        break;
+      case SimState::kDone:
+        label = ICON_FA_CIRCLE " Done";
+        color = ImVec4(0.3f, 0.7f, 1.0f, 1.0f);
+        break;
+      case SimState::kModified:
+        label = ICON_FA_CIRCLE " Modified";
+        color = WarningTextColor();
+        break;
+    }
+    if (label != nullptr) {
+      ImGui::TextColored(color, "%s", label);
     }
   }
 
+  MiddleDot();
+
   // Sim resolution + lens info (renderer is always embedded in GuiState).
   {
-    auto& rc = g_state.renderer;
-    int res = kSimResolutions[rc.sim_resolution_index];
-    ImGui::SameLine();
-    ImGui::Text("| %dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
+    const auto& rc = g_state.renderer;
+    const int res = kSimResolutions[rc.sim_resolution_index];
+    ImGui::Text("%dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
   }
 
-  ImGui::SameLine();
-  ImGui::Text("|");
-  ImGui::SameLine();
+  MiddleDot();
 
   if (g_state.current_file_path.empty()) {
-    ImGui::Text("No file");
+    ImGui::TextUnformatted("No file");
   } else {
-    auto filename = g_state.current_file_path.filename().u8string();
+    const auto filename = g_state.current_file_path.filename().u8string();
     if (g_state.dirty) {
       ImGui::Text("%s *", filename.c_str());
     } else {
@@ -2163,15 +2197,37 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // task-colored-toggle-to-topbar (346.3): the colored/full-spectrum mode toggle
-  // that used to sit here (task-345.4) moved to the top bar next to the Colors
-  // button. The status bar right cluster now contains only the Log button; the
-  // width formula below dropped `mode_w` and its trailing `mode_gap` term.
+  // ---- Right cluster: the run's counters, then the Log toggle, flush to the right edge ----
+  //
+  // The counters sit here rather than in the left run because they are the only segments of this
+  // row whose WIDTH moves on their own -- a ray count crosses a magnitude and the text under it
+  // changes length. Left-ordered, that shifted every segment after them; against the right edge,
+  // the growth happens into the gap in the middle of the row, where there is nothing to push.
+  //
+  // The colored/full-spectrum mode toggle that used to live at this end moved to the top bar next
+  // to the Colors button, which is why the Log button is the only control left down here.
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
-    const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - ImGui::GetStyle().WindowPadding.x);
+    // SmallButton's own frame padding is (FramePadding.x, 0), so the width is the label plus the
+    // horizontal padding twice, same as a full-height button.
+    float cluster_w = TextWidth(log_label) + style.FramePadding.x * 2.0f;
+    if (!total_rays.empty()) {
+      cluster_w += TextWidth(total_rays.c_str()) + spacing + TextWidth(kMiddleDot) + spacing +
+                   TextWidth(sampling.c_str()) + spacing;
+    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - cluster_w - style.WindowPadding.x);
+
+    if (!total_rays.empty()) {
+      ImGui::TextUnformatted(total_rays.c_str());
+      MiddleDot();
+      ImGui::TextUnformatted(sampling.c_str());
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
+                                                      g_state.stats_sim_ray_num)
+                                    .c_str());
+      }
+      ImGui::SameLine();
+    }
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }

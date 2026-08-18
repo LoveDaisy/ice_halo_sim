@@ -313,13 +313,24 @@ bool CaptureWindowRect(ImGuiTestContext* ctx, const char* window_name, std::vect
   const float lx = win->Pos.x - vp_pos.x;
   const float ly = win->Pos.y - vp_pos.y;
   // ImGui (origin top-left, window coords) -> glReadPixels (origin bottom-left, framebuffer).
-  const int rx = static_cast<int>(std::lround(lx * sx));
-  const int ry = static_cast<int>(std::lround((io.DisplaySize.y - (ly + win->Size.y)) * sy));
-  const int rw = static_cast<int>(std::lround(win->Size.x * sx));
-  const int rh = static_cast<int>(std::lround(win->Size.y * sy));
-  // A rectangle that runs off the framebuffer would otherwise come back shorter and internally
-  // consistent, i.e. as a capture of something else that looks fine.
-  if (rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > fb_w || ry + rh > fb_h) {
+  int rx = static_cast<int>(std::lround(lx * sx));
+  int ry = static_cast<int>(std::lround((io.DisplaySize.y - (ly + win->Size.y)) * sy));
+  int rw = static_cast<int>(std::lround(win->Size.x * sx));
+  int rh = static_cast<int>(std::lround(win->Size.y * sy));
+  // Clamped to the framebuffer rather than required to fit inside it: a chrome window pinned to an
+  // edge routinely overhangs it by a few pixels (the status bar's frame is taller than the height
+  // it is given, so its bottom rows fall below y=0), and those rows were never on screen to be
+  // compared. What is NOT allowed is an empty intersection — a rectangle that missed the
+  // framebuffer entirely would otherwise come back as a plausible-looking capture of nothing.
+  const int x0 = rx < 0 ? 0 : rx;
+  const int y0 = ry < 0 ? 0 : ry;
+  const int x1 = rx + rw > fb_w ? fb_w : rx + rw;
+  const int y1 = ry + rh > fb_h ? fb_h : ry + rh;
+  rx = x0;
+  ry = y0;
+  rw = x1 - x0;
+  rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) {
     return false;
   }
 

@@ -31,34 +31,13 @@ using lumice::gui::g_state;
 
 using Pixels = std::vector<unsigned char>;
 
-// Capture the live rectangle of the status-bar window out of the default framebuffer. ImGui is
-// origin-top-left in window coordinates; glReadPixels is origin-bottom-left in framebuffer pixels.
+// Capture the live rectangle of the status-bar window out of the default framebuffer. The
+// coordinate flip and the Retina scaling live in CaptureWindowRect (test_gui_shared.hpp), which is
+// where a new capture site should go rather than open-coding the arithmetic again.
 bool CaptureStatusBar(ImGuiTestContext* ctx, Pixels* out) {
-  ImGuiWindow* win = ctx->GetWindowByRef("##StatusBar");
-  if (win == nullptr) {
-    return false;
-  }
-  const ImGuiIO& io = ImGui::GetIO();
-  const float sx = io.DisplayFramebufferScale.x;
-  const float sy = io.DisplayFramebufferScale.y;
-  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
-  const float lx = win->Pos.x - vp_pos.x;
-  const float ly = win->Pos.y - vp_pos.y;
-
-  g_fullframe_capture.Reset();
-  g_fullframe_capture.rect_x = static_cast<int>(std::lround(lx * sx));
-  g_fullframe_capture.rect_y = static_cast<int>(std::lround((io.DisplaySize.y - (ly + win->Size.y)) * sy));
-  g_fullframe_capture.rect_w = static_cast<int>(std::lround(win->Size.x * sx));
-  g_fullframe_capture.rect_h = static_cast<int>(std::lround(win->Size.y * sy));
-  g_fullframe_capture.requested.store(true);
-  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
-    ctx->Yield(1);
-  }
-  if (!g_fullframe_capture.done.load()) {
-    return false;
-  }
-  *out = g_fullframe_capture.pixels;
-  return !out->empty();
+  int w = 0;
+  int h = 0;
+  return CaptureWindowRect(ctx, "##StatusBar", out, &w, &h) && !out->empty();
 }
 
 // Settle the frame, then capture. A hovered status bar would pop a tooltip over the rectangle and
@@ -280,6 +259,63 @@ void RegisterStatusBarTests(ImGuiTestEngine* engine) {
   // overlapped and pushed out of reach. Measuring text extents is what makes this checkable without
   // resizing a real window. The floor is kMinWindowWidth, which main.cpp hands to
   // glfwSetWindowSizeLimits, so it is the actual narrowest case rather than a number chosen here.
+  // The right cluster ends at the window's right edge, whether or not the counters are in it.
+  //
+  // This is the mechanical half of the layout statement the pixel cases above cannot make: the
+  // cluster is placed by measuring itself and starting that far in from the edge, so a counter
+  // whose measured width differs from its drawn width pushes the Log button off the end by exactly
+  // the difference. Log is the one item down here with an ID, which makes it the only thing in the
+  // row an assertion can hold on to — and it is the LAST item in the cluster, so it is also the one
+  // that moves when anything before it is measured wrong. Whether the counters render at all is a
+  // separate question, answered in pixels by ray_count_gate_and_magnitudes above.
+  ImGuiTest* t_flush = IM_REGISTER_TEST(engine, "status_bar", "right_cluster_stays_flush_to_the_edge");
+  t_flush->TestFunc = [](ImGuiTestContext* ctx) {
+    ResetTestState();
+    ctx->Yield(3);
+
+    std::string failures;
+    // Both sides of the counters' gate: with no run they are absent and the cluster is the Log
+    // button alone; with a run they precede it and the whole run must still end at the same edge.
+    const unsigned long long kRayCounts[] = { 0ULL, 5'400'000ULL };
+    for (unsigned long long rays : kRayCounts) {
+      InjectStats(rays > 0 ? 12ULL : 0ULL, rays > 0 ? 340ULL : 0ULL, rays);
+      ctx->Yield(3);
+
+      ImGuiWindow* bar = ctx->GetWindowByRef("##StatusBar");
+      if (bar == nullptr) {
+        failures += " no-status-bar";
+        continue;
+      }
+      const ImGuiTestItemInfo log =
+          ctx->ItemInfo("##StatusBar/**/" ICON_FA_CHEVRON_RIGHT " Log", ImGuiTestOpFlags_NoError);
+      if (log.ID == 0) {
+        failures += " missing-log-button";
+        continue;
+      }
+      const float edge = bar->Pos.x + bar->Size.x - ImGui::GetStyle().WindowPadding.x;
+      if (ImFabs(log.RectFull.Max.x - edge) > 1.0f) {
+        failures += (rays > 0 ? " with-counters:right-edge" : " no-counters:right-edge");
+        ctx->LogInfo("rays=%llu: Log ends at %.1f, window edge is %.1f", rays, static_cast<double>(log.RectFull.Max.x),
+                     static_cast<double>(edge));
+      }
+    }
+
+    InjectStats(0, 0, 0);
+    ctx->Yield(2);
+    // After the loop, not inside it: a fatal assert in the body would hide the second row, which is
+    // the one carrying the conditional members.
+    IM_CHECK_STR_EQ(failures.c_str(), "");
+  };
+
+  // The row fits inside the narrowest window the app allows, with every bounded segment at its
+  // widest at once.
+  //
+  // The arithmetic follows the layout rather than the reading order: the row is two clusters, one
+  // starting at the left padding and one ending at the right, so what has to fit is
+  // left + a gap + right, not the sum of every segment laid end to end. Summing everything in
+  // sequence would have been the conservative choice while the row was one run; it is not
+  // conservative now, it is a different quantity — and the difference is the gap, which is the only
+  // thing between the two clusters and the first thing an overlong segment eats.
   ImGuiTest* t_budget = IM_REGISTER_TEST(engine, "status_bar", "width_budget_at_minimum_window");
   t_budget->TestFunc = [](ImGuiTestContext* ctx) {
     ResetTestState();
@@ -287,6 +323,8 @@ void RegisterStatusBarTests(ImGuiTestEngine* engine) {
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float spacing = style.ItemSpacing.x;
+    // A separator costs its own glyph plus the item spacing on either side of it.
+    const float divider = spacing + ImGui::CalcTextSize("\xC2\xB7").x + spacing;
 
     // Worst case on every bounded segment at once: the longest status word, a ten-digit ray count,
     // the longest lens name, and both sampling counters in their widest (barely-sampled) form —
@@ -294,8 +332,10 @@ void RegisterStatusBarTests(ImGuiTestEngine* engine) {
     // orientation reads "1 per N" on both.
     const std::string sampling = FormatSamplingSegment(1, 1, 9900000000ULL);
     const float sampling_w = ImGui::CalcTextSize(sampling.c_str()).x;
-    const float total_rays_w = ImGui::CalcTextSize("| Total rays: 9.9 x10^9").x;
-    const float res_lens_w = ImGui::CalcTextSize("| 1024x512  Dual Fisheye  FOV:180").x;
+    const float total_rays_w = ImGui::CalcTextSize("Total rays: 9.9 x10^9").x;
+    const float res_lens_w = ImGui::CalcTextSize("1024x512  Dual Fisheye  FOV:180").x;
+    // The dot leads the word, so the state segment is wider than the word alone.
+    const float status_w = ImGui::CalcTextSize(ICON_FA_CIRCLE " Simulating...").x;
 
     // Both-barely-sampled really is the widest the segment gets, so the budget is not measuring an
     // accidentally narrow case.
@@ -304,13 +344,17 @@ void RegisterStatusBarTests(ImGuiTestEngine* engine) {
 
     // Declared allowance for the (unbounded) file-name segment: the repo's own example config name
     // plus the dirty marker.
-    const float filename_allowance = ImGui::CalcTextSize("| scene.lmc *").x;
+    const float filename_allowance = ImGui::CalcTextSize("scene.lmc *").x;
     const float log_button = ImGui::CalcTextSize(ICON_FA_CHEVRON_RIGHT " Log").x + style.FramePadding.x * 2;
-    const float required = style.WindowPadding.x + ImGui::CalcTextSize("Simulating...").x + spacing + total_rays_w +
-                           spacing + sampling_w + spacing + res_lens_w + spacing + filename_allowance + spacing +
-                           log_button + style.WindowPadding.x;
+
+    const float left = status_w + divider + res_lens_w + divider + filename_allowance;
+    const float right = total_rays_w + divider + sampling_w + spacing + log_button;
+    // One item spacing is the least air the two clusters may have between them; below that they are
+    // touching, which is the state the top bar's own alignment case calls an overlap.
+    const float required = style.WindowPadding.x + left + spacing + right + style.WindowPadding.x;
     const float floor_width = static_cast<float>(lumice::gui::kMinWindowWidth);
-    ctx->LogInfo("required=%.1f min_window=%.1f headroom=%.1f", required, floor_width, floor_width - required);
+    ctx->LogInfo("left=%.1f right=%.1f required=%.1f min_window=%.1f headroom=%.1f", left, right, required, floor_width,
+                 floor_width - required);
     IM_CHECK_LE(required, floor_width);
 
     // The sampling segment must not become the row's dominant consumer. Without this the check
