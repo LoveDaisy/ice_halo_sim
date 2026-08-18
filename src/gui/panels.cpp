@@ -126,6 +126,35 @@ void EndPropertyTable() {
   ImGui::EndTable();
 }
 
+// ---- Eyebrow section heading (see panels.hpp for the shape and the rationale) ----
+
+void RenderEyebrow(const char* label) {
+  // Debug-only statement of the "caller passes upper case" contract. Cheap here and worth having:
+  // the helper is meant to spread to more pages, and a stray lower-case heading is exactly the
+  // kind of inconsistency nobody notices in review but every screenshot shows.
+  IM_ASSERT([&]() {
+    for (const char* c = label; *c != '\0'; c++) {
+      if (*c >= 'a' && *c <= 'z') {
+        return false;
+      }
+    }
+    return true;
+  }() && "RenderEyebrow expects an already-upper-case label");
+
+  ImFont* font = EyebrowFont();
+  if (font != nullptr) {
+    ImGui::PushFont(font);
+  }
+  // Reuses the theme's dimmed text tier rather than a fresh colour: an eyebrow is secondary
+  // information by definition, and the palette already has exactly one tier that says so.
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::SeparatorText(label);
+  ImGui::PopStyleColor();
+  if (font != nullptr) {
+    ImGui::PopFont();
+  }
+}
+
 bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale) {
   char drag_id[80];
   snprintf(drag_id, sizeof(drag_id), "##%s", label);
@@ -1772,7 +1801,8 @@ void RenderDocumentTreeRows(GuiState& state) {
   const std::string camera_meta = FormatCameraTreeMeta(state.renderer.lens_type);
   RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun, sun_meta.c_str());
   RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera, camera_meta.c_str());
-  ImGui::Separator();
+  // Names the group the divider used to only separate: everything below is the scattering stack.
+  RenderEyebrow("LAYERS");
 
   for (int i = 0; i < static_cast<int>(state.layers.size()); i++) {
     RenderLayer(state, i);

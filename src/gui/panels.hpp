@@ -49,6 +49,27 @@ bool BeginPropertyTable(const char* id);
 void PropertyRow(const char* label);
 void EndPropertyTable();
 
+// ---- Eyebrow: the small-caps section heading ----
+//
+// One line of dimmed, small, upper-case text with a hairline running from its right edge to the
+// end of the row — the device that turns a flat stack of controls into named groups without
+// spending a foldable header (which would promise a click that does nothing here) or a bare
+// Separator (which draws a divider but never says what the group IS).
+//
+// It is ImGui::SeparatorText under a smaller font (theme.hpp's EyebrowFont) and the dimmed text
+// colour, so the hairline placement is ImGui's own: style.SeparatorTextAlign is (0, 0.5) — set by
+// the theme before this helper had a caller — which puts the label flush left and lets the rule
+// take the remaining width.
+//
+// `label` MUST already be upper-case at the call site ("LAYERS", "TYPE"). No run-time toupper: the
+// widget draws the literal it is handed, like every other control here, and a locale-dependent
+// case conversion has no place in a heading. A debug assert states the contract.
+//
+// Letter-spacing is NOT part of this: ImGui has no tracking control, so the prototype's spaced
+// 11px caps are approximated by size + case + colour + rule and stop there. A future reader who
+// finds it looser than the prototype is looking at a known limit of the toolkit, not a defect.
+void RenderEyebrow(const char* label);
+
 // One control per value: the DragFloat that replaces the [slider][input] pair. Ctrl+click
 // types an exact value, so the input half of the pair is not lost, it is folded in — the
 // same merge already validated on the display strip's Overlays alpha cell (app_panels.cpp).

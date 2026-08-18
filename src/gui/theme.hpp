@@ -26,6 +26,14 @@ void ApplyVisualLanguage(ImGuiIO& io);
 // deliberately assigned that very value.
 void ApplyStyle(ImGuiStyle& style);
 
+// The second font size instance: the same embedded Roboto Medium rasterized at the eyebrow
+// (section-heading) size. Returns null when that instance failed to load, and a caller is expected
+// to carry on with the body font rather than treat it as fatal — the difference is one size step.
+//
+// Lifetime matches the body font's: the atlas owns it, it is valid for as long as the ImGui context
+// is, and the caller does not free it. Valid only after ApplyVisualLanguage has run.
+ImFont* EyebrowFont();
+
 // Draws ImGui::Checkbox, then — because the theme's FrameBorderSize is 0 — adds a
 // low-contrast inset border around an UNCHECKED box so it stays legible against the panel
 // background. A checked box is already filled with the accent colour and needs no such aid.

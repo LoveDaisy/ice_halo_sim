@@ -17,6 +17,20 @@ namespace {
 // "two places that must change together" hazard.
 constexpr float kBodyFontSizePx = 15.0f;
 
+// Eyebrow (small-caps section heading) size in pixels. A second instance of the SAME embedded
+// face, not a second face: the atlas gains one more rasterization of Roboto Medium and no new
+// build-time or run-time dependency.
+//
+// ORDER DEPENDENCY: this instance must be added AFTER MergeIconGlyphs. A merged font config
+// attaches its glyphs to whichever font was added last, so adding the eyebrow size before the
+// merge would hang the FontAwesome glyphs off the eyebrow font and leave the body font — the one
+// every ICON_FA_* call site draws with — without them.
+constexpr float kEyebrowFontSizePx = 12.0f;
+
+// The eyebrow font instance, owned by the atlas (ImGui frees it); null when the face failed to
+// load, which RenderEyebrow tolerates by falling back to the body size.
+ImFont* g_eyebrow_font = nullptr;
+
 // Adds Roboto Medium (embedded at build time) as the body font. Returns nullptr
 // on failure, leaving the caller to fall back rather than run with no font.
 ImFont* AddBodyFont(ImGuiIO& io, float size_px) {
@@ -200,9 +214,20 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   c[ImGuiCol_ResizeGrip] = ImVec4(1.0f, 1.0f, 1.0f, 0.08f);
   c[ImGuiCol_ResizeGripHovered] = WithAlpha(p.accent, 0.55f);
   c[ImGuiCol_ResizeGripActive] = p.accent;
-  c[ImGuiCol_Tab] = p.button;
+  // Flattened to nothing: an underline tab bar states the selection with the accent overline
+  // below, and a filled box behind every tab head competes with it. Transparent rather than
+  // removed — theme.cpp claims every slot, and WithAlpha(window_bg, 0) is the file's existing
+  // spelling for "this slot is deliberately invisible" (see ScrollbarBg above).
+  // TabHovered keeps its fill: hover is a transient pointer response, not the resting form the
+  // issue calls "boxy", and button_hover carries no accent so the "accent only marks the active
+  // tab" rule holds.
+  c[ImGuiCol_Tab] = WithAlpha(p.window_bg, 0.0f);
   c[ImGuiCol_TabHovered] = p.button_hover;
-  c[ImGuiCol_TabSelected] = p.frame_active;
+  c[ImGuiCol_TabSelected] = WithAlpha(p.window_bg, 0.0f);
+  // The three TabDimmed* slots below are unreachable for both tab bars shipping today:
+  // ImGui::BeginTabBar unconditionally ORs in ImGuiTabBarFlags_IsFocused (imgui_widgets.cpp, the
+  // NavWindow test above it is commented out upstream), and only an unfocused bar reads them.
+  // They stay assigned because every slot is claimed here, not because they render anything.
   c[ImGuiCol_TabDimmed] = p.title_bg;
   c[ImGuiCol_TabDimmedSelected] = p.frame_bg;
   // The selected tab's top rule. Accent while the tab bar is focused; when it is not, the same
@@ -283,6 +308,18 @@ void ApplyVisualLanguage(ImGuiIO& io) {
     io.Fonts->AddFontDefault();
   }
   MergeIconGlyphs(io, kBodyFontSizePx);
+
+  // Added last, and deliberately so — see kEyebrowFontSizePx's order note. No fallback on
+  // failure: RenderEyebrow degrades to the body size, which costs the size contrast and nothing
+  // else, whereas substituting the built-in bitmap font here would mix two typefaces in one panel.
+  g_eyebrow_font = AddBodyFont(io, kEyebrowFontSizePx);
+  if (!g_eyebrow_font) {
+    GUI_LOG_WARNING("Eyebrow font instance failed to load; section headings fall back to body size.");
+  }
+}
+
+ImFont* EyebrowFont() {
+  return g_eyebrow_font;
 }
 
 }  // namespace lumice::gui
