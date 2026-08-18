@@ -534,6 +534,8 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
   // formatting functions are called directly (below), and the render sites are driven through the
   // real inspector controls with the observable consequence checked in the frame after.
   //
+  // All four row kinds are driven through a real control here, not just their formatting function.
+  //
   // What that leaves uncovered, stated rather than implied: none of these cases fails if the
   // TextDisabled call itself is deleted from the row, because nothing addressable sits downstream
   // of a string with no id. The one exception is the layer row, whose delete button IS positioned
@@ -650,6 +652,39 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ImGuiWindow* scroller = ctx->WindowInfo(kTreeScrollRef).Window;
       IM_CHECK(scroller != nullptr);
       IM_CHECK_LT(ImFabs(del.RectFull.Max.x - scroller->ContentRegionRect.Max.x), 2.0f);
+    };
+  }
+
+  // The Camera row, whose meta is a NAME rather than a number and so is the one that would survive
+  // a format string dropping its value. Driven through the lens picker on the inspector's Camera
+  // page. The explicit combo path (rather than "**/") is the same one test_view_display_controls.cpp
+  // documents: a BeginCombo preview button reports no label, so a wildcard cannot find it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "switching_the_lens_updates_the_tree_meta");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_CAMERA " Camera"));
+      ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);
+
+      const std::string meta_before = gui::FormatCameraTreeMeta(gui::g_state.renderer.lens_type);
+      // Scoped to the inspector window and picked through ComboPick, for the two reasons
+      // test_view_display_controls.cpp records: the combo's preview button is not in the item
+      // registry under a wildcard, and the popup scrolls, so an entry past the fold needs
+      // revealing before it can be clicked.
+      const std::string inspector_ref = std::string("//") + gui::kDocumentInspectorWindowName;
+      ctx->SetRef(inspector_ref.c_str());
+      ComboPick(ctx, "##cam_lens/##Lens Type##view", "Rectangular");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.lens_type, gui::kLensTypeRectangular);
+      const std::string meta_after = gui::FormatCameraTreeMeta(gui::g_state.renderer.lens_type);
+      IM_CHECK_STR_NE(meta_before.c_str(), meta_after.c_str());
+      IM_CHECK_STR_EQ(meta_after.c_str(), "Rectangular");
     };
   }
 
