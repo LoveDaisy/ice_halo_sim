@@ -325,4 +325,81 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       IM_CHECK_GT(log_idx, left_idx);
     };
   }
+
+  // The right cluster is flush to the window's right edge, in every state it has.
+  //
+  // What breaks if it is not: the cluster is right-aligned by MEASURING itself and then starting
+  // the run that far in from the edge, so a member that is measured under one predicate and drawn
+  // under another shifts the whole run by exactly the width that was missed. Two of its members are
+  // conditional — the Colored / Full Spectrum toggle (only with color classes configured, and its
+  // label, hence its width, alternates with the mode) and the "no class matches" pip — which is why
+  // this case walks the states rather than checking the default one: measuring the default state
+  // correctly proves nothing about the states the arithmetic actually has to get right.
+  //
+  // The tolerance is one pixel, for ImGui's own rounding of item extents. Anything the measurement
+  // gets wrong is at least the width of a control.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "shell_chrome", "the_top_bar_right_cluster_stays_flush_to_the_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      struct State {
+        const char* name;
+        bool with_color_class;
+      };
+      const State kStates[] = {
+        { "no color classes", false },
+        // A class that matches no rays is also the state the aggregate warning pip appears in, so
+        // this row can carry both conditional members at once — and it is reached with no server
+        // running, which is the state every case in this suite is in.
+        { "one color class", true },
+      };
+
+      std::string failures;
+      for (const State& st : kStates) {
+        gui::g_state.raypath_color.clear();
+        if (st.with_color_class) {
+          gui::g_state.raypath_color.emplace_back();
+        }
+        ctx->Yield(3);
+
+        ImGuiWindow* bar = ctx->GetWindowByRef("##TopBar");
+        if (bar == nullptr) {
+          failures += std::string(" ") + st.name + ":no-top-bar";
+          continue;
+        }
+        const float edge = bar->Pos.x + bar->Size.x - ImGui::GetStyle().WindowPadding.x;
+        const ImGuiTestItemInfo view = ctx->ItemInfo("##TopBar/View", ImGuiTestOpFlags_NoError);
+        const ImGuiTestItemInfo new_btn = ctx->ItemInfo("##TopBar/New", ImGuiTestOpFlags_NoError);
+        if (view.ID == 0 || new_btn.ID == 0) {
+          failures += std::string(" ") + st.name + ":missing-item";
+          continue;
+        }
+        if (ImFabs(view.RectFull.Max.x - edge) > 1.0f) {
+          failures += std::string(" ") + st.name + ":right-edge";
+          ctx->LogInfo("%s: View ends at %.1f, window edge is %.1f", st.name, static_cast<double>(view.RectFull.Max.x),
+                       static_cast<double>(edge));
+        }
+        // The left cluster is the other half of the statement: "flush right" is only a layout if
+        // the file operations stayed where they were, rather than the whole row having drifted.
+        if (new_btn.RectFull.Min.x > bar->Pos.x + bar->Size.x * 0.5f) {
+          failures += std::string(" ") + st.name + ":left-cluster-drifted";
+        }
+        // And the two clusters must not have grown into each other: an overlap is what a window
+        // narrow enough (or a cluster wide enough) produces, and it hides the right cluster under
+        // the left one rather than reflowing.
+        const ImGuiTestItemInfo colors = ctx->ItemInfo("##TopBar/" ICON_FA_PALETTE " Colors", ImGuiTestOpFlags_NoError);
+        if (colors.ID != 0 && colors.RectFull.Min.x < new_btn.RectFull.Max.x) {
+          failures += std::string(" ") + st.name + ":clusters-overlap";
+        }
+      }
+
+      gui::g_state.raypath_color.clear();
+      ctx->Yield(2);
+      // Reported after the loop, not inside it: a fatal assert in a loop body hides every row after
+      // the first failure, and the second row here is the one carrying the conditional members.
+      IM_CHECK_STR_EQ(failures.c_str(), "");
+    };
+  }
 }

@@ -10,6 +10,7 @@
 // clang-format on
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -291,6 +292,53 @@ void ResetTestState() {
 // includes imgui_internal.h, where ImGuiItemFlags_Disabled is declared.
 bool IsDisabled(const ImGuiTestItemInfo& info) {
   return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
+}
+
+// See the contract note in test_gui_shared.hpp.
+bool CaptureWindowRect(ImGuiTestContext* ctx, const char* window_name, std::vector<unsigned char>* out_pixels,
+                       int* out_w, int* out_h) {
+  ImGuiWindow* win = ctx->GetWindowByRef(window_name);
+  if (win == nullptr) {
+    return false;
+  }
+  // Geometry comes from ImGui's IO rather than from GLFW: glfwGetCurrentContext() is thread-local
+  // and returns null on the test coroutine's thread.
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const int fb_w = static_cast<int>(std::lround(io.DisplaySize.x * sx));
+  const int fb_h = static_cast<int>(std::lround(io.DisplaySize.y * sy));
+
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float lx = win->Pos.x - vp_pos.x;
+  const float ly = win->Pos.y - vp_pos.y;
+  // ImGui (origin top-left, window coords) -> glReadPixels (origin bottom-left, framebuffer).
+  const int rx = static_cast<int>(std::lround(lx * sx));
+  const int ry = static_cast<int>(std::lround((io.DisplaySize.y - (ly + win->Size.y)) * sy));
+  const int rw = static_cast<int>(std::lround(win->Size.x * sx));
+  const int rh = static_cast<int>(std::lround(win->Size.y * sy));
+  // A rectangle that runs off the framebuffer would otherwise come back shorter and internally
+  // consistent, i.e. as a capture of something else that looks fine.
+  if (rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > fb_w || ry + rh > fb_h) {
+    return false;
+  }
+
+  g_fullframe_capture.Reset();
+  g_fullframe_capture.rect_x = rx;
+  g_fullframe_capture.rect_y = ry;
+  g_fullframe_capture.rect_w = rw;
+  g_fullframe_capture.rect_h = rh;
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  if (!g_fullframe_capture.done.load() || g_fullframe_capture.pixels.empty()) {
+    return false;
+  }
+  *out_pixels = g_fullframe_capture.pixels;
+  *out_w = g_fullframe_capture.width;
+  *out_h = g_fullframe_capture.height;
+  return true;
 }
 
 // See the contract note in test_gui_shared.hpp.

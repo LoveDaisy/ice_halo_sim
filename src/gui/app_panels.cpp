@@ -162,6 +162,55 @@ inline ImVec2 MainVpPos(float x, float y) {
   return ImVec2(vp->Pos.x + x, vp->Pos.y + y);
 }
 
+// The divider between two clusters of a horizontal chrome row: a one-pixel vertical rule at the
+// theme's separator value, drawn where a TextDisabled("|") used to be printed.
+//
+// Why not the pipe character. A "|" is a glyph, so its weight, its height and the air on either
+// side of it are the font's decisions, not the layout's — it sits on the text baseline, it is as
+// dark as the dimmed text grade, and at 15 px Roboto it is tall enough to read as a character in a
+// sentence. A row of them reads as content with punctuation in it rather than as groups with
+// structure between them. The rule is drawn instead: inset from the row's top and bottom, at
+// ImGuiCol_Separator (the same low-contrast white the horizontal separators use, i.e. no new
+// colour), and one device pixel wide regardless of what the body font does next.
+//
+// Call it between two items of a SameLine run; it claims its own layout slot and leaves the cursor
+// on the same line, so a call site replaces the three-line SameLine / TextDisabled / SameLine
+// sequence one-for-one. kHairlineWidth is what a caller measuring a cluster must budget for it.
+constexpr float kHairlineWidth = 1.0f;
+constexpr float kHairlineInsetY = 3.0f;
+
+void Hairline() {
+  ImGui::SameLine();
+  const float h = ImGui::GetFrameHeight();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImGui::Dummy(ImVec2(kHairlineWidth, h));
+  // +0.5 puts the 1 px line on the pixel centre so it does not land as two half-covered columns.
+  ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + 0.5f, p.y + kHairlineInsetY),
+                                      ImVec2(p.x + 0.5f, p.y + h - kHairlineInsetY),
+                                      ImGui::GetColorU32(ImGuiCol_Separator));
+  ImGui::SameLine();
+}
+
+// Widths of the shapes a chrome row lays out, for a cluster that must be measured before it is
+// drawn — which is what right-aligning a run of SameLine items costs, since the run's starting x
+// depends on its total width. Each mirrors the geometry of the ImGui call it is named after
+// (Button: text + FramePadding.x*2; Checkbox: the square plus, when there is a label, ItemInnerSpacing
+// and the label; Text: the text). They exist as named functions rather than open-coded arithmetic
+// at the call site because a measurement that drifts from its widget is invisible until the cluster
+// lands a few pixels off the window edge.
+float ButtonWidth(const char* label) {
+  return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+
+float CheckboxWidth(const char* label) {
+  const float text_w = ImGui::CalcTextSize(label, nullptr, true).x;
+  return ImGui::GetFrameHeight() + (text_w > 0.0f ? ImGui::GetStyle().ItemInnerSpacing.x + text_w : 0.0f);
+}
+
+float TextWidth(const char* text) {
+  return ImGui::CalcTextSize(text).x;
+}
+
 // Pin a chrome panel to the main viewport so ImGui never promotes it to an
 // independent OS viewport. Without SetNextWindowViewport, panels that sit at
 // the viewport edge (e.g. status bar at the bottom row) may be promoted,
@@ -191,9 +240,12 @@ inline void SetNextPanelGeometry(float x, float y, float w, float h) {
 // kCompactFieldWidth, gui_constants.hpp), which is also where the "the row totals ~985 px, so it
 // fits inside kMinWindowWidth" arithmetic that picked them is recorded.
 //
-// Fixed slot for the run-progress readout, so the row does not shift as the text under it changes
-// between a percentage, "until stopped", and nothing at all.
+// Fixed slot for the run-progress readout, so the row does not shift as the run's state changes.
 constexpr float kProgressSlotWidth = 130.0f;
+// Its thickness. A rule, not a box: thin enough that the shape cannot be mistaken for a frame with
+// something typed in it (which is how the full-height bar with a centred percentage read), thick
+// enough to stay visible at the row's scale. The percentage it used to carry is in the tooltip.
+constexpr float kProgressBarHeight = 4.0f;
 
 void RenderExecutionCluster() {
   const auto& style = ImGui::GetStyle();
@@ -280,15 +332,12 @@ void RenderExecutionCluster() {
     ImGui::PopStyleVar();
   }
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
+  Hairline();
 
   // ---- Ray budget ----
-  ImGui::SameLine();
   RaysBudgetControl(g_state, kRaysControlWidth);
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
+  Hairline();
 
   // ---- Max hits ----
   // One DragInt, not the [slider][input] pair this used to be: the field's whole domain is a few
@@ -298,7 +347,6 @@ void RenderExecutionCluster() {
   //
   // The label leads the control here, as it does everywhere else in this row, rather than trailing
   // it the way SliderIntWithInput's own label did.
-  ImGui::SameLine();
   const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", g_state);
   InlineFieldLabel("Max hits");
   ImGui::SetNextItemWidth(kCompactFieldWidth);
@@ -322,9 +370,7 @@ void RenderExecutionCluster() {
   // machines with very old hardware / broken GPU drivers, where selecting it would otherwise fail
   // in EnsureDevice. The probe is cached, so the per-frame cost is a plain memory read.
   if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+    Hairline();
     // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
     // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
     const bool busy = IsBusy(g_state.sim_state);
@@ -339,28 +385,54 @@ void RenderExecutionCluster() {
   }
 
   // ---- Run progress ----
-  // The fraction is derived, not stored: rays traced so far against the budget this run was asked
-  // for.
+  // A 4 px rule, filled with the accent, over a neutral track. Two readings it had to lose, both
+  // of which were accidents rather than decisions: it drew in ImGui's default amber, because
+  // ImGuiCol_PlotHistogram was never claimed by the theme and amber is this app's WARNING grade
+  // (semantic_colors.hpp), so a healthy run read as a problem; and a full-height frame with a
+  // percentage centred in it reads as a text field the user could type into. Accent is the right
+  // grade here under "emphasis only while an interaction is in progress"
+  // (doc/gui-visual-language.md §4.3) — a run in flight is that case.
   //
-  // An infinite run gets NO slot at all, not an "until stopped" one. Two reasons, and the second is
-  // the one that is easy to get wrong: a bar with no denominator has to lie (a full one reads as
-  // "finished", an empty one as "stuck"), and the ray-budget control three slots to the left is
-  // already showing the words "until stopped" — a second copy in the same row says nothing the
-  // first did not and reads as a rendering fault. Dropping the trailing separator too keeps the row
-  // ending cleanly rather than on a dangling divider. Nothing shifts as a result: this is the last
-  // item in the row.
-  if (!g_state.sim.infinite) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+  // The infinite tier now gets the same rule, in ImGui's indeterminate mode. It used to get NO
+  // slot at all, and the argument for that was entirely about TEXT: a bar with no denominator has
+  // to lie with a percentage, and the ray-budget control three slots to the left already prints
+  // "until stopped", so a second copy read as a rendering fault. Neither half survives this shape
+  // — the rule carries no number and no words, so it repeats nothing and claims no denominator.
+  // What it does say is "this is running", which for an unbounded run is the one thing the row
+  // cannot otherwise show: the ray budget sits still and the percentage that would move does not
+  // exist. It animates only while the run is actually in flight; idle, the track sits empty rather
+  // than sliding forever under a stopped simulation.
+  //
+  // The percentage moved into the tooltip. At 4 px ImGui's overlay text is clipped to unreadable,
+  // and the two cannot both be had — a bar tall enough to hold 15 px type is the frame this shape
+  // was getting away from.
+  {
+    Hairline();
+    const bool infinite = g_state.sim.infinite;
     const double target = static_cast<double>(g_state.sim.ray_num_millions) * 1e6;
     const double done = static_cast<double>(g_state.stats_sim_ray_num);
-    const float fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
-    char overlay[32];
-    snprintf(overlay, sizeof(overlay), "%.0f%%", static_cast<double>(fraction) * 100.0);
-    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, 0.0f), overlay);
+    const float finite_fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
+    // ImGui reads a negative fraction as "indeterminate, animated by this value" — hence the clock.
+    const float fraction =
+        infinite ? (IsBusy(g_state.sim_state) ? -static_cast<float>(ImGui::GetTime()) : 0.0f) : finite_fraction;
+
+    // The track colour is pushed locally rather than set in the theme: the global FrameBg is the
+    // blue an input field is filled with, which is precisely the reading this shape had to lose,
+    // and changing it globally would repaint every real input in the app. ChildBg is the palette's
+    // neutral step above the window background — a groove, not a second widget.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
+    // Centre the rule in the row: at 4 px it would otherwise hang off the top of a 21 px line.
+    // Safe because this is the last item in the row — nothing after it inherits the offset.
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (ImGui::GetFrameHeight() - kProgressBarHeight) * 0.5f);
+    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, kProgressBarHeight), "");
+    ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Rays traced so far against this run's ray budget.");
+      if (infinite) {
+        ImGui::SetTooltip("Running until stopped: this run has no ray budget to measure progress against.");
+      } else {
+        ImGui::SetTooltip("Rays traced so far against this run's ray budget: %.0f%%",
+                          static_cast<double>(finite_fraction) * 100.0);
+      }
     }
   }
 }
@@ -383,9 +455,7 @@ void RenderTopBar(float window_width) {
     if (ImGui::Button(left_toggle_label)) {
       g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+    Hairline();
   }
 
   // `busy` gates the file operations: New/Open/Save stay disabled while the backend is still
@@ -445,9 +515,54 @@ void RenderTopBar(float window_width) {
     }
   }
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
+  // ---- The row's right cluster: what OPENS things (windows, menus, the settings modal) ----
+  //
+  // It is flush to the window's right edge, with the file operations left where they are and open
+  // space between the two. That space is the grouping: two runs of buttons at opposite ends of a
+  // row read as two kinds of control without a divider having to say so, which is what the row was
+  // doing with pipe characters before.
+  //
+  // Right-aligning a SameLine run means knowing where it starts, which means measuring it before
+  // drawing it. Every conditional item is measured under the same predicate it is drawn under —
+  // the two lists below and further down must stay in step, and a cluster measured for one state
+  // and drawn in another lands off the edge by exactly the width of whatever was missed. That is
+  // what test/gui/functional/test_shell_chrome.cpp's alignment case is for; it exercises the
+  // conditional members in both of their states rather than only the default one.
+  const bool has_color_classes = !g_state.raypath_color.empty();
+  bool composite_now = false;
+  bool composite_empty = false;
+  std::string composite_toggle_id;
+  if (has_color_classes) {
+    // The shared signal cache is read BEFORE the toggle is rendered, so the control can be wrapped
+    // in BeginDisabled() when the composite would be empty — otherwise it appears "unclickable /
+    // not responding" with no visual explanation. Reading it here costs nothing: the poll behind it
+    // is throttled to 500 ms and is unaffected by call-site order, and the Colors window and the
+    // aggregate pip read the same source, so all three cannot disagree.
+    //
+    // "The composite would be empty" is one predicate (NoVisibleMatchedColorClass) covering two
+    // ways of getting there: no rays match any configured class, OR every matching class is
+    // currently hidden (visible=false, or solo'd out by another class). It has a single owner,
+    // shared with the Colors-window Enable checkbox, for that reason — two indicators computing
+    // "empty" separately is two chances to say different things about one composite.
+    composite_now = g_state.last_uploaded_as_composite;
+    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
+    composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
+    composite_toggle_id = std::string(composite_now ? "Colored" : "Full Spectrum") + "##CompositePreviewToggle";
+  }
+  {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float gap = style.ItemSpacing.x;
+    float cluster_w = ButtonWidth(ICON_FA_PALETTE " Colors");
+    if (has_color_classes) {
+      cluster_w += gap + CheckboxWidth(composite_toggle_id.c_str());
+      if (composite_empty) {
+        cluster_w += gap + TextWidth(ICON_FA_TRIANGLE_EXCLAMATION);
+      }
+    }
+    cluster_w += gap + kHairlineWidth + gap + ButtonWidth(ICON_FA_GEAR " Settings");
+    cluster_w += gap + ButtonWidth("View");
+    ImGui::SameLine(ImGui::GetWindowWidth() - cluster_w - style.WindowPadding.x);
+  }
 
   // task-345.5 (⑥): dedicated "feature button" group, immediately right of
   // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
@@ -493,7 +608,7 @@ void RenderTopBar(float window_width) {
   // independent of the Colors window's own render call) is itself the
   // persistent "currently in colored mode" marker required by AC3: closing
   // Colors does not touch this window.
-  if (!g_state.raypath_color.empty()) {
+  if (has_color_classes) {
     ImGui::SameLine();
     // task-349.3 (#4): revert 348.3 icon-only Button back to a plain-text Checkbox
     // (no ICON_FA_PALETTE prefix) so this display-time toggle reads visually
@@ -505,28 +620,16 @@ void RenderTopBar(float window_width) {
     // introduced in 348.3 and stays after the widget-shape revert (a12: two
     // control sites, one write path).
     //
-    // task-349.2 Step 3 (#6): read the shared signal cache BEFORE rendering the
-    // Colored toggle so we can wrap it in BeginDisabled() when every configured
-    // color class matches zero rays (composite would be empty; control would
-    // appear "unclickable / non-responding" without visual explanation). The
-    // 500 ms throttled poll is unaffected by call-site order — same source as
-    // the Colors window and the aggregate pip below, so all three cannot drift.
+    // The state this block reads (composite_now / composite_empty / the label, hence the widget's
+    // width) is computed above, where the cluster is measured: the measurement and the drawing
+    // must see the same values, and the toggle's label alternates between "Colored" and
+    // "Full Spectrum", which are not the same width.
     //
     // Style tokens: Checkbox renders as frame background + check mark, not a
     // button surface — accent must go on FrameBg/FrameBgHovered/CheckMark. Using
     // ImGuiCol_Button here would silently no-op (this was the 346.3→348.3 pitfall
     // recorded in learnings/code-quality.md; reverting the widget type must
     // re-swap the token set).
-    const bool composite_now = g_state.last_uploaded_as_composite;
-    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
-    // task-fix-color-window-visibility-consistency: merged "composite would be
-    // empty" predicate covers both prior triggers — no rays match, OR every
-    // matching class is currently hidden (visible=false, or solo'd out by
-    // another class). Single owner shared with the Colors-window Enable
-    // checkbox so the two indicators cannot disagree.
-    const bool composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
-    const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
-    const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
     if (composite_now) {
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
@@ -534,7 +637,7 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
     ImGui::BeginDisabled(composite_empty);
-    if (Checkbox(checkbox_id.c_str(), &checked)) {
+    if (Checkbox(composite_toggle_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
     ImGui::EndDisabled();
@@ -588,18 +691,18 @@ void RenderTopBar(float window_width) {
   // by nobody who had not been told where it was, which is the only measure a settings entry has.
   //
   // Two deliberate choices, both worth knowing before this button gets tidied away again:
-  //   - It is separated from the Colors group by the same "|" the file group uses, because the two
-  //     are different kinds of control. Colors and the Colored checkbox are toggles that change
-  //     what the viewport shows; this opens a modal that edits persistent preferences. Sharing a
-  //     run of buttons with no break would let a modal launcher read as one more view toggle.
+  //   - It is separated from the Colors group by a hairline — the only divider left inside this
+  //     cluster — because the two are different kinds of control. Colors and the Colored checkbox
+  //     are toggles that change what the viewport shows; this opens a modal that edits persistent
+  //     preferences. Sharing a run of buttons with no break would let a modal launcher read as one
+  //     more view toggle. View needs no second hairline: it opens a menu about the window's own
+  //     layout, which is the same kind of thing this button opens.
   //   - It is NOT gated on `busy`. Reading and editing personal defaults is independent of whether
   //     a simulation is running, same as Colors — a settings entry that disappears while the thing
   //     the user is watching runs is a settings entry they cannot find when they think to look.
   // The panel's preset library is one section inside it, so retuning a preset is still reachable;
   // it no longer has a menu item of its own pointing straight at that section.
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
+  Hairline();
   if (ImGui::Button(ICON_FA_GEAR " Settings")) {
     OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
   }

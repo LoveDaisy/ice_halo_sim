@@ -289,6 +289,21 @@ void StopPerfSimulation();
 // ReadOnly, say) for the predicate to still mean "the user cannot operate this".
 bool IsDisabled(const ImGuiTestItemInfo& info);
 
+// Read the live rectangle of a named window out of the DEFAULT framebuffer, through
+// g_fullframe_capture's sub-region protocol. Returns false if the window is not submitted this
+// frame, if the rectangle would fall outside the framebuffer, or if the readback did not land.
+//
+// Output is RGBA, four bytes per pixel, origin bottom-left, sized in FRAMEBUFFER pixels — which is
+// twice the ImGui size on a Retina display, so a caller indexing into it must use *out_w / *out_h
+// rather than the window's ImGui size. The coordinate flip and the Retina scaling are the whole
+// reason this is shared: four call sites had already open-coded the same six lines of arithmetic,
+// and getting the y flip subtly wrong yields a plausible-looking capture of the wrong band.
+//
+// The caller is responsible for settling the frame first (and for parking the mouse if a tooltip
+// would otherwise land in the rectangle).
+bool CaptureWindowRect(ImGuiTestContext* ctx, const char* window_name, std::vector<unsigned char>* out_pixels,
+                       int* out_w, int* out_h);
+
 // Hands ImGui's popup stack back when a case leaves, by whichever exit.
 //
 // ResetTestState() reaches everything about a popup this suite opens except the one piece ImGui
