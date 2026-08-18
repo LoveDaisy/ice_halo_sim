@@ -436,6 +436,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);
+void RegisterThemeCoverageTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);

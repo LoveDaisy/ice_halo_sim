@@ -15,6 +15,17 @@ namespace lumice::gui {
 // Must be called after ImGui::CreateContext(), before the render loop.
 void ApplyVisualLanguage(ImGuiIO& io);
 
+// The half of the visual language that is pure data: the colour palette and the size rhythm,
+// written into whichever ImGuiStyle is handed in. ApplyVisualLanguage calls this on the active
+// style and then loads the fonts, which is the half that needs an ImGuiIO.
+//
+// It is separate so a caller can inspect what the palette CLAIMS without a live context to read it
+// back out of: the coverage test fills a scratch style with a sentinel, calls this, and requires
+// that no sentinel survives. Reading the active style instead would only prove the slots differ
+// from ImGui's dark defaults, which is a different (and weaker) statement — two slots are
+// deliberately assigned that very value.
+void ApplyStyle(ImGuiStyle& style);
+
 // Draws ImGui::Checkbox, then — because the theme's FrameBorderSize is 0 — adds a
 // low-contrast inset border around an UNCHECKED box so it stays legible against the panel
 // background. A checked box is already filled with the accent colour and needs no such aid.

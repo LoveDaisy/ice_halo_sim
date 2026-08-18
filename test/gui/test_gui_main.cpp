@@ -655,6 +655,7 @@ int main(int argc, char** argv) {
   RegisterFaceNumberOverlayTests(engine);
   RegisterRunLifecycleTests(engine);
   RegisterStatusBarTests(engine);
+  RegisterThemeCoverageTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterSimE2eSmokeTests(engine);

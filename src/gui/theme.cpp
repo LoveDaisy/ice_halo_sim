@@ -148,6 +148,18 @@ ImVec4 WithAlpha(const ImVec4& c, float a) {
   return ImVec4(c.x, c.y, c.z, a);
 }
 
+// EVERY ImGuiCol_ slot is assigned here, including the ones this app has no consumer for today.
+// That completeness is not tidiness, it is the fix for a measured defect: the run-progress bar
+// shipped ImGui's default amber (0.90, 0.70, 0.00) for as long as this theme existed, because
+// ImGuiCol_PlotHistogram was simply not in the list below — and amber is this app's *warning*
+// grade (semantic_colors.hpp), so a healthy run read as a problem. An unclaimed slot is not a
+// neutral omission; it is a second palette shipping under this one's name, and it surfaces
+// wherever a widget nobody thought about gets used.
+//
+// Slots with no consumer today are therefore claimed defensively, from the palette above and with
+// no hue this theme did not already have. test/gui/functional/test_theme_coverage.cpp holds the
+// line by re-applying this function to a sentinel-filled style and requiring that no sentinel
+// survives — including for slots a future ImGui version adds.
 void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   ImVec4* c = style.Colors;
   c[ImGuiCol_Text] = p.text;
@@ -193,14 +205,37 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   c[ImGuiCol_TabSelected] = p.frame_active;
   c[ImGuiCol_TabDimmed] = p.title_bg;
   c[ImGuiCol_TabDimmedSelected] = p.frame_bg;
+  // The selected tab's top rule. Accent while the tab bar is focused; when it is not, the same
+  // low-contrast white as Separator — an unfocused bar is demoted, not recoloured.
+  c[ImGuiCol_TabSelectedOverline] = p.accent;
+  c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(1.0f, 1.0f, 1.0f, 0.10f);
+  // Docking. The drag preview follows the same "accent at low alpha marks the region about to be
+  // acted on" convention as SeparatorHovered / ResizeGripHovered. An empty node takes the window
+  // background so it reads as a gap rather than as a panel with nothing in it; the central node is
+  // passthru and never draws this at all.
+  c[ImGuiCol_DockingPreview] = WithAlpha(p.accent, 0.35f);
+  c[ImGuiCol_DockingEmptyBg] = p.window_bg;
+  c[ImGuiCol_PlotLines] = p.accent;
+  c[ImGuiCol_PlotLinesHovered] = WithAlpha(p.accent, 0.85f);
+  // The run-progress bar's fill. Accent is legitimate here under "emphasis only while an
+  // interaction is in progress" (doc/gui-visual-language.md §4.3): this bar exists only while a
+  // run is in flight, which is that case. What it must NOT be is the amber it used to default to,
+  // which is the warning grade and already spoken for.
+  c[ImGuiCol_PlotHistogram] = p.accent;
+  c[ImGuiCol_PlotHistogramHovered] = WithAlpha(p.accent, 0.85f);
   c[ImGuiCol_TableHeaderBg] = p.title_active;
   c[ImGuiCol_TableBorderStrong] = p.border;
   c[ImGuiCol_TableBorderLight] = ImVec4(1.0f, 1.0f, 1.0f, 0.06f);
   c[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
   c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.025f);
+  c[ImGuiCol_TextLink] = p.accent;
   c[ImGuiCol_TextSelectedBg] = WithAlpha(p.accent, 0.35f);
   c[ImGuiCol_NavCursor] = p.accent;
   c[ImGuiCol_DragDropTarget] = p.accent;
+  c[ImGuiCol_NavWindowingHighlight] = p.accent;
+  // One dim value, used by both things that dim the whole screen behind a foreground window. A
+  // second, slightly different darkness would be a value nobody chose.
+  c[ImGuiCol_NavWindowingDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
   c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
 }
 
@@ -229,12 +264,19 @@ bool Checkbox(const char* label, bool* v) {
   return changed;
 }
 
-void ApplyVisualLanguage(ImGuiIO& io) {
-  ImGui::StyleColorsDark();
-
-  ImGuiStyle& style = ImGui::GetStyle();
+void ApplyStyle(ImGuiStyle& style) {
   ApplyGridSpacing(style);
   ApplyPalette(style, kIceTruePalette);
+}
+
+void ApplyVisualLanguage(ImGuiIO& io) {
+  // The palette below claims every colour slot, so this base is not load-bearing for anything
+  // shipping today. It stays as the floor for the one case that outruns the palette: an ImGui
+  // upgrade that adds a slot lands it on the dark default rather than on ImGuiStyle's classic
+  // one, while the coverage test reports the gap.
+  ImGui::StyleColorsDark();
+
+  ApplyStyle(ImGui::GetStyle());
 
   if (!AddBodyFont(io, kBodyFontSizePx)) {
     GUI_LOG_WARNING("Roboto Medium failed to load; falling back to the built-in bitmap font.");
