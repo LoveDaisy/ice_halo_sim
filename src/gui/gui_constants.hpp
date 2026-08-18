@@ -95,6 +95,77 @@ constexpr unsigned long long kMinRaysFloor = 5000;
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
 
+// ---------------------------------------------------------------------------
+// Form width tokens
+// ---------------------------------------------------------------------------
+//
+// Every control width in a form is one of the named tiers below, and a control that
+// stretches to the container's edge is the exception, not the default. The rule exists
+// because the opposite was measured: with ImGui's CalcItemWidth default (~65% of the
+// available region) plus scattered full-width stretches, five controls that all edit "one
+// scalar" ended up 90 / 110 / 230 / 240 / 600 px wide, and not one of those numbers had
+// been chosen by anyone — they were all leaked from whatever container the control
+// happened to sit in. Order (repetition + alignment + quantisation) is what reads as
+// refinement, so the number of distinct widths a form uses is the thing to minimise
+// (doc/gui-visual-language.md §2).
+//
+// Named exceptions — a control MAY fill its container when its content has no natural
+// width: a file path / expression text input (the filter editor's OR rows), and the
+// control column of a property row, whose left edge is already pinned by the label
+// column so the fill IS the alignment.
+
+// Label column of an inspector property row (BeginPropertyTable / PropertyRow, panels.hpp).
+// This is a CONTENT width — ImGui table cell padding is added outside it — so the gap
+// between the right-aligned label and the control's left edge comes out at CellPadding.x*2
+// = 8 px, the same step as ItemSpacing.x in the size rhythm (doc/gui-visual-language.md §4.2).
+//
+// MEASURED, not chosen: 59.0 px is the widest label any of the inspector's six pages renders
+// ("Lens Type") in the theme's 15 px Roboto Medium, rounded up to the rhythm's multiple of 4.
+// It is deliberately NOT padded out to the prototype's ~104 px — a label column
+// materially wider than its widest label re-opens the proximity gap that sank the
+// "one shared label column on the right" direction (§5, falsified), just at a smaller
+// scale. test/gui/functional/test_property_row.cpp recomputes the requirement from the
+// live font atlas and fails if a font/label change outgrows this value.
+constexpr float kPropertyLabelColWidth = 60.0f;
+
+// Upper bound on the width of an inspector data table (the crystal shape-parameter table
+// and its Face Distance sibling). The inspector is a dock node the user can widen without
+// limit, and those tables have exactly one stretch column (Value), so every extra pixel of
+// panel width lands in a single drag control: at a 900 px panel the height of a crystal in
+// millimetres gets a 700 px track. The cap is the width at which that Value column matches
+// the property rows' control column, i.e. the point past which the table has nothing left
+// to say with more room. Below the cap the tables still stretch as before, so the default
+// panel width is unaffected.
+constexpr float kPropertyTableMaxWidth = 420.0f;
+
+// A combo that sits in a TOOLBAR row rather than a property row — currently the crystal preview
+// pane's render-style picker, which shares its row with a Reset View button. A property row's
+// combo takes the control column and needs no width of its own; a toolbar combo has no column to
+// take, and letting it stretch to the row's end would put a four-item picker across the whole
+// panel. 120 px is the width that pane has shipped with, kept rather than re-derived: it fits the
+// longest style name with room for the dropdown arrow.
+constexpr float kToolbarComboWidth = 120.0f;
+
+// Content-shrink tier for a top-bar execution-cluster field (Rays / Max hits): a field
+// whose value is a handful of digits is sized to its content, not to the bar. Bounds the
+// FIELD ITEM only — the frame the value is typed into — and excludes the field's label,
+// its ItemSpacing, and any surrounding group padding, so a caller sizing a whole labelled
+// cluster must add those itself.
+//
+// DEFINED BUT NOT YET WIRED: the top bar's adoption is task 457.2's scope, and this
+// constant is here so that task consumes a tier this one already reasoned about rather
+// than inventing a sixth width. Do not delete it as unused before then.
+constexpr float kTopBarFieldWidth = 58.0f;
+
+// Reference drag track length, in pixels: the horizontal distance a DragFloat traverses to
+// cross its whole domain. It is the width the retired [slider][input] pair's slider half
+// used to get in the inspector, so a merged single control keeps the same "how far do I
+// have to drag" feel rather than inheriting ImGui's default (range/100, i.e. 100 px for the
+// full domain — more than twice as twitchy). Consumed by DragFloatField (panels.cpp), which
+// derives v_speed = (max - min) / this. In logarithmic mode ImGui divides the delta by the
+// domain size itself, so the same formula lands the same 230 px full-domain traversal there.
+constexpr float kDragTrackReferenceWidth = 230.0f;
+
 // Card thumbnail (offscreen crystal rendering)
 // Currently used for both FBO render resolution and UI display size.
 // If HiDPI support is needed later, split into separate render/display constants.

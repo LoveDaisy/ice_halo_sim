@@ -211,7 +211,7 @@ struct ValuePreset {
   float value;
 };
 
-// Label precision must match the fmt passed to SliderWithPresetEdit (currently "%.3f").
+// Label precision must match the fmt passed to DragWithPresetEdit (currently "%.3f").
 constexpr ValuePreset kWedgePresets[] = {
   { "{1,0,-1,1} 28.000\xc2\xb0", 28.0f },
   { "{2,0,-2,1} 47.300\xc2\xb0", 47.3f },
@@ -220,62 +220,21 @@ constexpr ValuePreset kWedgePresets[] = {
 };
 constexpr int kWedgePresetCount = 4;
 
-// Render a slider + input + preset dropdown for wedge angle.
+// Render one wedge-angle control: a DragFloat plus the preset dropdown arrow beside it.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
-// `trailing_label = false` (table-cell mode): mirrors SliderWithInput's switch — omit the
-// trailing text label and drop kLabelColWidth from the width so the [slider][input][▼] group
-// fills the whole table cell (the field name lives in the Parameter column instead).
-bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                          SliderScale scale, const ValuePreset* presets, int preset_count, bool trailing_label = true) {
-  char display_buf[64];
-  char slider_id[64];
-  char input_id[64];
+//
+// It is NOT DragFloatField plus an arrow at the call site, because the two share a cell and the
+// arrow's width has to come out of the drag's: the reservation is the reason this wrapper exists.
+// Table-cell only — it carries no label of its own, because its one caller renders the field name
+// in the table's Parameter column.
+bool DragWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
+                        SliderScale scale, const ValuePreset* presets, int preset_count) {
+  // The drag gives back exactly the arrow button's width; the arrow is drawn with no spacing
+  // before it, so nothing else needs reserving.
   constexpr float kArrowBtnWidth = 20.0f;
-  float input_w = kInputWidth - kArrowBtnWidth;
+  ImGui::SetNextItemWidth(-kArrowBtnWidth);
 
-  const char* hash_pos = strstr(label, "##");
-  if (hash_pos) {
-    auto len = static_cast<size_t>(hash_pos - label);
-    if (len >= sizeof(display_buf))
-      len = sizeof(display_buf) - 1;
-    memcpy(display_buf, label, len);
-    display_buf[len] = '\0';
-  } else {
-    snprintf(display_buf, sizeof(display_buf), "%s", label);
-  }
-  snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
-  snprintf(input_id, sizeof(input_id), "##%s_input", label);
-
-  float spacing = ImGui::GetStyle().ItemSpacing.x;
-  float avail_w = ImGui::GetContentRegionAvail().x;
-  // mirrors PrepareSliderLayout: reserve the label column + 2 spacings (slider->input, input->label)
-  // with a trailing label; without it, still reserve the one slider->input spacing (SameLine at the
-  // input below adds it) — omitting it overflows the cell by one ItemSpacing.x and clips the arrow.
-  float slider_w =
-      trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
-  if (slider_w < 40.0f)
-    slider_w = 40.0f;
-
-  bool changed = false;
-
-  ImGui::PushItemWidth(slider_w);
-  // ImGuiSliderFlags_NoInput: see panels.cpp::RenderNonlinearSlider for rationale.
-  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
-    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
-    float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
-      *value = sqrt_val * sqrt_val;
-      changed = true;
-    }
-  } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
-  }
-  ImGui::PopItemWidth();
-
-  ImGui::SameLine();
-  ImGui::PushItemWidth(input_w);
-  changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
-  ImGui::PopItemWidth();
+  bool changed = DragFloatField(label, value, min_val, max_val, fmt, scale);
 
   char popup_id[64];
   snprintf(popup_id, sizeof(popup_id), "##%s_presets", label);
@@ -297,11 +256,6 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
   }
 
   *value = std::clamp(*value, min_val, max_val);
-
-  if (trailing_label) {
-    ImGui::SameLine();
-    ImGui::TextUnformatted(display_buf);
-  }
   return changed;
 }
 
@@ -590,10 +544,9 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/, float image_size) {
   // Style combo + Reset View (single row — Combo / SameLine / SmallButton).
   // SetNextComboPopupTopMost: see RenderAxisModal for rationale (combo popups
   // need same NSWindow level as the detached modal viewport).
-  ImGui::PushItemWidth(120.0f);
+  ImGui::SetNextItemWidth(kToolbarComboWidth);
   SetNextComboPopupTopMost();
   ImGui::Combo("##ModalCrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-  ImGui::PopItemWidth();
   ImGui::SameLine();
   if (ImGui::SmallButton("Reset View##modal")) {
     // Reset to the default view derived from the current axis preset + edit-buffer
@@ -612,9 +565,9 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();  // Parameter
   ShapeTableParamLabel(label);
-  ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
-  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                                      kWedgePresetCount, /*trailing_label=*/false);
+  ImGui::TableNextColumn();  // Value — one drag control plus its preset dropdown, filling the cell.
+  bool changed =
+      DragWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets, kWedgePresetCount);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
   // columns as intentionally-empty cells (Sync / Rand / Spread). Driven by the shared constant
   // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
@@ -636,13 +589,20 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // -- Crystal type --
+  // A composite property row: one label, and a control column holding the whole choice. The row
+  // exists so the type sits on the same left edge as the Weight control above it and the shape
+  // table's Value column below, rather than starting at the panel's own margin.
   int type_int = static_cast<int>(cr.type);
-  if (ImGui::RadioButton("Prism##modal", &type_int, 0)) {
-    cr.type = CrystalType::kPrism;
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Pyramid##modal", &type_int, 1)) {
-    cr.type = CrystalType::kPyramid;
+  if (BeginPropertyTable("##crystal_type")) {
+    PropertyRow("Type");
+    if (ImGui::RadioButton("Prism##modal", &type_int, 0)) {
+      cr.type = CrystalType::kPrism;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Pyramid##modal", &type_int, 1)) {
+      cr.type = CrystalType::kPyramid;
+    }
+    EndPropertyTable();
   }
 
   ImGui::Spacing();
@@ -662,6 +622,10 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
   // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
   // clipping the fixed Sync/Rand/Spread cells.
+  // Capped rather than left to stretch: Value is the only WidthStretch column, so on a widened
+  // inspector every extra pixel of panel goes into one drag control. Past kPropertyTableMaxWidth
+  // the table has nothing more to say with the room, so it stops taking it and stays left-aligned.
+  const ImVec2 shape_table_size(std::min(ImGui::GetContentRegionAvail().x, kPropertyTableMaxWidth), 0.0f);
   const auto setup_shape_columns = []() {
     ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -673,7 +637,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
   };
 
-  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
+  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags, shape_table_size)) {
     setup_shape_columns();
     ImGui::TableHeadersRow();
 
@@ -700,7 +664,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // rejected it), so the old unified/mixed-state machinery (and its self-contradiction warning) is
   // gone.
   if (ImGui::CollapsingHeader("Face Distance##modal")) {
-    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags)) {
+    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags, shape_table_size)) {
       setup_shape_columns();  // no TableHeadersRow — the params table above already labels the columns
       for (int i = 0; i < 6; i++) {
         char label[32];
@@ -784,13 +748,20 @@ static void RenderAxisModal(GuiState& /*state*/) {
   // prematurely by that intermediate Begin instead of the combo popup. Verified
   // for the current implementation; if RenderAxisDist is ever refactored to
   // wrap its body in BeginChild for layout purposes, this propagation will
-  // silently break (popup regresses to layer=0).
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
+  // silently break (popup regresses to layer=0). The property table opened just
+  // below is not such a wrap — a scroll-free BeginTable opens no child window —
+  // and the queue is set INSIDE it, after that call, either way.
+  // One table for all three axes, not one each: the label column is computed per table, so three
+  // tables would line their labels up only by coincidence (see RenderAxisDist's caller contract).
+  if (BeginPropertyTable("##axis_props")) {
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
+    EndPropertyTable();
+  }
 
   // No OK / Cancel: the page commits every frame (RenderCrystalInspector).
 }
@@ -1008,8 +979,15 @@ static void RenderSummandRowList() {
 // task-356.3 — P/B/D rendering and IsDApplicableGuiAxis moved to
 // gui/symmetry_ui.hpp so color_window.cpp (per-ref row) can reuse them (a12).
 static void RenderSharedFilterControls(bool d_applicable) {
+  // Two composite property rows. The page's own content — the OR rows — is a LIST, not a form, and
+  // stays full-width above; these two are the page's settings and get the same leading-label shape
+  // every other inspector page uses.
+  if (!BeginPropertyTable("##filter_props")) {
+    return;
+  }
   // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
   // Always rendered — filter_in / filter_out semantics apply to every type.
+  PropertyRow("Action");
   if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
     g_filter_top.action = 0;
   }
@@ -1024,7 +1002,11 @@ static void RenderSharedFilterControls(bool d_applicable) {
     ImGui::SetTooltip("Hide rays matching the filter");
   }
 
+  // The row is opened here, not inside RenderSymmetryCheckboxes: that helper is shared with the
+  // Colors window's per-ref row (symmetry_ui.hpp), which is not a property table.
+  PropertyRow("Symmetry");
   RenderSymmetryCheckboxes(g_filter_top.sym_p, g_filter_top.sym_b, g_filter_top.sym_d, d_applicable, "filter_modal");
+  EndPropertyTable();
 }
 
 // Remove Filter — arms g_filter_remove_intent so ApplyBuffersToEntry writes
@@ -1504,7 +1486,11 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
     auto& entry = state.layers[layer_idx].entries[entry_idx];
     char weight_label[32];
     snprintf(weight_label, sizeof(weight_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
-    SliderWithInput(weight_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+    if (BeginPropertyTable("##entry_props")) {
+      PropertyRow("Weight");
+      DragFloatField(weight_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+      EndPropertyTable();
+    }
   }
 
   // Preview above, tabs below — the "vertical" arrangement the modal offered as an option is the

@@ -140,6 +140,20 @@ bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref) {
   return InspectorItemInfo(ctx, ref).ID != 0;
 }
 
+bool ScrollInspectorTo(ImGuiTestContext* ctx, const char* ref) {
+  return ScrollUntilFound(ctx, gui::kDocumentInspectorWindowName, ref).ID != 0;
+}
+
+void ComboPick(ImGuiTestContext* ctx, const char* combo_ref, const char* item_label) {
+  const ImGuiTestRef restore = ctx->GetRef();
+  ctx->ItemClick(combo_ref);
+  // "//$FOCUSED" has to become the REF before the wildcard search rather than be part of the path:
+  // a wildcard prefix is resolved with ImHashDecoratedPath, which does not understand the variable.
+  ctx->SetRef("//$FOCUSED");
+  ctx->ItemClick((std::string("**/") + item_label).c_str());
+  ctx->SetRef(restore);
+}
+
 bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref) {
   return ScrollUntilFound(ctx, kTreeScrollRef, ref).ID != 0;
 }
@@ -631,6 +645,7 @@ int main(int argc, char** argv) {
   RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
   RegisterDocumentColumnTests(engine);
+  RegisterPropertyRowTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
   RegisterPreviewViewportTests(engine);

@@ -384,13 +384,13 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kSun);
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
-      IM_CHECK(ctx->ItemExists("**/##Altitude_input"));
+      IM_CHECK(ctx->ItemExists("**/##Altitude"));
 
       IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_CAMERA " Camera"));
       ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);
-      IM_CHECK(ctx->ItemExists("**/##FOV##view_input"));
+      IM_CHECK(ctx->ItemExists("**/##FOV##view"));
     };
   }
 
@@ -407,7 +407,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
 
       const int crystal_id = gui::g_state.layers[0].entries[1].crystal_id;
       const float before = gui::g_state.crystals[crystal_id].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", before + 3.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", before + 3.0f);
       ctx->Yield(2);
 
       // No OK, no Close, nothing dismissed — and the pool already has it.
@@ -433,7 +433,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       const float base0 = gui::g_state.crystals[id0].height.center;
       const float base1 = gui::g_state.crystals[id1].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", base0 + 2.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", base0 + 2.0f);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
 
@@ -446,7 +446,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
 
       // And an edit here lands here only.
-      ctx->ItemInputValue("**/##Height##modal_cr_input", base1 + 5.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", base1 + 5.0f);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[id1].height.center, base1 + 5.0f);
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);

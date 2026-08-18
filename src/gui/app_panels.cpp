@@ -901,60 +901,78 @@ namespace {
 // below is still the field editor registry's answer, not this call site's.
 void RenderCameraControls() {
   auto& r = g_state.renderer;
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+
   ImGui::SeparatorText("Lens");
-  // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
-  // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
-  if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
-    for (int idx : kLensTypePresentationOrder) {
-      bool selected = (r.lens_type == idx);
-      if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-        // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
-        // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
-        // lens_type directly, so they keep their fov.
-        ApplyLensTypeSelection(r, idx);
+  if (BeginPropertyTable("##cam_lens")) {
+    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+    PropertyRow("Lens Type");
+    if (ImGui::BeginCombo("##Lens Type##view", kLensTypeNames[r.lens_type])) {
+      for (int idx : kLensTypePresentationOrder) {
+        bool selected = (r.lens_type == idx);
+        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+          // lens_type directly, so they keep their fov.
+          ApplyLensTypeSelection(r, idx);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
       }
-      if (selected) {
-        ImGui::SetItemDefaultFocus();
-      }
+      ImGui::EndCombo();
     }
-    ImGui::EndCombo();
+    // Domain, format and disabled-when all come from the field editor registry rather than being
+    // written here — same for every control below whose field is a registered document leaf. The
+    // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
+    // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
+    const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
+    PropertyRow("FOV");
+    ImGui::BeginDisabled(!fov_c.enabled);
+    DragFloatField("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
+                   fov_c.fmt, fov_c.scale);
+    ImGui::EndDisabled();
+    EndPropertyTable();
   }
-  // Domain, format and disabled-when all come from the field editor registry rather than being
-  // written here — same for every slider below whose field is a registered document leaf. The
-  // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
-  // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
-  const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
-  ImGui::BeginDisabled(!fov_c.enabled);
-  SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
-                  fov_c.fmt, fov_c.scale);
-  ImGui::EndDisabled();
-  bool is_globe = (r.lens_type == kLensTypeGlobe);
+
+  const bool is_globe = (r.lens_type == kLensTypeGlobe);
+
   ImGui::SeparatorText("Visibility");
-  // Same registry query as the FOV slider above, for the same reason. What used to stand here was
+  // Same registry query as the FOV control above, for the same reason. What used to stand here was
   // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
   // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
   // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
   // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
   // full-sky case in, so the call site needs no nesting: one flat pair per field.
-  const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
-  ImGui::BeginDisabled(!visible_c.enabled);
-  ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
-  ImGui::SameLine();
-  ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
-  ImGui::SameLine();
-  ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
-  ImGui::EndDisabled();
-  // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
-  // next widget, so it is unaffected by — and does not affect — the disabled stack.
-  ImGui::SameLine(0, 20);
-  const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
-  ImGui::BeginDisabled(!front_c.enabled);
-  Checkbox("Front##visible", &r.front);
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+  if (BeginPropertyTable("##cam_visibility")) {
+    // A composite row: the control column holds the whole hemisphere choice rather than a single
+    // widget. The row shape is unchanged — one label on the left, everything it names on the right
+    // — which is what lets a group of buttons share a left edge with the scalars around it.
+    const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
+    // Label-less: the section header one line up already says "Visibility", and a row that repeats
+    // its own section's word says nothing the second time. The row still exists so the choice keeps
+    // the control column's left edge rather than starting at the panel margin.
+    PropertyRow("");
+    ImGui::BeginDisabled(!visible_c.enabled);
+    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+    ImGui::SameLine();
+    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+    ImGui::SameLine();
+    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+    ImGui::EndDisabled();
+    // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
+    // next widget, so it is unaffected by — and does not affect — the disabled stack.
+    ImGui::SameLine(0, 20);
+    const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
+    ImGui::BeginDisabled(!front_c.enabled);
+    Checkbox("Front##visible", &r.front);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+    }
+    ImGui::EndDisabled();
+    EndPropertyTable();
   }
-  ImGui::EndDisabled();
+
   ImGui::SeparatorText("Pose");
   if (is_globe) {
     ImGui::TextDisabled("(?)");
@@ -962,26 +980,32 @@ void RenderCameraControls() {
       ImGui::SetTooltip(
           "In Globe lens, Az/El/Roll control the observer's orbit\n"
           "around the sphere, not the camera's own attitude.\n"
-          "Roll is locked to 0 in this mode (slider is greyed out).");
+          "Roll is locked to 0 in this mode (the control is greyed out).");
     }
   }
-  // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
-  // gate the two share, is the registry's to state. Both entries carry the SAME gate
-  // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
-  const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
-  const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
-  ImGui::BeginDisabled(!el_c.enabled);
-  SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
-                  static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
-  SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
-                  az_c.fmt, az_c.scale);
-  ImGui::EndDisabled();
-  // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
-  const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
-  ImGui::BeginDisabled(!roll_c.enabled);
-  SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
-                  roll_c.fmt, roll_c.scale);
-  ImGui::EndDisabled();
+  if (BeginPropertyTable("##cam_pose")) {
+    // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
+    // gate the two share, is the registry's to state. Both entries carry the SAME gate
+    // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
+    const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
+    const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
+    ImGui::BeginDisabled(!el_c.enabled);
+    PropertyRow("Elevation");
+    DragFloatField("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
+                   static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
+    PropertyRow("Azimuth");
+    DragFloatField("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
+                   az_c.fmt, az_c.scale);
+    ImGui::EndDisabled();
+    // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
+    const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
+    PropertyRow("Roll");
+    ImGui::BeginDisabled(!roll_c.enabled);
+    DragFloatField("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
+                   roll_c.fmt, roll_c.scale);
+    ImGui::EndDisabled();
+    EndPropertyTable();
+  }
 
   ImGui::Separator();
   float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -996,8 +1020,6 @@ void RenderCameraControls() {
     r.azimuth = d.azimuth;
     r.roll = d.roll;
   }
-
-  ImGui::PopItemWidth();
 }
 
 }  // namespace

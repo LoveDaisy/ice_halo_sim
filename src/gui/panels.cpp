@@ -62,9 +62,96 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
   return changed;
 }
 
+// Copy `label` up to its "##id" suffix into `out`, so a widget id and the text drawn for it
+// can be one argument. Same rule as ImGui's own label parsing.
+static void StripImGuiIdSuffix(const char* label, char* out, size_t out_size) {
+  const char* hash_pos = strstr(label, "##");
+  if (hash_pos) {
+    auto len = static_cast<size_t>(hash_pos - label);
+    if (len >= out_size) {
+      len = out_size - 1;
+    }
+    memcpy(out, label, len);
+    out[len] = '\0';
+  } else {
+    snprintf(out, out_size, "%s", label);
+  }
+}
+
 // ---- Edit request state ----
 
 }  // namespace
+
+// ---- Property rows (see panels.hpp for the shape and the rationale) ----
+
+bool BeginPropertyTable(const char* id) {
+  // No borders and no RowBg: the alignment of the two columns is the whole visual mechanism,
+  // and drawing the grid that produces it would add one box per row to a panel whose entire
+  // theme decision was to stop drawing boxes (theme.cpp, FrameBorderSize = 0).
+  // No scroll flags, deliberately: with ScrollX/ScrollY ImGui::BeginTable opens a child window
+  // (imgui_tables.cpp, `use_child_window`), which would consume a queued SetNextWindowClass —
+  // the mechanism RenderAxisDist's combo-popup contract depends on.
+  if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
+    return false;
+  }
+  ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, kPropertyLabelColWidth);
+  ImGui::TableSetupColumn("##control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  return true;
+}
+
+void PropertyRow(const char* label) {
+  char display_buf[64];
+  StripImGuiIdSuffix(label, display_buf, sizeof(display_buf));
+
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  // Right-align within the label cell. Overflow (a label wider than the token) is left to run
+  // into the cell's clip rect rather than being centred or ellipsised: it is a calibration bug
+  // in the token, and test_property_row.cpp is what reports it.
+  const float avail = ImGui::GetContentRegionAvail().x;
+  const float text_w = ImGui::CalcTextSize(display_buf).x;
+  if (avail > text_w) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - text_w));
+  }
+  // The control across the row is framed and the label is not, so without this the label sits a
+  // FramePadding.y above the text inside the control it names.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", display_buf);
+
+  ImGui::TableNextColumn();
+  ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+void EndPropertyTable() {
+  ImGui::EndTable();
+}
+
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale) {
+  char drag_id[80];
+  snprintf(drag_id, sizeof(drag_id), "##%s", label);
+
+  ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp;
+  if (scale != SliderScale::kLinear) {
+    flags |= ImGuiSliderFlags_Logarithmic;
+  }
+  // Full domain per kDragTrackReferenceWidth pixels of drag, in both modes: ImGui divides a
+  // logarithmic drag's delta by (max - min) before applying it, which cancels the numerator here.
+  const float speed = (max_val - min_val) / kDragTrackReferenceWidth;
+  const float old_value = *value;
+  ImGui::DragFloat(drag_id, value, speed, min_val, max_val, fmt, flags);
+
+  // Unconditional, and NOT redundant with ImGuiSliderFlags_AlwaysClamp: that flag constrains the
+  // values the widget itself produces, and deliberately leaves a value it was handed out of range
+  // alone. The retired [slider][input] pair ended with exactly this line, and things depend on it
+  // — a .lmc written by hand, or a lens switch that narrows a bound under a value that was legal a
+  // frame ago (the globe's elevation limit), reach the field without going through any control, and
+  // the control is what pulls them back in. Without it the page renders an out-of-domain value as
+  // if it were fine.
+  *value = std::clamp(*value, min_val, max_val);
+  // Same return contract as SliderWithInput: "the value is not what it was", clamp included, since
+  // a clamp is a change the caller has to commit like any other.
+  return *value != old_value;
+}
 
 // Infer axis orientation preset name from crystal config.
 // Matching logic lives in axis_presets.hpp (shared with edit_modals.cpp; unit-tested).
@@ -542,23 +629,31 @@ void SetNextComboPopupTopMost() {
 
 // ---- Axis distribution controls (shared with edit modals) ----
 //
-// CALLER CONTRACT: when invoked from a context where the parent window may
-// become a detached OS viewport (currently: Edit Entry modal in multi-viewport
-// mode), the caller must precede this call with `SetNextComboPopupTopMost()`.
-// Without that, the internal `##dist` Combo's popup defaults to NSWindow
-// layer=0 and gets rendered behind the modal at layer=3.
+// CALLER CONTRACT (layout): this emits property ROWS, not a self-contained block — the caller owns
+// the BeginPropertyTable / EndPropertyTable around it. That is not an accident of factoring: with
+// one table per axis, the three axes would each compute their own column widths, and the label
+// column would only line up by coincidence. One table for all three is what makes them one form.
 //
-// IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` /
-// `BeginChild` call before the Combo at line 297 — doing so would consume
-// the caller's queued NextWindowData (WindowClass) prematurely. If layout
-// wrapping is ever required, the SetNextComboPopupTopMost call must be moved
-// inside RenderAxisDist (after any wrapping Begin/BeginChild, immediately
-// before the Combo).
+// CALLER CONTRACT (combo popup): when invoked from a context where the parent window may become a
+// detached OS viewport (currently: the inspector page in multi-viewport mode), the caller must
+// precede this call with `SetNextComboPopupTopMost()`. Without that, the internal `##dist` Combo's
+// popup defaults to NSWindow layer=0 and gets rendered behind the modal at layer=3.
+//
+// IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` / `BeginChild` call before
+// the `##dist` Combo — doing so would consume the caller's queued NextWindowData (WindowClass)
+// prematurely. If layout wrapping is ever required, the SetNextComboPopupTopMost call must be moved
+// inside RenderAxisDist (after any wrapping Begin/BeginChild, immediately before the Combo).
+// The PropertyRow below is NOT such a wrap: it emits TableNextRow / TableNextColumn / a text item
+// / SetNextItemWidth, none of which touch NextWindowData. The enclosing BeginPropertyTable is not
+// one either — ImGui's BeginTable only opens a child window when ScrollX/ScrollY is set
+// (imgui_tables.cpp, `use_child_window`), and BeginPropertyTable deliberately sets neither. Both
+// checked against the vendored ImGui when the property rows landed.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max) {
   bool changed = false;
   ImGui::PushID(label);
-  ImGui::Text("%s", label);
-  ImGui::SameLine(100);
+  // The axis name labels the distribution-TYPE row: "what kind of spread does Zenith have", with
+  // its parameters on the rows below it.
+  PropertyRow(label);
 
   int dist_type = static_cast<int>(axis.type);
   auto prev_type = axis.type;
@@ -594,24 +689,32 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
     axis.std = std::min(axis.std, max_std);
   }
 
-  changed |= SliderWithInput("Mean", &axis.mean, mean_min, mean_max);
+  PropertyRow("Mean");
+  changed |= DragFloatField("Mean", &axis.mean, mean_min, mean_max);
 
+  // The spread parameter is one field under four names — which name it wears is the distribution's
+  // to say, so the row is emitted inside the switch rather than labelled after it.
   switch (axis.type) {
     case AxisDistType::kGauss:
     case AxisDistType::kGaussLegacy:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Std");
+      changed |= DragFloatField("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kUniform:
-      changed |= SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Range");
+      changed |= DragFloatField("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kZigzag:
-      changed |= SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Amplitude");
+      changed |= DragFloatField("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kLaplacian:
-      changed |= SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Scale");
+      changed |= DragFloatField("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
       break;
     default:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Std");
+      changed |= DragFloatField("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
       break;
   }
 
@@ -985,10 +1088,11 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
   }
   ShapeTableParamLabel(label);
 
-  // Col 1 — center value: slider + input, filling the (stretch) Value column. trailing_label=false
-  // because the name already occupies Col 0.
+  // Col 1 — center value: one DragFloat filling the (stretch) Value column. The name already
+  // occupies Col 0, so the control carries no label of its own.
   ImGui::TableNextColumn();
-  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  changed |= DragFloatField(label, &dist.center, center_min, center_max, center_fmt, center_scale);
 
   // Col 2 — sync group swatch + picker popup. Ahead of Rand/Spread because sync is not a property of
   // randomization: it constrains the row's final value and is equally usable with Rand off. Left
@@ -1489,13 +1593,7 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
   const bool is_last_layer = layer_idx == static_cast<int>(state.layers.size()) - 1;
   const bool prob_is_zero = IsProbZero(layer.probability);
   const bool disable_slider = is_last_layer && prob_is_zero;
-  ImGui::BeginDisabled(disable_slider);
-  ImGui::BeginGroup();
-  char prob_id[32];
-  snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
-  SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
-  ImGui::EndGroup();
-  ImGui::EndDisabled();
+  const bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
   const char* prob_tip = nullptr;
   if (disable_slider) {
     prob_tip = "Last layer: all filter-pass rays are effective output; prob does not apply.";
@@ -1507,16 +1605,31 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
   } else {
     prob_tip = "Fraction of rays continuing to the next layer.";
   }
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("%s", prob_tip);
-  }
-  const bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
-  if (show_warning_icon) {
-    ImGui::SameLine();
-    ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
-    if (ImGui::IsItemHovered()) {
+  char prob_id[32];
+  snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
+  if (BeginPropertyTable("##layer_props")) {
+    PropertyRow("Prob.");
+    if (show_warning_icon) {
+      // Named exception to "the control fills its column": the warning glyph shares the cell, so
+      // the control gives back exactly the glyph's own advance plus one spacing. Reserved rather
+      // than a fixed number so it tracks the font — same formula as the filter editor's delete
+      // column (RenderSummandRowList, edit_modals.cpp).
+      ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(ICON_FA_CIRCLE_EXCLAMATION).x + ImGui::GetStyle().ItemSpacing.x));
+    }
+    ImGui::BeginDisabled(disable_slider);
+    DragFloatField(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("%s", prob_tip);
     }
+    if (show_warning_icon) {
+      ImGui::SameLine();
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", prob_tip);
+      }
+    }
+    EndPropertyTable();
   }
 
   // How many crystals this layer holds. The tree above shows them one per row, but a folded layer
@@ -1574,31 +1687,33 @@ void RenderDocumentTreeRows(GuiState& state) {
 // ========== Sun controls (the inspector's Sun page) ==========
 
 void RenderSunControls(GuiState& state) {
-  ImGui::BeginGroup();
+  if (!BeginPropertyTable("##sun_props")) {
+    return;
+  }
   // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
   // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.
   // last_committed_state.sun). The pre-migration DIRTY_IF wrapper is retired at this call site.
   // Domain and format read from the field editor registry, not written here. `fmt` is passed
-  // explicitly even though it currently equals SliderWithInput's own default: relying on the
+  // explicitly even though it currently equals DragFloatField's own default: relying on the
   // default would leave the display precision as a second statement this call site makes on its
   // own, which is the thing being removed.
   const FieldEditorConstraint alt_c = ConstraintFor("sun.altitude", state);
-  SliderWithInput("Altitude", &state.sun.altitude, static_cast<float>(alt_c.min_value),
-                  static_cast<float>(alt_c.max_value), alt_c.fmt, alt_c.scale);
-  ImGui::EndGroup();
+  PropertyRow("Altitude");
+  DragFloatField("Altitude", &state.sun.altitude, static_cast<float>(alt_c.min_value),
+                 static_cast<float>(alt_c.max_value), alt_c.fmt, alt_c.scale);
+  // The tooltip now hangs off the control alone rather than a group spanning control + label: the
+  // label lives in the other column, and a group cannot span two table cells.
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sun elevation angle above the horizon");
   }
-  ImGui::BeginGroup();
   // AC2 migration path: same rationale as sun.altitude above.
   const FieldEditorConstraint dia_c = ConstraintFor("sun.diameter", state);
-  SliderWithInput("Diameter", &state.sun.diameter, static_cast<float>(dia_c.min_value),
-                  static_cast<float>(dia_c.max_value), dia_c.fmt, dia_c.scale);
-  ImGui::EndGroup();
+  PropertyRow("Diameter");
+  DragFloatField("Diameter", &state.sun.diameter, static_cast<float>(dia_c.min_value),
+                 static_cast<float>(dia_c.max_value), dia_c.fmt, dia_c.scale);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
   // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
   static const char* const* kSpectrumComboItems = [] {
@@ -1614,7 +1729,8 @@ void RenderSunControls(GuiState& state) {
   // Cancel leaves it at the prior valid preset. The combo re-reads spectrum_index each frame, so it
   // shows the prior preset while the editor is open and flips to "Custom..." once OK commits.
   int combo_sel = state.sun.spectrum_index;
-  if (ImGui::Combo("Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
+  PropertyRow("Spectrum");
+  if (ImGui::Combo("##Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
     if (combo_sel == kCustomSpectrumIndex) {
       OpenSpectrumModal(state);  // intent-only: open the editor; OK is the sole commit point
     } else {
@@ -1628,12 +1744,15 @@ void RenderSunControls(GuiState& state) {
         "Light source spectrum for wavelength-dependent refraction.\n"
         "\"Custom...\" opens an editor for a discrete wavelength/weight list.");
   }
-  ImGui::PopItemWidth();
   if (state.sun.spectrum_index == kCustomSpectrumIndex) {
+    // A label-less row rather than a button below the table: the button acts on the row above it,
+    // so lining it up under that row's control is what says so.
+    PropertyRow("");
     if (ImGui::SmallButton("Edit spectrum...##spectrum_edit")) {
       OpenSpectrumModal(state);  // re-open editor for the existing custom spectrum
     }
   }
+  EndPropertyTable();
 
   // The "Simulation" group that used to sit here — Infinite rays / Rays(M) / Max hits / Use GPU —
   // now lives in the top bar's execution cluster (RenderExecutionCluster, app_panels.cpp). It was

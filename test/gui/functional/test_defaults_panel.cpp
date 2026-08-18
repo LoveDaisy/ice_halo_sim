@@ -1399,7 +1399,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // so the row has to be selected for the control to be on screen at all.
       gui::g_state.SelectCamera();
       ctx->Yield(3);
-      ctx->ItemInputValue("**/##FOV##view_input", 900.0f);
+      ctx->ItemInputValue("**/##FOV##view", 900.0f);
       ctx->Yield(3);
       IM_CHECK_EQ(fov_from_table, gui::g_state.renderer.fov);
       IM_CHECK_EQ(fov_from_table, max_fov);  // non-vacuous: both clamped, neither ignored the input
@@ -2638,7 +2638,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // write-through survived, this is the edit it would carry into the library.
       ctx->ItemClick("**/Column");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/Zenith/##Std_input", 0.3f);
+      ctx->ItemInputValue("**/Zenith/##Std", 0.3f);
       ctx->Yield(2);
 
       // Every preset that once had a button, not just the one an older case happened to click.

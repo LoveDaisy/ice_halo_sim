@@ -95,8 +95,12 @@ struct ScopedBackground {
 };
 
 // The four View sliders, in the order the panel draws them.
-const char* const kViewInputs[] = { "**/##FOV##view_input", "**/##Elevation##view_input", "**/##Azimuth##view_input",
-                                    "**/##Roll##view_input" };
+// The lens picker. Same reason as the spectrum combo in test_scene_controls.cpp for the explicit
+// path: a BeginCombo preview button reports no label, so "**/" cannot find it. "##cam_lens" is the
+// property table RenderCameraControls opens for the Lens section.
+const char* const kLensCombo = "##cam_lens/##Lens Type##view";
+
+const char* const kViewInputs[] = { "**/##FOV##view", "**/##Elevation##view", "**/##Azimuth##view", "**/##Roll##view" };
 
 }  // namespace
 
@@ -219,7 +223,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       ctx->SetRef("//##DocumentInspector");
-      ctx->ItemClick("Lens Type##view");  // opens the popup; BeginCombo reports no info of its own
+      ctx->ItemClick(kLensCombo);  // opens the popup; BeginCombo reports no info of its own
       ctx->SetRef("");
       ctx->Yield(3);
 
@@ -296,17 +300,17 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 15.0f;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view")));
 
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));  // the control says so
-      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);                // ...but the value survives
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view")));  // the control says so
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);          // ...but the value survives
 
       gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view")));
     };
   }
 
@@ -350,7 +354,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         // The combo button is not in the item registry; ComboClick resolves it by id and scrolls
         // the popup to reveal an entry that starts clipped.
         ctx->SetRef("//##DocumentInspector");
-        ctx->ComboClick((std::string("Lens Type##view/") + r.pick).c_str());
+        ComboPick(ctx, kLensCombo, r.pick);
         ctx->SetRef("");
         ctx->Yield(3);
 
@@ -462,24 +466,24 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
       ctx->Yield(3);
 
-      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", 200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 90.0f);
-      ctx->ItemInputValue("**/##Elevation##view_input", -200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", -200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -90.0f);
 
-      ctx->ItemInputValue("**/##Azimuth##view_input", 400.0f);
+      ctx->ItemInputValue("**/##Azimuth##view", 400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
-      ctx->ItemInputValue("**/##Azimuth##view_input", -400.0f);
+      ctx->ItemInputValue("**/##Azimuth##view", -400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.azimuth, -180.0f);
 
-      ctx->ItemInputValue("**/##Roll##view_input", 400.0f);
+      ctx->ItemInputValue("**/##Roll##view", 400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.roll, 180.0f);
-      ctx->ItemInputValue("**/##Roll##view_input", -400.0f);
+      ctx->ItemInputValue("**/##Roll##view", -400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.roll, -180.0f);
 
@@ -488,7 +492,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
-      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", 200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);
     };
@@ -518,10 +522,10 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##FOV##view_input")));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Elevation##view_input")));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Azimuth##view_input")));
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##FOV##view")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Elevation##view")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Azimuth##view")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view")));
 
       // Full sky: no view angle applies at all, and the angles already stored are zeroed rather
       // than merely greyed. The second half is load-bearing outside this suite:

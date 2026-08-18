@@ -390,7 +390,7 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     // document column inspector's Camera page, so the row has to be selected before it exists.
     gui::g_state.SelectCamera();
     ctx->Yield(3);
-    ctx->ItemInputValue("**/##Elevation##view_input", 30.0f);
+    ctx->ItemInputValue("**/##Elevation##view", 30.0f);
     ctx->Yield(4);
     IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);  // the premise: the edit landed
     IM_CHECK_NE(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kModified));
@@ -398,7 +398,7 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
 
     // (2) A crystal change through the real editor. Revert must arm.
     OpenCrystalTab(ctx);
-    ctx->ItemInputValue("**/##Height##modal_cr_input", committed_h + 1.0f);
+    ctx->ItemInputValue("**/##Height##modal_cr", committed_h + 1.0f);
     ctx->Yield(2);
     ctx->Yield(4);
     IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h + 1.0f);  // premise

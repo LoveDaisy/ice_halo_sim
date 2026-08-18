@@ -10,6 +10,67 @@ namespace lumice::gui {
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 
+// ---- Property rows: the inspector's form layout ----
+//
+// A property row is one label/control pair laid out as two columns of an ImGui table: a
+// fixed-width label column (kPropertyLabelColWidth) whose text is right-aligned and dimmed,
+// and a stretch column the control fills. Every row in one table therefore puts its
+// control's LEFT edge on the same vertical line, and the labels' right edges on another —
+// which is what makes a column of settings read as one thing rather than N.
+//
+// This is the "leading label" shape doc/gui-visual-language.md §5 names as the correct
+// answer, and it is deliberately NOT the "move every label into a shared column on the
+// right" shape the same section records as falsified: there the label ended up ~230 px away
+// from the control it named, trading proximity for alignment. Here the alignment line IS the
+// label's own left edge, and each control still sits next to its own label.
+//
+// Usage:
+//     if (BeginPropertyTable("##sun_props")) {
+//       PropertyRow("Altitude");
+//       DragFloatField("Altitude", &alt, 0.0f, 90.0f);
+//       PropertyRow("Spectrum");
+//       ImGui::Combo("##spectrum", ...);
+//       EndPropertyTable();
+//     }
+//
+// PropertyRow leaves the cursor in the control column with the next item's width already set
+// to fill it, so a call site states the control and nothing about its geometry — that is what
+// keeps the "no bare widths outside the token table" rule enforceable by grep. A control that
+// must be narrower calls SetNextItemWidth itself, which then reads as the exception it is.
+//
+// A row's control column may hold more than one widget (a radio group, a checkbox pair):
+// SameLine works normally inside it, and only the FIRST widget picks up the pre-set width —
+// which is harmless for the button-shaped widgets that appear in such rows, since they size
+// to their own label. `label` may carry an "##id" suffix; only the part before it is drawn.
+//
+// BeginPropertyTable returns false (and must not be paired with EndPropertyTable) when the
+// table is clipped, mirroring ImGui::BeginTable's own contract.
+bool BeginPropertyTable(const char* id);
+void PropertyRow(const char* label);
+void EndPropertyTable();
+
+// One control per value: the DragFloat that replaces the [slider][input] pair. Ctrl+click
+// types an exact value, so the input half of the pair is not lost, it is folded in — the
+// same merge already validated on the display strip's Overlays alpha cell (app_panels.cpp).
+// The item id is "##<label>", with no _slider / _input suffix, because there is no longer a
+// pair to distinguish.
+//
+// `scale` keeps meaning what it means for SliderWithInput, but a Drag has no track position
+// to map, only a speed, so the three non-linear modes collapse onto ImGui's own logarithmic
+// drag: kLog and kLogLinear are what it natively is, and kSqrt takes it as the closer of the
+// two available approximations (a linear drag over a 0-360 domain moves ~1.6 deg per pixel,
+// which cannot express the sub-degree spreads the sqrt mapping existed to make reachable).
+// Dragging to either end still yields exactly min / max — ImGui special-cases the extents.
+//
+// The value is clamped to [min_val, max_val] UNCONDITIONALLY, not just when the widget moved it:
+// ImGuiSliderFlags_AlwaysClamp constrains what the widget produces and leaves an out-of-range value
+// it was handed alone, and fields do arrive here from outside any control (a hand-written .lmc, a
+// lens switch that narrows a bound under a value that was legal a frame ago). Returns true when the
+// value is not what it was — clamp included, since a clamp is a change the caller has to commit
+// like any other. Both match what the retired [slider][input] pair did.
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
+                    SliderScale scale = SliderScale::kLinear);
+
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
@@ -81,7 +142,11 @@ void SetNextComboPopupTopMost();
 
 // ---- Axis distribution controls (shared between panels and edit modals) ----
 
-// Render axis distribution controls (combo + mean + std sliders).
+// Render one axis' distribution controls as THREE property rows: <label> = distribution type,
+// then Mean, then the spread parameter under whichever name the chosen type gives it.
+// Must be called between BeginPropertyTable / EndPropertyTable, and all three axes belong in ONE
+// table — see the caller contracts above the definition in panels.cpp, which also cover the combo
+// popup's viewport-layer requirement.
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 

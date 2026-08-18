@@ -23,6 +23,7 @@ add_executable(gui_test
     functional/test_execution_cluster.cpp
     functional/test_shell_chrome.cpp
     functional/test_document_column.cpp
+    functional/test_property_row.cpp
     functional/test_log_panel.cpp
     functional/test_overlay_controls.cpp
     functional/test_preview_viewport.cpp

@@ -124,7 +124,33 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
   - 每个 canonical 取值都锚定收编前**已存在**的字面量（复用次数最多的那个），不是新拍的折中色——于是 5 处近重复琥珀、3 处近重复红折叠后只有几个百分点的通道位移，而参考图覆盖到的场景**逐像素不变**。
   - 三类颜色**不**在此收编，判据是"颜色是否表达产品对内容的判断"：**强调色**（hover/active/选中高亮）表达交互状态，与语义色取值必须分开，否则"正在被操作"会读成"有风险"；**数据色**（用户在 Overlay 面板配的线色、由组号派生的 sync-group 色板）由用户或索引决定；**结构色**（透明 hover 触发区、占位边框、标签底衬、按填充色 luma 派生的对比文字）不携带判断。
   - 状态栏的 `Simulating...` / `Stopping...` / `Done` 也不并入：它们是进度/信息指示。把"任何非稳态"塞进 warning 会把该档从"内容需要你处理"稀释掉，反而淹没 Resolution 这种真正会触发重跑的提示。
-- **一值两控件仍是主流行式** —— 表格单元格内已验证单控件（`DragFloat`）可行，但推广属控件形态层，见 §6。
+- ~~**一值两控件仍是主流行式**~~ —— **检视器已收口**（457.1）。六页（Sun / Camera / Layer /
+  Crystal / Axis / Filter）的标量行全部改为单个 `DragFloat`（ctrl+click 键入精确值），
+  `[slider][input]` 对不再出现在检视器里；控件 ID 随之丢掉 `_slider` / `_input` 后缀，与显示条
+  Overlays 的 Alpha 单元格（先落地的同一形态）取名一致。
+  - **非线性档的降级是有取舍的**：`DragFloat` 只有速度、没有轨道位置，故 `SliderScale` 的三个
+    非线性档统一走 ImGui 原生 `ImGuiSliderFlags_Logarithmic`。`kLog`/`kLogLinear` 本就是它；
+    `kSqrt`（Axis 的 Std/Range/Amplitude/Scale，量程 0–180/0–360）取 log 而非线性，因为预设库
+    给的典型值是 0.3–1.0 度这一档，线性拖动 1 px ≈ 1.6°，恰好把 sqrt 映射当初存在的理由废掉。
+    拖到最左端仍得到精确 `min`（ImGui 对 `t<=0` 显式短路，不走 log fudge）。
+  - 速度取 `(max-min)/kDragTrackReferenceWidth`（230 px = 旧滑条轨道长度）；log 档下 ImGui 会先
+    把 delta 除以量程，分子正好抵消，两档因此是同一条公式、同一段拖动距离。
+  - **未推广到**：顶栏 Rays 滑条（∞ 档位是设计资产，§4.5），以及显示条 / 默认值面板（各有自己的
+    任务与参考图组）。`SliderWithInput` 因此仍在，不是残留。
+
+- ~~**前置标签未推广**~~ —— **检视器已收口**（457.1）。§5 给出的正解（标签在左、右对齐、暗色）
+  由 `BeginPropertyTable` / `PropertyRow` / `EndPropertyTable`（`src/gui/panels.hpp`）承载：两列
+  ImGui table，固定标签列 + 控件列占余，控件列预置 `SetNextItemWidth(-FLT_MIN)`。
+  - **宽度不再从容器泄漏**：一组具名宽度 token 落在 `src/gui/gui_constants.hpp`「Form width
+    tokens」段，规则是**通栏拉伸默认禁止、例外必须具名**（目前两个具名例外：表达式/路径类文本
+    输入，以及属性行的控件列——它的左缘已由标签列钉死，填满就是对齐本身）。
+  - `kPropertyLabelColWidth = 60` 是**实测值**：六页全部行标签里最宽的是 `"Lens Type"` = 59.0 px
+    （15 px Roboto Medium），向上取到 4 的倍数。**没有**采用原型的 ~104 px：标签列显著宽于其最宽
+    标签，会重新拉开标签↔控件的距离，那正是 §5 里「统一右侧标签列」被证伪的同一机制。
+    `test/gui/functional/test_property_row.cpp` 在活字体图集上重算这个要求并从两侧钉死。
+  - 复合行（Camera 的 Upper/Full/Lower + Front、Crystal 的 Prism/Pyramid、Filter 的
+    Filter In/Out 与 P/B/D）用的是同一个 `PropertyRow`：控件列里放多个 `SameLine` 控件即可，
+    没有为它们另开一层封装 —— 一行标签加一列内容，这个形状本身就够用。
 - **左面板空区** —— 见 §2 第 6 条。
 
 ## 8. 验证方法

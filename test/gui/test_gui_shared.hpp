@@ -380,6 +380,27 @@ void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label);
 ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref);
 bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref);
 
+// Scroll the inspector until `ref` resolves and LEAVE it there, so an ItemClick / ItemInputValue
+// can follow. Returns whether it resolved. The action-side counterpart to InspectorItemInfo — same
+// relationship ScrollTreeTo has to the tree — and the reason it is separate is the last paragraph
+// above: the action verbs cannot reach an item they were never told the name of, so a case that
+// drives a control near the bottom of a page has to bring it on screen first rather than assume
+// it. Deliberately does NOT restore the scroll, since its whole purpose is to set up an action.
+bool ScrollInspectorTo(ImGuiTestContext* ctx, const char* ref);
+
+// Open the combo at `combo_ref` and click `item_label` inside its popup.
+//
+// Two quirks make this a hand-rolled helper rather than ImGuiTestContext::ComboClick. That one
+// splits its argument at the FIRST '/' and takes everything before it as the combo, so it can only
+// address a combo that is a direct child of the current ref — which excludes every combo inside a
+// PushID scope (the Colors window) or inside a property table (every inspector page). And
+// `combo_ref` must be a LITERAL path, never a "**/" wildcard: ImGui::BeginCombo never calls
+// IMGUI_TEST_ENGINE_ITEM_INFO, so a combo has no registered debug label and a wildcard search,
+// which matches by label, can never find one.
+//
+// The ref is left where it was found, so a caller that had set one up keeps it.
+void ComboPick(ImGuiTestContext* ctx, const char* combo_ref, const char* item_label);
+
 // The tree half's scrolling region. Named here because the rows live in a child window, so the
 // scroll that matters is the child's, not the tree window's.
 inline constexpr const char* kTreeScrollRef = "##DocumentTree/##TreeScroll";
@@ -405,6 +426,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine);
 void RegisterExecutionClusterTests(ImGuiTestEngine* engine);
 void RegisterShellChromeTests(ImGuiTestEngine* engine);
 void RegisterDocumentColumnTests(ImGuiTestEngine* engine);
+void RegisterPropertyRowTests(ImGuiTestEngine* engine);
 void RegisterLogPanelTests(ImGuiTestEngine* engine);
 void RegisterOverlayControlTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
