@@ -1481,8 +1481,13 @@ std::string FormatSamplingSegment(LUMICE_RayCount crystals, LUMICE_RayCount orie
   // No "Sampling:" prefix: the two labels below already say what the numbers are, the tooltip's
   // first line spells it out in full, and at 1024 px (the enforced minimum window width) the row
   // has no spare space for a word that carries no information the labels do not.
+  //
+  // No LEADING separator either: this returns a segment, not a segment-and-its-join. The status bar
+  // draws the dividers between its segments itself, and a separator baked in here is one the row
+  // cannot see when it measures or positions anything — it showed up on screen as a stray pipe
+  // sitting immediately after the row's own divider.
   // U+00B7 MIDDLE DOT, spelled as UTF-8 bytes so the source file stays plain ASCII.
-  return "| shape " + FormatSamplingDensityCompact(crystals, rays) + " \xC2\xB7 orient " +
+  return "shape " + FormatSamplingDensityCompact(crystals, rays) + " \xC2\xB7 orient " +
          FormatSamplingDensityCompact(orientations, rays);
 }
 
