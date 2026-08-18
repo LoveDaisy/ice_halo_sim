@@ -58,6 +58,7 @@
 - 显示条以标签页组织：**Grade**（EV / Resolution / Aspect / Background）、**Overlays**（辅助线表格——`doc/gui-visual-language.md` §4.4 的表格形态在此落地，表头声明一次记录结构、空格子即信息、行末折叠承载不等宽字段）、**Components**（光路成分分析的预留位，让布局按未来住户验收，参见 `doc/gui-custom-spectrum-and-raypath-color.md`）。
 - Resolution 属 sim-tier（改动触发重跑），其警示形态用语义色细左缘条，不用整条填充——语义色定义归 `doc/gui-visual-language.md` 的语义色三档。
 - **空态天空坐标系**：无结果时视口不是死黑——按当前文档画淡色地平线、角距参考圆与太阳标记（约半强度），配一行指令性提示。空屏由此从「什么都没有」变成「已取景、待曝光」，同时是功能预告（未跑先知道 22° 晕在哪）。
+  - as-built 笔触：这三样里**角距圆与太阳标记由 CPU 端 ImGui draw list 画**，不是着色器画的——空态的形态是虚线圆 + 圆上度数文字（`22°`/`46°`）+ 太阳十字线 + 地平线左端 `HORIZON` 小字，而 `overlayAuxLines()` 只会画实线圆与实心点、且完全不能画文字。改用 CPU 端绘制的代价是这两样的着色器 alpha 在空态被归零（`ApplyEmptyStatePresentation` 交接，`show_*` 布尔仍强制为 true），换来的是 `lens_proj` 参考组所依赖的那段片元着色器一行不动。文字档位取 `ImGuiCol_TextDisabled`（`doc/gui-visual-language.md` 的暗档），圆与十字沿用文档自己的 overlay 颜色，不新造色相。
 - 长期方向（不在本轮范围）：光路成分分析落地、图像上的成分可点选后，**画布成为第二个 master**（点图上的幻日 → 检视器跳到贡献它的晶体/滤镜）。同柱布局与此兼容。
 
 ## 5. 被推翻的形态（勿重提）
