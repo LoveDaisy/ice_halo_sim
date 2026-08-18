@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787031514005,
+  "lastUpdate": 1787031517306,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4800,54 +4800,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "fd719cc6d151b919a44e8ff1717f6e393a9bb12c",
-          "message": "Merge pull request #167 from LoveDaisy/feat/gui-lifecycle-clock-decouple\n\nGUI preview lifecycle: clock-decouple to single-source epoch/lifecycle (I1–I6)",
-          "timestamp": "2026-07-03T16:35:42+08:00",
-          "tree_id": "6e1aaabdbcb0ad556df9d66266d4156f23f8c2dd",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fd719cc6d151b919a44e8ff1717f6e393a9bb12c"
-        },
-        "date": 1783068104411,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1000910.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1210261.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 743737.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 719100.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "938964638e672bf93d079a6380a9a2e136258f18",
           "message": "Merge pull request #168 from LoveDaisy/feat/task-gui-custom-spectrum\n\nfeat(gui): custom discrete spectrum editor + ray_num total-across-wavelengths semantics (task-323)",
           "timestamp": "2026-07-04T00:50:09+08:00",
@@ -9566,6 +9518,54 @@ window.BENCHMARK_DATA = {
             "value": 651206.3,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e5a855759f2a1e535cf1ff56144d57a93472b4c1",
+          "message": "Merge pull request #272 from LoveDaisy/feat/new-gui-layout\n\nfeat(gui): 新 GUI 布局——「文档 | 图像 | 运行」三区重组（集成分支）",
+          "timestamp": "2026-08-18T13:27:49+08:00",
+          "tree_id": "4d399707fc655846f8bae9083488c3c91c9ce3aa",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e5a855759f2a1e535cf1ff56144d57a93472b4c1"
+        },
+        "date": 1787031516782,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 756212.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1178269.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 905969.2,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 596652.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
