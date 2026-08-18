@@ -288,6 +288,44 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
     计数右置的理由不是构图：它们是本行唯一**宽度会自己变**的段（跨数量级换字），左排时每次换字都
     推动其后的每一段；贴右之后，增长发生在中间的留白里，没有东西被推。
 
+- ~~**小节标题与 tab 形态未落地**~~ —— **已收口**（457.7）。这两项原本一起被记为"较贵的形态项"，
+  贵在各自需要一样新东西：一个新字号实例，和一套 ImGui 不提供的 tab 着色。
+  - **第二字号实例不是第二套字体机制**。`theme.cpp` 的 `AddBodyFont(io, size_px)` 本来就带尺寸
+    参数，于是 eyebrow 字号（12 px）只是拿同一份构建期嵌入的 Roboto Medium buffer 再喂一次
+    `AddFontFromMemoryTTF`——**零新增构建步骤、零运行期文件依赖**。唯一的硬顺序是它必须排在
+    `MergeIconGlyphs` **之后**：合并配置把字形挂到"最后添加的那个字体"上，先加 eyebrow 实例会把
+    FontAwesome 图标挂到它身上，正文那一份反而没有图标。该顺序依赖写在常量注释里，不靠记忆。
+  - **eyebrow = `SeparatorText` + 小字号 + 暗档**（`panels.cpp::RenderEyebrow`）。hairline 延展到
+    行尾这件事不需要自己画：`style.SeparatorTextAlign = (0, 0.5)` 早就在网格节奏那一版里配好了，
+    本次只是它的第一个消费者。**字距做不到**——ImGui 没有 tracking 控制，所以原型那种"11 px 加宽
+    字距的大写"只由字号 + 大写 + 暗档 + 横线四项近似，缺的那一项是工具箱的边界而不是缺陷。
+    大写由调用点的字面量给（`"LAYERS"` / `"TYPE"` / `"SHAPE"`），不做运行期 `toupper`：控件画它
+    拿到的字面量，与本仓其余控件一致，也不引入 locale 相关的转换。
+  - **tab 压平：两个色槽 + 一个自绘规则线**。`ImGuiCol_Tab` / `ImGuiCol_TabSelected` 压成透明
+    （`WithAlpha(window_bg, 0)`，与 `ScrollbarBg` 同一写法）即去掉盒式底色；`TabHovered` 保留填充，
+    因为 hover 是短暂的指针反馈而不是"常驻的盒子"，且它不含强调色。
+  - ⭐**两处机制性发现，都由白盒读源码 + 像素实测双向坐实**：
+    1. `TabDimmed` / `TabDimmedSelected` / `TabDimmedSelectedOverline` 三槽对**手写的**
+       `BeginTabBar` 恒不生效——`BeginTabBar` 无条件 OR 上 `ImGuiTabBarFlags_IsFocused`
+       （上游把 NavWindow 判断注释掉了），而这三槽只有"未聚焦"的 tab 条才读。
+    2. `ImGuiCol_TabSelectedOverline` 同样读不到：ImGui 画那条规则线的条件是
+       `ImGuiTabBarFlags_DrawSelectedOverline`，而设置该 flag 的地方**只有** `DockNodeUpdateTabBar`
+       ——它是 dock 节点 tab 条的待遇，普通 `BeginTabBar` 永远拿不到。所以那个槽位对 dock 标签有效、
+       对这两条 tab 条无效，只压平配色是拿不到 accent 下划线的（先压平后截图，tab 行内不存在任何
+       带色像素，与源码结论一致）。
+    ⇒ 规则线由 `BeginFlatTabItem` 在 `BeginTabItem` 返回后自绘（2 px，位置在 tab 头下缘 = 下划线
+    而非 ImGui 的顶线），颜色仍取 `ImGuiCol_TabSelectedOverline`——**一个色源、两条绘制路径**，
+    强调色仍然只出现在选中项的那条线上。
+  - **inactive 文字暗档必须由调用方 push**：ImGui 原生不区分 tab 文字的选中态
+    （`TabItemLabelAndCloseButton` 里那段调暗分支被上游 `#if 0` 掉，旁边就写着"要改 tab 文字色是
+    调用方的事"）。而调用方要在 `BeginTabItem` **之前**就知道答案，唯一可用的信息是它自己维护的
+    上一帧镜像（检视器复用既有的 `g_active_tab`，显示条新增 `g_display_strip_active_tab`）。
+    **已知限制**：真鼠标点击切 tab 的那一帧，被点的 tab 用旧镜像画字，暗一帧后才变亮；程序化选中
+    在 arm flag 的同一帧同步镜像，不受影响。下划线**没有**这个滞后，因为它读的是本帧返回值。
+  - **未跟进的范围（留给后续，复用同一 helper 零新增机制）**：Axis / Filter 子页与 Sun / Camera 页
+    的 eyebrow 分组。AC 只点名检视器晶体页与文档树，且那几页不在任何已注册视觉回归组的覆盖范围内，
+    本次扩进去等于扩大重拍半径却拿不到自动化信号。
+
 ## 8. 验证方法
 
 视觉改动的验证回路已存在，成本很低：
