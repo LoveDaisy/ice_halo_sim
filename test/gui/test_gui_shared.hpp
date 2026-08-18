@@ -426,6 +426,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine);
 void RegisterExecutionClusterTests(ImGuiTestEngine* engine);
 void RegisterShellChromeTests(ImGuiTestEngine* engine);
 void RegisterDocumentColumnTests(ImGuiTestEngine* engine);
+void RegisterInspectorNoHScrollTests(ImGuiTestEngine* engine);
 void RegisterPropertyRowTests(ImGuiTestEngine* engine);
 void RegisterLogPanelTests(ImGuiTestEngine* engine);
 void RegisterOverlayControlTests(ImGuiTestEngine* engine);

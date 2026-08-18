@@ -109,6 +109,11 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
   OpenFilterTab(ctx);
   ctx->Yield(4);
   if (start_with_filter) {
+    // Scrolled to first: the shared filter controls sit below the token hint, which wraps to a
+    // second line whenever the column is narrow enough — and a clipped item is invisible to
+    // ItemClick (see InspectorItemInfo's declaration). This helper predates InspectorItemClick
+    // below, so it reaches for the same scroll directly rather than through it.
+    ScrollInspectorTo(ctx, "**/Remove Filter##filter");
     ctx->ItemClick("**/Remove Filter##filter");
   } else {
     ctx->ItemInputValue("**/##row_text_0", "3-1-5");

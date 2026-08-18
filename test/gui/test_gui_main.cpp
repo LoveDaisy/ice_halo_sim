@@ -645,6 +645,7 @@ int main(int argc, char** argv) {
   RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
   RegisterDocumentColumnTests(engine);
+  RegisterInspectorNoHScrollTests(engine);
   RegisterPropertyRowTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);

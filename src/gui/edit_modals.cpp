@@ -711,9 +711,23 @@ static void RenderAxisModal(GuiState& /*state*/) {
   AxisPreset active = ClassifyAxisPreset(g_axis_buf[0], g_axis_buf[1], g_axis_buf[2]);
   const ImVec4 active_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
 
-  ImGui::Text("Presets:");
+  // The row flows: each button goes next to the previous one only while it still fits inside the
+  // content region, and starts a new line when it does not. An unconditional SameLine() chain was
+  // what it used to be, and that made the row a hard lower bound on the panel's width — the six
+  // labels plus the "Presets:" lead-in are ~330 px of text, so at any narrower column the inspector
+  // grew a horizontal scrollbar and every OTHER row on the page paid for this one (the form column
+  // never scrolls horizontally — doc/gui-visual-language.md §4.7). Wrapping is measured before
+  // drawing rather than by drawing and backing out: SmallButton's width is exactly its text plus
+  // FramePadding.x on each side, so it is known without submitting the item.
+  ImGui::TextUnformatted("Presets:");
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float content_right_x = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+  float last_item_right_x = ImGui::GetItemRectMax().x;
   for (const auto& entry : kAxisPresets) {
-    ImGui::SameLine();
+    const float button_w = ImGui::CalcTextSize(entry.label).x + style.FramePadding.x * 2.0f;
+    if (last_item_right_x + style.ItemSpacing.x + button_w <= content_right_x) {
+      ImGui::SameLine();
+    }
     bool highlighted = entry.id == active;
     if (highlighted) {
       ImGui::PushStyleColor(ImGuiCol_Button, active_color);
@@ -733,6 +747,7 @@ static void RenderAxisModal(GuiState& /*state*/) {
     if (highlighted) {
       ImGui::PopStyleColor();
     }
+    last_item_right_x = ImGui::GetItemRectMax().x;
   }
 
   ImGui::Separator();
@@ -898,13 +913,17 @@ static void RenderSummandRowList() {
     ImGui::SetTooltip("Maximum OR rows reached (%zu)", kMaxSummandRows);
   }
 
-  // Static hint — includes ';' example post-334.3 (H-A). Kept as one line so
-  // it does not compete with the live-preview block below.
-  ImGui::TextDisabled("e.g. 3-5  or  1-3;3-5 (OR)  or  entry:2 & exit:4  or  3-5 & len:2-3");
-
   // Token help icon: transparent SmallButton acts as a stable hover target
   // (mirrors RenderSharedFilterControls' `kDTooltipText` icon pattern).
-  ImGui::SameLine();
+  //
+  // Drawn BEFORE the hint, not after it on a SameLine. The pair used to be "hint, SameLine, icon",
+  // and that made them one composite of a fixed ~388 px — the hint cannot wrap while something is
+  // pinned to its right edge, because SameLine measures from the whole wrapped block. 388 px is
+  // wider than this column ever is once the page grows a vertical scrollbar (382 px of content at
+  // the default width), so the page scrolled sideways at the SHIPPING width, not only at a
+  // hand-narrowed one. Leading with the icon lets the hint below wrap against the content edge like
+  // any other prose, and costs nothing: the icon is a hover target whose position carries no
+  // meaning.
   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
@@ -926,6 +945,14 @@ static void RenderSummandRowList() {
         "  new row       = OR alternative (sum-of-products)\n"
         "  blank row     = states nothing, dropped (all rows blank = no filter)");
   }
+
+  // Static hint — includes ';' example post-334.3 (H-A). Wrapped rather than kept to one line:
+  // one line was a claim about the panel's width, and the panel is now narrow enough that the
+  // claim is false. It still reads as one unit with the icon it follows.
+  ImGui::SameLine();
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("e.g. 3-5  or  1-3;3-5 (OR)  or  entry:2 & exit:4  or  3-5 & len:2-3");
+  ImGui::PopStyleColor();
 
   // Live preview of the sum-of-products the current row buffers would
   // expand to on commit. Uses the SAME parse/format helpers as the commit
@@ -962,9 +989,11 @@ static void RenderSummandRowList() {
                   LUMICE_MAX_CONFIG_CLAUSES);
     if (sop_summary.overflow) {
       ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
-      ImGui::TextUnformatted(clause_line);
-      ImGui::SameLine();
-      ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
+      // Wrapped, not SameLine'd: the sentence is ~380 px of unbreakable text, so laying it beside
+      // the count made this row the widest thing on the page and the inspector scrolled sideways
+      // to fit it. The row-level validation message a few rows up (RenderFilterRow) already wraps
+      // for the same reason; this one was the leftover.
+      ImGui::TextWrapped("%s (exceeds limit — the previous config will be kept on OK)", clause_line);
       ImGui::PopStyleColor();
     } else {
       ImGui::TextDisabled("%s", clause_line);

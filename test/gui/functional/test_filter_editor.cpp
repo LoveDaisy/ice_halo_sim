@@ -469,6 +469,10 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
 
       // Always enabled: it is an intent flag, not something derived from row emptiness.
       IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, "**/Remove Filter##filter")));
+      // InspectorItemInfo puts the scroll back where it found it, so the button it just located
+      // may well be off screen again by the time the click runs — and a clipped item is invisible
+      // to ItemClick. The scroll is part of the action, not a nicety.
+      ScrollInspectorTo(ctx, "**/Remove Filter##filter");
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
       // The row stays editable and the editor stays up — the intent bypasses row validation
