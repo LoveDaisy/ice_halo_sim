@@ -230,8 +230,14 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   // They stay assigned because every slot is claimed here, not because they render anything.
   c[ImGuiCol_TabDimmed] = p.title_bg;
   c[ImGuiCol_TabDimmedSelected] = p.frame_bg;
-  // The selected tab's top rule. Accent while the tab bar is focused; when it is not, the same
+  // The selected tab's rule. Accent while the tab bar is focused; when it is not, the same
   // low-contrast white as Separator — an unfocused bar is demoted, not recoloured.
+  //
+  // ImGui draws this itself only for a DOCK NODE's tab bar: the overline is gated on
+  // ImGuiTabBarFlags_DrawSelectedOverline, which nothing but DockNodeUpdateTabBar sets. The two
+  // hand-written tab bars (the inspector's and the display strip's) therefore read this slot
+  // through panels.cpp's BeginFlatTabItem, which draws the rule under the selected head — one
+  // colour, two drawing paths, rather than a second accent constant next to this one.
   c[ImGuiCol_TabSelectedOverline] = p.accent;
   c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(1.0f, 1.0f, 1.0f, 0.10f);
   // Docking. The drag preview follows the same "accent at low alpha marks the region about to be

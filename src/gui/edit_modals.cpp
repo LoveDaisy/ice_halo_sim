@@ -589,6 +589,9 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // -- Crystal type --
+  // The page was a flat stack of tables; these two headings are what tell a reader that the radio
+  // pair and the parameter grid below it are two different subjects rather than one long form.
+  RenderEyebrow("TYPE");
   // A composite property row: one label, and a control column holding the whole choice. The row
   // exists so the type sits on the same left edge as the Weight control above it and the shape
   // table's Value column below, rather than starting at the panel's own margin.
@@ -605,7 +608,9 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     EndPropertyTable();
   }
 
-  ImGui::Spacing();
+  // Replaces the bare Spacing that used to separate the two tables: the gap is still there (the
+  // heading occupies a row) and now it is labelled.
+  RenderEyebrow("SHAPE");
 
   // -- Shape parameters (property table) --
   // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
@@ -1351,8 +1356,11 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
   // + ImGuiTabItemFlags_SetSelected) is delicate and must keep a stable identity.
   const int entry_layer = g_modal_layer_idx;
   const int entry_index = g_modal_entry_idx;
+  // g_active_tab doubles as BeginFlatTabItem's active-mirror: it is written inside each branch
+  // below, i.e. one frame before the heads are drawn again, which is what the underline styling
+  // needs and the only thing available (BeginTabItem tells you the answer after it has drawn).
   if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
+    if (BeginFlatTabItem(crystal_label, g_active_tab == ActiveTab::kCrystal, crystal_flags)) {
       g_active_tab = ActiveTab::kCrystal;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);
@@ -1361,7 +1369,7 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
       ImGui::PopID();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
+    if (BeginFlatTabItem(axis_label, g_active_tab == ActiveTab::kAxis, axis_flags)) {
       g_active_tab = ActiveTab::kAxis;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);
@@ -1370,7 +1378,7 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
       ImGui::PopID();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
+    if (BeginFlatTabItem(filter_label, g_active_tab == ActiveTab::kFilter, filter_flags)) {
       g_active_tab = ActiveTab::kFilter;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);

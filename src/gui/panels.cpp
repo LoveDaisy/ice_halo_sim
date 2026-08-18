@@ -155,6 +155,46 @@ void RenderEyebrow(const char* label) {
   }
 }
 
+// ---- Flat tab items (see panels.hpp for why the caller has to supply `is_active`) ----
+
+namespace {
+
+// Thickness of the accent rule under the selected tab, in pixels. Two, not one: at one pixel the
+// rule reads as a hairline divider (the same weight as Separator) rather than as the mark that
+// says which tab is showing. Same shape as app_panels.cpp's kSimTierEdgeWidth — a drawing
+// dimension of one bespoke mark, named where it is drawn.
+constexpr float kFlatTabUnderlineThickness = 2.0f;
+
+}  // namespace
+
+bool BeginFlatTabItem(const char* label, bool is_active, int flags) {
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(is_active ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+  const bool open = ImGui::BeginTabItem(label, nullptr, static_cast<ImGuiTabItemFlags>(flags));
+  // Popped immediately: the colour is for the tab HEAD, which BeginTabItem has finished drawing by
+  // the time it returns. Held across the `if (BeginFlatTabItem(...))` body it would re-tier every
+  // widget on the page inside it.
+  ImGui::PopStyleColor();
+
+  if (open) {
+    // The accent rule under the selected tab, drawn here because ImGui will not draw it for these
+    // tab bars: its own overline is gated on ImGuiTabBarFlags_DrawSelectedOverline, and the only
+    // place that flag is ever set is DockNodeUpdateTabBar (imgui.cpp) — a plain BeginTabBar never
+    // gets it, so ImGuiCol_TabSelectedOverline renders on docked-window tabs and on nothing else.
+    // Measured, not inferred: with the slot already set to accent and no rule appearing in a
+    // capture of either bar.
+    //
+    // The colour still comes from that slot rather than a second accent constant, so "the selected
+    // tab's rule" keeps one source across the two ways it gets drawn. And unlike the label tier
+    // above, this is driven by BeginTabItem's own return value — the answer for THIS frame — so
+    // the rule never lags a click the way the text colour does.
+    const ImVec2 head_min = ImGui::GetItemRectMin();
+    const ImVec2 head_max = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(head_min.x, head_max.y - kFlatTabUnderlineThickness), head_max,
+                                              ImGui::GetColorU32(ImGuiCol_TabSelectedOverline));
+  }
+  return open;
+}
+
 bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale) {
   char drag_id[80];
   snprintf(drag_id, sizeof(drag_id), "##%s", label);

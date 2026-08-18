@@ -1927,6 +1927,15 @@ constexpr float kSimTierEdgeWidth = 3.0f;
 // edit_modals.cpp's g_pending_tab_select).
 bool g_strip_select_grade = false;
 
+// Which strip tab is showing, mirrored for BeginFlatTabItem's sake alone — the selection itself
+// still lives in ImGui's TabBar, exactly as g_strip_select_grade's note above says. The mirror is
+// written inside each tab's own branch (and, for the programmatic reset, at the moment the
+// SetSelected flag is armed) so the heads drawn on the next frame know which one to draw bright.
+enum class DisplayStripTab { kGrade, kOverlays, kComponents };
+// Grade, because it is the first item declared in the bar and ImGui selects the first tab when no
+// tab has been selected yet — the mirror's initial value therefore matches the initial frame.
+DisplayStripTab g_display_strip_active_tab = DisplayStripTab::kGrade;
+
 // The sim-tier marker: a bar along the LEADING edge of the control just submitted, saying "editing
 // this re-runs the simulation and discards the accumulated rays" (doc/gui-visual-language.md §7,
 // doc/gui-layout-architecture.md §4).
@@ -2330,14 +2339,21 @@ void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_hei
 
   if (ImGui::BeginTabBar("##DisplayStripTabs")) {
     const ImGuiTabItemFlags grade_flags = g_strip_select_grade ? ImGuiTabItemFlags_SetSelected : 0;
+    if (g_strip_select_grade) {
+      // Same frame as the SetSelected flag, not the frame after: a programmatic reset knows the
+      // answer up front, so it does not have to pay the one-frame mirror lag a click does.
+      g_display_strip_active_tab = DisplayStripTab::kGrade;
+    }
     g_strip_select_grade = false;
-    if (ImGui::BeginTabItem("Grade", nullptr, grade_flags)) {
+    if (BeginFlatTabItem("Grade", g_display_strip_active_tab == DisplayStripTab::kGrade, grade_flags)) {
+      g_display_strip_active_tab = DisplayStripTab::kGrade;
       BeginStripTabContent("##GradeTab");
       RenderGradeTab(window);
       ImGui::EndChild();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Overlays")) {
+    if (BeginFlatTabItem("Overlays", g_display_strip_active_tab == DisplayStripTab::kOverlays)) {
+      g_display_strip_active_tab = DisplayStripTab::kOverlays;
       BeginStripTabContent("##OverlaysTab");
       RenderOverlaysTab();
       ImGui::EndChild();
@@ -2349,7 +2365,8 @@ void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_hei
     // strip's edge and height were chosen to fit that future tenant (see kDisplayStripHeight and
     // the strip's bottom-edge placement, doc/gui-layout-architecture.md §4/§6); leaving it out
     // would have made "does this layout hold it" unanswerable until the day it lands.
-    if (ImGui::BeginTabItem("Components")) {
+    if (BeginFlatTabItem("Components", g_display_strip_active_tab == DisplayStripTab::kComponents)) {
+      g_display_strip_active_tab = DisplayStripTab::kComponents;
       BeginStripTabContent("##ComponentsTab");
       ImGui::TextDisabled("Light-path component analysis lands here.");
       ImGui::EndChild();

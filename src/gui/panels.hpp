@@ -70,6 +70,33 @@ void EndPropertyTable();
 // finds it looser than the prototype is looking at a known limit of the toolkit, not a defect.
 void RenderEyebrow(const char* label);
 
+// ---- Flat (underline-style) tab items ----
+//
+// ImGui::BeginTabItem with the label drawn in the primary text tier when the tab is the active one
+// and in the dimmed tier when it is not. Everything else about it — the id, the flags, the return
+// value's meaning, the EndTabItem pairing — is ImGui::BeginTabItem's, unchanged.
+//
+// It exists because ImGui has no such thing natively: TabItemLabelAndCloseButton's tab-text tinting
+// branch is `#if 0`-ed out upstream (imgui_widgets.cpp, next to a comment saying that altering tab
+// text colour is the caller's job), so the only place the distinction can be made is before the
+// call. It also draws the selected tab's accent rule itself, for a second and separate reason:
+// ImGui's own overline needs ImGuiTabBarFlags_DrawSelectedOverline, which only a dock node's tab
+// bar ever gets. Together with the theme's transparent Tab / TabSelected slots, those two are what
+// turn a boxed tab bar into an underline one — the selection is stated by a rule and by text tier,
+// not by a filled rectangle behind the head.
+//
+// `is_active` is the CALLER's mirror of the selection, and it governs the TEXT TIER only, because
+// BeginTabItem's own return value arrives after the label has already been drawn. KNOWN LIMIT: on
+// the frame a click moves the selection the mirror is one frame stale, so the tab being clicked
+// draws its label dimmed for that single frame before catching up. The accent rule has no such lag
+// — it is drawn after the call, off the return value. Programmatic selection
+// (ImGuiTabItemFlags_SetSelected) updates the mirror where it arms the flag and is unaffected.
+//
+// `flags` is an int rather than ImGuiTabItemFlags so this header keeps its property of naming no
+// ImGui type in a signature (ImGuiTabItemFlags is itself a typedef for int, so call sites pass the
+// named constants unchanged).
+bool BeginFlatTabItem(const char* label, bool is_active, int flags = 0);
+
 // One control per value: the DragFloat that replaces the [slider][input] pair. Ctrl+click
 // types an exact value, so the input half of the pair is not lost, it is folded in — the
 // same merge already validated on the display strip's Overlays alpha cell (app_panels.cpp).
