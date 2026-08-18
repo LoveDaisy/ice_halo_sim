@@ -345,7 +345,13 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       gui::g_state.pick_link_source = gui::GuiState::EntryRef{ 0, 0 };
       ctx->Yield(3);
       IM_CHECK(!gui::g_state.document_tree_folded);
-      IM_CHECK(ctx->ItemExists("**/##row_0_1"));  // the target the user was told to click
+      // The target the user was told to click. ScrollTreeTo rather than a bare ItemExists: a folded
+      // half draws no rows at all (RenderDocumentTree returns before them), so "the rows are back"
+      // is what unfolding has to produce — not "the rows are back AND the half is tall enough to
+      // show all of them at once". The half's height is whatever the previous case left the
+      // splitter at, and a row below the fold is invisible to a wildcard lookup, which matches by
+      // label and only unclipped items register one.
+      IM_CHECK(ScrollTreeTo(ctx, "**/##row_0_1"));
 
       gui::g_state.pick_link_source.reset();
       ctx->Yield(2);
@@ -477,7 +483,11 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(gui::g_state.pick_link_source.has_value());
 
-      // Entry 0 adopts entry 1's slot.
+      // Entry 0 adopts entry 1's slot. Scrolled to first, for the same reason the case above this
+      // one does it: arming pick adds the hint bar above the rows, and the tree half is only as
+      // tall as the previous case left the splitter, so the row being clicked is not necessarily
+      // on screen.
+      IM_CHECK(ScrollTreeTo(ctx, "**/##row_0_1"));
       ctx->ItemClick("**/##row_0_1");
       ctx->Yield(4);
       IM_CHECK(!gui::g_state.pick_link_source.has_value());
