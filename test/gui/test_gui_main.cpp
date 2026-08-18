@@ -25,6 +25,7 @@
 #include "gui/app.hpp"
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
+#include "gui/dock_layout.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
@@ -83,6 +84,66 @@ std::vector<unsigned char> g_synth_tex;
 
 // ========== Shared function definitions ==========
 
+namespace {
+
+// Walk `window_ref` from the top in half-window steps, stopping at the first offset where
+// `item_ref` resolves, and LEAVE the scroll there. Returns the info, whose ID is 0 if it never
+// resolved.
+//
+// Half-window steps rather than a jump to the bottom because the target may be anywhere and only
+// the band on screen is findable; each band has to be visited.
+ImGuiTestItemInfo ScrollUntilFound(ImGuiTestContext* ctx, const char* window_ref, const char* item_ref) {
+  ImGuiTestItemInfo info = ctx->ItemInfo(item_ref, ImGuiTestOpFlags_NoError);
+  if (info.ID != 0) {
+    return info;
+  }
+  // WindowInfo rather than GetWindowByRef: a CHILD window's ImGuiID is the hash of the mangled name
+  // ImGui builds for it ("Parent/id_XXXXXXXX"), not the hash of the path a caller writes, so the
+  // straightforward lookup silently returns null for exactly the windows that scroll here.
+  ImGuiWindow* scroller = ctx->WindowInfo(window_ref, ImGuiTestOpFlags_NoError).Window;
+  if (scroller == nullptr || scroller->ScrollMax.y <= 0.0f) {
+    return info;
+  }
+  const float step = ImMax(scroller->Size.y * 0.5f, 1.0f);
+  for (float y = 0.0f; y <= scroller->ScrollMax.y + step; y += step) {
+    scroller->Scroll.y = ImMin(y, scroller->ScrollMax.y);
+    ctx->Yield(2);
+    info = ctx->ItemInfo(item_ref, ImGuiTestOpFlags_NoError);
+    if (info.ID != 0) {
+      break;
+    }
+    scroller = ctx->WindowInfo(window_ref, ImGuiTestOpFlags_NoError).Window;
+    if (scroller == nullptr) {
+      break;
+    }
+  }
+  return info;
+}
+
+}  // namespace
+
+// See the declaration in test_gui_shared.hpp for why these exist.
+ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
+  ImGuiWindow* page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+  const float restore = page != nullptr ? page->Scroll.y : 0.0f;
+  const ImGuiTestItemInfo info = ScrollUntilFound(ctx, gui::kDocumentInspectorWindowName, ref);
+  // Restored so a read-only lookup cannot decide what the next assertion in the same case sees.
+  page = ctx->GetWindowByRef(gui::kDocumentInspectorWindowName);
+  if (page != nullptr && page->Scroll.y != restore) {
+    page->Scroll.y = restore;
+    ctx->Yield(2);
+  }
+  return info;
+}
+
+bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref) {
+  return InspectorItemInfo(ctx, ref).ID != 0;
+}
+
+bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref) {
+  return ScrollUntilFound(ctx, kTreeScrollRef, ref).ID != 0;
+}
+
 // See the declaration in test_gui_shared.hpp for why this exists and who consumes it.
 std::filesystem::path GuiTestTempPath(const std::string& filename) {
   // The directory is latched on the FIRST call and reused for the rest of the process, so a call
@@ -134,12 +195,30 @@ void ResetTestState() {
   gui::ResetCrystalView();
   gui::g_crystal_style = 1;
   gui::g_state.left_panel_collapsed = false;
-  gui::g_state.right_panel_collapsed = false;
-  // Modal view preferences: pin to legacy defaults (H + Staged) for test
-  // determinism. Production defaults changed to V + Immediate in
-  // gui-polish-v15 round 2; individual tests opt-in explicitly as needed.
-  gui::g_state.modal_layout_vertical = false;
-  gui::g_state.modal_immediate_mode = false;
+  // NOTE: panel geometry is a dock layout now, and the dock layout outlives g_state — a case that
+  // moves a splitter hands the next case a different panel width unless it puts it back. This reset
+  // deliberately does NOT rebuild the layout to enforce that: DockBuilderRemoveNode undocks and
+  // re-docks the panels, and for the frame after that their child windows are not submitted, so
+  // every case paying two frames here would turn "the card is there" into a race. The one case that
+  // moves a splitter restores it by dragging back — see shell_chrome's splitter case.
+  //
+  // A window's SCROLL outlives g_state the same way, and unlike the splitter it is left behind by
+  // ordinary cases rather than by one deliberate one: ItemInputValue scrolls whatever window the
+  // field is in, so any case that types into the inspector hands the next case a page scrolled to
+  // the bottom. That is not cosmetic — ImGui culls table rows outside the clip rect BEFORE
+  // submitting them, so a scrolled-away row does not merely look absent, it IS absent, and the next
+  // case's ItemInfo cannot find it. The inspector's own product rule (scroll to top when the page
+  // swaps) does not cover this: DoNew leaves the selection where the next case puts it, so from the
+  // window's point of view the page never changed.
+  if (ImGuiWindow* inspector = ImGui::FindWindowByName(gui::kDocumentInspectorWindowName)) {
+    inspector->Scroll.y = 0.0f;
+    inspector->ScrollTarget.y = 0.0f;
+  }
+  // The display strip's selected tab outlives g_state exactly as a window's scroll does, and with a
+  // sharper consequence: an unselected tab's contents are never submitted, so a case left on
+  // Overlays hands the next case a Grade tab whose items do not exist at all. See the seam's
+  // declaration in app.hpp for why this is a request rather than an assignment.
+  gui::ResetDisplayStripSelectionForTest();
   gui::g_preview_vp.active = false;
   gui::g_programmatic_resize = 0;
 
@@ -200,10 +279,36 @@ bool IsDisabled(const ImGuiTestItemInfo& info) {
   return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
 }
 
+// See the contract note in test_gui_shared.hpp.
+void OpenEntryTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx, const char* tab_ref) {
+  gui::g_state.SelectCrystal(layer_idx, entry_idx);
+  ctx->Yield(3);
+  ctx->ItemClick(tab_ref);
+  ctx->Yield(2);
+}
+
+void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###crystal_tab");
+}
+
+void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###axis_tab");
+}
+
+void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx) {
+  OpenEntryTab(ctx, layer_idx, entry_idx, "**/###filter_tab");
+}
+
+// See the contract note in test_gui_shared.hpp.
+void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label) {
+  ctx->ItemClick((std::string(kDisplayStripTabPrefix) + tab_label).c_str());
+  ctx->Yield(2);
+}
+
 // See the contract note in test_gui_shared.hpp for why this is a destructor rather than three
 // statements at the end of a case body.
 ScopedPopups::~ScopedPopups() {
-  // The gui side first, so the popup stops being submitted: RenderEditModals and
+  // The gui side first, so the popup stops being submitted:
   // RenderSpectrumModal only call BeginPopupModal while these statics say one is open. One call
   // covers both — ResetModalState delegates to ResetSpectrumModalStateGlobals. The sun-circles
   // editor has no statics of its own: it is opened straight from its button and needs only the
@@ -434,6 +539,10 @@ int main(int argc, char** argv) {
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  gui::ApplyDockingConfig(io);
+  // Deliberately NOT mirroring src/gui/main.cpp's layout persistence: this is the same isolation
+  // rule as --user-config defaulting to kDisabled here. A reference image must not depend on a
+  // layout file that happens to exist on the machine that captured it.
   io.IniFilename = nullptr;
 
   gui::ApplyVisualLanguage(io);
@@ -519,7 +628,9 @@ int main(int argc, char** argv) {
   RegisterFilterEditorTests(engine);
   RegisterEditModalTests(engine);
   RegisterSceneControlTests(engine);
+  RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
+  RegisterDocumentColumnTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
   RegisterPreviewViewportTests(engine);
@@ -533,8 +644,9 @@ int main(int argc, char** argv) {
   RegisterSimE2eSmokeTests(engine);
   RegisterDefaultsPanelTests(engine);
   RegisterDefaultsPanelLayoutTests(engine);
+  RegisterCrystalInspectorLayoutTests(engine);
+  RegisterDisplayStripLayoutTests(engine);
   RegisterLensProjectionTests(engine);
-  RegisterModalLayoutTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
@@ -605,9 +717,15 @@ int main(int argc, char** argv) {
     auto layout_height = static_cast<float>(win_h);
 
     gui::RenderTopBar(layout_width);
-    gui::RenderLeftPanel(layout_height);
-    gui::RenderRightPanel(window, layout_width, layout_height);
+    // Mirrors src/gui/main.cpp: same call, same arguments, so the dock layout a screenshot is taken
+    // from is the product's layout rather than a harness-local copy of it.
+    const float dock_host_height = layout_height - gui::kTopBarHeight - gui::kStatusBarHeight;
+    const ImGuiID dockspace_id = gui::RenderDockSpaceHost(0.0f, gui::kTopBarHeight, layout_width, dock_host_height);
+    gui::BuildDefaultDockLayout(dockspace_id, layout_width, dock_host_height);
+    gui::RenderDocumentTree();
+    gui::RenderDocumentInspector();
     gui::RenderPreviewPanel(window, layout_width, layout_height);
+    gui::RenderDisplayStrip(window, layout_width, layout_height);
     if (g_enable_log_panel) {
       gui::RenderLogPanel(layout_width, layout_height);
     }
@@ -618,12 +736,6 @@ int main(int argc, char** argv) {
     // tests is negligible.
     gui::RenderColorWindow(gui::g_state, gui::g_server);
     gui::RenderStatusBar(layout_width, layout_height);
-    // Intentional deviation from plan (which suggested nullptr): the test
-    // harness owns a real GLFW window (hidden in CI), so passing it yields
-    // a realistic monitor-aware size clamp when a display server is present.
-    // In fully headless CI `glfwGetMonitors` returns 0 → helper returns false
-    // → caller falls back to FLT_MAX, matching the plan-intended behavior.
-    gui::RenderEditModals(gui::g_state, window);
     gui::RenderSpectrumModal(gui::g_state);
     gui::RenderUnsavedPopup(window);
     // task-cleanup-hardening code-review-01 M1: RenderSaveModifiedPopup was

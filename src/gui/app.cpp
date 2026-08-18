@@ -218,7 +218,10 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
 
   constexpr float kCollapsedStripWidth = 20.0f;  // Must match kCollapseBtnSize in app_panels.cpp
   float left_w = g_state.left_panel_collapsed ? kCollapsedStripWidth : kLeftPanelWidth;
-  float right_w = g_state.right_panel_collapsed ? kCollapsedStripWidth : kRightPanelWidth;
+  // The chrome around the preview is now one column and three bands: the right panel is gone and
+  // the display strip took its place UNDER the viewport, so what used to be a second horizontal
+  // subtraction is a third vertical one.
+  float bottom_h = kDisplayStripHeight;
 
   // Select the monitor containing the window center so multi-monitor users do
   // not get yanked back to primary when aspect ratio changes (v11 bug #4).
@@ -251,7 +254,7 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
   }
 
   AspectFitResult fit =
-      ResolveAspectFit(win_w, ratio, work_w, work_h, left_w, right_w, kTopBarHeight, kStatusBarHeight);
+      ResolveAspectFit(win_w, ratio, work_w, work_h, left_w, bottom_h, kTopBarHeight, kStatusBarHeight);
   int target_w = fit.target_w;
   int target_h = fit.target_h;
 

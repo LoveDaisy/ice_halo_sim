@@ -195,7 +195,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   target.core_log_level = 2;
   target.log_to_file = true;
   target.log_panel_open = true;
-  target.right_panel_collapsed = true;
+  target.left_panel_collapsed = true;
   target.save_texture = false;
 
   snap.ApplyTo(target);
@@ -241,7 +241,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_EQ(target.core_log_level, 2);
   EXPECT_TRUE(target.log_to_file);
   EXPECT_TRUE(target.log_panel_open);
-  EXPECT_TRUE(target.right_panel_collapsed);
+  EXPECT_TRUE(target.left_panel_collapsed);
   EXPECT_FALSE(target.save_texture);
 }
 

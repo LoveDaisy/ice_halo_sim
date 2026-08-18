@@ -28,8 +28,8 @@
 //     validation cell, 0.6 for the Resolution input).
 //
 // Button triples are only provided where a consumer exists: good (the Run
-// button) below, destructive in gui/destructive_style.hpp. There is no warning
-// button form — no warning-semantic button exists in the tree.
+// button) below, warning (the top bar's "Changed - re-run" chip) below that,
+// and destructive in gui/destructive_style.hpp.
 
 namespace lumice::gui {
 
@@ -46,6 +46,20 @@ void PopGoodButtonStyle();
 // re-run the simulation, unsaved edits, an incomplete row, a soft cap exceeded.
 ImVec4 WarningTextColor();
 ImVec4 WarningFillColor(float alpha);
+
+// Warning button's Normal/Hovered/Active triple, for a control whose whole
+// message is "this needs your attention" — currently the top bar's
+// "Changed - re-run" chip. Push/Pop must be paired on every code path, matching
+// PushGoodButtonStyle / PushDestructiveStyle.
+//
+// It is derived from the same amber as WarningTextColor rather than being a
+// fourth hand-picked shade: a button surface has to be darker than the text
+// grade at the same hue to keep its own label legible, so the triple sits at
+// the fill end of the grade, not at the text end. Anything that changes the
+// amber must change both, or the chip and the "Modified" status text stop
+// reading as the same statement.
+void PushWarningButtonStyle();
+void PopWarningButtonStyle();
 
 // "Error / destructive action" — invalid input, a hard cap exceeded, delete /
 // remove / Stop.

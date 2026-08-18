@@ -20,7 +20,9 @@ add_executable(gui_test
     functional/test_background_overlay.cpp
     functional/test_entry_management.cpp
     functional/test_scene_controls.cpp
+    functional/test_execution_cluster.cpp
     functional/test_shell_chrome.cpp
+    functional/test_document_column.cpp
     functional/test_log_panel.cpp
     functional/test_overlay_controls.cpp
     functional/test_preview_viewport.cpp
@@ -30,7 +32,8 @@ add_executable(gui_test
     visual/test_preview_pixels.cpp
     visual/test_gui_capture_smoke.cpp
     visual/test_gui_lens_projection.cpp
-    visual/test_gui_modal_layout.cpp
+    visual/test_gui_crystal_inspector_layout.cpp
+    visual/test_gui_display_strip_layout.cpp
     visual/test_gui_defaults_panel.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp

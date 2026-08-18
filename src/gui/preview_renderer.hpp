@@ -86,6 +86,22 @@ struct OverlayDecoration {
   float zenith_nadir_alpha = 0.6f;
   float zenith_nadir_radius_px = 8.0f;
 
+  // Sun position marker: a filled dot at the sun's own pixel position, as opposed to the
+  // sun_circles above, which are rings of constant angular distance AROUND it and never mark
+  // the centre. Same screen-position protocol as zenith/nadir (CPU-precomputed, center-origin,
+  // y-up, sentinel when offscreen or on a lens ProjectWorldDirToScreen does not support).
+  //
+  // Unlike every other show_* field here, this one is NOT sourced from a GuiState toggle: there
+  // is no user-facing checkbox for it. It is forced on by the empty-state call site in
+  // RenderPreviewPanel, which is the only place it is wanted — a marker whose whole job is to
+  // say "the sun will be here" is redundant once the rendered image shows the sun itself. Adding
+  // it to the Overlays tab would therefore be a behaviour change, not a piece of missing plumbing.
+  bool show_sun_marker = false;
+  float sun_marker_screen_pos[2] = { kOverlaySentinel, kOverlaySentinel };
+  float sun_marker_color[3] = { 1.0f, 0.9f, 0.3f };
+  float sun_marker_alpha = 0.75f;
+  float sun_marker_radius_px = 5.0f;
+
   static OverlayDecoration Disabled() { return {}; }
 };
 

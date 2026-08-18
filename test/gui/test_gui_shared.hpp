@@ -326,6 +326,69 @@ struct ScopedPopups {
   ImGuiTestContext* ctx_;
 };
 
+// Put the document inspector's crystal page on an entry, showing one of its three tabs.
+//
+// Every suite that used to reach the crystal / axis / filter editors did it by clicking an "Edit"
+// button on an entry card, which opened a modal. Both are gone: the editors are the inspector's
+// crystal page, and what decides which entry they edit is the tree's selection
+// (doc/gui-layout-architecture.md §2). There is no dismissal counterpart on purpose — the page is
+// always up and an edit is in the document the frame it is made.
+//
+// Shared rather than copied into each suite because five of them need it and the sequence is not
+// obvious: the selection has to be pumped before the tab click, since the tab does not exist until
+// the page is rendering.
+void OpenEntryTab(ImGuiTestContext* ctx, int layer_idx, int entry_idx, const char* tab_ref);
+void OpenCrystalTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+void OpenAxisTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+void OpenFilterTab(ImGuiTestContext* ctx, int layer_idx = 0, int entry_idx = 0);
+
+// Path prefix of a display strip TAB BUTTON, for the one case that has to point at a tab rather
+// than at something inside it. Note the second segment: BeginTabBar pushes an override ID, so a tab
+// item's id is hashed under the tab bar's, NOT under the window's — "//##DisplayStrip/Grade" finds
+// nothing, and finds it silently (ItemExists just answers false).
+inline constexpr const char* kDisplayStripTabPrefix = "//##DisplayStrip/##DisplayStripTabs/";
+
+// Select one of the display strip's tabs ("Grade" / "Overlays" / "Components") and pump the frames
+// its contents need to be submitted.
+//
+// A case that reads anything in the strip has to call this first, and the reason is stronger than
+// convenience: ImGui does not submit an unselected tab's contents at all, so those items do not
+// exist rather than merely sitting out of view — `!ItemExists` would then be satisfied by "another
+// tab is showing" as readily as by "the control is not offered", which is what several of these
+// cases are actually asserting. ResetTestState puts the strip back on Grade, so a case that wants
+// Grade need not call this; one that wants any other tab must.
+void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label);
+
+// The document column's two halves are docked windows a few hundred pixels tall showing content
+// that is routinely taller — a Pyramid with its Face Distance section expanded, a scene with more
+// rows than the tree's half can show — so both scroll, by design. The two helpers below find an
+// item in one of them regardless of where it currently sits.
+//
+// WHY A SCROLLED-AWAY ITEM CANNOT BE FOUND AT ALL, which is not obvious and is stronger than "it is
+// off screen". A `**/name` lookup is resolved by LABEL, and a widget hands its label to the test
+// engine on its last line — `IMGUI_TEST_ENGINE_ITEM_INFO(id, label, ...)` — which is AFTER the
+// early-out it takes when its rectangle does not overlap the clip rect (see the tail of
+// ImGui::Selectable, and every other widget built the same way). So for a clipped item the engine
+// learns the id but never the label, and ItemInfo / ItemExists / ItemClick alike answer "no such
+// item" rather than "not visible". Table rows are the same story one level up and worse: ImGui
+// culls the ROW before submitting its contents, so the widgets are never created either.
+//
+// The consequence worth remembering: this affects the ACTION verbs too, not only the read-only
+// queries. ItemClick scrolls to a target it has found; it cannot find one it has never been told
+// the name of. The modal these pages replaced never hit any of this because it sized its content
+// pane to fit its tallest tab — a luxury a docked column does not have.
+ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref);
+bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref);
+
+// The tree half's scrolling region. Named here because the rows live in a child window, so the
+// scroll that matters is the child's, not the tree window's.
+inline constexpr const char* kTreeScrollRef = "##DocumentTree/##TreeScroll";
+
+// Scroll the tree until `ref` resolves and LEAVE it there, so an ItemClick can follow. Returns
+// whether it resolved. The counterpart to InspectorItemInfo for the other half — and unlike it,
+// this one does not restore the scroll, because its whole purpose is to set up an action.
+bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref);
+
 // ========== Register function declarations ==========
 
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine);
@@ -339,7 +402,9 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine);
 void RegisterFilterEditorTests(ImGuiTestEngine* engine);
 void RegisterEditModalTests(ImGuiTestEngine* engine);
 void RegisterSceneControlTests(ImGuiTestEngine* engine);
+void RegisterExecutionClusterTests(ImGuiTestEngine* engine);
 void RegisterShellChromeTests(ImGuiTestEngine* engine);
+void RegisterDocumentColumnTests(ImGuiTestEngine* engine);
 void RegisterLogPanelTests(ImGuiTestEngine* engine);
 void RegisterOverlayControlTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
@@ -352,8 +417,9 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);
 void RegisterLensProjectionTests(ImGuiTestEngine* engine);
-void RegisterModalLayoutTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
+void RegisterCrystalInspectorLayoutTests(ImGuiTestEngine* engine);
+void RegisterDisplayStripLayoutTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

@@ -1,5 +1,5 @@
-// The window's chrome: the top bar's shape, the collapse strips, and where the log panel sits in
-// the stack.
+// The window's chrome: the top bar's shape, the collapse strips, the splitter between a side panel
+// and the viewport, and where the log panel sits in the stack.
 //
 // What this suite is for. These are the parts of the shell that have no state of their own — they
 // are about where things are and what is on top of what, which is a property of a rendered frame
@@ -57,12 +57,12 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
   // half of it is not a feature: a panel that collapses and cannot be restored is a panel the user
   // has lost.
   //
-  // The strip's button is drawn with an explicit screen position rather than by the layout, so the
-  // click below is placed from the same geometry the drawing code uses. That is deliberate: the
-  // button is an OverlayButton gated on `!io.WantCaptureMouse`, and the point of clicking it by
-  // POSITION is that the gate is evaluated for a real pointer at a real place. Its occluded half —
-  // the same gate correctly swallowing a click under a floating window — is the entry card's, in
-  // functional/test_entry_management.cpp.
+  // The strip's button is clicked by POSITION rather than by item path, and stays that way now that
+  // the button is an ordinary widget in the collapsed panel's own window: the proposition is that a
+  // real pointer at the place a user would aim at reaches it, which is exactly what an unreachable
+  // expand button breaks. The geometry below is therefore derived the same way the drawing code
+  // derives it. Its occluded counterpart — a click under a floating window correctly NOT reaching
+  // the background — is the entry card's, in functional/test_entry_management.cpp.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "shell_chrome", "collapsing_the_left_panel_hides_it_and_the_strip_brings_it_back");
@@ -70,23 +70,29 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       IM_CHECK(!gui::g_state.left_panel_collapsed);
-      IM_CHECK(ctx->GetWindowByRef("##LeftPanel") != nullptr);
+      IM_CHECK(ctx->GetWindowByRef("##DocumentTree") != nullptr);
+
+      // The strip spans the space between the top bar and the status bar, with a square button
+      // centred vertically in it (RenderCollapsedStrip, src/gui/app_panels.cpp). kCollapseBtnSize is
+      // file-local there and is mirrored here rather than exported for one test.
+      constexpr float kCollapseBtnSize = 20.0f;
 
       // The toggle's label carries the chevron that points the way it will move, so the path
       // depends on the current state — expanded here.
       ctx->ItemClick("##TopBar/" ICON_FA_CHEVRON_LEFT "##left_panel_toggle");
       ctx->Yield(3);
       IM_CHECK(gui::g_state.left_panel_collapsed);
-      // The window is not merely empty — RenderLeftPanel returns before Begin, so it stops being
-      // submitted at all and the preview gains the space.
-      ImGuiWindow* left = ctx->GetWindowByRef("##LeftPanel");
-      IM_CHECK(left == nullptr || !left->WasActive);
+      // What "collapsed" means is that the panel gives its column up to the preview, and the width
+      // is what says so. It used to be checked as "the window stops being submitted at all", which
+      // was true of the fixed-coordinate layout but is not a property of collapsing: the panel is a
+      // dock node now, and a docked window that stops being submitted takes its node out of the
+      // layout entirely — the column would go to the preview and the strip would end up drawn on top
+      // of it rather than beside it.
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_LE(left->Size.x, kCollapseBtnSize);
 
-      // The strip spans the space between the top bar and the status bar, with a square button
-      // centred vertically in it (RenderCollapsedStrip, src/gui/app_panels.cpp). kCollapseBtnSize is
-      // file-local there and is mirrored here rather than exported for one test.
       const ImGuiViewport* vp = ImGui::GetMainViewport();
-      constexpr float kCollapseBtnSize = 20.0f;
       const float strip_h = vp->Size.y - gui::kTopBarHeight - gui::kStatusBarHeight;
       const float btn_y = gui::kTopBarHeight + (strip_h - kCollapseBtnSize) * 0.5f;
       ctx->MouseMoveToPos(ImVec2(vp->Pos.x + kCollapseBtnSize * 0.5f, vp->Pos.y + btn_y + kCollapseBtnSize * 0.5f));
@@ -94,7 +100,116 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       IM_CHECK(!gui::g_state.left_panel_collapsed);
-      IM_CHECK(ctx->GetWindowByRef("##LeftPanel") != nullptr);
+      // The other half of the round trip: the column comes back at its default width, not at some
+      // width the collapse left behind.
+      left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+    };
+  }
+
+  // The View menu's Reset Layout item is the other entry point into the same round trip, and the
+  // one nothing else in the suite covers: its click handler clears both collapse flags in the same
+  // frame it requests the rebuild (app_panels.cpp's ViewMenu handler), specifically so a reset
+  // cannot leave the marker and the geometry disagreeing — "flag still says collapsed, node is back
+  // at full width" is exactly the split state that would go unnoticed without this case, since the
+  // strip button round trip above never exercises Reset Layout at all.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "shell_chrome", "reset_layout_clears_a_collapsed_left_panel");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      ctx->ItemClick("##TopBar/" ICON_FA_CHEVRON_LEFT "##left_panel_toggle");
+      ctx->Yield(3);
+      IM_CHECK(gui::g_state.left_panel_collapsed);
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_LT(left->Size.x, gui::kLeftPanelWidth);
+
+      ctx->ItemClick("##TopBar/View");
+      ctx->Yield(2);
+      ctx->ItemClick("**/Reset Layout");
+      ctx->Yield(3);
+
+      IM_CHECK(!gui::g_state.left_panel_collapsed);
+      left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+    };
+  }
+
+  // The side panels are dock nodes, so the seam between a panel and the viewport is a splitter the
+  // user can drag. That is the whole point of the docking substrate, and nothing else in the suite
+  // states it — a regression that froze the splitter (or left the panels placed by arithmetic again)
+  // would show up as every other case still passing.
+  //
+  // The preview is checked alongside the panel because the two are one proposition: the viewport is
+  // placed from the central dock node's rectangle, so a panel that resizes while the preview stays
+  // put means the preview is still being derived from the width constants.
+  //
+  // The preview WINDOW's rectangle is what is read, not g_preview_vp: the GL viewport is only
+  // published when there is something to draw into it, and this case has no simulation result. The
+  // two come from the same central-node rect one line apart in RenderPreviewPanel.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "shell_chrome", "dragging_the_left_splitter_resizes_the_panel_and_the_preview");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      ImGuiWindow* left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+      ImGuiWindow* preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      const float preview_x_before = preview->Pos.x;
+      const float preview_w_before = preview->Size.x;
+
+      // The splitter sits in the gap immediately right of the panel; aim at its middle, which is
+      // half of style.DockingSeparatorSize past the panel's right edge.
+      const ImGuiViewport* vp = ImGui::GetMainViewport();
+      const float seam_x = gui::kLeftPanelWidth + ImGui::GetStyle().DockingSeparatorSize * 0.5f;
+      const float seam_y = vp->Size.y * 0.5f;
+      constexpr float kDragBy = 60.0f;
+
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x, vp->Pos.y + seam_y));
+      ctx->MouseDown(0);
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x + kDragBy, vp->Pos.y + seam_y));
+      ctx->MouseUp(0);
+      ctx->Yield(3);
+
+      left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      // Not an exact width: the splitter lands where the pointer left it, and ImGui truncates the
+      // resulting node sizes. What must be true is that the drag moved the panel, and moved it the
+      // way it was dragged.
+      IM_CHECK_GT(left->Size.x, gui::kLeftPanelWidth);
+      preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      IM_CHECK_GT(preview->Pos.x, preview_x_before);
+      IM_CHECK_LT(preview->Size.x, preview_w_before);
+
+      // Drag back, for two reasons. It states that a splitter drag is reversible — a resize that
+      // quantises differently in each direction leaves the user unable to get their layout back. And
+      // it is how this case cleans up after itself: the dock layout outlives ResetTestState, so a
+      // panel left 60 px wider would be the width every later case (including the ones comparing
+      // against reference images) runs at. Restoring by dragging rather than by rebuilding the
+      // layout keeps the panels docked throughout; a rebuild costs the next case a frame in which
+      // the panels' child windows are not submitted.
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x + kDragBy, vp->Pos.y + seam_y));
+      ctx->MouseDown(0);
+      ctx->MouseMoveToPos(ImVec2(vp->Pos.x + seam_x, vp->Pos.y + seam_y));
+      ctx->MouseUp(0);
+      ctx->Yield(3);
+
+      left = ctx->GetWindowByRef("##DocumentTree");
+      IM_CHECK(left != nullptr);
+      IM_CHECK_EQ(left->Size.x, gui::kLeftPanelWidth);
+      preview = ctx->GetWindowByRef("##PreviewPanel");
+      IM_CHECK(preview != nullptr);
+      IM_CHECK_EQ(preview->Pos.x, preview_x_before);
+      IM_CHECK_EQ(preview->Size.x, preview_w_before);
     };
   }
 
@@ -198,13 +313,13 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       gui::g_state.log_panel_open = true;
       ctx->Yield(4);
 
-      // Try to raise a background panel. Without its flag this would splice ##LeftPanel to the back
+      // Try to raise a background panel. Without its flag this would splice ##DocumentTree to the back
       // of the list, i.e. above the log panel.
-      ctx->WindowFocus("##LeftPanel");
+      ctx->WindowFocus("##DocumentTree");
       ctx->Yield(2);
 
       const int log_idx = WindowStackIndex("##LogPanel");
-      const int left_idx = WindowStackIndex("##LeftPanel");
+      const int left_idx = WindowStackIndex("##DocumentTree");
       IM_CHECK_GE(log_idx, 0);
       IM_CHECK_GE(left_idx, 0);
       IM_CHECK_GT(log_idx, left_idx);

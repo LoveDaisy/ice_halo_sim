@@ -76,5 +76,69 @@
 ## 7. 与 docking 迁移的关系及顺序
 
 - **本文就是 docking 迁移的设计输入**：迁移不做「现状面板的机械搬运然后再重组」——那是同一个 shell 改两遍。基底迁移（面板进 dock 节点、测试保绿）之后，各区按本文形态重建。
+- **基底已落地（as-built）**，三条边界值得后来者直接接手，不必重新查证：
+  - **顶栏与状态栏不是 dock 节点**，是夹住 DockSpace 的固定几何 chrome（`SetNextPanelGeometry`）。理由是 §1 里两者的定位——执行簇与状态展示——本就是固定 chrome，不是可被用户拖散的「文档」；真做成可拖拽节点，用户能把 Run 按钮拖到画面中间甚至拖没。
+  - **中心节点永久保持为空**（`PassthruCentralNode | NoDockingOverCentralNode`），视口窗口钉在它的矩形上而不是 dock 进去。这不是风格选择：ImGui 只在中心节点为空时才在 dockspace 背景上开洞，一旦有窗口 dock 进中心节点，`ImGuiCol_WindowBg` 会填满整个 dockspace 把 GL 预览盖住。§1 的「图像区 = 视口」因此在机制上也成立——视口不是一个可以被拖走或被别的面板顶掉的工具窗。
+  - **`DockBuilder*` 只允许出现在 `src/gui/dock_layout.cpp`**：docking 配置与默认布局若在 app 与 gui_test 各写一遍，参考图截出来的布局与真 app 就只是碰巧一致。与视觉语言收敛到 `theme.cpp` 同一条纪律。
 - 纯视觉语言（字体/调色板/节奏/语义色）与本文正交，按 `doc/gui-visual-language.md` §6 先行落地。
-- 测试影响：`modal_layout` 参考组随编辑模态退役而废弃（其覆盖的控件布局命题由检视器侧的新参考组接手）；`defaults_panel_layout` 的 Settings 面板不在本文范围、暂不受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考随每步 shell 改动失效，重拍税一次性付清于 shell 收尾（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
+### 7.1 基底 as-built（迁移第一步已落地，后续各区在此之上重建）
+
+docking 基底已经就位，形态**刻意未变**（面板组织、编辑 modal 全部原样），以便把「docking 引入的回归」
+与「形态重组引入的回归」分开归因。接手后续各区前需要知道的三件事：
+
+- **单一 owner**：`src/gui/dock_layout.{hpp,cpp}` 是 docking 配置标志、DockSpace host、默认布局与
+  **每一次对 dock 节点几何的写入**的唯一持有者。`src/gui/main.cpp` 与 `test/gui/test_gui_main.cpp`
+  只调它暴露的那组函数、不自行触碰 `DockBuilder*`——理由与 `theme.cpp` 持有视觉语言完全相同：两套
+  各自维护的 docking 初始化会让 gui_test 的截图变成「关于测试夹具的证据」而不是关于真 app 的证据。
+  这条可机械核验：`grep -rn "DockBuilder\|DockSpace(" src/` 只应命中 `dock_layout.{hpp,cpp}`。
+- **⭐ 中心节点永久为空，预览不是 dock 节点**。这条最容易被下一个人"顺手修正"回去，所以写明机制：
+  `ImGuiDockNodeFlags_PassthruCentralNode` 只在中心节点**为空**时保持透明；一旦有窗口真的 dock 进
+  中心节点，该窗口的 `ImGuiCol_WindowBg` 会整块盖住底下的 OpenGL 画面，「预览 docked」与「预览可见」
+  不能同时成立。因此中心节点带 `NoDockingOverCentralNode` 永久留空，`##PreviewPanel` 是带
+  `ImGuiWindowFlags_NoDocking` 的普通窗口，几何取自 `dock_layout` 的 `GetCentralNodeRect()`
+  ——中心节点没有窗口入驻，没有任何窗口能被问出它的矩形，这正是该接口存在的原因。
+  §2 所说「检视器天然可撕出浮动」不受影响：那是侧节点的原生能力，与中心节点留空无关。
+- **布局持久化**：交互式 app 把用户拖出来的布局持久化到用户配置目录（**不是** ImGui 默认的
+  `imgui.ini`，那会落在进程 cwd 随启动目录漂移），配 View → Reset Layout 复位；`gui_test` 侧
+  `io.IniFilename` 恒为 `nullptr`。这条分叉是刻意的，与 gui_test 默认禁用个人默认值同一条隔离纪律：
+  参考图绝不能依赖跑测机器上碰巧存在的布局文件。**新增视觉参考场景时不要"顺手打开"测试侧的持久化。**
+
+- 测试影响：`modal_layout` 参考组随编辑模态退役而废弃，其覆盖的控件布局命题由检视器侧的新参考组 `crystal_inspector_layout` 接手（同一套 4 景、同一种 `##DocumentInspector` 在屏子区域截图技术），显示条的 Overlays 表另立 `display_strip_layout`（1 景）——两者均已实测进 CI 白名单（`doc/testing-architecture.md` §4.6）；`defaults_panel_layout` 的 Settings 面板不在本文范围、未受影响；`lens_proj` 走离屏 FBO，与 shell 无耦合；`capture_harness` 整帧参考已随 shell 收尾重拍（重拍纪律见 `doc/testing-architecture.md` §4.6 与 `doc/gui-visual-language.md` §8）。
+
+### 7.2 执行簇 as-built（顶栏，§3 已落地）
+
+§3 的执行簇已建成，三处细节属 §6 的落地自由度、由实现侧定案，写在这里免得下一个人重新推一遍：
+
+- **顶栏是两行，不是一行**。§1 的 ASCII 图把文件簇、执行簇、窗口簇画在一行，那是形态示意；一行装不下
+  是实测而非估计——chrome（面板折叠 / New / Open / Save / Colors / Colored / Settings / View）本身约
+  700 px，执行簇再加约 800 px，连 1600 px 的默认窗口都溢出，更不用说 `kMinWindowWidth`。定案：
+  **第一行 chrome，第二行执行簇**（Run/Stop · dirty 芯片 + Revert · Rays · Max hits · Use GPU · 进度），
+  按生命周期分行，与三区划分同一条组织原则。`kTopBarHeight` 因此从 40 变 64
+  （= `WindowPadding.y*2 + FrameHeight*2 + ItemSpacing.y` = 57 取整留余）。执行簇整行约 985 px，
+  在 1024 px 下**仍完整装下**（实测，非估算）；再窄则裁掉行尾，不重排——Run、dirty 芯片、光线预算这三个
+  最常用的留在最左。
+- **⭐ Rays ∞ 档位：档位边界闭在 ∞ 一侧，所以最大有限值靠拖拽结构上不可达**。轨道 `[0, 0.88)` 映射有限域
+  `[min, max)`，`[0.88, 1]` 是显示 "until stopped" 的档位。这不是「像素精度不够所以很难拖到」，而是映射本身
+  就取不到 `max`——**这正是「输入框必须始终可编辑」的对偶**，两条一起才让 ∞ 保持为终止语义而不是
+  「一个很大的数」（约束出处 `doc/gui-visual-language.md` §4.5）。任何让轨道顶端吸附到 `max` 的「顺手改进」
+  都会同时废掉这两条。
+  另一条同样容易被改掉的性质：**拖进档位时要还原拖拽前的有限值**。ImGui 滑条每帧从指针绝对位置反算值，
+  所以「从 5 M 拖到最右」这条路径本身会把 5 一路改写成接近 100；不还原，用户就带着一个自己没输过的数字
+  进入 ∞。这条性质原本属于被退役的 `Infinite rays` 复选框，它不因为复选框没了而失效。
+- **dirty 芯片没有自己的字段清单**。判据是 `IsModified(sim_state)` ← `dirty` ←
+  `DiffAgainstCommitBaseline`，全链单一。值得知道的边界：`gui_state_tiers.hpp` 的 tier 表以**整个 struct**
+  为一行，而提交基线只捕获 `renderer` 的 re-sim 投影（`RenderConfigResimFields`：分辨率 / 背景 / 光线色 /
+  不透明度）——所以改 `renderer.fov` **不会**点亮芯片，改 `renderer.sim_resolution_index` 会。芯片跟随的是
+  更细、也更权威的那个投影；tier 表在 struct 粒度上是治理文档，不是运行判据。
+- **芯片与 Revert 是两个动作，不合并**：芯片带着新配置重跑，Revert 把新配置扔掉；合并等于删掉后者。
+  芯片在运行中天然不可见——`ReconcileSimState` 只从 `kDone` 产生 `kModified`，`kSimulating` / `kStopping`
+  不被 dirty 降级，运行中的编辑走 `main.cpp` 的节流自动提交。
+- **进度槽**：有限预算画 `ImGui::ProgressBar(已追迹 / 预算)`；∞ 档位**整个槽连同前面的分隔条一起不画**。
+  两条理由，第二条更容易被写错：没有分母的条只能说谎（满条读作「已完成」、空条读作「卡住」），而且光线预算
+  控件已经在同一行写着 "until stopped"，进度槽再写一遍不增加任何信息、只会被读成渲染故障。它是行尾最后一项，
+  所以省略不会让任何东西移位。状态指示文字（Ready / Simulating… / Done / Modified）**留在状态栏**，
+  与 §1 的 ASCII 图一致。
+- 测试影响：执行簇的用例住 `test/gui/functional/test_execution_cluster.cpp`（按字段用途切分：这一次跑多狠
+  归执行簇，会被保存的文档字段留 `test_scene_controls.cpp`）。`kTopBarHeight` 变化会改变 `visual` 组
+  `left_panel` 参考图的捕获高度（`test_gui_main.cpp` 的回读按 `fb_h - (kTopBarHeight + kStatusBarHeight)*sy`
+  算），该参考图与 `capture_harness` 整帧一并进入 shell 收尾的一次性重拍。

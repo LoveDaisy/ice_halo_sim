@@ -4,7 +4,7 @@
 namespace lumice::gui {
 
 // Layout constants
-// Initial window size. Height is bound to the right-panel content footprint:
+// Initial window size. Height is bound to the document column's content footprint:
 // when adding new control groups / expanding existing groups, re-evaluate this
 // constant to avoid spawning a scrollbar on fresh install. On constrained
 // displays (e.g. 1080p + large Dock, Windows 125% scaling), main.cpp clamps
@@ -21,9 +21,32 @@ constexpr int kMinWindowHeight = 640;
 // decoration on macOS/Windows/Linux with ~1.5x buffer.
 constexpr int kWindowDecorationMargin = 50;
 constexpr float kLeftPanelWidth = 400.0f;
-constexpr float kRightPanelWidth = 300.0f;
-constexpr float kTopBarHeight = 40.0f;
+// The top bar is TWO rows: chrome (panel toggles / New / Open / Save / Colors / Settings / View) on
+// the first, the execution cluster (Run / Stop / dirty chip / Revert / Rays / Max hits / Use GPU /
+// run status) on the second. One row was measured not to fit: the chrome row alone is ~700 px and
+// the execution cluster adds ~800 px, which overflows even the 1600 px default window and is far
+// past kMinWindowWidth. Height = WindowPadding.y*2 + FrameHeight*2 + ItemSpacing.y with the theme's
+// 15 px body font (theme.cpp) = 6*2 + 21*2 + 3 = 57, rounded up to 64 for the same slack the 40 px
+// single-row value carried.
+//
+// MAINTAINER: this constant is the input to every fixed-chrome geometry calculation in the app —
+// the dock host's origin and height (main.cpp / test_gui_main.cpp), the document column's y and
+// height (RenderDocumentTree / RenderDocumentInspector call sites in app_panels.cpp), the
+// viewport/display-strip band (GetCentralBand, app_panels.cpp), the collapsed-strip button centring
+// (RenderCollapsedStrip's callers), and the aspect-fit solver (ResolveAspectFit, app.cpp).
+// Changing it also changes the pixel height of the `visual` group's left_panel reference capture
+// (test_gui_main.cpp's left-panel readback derives rh from it), so a change here requires a
+// reference re-shoot for that group.
+constexpr float kTopBarHeight = 64.0f;
 constexpr float kStatusBarHeight = 28.0f;
+// The display strip under the viewport (Grade / Overlays / Components tabs, RenderDisplayStrip in
+// app_panels.cpp). Like kTopBarHeight this is MEASURED, not estimated: it is the height at which the
+// tallest tab (Grade, with the conditional "Screen too small" warning showing) fits without a
+// scrollbar — tab bar + WindowPadding.y*2 + the tab's own rows, read off a real capture.
+// It is a fixed height on purpose: a strip that grew and shrank with the selected tab would move the
+// viewport's bottom edge every time the user switched tabs. Tabs whose content exceeds it scroll
+// inside their own child region instead.
+constexpr float kDisplayStripHeight = 176.0f;
 
 // Live-edit timing constants
 // Invariant: kCommitIntervalMs >= kPollIntervalMs (commit should not be faster than poll)
@@ -44,7 +67,7 @@ constexpr int kPollIntervalMs = 20;  // Server poll interval (T_poll, ms). Short
 constexpr int kIdleHeartbeatIntervalMs = 500;
 static_assert(kIdleHeartbeatIntervalMs > kPollIntervalMs,
               "the idle heartbeat must be a throttled-DOWN cadence relative to the running poll");
-// Crystal edit-modal preview animation tick (ms between successive sample_seed advances while a
+// Crystal inspector preview animation tick (ms between successive sample_seed advances while a
 // shape distribution is active). ~3.3 Hz sits in the 2-4 Hz visual-comfort band (faster reads as
 // noise); it is a pure UX cadence choice, not a correctness constraint.
 constexpr int kCrystalPreviewAnimIntervalMs = 300;
@@ -81,19 +104,13 @@ constexpr int kMaxThumbnailUpdatesPerFrame = 2;
 // Vertical gap between stacked hover-action buttons (Delete on top, Duplicate below).
 constexpr float kHoverBtnGap = 4.0f;
 
-// Border thickness applied to the entry card while its edit modal is open.
-// Default ImGui ChildBorderSize is 1.0f; 2.0f provides a clearly visible
-// distinction without over-thickening. Consumed by RenderEntryCard via
-// PushStyleVar(ImGuiStyleVar_ChildBorderSize).
-constexpr float kActiveCardBorder = 2.0f;
-
 // Default camera zoom for the crystal renderer. Lower value → crystal fills
 // more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
-// the thumbnail cache and the edit-modal preview so the crystal does not
-// visually jump when opening the modal.
+// the thumbnail cache and the inspector's preview so the crystal does not
+// visually jump when a row is selected.
 constexpr float kDefaultCrystalZoom = 1.4f;
 
-// Camera elevation (downward pitch) for the modal/thumbnail crystal preview,
+// Camera elevation (downward pitch) for the inspector/thumbnail crystal preview,
 // in degrees. The camera sits at world (0, -dist, dist·tan(kCameraTiltDeg))
 // looking at the origin, with world +z up. Implemented as a fixed rotation
 // V_rot = Rx(+kCameraTiltDeg) inside CrystalRenderer::BuildViewRotation —

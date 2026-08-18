@@ -110,9 +110,9 @@
 - **GUI 测试**：该机是 WSL，`gui_test` 需要 `xvfb-run`（WSLg 的 X server 在 ssh 会话里不可达）：
   ```bash
   xvfb-run -a build/Release/static/bin/gui_test \
-    --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config
+    --fixed-dt --filter "crystal_inspector_layout,display_strip_layout,defaults_panel_layout" --no-user-config
   ```
-  这两组正是 CI 在软件光栅下运行的组。⚠️ **完整视觉池里的 `crystal_preview_*` 与
+  这三组正是 CI 在软件光栅下运行的组。⚠️ **完整视觉池里的 `crystal_preview_*` 与
   `capture_harness` 场景在软件光栅下达不到 40 dB 阈值**，属已知边界，不是回归——
   判据与可运行组的界定见 `testing-architecture.md`。
 

@@ -145,7 +145,8 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 - GUI tests require a display server unless explicitly skipped with `LUMICE_SKIP_GUI_TESTS=1`.
   `gui_test` is therefore **built on three platforms and run on one**: the `Ubuntu x86_64` leg of
   `.github/workflows/ci.yml` supplies a display with `xvfb-run` + Mesa's llvmpipe software
-  rasterizer and runs the `modal_layout` and `defaults_panel_layout` reference groups there; the
+  rasterizer and runs the `crystal_inspector_layout`, `display_strip_layout` and
+  `defaults_panel_layout` reference groups there; the
   macOS and Windows legs still only compile it. Which groups may run under a software rasterizer
   is a measured fact, not a preference — the per-scene numbers, the reason `lens_proj` is
   excluded despite its pixels being portable, and **the checklist a red in this layer obliges you
@@ -307,20 +308,41 @@ Regen trigger: any change to that projection math, to the overlay drawing, or to
 `python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_lens_projection.cpp`.
 
-The `modal_layout` references cover the edit-modal's internal control layout
-(`src/gui/edit_modals.cpp`) via an on-screen capture of the live "Edit Entry" window rectangle — see
-the docking-coupling note below. All four scenes are deterministic (no simulation, no RNG) and
-compare pixel-identical, so their thresholds sit at the shared 40 dB deterministic floor rather than
-a calibrated mean − 4σ. Regen trigger: any layout change to the edit modal (slider/input widths,
-property-table columns, control ordering, auto-resize behavior), or a harness window size / font
-atlas / ImGui style change. Command: `python scripts/regen_gui_test_refs.py --group modal_layout`.
-Threshold backfill: the `psnr_threshold` field of each `kScenes[]` row in
-`test/gui/visual/test_gui_modal_layout.cpp` — normally left at `kDeterministicThresholdDb` unless a
-scene stops comparing pixel-identical.
+The `crystal_inspector_layout` references cover the document inspector's crystal-page control
+layout (`src/gui/edit_modals.cpp`: `RenderCrystalInspector`) via an on-screen capture of the live
+`##DocumentInspector` window rectangle — see the docking-coupling note below. This group replaced
+`modal_layout` when the Crystal / Axis / Filter edit popup was retired in favor of a persistent
+inspector page (`doc/gui-layout-architecture.md` §2); scene names (`crystal_prism`,
+`crystal_pyramid`, `filter_raypath`, `filter_ee`) carried over unchanged, since the control-layout
+proposition they cover did not change, only the host window did. All four scenes are deterministic
+(no simulation, no RNG) and compare pixel-identical, so their thresholds sit at the shared 40 dB
+deterministic floor rather than a calibrated mean − 4σ. Regen trigger: any layout change to the
+inspector's crystal page (slider/input widths, property-table columns, control ordering), the
+default dock layout, or a harness window size / font atlas / ImGui style change. Command:
+`python scripts/regen_gui_test_refs.py --group crystal_inspector_layout`. Threshold backfill: the
+`psnr_threshold` field of each `kScenes[]` row in
+`test/gui/visual/test_gui_crystal_inspector_layout.cpp` — normally left at
+`kDeterministicThresholdDb` unless a scene stops comparing pixel-identical.
+
+The `display_strip_layout` references cover the viewport's bottom strip's Overlays table
+(`src/gui/app_panels.cpp`: `RenderOverlaysTab`) via an on-screen capture of the live `##DisplayStrip`
+window rectangle. Unlike the other three on-screen groups this window is fixed chrome rather than a
+dock node (`ImGuiWindowFlags_NoDocking`, positioned every frame by `SetNextPanelGeometry`), so it
+needs no dock-layout lookup and no re-shoot on a docking change — only on a layout change to the
+strip itself or the harness/font/style triggers every group shares. One deterministic scene
+(`overlays`) at the 40 dB floor — the AC asked for "at least one," and the table has no
+state-dependent column a second scene would newly exercise (the row-level fold popups are a
+separate ImGui window, outside this rectangle). Regen trigger: any layout change to the Overlays
+table's columns or row order. Command:
+`python scripts/regen_gui_test_refs.py --group display_strip_layout`. Threshold backfill: the
+`psnr_threshold` argument in `test/gui/visual/test_gui_display_strip_layout.cpp`.
 
 The `defaults_panel_layout` references cover the `Settings` modal
-(`src/gui/defaults_panel.cpp`) through the same on-screen sub-region capture as `modal_layout`, and
-inherit the same docking coupling. Six deterministic scenes at the 40 dB floor: four over the merged
+(`src/gui/defaults_panel.cpp`) through the same on-screen sub-region capture technique as the two
+groups above — a `BeginPopupModal` window parked at a fixed position by `WindowMove`, unlike
+`crystal_inspector_layout`'s dock node (see the docking-coupling note below: this modal is still
+outside the docking migration's scope, `doc/gui-layout-architecture.md` §7.1). Six deterministic
+scenes at the 40 dB floor: four over the merged
 settings list (`pending_changes` / `other_expanded` / `filtered` / `no_changes` — the two-section
 diff/adopt split these names once referred to was merged into one list with an inline-edited "Current
 value" column; see `doc/gui-state-governance.md` §8.5) and two over the preset library
@@ -348,7 +370,7 @@ directory is not part of that contract.
 
 **Reference groups** — the registry is `GROUPS` at the top of
 `scripts/regen_gui_test_refs.py`, currently holding `capture_harness`, `lens_proj`,
-`modal_layout` and `defaults_panel_layout`. A
+`crystal_inspector_layout`, `display_strip_layout` and `defaults_panel_layout`. A
 group names the `gui_test` category it tags its output with (also the `[<tag>]` its comparisons
 print and its key in `_thresholds.json`), its scenes/modes, and the export and reference filename
 prefixes. Adding a visual-regression suite means adding a `GROUPS` entry — Phase A/B themselves
@@ -401,20 +423,31 @@ After Phase B, copy the `threshold` values into the group's test source — for 
 `kScenes[]` in `test/gui/visual/test_gui_lens_projection.cpp` (one threshold per scene); the
 script prints the path for whichever group it ran.
 
-**Docking coupling boundary** — relevant to a planned migration of the GUI's fixed-layout panels
-(and the edit modal, from `BeginPopupModal` to a dockable window) onto ImGui's docking branch:
+**Docking coupling boundary** — the GUI's docking substrate migration (`doc/gui-layout-architecture.md`
+§7.1) is landed as-built; this records which reference groups its geometry sources bind to, now that
+the migration is a fact rather than a plan:
 - The regen harness itself (readback, comparison, threshold, trigger mode) is layout-agnostic —
   Phase A/B do not know or care whether panels are docked.
 - `lens_proj` renders through its own off-screen FBO (`export_fbo_renderer.cpp`'s
   `RenderExportToRgba`, allocated at the caller-supplied size), never reading the on-screen preview
-  viewport. It is **fully docking-decoupled**, in both pixel content and output size — the migration
-  needs no action on this group.
-- `modal_layout` reads the DEFAULT framebuffer through `g_fullframe_capture`'s sub-region protocol,
-  using the live on-screen rectangle of the "Edit Entry" window. Once the edit modal becomes
-  dockable, its on-screen position/size source changes and these references will need a **re-shoot**:
-  re-run `python scripts/regen_gui_test_refs.py --group modal_layout` (Phase A + B). No harness code
-  change is required — the comparison mechanism (`CheckAgainstReference` + `g_fullframe_capture`)
-  stays the same; only the captured pixels change.
+  viewport. It is **fully docking-decoupled**, in both pixel content and output size — no dock
+  layout change can touch it.
+- `crystal_inspector_layout` reads the DEFAULT framebuffer through `g_fullframe_capture`'s
+  sub-region protocol, using the live on-screen rectangle of the **docked** `##DocumentInspector`
+  window (`GetPanelNodeIds().document_inspector` in `src/gui/dock_layout.cpp`). A change to the
+  default dock layout (split ratios, which panel docks where) moves that rectangle and these
+  references need a **re-shoot**: re-run
+  `python scripts/regen_gui_test_refs.py --group crystal_inspector_layout` (Phase A + B). No harness
+  code change is required — the comparison mechanism (`CheckAgainstReference` + `g_fullframe_capture`)
+  stays the same; only the captured pixels change. This is the group that inherited `modal_layout`'s
+  re-shoot obligation once the edit popup it used to cover became this dock node.
+- `defaults_panel_layout` reads the same DEFAULT-framebuffer sub-region, but the `Settings` modal is
+  a floating `BeginPopupModal` outside `dock_layout.cpp`'s scope (`doc/gui-layout-architecture.md`
+  §7.1) — a dock layout change does not move it. It re-shoots on the triggers named in its own
+  paragraph above (panel/table layout, harness/font/style), not on docking.
+- `display_strip_layout` reads the same protocol again, over `##DisplayStrip` — fixed chrome
+  (`ImGuiWindowFlags_NoDocking`) positioned every frame by `SetNextPanelGeometry`, so it shares
+  `defaults_panel_layout`'s docking-decoupled standing: a dock layout change does not move it either.
 
 ## Logging and Troubleshooting
 

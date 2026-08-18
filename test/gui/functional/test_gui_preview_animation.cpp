@@ -57,7 +57,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
           gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id]));
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       const std::vector<float> before = SnapshotPreviewVertices();
 
@@ -67,7 +67,6 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       // A new sample_seed after the tick must produce a different draw.
       IM_CHECK(before != after);
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -84,7 +83,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
           gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id]));
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       const std::vector<float> baseline = SnapshotPreviewVertices();
 
@@ -101,7 +100,6 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
         }
       }
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -130,8 +128,15 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // AC4: the ticker is epoch-keyed — reopening a modal starts a fresh session whose first frame
-  // builds with kPreviewFixedSampleSeed, regardless of how far the prior session had advanced.
+  // AC4: the ticker is epoch-keyed — a fresh session's first frame builds with
+  // kPreviewFixedSampleSeed, regardless of how far the prior session had advanced.
+  //
+  // What counts as a session boundary changed with the editor. The modal had an open event, so
+  // reopening it on the same entry was one. The page has none: it is up whenever a crystal is
+  // selected, and re-selecting the crystal already showing is not an event at all. The boundary is
+  // now the page RETARGETING — pointed at a different entry, or brought back after being away —
+  // which is what this case drives below. Re-selecting the same crystal deliberately does NOT
+  // rewind the ticker, for the same reason it does not rewind the trackball: nothing happened.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "p1_edit_modal", "preview_animation_epoch_resets_across_sessions");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -141,18 +146,23 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // First session: advance well past two ticks so the internal seed has moved off the fixed seed.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
       ctx->Yield(kFramesPastOneTick * 2);
       const std::vector<float> advanced = SnapshotPreviewVertices();
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
-
-      // Reopen the same entry: the first built frame must match the fixed-seed reference exactly,
-      // proving the ticker reset rather than resuming the prior session's seed.
-      ctx->ItemClick("**/Edit##cr");
-      ctx->Yield(4);
+      // Away from the page and back — a real session boundary, where re-clicking the same row is
+      // not. The first built frame after it must match the fixed-seed reference exactly, proving
+      // the ticker reset rather than resuming the prior session's seed.
+      gui::g_state.SelectSun();
+      ctx->Yield(3);
+      OpenCrystalTab(ctx);
+      // Read on the FIRST built frame of the new session, which is what the proposition is about.
+      // Not a detail: one tick is kFramesPastOneTick-ish frames away, so a snapshot taken a
+      // handful of frames later is measuring the ticker running again — correctly — rather than
+      // the reset. The old body could afford to be loose here because opening a modal cost one
+      // click; selecting a row and clicking a tab costs several frames before the snapshot, and
+      // the two together were enough to cross a tick.
       const std::vector<float> reopened = SnapshotPreviewVertices();
 
       const auto& cr = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id];
@@ -164,7 +174,6 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       // Sanity: the reset genuinely rewound — the reopened frame differs from the advanced one.
       IM_CHECK(reopened != advanced);
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }
@@ -181,7 +190,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       RandomizeEntry0FaceDistance();
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
 
       float rot_before[16];
@@ -201,7 +210,6 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       ctx->Yield(kFramesPastOneTick);
       IM_CHECK(std::memcmp(gui::g_crystal_rotation, rot_dragged, sizeof(rot_dragged)) == 0);
 
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
       ctx->Yield(2);
     };
   }

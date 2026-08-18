@@ -14,6 +14,7 @@
 #include "gui/crystal_preview.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/destructive_style.hpp"
+#include "gui/dock_layout.hpp"
 #include "gui/edit_modals.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
@@ -25,6 +26,7 @@
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
+#include "gui/window_sizing.hpp"  // SplitViewportForDisplayStrip — the preview/strip split's single owner
 #include "imgui.h"
 #include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
 
@@ -57,11 +59,14 @@
 //
 //   Layer 3 (Floating; default raise behavior — NO NoBringToFrontOnFocus,
 //            so push_back on creation -> floats above the background cluster):
-//     - Staged "Edit Entry" (BeginPopupModal, on ImGui popup stack -> always top)
-//     - Immediate "Edit Entry" (ImGui::Begin regular window)
-//     - "Unsaved Changes" (BeginPopupModal)
+//     - "Unsaved Changes" (BeginPopupModal), and the other popups beside it:
+//       "Save Modified Config", "Overwrite Config File", "Import Warning",
+//       "Warning", "Custom Spectrum", the Settings panel.
+//       The per-entry "Edit Entry" window used to head this list in both its
+//       forms; it is gone — the crystal / axis / filter editors are a page of
+//       "##DocumentInspector" in the background cluster below.
 //     - "##LogPanel" — user-toggleable; raisable on click; sits naturally
-//       above the LeftPanel / RightPanel cluster.
+//       above the document column / display strip cluster.
 //     - ICON_FA_PALETTE " Colors" (color_window.cpp:508) — user-toggleable
 //       floating window. Manual click detection in the background cluster
 //       (e.g. RenderEntryCard's IsMouseHoveringRect path) MUST gate on
@@ -71,15 +76,33 @@
 //
 //   Background cluster (NoBringToFrontOnFocus, push_front on creation
 //                       -> bottom of g.Windows):
-//     - "##LeftPanel" / "##RightPanel" — fixed left/right strips.
-//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars.
-//     - "##PreviewPanel" — transparent (NoBackground); the OpenGL preview
+//     - "##DockHost" — the transparent host carrying the main DockSpace
+//       (dock_layout.cpp). Draws nothing itself; the dockspace paints the
+//       panel background over everything except its central node.
+//     - "##DocumentTree" / "##DocumentInspector" — docked
+//       INTO that dockspace. Their position and size come from their dock
+//       nodes; they no longer carry NoMove/NoResize because they no longer
+//       place themselves. The two share the document column, one above the
+//       other, with a native separator between them.
+//     - "##TopBar" / "##StatusBar" — fixed top/bottom bars, outside the
+//       dockspace, still placed by SetNextPanelGeometry.
+//     - "##PreviewPanel" — transparent (NoBackground) and pinned over the
+//       dockspace's deliberately-empty central node; the OpenGL preview
 //       shader is rendered into this region between ImGui::Render and
 //       SwapBuffers in main.cpp.
+//     - "##DisplayStrip" — the Grade / Overlays / Components tabs, opaque and
+//       pinned to the BOTTOM of that same central node; the preview gives up
+//       exactly this band (SplitViewportForDisplayStrip, window_sizing.hpp).
+//       Fixed-geometry chrome like the bars, not a dock node — hence NoDocking.
 //     Within this cluster, push_front means the LATEST Begin'd window ends
 //     up at index 0 (bottom). Visual order within the cluster is therefore
 //     the REVERSE of main.cpp Render* call order. Cluster members do not
-//     overlap each other, so this internal ordering has no visual effect.
+//     overlap each other, so this internal ordering has no visual effect —
+//     and for the three that are now dock nodes / the central node, docking
+//     enforces that non-overlap rather than the call order merely happening
+//     to produce it. Measured, not assumed: shell_chrome's
+//     "the_log_panel_can_come_forward_over_the_side_panels" still reports the
+//     log panel above the docked left panel in g.Windows.
 //
 // -----------------------------------------------------------------------------
 // CHECKLIST when adding a new ImGui::Begin window (in this file or elsewhere):
@@ -94,7 +117,11 @@
 //   3. If Layer 3 (floating): do NOT add NoBringToFrontOnFocus. The window
 //      will be push_back'd on creation and naturally float above the
 //      background cluster, and clicks will splice it to the very top.
-//   4. Code-review must reject any new Begin not registered here, or any
+//   4. Decide whether it may be docked. Anything that is not one of the
+//      dockspace's own panels needs ImGuiWindowFlags_NoDocking: dragged into
+//      the DockSpace it would take space from the default layout and have no
+//      way back except View -> Reset Layout.
+//   5. Code-review must reject any new Begin not registered here, or any
 //      main.cpp Render* call order that contradicts this model.
 //
 // SCOPE of this convention:
@@ -127,34 +154,40 @@ inline void SetNextPanelGeometry(float x, float y, float w, float h) {
   ImGui::SetNextWindowSize(ImVec2(w, h));
   ImGui::SetNextWindowViewport(vp->ID);
 }
-}  // namespace
 
-void RenderTopBar(float window_width) {
-  SetNextPanelGeometry(0, 0, window_width, kTopBarHeight);
-  ImGui::Begin("##TopBar", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+// ================================================================================================
+// Execution cluster — the top bar's SECOND row, rendered by RenderExecutionCluster below.
+//
+// Why it is a block of its own rather than more statements in RenderTopBar: the first row is static
+// chrome (buttons that open things), while this row is the only part of the top bar that reads
+// simulation state and writes document fields. Keeping the two apart is what lets a reader answer
+// "what in the top bar can change while a run is in flight" by looking at one function.
+//
+// What belongs here is decided by field lifecycle, not by convenience: these controls say how hard
+// THIS RUN goes and whether the picture on screen still corresponds to the document. Nothing saved
+// with the scene belongs in this row — that is the document column's job
+// (doc/gui-layout-architecture.md §1/§3).
+// ================================================================================================
 
-  // Left-panel collapse toggle (placed before Run/Stop; owns the leftmost slot of the top bar
-  // so it can never overlap with panel-internal headers).
-  {
-    const char* left_toggle_label = g_state.left_panel_collapsed ? ICON_FA_CHEVRON_RIGHT "##left_panel_toggle" :
-                                                                   ICON_FA_CHEVRON_LEFT "##left_panel_toggle";
-    if (ImGui::Button(left_toggle_label)) {
-      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-  }
+// Widths of the two numeric controls, in pixels, covering their [slider][input] pair only (the
+// trailing text label is drawn after and sizes itself). Chosen so the whole row fits inside
+// kMinWindowWidth (1024): the row totals ~985 px with separators. A narrower window clips the tail
+// of the row rather than reflowing it — the blueprint leaves narrow-window degradation to the
+// implementation (§6), and clipping keeps Run, the dirty chip and the ray budget (the leftmost,
+// most-used items) on screen.
+constexpr float kRaysControlWidth = 170.0f;
+constexpr float kMaxHitsControlWidth = 150.0f;
+// Fixed slot for the run-progress readout, so the row does not shift as the text under it changes
+// between a percentage, "until stopped", and nothing at all.
+constexpr float kProgressSlotWidth = 130.0f;
 
-  // Run/Stop — fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on
-  // toggle. `busy` widens the file-op gates below: New/Open/Save/backend-toggle stay disabled while
-  // the backend is still draining an async Stop (kStopping), not just while simulating.
-  bool simulating = IsSimulating(g_state.sim_state);
-  bool stopping = IsStopping(g_state.sim_state);
-  bool busy = IsBusy(g_state.sim_state);
+void RenderExecutionCluster() {
   const auto& style = ImGui::GetStyle();
+  const bool simulating = IsSimulating(g_state.sim_state);
+  const bool stopping = IsStopping(g_state.sim_state);
+
+  // ---- Run / Stop ----
+  // Fixed width (max of ALL three labels, incl. "Stopping…") to prevent layout shift on toggle.
   const char* kRunLabel = ICON_FA_PLAY " Run";
   const char* kStopLabel = ICON_FA_STOP " Stop";
   const char* kStoppingLabel = ICON_FA_STOP " Stopping...";
@@ -183,27 +216,46 @@ void RenderTopBar(float window_width) {
     PopGoodButtonStyle();
   }
 
-  // Revert area — always rendered for stable layout, hidden when not modified.
-  // Alpha=0 + BeginDisabled: invisible and non-interactive, but still occupies layout space.
-  // The hidden area intercepts clicks, which is harmless in this horizontal toolbar context.
-  bool modified = IsModified(g_state.sim_state);
+  // ---- Dirty chip + Revert ----
+  // Always rendered for stable layout, hidden when not modified: Alpha=0 + BeginDisabled leaves the
+  // area invisible and non-interactive while it still occupies layout space. The hidden area
+  // intercepts clicks, which is harmless in this horizontal toolbar context.
+  //
+  // The chip and Revert are two actions, not one: the chip re-runs with the new configuration, and
+  // Revert throws the new configuration away. Merging them would leave no way to do the second.
+  //
+  // The predicate is `IsModified(sim_state)` and nothing else — deliberately NOT a second list of
+  // "which fields count as simulation input". IsModified is fed by ReconcileSimState, whose dirty
+  // flag is DiffAgainstCommitBaseline's verdict over the field→tier table (gui_state_tiers.hpp), so
+  // the chip and the tier classifier are the same statement read twice. Anything that would make
+  // the chip disagree with the classifier is a bug in the classifier, and belongs there.
+  //
+  // A consequence of that predicate worth stating, because it is a behavior and not an oversight:
+  // the chip cannot appear during a run. ReconcileSimState only produces kModified from kDone, so
+  // kSimulating/kStopping are never downgraded to it; edits made while a run is in flight are
+  // auto-committed to the running server instead (the throttled commit in main.cpp), which is what
+  // makes "modified relative to the last completed run" the only question the chip answers.
+  const bool modified = IsModified(g_state.sim_state);
   if (!modified) {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.0f);
   }
   ImGui::BeginDisabled(!modified);
   ImGui::SameLine();
-  ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
-  // task-349.2 Step 2 (AC1/AC3): tooltip explains what the ⚠ + Revert row
-  // means. Source-agnostic wording (config changed, not "you added a color
-  // class") — main-scene edits and color-class edits reach kModified through
-  // the same ReconcileSimState pipeline, so a single tooltip covers both.
-  // Attached to the icon rather than the button so the button's own hover
-  // action (click to revert) is not shadowed. Only shown when modified,
-  // since the row is BeginDisabled(alpha=0) otherwise.
+  PushWarningButtonStyle();
+  if (ImGui::Button(ICON_FA_CIRCLE_EXCLAMATION " Changed - re-run") && modified) {
+    // Same call as the Run button above, not a variant of it: the chip is a second entry point to
+    // running, placed where the user is already looking when they notice the result is stale.
+    DoRun(/*user_initiated=*/true);
+  }
+  PopWarningButtonStyle();
+  // The wording is source-agnostic on purpose — "configuration changed", not "you added a color
+  // class". Main-scene edits and color-class edits reach kModified through the same
+  // ReconcileSimState pipeline, so naming either source would be wrong half the time. Shown only
+  // when modified, since the row is BeginDisabled(alpha=0) otherwise.
   if (modified && ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "Configuration changed since the last run.\n"
-        "Click Run to re-simulate, or Revert to discard the changes.");
+        "Click to re-simulate, or Revert to discard the changes.");
   }
   ImGui::SameLine();
   if (ImGui::SmallButton("Revert") && modified) {  // `&& modified`: redundant safety guard over BeginDisabled
@@ -216,7 +268,108 @@ void RenderTopBar(float window_width) {
 
   ImGui::SameLine();
   ImGui::TextDisabled("|");
+
+  // ---- Ray budget ----
   ImGui::SameLine();
+  RaysBudgetControl(g_state, kRaysControlWidth);
+
+  ImGui::SameLine();
+  ImGui::TextDisabled("|");
+
+  // ---- Max hits ----
+  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
+  ImGui::SameLine();
+  const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", g_state);
+  SliderIntWithInput("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
+                     static_cast<int>(hits_c.max_value), /*trailing_label=*/false, /*committed=*/nullptr,
+                     /*active=*/nullptr, kMaxHitsControlWidth);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
+  }
+
+  // ---- Backend toggle ----
+  // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so the next
+  // Apply/Run reconstructs the server for the chosen backend (MaybeReconstructServerForBackend in
+  // app.cpp) — CPU N-worker vs GPU single engine are different orchestration topologies, so the
+  // server is rebuilt and the accumulated image resets on toggle. Falls back to CPU silently if the
+  // active config is not GPU-compatible.
+  // use_gpu_backend is intentionally excluded from ConfigSnapshot (session/view field, see
+  // gui_state.hpp field-sync scope comment), so it cannot participate in the reconciler auto-diff —
+  // the manual MarkDirty call below is the T0 documented exception.
+  // Runtime gate: only show the checkbox when a GPU backend is actually available (Metal device on
+  // Apple / NVIDIA device + usable CUDA on Windows-Linux), so it never appears on CPU-only hosts or
+  // machines with very old hardware / broken GPU drivers, where selecting it would otherwise fail
+  // in EnsureDevice. The probe is cached, so the per-frame cost is a plain memory read.
+  if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
+    // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
+    const bool busy = IsBusy(g_state.sim_state);
+    ImGui::BeginDisabled(busy);
+    if (Checkbox("Use GPU", &g_state.use_gpu_backend)) {
+      g_state.MarkDirty();
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Use the GPU for simulation (falls back to CPU if incompatible)");
+    }
+  }
+
+  // ---- Run progress ----
+  // The fraction is derived, not stored: rays traced so far against the budget this run was asked
+  // for.
+  //
+  // An infinite run gets NO slot at all, not an "until stopped" one. Two reasons, and the second is
+  // the one that is easy to get wrong: a bar with no denominator has to lie (a full one reads as
+  // "finished", an empty one as "stuck"), and the ray-budget control three slots to the left is
+  // already showing the words "until stopped" — a second copy in the same row says nothing the
+  // first did not and reads as a rendering fault. Dropping the trailing separator too keeps the row
+  // ending cleanly rather than on a dangling divider. Nothing shifts as a result: this is the last
+  // item in the row.
+  if (!g_state.sim.infinite) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    const double target = static_cast<double>(g_state.sim.ray_num_millions) * 1e6;
+    const double done = static_cast<double>(g_state.stats_sim_ray_num);
+    const float fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
+    char overlay[32];
+    snprintf(overlay, sizeof(overlay), "%.0f%%", static_cast<double>(fraction) * 100.0);
+    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, 0.0f), overlay);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Rays traced so far against this run's ray budget.");
+    }
+  }
+}
+}  // namespace
+
+void RenderTopBar(float window_width) {
+  SetNextPanelGeometry(0, 0, window_width, kTopBarHeight);
+  ImGui::Begin("##TopBar", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  // ---- Row 1: chrome. Documents, features, windows — nothing here reads simulation state except
+  // the `busy` gate on the file operations, and nothing here writes a document field.
+  //
+  // Left-panel collapse toggle owns the leftmost slot of the top bar so it can never overlap with
+  // panel-internal headers.
+  {
+    const char* left_toggle_label = g_state.left_panel_collapsed ? ICON_FA_CHEVRON_RIGHT "##left_panel_toggle" :
+                                                                   ICON_FA_CHEVRON_LEFT "##left_panel_toggle";
+    if (ImGui::Button(left_toggle_label)) {
+      g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+  }
+
+  // `busy` gates the file operations: New/Open/Save stay disabled while the backend is still
+  // draining an async Stop (kStopping), not just while simulating.
+  const bool busy = IsBusy(g_state.sim_state);
 
   // File operations — New/Open disabled while busy (simulating OR async Stop draining); Save menu
   // itself stays enabled so read-only exports (Screenshot / Dual Fisheye Equal Area /
@@ -430,23 +583,31 @@ void RenderTopBar(float window_width) {
     OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
   }
 
-  // Right-panel collapse toggle — right-aligned so it sits flush with the right panel's outer edge.
-  // Also note: when the right panel is already collapsed, RenderCollapsedStrip's internal button
-  // still expands it; this top-bar toggle simply offers a symmetric alternate entry point.
-  {
-    const char* right_toggle_label = g_state.right_panel_collapsed ? ICON_FA_CHEVRON_LEFT "##right_panel_toggle" :
-                                                                     ICON_FA_CHEVRON_RIGHT "##right_panel_toggle";
-    // Use the max width of both label states so the button's left edge doesn't jitter when toggled.
-    float w_expanded = ImGui::CalcTextSize(ICON_FA_CHEVRON_RIGHT "##right_panel_toggle", nullptr, true).x;
-    float w_collapsed = ImGui::CalcTextSize(ICON_FA_CHEVRON_LEFT "##right_panel_toggle", nullptr, true).x;
-    float btn_w = std::max(w_expanded, w_collapsed) + style.FramePadding.x * 2.0f;
-    float right_edge = ImGui::GetWindowContentRegionMax().x;
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(right_edge - btn_w);
-    if (ImGui::Button(right_toggle_label)) {
-      g_state.right_panel_collapsed = !g_state.right_panel_collapsed;
-    }
+  // View menu. It exists because panel geometry became user-editable (the panels are dock nodes and
+  // their splitters are draggable, and the arrangement persists across runs) — "I dragged the layout
+  // into a state I cannot undo" is the one objection to persisting it, and this is the answer to it.
+  // Same popup-button shape as Save above rather than a real menu bar, which the top bar has never
+  // had.
+  ImGui::SameLine();
+  if (ImGui::Button("View")) {
+    ImGui::OpenPopup("ViewMenu");
   }
+  if (ImGui::BeginPopup("ViewMenu")) {
+    if (ImGui::MenuItem("Reset Layout")) {
+      RequestDockLayoutReset();
+      // A reset that left the column collapsed would not be a reset: collapse is view state, and the
+      // rebuilt layout restores the column to its default width regardless. Clearing the flag here
+      // keeps the marker and the geometry from disagreeing. The collapse-tracking in
+      // RenderDocumentTree sees this as an ordinary expand and asks for the width the rebuild
+      // already produced, so the two agree rather than fight.
+      g_state.left_panel_collapsed = false;
+    }
+    ImGui::EndPopup();
+  }
+
+  // ---- Row 2: the execution cluster. No SameLine, so it starts on a fresh line; kTopBarHeight is
+  // sized for exactly these two rows (gui_constants.hpp).
+  RenderExecutionCluster();
 
   ImGui::End();
 }
@@ -454,58 +615,161 @@ void RenderTopBar(float window_width) {
 namespace {
 constexpr float kCollapseBtnSize = 20.0f;
 
-// Draw a collapse/expand button as a foreground overlay using ImGui theme colors.
-// Returns true if clicked. Coordinates are viewport-local; under multi-viewport
-// the main-viewport origin is applied to reach absolute screen space used by
-// ForegroundDrawList and io.MousePos.
-bool OverlayButton(const char* label, float local_x, float local_y) {
-  ImVec2 pos = MainVpPos(local_x, local_y);
-  ImVec2 max(pos.x + kCollapseBtnSize, pos.y + kCollapseBtnSize);
-
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
-  ImGuiIO& io = ImGui::GetIO();
-  // The collapse strip is drawn directly to ForegroundDrawList without a Begin(), so no
-  // ImGui window exists to gate against. Fall back to WantCaptureMouse, which is set by
-  // NewFrame() when any real ImGui window (e.g. Colors) sits under the cursor. This
-  // prevents click-through when a floating window covers the strip
-  // (task-color-window-mouse-capture).
-  bool hovered = !io.WantCaptureMouse &&
-                 (io.MousePos.x >= pos.x && io.MousePos.x <= max.x && io.MousePos.y >= pos.y && io.MousePos.y <= max.y);
-  bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-
-  ImU32 bg_col = ImGui::GetColorU32(clicked ? ImGuiCol_ButtonActive :
-                                    hovered ? ImGuiCol_ButtonHovered :
-                                              ImGuiCol_Button);
-  fg->AddRectFilled(pos, max, bg_col, 3.0f);
-
-  ImVec2 text_size = ImGui::CalcTextSize(label);
-  float tx = pos.x + (kCollapseBtnSize - text_size.x) * 0.5f;
-  float ty = pos.y + (kCollapseBtnSize - text_size.y) * 0.5f;
-  fg->AddText(ImVec2(tx, ty), ImGui::GetColorU32(ImGuiCol_Text), label);
-
-  return clicked;
-}
-
-// Draw the collapsed strip background + expand button via foreground draw list.
-// No ImGui window needed — avoids WindowMinSize issues. Coordinates are
-// viewport-local (see OverlayButton comment).
-void RenderCollapsedStrip(const char* btn_label, float strip_x, float strip_y, float strip_h, bool* collapsed) {
-  ImDrawList* fg = ImGui::GetForegroundDrawList();
-  ImVec2 strip_min = MainVpPos(strip_x, strip_y);
-  ImVec2 strip_max = MainVpPos(strip_x + kCollapseBtnSize, strip_y + strip_h);
-  fg->AddRectFilled(strip_min, strip_max, ImGui::GetColorU32(ImGuiCol_WindowBg));
-  float btn_y = strip_y + (strip_h - kCollapseBtnSize) * 0.5f;
-  if (OverlayButton(btn_label, strip_x, btn_y)) {
+// The expand button of a collapsed side panel: an ordinary ImGui button, vertically centred in the
+// panel's own (now kCollapseBtnSize-wide) window. Call between that window's Begin and End.
+//
+// It used to be drawn straight to the ForegroundDrawList, with hit-testing done by hand and gated on
+// `!io.WantCaptureMouse` — a stand-in for "no floating window is over the strip", which worked only
+// because nothing else was submitted where the strip sat. Under docking the strip's rectangle always
+// belongs to a dock node, so that gate is false whenever the pointer is on the button and the panel
+// could never be brought back. Letting ImGui hit-test a real widget answers the original question
+// (is something above this?) properly, by z-order, instead of by proxy.
+void RenderCollapsedStrip(const char* btn_label, bool* collapsed) {
+  // Centre the square button in the strip; the window itself supplies the strip's background, so
+  // there is nothing left to draw by hand.
+  const float btn_y = (ImGui::GetWindowHeight() - kCollapseBtnSize) * 0.5f;
+  ImGui::SetCursorPos(ImVec2(0.0f, btn_y));
+  if (ImGui::Button(btn_label, ImVec2(kCollapseBtnSize, kCollapseBtnSize))) {
     *collapsed = false;
   }
 }
+
+// Which collapse state has already been written to which node. Per panel, kept by the caller.
+//
+// `restore_extent` is what the node measured along the folding axis the moment it was folded, and
+// it is why unfolding does not have to guess. For the side panels the guess would merely be stale
+// (a dragged width snapping back to the default); for the document column's halves there is no
+// constant to guess WITH — their expanded height is a fraction of a column whose own height is the
+// window's. Zero means "never folded on this node", which is the state after a layout rebuild hands
+// out new IDs, and then the caller's default is the only answer available.
+struct PanelCollapseTracker {
+  ImGuiID node_id = 0;
+  bool applied = false;
+  float restore_extent = 0.0f;
+};
+
+// Which extent of a dock node a collapse writes. The document column's two halves fold along the
+// other axis from the side panels, and the arithmetic is otherwise identical — see ApplyPanelCollapse.
+enum class CollapseAxis { kWidth, kHeight };
+
+// A collapsed panel's extent along the folding axis. Width: the strip that holds the chevron that
+// brings it back. Height: enough for the half's header row, which is what stays visible when a half
+// folds — the column keeps saying what is folded, where a bare 20 px strip would not.
+constexpr float kFoldedHalfHeight = 26.0f;
+
+// A panel's collapsed/expanded state is the size of its dock node along one axis. Four things about
+// the shape of this:
+//   - It writes only on a transition, never every frame. A per-frame DockBuilderSetNodeSize would
+//     silently undo a splitter drag on the very next frame, i.e. the panels would look resizable and
+//     not be.
+//   - The node ID is read fresh from dock_layout on every call, never cached: a Reset Layout
+//     rebuilds the tree and hands out new IDs, and resizing the old one would silently do nothing.
+//   - When the node changes (first frame, or a rebuild), the marker is seeded from the layout rather
+//     than from a default. The interactive app persists the dock tree but not GuiState, so a session
+//     that quit with a panel collapsed comes back with a strip-wide node and a flag that says
+//     expanded; a marker starting at "expanded" would agree with the flag, see no transition, and
+//     leave the panel rendering its full content inside a 20 px column.
+//   - The height it writes back comes from the NODE, not from the calling window. For the right
+//     panel the two are the same number; for the document column they are not — its node is the
+//     split parent of the tree and the inspector, and the tree window's own height is one half of
+//     it. Writing that half back would shrink the column a little further on every collapse. A
+//     node that cannot be measured (height 0, i.e. the id no longer resolves) leaves the marker
+//     untouched so the transition is retried rather than swallowed.
+// One implementation for both axes rather than a width version and a near-copy height version.
+// Nothing in the body was specific to width: the folding extent and the extent carried through
+// unchanged are the only two quantities, and which of them is x is a parameter. (plan §3 point 3
+// asked for this evaluation explicitly — the merge is clean, so there is no second copy to keep in
+// step.)
+void ApplyPanelCollapse(CollapseAxis axis, ImGuiID node_id, bool collapsed, float expanded_extent,
+                        PanelCollapseTracker* tracker) {
+  if (node_id == 0) {
+    return;
+  }
+  const bool horizontal = axis == CollapseAxis::kWidth;
+  const float folded_extent = horizontal ? kCollapseBtnSize : kFoldedHalfHeight;
+  const float along = horizontal ? GetPanelNodeWidth(node_id) : GetPanelNodeHeight(node_id);
+  if (tracker->node_id != node_id) {
+    tracker->node_id = node_id;
+    tracker->applied = along <= folded_extent;
+  }
+  if (collapsed == tracker->applied) {
+    return;
+  }
+  const float across = horizontal ? GetPanelNodeHeight(node_id) : GetPanelNodeWidth(node_id);
+  if (across <= 0.0f) {
+    return;
+  }
+  tracker->applied = collapsed;
+  float new_along;
+  if (collapsed) {
+    tracker->restore_extent = along;
+    new_along = folded_extent;
+  } else {
+    new_along = tracker->restore_extent > folded_extent ? tracker->restore_extent : expanded_extent;
+  }
+  ResizePanelNode(node_id, horizontal ? ImVec2(new_along, across) : ImVec2(across, new_along));
+}
+
+// Shared by both side panels. NoMove / NoResize are gone: position and size are the dock node's job
+// now, and leaving them on would be a claim about geometry this code no longer makes.
+// NoBringToFrontOnFocus is kept — the panels stay in the background cluster described at the top of
+// this file, below every floating window.
+constexpr ImGuiWindowFlags kSidePanelBaseFlags =
+    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+// A document-column half's section header, and the control that folds it. Returns true on the frame
+// the user asked to toggle the fold.
+//
+// It doubles as the page title, which for the inspector is load-bearing: the inspector is the only
+// thing on screen that says which item the controls below are editing — the tree's highlight says
+// it too, but the tree can be scrolled away from the selected row, or folded flat, while the
+// inspector still shows it.
+//
+// The whole row is the hit target rather than just the chevron (doc/gui-layout-architecture.md §5:
+// clicking the section header folds the section). A full-width Selectable gives that, and gives the
+// hover highlight that says the row is a target at all.
+//
+// `id` is a fixed string per half, kept out of the visible label with `###`, so the identity does
+// not move when the chevron flips or the crystal page retitles itself on every selection.
+bool RenderHalfFoldHeader(const char* icon, const char* text, const char* id, bool folded) {
+  char label[96];
+  snprintf(label, sizeof(label), "%s  %s  %s###%s", folded ? ICON_FA_CHEVRON_RIGHT : ICON_FA_CHEVRON_DOWN, icon, text,
+           id);
+  const bool toggled = ImGui::Selectable(label);
+  ImGui::Separator();
+  return toggled;
+}
+
+// Height to give a half when it unfolds and the tracker has nothing remembered — the default split
+// of whatever the column measures right now. Not a constant, because the column's height is the
+// window's: a fixed number would be wrong on every window size but one.
+float DefaultHalfHeight(bool inspector) {
+  const float column_h = GetPanelNodeHeight(GetPanelNodeIds().left);
+  const float ratio = inspector ? kDocumentInspectorHeightRatio : 1.0f - kDocumentInspectorHeightRatio;
+  return column_h * ratio;
+}
 }  // namespace
 
-void RenderLeftPanel(float window_height) {
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
+void RenderDocumentTree() {
+  static PanelCollapseTracker s_collapse;
 
   if (g_state.left_panel_collapsed) {
-    RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, 0, kTopBarHeight, panel_height, &g_state.left_panel_collapsed);
+    // The tree window is still submitted, holding the strip-wide column, rather than skipped: a
+    // docked window that stops submitting makes its node invisible, and the neighbours take the
+    // space back the same frame — the strip would end up on top of the preview instead of beside
+    // it. The INSPECTOR is skipped while collapsed (see RenderDocumentInspector), and that is the
+    // same mechanism used deliberately: its neighbour is the tree, one node over, so the space it
+    // gives up stays inside the column and the strip holds one chevron rather than two.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin(kDocumentTreeWindowName, nullptr,
+                 kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    // Collapse resizes the column's PARENT node, not this window's own node — see
+    // DockPanelNodeIds. Consequence, by design: a resize written here lands on the dock node
+    // starting next frame, like every other transition-triggered ResizePanelNode call.
+    ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().left, true, kLeftPanelWidth, &s_collapse);
+    RenderCollapsedStrip(ICON_FA_CHEVRON_RIGHT, &g_state.left_panel_collapsed);
+    ImGui::End();
     return;
   }
 
@@ -516,19 +780,40 @@ void RenderLeftPanel(float window_height) {
     g_state.pick_link_source.reset();
   }
   // Remember whether pick was active at the start of this frame so we can
-  // detect "pick just completed" at the bottom and re-open the modal.
+  // detect "pick just completed" at the bottom and re-select the source entry.
   std::optional<GuiState::EntryRef> pick_source_at_entry =
       pick_active_at_entry ? g_state.pick_link_source : std::nullopt;
 
-  SetNextPanelGeometry(0, kTopBarHeight, kLeftPanelWidth, panel_height);
-  ImGui::Begin("##LeftPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+  // Arming pick unfolds the halves, because the tree's rows ARE the click targets pick is waiting
+  // for. Without this, "Link to..." pressed from a page while the tree is folded arms a mode whose
+  // only exit is Esc — the thing the user was told to click is not on screen.
+  if (pick_active_at_entry) {
+    g_state.FoldDocumentHalves(false, false);
+  }
+
+  ImGui::Begin(kDocumentTreeWindowName, nullptr,
+               kSidePanelBaseFlags | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  ApplyPanelCollapse(CollapseAxis::kWidth, GetPanelNodeIds().left, false, kLeftPanelWidth, &s_collapse);
+
+  // The half's own fold, distinct from the whole-column collapse handled above: this one gives the
+  // height to the inspector rather than to the preview.
+  static PanelCollapseTracker s_fold;
+  if (RenderHalfFoldHeader(ICON_FA_LIST, "Document", "tree_fold", g_state.document_tree_folded)) {
+    g_state.FoldDocumentHalves(!g_state.document_tree_folded, false);
+  }
+  ApplyPanelCollapse(CollapseAxis::kHeight, GetPanelNodeIds().document_tree, g_state.document_tree_folded,
+                     DefaultHalfHeight(/*inspector=*/false), &s_fold);
+  if (g_state.document_tree_folded) {
+    // Everything below is skipped, header included in what stays: the node is now a strip the
+    // height of that one row, and submitting rows into it would only give the window a scrollbar
+    // over content nobody asked to see.
+    ImGui::End();
+    return;
+  }
 
   // Pick-mode hint bar — render above the scroll area so the user always sees
   // the active-pick state and the Esc instruction. The actual click target is
-  // each entry card (handled inside RenderEntryCard via InvisibleButton).
+  // each entry row (handled inside RenderEntryRow).
   if (pick_active_at_entry) {
     const auto& src = *g_state.pick_link_source;
     ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
@@ -538,18 +823,18 @@ void RenderLeftPanel(float window_height) {
     ImGui::Separator();
   }
 
-  // ---- Layout: cards (scroll) + toolbar ----
+  // ---- Layout: tree rows (scroll) + toolbar ----
   float avail_h = ImGui::GetContentRegionAvail().y;
   auto& style = ImGui::GetStyle();
   float toolbar_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-  float cards_h = std::max(0.0f, avail_h - toolbar_h);
+  float rows_h = std::max(0.0f, avail_h - toolbar_h);
 
-  // Process thumbnail update queue before rendering cards
+  // Process thumbnail update queue before rendering rows
   g_thumbnail_cache.ProcessUpdateQueue(g_state, kMaxThumbnailUpdatesPerFrame);
 
-  // ---- Card scroll area (fills panel above the toolbar) ----
-  ImGui::BeginChild("##CardScroll", ImVec2(0, cards_h), ImGuiChildFlags_None);
-  RenderScatteringSection(g_state);
+  // ---- Row scroll area (fills panel above the toolbar) ----
+  ImGui::BeginChild("##TreeScroll", ImVec2(0, rows_h), ImGuiChildFlags_None);
+  RenderDocumentTreeRows(g_state);
   ImGui::EndChild();
 
   // ---- Bottom toolbar: add layer only (per-layer delete lives on the header row) ----
@@ -577,409 +862,412 @@ void RenderLeftPanel(float window_height) {
     g_thumbnail_cache.OnLayerStructureChanged();
   }
 
-  // Process edit request: open modal if an edit button or card area was clicked
-  if (GetEditRequest().target != EditTarget::kNone) {
-    const auto& req = GetEditRequest();
-    if (req.target == EditTarget::kCard) {
-      const auto modal_tgt = GetEditModalTarget();
-      if (!IsEditModalOpen() || modal_tgt.layer_idx != req.layer_idx || modal_tgt.entry_idx != req.entry_idx) {
-        EditRequest resolved = req;
-        resolved.target = IsEditModalOpen() ? GetActiveTabAsEditTarget() : EditTarget::kCrystal;
-        OpenEditModal(resolved, g_state);
-      }
-    } else {
-      OpenEditModal(req, g_state);
-    }
-    ResetEditRequest();
-  }
-
   // Pick-mode cancel: blank area / panel-switch click.
-  // If pick is still active after cards are rendered (no card's InvisibleButton consumed
-  // the click), a left mouse click anywhere cancels pick. Covers clicking blank space in
-  // the LeftPanel, the right panel, or any non-card widget. Esc was handled at frame start.
+  // If pick is still active after the rows are rendered (no row's Selectable consumed the click), a
+  // left mouse click anywhere cancels pick. Covers clicking blank space in the tree, the inspector,
+  // the right panel, or any non-row widget. Esc was handled at frame start.
   if (g_state.pick_link_source.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     g_state.pick_link_source.reset();
-    pick_source_at_entry.reset();  // suppress spurious modal re-open
+    pick_source_at_entry.reset();  // suppress the spurious re-select below
   }
 
-  // Pick-mode completion: if pick was active at frame entry but is now reset
-  // (cleared by RenderEntryCard's pick-click handler), re-open the modal on
-  // the SOURCE entry so the user resumes editing where they started. The
-  // editing entry's crystal_id was just re-bound to the clicked card's
-  // crystal, so also reset the singleton trackball view to that crystal's
-  // default orientation — otherwise the modal preview keeps the old
-  // crystal's rotation while the thumbnail (which always renders from the
-  // entry's axis distribution) shows the new one. Cancel paths
-  // (Esc / blank-area click) clear pick_source_at_entry and skip this
-  // branch, so view reset only fires when a link was actually applied.
+  // Pick-mode completion: if pick was active at frame entry but is now reset (cleared by
+  // RenderEntryRow's pick-click handler), put the selection back on the SOURCE entry so the user
+  // resumes editing where they started — the inspector is showing whatever the selection names, and
+  // leaving it on the row that was merely clicked as a model would silently move the edit target.
+  // The source entry's crystal_id was just re-bound to the clicked row's crystal, so also reset the
+  // singleton trackball view to that crystal's default orientation — otherwise the inspector's
+  // preview keeps the old crystal's rotation while the thumbnail (which always renders from the
+  // entry's axis distribution) shows the new one. Cancel paths (Esc / blank-area click) clear
+  // pick_source_at_entry and skip this branch, so the view reset only fires when a link was
+  // actually applied.
   if (pick_source_at_entry.has_value() && !g_state.pick_link_source.has_value()) {
     const auto& src = *pick_source_at_entry;
     const auto& editing_entry = g_state.layers[src.layer_idx].entries[src.entry_idx];
     ResetCrystalViewToCrystal(g_state.crystals[editing_entry.crystal_id]);
-    EditRequest reopen;
-    reopen.target = EditTarget::kCrystal;
-    reopen.layer_idx = src.layer_idx;
-    reopen.entry_idx = src.entry_idx;
-    OpenEditModal(reopen, g_state);
+    g_state.SelectCrystal(src.layer_idx, src.entry_idx);
   }
 
   ImGui::End();
 }
 
-void RenderRightPanel(GLFWwindow* window, float window_width, float window_height) {
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
+namespace {
 
-  if (g_state.right_panel_collapsed) {
-    RenderCollapsedStrip(ICON_FA_CHEVRON_LEFT, window_width - kCollapseBtnSize, kTopBarHeight, panel_height,
-                         &g_state.right_panel_collapsed);
+// The inspector's Camera page: which lens the sky is projected through, which hemisphere is
+// shown, and where the observer is pointed. This used to be the right panel's "View" group. It
+// moved because these fields describe the DOCUMENT — they are saved with the scene and a change
+// to any of them is a different picture of the same simulation — which is the line the whole
+// column is drawn along (doc/gui-layout-architecture.md §2). Only the host changed: every gate
+// below is still the field editor registry's answer, not this call site's.
+void RenderCameraControls() {
+  auto& r = g_state.renderer;
+  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  ImGui::SeparatorText("Lens");
+  // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+  // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+  if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
+    for (int idx : kLensTypePresentationOrder) {
+      bool selected = (r.lens_type == idx);
+      if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+        // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+        // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+        // lens_type directly, so they keep their fov.
+        ApplyLensTypeSelection(r, idx);
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
+  // Domain, format and disabled-when all come from the field editor registry rather than being
+  // written here — same for every slider below whose field is a registered document leaf. The
+  // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
+  // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
+  const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
+  ImGui::BeginDisabled(!fov_c.enabled);
+  SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
+                  fov_c.fmt, fov_c.scale);
+  ImGui::EndDisabled();
+  bool is_globe = (r.lens_type == kLensTypeGlobe);
+  ImGui::SeparatorText("Visibility");
+  // Same registry query as the FOV slider above, for the same reason. What used to stand here was
+  // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
+  // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
+  // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
+  // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
+  // full-sky case in, so the call site needs no nesting: one flat pair per field.
+  const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
+  ImGui::BeginDisabled(!visible_c.enabled);
+  ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+  ImGui::SameLine();
+  ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+  ImGui::SameLine();
+  ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+  ImGui::EndDisabled();
+  // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
+  // next widget, so it is unaffected by — and does not affect — the disabled stack.
+  ImGui::SameLine(0, 20);
+  const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
+  ImGui::BeginDisabled(!front_c.enabled);
+  Checkbox("Front##visible", &r.front);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+  }
+  ImGui::EndDisabled();
+  ImGui::SeparatorText("Pose");
+  if (is_globe) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "In Globe lens, Az/El/Roll control the observer's orbit\n"
+          "around the sphere, not the camera's own attitude.\n"
+          "Roll is locked to 0 in this mode (slider is greyed out).");
+    }
+  }
+  // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
+  // gate the two share, is the registry's to state. Both entries carry the SAME gate
+  // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
+  const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
+  const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
+  ImGui::BeginDisabled(!el_c.enabled);
+  SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
+                  static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
+  SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
+                  az_c.fmt, az_c.scale);
+  ImGui::EndDisabled();
+  // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
+  const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
+  ImGui::BeginDisabled(!roll_c.enabled);
+  SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
+                  roll_c.fmt, roll_c.scale);
+  ImGui::EndDisabled();
+
+  ImGui::Separator();
+  float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  float avail = ImGui::GetContentRegionAvail().x;
+  if (avail > btn_w) {
+    ImGui::SameLine(avail - btn_w);
+  }
+  if (ImGui::SmallButton("Reset##view")) {
+    ViewDefaults d = DefaultViewParamsFor(r.lens_type);
+    r.fov = d.fov;
+    r.elevation = d.elevation;
+    r.azimuth = d.azimuth;
+    r.roll = d.roll;
+  }
+
+  ImGui::PopItemWidth();
+}
+
+}  // namespace
+
+void RenderDocumentInspector() {
+  // Not submitted while the column is collapsed. Unlike the tree — whose window has to stay
+  // submitted so the strip keeps a node beside the preview rather than on top of it — the
+  // inspector's neighbour is the tree, one node over inside the same column. Dropping it hands
+  // its height to the tree, which is the whole 20 px strip, so the collapsed column shows one
+  // chevron instead of two stacked ones with a separator between them.
+  if (g_state.left_panel_collapsed) {
     return;
   }
 
-  float panel_x = window_width - kRightPanelWidth;
-  SetNextPanelGeometry(panel_x, kTopBarHeight, kRightPanelWidth, panel_height);
-  ImGui::Begin("##RightPanel", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+  ImGui::Begin(kDocumentInspectorWindowName, nullptr, kSidePanelBaseFlags);
 
-  // ---- Scene Group ----
-  if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen)) {
-    RenderSceneControls(g_state);
+  // A selection is a pair of indices into vectors the user can shrink, so it can name something
+  // that no longer exists. The delete paths clear it, but that is a claim about every writer being
+  // careful; range-checking HERE is a claim about this reader, and it is the one that decides
+  // whether a stale selection is a blank page or a crash.
+  GuiState::DocumentSelection sel = g_state.selection;
+  const int layer_count = static_cast<int>(g_state.layers.size());
+  const bool layer_in_range = sel.layer_idx >= 0 && sel.layer_idx < layer_count;
+  if ((sel.kind == GuiState::SelectionKind::kLayer || sel.kind == GuiState::SelectionKind::kCrystal) &&
+      !layer_in_range) {
+    sel.kind = GuiState::SelectionKind::kNone;
+  }
+  if (sel.kind == GuiState::SelectionKind::kCrystal && !g_state.HasValidCrystalSelection()) {
+    sel.kind = GuiState::SelectionKind::kNone;
   }
 
-  // Copy-model renderer: GuiState always owns a valid renderer by default construction.
-  auto& r = g_state.renderer;
-
-  // ---- View Group ----
-  if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Lens");
-    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
-    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
-    if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
-      for (int idx : kLensTypePresentationOrder) {
-        bool selected = (r.lens_type == idx);
-        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
-          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
-          // lens_type directly, so they keep their fov.
-          ApplyLensTypeSelection(r, idx);
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-      }
-      ImGui::EndCombo();
-    }
-    // Domain, format and disabled-when all come from the field editor registry rather than being
-    // written here — same for every slider below whose field is a registered document leaf. The
-    // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
-    // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
-    const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
-    ImGui::BeginDisabled(!fov_c.enabled);
-    SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
-                    fov_c.fmt, fov_c.scale);
-    ImGui::EndDisabled();
-    bool is_globe = (r.lens_type == kLensTypeGlobe);
-    ImGui::SeparatorText("Visibility");
-    // Same registry query as the FOV slider above, for the same reason. What used to stand here was
-    // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
-    // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
-    // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
-    // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
-    // full-sky case in, so the call site needs no nesting: one flat pair per field.
-    const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
-    ImGui::BeginDisabled(!visible_c.enabled);
-    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
-    ImGui::SameLine();
-    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
-    ImGui::SameLine();
-    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
-    ImGui::EndDisabled();
-    // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
-    // next widget, so it is unaffected by — and does not affect — the disabled stack.
-    ImGui::SameLine(0, 20);
-    const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
-    ImGui::BeginDisabled(!front_c.enabled);
-    Checkbox("Front##visible", &r.front);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
-    }
-    ImGui::EndDisabled();
-    ImGui::SeparatorText("Pose");
-    if (is_globe) {
-      ImGui::TextDisabled("(?)");
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "In Globe lens, Az/El/Roll control the observer's orbit\n"
-            "around the sphere, not the camera's own attitude.\n"
-            "Roll is locked to 0 in this mode (slider is greyed out).");
-      }
-    }
-    // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
-    // gate the two share, is the registry's to state. Both entries carry the SAME gate
-    // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
-    const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
-    const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
-    ImGui::BeginDisabled(!el_c.enabled);
-    SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
-                    static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
-    SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
-                    az_c.fmt, az_c.scale);
-    ImGui::EndDisabled();
-    // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
-    const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
-    ImGui::BeginDisabled(!roll_c.enabled);
-    SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
-                    roll_c.fmt, roll_c.scale);
-    ImGui::EndDisabled();
-
-    ImGui::Separator();
-    float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    float avail = ImGui::GetContentRegionAvail().x;
-    if (avail > btn_w) {
-      ImGui::SameLine(avail - btn_w);
-    }
-    if (ImGui::SmallButton("Reset##view")) {
-      ViewDefaults d = DefaultViewParamsFor(r.lens_type);
-      r.fov = d.fov;
-      r.elevation = d.elevation;
-      r.azimuth = d.azimuth;
-      r.roll = d.roll;
-    }
-
-    ImGui::PopItemWidth();
+  // A page swap starts at the top of the new page. The window is one persistent ImGui window
+  // showing four different documents' worth of controls, so without this it opens the next page at
+  // whatever offset the last one was left at — reliably hiding the top of a page whenever the
+  // previous one was taller, which is exactly when the user was last scrolling.
+  static GuiState::DocumentSelection s_shown;
+  if (sel != s_shown) {
+    s_shown = sel;
+    ImGui::SetScrollY(0.0f);
   }
 
-  // ---- Display Group ----
-  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Rendering");
-    // Rust-tinted input: changing Resolution re-runs the simulation and discards accumulated rays.
-    // The warning is the point — see doc/gui-visual-language.md §7.
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, WarningFillColor(0.6f));
-    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+  // The header names the page, so it is composed before anything is drawn — including in the folded
+  // case, where it is the only thing drawn and therefore the only thing still saying what the
+  // column has selected.
+  const char* icon = ICON_FA_CIRCLE_INFO;
+  char title[64] = "Inspector";
+  switch (sel.kind) {
+    case GuiState::SelectionKind::kSun:
+      icon = ICON_FA_SUN;
+      snprintf(title, sizeof(title), "Sun");
+      break;
+    case GuiState::SelectionKind::kCamera:
+      icon = ICON_FA_CAMERA;
+      snprintf(title, sizeof(title), "Camera");
+      break;
+    case GuiState::SelectionKind::kLayer:
+      icon = ICON_FA_LAYER_GROUP;
+      snprintf(title, sizeof(title), "Layer %d", sel.layer_idx + 1);
+      break;
+    case GuiState::SelectionKind::kCrystal: {
+      const auto& entry = g_state.layers[sel.layer_idx].entries[sel.entry_idx];
+      const CrystalConfig& cr = g_state.crystals[entry.crystal_id];
+      icon = ICON_FA_GEM;
+      snprintf(title, sizeof(title), "%s  ·  L%d/%d", cr.type == CrystalType::kPrism ? "Prism" : "Pyramid",
+               sel.layer_idx + 1, sel.entry_idx + 1);
+      break;
     }
-    ImGui::BeginGroup();
-    const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
-    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
-                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
-    ImGui::EndGroup();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Exposure value offset for display brightness");
-    }
-
-    ImGui::SeparatorText("Aspect Ratio");
-    int preset_idx = static_cast<int>(g_state.aspect_preset);
-    const char* preview_label = kAspectPresetNames[preset_idx];
-    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
-      for (int i = 0; i < kAspectPresetCount; i++) {
-        bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
-        ImGui::BeginDisabled(disabled);
-        bool selected = (i == preset_idx);
-        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
-          g_state.aspect_preset = static_cast<AspectPreset>(i);
-          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-        }
-        if (selected) {
-          ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndDisabled();
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::BeginDisabled(AspectFlipDisabled(g_state.aspect_preset));
-    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-    if (ImGui::Button(flip_label)) {
-      g_state.aspect_portrait = !g_state.aspect_portrait;
-      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
-    }
-    ImGui::EndDisabled();
-
-    // Screen-too-small warning: rendered only when the requested aspect could
-    // not be honored AND the user is still on a non-Free preset (the
-    // ApplyAspectRatio path already clears aspect_clamp on Free / kMatchBg-no-bg,
-    // but we re-check here so a stale signal from a missed callback path
-    // cannot leak through).
-    if (g_state.aspect_clamp.was_clamped && g_state.aspect_preset != AspectPreset::kFree) {
-      // Disabled Selectable for the static header (ImGui::Text* widgets are
-      // emitted with id=0 so they cannot be located by the GUI test engine;
-      // disabled Selectable still calls ItemAdd with a real ID derived from
-      // the label, so it is addressable while remaining non-interactive).
-      // Dynamic ratio detail follows as a plain Text below.
-      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
-      ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
-      ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
-                  g_state.aspect_clamp.requested_preview_ratio);
-      ImGui::PopStyleColor();
-    }
-
-    ImGui::SeparatorText("Background");
-    if (ImGui::Button("Load Bg##display")) {
-      DoLoadBackground(window);
-    }
-    ImGui::SameLine();
-    bool no_bg = !g_preview.HasBackground();
-    ImGui::BeginDisabled(no_bg);
-    if (ImGui::Button("Clear##display_bg")) {
-      DoClearBackground();
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(no_bg);
-    Checkbox("Show##display_bg", &g_state.bg_show);
-    // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
-    // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
-    // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
-    // disabled state is idempotent.
-    const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
-    ImGui::BeginDisabled(!bg_alpha_c.enabled);
-    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
-                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    ImGui::PopItemWidth();
+    case GuiState::SelectionKind::kNone:
+      break;
   }
 
-  // ---- Overlay Group ----
-  if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Auxiliary Lines");
-    // Per-overlay row layout: color picker + name (variable width) + Line / Label
-    // checkboxes anchored at fixed X so the two checkbox columns align across rows
-    // even though the name column has different widths (Horizon / Grid / Angular Distance).
-    // Second row: Alpha slider.
-    const ImGuiStyle& style = ImGui::GetStyle();
-    // Anchor checkbox columns at fixed X derived from the longest overlay name
-    // plus widget metrics. The trailing pad (ItemSpacing.x × 2) protects against
-    // ColorEdit3 / CalcTextSize sub-pixel rounding under HiDPI so the long name
-    // ("Angular Distance") never overlaps the Line checkbox.
-    float color_w = ImGui::GetFrameHeight();                       // ColorEdit3 NoInputs is a frame_h square
-    float name_col_w = ImGui::CalcTextSize("Angular Distance").x;  // widest overlay name
-    float check_box_w = ImGui::GetFrameHeight();                   // checkbox tick area
-    float line_text_w = ImGui::CalcTextSize("Line").x;
-    float line_col_x = color_w + style.ItemSpacing.x + name_col_w + style.ItemSpacing.x * 2.0f;
-    float label_col_x = line_col_x + check_box_w + style.ItemInnerSpacing.x + line_text_w + style.ItemSpacing.x * 2.0f;
+  static PanelCollapseTracker s_fold;
+  if (RenderHalfFoldHeader(icon, title, "inspector_fold", g_state.document_inspector_folded)) {
+    g_state.FoldDocumentHalves(false, !g_state.document_inspector_folded);
+  }
+  ApplyPanelCollapse(CollapseAxis::kHeight, GetPanelNodeIds().document_inspector, g_state.document_inspector_folded,
+                     DefaultHalfHeight(/*inspector=*/true), &s_fold);
+  if (g_state.document_inspector_folded) {
+    ImGui::End();
+    return;
+  }
 
-    auto overlay_row = [&](const char* name, const char* color_id, float* color, const char* line_id, bool* line_v,
-                           const char* label_id, bool* label_v) {
-      ImGui::ColorEdit3(color_id, color, ImGuiColorEditFlags_NoInputs);
-      ImGui::SameLine();
-      ImGui::TextUnformatted(name);
-      ImGui::SameLine(line_col_x);
-      Checkbox(line_id, line_v);
-      ImGui::SameLine(label_col_x);
-      Checkbox(label_id, label_v);
-    };
-
-    overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
-                "Label##horizon", &g_state.show_horizon_label);
-    const FieldEditorConstraint horizon_a_c = ConstraintFor("overlay_horizon_alpha", g_state);
-    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, static_cast<float>(horizon_a_c.min_value),
-                    static_cast<float>(horizon_a_c.max_value), horizon_a_c.fmt, horizon_a_c.scale);
-
-    overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
-                &g_state.show_grid_label);
-    const FieldEditorConstraint grid_a_c = ConstraintFor("overlay_grid_alpha", g_state);
-    SliderWithInput("Alpha##grid", &g_state.grid_alpha, static_cast<float>(grid_a_c.min_value),
-                    static_cast<float>(grid_a_c.max_value), grid_a_c.fmt, grid_a_c.scale);
-
-    overlay_row("Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
-                &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
-    const FieldEditorConstraint sun_a_c = ConstraintFor("overlay_sun_circles_alpha", g_state);
-    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, static_cast<float>(sun_a_c.min_value),
-                    static_cast<float>(sun_a_c.max_value), sun_a_c.fmt, sun_a_c.scale);
-
-    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
-      if (ImGui::Button("Edit Angles...##overlay")) {
-        ImGui::OpenPopup("SunCirclesEdit");
+  switch (sel.kind) {
+    case GuiState::SelectionKind::kSun:
+      RenderSunControls(g_state);
+      break;
+    case GuiState::SelectionKind::kCamera:
+      RenderCameraControls();
+      break;
+    case GuiState::SelectionKind::kLayer:
+      // The erase is the caller's, not the page's — see RenderLayerInspector. Doing it here also
+      // keeps it after the tree has finished iterating this frame's layers.
+      if (RenderLayerInspector(g_state, sel.layer_idx)) {
+        g_state.layers.erase(g_state.layers.begin() + sel.layer_idx);
+        g_thumbnail_cache.OnLayerStructureChanged();
+        g_state.SelectNone();
       }
-      if (ImGui::BeginPopup("SunCirclesEdit")) {
-        bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
-
-        // Preset buttons
-        const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-        for (float p : presets) {
-          const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
-          char label[16];
-          std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-          ImGui::BeginDisabled(already || at_limit);
-          if (ImGui::Button(label)) {
-            g_state.sun_circle_angles.push_back(p);
-            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-          }
-          ImGui::EndDisabled();
-          ImGui::SameLine();
-        }
-        ImGui::NewLine();
-
-        // Custom angle input
-        static float custom_angle = 22.0f;
-        ImGui::PushItemWidth(60.0f);
-        ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(at_limit);
-        if (ImGui::Button("+##add_circle")) {
-          custom_angle = ClampSunCircleAngle(custom_angle);
-          g_state.sun_circle_angles.push_back(custom_angle);
-          std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-        }
-        ImGui::EndDisabled();
-
-        // Current list with delete buttons
-        ImGui::Separator();
-        int remove_idx = -1;
-        for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-          ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
-          ImGui::SameLine();
-          char del_label[32];
-          std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
-          if (ImGui::SmallButton(del_label)) {
-            remove_idx = i;
-          }
-        }
-        if (remove_idx >= 0) {
-          g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-        }
-
-        ImGui::EndPopup();
-      }
-    }
-
-    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
-    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
-    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Zenith/Nadir");
-    ImGui::SameLine(line_col_x);
-    Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
-    const FieldEditorConstraint zn_a_c = ConstraintFor("overlay_zenith_nadir_alpha", g_state);
-    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, static_cast<float>(zn_a_c.min_value),
-                    static_cast<float>(zn_a_c.max_value), zn_a_c.fmt, zn_a_c.scale);
-    const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
-                    static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
-
-    ImGui::PopItemWidth();
+      break;
+    case GuiState::SelectionKind::kCrystal:
+      RenderCrystalInspector(g_state, sel.layer_idx, sel.entry_idx);
+      break;
+    case GuiState::SelectionKind::kNone:
+      ImGui::TextDisabled("Select an item in the tree above.");
+      break;
   }
 
   ImGui::End();
 }
 
+namespace {
+
+// The rectangle the preview and the display strip share: the dockspace's central node, which
+// dock_layout keeps permanently empty so the GL shader drawn between ImGui::Render and SwapBuffers
+// shows through it. Taking the rect from the node instead of recomputing it from the panel-width
+// constants is what makes both windows follow a splitter drag; the constants only describe the
+// DEFAULT layout now.
+//
+// The fallback covers the frames before the first BuildDefaultDockLayout call (and any state where
+// the tree has not been split): the pre-docking arithmetic, which is exactly right for the default
+// layout — not a stale rect carried over from an earlier frame.
+//
+// Shared by the two windows rather than computed in each: they are stacked inside this one band, so
+// a fallback that drifted between them would put a seam in a place only one of them knows about.
+struct CentralBand {
+  float x = 0.0f;
+  float y = 0.0f;
+  float w = 0.0f;
+  float h = 0.0f;
+};
+
+CentralBand GetCentralBand(float window_width, float window_height) {
+  CentralBand band;
+  band.x = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
+  band.y = kTopBarHeight;
+  band.w = window_width - band.x;
+  band.h = window_height - kTopBarHeight - kStatusBarHeight;
+
+  ImVec2 central_pos;
+  ImVec2 central_size;
+  if (GetCentralNodeRect(&central_pos, &central_size)) {
+    band.x = central_pos.x;
+    band.y = central_pos.y;
+    band.w = central_size.x;
+    band.h = central_size.y;
+  }
+  return band;
+}
+
+// One frame's auxiliary-line overlay, derived from the document alone — the sun, the renderer pose
+// and the show_*_line view preferences. It reads nothing from the simulation lifecycle, and that is
+// load-bearing rather than incidental: it is what lets a stale on-screen image and a live
+// coordinate system disagree on purpose. The pixels are the last run's, the lines are the current
+// document's, and the offset between them IS the "this result is out of date" signal, read at the
+// same moment as the top bar's dirty chip (doc/gui-layout-architecture.md §4).
+//
+// Deliberately pure: the empty state's own presentation (half intensity, forced sky coordinate
+// system) is a post-processing step the caller applies to the returned value. Pushing it in here as a couple of
+// mode parameters would make every other call site pass constants that only exist to say "I am not
+// the empty state".
+OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjection& vp, int vp_w, int vp_h) {
+  OverlayDecoration ov;
+
+  // Line flags only — labels are a separate path via BuildOverlayLabelInput.
+  ov.show_horizon = st.show_horizon_line;
+  ov.show_grid = st.show_grid_line;
+  ov.show_sun_circles = st.show_sun_circles_line;
+  std::copy(std::begin(st.horizon_color), std::end(st.horizon_color), std::begin(ov.horizon_color));
+  std::copy(std::begin(st.grid_color), std::end(st.grid_color), std::begin(ov.grid_color));
+  std::copy(std::begin(st.sun_circles_color), std::end(st.sun_circles_color), std::begin(ov.sun_circles_color));
+  ov.horizon_alpha = st.horizon_alpha;
+  ov.grid_alpha = st.grid_alpha;
+  ov.sun_circles_alpha = st.sun_circles_alpha;
+  ov.grid_step = ComputeGridStep(st.renderer.fov);
+
+  // Sun direction in world space (azimuth fixed at 0, only altitude matters). Computed once and
+  // used twice — as the shader's u_sun_dir for the angular-distance circles, and as the input to
+  // the marker's forward projection below. Two copies of this derivation would have to agree
+  // forever for the circles to stay centred on the dot.
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  const float sa = st.sun.altitude * kDeg2Rad;
+  const float sun_world_dir[3] = { -std::cos(sa), 0.0f, -std::sin(sa) };
+  std::copy(std::begin(sun_world_dir), std::end(sun_world_dir), std::begin(ov.sun_dir));
+  ov.sun_circle_count = std::min(static_cast<int>(st.sun_circle_angles.size()), kMaxSunCircles);
+  for (int i = 0; i < ov.sun_circle_count; i++) {
+    ov.sun_circle_angles[i] = st.sun_circle_angles[i];
+  }
+
+  // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
+  // (see preview_renderer.cpp:overlayAuxLines altitude convention).
+  ov.show_zenith_nadir = st.show_zenith_nadir_line;
+  std::copy(std::begin(st.zenith_nadir_color), std::end(st.zenith_nadir_color), std::begin(ov.zenith_nadir_color));
+  ov.zenith_nadir_alpha = st.zenith_nadir_alpha;
+  ov.zenith_nadir_radius_px = st.zenith_nadir_radius_px;
+  constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
+  constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
+  const auto zpos = ProjectWorldDirToScreen(vp, kZenithWorldDir, vp_w, vp_h);
+  const auto npos = ProjectWorldDirToScreen(vp, kNadirWorldDir, vp_w, vp_h);
+  ov.zenith_screen_pos[0] = zpos[0];
+  ov.zenith_screen_pos[1] = zpos[1];
+  ov.nadir_screen_pos[0] = npos[0];
+  ov.nadir_screen_pos[1] = npos[1];
+
+  // The sun's own pixel position. Placed unconditionally — show_sun_marker stays false here and is
+  // the caller's to set, so a call site that wants the marker never has to also remember to ask for
+  // the position, and a test can read the position without turning the marker on.
+  const auto spos = ProjectWorldDirToScreen(vp, sun_world_dir, vp_w, vp_h);
+  ov.sun_marker_screen_pos[0] = spos[0];
+  ov.sun_marker_screen_pos[1] = spos[1];
+
+  return ov;
+}
+
+// How much of the user's overlay intensity the empty state keeps. Half is where the prototype
+// landed: enough to read the sky as "framed and waiting" rather than as a rendered result, which is
+// the whole distinction the empty state is drawing. A starting point, not a derived constant.
+constexpr float kEmptyStateOverlayAlphaScale = 0.5f;
+
+// Turn a document's overlay into the empty state's version of itself: every line the empty state
+// owes the user, dimmer.
+//
+// Which lines those are is not a taste call — doc/gui-layout-architecture.md §4 enumerates the
+// empty-state sky coordinate system as horizon, angular-distance circles and sun marker, so those
+// three are forced on here regardless of the show_*_line toggles. The grid and the zenith/nadir
+// markers are NOT in that enumeration, so they keep following the toggles, in the empty state
+// exactly as over a result. The asymmetry is the point rather than an oversight: a show_*_line
+// toggle means "do not clutter the image I rendered", a preference about a RESULT. An empty state
+// has no result to clutter, and the one thing it is for — telling the user where the 22 degree halo
+// will land before they press Run — is the very line the default-off sun_circles toggle would
+// suppress.
+//
+// Forcing happens on the caller's per-frame copy of the decoration, never on GuiState: the argument
+// is the local value RenderPreviewPanel just derived via BuildOverlayDecoration, and this function
+// is handed no GuiState to write back to. Leaving the empty state and returning to a result
+// therefore restores the user's own toggles by construction, not by anyone remembering to undo
+// anything.
+//
+// The marker's alpha is NOT scaled. The four alphas above are user settings, chosen for legibility
+// on top of a rendered image, so halving them is what "dimmer than that" means. The marker has no
+// user setting and never appears over an image — its OverlayDecoration default IS its empty-state
+// value, and halving it would only be halving a number this task chose one line earlier.
+void ApplyEmptyStatePresentation(OverlayDecoration* ov) {
+  ov->horizon_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->grid_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->sun_circles_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->zenith_nadir_alpha *= kEmptyStateOverlayAlphaScale;
+  ov->show_horizon = true;
+  ov->show_sun_circles = true;
+  ov->show_sun_marker = true;
+}
+
+}  // namespace
+
 void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_height) {
-  float left_w = g_state.left_panel_collapsed ? kCollapseBtnSize : kLeftPanelWidth;
-  float right_w = g_state.right_panel_collapsed ? kCollapseBtnSize : kRightPanelWidth;
-  float panel_x = left_w;
-  float panel_width = window_width - left_w - right_w;
-  float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
-  SetNextPanelGeometry(panel_x, kTopBarHeight, panel_width, panel_height);
+  const CentralBand band = GetCentralBand(window_width, window_height);
+  // The strip takes the bottom of the band; what is left is the preview. Complementary by
+  // construction — see SplitViewportForDisplayStrip (window_sizing.hpp).
+  const ViewportStripSplit split = SplitViewportForDisplayStrip(band.y, band.h, kDisplayStripHeight);
+  float panel_x = band.x;
+  float panel_y = band.y;
+  float panel_width = band.w;
+  float panel_height = split.preview_h;
+  SetNextPanelGeometry(panel_x, panel_y, panel_width, panel_height);
+  // NoDocking: this window is pinned to the central node, it is not docked INTO it. Letting the user
+  // dock it would fill the central node, and imgui only punches the passthru hole while that node is
+  // empty — the preview would paint itself out of existence. (It is also unreachable by dragging
+  // today, having neither a title bar nor NoMove cleared; the flag states the constraint rather than
+  // leaving it to be re-derived.)
   ImGui::Begin("##PreviewPanel", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDocking |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // Renderer invariants (previously in RenderViewBar, runs every frame).
@@ -997,26 +1285,45 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
 
   float preview_height = panel_height;
 
-  g_preview_vp.active = false;
+  // The viewport rectangle, the view projection and the overlay are computed for BOTH states, not
+  // only the one that has pixels. An empty preview draws the same sky coordinate system through the
+  // same shader, so it needs the same rectangle and the same projection; what it does not need is
+  // the exposure, the background image and the drag surface. Those three — not the geometry — are
+  // where the two states actually part company, and the branch below is now only about them.
+  //
+  // Compute viewport in framebuffer pixels (for HiDPI).
+  int fb_w = 0;
+  int fb_h = 0;
+  glfwGetFramebufferSize(window, &fb_w, &fb_h);
+  float scale_x = static_cast<float>(fb_w) / window_width;
+  float scale_y = static_cast<float>(fb_h) / window_height;
+
+  auto& rc = g_state.renderer;
+  auto& pp = g_preview_vp.params;
+
+  // Store viewport for deferred rendering. Always active: with the empty state drawing its own
+  // coordinate system, there is no longer a frame in which the panel is on screen and has nothing
+  // for PreviewRenderer::Render to do (which guards a degenerate rectangle itself).
+  g_preview_vp.active = true;
+  g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
+  // OpenGL Y is bottom-up: measure from the window's bottom edge to the panel's bottom edge. This
+  // used to read kStatusBarHeight directly, which was the same number only while the panel was
+  // guaranteed to end exactly at the status bar.
+  g_preview_vp.vp_y = static_cast<int>((window_height - (panel_y + panel_height)) * scale_y);
+  g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
+  g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
+  pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
+  // Overlap parameters for dual fisheye texture sampling. Frame-invariant constants, so they are
+  // set once for both states rather than left holding whichever frame last passed through the
+  // branch below.
+  pp.source.max_abs_dz = kDualFisheyeOverlap;
+  pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+  // Auxiliary line overlay (line flags only — labels are handled separately via
+  // BuildOverlayLabelInput below). Read from the document every frame in both states, which is what
+  // keeps a stale image and a live coordinate system able to disagree — see BuildOverlayDecoration.
+  pp.overlay = BuildOverlayDecoration(g_state, pp.view_proj, g_preview_vp.vp_w, g_preview_vp.vp_h);
 
   if (g_preview.HasTexture() || g_preview.HasBackground()) {
-    // Compute viewport in framebuffer pixels (for HiDPI)
-    int fb_w = 0;
-    int fb_h = 0;
-    glfwGetFramebufferSize(window, &fb_w, &fb_h);
-    float scale_x = static_cast<float>(fb_w) / window_width;
-    float scale_y = static_cast<float>(fb_h) / window_height;
-
-    auto& rc = g_state.renderer;
-
-    // Store viewport for deferred rendering
-    g_preview_vp.active = true;
-    g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
-    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
-    g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
-    g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
-    auto& pp = g_preview_vp.params;
-    pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
     pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
 
@@ -1066,52 +1373,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     }
     float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
-    // Overlap parameters for dual fisheye texture sampling.
-    pp.source.max_abs_dz = kDualFisheyeOverlap;
-    pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
-
-    // Auxiliary line overlay parameters (line flags only — labels are handled
-    // separately via BuildOverlayLabelInput below).
-    pp.overlay.show_horizon = g_state.show_horizon_line;
-    pp.overlay.show_grid = g_state.show_grid_line;
-    pp.overlay.show_sun_circles = g_state.show_sun_circles_line;
-    std::copy(std::begin(g_state.horizon_color), std::end(g_state.horizon_color), std::begin(pp.overlay.horizon_color));
-    std::copy(std::begin(g_state.grid_color), std::end(g_state.grid_color), std::begin(pp.overlay.grid_color));
-    std::copy(std::begin(g_state.sun_circles_color), std::end(g_state.sun_circles_color),
-              std::begin(pp.overlay.sun_circles_color));
-    pp.overlay.horizon_alpha = g_state.horizon_alpha;
-    pp.overlay.grid_alpha = g_state.grid_alpha;
-    pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
-    pp.overlay.grid_step = ComputeGridStep(rc.fov);
-    // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
-    constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-    float sa = g_state.sun.altitude * kDeg2Rad;
-    pp.overlay.sun_dir[0] = -std::cos(sa);
-    pp.overlay.sun_dir[1] = 0.0f;
-    pp.overlay.sun_dir[2] = -std::sin(sa);
-    pp.overlay.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
-    for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
-      pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
-    }
-
-    // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
-    // (see preview_renderer.cpp:overlayAuxLines altitude convention).
-    pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
-    std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
-              std::begin(pp.overlay.zenith_nadir_color));
-    pp.overlay.zenith_nadir_alpha = g_state.zenith_nadir_alpha;
-    pp.overlay.zenith_nadir_radius_px = g_state.zenith_nadir_radius_px;
-    constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-    constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-    auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    auto npos = ProjectWorldDirToScreen(pp.view_proj, kNadirWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    pp.overlay.zenith_screen_pos[0] = zpos[0];
-    pp.overlay.zenith_screen_pos[1] = zpos[1];
-    pp.overlay.nadir_screen_pos[0] = npos[0];
-    pp.overlay.nadir_screen_pos[1] = npos[1];
 
     // Overlay labels at viewport edges (drawn on the preview window's draw list so
     // modals correctly occlude them). BuildOverlayLabelInput is shared with
@@ -1123,11 +1387,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
       // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
       // draw list coordinates are absolute screen space, not relative to the host GLFW window.
-      // Anchor (panel_x, kTopBarHeight) through MainVpPos() so labels stay glued to the
+      // Anchor (panel_x, panel_y) through MainVpPos() so labels stay glued to the
       // preview viewport when the host window is dragged or sits on a non-primary monitor.
       // Note: the export_fbo_renderer.cpp path passes (0, 0, w, h) intentionally — it owns a
       // self-allocated ImDrawList targeting an off-screen FBO and must NOT add this offset.
-      ImVec2 vp_origin = MainVpPos(panel_x, kTopBarHeight);
+      ImVec2 vp_origin = MainVpPos(panel_x, panel_y);
       float vp_sx = vp_origin.x;
       float vp_sy = vp_origin.y;
       float vp_sw = panel_width;
@@ -1190,10 +1454,462 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
     }
   } else {
+    // Nothing has been rendered and nothing has been loaded. The view is still a view, though: the
+    // document already says which way the camera points, how wide the lens is and where the sun
+    // will be, so the panel draws that — dimmed, and with the sun marked — instead of a black
+    // rectangle. The empty state stops being "there is nothing here" and becomes "this is framed,
+    // press Run" (doc/gui-layout-architecture.md §4).
+    //
+    // Exposure and background stay at their defaults: with no texture uploaded, PreviewRenderer
+    // samples its 1x1 blank in sRGB mode, where neither is read. The drag surface is deliberately
+    // NOT submitted — orbiting an empty view is a separate question from previewing one, and this
+    // panel keeps its "the surface exists only when there is something to interact with" contract.
+    ApplyEmptyStatePresentation(&pp.overlay);
+    pp.exposure = Exposure{};
+    pp.bg = Background::Disabled();
+
+    // Instructional, not descriptive: it names the next action rather than restating what the user
+    // can already see (doc/gui-visual-language.md).
+    const char* kEmptyHint = "Press Run to render this view.";
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImVec2 text_size = ImGui::CalcTextSize("Render Preview");
+    ImVec2 text_size = ImGui::CalcTextSize(kEmptyHint);
     ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
-    ImGui::TextDisabled("Render Preview");
+    ImGui::TextDisabled("%s", kEmptyHint);
+  }
+
+  ImGui::End();
+}
+
+namespace {
+
+// Width of the sim-tier marker bar, in pixels. Thin on purpose: the old form filled the whole input
+// with rust, which read as "this control is broken" rather than "editing it costs you the run".
+constexpr float kSimTierEdgeWidth = 3.0f;
+
+// Armed by ResetDisplayStripSelectionForTest, consumed by the Grade tab's flags on the next frame.
+// Which tab is selected lives in ImGui's TabBar, not here, so "put it back on Grade" cannot be an
+// assignment — it has to be a request the next render honours (same shape, and the same reason, as
+// edit_modals.cpp's g_pending_tab_select).
+bool g_strip_select_grade = false;
+
+// The sim-tier marker: a bar along the LEADING edge of the control just submitted, saying "editing
+// this re-runs the simulation and discards the accumulated rays" (doc/gui-visual-language.md §7,
+// doc/gui-layout-architecture.md §4).
+//
+// It is the same statement as the top bar's dirty chip, read at a different moment. The chip
+// reports that a sim-tier field HAS been edited — IsModified, fed by DiffAgainstCommitBaseline over
+// GuiState::ConfigSnapshot, whose RenderConfig half is RenderConfigResimFields (gui_state.hpp).
+// This marker says which control would produce that. The two cannot share one runtime value (one is
+// a property of a field, the other of the document's state), so what keeps them from drifting is
+// that both name the same registry: marking a control whose field RenderConfigResimFields does not
+// carry would light up a control the chip never answers for. That registry holds four fields
+// (sim_resolution_index, background, ray_color, opacity), of which sim_resolution_index is the only
+// one this strip offers a control for — the other three are reachable today only through the
+// Settings panel's field registry. The classifier side of it is pinned by
+// unit-correctness/gui/test_state_reconcile.cpp's "renderer.sim_resolution_index" row.
+//
+// Call directly after the control it marks — it reads ImGui's last-item rectangle, and it does not
+// disturb it, so an IsItemHovered() tooltip after this call still belongs to the control.
+void MarkSimTierEdge() {
+  const ImVec2 lo = ImGui::GetItemRectMin();
+  const ImVec2 hi = ImGui::GetItemRectMax();
+  ImGui::GetWindowDrawList()->AddRectFilled(lo, ImVec2(lo.x + kSimTierEdgeWidth, hi.y),
+                                            ImGui::ColorConvertFloat4ToU32(WarningTextColor()),
+                                            ImGui::GetStyle().FrameRounding, ImDrawFlags_RoundCornersLeft);
+}
+
+// Every tab's body goes in a child region of its own. The strip is a FIXED height (see
+// kDisplayStripHeight) so that switching tabs cannot move the viewport's bottom edge; a tab whose
+// content does not fit therefore has to scroll inside the strip rather than resize it. Without the
+// child, an over-tall tab would simply be clipped, with nothing on screen saying so.
+void BeginStripTabContent(const char* id) {
+  ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
+}
+
+// The Grade tab: how the accumulated result is rendered and shown — the former right panel's
+// Display group, minus its own collapsing header (the tab is the group boundary now).
+//
+// Laid out across the strip rather than down it: three groups side by side, each two rows tall.
+// The strip is wide and short by construction, and the old one-control-per-row column would have
+// made it four rows tall — which is height taken from the viewport for a shape that does not need
+// it. Column widths stretch, so the same layout holds down to kMinWindowWidth.
+void RenderGradeTab(GLFWwindow* window) {
+  // Copy-model renderer: GuiState always owns a valid renderer by default construction.
+  auto& r = g_state.renderer;
+  const ImGuiStyle& style = ImGui::GetStyle();
+
+  // ONE sub-heading for the whole group (doc/gui-visual-language.md §4.6): the three it replaces
+  // ("Rendering" / "Aspect Ratio" / "Background") each headed a single row, which is less than a
+  // sub-heading has to earn. What they separated is now separated by the columns themselves.
+  ImGui::SeparatorText("Rendering");
+
+  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingStretchSame)) {
+    ImGui::TableNextRow();
+
+    // ---- Column 1: the image the simulation renders, and how bright it is shown.
+    ImGui::TableSetColumnIndex(0);
+    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
+    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
+    MarkSimTierEdge();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
+    }
+    ImGui::BeginGroup();
+    const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
+    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
+                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
+    ImGui::EndGroup();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Exposure value offset for display brightness");
+    }
+    ImGui::PopItemWidth();
+
+    // ---- Column 2: the aspect ratio the preview region is fitted to.
+    ImGui::TableSetColumnIndex(1);
+    int preset_idx = static_cast<int>(g_state.aspect_preset);
+    const char* preview_label = kAspectPresetNames[preset_idx];
+    // The orientation button MODIFIES the preset, so it shares the preset's row (AC4 /
+    // doc/gui-visual-language.md §4.6). It used to sit on a row of its own, which read as a second,
+    // independent control. Item width is what is left of the cell after the button and the trailing
+    // "Preset" label — the negative-width idiom above cannot express "minus a widget I have not
+    // submitted yet".
+    const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
+    const float flip_w = ImGui::CalcTextSize(flip_label).x + style.FramePadding.x * 2.0f;
+    const float preset_w =
+        std::max(60.0f, ImGui::GetContentRegionAvail().x - flip_w - kLabelColWidth - style.ItemSpacing.x * 2.0f);
+    ImGui::SetNextItemWidth(preset_w);
+    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+      for (int i = 0; i < kAspectPresetCount; i++) {
+        bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
+        ImGui::BeginDisabled(disabled);
+        bool selected = (i == preset_idx);
+        if (ImGui::Selectable(kAspectPresetNames[i], selected)) {
+          g_state.aspect_preset = static_cast<AspectPreset>(i);
+          ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndDisabled();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(AspectFlipDisabled(g_state.aspect_preset));
+    if (ImGui::Button(flip_label)) {
+      g_state.aspect_portrait = !g_state.aspect_portrait;
+      ApplyAspectRatio(window, g_state.aspect_preset, g_state.aspect_portrait);
+    }
+    ImGui::EndDisabled();
+
+    // Screen-too-small warning: rendered only when the requested aspect could
+    // not be honored AND the user is still on a non-Free preset (the
+    // ApplyAspectRatio path already clears aspect_clamp on Free / kMatchBg-no-bg,
+    // but we re-check here so a stale signal from a missed callback path
+    // cannot leak through).
+    if (g_state.aspect_clamp.was_clamped && g_state.aspect_preset != AspectPreset::kFree) {
+      // Disabled Selectable for the static header (ImGui::Text* widgets are
+      // emitted with id=0 so they cannot be located by the GUI test engine;
+      // disabled Selectable still calls ItemAdd with a real ID derived from
+      // the label, so it is addressable while remaining non-interactive).
+      // Dynamic ratio detail follows as a plain Text below.
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
+      ImGui::Selectable("Screen too small for this aspect", false, ImGuiSelectableFlags_Disabled);
+      ImGui::Text("preview ~%.2f:1, export %.2f:1", g_state.aspect_clamp.achieved_preview_ratio,
+                  g_state.aspect_clamp.requested_preview_ratio);
+      ImGui::PopStyleColor();
+    }
+
+    // ---- Column 3: the background image shown under the result.
+    ImGui::TableSetColumnIndex(2);
+    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
+    if (ImGui::Button("Load Bg##display")) {
+      DoLoadBackground(window);
+    }
+    ImGui::SameLine();
+    bool no_bg = !g_preview.HasBackground();
+    ImGui::BeginDisabled(no_bg);
+    if (ImGui::Button("Clear##display_bg")) {
+      DoClearBackground();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(no_bg);
+    Checkbox("Show##display_bg", &g_state.bg_show);
+    // bg_alpha's own gate (WhenBackgroundShown) already covers BOTH "no image loaded" and "image
+    // hidden", so it subsumes the outer BeginDisabled(no_bg) this sits inside. The outer one stays
+    // because it also wraps the Show checkbox, which is not this field's control; a doubly-pushed
+    // disabled state is idempotent.
+    const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
+    ImGui::BeginDisabled(!bg_alpha_c.enabled);
+    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
+                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
+
+    ImGui::EndTable();
+  }
+}
+
+// The angle list behind the Angular Distance row's fold: presets, a custom-angle input, and the
+// current list with per-entry delete.
+//
+// A named function rather than statements inside the row loop. A table row IS a loop body here, so
+// a popup written inline would be built once per row — four popups sharing one name, of which the
+// last one submitted wins. Having exactly one construction site is a property worth being able to
+// check by reading, not by trusting the loop's shape to stay what it is today.
+void RenderSunCirclesAnglePopup() {
+  bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
+
+  // Preset buttons
+  const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+  for (float p : presets) {
+    const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
+    char label[16];
+    std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
+    ImGui::BeginDisabled(already || at_limit);
+    if (ImGui::Button(label)) {
+      g_state.sun_circle_angles.push_back(p);
+      std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+  }
+  ImGui::NewLine();
+
+  // Custom angle input
+  static float custom_angle = 22.0f;
+  ImGui::PushItemWidth(60.0f);
+  ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(at_limit);
+  if (ImGui::Button("+##add_circle")) {
+    custom_angle = ClampSunCircleAngle(custom_angle);
+    g_state.sun_circle_angles.push_back(custom_angle);
+    std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+  }
+  ImGui::EndDisabled();
+
+  // Current list with delete buttons
+  ImGui::Separator();
+  int remove_idx = -1;
+  for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+    ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+    ImGui::SameLine();
+    char del_label[32];
+    std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+    if (ImGui::SmallButton(del_label)) {
+      remove_idx = i;
+    }
+  }
+  if (remove_idx >= 0) {
+    g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+  }
+}
+
+// The pixel radius behind the Zenith/Nadir row's fold. It is the one field only that row has, and
+// giving it a column of its own would have cost every other row an empty cell (and the name column
+// the width) to say something about one of the four — the fold is what buys "Angular Distance" its
+// uncut name (doc/gui-visual-language.md §4.4).
+void RenderZenithNadirRadiusPopup() {
+  const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
+  SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
+                  static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
+}
+
+// What a row's fold holds, when it holds anything. Two of the four overlays have a field the others
+// do not, and they are not the same field.
+enum class OverlayFold {
+  kNone,
+  kSunCircleAngles,
+  kZenithNadirRadius,
+};
+
+// One auxiliary line, as the table reads it. Every row answers the same questions — colour, name,
+// line, text label, opacity — which is exactly why the table is the right shape for them
+// (doc/gui-visual-language.md §4.4). `label` is null for a row that draws no text label at all;
+// that cell is then left EMPTY rather than filled with a disabled control or an explanatory word,
+// because "this one has no text" is what an empty cell in a labelled column already says.
+struct OverlayRowSpec {
+  const char* name;
+  const char* color_id;
+  float* color;
+  const char* line_id;
+  bool* line;
+  const char* label_id;  // null ⇒ no text label for this overlay; the cell stays empty.
+  bool* label;
+  const char* alpha_id;
+  const char* alpha_field;
+  float* alpha;
+  // Triple hash, unlike every other id above, and not a slip: the fold button's label carries a
+  // visible glyph, and ImGui hashes the WHOLE label for "glyph##suffix" — the id would then contain
+  // the icon codepoint, so renaming the icon would silently rename the item. "###suffix" hashes the
+  // suffix alone. Null for a row with no fold.
+  const char* fold_id;
+  OverlayFold fold;
+};
+
+// The Overlays tab: the four auxiliary lines drawn over the preview, as one table.
+//
+// It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
+// their checkboxes at an x computed from the width of the longest name — an arrangement in which
+// adding a name longer than "Angular Distance" silently overlapped the Line column.
+void RenderOverlaysTab() {
+  const OverlayRowSpec rows[] = {
+    { "Horizon", "##horizon_color", g_state.horizon_color, "##horizon_line", &g_state.show_horizon_line,
+      "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha", "overlay_horizon_alpha",
+      &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
+    { "Grid", "##grid_color", g_state.grid_color, "##grid_line", &g_state.show_grid_line, "##grid_label",
+      &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
+      OverlayFold::kNone },
+    { "Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "##sun_circles_line",
+      &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
+      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", OverlayFold::kSunCircleAngles },
+    // The marker pair: pixel-space dots at the zenith and the nadir. No text label — hence a null
+    // label id — and the only row with a radius.
+    { "Zenith/Nadir", "##zenith_nadir_color", g_state.zenith_nadir_color, "##zenith_nadir_line",
+      &g_state.show_zenith_nadir_line, nullptr, nullptr, "##zenith_nadir_alpha", "overlay_zenith_nadir_alpha",
+      &g_state.zenith_nadir_alpha, "###zenith_nadir_fold", OverlayFold::kZenithNadirRadius },
+  };
+
+  const float swatch_w = ImGui::GetFrameHeight();
+  const float check_w = ImGui::GetFrameHeight();
+  const float fold_w = ImGui::GetFrameHeight();
+  constexpr float kAlphaColWidth = 90.0f;
+
+  // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
+  // every other column states the width it needs, and whatever is left goes to the names — rather
+  // than the names getting what is left over after an x anchor derived from the longest of them.
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+  // Capped width, not the strip's full width. The strip is as wide as the viewport (~1200 px on the
+  // default window), and a table stretched across all of it puts a row's name at one end and the
+  // checkboxes that belong to it at the other, with a screen's worth of empty row in between —
+  // measured on a capture before this cap existed. The cap is a maximum, not a fixed width: below
+  // it the table still shrinks with the window, so the Name column's stretch keeps doing the job
+  // the fixed columns' declared widths leave it (see the note above kFlags).
+  constexpr float kMaxTableWidth = 560.0f;
+  const ImVec2 outer_size(std::min(ImGui::GetContentRegionAvail().x, kMaxTableWidth), 0.0f);
+  if (!ImGui::BeginTable("##OverlaysTable", 6, kFlags, outer_size)) {
+    return;
+  }
+  ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
+  ImGui::TableSetupColumn("Overlay", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
+  ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
+  ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+  ImGui::TableHeadersRow();
+
+  for (const OverlayRowSpec& row : rows) {
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(row.name);
+
+    ImGui::TableSetColumnIndex(2);
+    Checkbox(row.line_id, row.line);
+
+    // Empty cell, on purpose — see OverlayRowSpec::label.
+    if (row.label != nullptr) {
+      ImGui::TableSetColumnIndex(3);
+      Checkbox(row.label_id, row.label);
+    }
+
+    ImGui::TableSetColumnIndex(4);
+    const FieldEditorConstraint alpha_c = ConstraintFor(row.alpha_field, g_state);
+    // A single DragFloat rather than the [slider][input] pair the panel used: the pair needs about
+    // twice this cell's width, and the width it would take comes straight off the name column
+    // (doc/gui-visual-language.md §7 records the cell-sized single control as the verified form).
+    // AlwaysClamp so the ctrl+click text entry honours the registry's domain like the drag does.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::DragFloat(row.alpha_id, row.alpha, 0.005f, static_cast<float>(alpha_c.min_value),
+                     static_cast<float>(alpha_c.max_value), alpha_c.fmt, ImGuiSliderFlags_AlwaysClamp);
+
+    if (row.fold == OverlayFold::kNone) {
+      continue;  // Empty fold cell: this overlay has no field the others lack.
+    }
+    ImGui::TableSetColumnIndex(5);
+    // The angle list is offered only while the circles are actually drawn — editing the angles of
+    // something invisible is a control with no feedback. The radius has no such gate: the markers'
+    // own Line checkbox is right there in the same row.
+    const bool circles_shown = g_state.show_sun_circles_line || g_state.show_sun_circles_label;
+    if (row.fold == OverlayFold::kSunCircleAngles && !circles_shown) {
+      continue;
+    }
+    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
+      ImGui::OpenPopup(row.fold_id);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(row.fold == OverlayFold::kSunCircleAngles ? "Edit angles" : "Marker radius");
+    }
+    if (ImGui::BeginPopup(row.fold_id)) {
+      if (row.fold == OverlayFold::kSunCircleAngles) {
+        RenderSunCirclesAnglePopup();
+      } else {
+        RenderZenithNadirRadiusPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  ImGui::EndTable();
+}
+
+}  // namespace
+
+void ResetDisplayStripSelectionForTest() {
+  g_strip_select_grade = true;
+}
+
+void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_height) {
+  const CentralBand band = GetCentralBand(window_width, window_height);
+  const ViewportStripSplit split = SplitViewportForDisplayStrip(band.y, band.h, kDisplayStripHeight);
+
+  SetNextPanelGeometry(band.x, split.strip_y, band.w, split.strip_h);
+  // Fixed-geometry chrome, like the top bar and the status bar and unlike the document column: it is
+  // glued to the viewport's bottom edge because that is where it says something about the picture
+  // above it (doc/gui-layout-architecture.md §4). NoDocking states that — dragged into the dockspace
+  // it would take space from the layout with no way back except View -> Reset Layout. A background
+  // (no NoBackground flag) is deliberate: the strip is chrome, not a hole onto the GL preview.
+  ImGui::Begin("##DisplayStrip", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoDocking |
+                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+  if (ImGui::BeginTabBar("##DisplayStripTabs")) {
+    const ImGuiTabItemFlags grade_flags = g_strip_select_grade ? ImGuiTabItemFlags_SetSelected : 0;
+    g_strip_select_grade = false;
+    if (ImGui::BeginTabItem("Grade", nullptr, grade_flags)) {
+      BeginStripTabContent("##GradeTab");
+      RenderGradeTab(window);
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Overlays")) {
+      BeginStripTabContent("##OverlaysTab");
+      RenderOverlaysTab();
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    // A reserved slot, and deliberately nothing more. What goes here is the per-raypath colour
+    // analysis of doc/gui-custom-spectrum-and-raypath-color.md — a legend of one row per light-path
+    // component, the same shape as the Overlays table above it. The slot exists now because the
+    // strip's edge and height were chosen to fit that future tenant (see kDisplayStripHeight and
+    // the strip's bottom-edge placement, doc/gui-layout-architecture.md §4/§6); leaving it out
+    // would have made "does this layout hold it" unanswerable until the day it lands.
+    if (ImGui::BeginTabItem("Components")) {
+      BeginStripTabContent("##ComponentsTab");
+      ImGui::TextDisabled("Light-path component analysis lands here.");
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
   }
 
   ImGui::End();
@@ -1633,9 +2349,13 @@ void RenderLogPanel(float window_width, float window_height) {
   // at the top of this file. ImGui creates NoBringToFrontOnFocus windows via
   // push_front (= bottom of g.Windows) and others via push_back (= top), so
   // adding the flag here would push LogPanel into the background cluster
-  // BELOW LeftPanel/RightPanel — the opposite of the desired stacking.
-  ImGui::Begin("##LogPanel", &g_state.log_panel_open,
-               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+  // BELOW the document column / display strip — the opposite of the desired stacking.
+  // NoDocking: this panel keeps its own fixed geometry above the status bar. Without the flag a user
+  // could drag it into the main DockSpace, where it would take space away from the panels the
+  // default layout is built from and never come back on its own.
+  ImGui::Begin(
+      "##LogPanel", &g_state.log_panel_open,
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking);
 
   // Config controls row
   static const char* const kLevelNames[] = { "Trace", "Debug", "Verbose", "Info", "Warning", "Error", "Off" };

@@ -1,31 +1,33 @@
-// The Edit modal's Filter tab: the sum-of-products row editor and the controls beside it.
+// The document inspector's Filter tab: the sum-of-products row editor and the controls beside it.
 //
 // What this suite is for: the row editor is a buffer, not the document. Rows are authored into a
-// scratch list, validated per row, and only materialised into the entry's FilterConfig when OK
-// commits them — with Cancel, Remove Filter and Immediate mode each taking a different route
-// through that seam. Falsifying any of it needs a real modal on screen and real typing: the
+// scratch list, validated per row, and materialised into the entry's FilterConfig by the page's
+// per-frame commit — which every case below relies on, since there is no longer an OK to press.
+// Falsifying any of it needs the real editor on screen and real typing: the
 // buffers are file-scope statics inside edit_modals.cpp with no seam to write them from a test,
 // which is exactly the point (a test that could set them directly would not be testing the
-// editor). What the grammar means once committed is settled elsewhere and deliberately not
-// re-asserted here — ValidateSummandText in unit-correctness/gui/test_filter_sop_grammar.cpp, and
-// the reconstruction and clause arithmetic in
+// editor). Where these cases used to open a modal from a card's Edit button and dismiss it with
+// OK or Cancel, they now select the entry and let the page commit — see OpenFilterTab. What the grammar means once
+// committed is settled elsewhere and deliberately not re-asserted here — ValidateSummandText in
+// unit-correctness/gui/test_filter_sop_grammar.cpp, and the reconstruction and clause arithmetic in
 // composition-correctness/gui/test_filter_reconstruct_chain.cpp.
 //
-// What a user sees when these break: OK stays grey with no way to tell which row is at fault, or
-// worse goes live on a row that cannot commit; deleting one OR row silently edits a different
-// one; Remove Filter appears to work and the filter comes back on the next save; a forgotten
-// blank row turns a filter into a match-all, which reads as "my filter does nothing" under
-// filter_in and as an all-black render under filter_out.
+// What a user sees when these break: a row that cannot commit silently reaching the document
+// anyway; deleting one OR row silently editing a different one; Remove Filter appearing to work
+// and the filter coming back on the next save; a forgotten blank row turning a filter into a
+// match-all, which reads as "my filter does nothing" under filter_in and as an all-black render
+// under filter_out.
 //
 // Five propositions from the catalogue are NOT covered here and the reason is mechanical, the
 // same one recorded for the Colors window: the per-row validation hints, the static syntax hint,
 // the live SoP preview and the "Clauses: N / M" line are all drawn with TextColored /
 // TextWrapped / TextDisabled / TextUnformatted, which reach ItemAdd() with id == 0 and are never
 // registered with the test engine; and the row's validation tint is a style colour, not an item
-// flag, so ItemInfo cannot see it either. Their user-visible consequence IS covered, by the OK
-// gate below — that gate is driven by the same per-row validation the hints report, so a
-// validation regression surfaces here even though the text does not. The clause count's own
-// arithmetic is covered a layer down.
+// flag, so ItemInfo cannot see it either. Their user-visible consequence IS covered, by the
+// commit: the same per-row validation that drives the hints also decides whether a row reaches
+// the document, so a validation regression surfaces here as a wrong FilterConfig even though the
+// text does not. That surface used to be the OK button's disabled flag, which is gone with it.
+// The clause count's own arithmetic is covered a layer down.
 
 #include <string>
 #include <vector>
@@ -40,19 +42,25 @@
 
 namespace {
 
-const char* const kOk = "**/" ICON_FA_CHECK " OK##edit_modal";
-const char* const kCancel = "**/" ICON_FA_XMARK " Cancel##edit_modal";
 const char* const kAddRow = "**/+ Add OR row##summand_add";
 
-// Open the entry's Edit modal on its Filter tab. Four frames because the tab's SetSelected only
-// takes effect on the frame after the popup opens.
+// Put the inspector on the entry's Filter tab. The extra frames let the tab's selection settle
+// before the rows below it are addressed.
 void OpenFilterModal(ImGuiTestContext* ctx) {
-  ctx->ItemClick("**/Edit##fi");
+  OpenFilterTab(ctx);
   ctx->Yield(4);
 }
 
-bool OkIsDisabled(ImGuiTestContext* ctx) {
-  return IsDisabled(ctx->ItemInfo(kOk));
+// Whether the editor is still on screen and rendering its Filter tab.
+//
+// This replaces OkIsDisabled, which asked whether the modal's OK button was greyed out. There is no
+// OK: the page commits every frame, so "the commit is not blocked" is no longer a property of a
+// button but of whether the row's text reached the document — which each case checks directly, on
+// the document. What is left for this predicate is the other half those assertions carried: that
+// the editor SURVIVED rendering whatever was just typed into it. The over-cap preview below is the
+// case that needs it, since its warning branch pushes a style colour it must also pop.
+bool EditorStillUp(ImGuiTestContext* ctx) {
+  return InspectorItemExists(ctx, "**/###filter_tab");
 }
 
 // Give the entry a committed filter to edit, so a case can start from "there is something here"
@@ -82,60 +90,17 @@ void AuthorRow(ImGuiTestContext* ctx, int uid, const char* text) {
 
 void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
   // ---------------------------------------------------------------------------------------------
-  // The OK gate. This is the whole validation story's one addressable surface.
+  // Validation: what a row that cannot commit does, and does not do.
   // ---------------------------------------------------------------------------------------------
 
-  // A row that cannot commit must stop the commit, and stop it in a recoverable way. Both halves
-  // are needed: a gate that never releases is as broken as one that never closes, and the second
-  // half is what proves the gate is reading the live buffer rather than latching once.
+  // The clause-count line is a diagnostic, not a gate — deliberately so. An over-cap row must not
+  // block the edit: the ABI limit is enforced at commit, and turning the preview into a second
+  // enforcement point would strand the user with an edit that will not take and an unreadable
+  // reason. What is addressable here is that the editor kept rendering; the line itself is text
+  // the engine never sees.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "ok_is_gated_by_a_row_that_cannot_commit");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      OpenFilterModal(ctx);
-      IM_CHECK(!OkIsDisabled(ctx));  // a lone blank row is match-all, not an error
-
-      ctx->ItemInputValue("**/##row_text_0", "3-");  // incomplete: a path with nothing after the dash
-      ctx->Yield(2);
-      IM_CHECK(OkIsDisabled(ctx));
-
-      ctx->ItemInputValue("**/##row_text_0", "3-5");
-      ctx->Yield(2);
-      IM_CHECK(!OkIsDisabled(ctx));  // released again, so the gate re-reads every frame
-
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
-      const auto* f = CommittedFilter();
-      IM_CHECK(f != nullptr);
-      IM_CHECK_STR_EQ(f->param[0].text.c_str(), "3-5");
-    };
-  }
-
-  // A blank row beside a real one must not block either — blank means "no constraint from this
-  // row", and treating it as an error would make the add-row button a trap.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "a_blank_row_beside_a_real_one_does_not_gate_ok");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      OpenFilterModal(ctx);
-      AuthorRow(ctx, 0, "3-5");
-      ctx->ItemClick(kAddRow);
-      ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/##row_text_1"));
-      IM_CHECK(!OkIsDisabled(ctx));
-      ctx->ItemClick(kCancel);
-      ctx->Yield(2);
-    };
-  }
-
-  // The clause-count line is a diagnostic, not a gate — deliberately so, and the distinction is
-  // only observable on OK's flag since the line itself is unaddressable text. An over-cap row must
-  // leave OK live: the ABI limit is enforced at commit, and turning the preview into a second
-  // enforcement point would strand the user with a disabled button and an unreadable reason.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "an_over_cap_clause_count_warns_without_gating_ok");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "filter_editor", "an_over_cap_clause_count_warns_without_blocking_the_edit");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -145,12 +110,10 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       ctx->ItemInputValue("**/##row_text_0",
                           "1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4 & 1;2;3;4;5;6;7;8;3-4");
       ctx->Yield(3);
-      IM_CHECK(!OkIsDisabled(ctx));
-      // And the modal survived rendering that preview — the over-cap branch pushes a style colour
-      // it must also pop, and an unbalanced pair takes the whole popup down with it.
-      IM_CHECK(ctx->ItemExists(kCancel));
+      // The editor survived rendering that preview — the over-cap branch pushes a style colour it
+      // must also pop, and an unbalanced pair takes the whole page down with it.
+      IM_CHECK(EditorStillUp(ctx));
 
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
     };
   }
@@ -167,15 +130,14 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       OpenFilterModal(ctx);
-      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_0")));
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_0"));
+      IM_CHECK(IsDisabled(InspectorItemInfo(ctx, "**/" ICON_FA_XMARK "##row_delete_0")));
 
       ctx->ItemClick(kAddRow);
       ctx->Yield(2);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_0")));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/" ICON_FA_XMARK "##row_delete_1")));
+      IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, "**/" ICON_FA_XMARK "##row_delete_0")));
+      IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, "**/" ICON_FA_XMARK "##row_delete_1")));
 
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
     };
   }
@@ -196,11 +158,10 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/" ICON_FA_XMARK "##row_delete_1");  // the middle one
       ctx->Yield(2);
-      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
-      IM_CHECK(!ctx->ItemExists("**/##row_text_1"));
-      IM_CHECK(ctx->ItemExists("**/##row_text_2"));  // uid 2 did NOT slide down into slot 1
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_0"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##row_text_1"));
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_2"));  // uid 2 did NOT slide down into slot 1
 
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       const auto* f = CommittedFilter();
       IM_CHECK(f != nullptr);
@@ -227,18 +188,17 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
 
       std::string disabled_at;
       for (int i = 1; i < 20; ++i) {
-        if (IsDisabled(ctx->ItemInfo(kAddRow))) {
+        if (IsDisabled(InspectorItemInfo(ctx, kAddRow))) {
           disabled_at += " " + std::to_string(i);
         }
         ctx->ItemClick(kAddRow);
         ctx->Yield(2);
       }
       IM_CHECK_STR_EQ(disabled_at.c_str(), "");
-      IM_CHECK(ctx->ItemExists("**/##row_text_16"));  // the 17th row exists at all
-      IM_CHECK(ctx->ItemExists("**/##row_text_19"));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo(kAddRow)));
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_16"));  // the 17th row exists at all
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_19"));
+      IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, kAddRow)));
 
-      ctx->ItemClick(kCancel);
       ctx->Yield(2);
     };
   }
@@ -259,8 +219,7 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       AuthorRow(ctx, 0, "3-5");
       AuthorRow(ctx, 1, "entry:2 & exit:4");
       AuthorRow(ctx, 2, "3-5 & entry:2");
-      IM_CHECK(!OkIsDisabled(ctx));
-      ctx->ItemClick(kOk);
+      IM_CHECK(EditorStillUp(ctx));
       ctx->Yield(2);
 
       const auto* f = CommittedFilter();
@@ -283,8 +242,7 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       OpenFilterModal(ctx);
       ctx->ItemInputValue("**/##row_text_0", "1-3;3-5");
       ctx->Yield(2);
-      IM_CHECK(!OkIsDisabled(ctx));
-      ctx->ItemClick(kOk);
+      IM_CHECK(EditorStillUp(ctx));
       ctx->Yield(2);
 
       const auto* f = CommittedFilter();
@@ -308,7 +266,6 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       AuthorRow(ctx, 0, "3-5");
       ctx->ItemClick(kAddRow);
       ctx->Yield(2);
-      ctx->ItemClick(kOk);  // row 1 left blank on purpose
       ctx->Yield(2);
 
       const auto* f = CommittedFilter();
@@ -321,7 +278,6 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       OpenFilterModal(ctx);
       ctx->ItemInputValue("**/##row_text_0", "");
       ctx->Yield(2);
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       IM_CHECK(CommittedFilter() == nullptr);
     };
@@ -337,19 +293,17 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       OpenFilterModal(ctx);
       AuthorRow(ctx, 0, "3-5");
       AuthorRow(ctx, 1, "1-2");
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       IM_CHECK(CommittedFilter() != nullptr);
 
       OpenFilterModal(ctx);
-      IM_CHECK(ctx->ItemExists("**/##row_text_0"));
-      IM_CHECK(ctx->ItemExists("**/##row_text_1"));
-      IM_CHECK(!ctx->ItemExists("**/##row_text_2"));  // two rows back, not three or one
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_0"));
+      IM_CHECK(InspectorItemExists(ctx, "**/##row_text_1"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##row_text_2"));  // two rows back, not three or one
 
       // Edit the second row and commit again: the rebuilt buffer is the one being edited.
       ctx->ItemInputValue("**/##row_text_1", "4-6");
       ctx->Yield(2);
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       const auto* f = CommittedFilter();
       IM_CHECK(f != nullptr);
@@ -372,7 +326,6 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       AuthorRow(ctx, 0, "3-5");
       AuthorRow(ctx, 1, "entry:2 & exit:4");
       AuthorRow(ctx, 2, "3-5 & entry:2");
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       const auto* committed = CommittedFilter();
       IM_CHECK(committed != nullptr);
@@ -415,14 +368,13 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
       OpenFilterModal(ctx);
-      IM_CHECK(ctx->ItemExists("**/Filter In##filter_action"));
-      IM_CHECK(ctx->ItemExists("**/Filter Out##filter_action"));
+      IM_CHECK(InspectorItemExists(ctx, "**/Filter In##filter_action"));
+      IM_CHECK(InspectorItemExists(ctx, "**/Filter Out##filter_action"));
 
       ctx->ItemClick("**/Filter Out##filter_action");
       ctx->Yield(2);
       ctx->ItemInputValue("**/##row_text_0", "3-1-5");
       ctx->Yield(2);
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       const auto* out = CommittedFilter();
       IM_CHECK(out != nullptr);
@@ -432,7 +384,6 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       OpenFilterModal(ctx);
       ctx->ItemClick("**/Filter In##filter_action");
       ctx->Yield(2);
-      ctx->ItemClick(kOk);
       ctx->Yield(2);
       const auto* in = CommittedFilter();
       IM_CHECK(in != nullptr);
@@ -480,15 +431,14 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
           wrong_predicate += std::string(" ") + c.label;
         }
         // The user-visible half: the info icon appears exactly when D does not apply.
-        const bool icon = ctx->ItemExists("**/" ICON_FA_CIRCLE_INFO "##d_tooltip_icon_filter_modal");
+        const bool icon = InspectorItemExists(ctx, "**/" ICON_FA_CIRCLE_INFO "##d_tooltip_icon_filter_modal");
         if (icon == c.expect_applicable) {
           wrong_icon += std::string(" ") + c.label;
         }
         // D itself stays editable either way — it is explained, not taken away.
-        if (IsDisabled(ctx->ItemInfo("**/D##filter_modal"))) {
+        if (IsDisabled(InspectorItemInfo(ctx, "**/D##filter_modal"))) {
           wrong_icon += std::string(" ") + c.label + ":disabled";
         }
-        ctx->ItemClick(kCancel);
         ctx->Yield(2);
       }
       IM_CHECK_STR_EQ(wrong_predicate.c_str(), "");
@@ -497,15 +447,18 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Remove Filter — a session-level intent, not a buffer edit.
+  // Remove Filter — an action, where it used to be an intent.
   // ---------------------------------------------------------------------------------------------
 
-  // Remove arms an intent that OK honours regardless of what the rows say afterwards. Retyping
-  // after Remove used to re-create the filter, and the current single direction is deliberate:
-  // aborting a Remove is Cancel's job. Typing into the row after arming is how this case tells the
-  // two apart.
+  // Under the modal, Remove armed an intent that OK honoured regardless of what the rows said
+  // afterwards, and Cancel was how you aborted it. With the per-frame commit there is no interval
+  // between arming and honouring, so Remove is simply an action: it clears the filter on the spot,
+  // and what the rows say next is a new authoring act rather than a contradiction of it. This case
+  // pins both halves, because the first without the second would also pass if typing had been
+  // wrongly swallowed.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "remove_filter_wins_over_whatever_the_rows_say");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "filter_editor", "remove_filter_applies_at_once_and_typing_authors_a_new_one");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(2);
@@ -515,86 +468,27 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       OpenFilterModal(ctx);
 
       // Always enabled: it is an intent flag, not something derived from row emptiness.
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/Remove Filter##filter")));
+      IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, "**/Remove Filter##filter")));
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
-      // The row stays editable, and OK stays live — the intent bypasses row validation entirely.
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##row_text_0")));
-      IM_CHECK(!OkIsDisabled(ctx));
+      // The row stays editable and the editor stays up — the intent bypasses row validation
+      // entirely.
+      IM_CHECK(!IsDisabled(InspectorItemInfo(ctx, "**/##row_text_0")));
+      IM_CHECK(EditorStillUp(ctx));
 
-      ctx->ItemInputValue("**/##row_text_0", "1-2");  // typing must NOT resurrect the filter
-      ctx->Yield(2);
-      ctx->ItemClick(kOk);
-      ctx->Yield(2);
+      // Remove took effect on the spot; there is no pending removal for a later keystroke to
+      // contradict.
       IM_CHECK(CommittedFilter() == nullptr);
-    };
-  }
 
-  // Cancel discards the intent along with the buffers, restoring the committed filter whole —
-  // symmetry flags included, since those live beside the rows and are just as easy to drop.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "remove_then_cancel_puts_the_filter_back");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      gui::FilterConfig f;
-      f.SetRaypath(gui::RaypathParams{ "3-1-5" });
-      f.sym_p = true;
-      f.sym_b = false;
-      f.sym_d = true;
-      gui::SetFilter(gui::g_state, gui::g_state.layers[0].entries[0], f);
-      ctx->Yield();
-
-      OpenFilterModal(ctx);
-      ctx->ItemClick("**/Remove Filter##filter");
-      ctx->Yield(2);
-      ctx->ItemClick(kCancel);
-      ctx->Yield(4);
-
-      const auto* restored = CommittedFilter();
-      IM_CHECK(restored != nullptr);
-      IM_CHECK_STR_EQ(restored->RaypathText().c_str(), "3-1-5");
-      IM_CHECK(restored->sym_p);
-      IM_CHECK(!restored->sym_b);
-      IM_CHECK(restored->sym_d);
-    };
-  }
-
-  // Immediate mode has no OK to press, so the same click has to reach the document on the next
-  // frame. The second assertion is the one that matters: applying the removal without routing it
-  // through the structural lane would leave the display generation floor behind, and the preview
-  // would keep showing rays the filter no longer admits.
-  {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "filter_editor", "immediate_mode_applies_remove_on_the_next_frame");
-    t->TestFunc = [](ImGuiTestContext* ctx) {
-      ResetTestState();
-      ctx->Yield(2);
-      SeedRaypathFilter("3-1-5");
-      gui::g_state.committed_epoch = 5;
-      gui::g_state.display_epoch_floor = 0;
-      // Baseline seeded with the filter present, so removing it is the diff the reconciler sees.
-      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
-      ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.display_epoch_floor, 0u);  // guard: the floor has not moved yet
-
-      OpenFilterModal(ctx);
-      ctx->ItemClick("**/Immediate##edit_modal");
-      ctx->Yield(6);
-      ctx->ItemClick("**/###filter_tab");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Remove Filter##filter");
-      ctx->Yield(2);
-
-      IM_CHECK(CommittedFilter() == nullptr);
-      IM_CHECK_EQ(gui::g_state.display_epoch_floor, gui::g_state.committed_epoch);
-
-      ctx->ItemClick("**/Close##edit_modal");
-      ctx->Yield(2);
-      // Courtesy reset, not a guard: any fatal IM_CHECK above skips this line and leaves the flag
-      // set. That is safe because ResetTestState() pins modal_immediate_mode back to false
-      // (test_gui_main.cpp:142), so the next case starts from the documented default either way.
-      // Left in so a reader of THIS case does not have to know that.
-      gui::g_state.modal_immediate_mode = false;
+      // ...and typing afterwards authors a NEW filter rather than being swallowed. This is the
+      // opposite of what the modal did, and deliberately so: there, Remove was an INTENT held
+      // until OK, so a keystroke arriving before OK had to lose to it or the user's "remove this"
+      // would have been silently undone by their own next click. Here the removal already
+      // happened, so the keystroke is not competing with anything — it is a new filter being
+      // written, and swallowing it would leave the user typing into a row that never takes.
+      ctx->ItemInputValue("**/##row_text_0", "1-2");
+      ctx->Yield(3);
+      IM_CHECK(CommittedFilter() != nullptr);
     };
   }
 }

@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstring>
 
-#include "IconsFontAwesome6.h"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/face_number_overlay.hpp"
@@ -32,15 +31,19 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
   using lumice::gui::ProjectLabelToScreen;
   using lumice::gui::detail::ComputeLabelMinWidthRatio;
 
-  // End-to-end smoke: open Crystal modal, verify GetLastCrystalMesh populates
-  // with prism config + at least one labelable face (>0).
+  // End-to-end smoke: put the inspector's crystal page on an entry, verify GetLastCrystalMesh
+  // populates with prism config + at least one labelable face (>0).
+  //
+  // What drives the mesh is the preview pane, and what decides the preview pane is on screen is the
+  // tree's selection — the card's "Edit" button that used to raise a modal here is gone. There is
+  // no dismissal at the end for the same reason: the page is simply always up.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "screenshot", "face_number_overlay_smoke");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       lumice::gui::ResetLastCrystalMesh();
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCrystalTab(ctx);
       ctx->Yield(4);
 
       const auto* mesh = lumice::gui::GetLastCrystalMesh();
@@ -55,9 +58,6 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
         }
       }
       IM_CHECK(any_labelable);
-
-      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
-      ctx->Yield(2);
     };
   }
 

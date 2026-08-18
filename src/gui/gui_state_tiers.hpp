@@ -104,7 +104,8 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "zenith_nadir_radius_px",     FieldTier::kView,       false },
     // Panel layout
     { "left_panel_collapsed",       FieldTier::kView,       false },
-    { "right_panel_collapsed",      FieldTier::kView,       false },
+    { "document_tree_folded",       FieldTier::kView,       false },
+    { "document_inspector_folded",  FieldTier::kView,       false },
     { "modal_layout_vertical",      FieldTier::kView,       false },
     // Log panel
     { "gui_log_level",              FieldTier::kView,       false },
@@ -114,6 +115,13 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
 
     // ==== T-session: runtime/session-only, not persisted, not dirty =============================
     { "pick_link_source",           FieldTier::kSession,    false },
+    // selection: the document column's master–detail cursor. Session for the same reason
+    // pick_link_source is — transient UI state, never persisted, and meaningless as a personal
+    // default (a saved "the inspector was showing Layer 2 / Entry 3" would restore onto a
+    // different document). kView would have made it default-eligible unless separately listed in
+    // user_defaults.hpp's kUnserializedViewFields, i.e. correct behaviour reached by a second
+    // exception rather than by the classification.
+    { "selection",                  FieldTier::kSession,    false },
     { "color_window_open",          FieldTier::kSession,    false },
     { "defaults_panel_open",        FieldTier::kSession,    false },
     { "current_file_path",          FieldTier::kSession,    false },

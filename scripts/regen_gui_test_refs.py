@@ -113,11 +113,12 @@ GROUPS: dict[str, ReferenceGroup] = {
         ref_prefix="defaults_panel_",
         source="test/gui/visual/test_gui_defaults_panel.cpp",
     ),
-    # Edit-modal layout scene names — must match kScenes[] order in test_gui_modal_layout.cpp.
-    # Each scene is one (tab, crystal type, H/V layout) combination of the unified edit popup,
-    # captured as the modal's own on-screen rectangle.
-    "modal_layout": ReferenceGroup(
-        key="modal_layout",
+    # Document-inspector crystal-page layout scene names — must match kScenes[] order in
+    # test_gui_crystal_inspector_layout.cpp. Each scene is one (tab, crystal type) combination of
+    # the persistent inspector page that replaced the edit popup modal_layout used to cover,
+    # captured as the page's own on-screen (docked) rectangle.
+    "crystal_inspector_layout": ReferenceGroup(
+        key="crystal_inspector_layout",
         scenes=[
             "crystal_prism",
             "crystal_pyramid",
@@ -125,9 +126,20 @@ GROUPS: dict[str, ReferenceGroup] = {
             "filter_ee",
         ],
         modes=[None],
-        tmp_prefix="lumice_modal_layout_",
-        ref_prefix="modal_layout_",
-        source="test/gui/visual/test_gui_modal_layout.cpp",
+        tmp_prefix="lumice_crystal_inspector_layout_",
+        ref_prefix="crystal_inspector_layout_",
+        source="test/gui/visual/test_gui_crystal_inspector_layout.cpp",
+    ),
+    # Display-strip layout scene names — must match kScenes[]/test registration in
+    # test_gui_display_strip_layout.cpp. One scene: the Overlays tab's table, captured as the
+    # strip's own on-screen (fixed-chrome) rectangle.
+    "display_strip_layout": ReferenceGroup(
+        key="display_strip_layout",
+        scenes=["overlays"],
+        modes=[None],
+        tmp_prefix="lumice_display_strip_layout_",
+        ref_prefix="display_strip_layout_",
+        source="test/gui/visual/test_gui_display_strip_layout.cpp",
     ),
 }
 

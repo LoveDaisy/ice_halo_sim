@@ -107,7 +107,6 @@ const MissingKeyCase kGuiNativeCases[] = {
   LUMICE_MISSING_KEY_ROW(kRoot, s.show_zenith_nadir_line, GuiState{}.show_zenith_nadir_line),
   LUMICE_MISSING_KEY_ROW(kRoot, s.zenith_nadir_alpha, GuiState{}.zenith_nadir_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.zenith_nadir_radius_px, GuiState{}.zenith_nadir_radius_px),
-  LUMICE_MISSING_KEY_ROW(kRoot, s.right_panel_collapsed, GuiState{}.right_panel_collapsed),
   LUMICE_MISSING_KEY_ROW(kRoot, s.modal_layout_vertical, GuiState{}.modal_layout_vertical),
 
   // -- root.sun / root.sim / root.renderer --

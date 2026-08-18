@@ -41,7 +41,15 @@ namespace {
 // run-result readbacks polled off the server's stats, exactly like the stats_ray_seg_num /
 // stats_sim_ray_num pair beside them, so they are kDerivedRuntime and deliberately ineligible as
 // personal defaults — a measurement of the last run is not a preference a user can pre-set.
-constexpr std::size_t kExpectedGovernedFieldCount = 66;
+// 67 since `selection` (the document column's master–detail cursor) was registered kSession: it
+// names a (layer, entry) inside the document currently open, so a saved copy would restore onto a
+// different document and select something unrelated. Ineligible for the same reason
+// pick_link_source is.
+// 68 since right_panel_collapsed was DELETED along with the right panel itself: its display groups
+// became the strip under the viewport, which is fixed chrome with no collapse of its own, so the
+// field had nothing left to describe. The count going DOWN is the first time this constant has
+// moved that way — it is a governed-field census, not a high-water mark.
+constexpr std::size_t kExpectedGovernedFieldCount = 68;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -112,7 +120,6 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     // namespace 1 — kView fields that ARE serialized (default lens / overlays / background).
     { "bg_alpha", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "aspect_preset", DefaultEligibility::kEligible, IneligibleReason::kNone },
-    { "right_panel_collapsed", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_zenith_nadir_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
@@ -126,6 +133,8 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "log_to_file", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "log_panel_open", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "left_panel_collapsed", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
+    { "document_tree_folded", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
+    { "document_inspector_folded", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     // Not in any persisted schema.
     { "raypath_color_mode", DefaultEligibility::kIneligible, IneligibleReason::kNotSerialized },
     // Session / derived.

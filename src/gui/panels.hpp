@@ -48,20 +48,28 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
 // renders integer settings with it: an integer setting has to be edited by the SAME control the
 // main UI uses, or the two disagree about what a valid value is — which is the whole point of that
 // registry.
+//
+// `total_width > 0` sizes the [slider][input](label) triple explicitly instead of from the content
+// region. Needed only in a horizontal toolbar row, where "the content region" is the distance to
+// the window's right edge and would swallow everything after it.
 bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true,
-                        bool* committed = nullptr, bool* active = nullptr);
+                        bool* committed = nullptr, bool* active = nullptr, float total_width = 0.0f);
 
-// ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
-enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };
-
-struct EditRequest {
-  EditTarget target = EditTarget::kNone;
-  int layer_idx = -1;
-  int entry_idx = -1;
-};
-
-const EditRequest& GetEditRequest();
-void ResetEditRequest();
+// The ray-budget control: [slider][input] Rays(M), where the slider's rightmost band is a detent
+// that reads "until stopped" instead of a number and sets sim.infinite.
+//
+// It is a bespoke control for ONE field, not a general SliderWithInput mode, and it should stay
+// that way: the reason it exists is that this field's domain has a non-numeric top end, which no
+// other field editable through SliderWithInput has. Two properties are load-bearing —
+//   - the detent's boundary is closed on the infinite side, so the largest FINITE value cannot be
+//     reached by dragging at all (not "is hard to hit"), and
+//   - the input box is never disabled, so that value stays typeable —
+// which together are what keeps ∞ a termination mode rather than a synonym for "a big number"
+// (doc/gui-visual-language.md §4.5). Disabling the input box while the detent is engaged, or
+// snapping a near-max drag up to max, each individually breaks that.
+//
+// Returns true if sim.infinite or sim.ray_num_millions changed this frame.
+bool RaysBudgetControl(GuiState& state, float total_width = 0.0f);
 
 // ---- Shared ImGui combo-popup fix (panels.cpp and edit_modals.cpp both call this) ----
 
@@ -138,17 +146,29 @@ std::string FilterSummary(const std::optional<FilterConfig>& f);
 
 // ---- Panel rendering ----
 
-// Render a single entry card within a layer. Returns true if the delete button was clicked.
-bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx);
+// Render one entry as a compact tree row: thumbnail, "Type · AxisPreset", the weight, the sharing
+// and filter badges, and hover-revealed duplicate / delete. Clicking the row selects the entry (or,
+// while a pick is in flight, completes the link). Returns true if the delete button was clicked;
+// the caller performs the erase, because deleting inside the loop that renders the rows would
+// invalidate it.
+bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx);
 
-// Render a full layer (collapsing header + entry cards + controls).
+// Render a full layer: a foldable tree node (arrow folds, row selects) plus its entry rows and the
+// "+ Crystal" button.
 void RenderLayer(GuiState& state, int layer_idx);
 
-// Scattering section (layer management, rendered inside left panel scroll area).
-void RenderScatteringSection(GuiState& state);
+// The document tree's contents — Sun, Camera, then the scattering layers. Rendered inside the
+// document-tree window's scroll area (app_panels.cpp).
+void RenderDocumentTreeRows(GuiState& state);
 
-// Scene controls (Sun + Simulation) rendered in the right panel Scene group.
-void RenderSceneControls(GuiState& state);
+// The inspector's Layer page: the multi-scatter probability, how many crystals the layer holds, and
+// a delete button. Returns true when the user asked to delete the layer; the CALLER erases it, so
+// that the selection fix-up has a single owner and this function never leaves its own `layer`
+// reference dangling.
+bool RenderLayerInspector(GuiState& state, int layer_idx);
+
+// Sun controls, rendered on the inspector's Sun page.
+void RenderSunControls(GuiState& state);
 
 // Reset all panel editing state: edit request, selection indices.
 // Name kept for GUI test teardown compatibility (was pending-delete only, now broader).

@@ -466,7 +466,7 @@ inline ViewDefaults DefaultViewParamsFor(int lens_type) {
     // Globe is outside-in: az=0 puts the camera behind the sphere. Default az=-180
     // so View Reset shows the same forward direction as non-Globe lenses at az=0.
     // Lens-combo direction continuity is handled separately by the transform formula
-    // in RenderRightPanel (app_panels.cpp), not by this default.
+    // in RenderCameraControls (app_panels.cpp), not by this default.
     azimuth = -180.0f;
   }
   // Orthographic single + dual already fall through to 90; no extra branch.
@@ -902,6 +902,59 @@ struct GuiState {
   };
   std::optional<EntryRef> pick_link_source;
 
+  // Which document item the inspector edits, i.e. the "detail" half of the document column's
+  // master–detail pair (doc/gui-layout-architecture.md §2). It replaces the modal-open state
+  // machine that used to answer the same question: before this, "which entry is being edited"
+  // lived in edit_modals.cpp as a pair of file-scope statics reachable only through
+  // OpenEditModal, so the tree had no way to ask it and the answer disappeared when the popup
+  // closed. Now the selection IS the question's single owner, and the inspector renders whatever
+  // it names.
+  //
+  // Addressing reuses EntryRef's (layer_idx, entry_idx) rather than inventing a second
+  // coordinate system, and the two index fields are meaningful only for the kinds that need
+  // them: kCrystal uses both, kLayer uses layer_idx alone, kSun/kCamera/kNone use neither and
+  // leave both at -1. Indices are NOT validated on write — layers/entries can be deleted while a
+  // selection points at them, so every reader must range-check before dereferencing (the same
+  // contract pick_link_source has carried since it was introduced).
+  //
+  // Registered kSession, not kView: this is transient runtime UI state with no persistence and
+  // no meaning as a personal default, which is exactly pick_link_source's classification and for
+  // exactly the same reason. It is neither written to .lmc by file_io.cpp nor captured in
+  // ConfigSnapshot, so Revert leaves it alone.
+  enum class SelectionKind { kNone, kSun, kCamera, kLayer, kCrystal };
+  struct DocumentSelection {
+    SelectionKind kind = SelectionKind::kNone;
+    int layer_idx = -1;
+    int entry_idx = -1;
+
+    friend bool operator==(const DocumentSelection& a, const DocumentSelection& b) {
+      return a.kind == b.kind && a.layer_idx == b.layer_idx && a.entry_idx == b.entry_idx;
+    }
+    friend bool operator!=(const DocumentSelection& a, const DocumentSelection& b) { return !(a == b); }
+  };
+  DocumentSelection selection;
+
+  // Selection writers. Free-standing assignments would work, but each of these also states which
+  // index fields the kind leaves unused — writing `{kSun, 3, 0}` is expressible and meaningless,
+  // and a reader that trusted layer_idx there would be reading a leftover.
+  void SelectNone() { selection = DocumentSelection{}; }
+  void SelectSun() { selection = DocumentSelection{ SelectionKind::kSun, -1, -1 }; }
+  void SelectCamera() { selection = DocumentSelection{ SelectionKind::kCamera, -1, -1 }; }
+  void SelectLayer(int layer_idx) { selection = DocumentSelection{ SelectionKind::kLayer, layer_idx, -1 }; }
+  void SelectCrystal(int layer_idx, int entry_idx) {
+    selection = DocumentSelection{ SelectionKind::kCrystal, layer_idx, entry_idx };
+  }
+
+  // True when `selection` names an entry that still exists. The inspector's crystal page and
+  // every buffer-commit path go through this rather than re-deriving the bounds check, because
+  // getting it wrong is not a crash on the frame the layer is deleted — the indices stay in
+  // range while pointing at a different entry, and the edit buffer commits into it.
+  bool HasValidCrystalSelection() const {
+    return selection.kind == SelectionKind::kCrystal && selection.layer_idx >= 0 &&
+           selection.layer_idx < static_cast<int>(layers.size()) && selection.entry_idx >= 0 &&
+           selection.entry_idx < static_cast<int>(layers[selection.layer_idx].entries.size());
+  }
+
   // Layers (entry cards reference crystals/filters via pool ids)
   std::vector<Layer> layers;
 
@@ -995,13 +1048,17 @@ struct GuiState {
   // engine), so the accumulated image resets on toggle. UI-only, session-only.
   bool use_gpu_backend = false;
 
-  // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
-  // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
-  // Immediate mode (default, gui-polish-v15 round 2): ImGui::Begin + single
-  // Close button + no dirty-mark; every frame commits buffer to state via
-  // CommitAllBuffersImmediate (crystal/axis edits only MarkDirty — filter
-  // edits still MarkStructHardDirty — so infinite-rays accumulation persists
-  // while the user drags a crystal slider).
+  // ORPHANED, deliberately, and this is the only place that says so.
+  //
+  // It used to choose between the edit modal's two commit modes: staged (OK/Cancel, dirty marks on
+  // the tabs) and immediate (every frame commits the buffer). The modal is gone — the editors are
+  // the document inspector's crystal page — and the page commits every frame unconditionally, so
+  // the field has no reader left. What it once selected is now the only behaviour there is.
+  //
+  // Kept rather than deleted because removing a field is a change to the tier table, the
+  // user-defaults eligibility count and four test files, none of which is what the migration that
+  // orphaned it was about. It is session-tier and never serialised, so an orphan here costs a bool
+  // and nothing else. Remove it in a cleanup change of its own.
   bool modal_immediate_mode = true;
 
   // Mark the config dirty. sim_state is NOT touched here — it is derived once per frame by
@@ -1064,13 +1121,37 @@ struct GuiState {
   }
 
   // Panel state (view preference — does not call MarkDirty)
-  // not persisted to .lmc (unlike right_panel_collapsed)
   bool left_panel_collapsed = false;
-  bool right_panel_collapsed = false;
-  // Edit modal layout orientation (view preference). false = horizontal
-  // (preview left + tabs right); true = vertical (preview top + tabs below,
-  // default since gui-polish-v15 round 2). Persisted to .lmc alongside
-  // right_panel_collapsed.
+  // The two halves of the document column, folded to their header strips. Distinct from
+  // left_panel_collapsed, which folds the column as a whole: these hand the height to the OTHER
+  // half rather than to the preview, which is the point of the pair being in one column
+  // (doc/gui-layout-architecture.md §2 — the tree and the inspector take turns needing the room).
+  //
+  // At most one of the two is ever true; the setter below is what makes that a property of the
+  // state rather than a rule each call site remembers. Both folded would leave a column of two
+  // header strips and nothing else — reachable in one click from a UI that let it happen, and
+  // useless.
+  bool document_tree_folded = false;
+  bool document_inspector_folded = false;
+
+  // Fold one half of the document column, unfolding the other. Passing false to both is how a
+  // caller says "show both halves"; there is no state in which neither is showing.
+  void FoldDocumentHalves(bool tree_folded, bool inspector_folded) {
+    document_tree_folded = tree_folded && !inspector_folded;
+    document_inspector_folded = inspector_folded && !tree_folded;
+  }
+  // ORPHANED, deliberately — and unlike modal_immediate_mode above, this one IS persisted, so the
+  // orphan is visible in every .lmc written from now on.
+  //
+  // It chose between the edit modal's two arrangements: preview-left/tabs-right, or preview-above/
+  // tabs-below. The inspector's crystal page is a fixed-width column, where only the stacked
+  // arrangement means anything, so the page hard-codes it and offers no toggle. The field is
+  // therefore written to .lmc and read back and never consulted.
+  //
+  // Kept because dropping it is a FORMAT change: files written by this build would lose a key that
+  // files written by the last one carry, and the round-trip and missing-key tests both name it.
+  // That is a breaking-bump decision, not a side effect of moving a panel. Until then it stays
+  // true, which is what every reader that ever existed would have seen.
   bool modal_layout_vertical = true;
 
   // Log panel state (view preference — does not call MarkDirty)
@@ -1155,7 +1236,7 @@ struct GuiState {
   //   MarkStructHardDirty, so Revert must restore them; the field was missing from the
   //   original 2026-04 audit and re-added by task-349.2 (Step 2 of plan §3.4).
   //   View preferences (aspect_preset, bg_*, horizon/grid/sun circles, log levels,
-  //   left_panel_collapsed, right_panel_collapsed, show_composite_preview,
+  //   left_panel_collapsed, show_composite_preview,
   //   raypath_color_mode — display state via PushDisplayState, not through MarkDirty),
   //   runtime state (sim_state, run_intent, committed_epoch, display_epoch_floor,
   //   last_uploaded_texture_serial, last_uploaded_as_composite, stats_*, snapshot_intensity,

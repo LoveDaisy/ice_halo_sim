@@ -369,7 +369,6 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     const ScopedPopups popup_guard(ctx);
     const ScopedRunBaseline baseline_guard;
 
-    gui::g_state.modal_immediate_mode = true;
     // A rectilinear lens, so the view angle inputs are live here.
     gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
 
@@ -387,20 +386,20 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     const int cid = gui::g_state.layers[0].entries[0].crystal_id;
     const float committed_h = gui::g_state.crystals[cid].height.center;
 
-    // (1) A view change through its real input. Revert must NOT arm.
+    // (1) A view change through its real input. Revert must NOT arm. The control moved to the
+    // document column inspector's Camera page, so the row has to be selected before it exists.
+    gui::g_state.SelectCamera();
+    ctx->Yield(3);
     ctx->ItemInputValue("**/##Elevation##view_input", 30.0f);
     ctx->Yield(4);
     IM_CHECK_EQ(gui::g_state.renderer.elevation, 30.0f);  // the premise: the edit landed
     IM_CHECK_NE(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kModified));
     IM_CHECK(IsDisabled(ctx->ItemInfo(kRevertBtn)));
 
-    // (2) A crystal change through the real edit modal. Revert must arm.
-    gui::EditRequest req{ gui::EditTarget::kCrystal, /*layer_idx=*/0, /*entry_idx=*/0 };
-    gui::OpenEditModal(req, gui::g_state);
-    ctx->Yield(4);
+    // (2) A crystal change through the real editor. Revert must arm.
+    OpenCrystalTab(ctx);
     ctx->ItemInputValue("**/##Height##modal_cr_input", committed_h + 1.0f);
     ctx->Yield(2);
-    ctx->ItemClick("**/Close##edit_modal");  // Immediate mode: one exit button
     ctx->Yield(4);
     IM_CHECK_EQ(gui::g_state.crystals[cid].height.center, committed_h + 1.0f);  // premise
     IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kModified));

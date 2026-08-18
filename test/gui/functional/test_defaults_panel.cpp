@@ -1395,7 +1395,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       panel.Close();
 
       gui::g_state.renderer.fov = 90.0f;
-      ctx->Yield(2);
+      // FOV's "main UI control" is the document inspector's Camera page now, not the right panel,
+      // so the row has to be selected for the control to be on screen at all.
+      gui::g_state.SelectCamera();
+      ctx->Yield(3);
       ctx->ItemInputValue("**/##FOV##view_input", 900.0f);
       ctx->Yield(3);
       IM_CHECK_EQ(fov_from_table, gui::g_state.renderer.fov);
@@ -1412,8 +1415,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       panel.Close();
 
       gui::g_state.grid_alpha = 0.3f;
-      ctx->Yield(2);
-      ctx->ItemInputValue("**/##Alpha##grid_input", 7.5f);
+      // Same relocation as FOV above, one layer further: this field's "main UI control" is the
+      // display strip's Overlays tab, and an unselected tab submits nothing — so the tab has to be
+      // opened, not merely yielded for. The control itself changed shape too (a cell-sized DragFloat
+      // where the panel had a slider+input pair), which is why the id is the field's rather than the
+      // pair's "_input" half; ctrl+click text entry, which ItemInputValue uses, honours the drag's
+      // AlwaysClamp, so this is still the same claim about clamping.
+      OpenDisplayStripTab(ctx, "Overlays");
+      ctx->ItemInputValue("**/##grid_alpha", 7.5f);
       ctx->Yield(3);
       IM_CHECK_EQ(alpha_from_table, gui::g_state.grid_alpha);
       IM_CHECK_EQ(alpha_from_table, 1.0f);
@@ -1600,19 +1609,27 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // row can legitimately carry both, and a priority rule would hide whichever the user needed.
     //
     // The out-of-range icon's REACHABILITY is the finding this pins, because it inverts the obvious
-    // guess: the shared slider control ends with an unconditional clamp and the main UI calls it
-    // every frame, so a hand-edited out-of-range alpha is pulled back into its domain before this
-    // panel ever sees it. The reachable fields are the ones with no main-UI control at all. Both
-    // directions are asserted — the field that keeps the poison and two that cannot — so "this
-    // notice can fire" is not confused with "this notice fires for everything".
+    // guess: the shared slider control (panels.cpp::SliderWithInput) ends with an unconditional
+    // clamp and the main UI calls it every frame, so a hand-edited out-of-range value is pulled back
+    // into its domain before this panel ever sees it. The reachable fields are the ones no control
+    // touches per frame. Both directions are asserted — the fields that keep the poison and the two
+    // that cannot — so "this notice can fire" is not confused with "it fires for everything".
+    //
+    // "No control touches it per frame" is a WIDER set than "no control at all", and the display
+    // strip is what widened it. An overlay alpha still has a control, but that control now lives in
+    // the strip's Overlays tab, and ImGui does not submit an unselected tab's contents at all — so
+    // it clamps on the frames the user is looking at that tab and on no others. The strip's own
+    // Grade tab, which IS the one selected by default, is why bg_alpha below still stands for the
+    // clamped-every-frame mechanism.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "the_two_note_icons_are_independent");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedPanel panel(ctx, "panel_notes");
 
-      // A hand-edited defaults file, out of range on three fields.
+      // A hand-edited defaults file, out of range on four fields.
       json doc;
       doc["renderer"]["opacity"] = 3.0f;  // no main-UI control => nothing clamps it
-      doc["overlay_grid_alpha"] = 7.0f;   // its own slider clamps it every frame
+      doc["overlay_grid_alpha"] = 7.0f;   // its control is behind an unselected tab => not submitted
+      doc["bg_alpha"] = 7.0f;             // its slider is on the default tab => clamped every frame
       doc["renderer"]["fov"] = 4000.0f;   // the per-frame renderer invariant clamps it
       IM_CHECK(gui::WriteUserDefaultsFile(panel.dir(), doc));
       gui::g_state = gui::MakeNewDocumentState();
@@ -1621,15 +1638,19 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
 
-      // Positive: the field nothing clamps still holds its out-of-range value, and says so.
+      // Positive, twice, for the two ways a value goes untouched: no control at all, and a control
+      // that exists but is not being submitted.
       FilterTo(ctx, "renderer.opacity");
       IM_CHECK(ctx->ItemExists("**/###note_range_renderer.opacity"));
       IM_CHECK(!ctx->ItemExists("**/###note_edited_renderer.opacity"));
+      FilterTo(ctx, "overlay_grid_alpha");
+      IM_CHECK_EQ(gui::g_state.grid_alpha, 7.0f);
+      IM_CHECK(ctx->ItemExists("**/###note_range_overlay_grid_alpha"));
 
       // Negative, twice, for the two different mechanisms that pull a value back in range.
-      FilterTo(ctx, "overlay_grid_alpha");
-      IM_CHECK_EQ(gui::g_state.grid_alpha, 1.0f);
-      IM_CHECK(!ctx->ItemExists("**/###note_range_overlay_grid_alpha"));
+      FilterTo(ctx, "bg_alpha");
+      IM_CHECK_EQ(gui::g_state.bg_alpha, 1.0f);
+      IM_CHECK(!ctx->ItemExists("**/###note_range_bg_alpha"));
       FilterTo(ctx, "renderer.fov");
       IM_CHECK(!ctx->ItemExists("**/###note_range_renderer.fov"));
 
@@ -2584,15 +2605,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       SaveDefaultsPanel(ctx);
       panel.Close();
 
-      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req, gui::g_state);
-      ctx->Yield(4);
+      OpenAxisTab(ctx);
       ctx->ItemClick("**/Column");
-      ctx->Yield(2);
-      // Committed rather than read out of the modal's buffer: the buffer is TU-private by design
-      // (OK/Cancel atomicity), and "the value reached the document" is the stronger claim anyway.
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(3);
+      // Read off the document rather than the editor's buffer: the buffer is TU-private, and "the
+      // value reached the document" is the stronger claim anyway. It gets there on its own now —
+      // the page commits every frame, so there is no OK to press.
 
       const auto& edited = gui::CrystalOf(gui::g_state, gui::g_state.layers[0].entries[0]);
       IM_CHECK_EQ(edited.zenith.std, 0.3f);
@@ -2614,9 +2632,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ScopedPanel panel(ctx, "panel_modal_no_writeback");
 
-      gui::EditRequest req{ gui::EditTarget::kAxis, /*layer_idx=*/0, /*entry_idx=*/0 };
-      gui::OpenEditModal(req, gui::g_state);
-      ctx->Yield(4);
+      OpenAxisTab(ctx);
 
       // The same starting point the read case used: Column, then a std the user tuned. If any
       // write-through survived, this is the edit it would carry into the library.
@@ -2630,7 +2646,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/###save_as_preset_plate"));
       IM_CHECK(!ctx->ItemExists("**/###save_as_preset_lowitz"));
 
-      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
       ctx->Yield(3);
 
       // The crystal took the edit; the library did not. OK rather than Cancel on purpose: a

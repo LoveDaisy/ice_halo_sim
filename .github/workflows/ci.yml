@@ -181,7 +181,7 @@ jobs:
           set -o pipefail
           rc=0
           xvfb-run -a build/Release/static/bin/gui_test \
-            --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config \
+            --fixed-dt --filter "crystal_inspector_layout,display_strip_layout,defaults_panel_layout" --no-user-config \
             2>&1 | tee gui_visual.log || rc=$?
           # Same hazard, and the same answer, as the gui_unit_test verification above: a filter
           # that stops matching, a renamed category or a binary that registered no cases would

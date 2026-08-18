@@ -78,7 +78,8 @@ inline constexpr const char* kCollectionFields[] = {
 // probing for each kView field's expected root key, so a future change that starts (or stops)
 // serializing one of these turns the test red instead of silently widening eligibility.
 inline constexpr const char* kUnserializedViewFields[] = {
-  "left_panel_collapsed", "gui_log_level", "core_log_level", "log_to_file", "log_panel_open",
+  "left_panel_collapsed", "document_tree_folded", "document_inspector_folded", "gui_log_level", "core_log_level",
+  "log_to_file",          "log_panel_open",
 };
 
 struct EligibilityVerdict {
