@@ -138,24 +138,55 @@ constexpr float kPropertyLabelColWidth = 60.0f;
 // panel width is unaffected.
 constexpr float kPropertyTableMaxWidth = 420.0f;
 
-// A combo that sits in a TOOLBAR row rather than a property row — currently the crystal preview
-// pane's render-style picker, which shares its row with a Reset View button. A property row's
-// combo takes the control column and needs no width of its own; a toolbar combo has no column to
-// take, and letting it stretch to the row's end would put a four-item picker across the whole
-// panel. 120 px is the width that pane has shipped with, kept rather than re-derived: it fits the
-// longest style name with room for the dropdown arrow.
+// A combo that sits in a TOOLBAR row rather than a property row — the crystal preview pane's
+// render-style picker, which shares its row with a Reset View button, and the display strip's
+// Grade row Resolution picker. A property row's combo takes the control column and needs no width
+// of its own; a toolbar combo has no column to take, and letting it stretch to the row's end would
+// put a four-item picker across the whole panel. 120 px is the width that pane has shipped with,
+// kept rather than re-derived: it fits the longest style name with room for the dropdown arrow,
+// and the resolution labels ("2048 x 2048" being the longest) fit inside the same box.
 constexpr float kToolbarComboWidth = 120.0f;
 
-// Content-shrink tier for a top-bar execution-cluster field (Rays / Max hits): a field
-// whose value is a handful of digits is sized to its content, not to the bar. Bounds the
-// FIELD ITEM only — the frame the value is typed into — and excludes the field's label,
-// its ItemSpacing, and any surrounding group padding, so a caller sizing a whole labelled
-// cluster must add those itself.
+// The Grade row's aspect-preset combo. It gets a tier of its own rather than kToolbarComboWidth
+// because its longest option, "Match Background", does not fit in 120 px — and a combo whose
+// selected value is ellipsised is the one case where "content width" has failed at the only job
+// it has.
 //
-// DEFINED BUT NOT YET WIRED: the top bar's adoption is task 457.2's scope, and this
-// constant is here so that task consumes a tier this one already reasoned about rather
-// than inventing a sixth width. Do not delete it as unused before then.
-constexpr float kTopBarFieldWidth = 58.0f;
+// MEASURED, not chosen, in the same sense as kPropertyLabelColWidth: it is
+// CalcTextSize("Match Background").x + FramePadding.x*2 (the frame's own inset) + the arrow
+// button's square side (GetFrameHeight()), taken on the theme's 15 px Roboto Medium and rounded
+// up to the size rhythm's multiple of 4 — 142.0 px measured, hence 144. That is one rhythm step
+// wider than kToolbarComboWidth's 120 plus the difference in longest label, and NOT padded out
+// further: a combo materially wider than the value it shows is back to a width nobody chose.
+// test/gui/functional/test_view_display_controls.cpp re-derives the requirement from the live font
+// atlas and fails in BOTH directions if a font or a longer preset name outgrows this value, or if
+// the slack over it exceeds one rhythm step.
+constexpr float kAspectPresetComboWidth = 144.0f;
+
+// Content-shrink tier for a single numeric field that sits in a horizontal row rather than a
+// property table: the top bar's Max hits, and the display strip's Grade row EV and background
+// Alpha. A field whose value is a handful of digits is sized to its content, not to the bar it
+// happens to sit in. Bounds the FIELD ITEM only — the frame the value is typed into — and
+// excludes the field's label, its ItemSpacing, and any surrounding group padding, so a caller
+// sizing a whole labelled cluster must add those itself.
+//
+// Named for what it is rather than for where it was first needed: it was introduced as the top
+// bar's tier, and the display strip then wanted the same "one scalar, a few digits, in a
+// horizontal row" width. Two symbols for one concept is exactly the width proliferation the
+// token table exists to stop.
+constexpr float kCompactFieldWidth = 58.0f;
+
+// The ray-budget control (RaysBudgetControl) in the top bar's execution cluster. It is the one
+// control in this table that is NOT a content-shrink field: it keeps its [slider][input] pair,
+// because the slider's rightmost band is the ∞ detent and a drag has no track to put a detent on
+// (doc/gui-visual-language.md §4.5). The width therefore covers the whole pair.
+//
+// Chosen so the whole execution row fits inside kMinWindowWidth (1024): the row totals ~985 px
+// with separators. A narrower window clips the tail of the row rather than reflowing it — the
+// blueprint leaves narrow-window degradation to the implementation
+// (doc/gui-layout-architecture.md §6), and clipping keeps Run, the dirty chip and the ray budget
+// (the leftmost, most-used items) on screen.
+constexpr float kRaysControlWidth = 170.0f;
 
 // Reference drag track length, in pixels: the horizontal distance a DragFloat traverses to
 // cross its whole domain. It is the width the retired [slider][input] pair's slider half

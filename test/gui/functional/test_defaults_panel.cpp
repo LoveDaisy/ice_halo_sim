@@ -1439,7 +1439,11 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       gui::g_state.sim.max_hits = 8;
       ctx->Yield(2);
-      ctx->ItemInputValue("**/##Max hits_input", 4096);
+      // Same substitution as overlay_grid_alpha above: this field's main-UI control became a single
+      // DragInt where the panel still renders a slider+input pair, hence the field's own id rather
+      // than a pair half. The claim under test is unchanged — two differently shaped controls over
+      // one field must agree on what a valid value is.
+      ctx->ItemInputValue("**/##Max hits", 4096);
       ctx->Yield(3);
       IM_CHECK_EQ(hits_from_table, gui::g_state.sim.max_hits);
       IM_CHECK_EQ(hits_from_table, 64);

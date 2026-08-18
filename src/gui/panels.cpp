@@ -153,6 +153,23 @@ bool DragFloatField(const char* label, float* value, float min_val, float max_va
   return *value != old_value;
 }
 
+bool DragIntField(const char* label, int* value, int min_val, int max_val, const char* fmt) {
+  char drag_id[80];
+  snprintf(drag_id, sizeof(drag_id), "##%s", label);
+
+  // Full domain per kDragTrackReferenceWidth pixels of drag, matching DragFloatField. The speed
+  // is a float even for an int drag — ImGui accumulates the sub-unit remainder across frames, so a
+  // domain narrower than the reference width still traverses in exactly that many pixels rather
+  // than snapping one step per pixel.
+  const float speed = static_cast<float>(max_val - min_val) / kDragTrackReferenceWidth;
+  const int old_value = *value;
+  ImGui::DragInt(drag_id, value, speed, min_val, max_val, fmt, ImGuiSliderFlags_AlwaysClamp);
+
+  // Unconditional, for the same reason as DragFloatField's: see the note there.
+  *value = std::clamp(*value, min_val, max_val);
+  return *value != old_value;
+}
+
 // Infer axis orientation preset name from crystal config.
 // Matching logic lives in axis_presets.hpp (shared with edit_modals.cpp; unit-tested).
 std::string AxisPresetName(const CrystalConfig& c) {

@@ -135,8 +135,40 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
     拖到最左端仍得到精确 `min`（ImGui 对 `t<=0` 显式短路，不走 log fudge）。
   - 速度取 `(max-min)/kDragTrackReferenceWidth`（230 px = 旧滑条轨道长度）；log 档下 ImGui 会先
     把 delta 除以量程，分子正好抵消，两档因此是同一条公式、同一段拖动距离。
-  - **未推广到**：顶栏 Rays 滑条（∞ 档位是设计资产，§4.5），以及显示条 / 默认值面板（各有自己的
-    任务与参考图组）。`SliderWithInput` 因此仍在，不是残留。
+  - **显示条与顶栏也已收口**（457.2）。显示条 Grade 行的 EV 与 Background Alpha 改为单
+    `DragFloat`，顶栏的 Max hits 改为单 `DragInt`（新增 `DragIntField`，`DragFloatField` 的整数
+    版：同一条速度公式、同一条无条件 clamp、同一套 `##<label>` ID 规则，但**不带** `scale` 参数
+    —— 这里的整数字段量程只有几十个取值，log 拖动会把大半条轨道花在最低两档上）。
+  - **未推广到**：顶栏 Rays 滑条（∞ 档位是设计资产，§4.5 —— 拖动只有速度、没有轨道位置，而档位
+    需要一段轨道来放），以及默认值面板（自有任务与参考图组）。`SliderWithInput` /
+    `SliderIntWithInput` 因此仍在，不是残留。
+
+- ~~**显示条与顶栏的宽度仍从容器派生**~~ —— **已收口**（457.2）。检视器（457.1）修的是"控件没有
+  token"，显示条 Grade 行还多一层：`##GradeLayout` 用 `ImGuiTableFlags_SizingStretchSame` 把整条
+  显示条的宽度硬性三等分给每一栏，栏内控件再用 `-(kLabelColWidth + spacing)` 去吃这三分之一 ——
+  于是一个只有五个选项的 Resolution combo 在宽窗口下被撑到 ~600 px。那个数字没有人选过，它是视口
+  的宽度经两层容器读出来的（§2）。
+  - 改法是把该表换成 `ImGuiTableFlags_SizingFixedFit`，**方向就此反过来**：列宽由列内最宽的那行
+    反推，每个控件自己从 token 表声明宽度。栏内两行仍是纵向堆叠，所以一栏的宽度是两行的**较大
+    值**而非两者之和 —— 第一栏由 `Resolution [combo]` 定宽，不是 EV。
+  - **代价是明示接受的**：三栏不再均分显示条，右侧可能留白。原型那种"一行内联流"更紧凑，但换回
+    均分的唯一办法就是把每个控件重新拴到窗口宽度上，那正是被修掉的机制本身。
+  - **前置标签用行内变体，不套 `PropertyRow`**：`InlineFieldLabel`（`app_panels.cpp` 匿名命名
+    空间）只做 `AlignTextToFramePadding` + `TextDisabled` + `SameLine`，视觉契约与 `PropertyRow`
+    一致，但没有固定标签列。理由是这里**没有可对齐的东西**：显示条的字段是横排的，没有两个字段
+    共用一条竖线；把 `"EV"` 撑到 60 px 只会把数值推离它自己的名字，即 §5 已证伪的那笔交易。
+  - **新增两个 token**：`kAspectPresetComboWidth = 144`（实测：最长选项 `"Match Background"`
+    在活字体图集上要求 142 px，向上取到 4 的倍数；`test_view_display_controls.cpp` 从两侧钉死
+    —— 太窄会把**当前选中值**省略号截断，那是内容宽 combo 唯一不能犯的错），以及
+    `kRaysControlWidth = 170`（原为 `app_panels.cpp` 的文件内常量，数值不变，只是搬进共享词表：
+    "宽度必须来自词表"这条 AC 的最严读法不接受"随便一个具名局部常量"）。Resolution combo 复用
+    既有的 `kToolbarComboWidth = 120`。
+  - `kTopBarFieldWidth` 改名为 `kCompactFieldWidth`：它现在同时服务顶栏 Max hits 与显示条的
+    EV / Alpha，名字若停留在最初的宿主就成了历史来源而非当前语义 —— 而"一个概念两个符号"正是
+    token 表要防的那种宽度增殖。
+  - **`RenderOverlaysTab` 零改动**：它早就是目标形态（Alpha 已是单元格宽的单 `DragFloat`；表格
+    外层 `std::min(GetContentRegionAvail().x, 560)` 实现封顶而非跟随拉伸）。这里只做验证，不产
+    出 diff。
 
 - ~~**前置标签未推广**~~ —— **检视器已收口**（457.1）。§5 给出的正解（标签在左、右对齐、暗色）
   由 `BeginPropertyTable` / `PropertyRow` / `EndPropertyTable`（`src/gui/panels.hpp`）承载：两列

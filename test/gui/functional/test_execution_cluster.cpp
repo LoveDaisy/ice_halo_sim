@@ -35,7 +35,9 @@ namespace {
 // on the input box. Every case below that says something about one of them addresses that one.
 const char* const kRaysSlider = "**/##Rays(M)_slider";
 const char* const kRaysInput = "**/##Rays(M)_input";
-const char* const kMaxHits = "**/##Max hits_input";
+// Max hits, by contrast, is ONE item: it was merged into a single DragInt, so its id carries no
+// _slider / _input half to choose between.
+const char* const kMaxHits = "**/##Max hits";
 const char* const kUseGpu = "**/Use GPU";
 const char* const kChip = "##TopBar/" ICON_FA_CIRCLE_EXCLAMATION " Changed - re-run";
 
@@ -299,8 +301,13 @@ void RegisterExecutionClusterTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P83, moved with the control. The int slider is a different widget family from the float ones
-  // and reads its bounds from the same registry, so it gets the same treatment: literals, both ends.
+  // P83, moved with the control. The int drag is a different widget family from the float ones and
+  // reads its bounds from the same registry, so it gets the same treatment: literals, both ends.
+  //
+  // The control changed shape under this case (a single DragInt where a slider+input pair used to
+  // be) without the case changing what it claims: ItemInputValue's ctrl+click text entry honours
+  // the drag's AlwaysClamp exactly as it honoured the input box's, so both ends still land on the
+  // registry's bounds. Same substitution, same reasoning, as the EV and overlay-alpha fields.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "execution_cluster", "max_hits_clamps_typed_values_to_its_domain");
     t->TestFunc = [](ImGuiTestContext* ctx) {

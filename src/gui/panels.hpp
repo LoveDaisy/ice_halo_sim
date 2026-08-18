@@ -71,6 +71,18 @@ void EndPropertyTable();
 bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
                     SliderScale scale = SliderScale::kLinear);
 
+// DragFloatField's integer sibling: one DragInt where an int field used to be a
+// [SliderInt][InputInt] pair. Same id rule ("##<label>", no _slider / _input half), same
+// kDragTrackReferenceWidth-derived speed, and the same UNCONDITIONAL clamp for the same reason
+// — ImGuiSliderFlags_AlwaysClamp constrains what the widget produces and leaves an out-of-range
+// value it was handed alone, while an int field can arrive here from a hand-written .lmc.
+// Returns true when the value is not what it was, clamp included.
+//
+// No `scale` parameter, unlike the float version: the int fields that reach this helper have
+// domains of a few dozen values, where a logarithmic drag would spend most of its track on the
+// bottom two. If one ever needs it, add it then rather than carrying an unused mode.
+bool DragIntField(const char* label, int* value, int min_val, int max_val, const char* fmt = "%d");
+
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.

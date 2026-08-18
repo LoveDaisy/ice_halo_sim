@@ -135,6 +135,24 @@ namespace lumice::gui {
 using SimState = GuiState::SimState;
 
 namespace {
+
+// The leading label of a field in a HORIZONTAL row — the display strip's inline answer to the
+// inspector's PropertyRow. Same visual contract (dimmed text, top-aligned with the frame of the
+// control it names, control immediately to its right); what it does not have is the property
+// table's fixed label column, because there is no column of rows here to align down.
+//
+// A nested two-column BeginPropertyTable per field would produce the same pixels and claim an
+// alignment that does not exist — the strip's fields sit side by side, so no two of them share a
+// vertical line to be aligned on. The label column tier (kPropertyLabelColWidth) is deliberately
+// NOT consumed here for the same reason: padding "EV" out to 60 px would put the number that far
+// from its own name, which is the proximity trade doc/gui-visual-language.md §5 records as
+// falsified.
+void InlineFieldLabel(const char* text) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", text);
+  ImGui::SameLine();
+}
+
 // With ImGuiConfigFlags_ViewportsEnable (gui-polish-v15), window positions
 // and ForegroundDrawList coordinates are in absolute OS screen space, not
 // relative to the main GLFW window. All fixed-layout panels must anchor to
@@ -169,14 +187,10 @@ inline void SetNextPanelGeometry(float x, float y, float w, float h) {
 // (doc/gui-layout-architecture.md §1/§3).
 // ================================================================================================
 
-// Widths of the two numeric controls, in pixels, covering their [slider][input] pair only (the
-// trailing text label is drawn after and sizes itself). Chosen so the whole row fits inside
-// kMinWindowWidth (1024): the row totals ~985 px with separators. A narrower window clips the tail
-// of the row rather than reflowing it — the blueprint leaves narrow-window degradation to the
-// implementation (§6), and clipping keeps Run, the dirty chip and the ray budget (the leftmost,
-// most-used items) on screen.
-constexpr float kRaysControlWidth = 170.0f;
-constexpr float kMaxHitsControlWidth = 150.0f;
+// The two numeric controls' widths now come from the shared token table (kRaysControlWidth /
+// kCompactFieldWidth, gui_constants.hpp), which is also where the "the row totals ~985 px, so it
+// fits inside kMinWindowWidth" arithmetic that picked them is recorded.
+//
 // Fixed slot for the run-progress readout, so the row does not shift as the text under it changes
 // between a percentage, "until stopped", and nothing at all.
 constexpr float kProgressSlotWidth = 130.0f;
@@ -277,12 +291,19 @@ void RenderExecutionCluster() {
   ImGui::TextDisabled("|");
 
   // ---- Max hits ----
-  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
+  // One DragInt, not the [slider][input] pair this used to be: the field's whole domain is a few
+  // dozen values, and ctrl+click still types an exact one, so the pair's second half was paying
+  // ~90 px of a 1024-px row for a way to enter a number the drag can already reach. Unlike the ray
+  // budget beside it, this field has no non-numeric end that needs a track to put a detent on.
+  //
+  // The label leads the control here, as it does everywhere else in this row, rather than trailing
+  // it the way SliderIntWithInput's own label did.
   ImGui::SameLine();
   const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", g_state);
-  SliderIntWithInput("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
-                     static_cast<int>(hits_c.max_value), /*trailing_label=*/false, /*committed=*/nullptr,
-                     /*active=*/nullptr, kMaxHitsControlWidth);
+  InlineFieldLabel("Max hits");
+  ImGui::SetNextItemWidth(kCompactFieldWidth);
+  DragIntField("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
+               static_cast<int>(hits_c.max_value));
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
@@ -1554,37 +1575,49 @@ void BeginStripTabContent(const char* id) {
 // Laid out across the strip rather than down it: three groups side by side, each two rows tall.
 // The strip is wide and short by construction, and the old one-control-per-row column would have
 // made it four rows tall — which is height taken from the viewport for a shape that does not need
-// it. Column widths stretch, so the same layout holds down to kMinWindowWidth.
+// it.
+//
+// The columns are SizingFixedFit, not SizingStretchSame, and that is the whole of this row's width
+// story. Under StretchSame every column got a third of the strip's width whatever it held, and the
+// controls inside then asked for "the column minus a label" — which is how a combo offering five
+// resolutions ended up ~600 px wide on a wide window. Nobody chose that number; it was the
+// viewport's, read through two containers (doc/gui-visual-language.md §2). FixedFit inverts the
+// direction: each column is as wide as the widest row inside it, and each control states its own
+// width from the token table. The cost is that the three groups no longer divide the strip evenly
+// and may leave slack at the right — accepted deliberately, because the alternative buys even
+// columns by re-attaching every control to the window width.
+//
+// Within a column the two rows stack vertically (they always have), so a column's width is the max
+// of its rows' widths, not their sum: column 1 is set by "Resolution [combo]" rather than by EV.
 void RenderGradeTab(GLFWwindow* window) {
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-  const ImGuiStyle& style = ImGui::GetStyle();
 
   // ONE sub-heading for the whole group (doc/gui-visual-language.md §4.6): the three it replaces
   // ("Rendering" / "Aspect Ratio" / "Background") each headed a single row, which is less than a
   // sub-heading has to earn. What they separated is now separated by the columns themselves.
   ImGui::SeparatorText("Rendering");
 
-  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingStretchSame)) {
+  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingFixedFit)) {
     ImGui::TableNextRow();
 
     // ---- Column 1: the image the simulation renders, and how bright it is shown.
     ImGui::TableSetColumnIndex(0);
-    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
-    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
+    InlineFieldLabel("Resolution");
+    ImGui::SetNextItemWidth(kToolbarComboWidth);
+    ImGui::Combo("##resolution_display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
     MarkSimTierEdge();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    ImGui::BeginGroup();
+    InlineFieldLabel("EV");
     const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
-    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
-                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
-    ImGui::EndGroup();
+    ImGui::SetNextItemWidth(kCompactFieldWidth);
+    DragFloatField("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
+                   static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Exposure value offset for display brightness");
     }
-    ImGui::PopItemWidth();
 
     // ---- Column 2: the aspect ratio the preview region is fitted to.
     ImGui::TableSetColumnIndex(1);
@@ -1592,15 +1625,11 @@ void RenderGradeTab(GLFWwindow* window) {
     const char* preview_label = kAspectPresetNames[preset_idx];
     // The orientation button MODIFIES the preset, so it shares the preset's row (AC4 /
     // doc/gui-visual-language.md §4.6). It used to sit on a row of its own, which read as a second,
-    // independent control. Item width is what is left of the cell after the button and the trailing
-    // "Preset" label — the negative-width idiom above cannot express "minus a widget I have not
-    // submitted yet".
+    // independent control.
     const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-    const float flip_w = ImGui::CalcTextSize(flip_label).x + style.FramePadding.x * 2.0f;
-    const float preset_w =
-        std::max(60.0f, ImGui::GetContentRegionAvail().x - flip_w - kLabelColWidth - style.ItemSpacing.x * 2.0f);
-    ImGui::SetNextItemWidth(preset_w);
-    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+    InlineFieldLabel("Aspect");
+    ImGui::SetNextItemWidth(kAspectPresetComboWidth);
+    if (ImGui::BeginCombo("##aspect_preset_display", preview_label)) {
       for (int i = 0; i < kAspectPresetCount; i++) {
         bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
         ImGui::BeginDisabled(disabled);
@@ -1644,7 +1673,6 @@ void RenderGradeTab(GLFWwindow* window) {
 
     // ---- Column 3: the background image shown under the result.
     ImGui::TableSetColumnIndex(2);
-    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
     if (ImGui::Button("Load Bg##display")) {
       DoLoadBackground(window);
     }
@@ -1664,11 +1692,12 @@ void RenderGradeTab(GLFWwindow* window) {
     // disabled state is idempotent.
     const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
     ImGui::BeginDisabled(!bg_alpha_c.enabled);
-    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
-                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
+    InlineFieldLabel("Alpha");
+    ImGui::SetNextItemWidth(kCompactFieldWidth);
+    DragFloatField("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
+                   static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    ImGui::PopItemWidth();
 
     ImGui::EndTable();
   }
@@ -1700,9 +1729,12 @@ void RenderSunCirclesAnglePopup() {
   }
   ImGui::NewLine();
 
-  // Custom angle input
+  // Custom angle input. This popup hangs off the Overlays tab's Angular Distance row, so it is
+  // inside the display strip's width-token scope even though it is a separate ImGui window: a
+  // single numeric field in a horizontal row is exactly what kCompactFieldWidth names. The 60.0f
+  // it replaces was within 2 px of the tier anyway.
   static float custom_angle = 22.0f;
-  ImGui::PushItemWidth(60.0f);
+  ImGui::PushItemWidth(kCompactFieldWidth);
   ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
   ImGui::PopItemWidth();
   ImGui::SameLine();
