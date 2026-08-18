@@ -9,8 +9,8 @@
 //   2. gui_shader — src/gui/preview_renderer.cpp  ProjectWorldDirToScreen
 //                 (CPU mirror of the marker-overlay fragment shader).
 //   3. gui_label  — src/gui/overlay_labels.cpp  WorldDirToPixel
-//                 (exposed via detail::WorldDirToPixelForTesting; the forward
-//                 used for interaction and label placement).
+//                 (declared in overlay_labels.hpp; the forward used for
+//                 interaction, label placement and the empty-state instrument).
 // Plus an interaction read-back (detail::PixelToWorldDirForTesting) fed the
 // cross-validated gui_shader pixel to pin the GUI inverse convention.
 //
@@ -150,15 +150,12 @@ bool GuiLabelPx(int lens_type, float fov_deg, float view_az_deg, float world_az_
   float vm[9];
   lumice::gui::BuildViewMatrix(/*elevation*/ 0.0f, /*azimuth*/ view_az_deg, /*roll*/ 0.0f, vm);
   WorldDir w = MakeWorldDir(world_az_deg);
-  float out_px = 0.0f;
-  float out_py = 0.0f;
-  bool valid = false;
-  lumice::gui::detail::WorldDirToPixelForTesting(w.x, w.y, w.z, static_cast<float>(kW), static_cast<float>(kH),
-                                                 lens_type, fov_deg, vm, &out_px, &out_py, &valid);
-  if (!valid) {
+  const lumice::gui::ProjectedPixel p = lumice::gui::WorldDirToPixel(w.x, w.y, w.z, static_cast<float>(kW),
+                                                                     static_cast<float>(kH), lens_type, fov_deg, vm);
+  if (!p.valid) {
     return false;
   }
-  *px_out = out_px;
+  *px_out = p.px;
   return true;
 }
 

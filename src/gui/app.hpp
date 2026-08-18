@@ -23,6 +23,36 @@ struct GLFWwindow;
 
 namespace lumice::gui {
 
+// What the empty state's own instrument marks put on screen, recorded as they are drawn.
+//
+// The empty state draws four things the shader does not: dashed angular-distance circles, a degree
+// label on each, a HORIZON label and a cross-hair on the sun (doc/gui-layout-architecture.md §4).
+// They are CPU-side ImGui draw-list calls, so unlike the shader's overlay they leave no field a
+// test could read — a case asserting "the circles are drawn" would have nothing to assert against
+// but the pixels, and pixel evidence for this group is a committed reference image nobody re-shoots
+// per assertion. These counters are that missing field: what was emitted this frame, and where the
+// two single-anchor marks landed.
+//
+// They are an OUTPUT of the drawing pass, never an input to it — nothing reads them back to decide
+// what to draw, so a stale or wrong value here cannot change what the user sees. Reset at the top
+// of every empty-state frame, and left zeroed on frames the empty state did not run, which is why
+// `drawn` has to be read before the counts mean anything.
+struct EmptyStateInstrument {
+  bool drawn = false;          // the empty-state branch produced a frame
+  int dashed_circles = 0;      // angular-distance circles with at least one dash on screen
+  int degree_labels = 0;       // "22°"-style labels placed beside those circles
+  bool horizon_label = false;  // the HORIZON label found a visible anchor
+  bool sun_cross = false;      // the sun's cross-hair is on screen
+  float sun_cross_pos[2] = { kOverlaySentinel, kOverlaySentinel };  // its ImGui screen position
+
+  // Where each ring's degree label was anchored, indexed as sun_circle_angles is, so a case can
+  // check the ring GEOMETRY and not merely that something was drawn: two rings' anchors, read
+  // against the cross-hair, carry the projection's radius law — their offsets stand in the ratio
+  // the lens says two angular distances should. A ring that drew no label leaves its entry zeroed,
+  // so `degree_labels` is what says how many of these mean anything.
+  float degree_label_pos[kMaxSunCircles][2] = {};
+};
+
 // Stored preview viewport for deferred rendering (after ImGui::Render)
 struct PreviewViewport {
   bool active = false;
@@ -31,6 +61,7 @@ struct PreviewViewport {
   int vp_w = 0;
   int vp_h = 0;
   PreviewParams params;
+  EmptyStateInstrument empty_state;
 };
 
 enum class PendingAction { kNone, kNew, kOpen, kQuit };

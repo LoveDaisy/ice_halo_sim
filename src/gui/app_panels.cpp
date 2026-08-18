@@ -1369,6 +1369,14 @@ OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjectio
   return ov;
 }
 
+// The intensities the empty state's CPU-drawn marks are drawn at — the ones the shader would have
+// used, handed over by ApplyEmptyStatePresentation as it mutes its own copy of them. Returned
+// rather than recomputed at the draw site so the scaling below has exactly one owner.
+struct EmptyStateStrokes {
+  float sun_circles_alpha = 0.0f;
+  float sun_marker_alpha = 0.0f;
+};
+
 // How much of the user's overlay intensity the empty state keeps. Half is where the prototype
 // landed: enough to read the sky as "framed and waiting" rather than as a rendered result, which is
 // the whole distinction the empty state is drawing. A starting point, not a derived constant.
@@ -1397,14 +1405,239 @@ constexpr float kEmptyStateOverlayAlphaScale = 0.5f;
 // on top of a rendered image, so halving them is what "dimmer than that" means. The marker has no
 // user setting and never appears over an image — its OverlayDecoration default IS its empty-state
 // value, and halving it would only be halving a number this task chose one line earlier.
-void ApplyEmptyStatePresentation(OverlayDecoration* ov) {
+//
+// Two of the four alphas are not dimmed but ZEROED, and that is a handover rather than a removal:
+// the angular-distance circles and the sun marker are still forced ON one line below, but the
+// EMPTY STATE'S versions of them are a dashed circle with a degree label and a cross-hair, and
+// neither shape is expressible in overlayAuxLines() — the shader draws a solid ring and a filled
+// dot, and it cannot draw text at all. So the empty state draws those two itself, on the CPU, in
+// DrawEmptyStateInstrument below; the alphas it would have drawn them at are returned here and
+// handed to that function, and the shader is muted so the two paths cannot double-draw.
+//
+// Reading only this function, alpha == 0 looks like "invisible". It is not: it means "not the
+// shader's to draw this time". The visible counterpart lives in RenderPreviewPanel's empty-state
+// branch, which carries the reverse pointer back here.
+EmptyStateStrokes ApplyEmptyStatePresentation(OverlayDecoration* ov) {
   ov->horizon_alpha *= kEmptyStateOverlayAlphaScale;
   ov->grid_alpha *= kEmptyStateOverlayAlphaScale;
-  ov->sun_circles_alpha *= kEmptyStateOverlayAlphaScale;
   ov->zenith_nadir_alpha *= kEmptyStateOverlayAlphaScale;
   ov->show_horizon = true;
   ov->show_sun_circles = true;
   ov->show_sun_marker = true;
+
+  EmptyStateStrokes strokes;
+  strokes.sun_circles_alpha = ov->sun_circles_alpha * kEmptyStateOverlayAlphaScale;
+  strokes.sun_marker_alpha = ov->sun_marker_alpha;
+  ov->sun_circles_alpha = 0.0f;
+  ov->sun_marker_alpha = 0.0f;
+  return strokes;
+}
+
+// The empty state's instrument marks: everything the shader was just muted for, plus the two
+// labels it never could have drawn.
+//
+// What this draws, and why here rather than in the shader (doc/gui-layout-architecture.md §4 for
+// what the empty state owes the user, the prototype for the form):
+//   - each angular-distance circle as a DASHED ring with its angle written beside it ("22°"),
+//   - the sun as a CROSS-HAIR rather than a filled dot,
+//   - the horizon line — drawn by the shader, unchanged — labelled HORIZON at its left end.
+// overlayAuxLines() draws solid rings and a filled dot and has no text at all, so all three shapes
+// would have meant editing that fragment shader. That shader is the pixel source of the committed
+// lens_proj reference group, whose scenes are re-shot on a change to it; the empty state is not
+// among them and has no business forcing that. Drawing on the CPU keeps the change where its own
+// evidence is.
+//
+// Every mark projects through overlay_labels.hpp's WorldDirToPixel — the same forward the labels
+// over a rendered result use. Not a copy of it: a second projection would put the "22°" text and
+// the ring it names on two different lenses' worth of maths the first time either changed.
+//
+// Colours are the ones already in play, at the intensities ApplyEmptyStatePresentation handed over:
+// the circles keep the document's own sun_circles_color, the cross keeps the marker's colour, and
+// both labels take ImGuiCol_TextDisabled — the palette's dim text tier (theme.cpp text_dim), the
+// same grade every other secondary reading in this app is set in. No new hue is introduced here.
+
+// Samples per angular-distance ring. 96 puts a vertex every 3.75° of arc, which reads as a circle
+// rather than a polygon at any viewport this panel gets, and leaves the dash rhythm below enough
+// segments to be a rhythm.
+constexpr int kEmptyStateCircleSegments = 96;
+// The dash rhythm, in segments: three drawn, three skipped. Deliberately coarse — the point is that
+// the ring reads as a MEASUREMENT overlaid on the sky rather than as something in the picture.
+constexpr int kEmptyStateDashOnSegments = 3;
+constexpr int kEmptyStateDashOffSegments = 3;
+// Half the length of each arm of the sun's cross-hair, in ImGui pixels. Slightly larger than the
+// filled dot it replaces (OverlayDecoration::sun_marker_radius_px = 5) so the two forms carry
+// about the same visual weight.
+constexpr float kEmptyStateSunCrossArmPx = 8.0f;
+// Gap between a mark and the text naming it.
+constexpr float kEmptyStateLabelGapPx = 4.0f;
+
+// One frame's world → preview-window projection, bound once so every mark below is placed by the
+// same lens, pose and rectangle.
+struct EmptyStateProjection {
+  float view_matrix[9] = {};
+  int lens_type = 0;
+  float fov = 0.0f;
+  float res_x = 0.0f, res_y = 0.0f;                          // viewport in FRAMEBUFFER pixels
+  float vp_x = 0.0f, vp_y = 0.0f, vp_w = 0.0f, vp_h = 0.0f;  // the same rect in ImGui screen space
+
+  // Screen position of a world direction, or false if it is behind the camera, outside this lens's
+  // projection domain, or off the edge of the viewport. The y flip and the framebuffer → screen
+  // scaling are the same two lines ComputeOverlayLabels uses on its own samples.
+  bool ToScreen(const float dir[3], ImVec2* out) const {
+    const ProjectedPixel fp = WorldDirToPixel(dir[0], dir[1], dir[2], res_x, res_y, lens_type, fov, view_matrix);
+    if (!fp.valid) {
+      return false;
+    }
+    const float hw = res_x * 0.5f;
+    const float hh = res_y * 0.5f;
+    if (std::fabs(fp.px) > hw || std::fabs(fp.py) > hh) {
+      return false;
+    }
+    out->x = vp_x + (fp.px + hw) / res_x * vp_w;
+    out->y = vp_y + (hh - fp.py) / res_y * vp_h;
+    return true;
+  }
+};
+
+// Place a label above `anchor`, kept inside the viewport by the same clamp the overlay labels use.
+void DrawEmptyStateLabel(ImDrawList* dl, const EmptyStateProjection& proj, ImVec2 anchor, const char* text,
+                         ImU32 color) {
+  const ImVec2 size = ImGui::CalcTextSize(text);
+  ImVec2 pos(anchor.x - size.x * 0.5f, anchor.y - kEmptyStateLabelGapPx - size.y);
+  pos = detail::ClampLabelPosToViewport(pos, size, proj.vp_x, proj.vp_y, proj.vp_w, proj.vp_h);
+  dl->AddText(pos, color, text);
+}
+
+void DrawEmptyStateInstrument(const EmptyStateProjection& proj, const OverlayDecoration& ov,
+                              const EmptyStateStrokes& strokes, EmptyStateInstrument* out) {
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+  const ImU32 circle_col = ImGui::ColorConvertFloat4ToU32(
+      ImVec4(ov.sun_circles_color[0], ov.sun_circles_color[1], ov.sun_circles_color[2], strokes.sun_circles_alpha));
+  const ImU32 cross_col = ImGui::ColorConvertFloat4ToU32(
+      ImVec4(ov.sun_marker_color[0], ov.sun_marker_color[1], ov.sun_marker_color[2], strokes.sun_marker_alpha));
+
+  // An orthonormal basis of the plane perpendicular to the sun, so a ring at angular distance θ is
+  // cos(θ)·sun + sin(θ)·(cos t·u + sin t·v). The sun's azimuth is fixed at 0 in this app
+  // (BuildOverlayDecoration), i.e. sun_dir.y is identically zero, so (0,1,0) is perpendicular to it
+  // for every altitude and the usual "pick a reference axis that is not parallel" fallback has no
+  // case to cover. v then points along the meridian, which is what puts the degree label at the top
+  // of the ring rather than at an angle that moves with the sun.
+  const float* sun = ov.sun_dir;
+  const float u[3] = { 0.0f, 1.0f, 0.0f };
+  const float v[3] = { sun[1] * u[2] - sun[2] * u[1], sun[2] * u[0] - sun[0] * u[2], sun[0] * u[1] - sun[1] * u[0] };
+
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  constexpr float kTwoPi = 2.0f * 3.14159265358979323846f;
+  constexpr int kDashPeriod = kEmptyStateDashOnSegments + kEmptyStateDashOffSegments;
+
+  for (int c = 0; c < ov.sun_circle_count; c++) {
+    const float angle_deg = ov.sun_circle_angles[c];
+    const float theta = angle_deg * kDeg2Rad;
+    const float ct = std::cos(theta);
+    const float st = std::sin(theta);
+
+    ImVec2 pts[kEmptyStateCircleSegments + 1];
+    bool on_screen[kEmptyStateCircleSegments + 1];
+    for (int i = 0; i <= kEmptyStateCircleSegments; i++) {
+      const float t = kTwoPi * static_cast<float>(i) / kEmptyStateCircleSegments;
+      const float cos_t = std::cos(t);
+      const float sin_t = std::sin(t);
+      const float dir[3] = { ct * sun[0] + st * (cos_t * u[0] + sin_t * v[0]),
+                             ct * sun[1] + st * (cos_t * u[1] + sin_t * v[1]),
+                             ct * sun[2] + st * (cos_t * u[2] + sin_t * v[2]) };
+      on_screen[i] = proj.ToScreen(dir, &pts[i]);
+    }
+
+    int drawn_segments = 0;
+    for (int i = 0; i < kEmptyStateCircleSegments; i++) {
+      if (i % kDashPeriod >= kEmptyStateDashOnSegments) {
+        continue;  // the gap half of the rhythm
+      }
+      if (!on_screen[i] || !on_screen[i + 1]) {
+        continue;  // an arc that leaves the frame simply stops, as the shader's ring does
+      }
+      dl->AddLine(pts[i], pts[i + 1], circle_col);
+      drawn_segments++;
+    }
+    if (drawn_segments == 0) {
+      continue;  // this ring is entirely off screen — no ring, and nothing to label
+    }
+    out->dashed_circles++;
+
+    // The label goes at t = 90°, i.e. straight up the meridian from the sun — a fixed parameter ON
+    // THE RING rather than a fixed pixel offset, so it is re-projected every frame and follows the
+    // sun and the lens instead of drifting off the ring the first time either moves.
+    //
+    // When that point is off screen the label walks around the ring to the nearest sample that is
+    // not, in either direction. That is not the curve-centric label placement machinery
+    // (overlay-label-placement.md) and deliberately so — no visibility model, no collision pass,
+    // no scoring; it reads the on_screen[] flags this loop already computed and stops at the first
+    // true. Without it the 46° ring loses its label at the default pose, since its top is above the
+    // frame — the ring is drawn and unnamed, which is the one thing the degree labels exist to fix.
+    const int anchor_index = kEmptyStateCircleSegments / 4;  // t = 90°
+    int label_index = -1;
+    for (int d = 0; d <= kEmptyStateCircleSegments / 2 && label_index < 0; d++) {
+      const int forward = (anchor_index + d) % kEmptyStateCircleSegments;
+      const int backward = (anchor_index - d + kEmptyStateCircleSegments) % kEmptyStateCircleSegments;
+      if (on_screen[forward]) {
+        label_index = forward;
+      } else if (on_screen[backward]) {
+        label_index = backward;
+      }
+    }
+    if (label_index < 0) {
+      continue;  // the whole ring is off screen (its dashes came from the wrap-around sample only)
+    }
+    const ImVec2 label_anchor = pts[label_index];
+    const bool integral = std::fabs(angle_deg - std::round(angle_deg)) < 0.05f;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), integral ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0", angle_deg);
+    DrawEmptyStateLabel(dl, proj, label_anchor, buf, label_col);
+    // Bounds: ov.sun_circle_count is already min(angles.size(), kMaxSunCircles) at its only
+    // producer (BuildOverlayDecoration), which is the same bound the ring loop reads angles under.
+    out->degree_label_pos[c][0] = label_anchor.x;
+    out->degree_label_pos[c][1] = label_anchor.y;
+    out->degree_labels++;
+  }
+
+  // The sun itself: a cross-hair, which says "this is where it WILL be" in a way a filled dot —
+  // the shape a rendered sun actually has — does not.
+  ImVec2 sun_pos;
+  if (proj.ToScreen(sun, &sun_pos)) {
+    dl->AddLine(ImVec2(sun_pos.x - kEmptyStateSunCrossArmPx, sun_pos.y),
+                ImVec2(sun_pos.x + kEmptyStateSunCrossArmPx, sun_pos.y), cross_col);
+    dl->AddLine(ImVec2(sun_pos.x, sun_pos.y - kEmptyStateSunCrossArmPx),
+                ImVec2(sun_pos.x, sun_pos.y + kEmptyStateSunCrossArmPx), cross_col);
+    out->sun_cross = true;
+    out->sun_cross_pos[0] = sun_pos.x;
+    out->sun_cross_pos[1] = sun_pos.y;
+  }
+
+  // HORIZON, at the left end of the horizon line — the end the prototype labels, and the one a
+  // reader gets to first. Which azimuth that is depends on where the camera points and which lens
+  // it looks through, so it is FOUND rather than computed: walk the altitude-0 circle, keep the
+  // visible sample furthest to the left. A closed-form azimuth would have to re-derive the sign
+  // convention of the view matrix and would still be wrong for the full-sky lenses, whose horizon
+  // does not run left-to-right across the frame at all.
+  ImVec2 left_end;
+  bool found_horizon = false;
+  for (int i = 0; i < kEmptyStateCircleSegments; i++) {
+    const float az = kTwoPi * static_cast<float>(i) / kEmptyStateCircleSegments;
+    const float dir[3] = { -std::cos(az), -std::sin(az), 0.0f };
+    ImVec2 p;
+    if (!proj.ToScreen(dir, &p)) {
+      continue;
+    }
+    if (!found_horizon || p.x < left_end.x) {
+      left_end = p;
+      found_horizon = true;
+    }
+  }
+  if (found_horizon) {
+    DrawEmptyStateLabel(dl, proj, left_end, "HORIZON", label_col);
+    out->horizon_label = true;
+  }
 }
 
 }  // namespace
@@ -1481,6 +1714,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   // BuildOverlayLabelInput below). Read from the document every frame in both states, which is what
   // keeps a stale image and a live coordinate system able to disagree — see BuildOverlayDecoration.
   pp.overlay = BuildOverlayDecoration(g_state, pp.view_proj, g_preview_vp.vp_w, g_preview_vp.vp_h);
+  // Zeroed on EVERY frame, not only on empty ones: it records what the empty state's instrument
+  // drew, so a result frame has to leave it saying "nothing", not saying whatever the last empty
+  // frame said.
+  g_preview_vp.empty_state = EmptyStateInstrument{};
 
   if (g_preview.HasTexture() || g_preview.HasBackground()) {
     float ev_total = rc.exposure_offset + g_state.ev_auto;
@@ -1623,17 +1860,56 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // samples its 1x1 blank in sRGB mode, where neither is read. The drag surface is deliberately
     // NOT submitted — orbiting an empty view is a separate question from previewing one, and this
     // panel keeps its "the surface exists only when there is something to interact with" contract.
-    ApplyEmptyStatePresentation(&pp.overlay);
+    // The circles and the sun marker come back from here with their shader alphas at zero and their
+    // show_* flags forced ON — the empty state draws those two itself, right below, in a form the
+    // shader has no way to express (see ApplyEmptyStatePresentation for the full handover). The
+    // intensities it would have used come back as the return value.
+    const EmptyStateStrokes strokes = ApplyEmptyStatePresentation(&pp.overlay);
     pp.exposure = Exposure{};
     pp.bg = Background::Disabled();
 
+    EmptyStateProjection proj;
+    BuildViewMatrix(rc.elevation, rc.azimuth, rc.roll, proj.view_matrix);
+    proj.lens_type = rc.lens_type;
+    proj.fov = rc.fov;
+    proj.res_x = static_cast<float>(g_preview_vp.vp_w);
+    proj.res_y = static_cast<float>(g_preview_vp.vp_h);
+    // Same anchoring as the result state's overlay labels: draw-list coordinates are absolute OS
+    // screen space under ImGuiConfigFlags_ViewportsEnable, so the panel rect goes through
+    // MainVpPos rather than being used as window-local.
+    const ImVec2 vp_origin = MainVpPos(panel_x, panel_y);
+    proj.vp_x = vp_origin.x;
+    proj.vp_y = vp_origin.y;
+    proj.vp_w = panel_width;
+    proj.vp_h = preview_height;
+    if (proj.res_x > 0.0f && proj.res_y > 0.0f) {
+      DrawEmptyStateInstrument(proj, pp.overlay, strokes, &g_preview_vp.empty_state);
+      g_preview_vp.empty_state.drawn = true;
+    }
+
     // Instructional, not descriptive: it names the next action rather than restating what the user
     // can already see (doc/gui-visual-language.md).
-    const char* kEmptyHint = "Press Run to render this view.";
+    //
+    // Set in three runs rather than one, because the sentence is two statements at two weights: the
+    // sky IS framed (a description of what is already on screen, and so dim — the same
+    // ImGuiCol_TextDisabled grade every other secondary reading uses), and Run is the thing to do
+    // next, so it carries the body text's own weight. The app has one font at one weight, so
+    // emphasis here is contrast, not a bold face; brightening the one word that names a control the
+    // user can go and press is the whole of it.
+    const char* kHintLead = "Sky is framed. Press ";
+    const char* kHintKeyword = "Run";
+    const char* kHintTail = " to expose.";
+    const ImVec2 lead_size = ImGui::CalcTextSize(kHintLead);
+    const ImVec2 keyword_size = ImGui::CalcTextSize(kHintKeyword);
+    const ImVec2 tail_size = ImGui::CalcTextSize(kHintTail);
+    const float hint_width = lead_size.x + keyword_size.x + tail_size.x;
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImVec2 text_size = ImGui::CalcTextSize(kEmptyHint);
-    ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
-    ImGui::TextDisabled("%s", kEmptyHint);
+    ImGui::SetCursorPos(ImVec2((avail.x - hint_width) * 0.5f, (avail.y - lead_size.y) * 0.5f));
+    ImGui::TextDisabled("%s", kHintLead);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextUnformatted(kHintKeyword);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextDisabled("%s", kHintTail);
   }
 
   ImGui::End();

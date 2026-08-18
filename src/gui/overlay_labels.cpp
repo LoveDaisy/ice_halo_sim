@@ -234,16 +234,18 @@ InvResult PixelToWorldDir(float px, float py, float res_x, float res_y, int lens
   return r;
 }
 
+}  // namespace
+
 // Forward projection: world direction → pixel offset from viewport center.
 // Inverse of PixelToWorldDir. For types 0-3, applies inverse view matrix first.
 // Returns valid=false if direction is behind camera or outside projection domain.
-struct FwdResult {
-  float px, py;
-  bool valid;
-};
-
-FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
-                          const float view_matrix[9]) {
+//
+// Declared in overlay_labels.hpp (not file-local) because the empty state's CPU-drawn instrument
+// projects against it too — see the header for why there is exactly one of these. The anonymous
+// namespace is closed for this one definition and reopened below: everything above stays file-local,
+// and the file-local helpers this body calls are still reachable from the enclosing namespace.
+ProjectedPixel WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9]) {
   // View transform applies to all view-transformed lens types — i.e. NOT full-sky.
   // This mirrors the inverse projection's classification: linear (0), single fisheye
   // (1-3), and single orthographic (8) all carry view matrix; dual fisheye (4-6),
@@ -383,6 +385,8 @@ FwdResult WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y
   return { 0, 0, false };
 }
 
+namespace {
+
 ImU32 ColorToImU32(const float c[3], int alpha) {
   return IM_COL32(static_cast<int>(c[0] * 255), static_cast<int>(c[1] * 255), static_cast<int>(c[2] * 255), alpha);
 }
@@ -469,7 +473,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     s.wy = wy;
     s.wz = wz;
     s.vis = false;
-    FwdResult fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
+    ProjectedPixel fp = WorldDirToPixel(wx, wy, wz, res_x, res_y, input.lens_type, input.fov, view_matrix);
     if (!fp.valid)
       return s;
     if (std::abs(fp.px) > hw || std::abs(fp.py) > hh)
@@ -776,16 +780,6 @@ void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int
     *out_x = r.x;
     *out_y = r.y;
     *out_z = r.z;
-  }
-}
-
-void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
-                               const float view_matrix[9], float* out_px, float* out_py, bool* out_valid) {
-  FwdResult r = WorldDirToPixel(wx, wy, wz, res_x, res_y, lens_type, fov, view_matrix);
-  *out_valid = r.valid;
-  if (r.valid) {
-    *out_px = r.px;
-    *out_py = r.py;
   }
 }
 
