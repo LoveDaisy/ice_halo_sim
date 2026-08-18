@@ -20,7 +20,26 @@ constexpr int kMinWindowHeight = 640;
 // compute the usable creation size. 50 px covers the typical 28-32 px
 // decoration on macOS/Windows/Linux with ~1.5x buffer.
 constexpr int kWindowDecorationMargin = 50;
-constexpr float kLeftPanelWidth = 400.0f;
+// The document column (tree above, inspector below). MEASURED against a floor rather than chosen:
+// two independent constraints put the narrowest workable column at ~280 px, and both were read off
+// a live frame by sweeping the dock node's width (the sweep itself was a throwaway probe; the
+// invariants it established are the standing cases in test/gui/functional/).
+//   - The shape tables' Value column is the one stretch column in a row of fixed ones, so it is
+//     what a narrower panel takes from: at 280 px it is exactly as wide as "0.000" plus the frame's
+//     padding, i.e. at the point where the cell stops showing the number it holds
+//     (edit_modal's the_sync_column_leaves_the_slider_room asserts the same threshold).
+//   - The property rows' control column carries the Lens Type combo, whose longest value
+//     ("Dual Fisheye Stereographic") needs 190 px before ImGui ellipsises it — reached at 280 px
+//     of panel.
+// 330 is the prototype's anchor and sits ~50 px above both floors, which is the slack a label or a
+// font a step larger would eat. It is not a minimum the layout must survive: the user can drag the
+// separator further in, and nothing may overflow when they do — that is what
+// test/gui/functional/test_inspector_no_hscroll.cpp asserts, at 300 px and at this value.
+//
+// It came down from 400. The extra 70 px were not doing anything a control asked for: before the
+// width tokens landed, every control took its width from this constant, so a wider column simply
+// made every field wider (doc/gui-visual-language.md §4.7).
+constexpr float kLeftPanelWidth = 330.0f;
 // The top bar is TWO rows: chrome (panel toggles / New / Open / Save / Colors / Settings / View) on
 // the first, the execution cluster (Run / Stop / dirty chip / Revert / Rays / Max hits / Use GPU /
 // run status) on the second. One row was measured not to fit: the chrome row alone is ~700 px and

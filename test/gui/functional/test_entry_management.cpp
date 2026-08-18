@@ -849,6 +849,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
 
       OpenFilterTab(ctx);
       ctx->Yield(4);
+      // Scrolled to first: the shared filter controls sit below the page's token hint, which wraps
+      // once the column is narrow enough, and a clipped item is invisible to ItemClick (see
+      // InspectorItemInfo's declaration in test_gui_shared.hpp).
+      ScrollInspectorTo(ctx, "**/Remove Filter##filter");
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
       ctx->Yield(2);
