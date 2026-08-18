@@ -325,4 +325,124 @@ void RegisterShellChromeTests(ImGuiTestEngine* engine) {
       IM_CHECK_GT(log_idx, left_idx);
     };
   }
+
+  // The right cluster is flush to the window's right edge, in every state it has.
+  //
+  // What breaks if it is not: the cluster is right-aligned by MEASURING itself and then starting
+  // the run that far in from the edge, so a member that is measured under one predicate and drawn
+  // under another shifts the whole run by exactly the width that was missed. Two of its members are
+  // conditional — the Colored / Full Spectrum toggle (only with color classes configured, and its
+  // label, hence its width, alternates with the mode) and the "no class matches" pip — which is why
+  // this case walks the states rather than checking the default one: measuring the default state
+  // correctly proves nothing about the states the arithmetic actually has to get right.
+  //
+  // Reaching the pip's state is the fiddly part, and getting it wrong costs the case its whole
+  // point. The pip is driven by NoVisibleMatchedColorClass, which answers "would the composite be
+  // empty" and returns FALSE for a class whose match[] is empty — there is nothing configured to
+  // warn about yet. It is also false for a matched, visible class while no server is running, since
+  // an unpolled signal reads as 1 ("settling", i.e. no warning). The state that does reach it with
+  // no server is a class that is CONFIGURED (non-empty match[]) and HIDDEN: matched-but-hidden is
+  // the pip's second root, and it is decided entirely in the GUI. The two width assertions after
+  // the loop exist to keep that true — if a predicate change quietly puts every row back into the
+  // same rendered state, the flush checks would all still pass while testing one state three times.
+  //
+  // The tolerance is one pixel, for ImGui's own rounding of item extents. Anything the measurement
+  // gets wrong is at least the width of a control.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "shell_chrome", "the_top_bar_right_cluster_stays_flush_to_the_edge");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      enum class Members { kNone, kToggle, kToggleAndPip };
+      struct State {
+        const char* name;
+        Members members;
+        bool as_composite;  // drives the toggle's label, hence its width
+      };
+      const State kStates[] = {
+        { "no color classes", Members::kNone, false },
+        { "matched visible class", Members::kToggle, false },
+        { "matched hidden class", Members::kToggleAndPip, false },
+        { "matched visible class, composite on", Members::kToggle, true },
+      };
+
+      std::string failures;
+      float colors_x[IM_ARRAYSIZE(kStates)] = {};
+      for (int i = 0; i < IM_ARRAYSIZE(kStates); ++i) {
+        const State& st = kStates[i];
+        gui::g_state.raypath_color.clear();
+        if (st.members != Members::kNone) {
+          gui::ColorClassConfig cls;
+          // Non-empty match[] is what makes the class "configured" as far as the pip predicate is
+          // concerned; what the ref points at does not matter here, only that there is one.
+          cls.match.emplace_back();
+          cls.visible = (st.members == Members::kToggle);
+          gui::g_state.raypath_color.push_back(cls);
+        }
+        gui::g_state.last_uploaded_as_composite = st.as_composite;
+        ctx->Yield(3);
+
+        ImGuiWindow* bar = ctx->GetWindowByRef("##TopBar");
+        if (bar == nullptr) {
+          failures += std::string(" ") + st.name + ":no-top-bar";
+          continue;
+        }
+        const float edge = bar->Pos.x + bar->Size.x - ImGui::GetStyle().WindowPadding.x;
+        const ImGuiTestItemInfo view = ctx->ItemInfo("##TopBar/View", ImGuiTestOpFlags_NoError);
+        const ImGuiTestItemInfo new_btn = ctx->ItemInfo("##TopBar/New", ImGuiTestOpFlags_NoError);
+        if (view.ID == 0 || new_btn.ID == 0) {
+          failures += std::string(" ") + st.name + ":missing-item";
+          continue;
+        }
+        if (ImFabs(view.RectFull.Max.x - edge) > 1.0f) {
+          failures += std::string(" ") + st.name + ":right-edge";
+          ctx->LogInfo("%s: View ends at %.1f, window edge is %.1f", st.name, static_cast<double>(view.RectFull.Max.x),
+                       static_cast<double>(edge));
+        }
+        // The left cluster is the other half of the statement: "flush right" is only a layout if
+        // the file operations stayed where they were, rather than the whole row having drifted.
+        if (new_btn.RectFull.Min.x > bar->Pos.x + bar->Size.x * 0.5f) {
+          failures += std::string(" ") + st.name + ":left-cluster-drifted";
+        }
+        // And the two clusters must not have grown into each other: an overlap is what a window
+        // narrow enough (or a cluster wide enough) produces, and it hides the right cluster under
+        // the left one rather than reflowing.
+        const ImGuiTestItemInfo colors = ctx->ItemInfo("##TopBar/" ICON_FA_PALETTE " Colors", ImGuiTestOpFlags_NoError);
+        if (colors.ID == 0) {
+          failures += std::string(" ") + st.name + ":missing-colors";
+          continue;
+        }
+        colors_x[i] = colors.RectFull.Min.x;
+        if (colors.RectFull.Min.x < new_btn.RectFull.Max.x) {
+          failures += std::string(" ") + st.name + ":clusters-overlap";
+        }
+      }
+
+      gui::g_state.raypath_color.clear();
+      gui::g_state.last_uploaded_as_composite = false;
+      ctx->Yield(2);
+
+      // The cluster starts further left exactly when it carries more: a class adds the toggle, a
+      // hidden one adds the pip beside it, and "Colored" is a shorter word than "Full Spectrum".
+      // These are the rows differing from one another, which is what the flush checks above are
+      // worth anything only if.
+      if (!(colors_x[1] < colors_x[0])) {
+        failures += " toggle-adds-no-width";
+      }
+      if (!(colors_x[2] < colors_x[1])) {
+        failures += " pip-adds-no-width";
+      }
+      if (!(colors_x[3] > colors_x[1])) {
+        failures += " label-width-not-tracked";
+      }
+      ctx->LogInfo("Colors left edge by state: none=%.1f toggle=%.1f toggle+pip=%.1f composite=%.1f",
+                   static_cast<double>(colors_x[0]), static_cast<double>(colors_x[1]), static_cast<double>(colors_x[2]),
+                   static_cast<double>(colors_x[3]));
+
+      // Reported after the loop, not inside it: a fatal assert in a loop body hides every row after
+      // the first failure, and the rows carrying the conditional members come last.
+      IM_CHECK_STR_EQ(failures.c_str(), "");
+    };
+  }
 }

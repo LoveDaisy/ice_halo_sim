@@ -49,6 +49,7 @@
 #include <cmath>
 #include <string>
 
+#include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "test_gui_shared.hpp"
 
@@ -95,12 +96,58 @@ struct ScopedBackground {
 };
 
 // The four View sliders, in the order the panel draws them.
-const char* const kViewInputs[] = { "**/##FOV##view_input", "**/##Elevation##view_input", "**/##Azimuth##view_input",
-                                    "**/##Roll##view_input" };
+// The lens picker. Same reason as the spectrum combo in test_scene_controls.cpp for the explicit
+// path: a BeginCombo preview button reports no label, so "**/" cannot find it. "##cam_lens" is the
+// property table RenderCameraControls opens for the Lens section.
+const char* const kLensCombo = "##cam_lens/##Lens Type##view";
+
+const char* const kViewInputs[] = { "**/##FOV##view", "**/##Elevation##view", "**/##Azimuth##view", "**/##Roll##view" };
 
 }  // namespace
 
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
+  // kAspectPresetComboWidth is a MEASURED token — the width at which the longest preset name still
+  // fits inside the combo's frame, in the theme's font — and nothing in the build recomputes it, so
+  // a font change or a longer preset name would silently start ellipsising the SELECTED value. That
+  // is the one failure a content-width combo cannot have: the whole reason it is sized to its
+  // content rather than to its container is so the current value reads.
+  //
+  // The requirement is re-derived here from the live atlas, in the same shape as
+  // functional/test_property_row.cpp's label-column guard. What ImGui reserves inside a combo frame
+  // is FramePadding.x on each side plus a square arrow button of side GetFrameHeight()
+  // (imgui_widgets.cpp, BeginCombo), so the text gets width - FramePadding.x*2 - GetFrameHeight().
+  //
+  // A guard on the token, NOT on the drawn item: the combo's own rect is what the token produced,
+  // so measuring it would compare one line of code against itself.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "the_aspect_combo_fits_its_longest_preset_name");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      float widest = 0.0f;
+      const char* widest_name = "";
+      for (int i = 0; i < gui::kAspectPresetCount; i++) {
+        const float w = ImGui::CalcTextSize(gui::kAspectPresetNames[i]).x;
+        if (w > widest) {
+          widest = w;
+          widest_name = gui::kAspectPresetNames[i];
+        }
+      }
+      const ImGuiStyle& style = ImGui::GetStyle();
+      const float required = widest + style.FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+      ctx->LogInfo(
+          "widest aspect preset: \"%s\" = %.2f px; required combo width = %.2f px; "
+          "kAspectPresetComboWidth = %.1f px",
+          widest_name, widest, required, gui::kAspectPresetComboWidth);
+      IM_CHECK_LE(required, gui::kAspectPresetComboWidth);
+      // Non-vacuous in the other direction: a combo materially wider than the value it shows is
+      // back to a width nobody chose. One rhythm step (4 px) of slack is the allowance, same as the
+      // property-row label column's.
+      IM_CHECK_LE(gui::kAspectPresetComboWidth - required, 4.0f);
+    };
+  }
+
   // The positive branch: a clamped window on a real preset says so.
   {
     ImGuiTest* t =
@@ -168,7 +215,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         std::string member;  // an item that exists only while that tab is showing
       };
       const Tab kTabs[] = {
-        { "Grade", "**/##EV##display_input" },
+        { "Grade", "**/##EV##display" },
         { "Overlays", "**/##horizon_line" },
         // The reserved slot has no controls at all by design, so the tab button itself is the only
         // thing to point at — which is exactly the claim worth making about it (AC1: the slot is
@@ -219,7 +266,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
 
       ctx->SetRef("//##DocumentInspector");
-      ctx->ItemClick("Lens Type##view");  // opens the popup; BeginCombo reports no info of its own
+      ctx->ItemClick(kLensCombo);  // opens the popup; BeginCombo reports no info of its own
       ctx->SetRef("");
       ctx->Yield(3);
 
@@ -296,17 +343,17 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.roll = 15.0f;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view")));
 
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));  // the control says so
-      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);                // ...but the value survives
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view")));  // the control says so
+      IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);          // ...but the value survives
 
       gui::g_state.renderer.lens_type = gui::kLensTypeFisheyeEquidist;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.roll, 15.0f);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Roll##view")));
     };
   }
 
@@ -350,7 +397,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         // The combo button is not in the item registry; ComboClick resolves it by id and scrolls
         // the popup to reveal an entry that starts clipped.
         ctx->SetRef("//##DocumentInspector");
-        ctx->ComboClick((std::string("Lens Type##view/") + r.pick).c_str());
+        ComboPick(ctx, kLensCombo, r.pick);
         ctx->SetRef("");
         ctx->Yield(3);
 
@@ -462,24 +509,24 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
       ctx->Yield(3);
 
-      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", 200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 90.0f);
-      ctx->ItemInputValue("**/##Elevation##view_input", -200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", -200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -90.0f);
 
-      ctx->ItemInputValue("**/##Azimuth##view_input", 400.0f);
+      ctx->ItemInputValue("**/##Azimuth##view", 400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.azimuth, 180.0f);
-      ctx->ItemInputValue("**/##Azimuth##view_input", -400.0f);
+      ctx->ItemInputValue("**/##Azimuth##view", -400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.azimuth, -180.0f);
 
-      ctx->ItemInputValue("**/##Roll##view_input", 400.0f);
+      ctx->ItemInputValue("**/##Roll##view", 400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.roll, 180.0f);
-      ctx->ItemInputValue("**/##Roll##view_input", -400.0f);
+      ctx->ItemInputValue("**/##Roll##view", -400.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.roll, -180.0f);
 
@@ -488,7 +535,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
-      ctx->ItemInputValue("**/##Elevation##view_input", 200.0f);
+      ctx->ItemInputValue("**/##Elevation##view", 200.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);
     };
@@ -518,10 +565,10 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
       ctx->Yield(3);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##FOV##view_input")));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Elevation##view_input")));
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Azimuth##view_input")));
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##FOV##view")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Elevation##view")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Azimuth##view")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Roll##view")));
 
       // Full sky: no view angle applies at all, and the angles already stored are zeroed rather
       // than merely greyed. The second half is load-bearing outside this suite:
@@ -622,10 +669,10 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      ctx->ItemInputValue("**/##EV##display_input", 20.0f);
+      ctx->ItemInputValue("**/##EV##display", 20.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, 6.0f);
-      ctx->ItemInputValue("**/##EV##display_input", -20.0f);
+      ctx->ItemInputValue("**/##EV##display", -20.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, -6.0f);
     };
@@ -663,16 +710,16 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       gui::g_state.bg_show = false;
       ctx->Yield(3);
-      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Alpha##display_input")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("**/##Alpha##display")));
 
       gui::g_state.bg_show = true;
       ctx->Yield(3);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Alpha##display_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Alpha##display")));
 
-      ctx->ItemInputValue("**/##Alpha##display_input", 7.5f);
+      ctx->ItemInputValue("**/##Alpha##display", 7.5f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.bg_alpha, 1.0f);
-      ctx->ItemInputValue("**/##Alpha##display_input", -3.0f);
+      ctx->ItemInputValue("**/##Alpha##display", -3.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.bg_alpha, 0.0f);
       // The background is handed back by ScopedBackground; see it for why not here.

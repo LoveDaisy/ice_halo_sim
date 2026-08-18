@@ -186,19 +186,6 @@ void ClickInFocusedPopup(ImGuiTestContext* ctx, const std::string& label) {
   ctx->SetRef(kColorsWindowRef);
 }
 
-// Open a combo and pick one of its entries.
-//
-// Two quirks make this a hand-rolled helper. ctx->ComboClick() splits its argument at the FIRST
-// '/', so it cannot address a combo that sits inside a PushID scope — which every combo in this
-// window except ##ColorMode does. And `combo_ref` must be a LITERAL path, never a "**/" wildcard:
-// ImGui::BeginCombo() never calls IMGUI_TEST_ENGINE_ITEM_INFO(), so a combo has no registered
-// debug label and a wildcard search (which matches by label) can never find one. Same quirk as
-// ColorButton, and the same fix — name the item by its id path.
-void ComboPick(ImGuiTestContext* ctx, const char* combo_ref, const char* entry) {
-  ctx->ItemClick(combo_ref);
-  ClickInFocusedPopup(ctx, entry);
-}
-
 // The top-bar colored toggle's widget id embeds its own label, which flips with the ground-truth
 // state — so the id a lookup must use depends on what the test just asserted about that state.
 std::string TopBarToggleRef(bool composite_now) {

@@ -35,7 +35,9 @@ namespace {
 // on the input box. Every case below that says something about one of them addresses that one.
 const char* const kRaysSlider = "**/##Rays(M)_slider";
 const char* const kRaysInput = "**/##Rays(M)_input";
-const char* const kMaxHits = "**/##Max hits_input";
+// Max hits, by contrast, is ONE item: it was merged into a single DragInt, so its id carries no
+// _slider / _input half to choose between.
+const char* const kMaxHits = "**/##Max hits";
 const char* const kUseGpu = "**/Use GPU";
 const char* const kChip = "##TopBar/" ICON_FA_CIRCLE_EXCLAMATION " Changed - re-run";
 
@@ -56,6 +58,10 @@ struct ScopedFakedRun {
     gui::g_state.run_intent = gui::RunIntent::kNone;
     gui::g_state.last_committed_state.reset();
     gui::g_state.dirty = false;
+    // Runtime counters, not document fields: DoNew (and so ResetTestState) rebuilds the document
+    // and leaves these standing, so a case that fakes a ray count hands the next one a status bar
+    // and a progress rule that still believe a run happened.
+    gui::g_state.stats_sim_ray_num = 0;
   }
 };
 
@@ -136,6 +142,48 @@ void SeedCompletedResult(ImGuiTestContext* ctx) {
 bool ChipIsLit(ImGuiTestContext* ctx) {
   const ImGuiTestItemInfo info = ctx->ItemInfo(kChip, ImGuiTestOpFlags_NoError);
   return info.ID != 0 && !IsDisabled(info);
+}
+
+
+// ---- Run-progress rule: pixel helpers -----------------------------------------------------------
+//
+// The rule is an ImGui::ProgressBar, which submits with item ID 0 — the test engine addresses items
+// by ID, so nothing about it can be read back through ItemInfo. Its colour and its motion are
+// therefore questions about the framebuffer, which is what these read.
+
+// ImGui's float -> 8-bit conversion, so an expected colour is quantised exactly the way the drawn
+// one was.
+unsigned char ToByte(float v) {
+  const int q = static_cast<int>(v * 255.0f + 0.5f);
+  return static_cast<unsigned char>(q < 0 ? 0 : (q > 255 ? 255 : q));
+}
+
+// How many pixels of the captured rectangle are exactly this colour. Exact rather than tolerant on
+// purpose: the fill is a flat rect, so its interior pixels are the drawn value bit for bit, and a
+// tolerance wide enough to be safe here would also accept the neighbouring frame blues.
+int CountColor(const std::vector<unsigned char>& rgba, const ImVec4& c) {
+  const unsigned char r = ToByte(c.x);
+  const unsigned char g = ToByte(c.y);
+  const unsigned char b = ToByte(c.z);
+  int n = 0;
+  for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+    if (rgba[i] == r && rgba[i + 1] == g && rgba[i + 2] == b) {
+      ++n;
+    }
+  }
+  return n;
+}
+
+// Park the pointer off-window (a hovered control pops a tooltip into the rectangle), settle, then
+// capture the top bar.
+std::vector<unsigned char> SettleAndCaptureTopBar(ImGuiTestContext* ctx) {
+  ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
+  ctx->Yield(3);
+  std::vector<unsigned char> pixels;
+  int w = 0;
+  int h = 0;
+  CaptureWindowRect(ctx, "##TopBar", &pixels, &w, &h);
+  return pixels;
 }
 
 }  // namespace
@@ -299,8 +347,13 @@ void RegisterExecutionClusterTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P83, moved with the control. The int slider is a different widget family from the float ones
-  // and reads its bounds from the same registry, so it gets the same treatment: literals, both ends.
+  // P83, moved with the control. The int drag is a different widget family from the float ones and
+  // reads its bounds from the same registry, so it gets the same treatment: literals, both ends.
+  //
+  // The control changed shape under this case (a single DragInt where a slider+input pair used to
+  // be) without the case changing what it claims: ItemInputValue's ctrl+click text entry honours
+  // the drag's AlwaysClamp exactly as it honoured the input box's, so both ends still land on the
+  // registry's bounds. Same substitution, same reasoning, as the EV and overlay-alpha fields.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "execution_cluster", "max_hits_clamps_typed_values_to_its_domain");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -505,6 +558,95 @@ void RegisterExecutionClusterTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.sun.altitude, before);
       IM_CHECK(!ChipIsLit(ctx));
+    };
+  }
+
+  // The run-progress rule is filled with the theme's accent, and the amount of it tracks the run.
+  //
+  // This is the case the defect asks for: the bar drew in ImGui's DEFAULT ImGuiCol_PlotHistogram
+  // amber (0.90, 0.70, 0.00) for as long as the theme existed, because that slot was never claimed
+  // — and amber is this app's warning grade, so a run in perfect health was painted in the colour
+  // reserved for "this needs your attention". Both halves are asserted: the amber is gone, and what
+  // replaced it is the accent rather than some third blue.
+  //
+  // The accent is read out of ImGuiCol_CheckMark rather than from a literal or from a getter added
+  // for the test. That makes the assertion a cross-check between two consumers of one palette entry
+  // ("the rule is filled with the same accent the check marks use") instead of a comparison of
+  // theme.cpp's literal against a copy of itself, which would pass no matter what either said.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "execution_cluster", "the_progress_rule_is_accent_and_tracks_the_run");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedFakedRun guard;
+      ctx->Yield(3);
+
+      const ImVec4 accent = ImGui::GetStyle().Colors[ImGuiCol_CheckMark];
+      // The colour the slot used to default to. Named here as a literal deliberately: it is not a
+      // value this app owns, it is the one that must never be on screen again.
+      const ImVec4 imgui_default_histogram(0.90f, 0.70f, 0.00f, 1.00f);
+
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 10.0f;  // 10 M rays requested
+      gui::g_state.stats_sim_ray_num = 1'000'000ULL;
+      const std::vector<unsigned char> tenth = SettleAndCaptureTopBar(ctx);
+      IM_CHECK(!tenth.empty());
+
+      gui::g_state.stats_sim_ray_num = 9'000'000ULL;
+      const std::vector<unsigned char> nine_tenths = SettleAndCaptureTopBar(ctx);
+      IM_CHECK(!nine_tenths.empty());
+
+      const int accent_at_10 = CountColor(tenth, accent);
+      const int accent_at_90 = CountColor(nine_tenths, accent);
+      const int amber_at_90 = CountColor(nine_tenths, imgui_default_histogram);
+      ctx->LogInfo("accent px: 10%%=%d 90%%=%d | imgui-default-amber px at 90%%=%d", accent_at_10, accent_at_90,
+                   amber_at_90);
+
+      IM_CHECK_GT(accent_at_10, 0);
+      // Nine times the fill for nine times the fraction; a factor of three is slack enough for the
+      // rounded ends and for any accent pixel the rest of the row happens to own, while still
+      // failing a bar that is painted whole regardless of progress.
+      IM_CHECK_GT(accent_at_90, accent_at_10 * 3);
+      IM_CHECK_EQ(amber_at_90, 0);
+    };
+  }
+
+  // The infinite tier gets the same rule, animated — and only while the run is in flight.
+  //
+  // It used to get no slot at all, on an argument about TEXT (a percentage with no denominator has
+  // to lie, and "until stopped" was already printed three slots to the left). The rule carries
+  // neither, so what is left is the one thing an unbounded run cannot otherwise show: that it is
+  // running at all. The ray budget sits still and there is no percentage to move.
+  //
+  // Motion is asserted as a difference between two frames, not as a property of any one of them —
+  // and the idle half is the control: without it, "the pixels changed" could be satisfied by
+  // anything in the row that moves, and a bar that slid forever under a stopped simulation would
+  // read as a running one.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "execution_cluster", "the_infinite_tier_animates_only_while_running");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedFakedRun guard;
+      gui::g_state.sim.infinite = true;
+      ctx->Yield(3);
+
+      // Idle: two captures a few frames apart must be identical.
+      const std::vector<unsigned char> idle_a = SettleAndCaptureTopBar(ctx);
+      ctx->Yield(6);
+      const std::vector<unsigned char> idle_b = SettleAndCaptureTopBar(ctx);
+      IM_CHECK(!idle_a.empty());
+      IM_CHECK(idle_a == idle_b);
+
+      // Running: the same two captures must differ. sim_state has one owner (SyncFromPoller assigns
+      // it from ReconcileSimState every tick), so the intent is what a case may drive; writing
+      // sim_state directly would not survive to the frame that draws.
+      gui::g_state.run_intent = gui::RunIntent::kRunning;
+      ctx->Yield(3);
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(gui::GuiState::SimState::kSimulating));
+      const std::vector<unsigned char> run_a = SettleAndCaptureTopBar(ctx);
+      ctx->Yield(6);
+      const std::vector<unsigned char> run_b = SettleAndCaptureTopBar(ctx);
+      IM_CHECK(!run_a.empty());
+      IM_CHECK(run_a != run_b);
     };
   }
 }

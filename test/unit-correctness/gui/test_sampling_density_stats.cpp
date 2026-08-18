@@ -139,6 +139,10 @@ TEST(SamplingDensity, segment_shows_both_counters) {
   // The status bar carries the compact spelling (no trailing " rays"); the tooltip carries the
   // verbose one. Both are pinned so a change to either has to be deliberate.
   EXPECT_TRUE(Contains(segment, "shape 1 per 5.4 x10^6 \xC2\xB7"));
+  // The segment starts with its own first word, not with a divider. Joining segments belongs to
+  // the row that lays them out — a separator returned from here is invisible to whatever measures
+  // or positions the string, and it renders as a second divider beside the row's own.
+  EXPECT_EQ(segment.rfind("shape", 0), 0u);
   EXPECT_TRUE(!Contains(segment, "rays"));
   EXPECT_TRUE(Contains(segment, "orient 1.00/ray"));
 

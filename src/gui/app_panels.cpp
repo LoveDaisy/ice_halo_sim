@@ -135,6 +135,24 @@ namespace lumice::gui {
 using SimState = GuiState::SimState;
 
 namespace {
+
+// The leading label of a field in a HORIZONTAL row — the display strip's inline answer to the
+// inspector's PropertyRow. Same visual contract (dimmed text, top-aligned with the frame of the
+// control it names, control immediately to its right); what it does not have is the property
+// table's fixed label column, because there is no column of rows here to align down.
+//
+// A nested two-column BeginPropertyTable per field would produce the same pixels and claim an
+// alignment that does not exist — the strip's fields sit side by side, so no two of them share a
+// vertical line to be aligned on. The label column tier (kPropertyLabelColWidth) is deliberately
+// NOT consumed here for the same reason: padding "EV" out to 60 px would put the number that far
+// from its own name, which is the proximity trade doc/gui-visual-language.md §5 records as
+// falsified.
+void InlineFieldLabel(const char* text) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", text);
+  ImGui::SameLine();
+}
+
 // With ImGuiConfigFlags_ViewportsEnable (gui-polish-v15), window positions
 // and ForegroundDrawList coordinates are in absolute OS screen space, not
 // relative to the main GLFW window. All fixed-layout panels must anchor to
@@ -142,6 +160,68 @@ namespace {
 inline ImVec2 MainVpPos(float x, float y) {
   const ImGuiViewport* vp = ImGui::GetMainViewport();
   return ImVec2(vp->Pos.x + x, vp->Pos.y + y);
+}
+
+// The divider between two clusters of a horizontal chrome row: a one-pixel vertical rule at the
+// theme's separator value, drawn where a TextDisabled("|") used to be printed.
+//
+// Why not the pipe character. A "|" is a glyph, so its weight, its height and the air on either
+// side of it are the font's decisions, not the layout's — it sits on the text baseline, it is as
+// dark as the dimmed text grade, and at 15 px Roboto it is tall enough to read as a character in a
+// sentence. A row of them reads as content with punctuation in it rather than as groups with
+// structure between them. The rule is drawn instead: inset from the row's top and bottom, at
+// ImGuiCol_Separator (the same low-contrast white the horizontal separators use, i.e. no new
+// colour), and one device pixel wide regardless of what the body font does next.
+//
+// Call it between two items of a SameLine run; it claims its own layout slot and leaves the cursor
+// on the same line, so a call site replaces the three-line SameLine / TextDisabled / SameLine
+// sequence one-for-one. kHairlineWidth is what a caller measuring a cluster must budget for it.
+constexpr float kHairlineWidth = 1.0f;
+constexpr float kHairlineInsetY = 3.0f;
+
+void Hairline() {
+  ImGui::SameLine();
+  const float h = ImGui::GetFrameHeight();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImGui::Dummy(ImVec2(kHairlineWidth, h));
+  // +0.5 puts the 1 px line on the pixel centre so it does not land as two half-covered columns.
+  ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + 0.5f, p.y + kHairlineInsetY),
+                                      ImVec2(p.x + 0.5f, p.y + h - kHairlineInsetY),
+                                      ImGui::GetColorU32(ImGuiCol_Separator));
+  ImGui::SameLine();
+}
+
+// The divider between two segments of the status bar. A middle dot, not the pipe the row used to
+// print: the segments there are readouts rather than groups of controls, and a dot between two
+// short phrases separates them without drawing a line through a 28 px row. Same call shape as
+// Hairline() — it claims its own slot and leaves the cursor on the line — and kMiddleDot is what a
+// caller measuring a cluster must budget for it.
+constexpr const char* kMiddleDot = "\xC2\xB7";  // U+00B7, inside the body font's default range
+
+void MiddleDot() {
+  ImGui::SameLine();
+  ImGui::TextDisabled("%s", kMiddleDot);
+  ImGui::SameLine();
+}
+
+// Widths of the shapes a chrome row lays out, for a cluster that must be measured before it is
+// drawn — which is what right-aligning a run of SameLine items costs, since the run's starting x
+// depends on its total width. Each mirrors the geometry of the ImGui call it is named after
+// (Button: text + FramePadding.x*2; Checkbox: the square plus, when there is a label, ItemInnerSpacing
+// and the label; Text: the text). They exist as named functions rather than open-coded arithmetic
+// at the call site because a measurement that drifts from its widget is invisible until the cluster
+// lands a few pixels off the window edge.
+float ButtonWidth(const char* label) {
+  return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+
+float CheckboxWidth(const char* label) {
+  const float text_w = ImGui::CalcTextSize(label, nullptr, true).x;
+  return ImGui::GetFrameHeight() + (text_w > 0.0f ? ImGui::GetStyle().ItemInnerSpacing.x + text_w : 0.0f);
+}
+
+float TextWidth(const char* text) {
+  return ImGui::CalcTextSize(text).x;
 }
 
 // Pin a chrome panel to the main viewport so ImGui never promotes it to an
@@ -169,17 +249,16 @@ inline void SetNextPanelGeometry(float x, float y, float w, float h) {
 // (doc/gui-layout-architecture.md §1/§3).
 // ================================================================================================
 
-// Widths of the two numeric controls, in pixels, covering their [slider][input] pair only (the
-// trailing text label is drawn after and sizes itself). Chosen so the whole row fits inside
-// kMinWindowWidth (1024): the row totals ~985 px with separators. A narrower window clips the tail
-// of the row rather than reflowing it — the blueprint leaves narrow-window degradation to the
-// implementation (§6), and clipping keeps Run, the dirty chip and the ray budget (the leftmost,
-// most-used items) on screen.
-constexpr float kRaysControlWidth = 170.0f;
-constexpr float kMaxHitsControlWidth = 150.0f;
-// Fixed slot for the run-progress readout, so the row does not shift as the text under it changes
-// between a percentage, "until stopped", and nothing at all.
+// The two numeric controls' widths now come from the shared token table (kRaysControlWidth /
+// kCompactFieldWidth, gui_constants.hpp), which is also where the "the row totals ~985 px, so it
+// fits inside kMinWindowWidth" arithmetic that picked them is recorded.
+//
+// Fixed slot for the run-progress readout, so the row does not shift as the run's state changes.
 constexpr float kProgressSlotWidth = 130.0f;
+// Its thickness. A rule, not a box: thin enough that the shape cannot be mistaken for a frame with
+// something typed in it (which is how the full-height bar with a centred percentage read), thick
+// enough to stay visible at the row's scale. The percentage it used to carry is in the tooltip.
+constexpr float kProgressBarHeight = 4.0f;
 
 void RenderExecutionCluster() {
   const auto& style = ImGui::GetStyle();
@@ -266,23 +345,26 @@ void RenderExecutionCluster() {
     ImGui::PopStyleVar();
   }
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
+  Hairline();
 
   // ---- Ray budget ----
-  ImGui::SameLine();
   RaysBudgetControl(g_state, kRaysControlWidth);
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
+  Hairline();
 
   // ---- Max hits ----
-  // An int field has no fmt/scale to read — SliderIntWithInput takes neither.
-  ImGui::SameLine();
+  // One DragInt, not the [slider][input] pair this used to be: the field's whole domain is a few
+  // dozen values, and ctrl+click still types an exact one, so the pair's second half was paying
+  // ~90 px of a 1024-px row for a way to enter a number the drag can already reach. Unlike the ray
+  // budget beside it, this field has no non-numeric end that needs a track to put a detent on.
+  //
+  // The label leads the control here, as it does everywhere else in this row, rather than trailing
+  // it the way SliderIntWithInput's own label did.
   const FieldEditorConstraint hits_c = ConstraintFor("sim.max_hits", g_state);
-  SliderIntWithInput("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
-                     static_cast<int>(hits_c.max_value), /*trailing_label=*/false, /*committed=*/nullptr,
-                     /*active=*/nullptr, kMaxHitsControlWidth);
+  InlineFieldLabel("Max hits");
+  ImGui::SetNextItemWidth(kCompactFieldWidth);
+  DragIntField("Max hits", &g_state.sim.max_hits, static_cast<int>(hits_c.min_value),
+               static_cast<int>(hits_c.max_value));
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Maximum number of crystal face hits per ray path");
   }
@@ -301,9 +383,7 @@ void RenderExecutionCluster() {
   // machines with very old hardware / broken GPU drivers, where selecting it would otherwise fail
   // in EnsureDevice. The probe is cached, so the per-frame cost is a plain memory read.
   if (LUMICE_IsBackendAvailable(LUMICE_BACKEND_METAL) || LUMICE_IsBackendAvailable(LUMICE_BACKEND_CUDA)) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+    Hairline();
     // Disable the toggle while busy (simulating OR async Stop draining): the backend switch
     // reconstructs the server on the next DoRun, and an in-flight stop still holds it (R1).
     const bool busy = IsBusy(g_state.sim_state);
@@ -318,28 +398,54 @@ void RenderExecutionCluster() {
   }
 
   // ---- Run progress ----
-  // The fraction is derived, not stored: rays traced so far against the budget this run was asked
-  // for.
+  // A 4 px rule, filled with the accent, over a neutral track. Two readings it had to lose, both
+  // of which were accidents rather than decisions: it drew in ImGui's default amber, because
+  // ImGuiCol_PlotHistogram was never claimed by the theme and amber is this app's WARNING grade
+  // (semantic_colors.hpp), so a healthy run read as a problem; and a full-height frame with a
+  // percentage centred in it reads as a text field the user could type into. Accent is the right
+  // grade here under "emphasis only while an interaction is in progress"
+  // (doc/gui-visual-language.md §4.3) — a run in flight is that case.
   //
-  // An infinite run gets NO slot at all, not an "until stopped" one. Two reasons, and the second is
-  // the one that is easy to get wrong: a bar with no denominator has to lie (a full one reads as
-  // "finished", an empty one as "stuck"), and the ray-budget control three slots to the left is
-  // already showing the words "until stopped" — a second copy in the same row says nothing the
-  // first did not and reads as a rendering fault. Dropping the trailing separator too keeps the row
-  // ending cleanly rather than on a dangling divider. Nothing shifts as a result: this is the last
-  // item in the row.
-  if (!g_state.sim.infinite) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+  // The infinite tier now gets the same rule, in ImGui's indeterminate mode. It used to get NO
+  // slot at all, and the argument for that was entirely about TEXT: a bar with no denominator has
+  // to lie with a percentage, and the ray-budget control three slots to the left already prints
+  // "until stopped", so a second copy read as a rendering fault. Neither half survives this shape
+  // — the rule carries no number and no words, so it repeats nothing and claims no denominator.
+  // What it does say is "this is running", which for an unbounded run is the one thing the row
+  // cannot otherwise show: the ray budget sits still and the percentage that would move does not
+  // exist. It animates only while the run is actually in flight; idle, the track sits empty rather
+  // than sliding forever under a stopped simulation.
+  //
+  // The percentage moved into the tooltip. At 4 px ImGui's overlay text is clipped to unreadable,
+  // and the two cannot both be had — a bar tall enough to hold 15 px type is the frame this shape
+  // was getting away from.
+  {
+    Hairline();
+    const bool infinite = g_state.sim.infinite;
     const double target = static_cast<double>(g_state.sim.ray_num_millions) * 1e6;
     const double done = static_cast<double>(g_state.stats_sim_ray_num);
-    const float fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
-    char overlay[32];
-    snprintf(overlay, sizeof(overlay), "%.0f%%", static_cast<double>(fraction) * 100.0);
-    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, 0.0f), overlay);
+    const float finite_fraction = target > 0.0 ? static_cast<float>(std::clamp(done / target, 0.0, 1.0)) : 0.0f;
+    // ImGui reads a negative fraction as "indeterminate, animated by this value" — hence the clock.
+    const float fraction =
+        infinite ? (IsBusy(g_state.sim_state) ? -static_cast<float>(ImGui::GetTime()) : 0.0f) : finite_fraction;
+
+    // The track colour is pushed locally rather than set in the theme: the global FrameBg is the
+    // blue an input field is filled with, which is precisely the reading this shape had to lose,
+    // and changing it globally would repaint every real input in the app. ChildBg is the palette's
+    // neutral step above the window background — a groove, not a second widget.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
+    // Centre the rule in the row: at 4 px it would otherwise hang off the top of a 21 px line.
+    // Safe because this is the last item in the row — nothing after it inherits the offset.
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (ImGui::GetFrameHeight() - kProgressBarHeight) * 0.5f);
+    ImGui::ProgressBar(fraction, ImVec2(kProgressSlotWidth, kProgressBarHeight), "");
+    ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Rays traced so far against this run's ray budget.");
+      if (infinite) {
+        ImGui::SetTooltip("Running until stopped: this run has no ray budget to measure progress against.");
+      } else {
+        ImGui::SetTooltip("Rays traced so far against this run's ray budget: %.0f%%",
+                          static_cast<double>(finite_fraction) * 100.0);
+      }
     }
   }
 }
@@ -362,9 +468,7 @@ void RenderTopBar(float window_width) {
     if (ImGui::Button(left_toggle_label)) {
       g_state.left_panel_collapsed = !g_state.left_panel_collapsed;
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
+    Hairline();
   }
 
   // `busy` gates the file operations: New/Open/Save stay disabled while the backend is still
@@ -424,9 +528,54 @@ void RenderTopBar(float window_width) {
     }
   }
 
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
+  // ---- The row's right cluster: what OPENS things (windows, menus, the settings modal) ----
+  //
+  // It is flush to the window's right edge, with the file operations left where they are and open
+  // space between the two. That space is the grouping: two runs of buttons at opposite ends of a
+  // row read as two kinds of control without a divider having to say so, which is what the row was
+  // doing with pipe characters before.
+  //
+  // Right-aligning a SameLine run means knowing where it starts, which means measuring it before
+  // drawing it. Every conditional item is measured under the same predicate it is drawn under —
+  // the two lists below and further down must stay in step, and a cluster measured for one state
+  // and drawn in another lands off the edge by exactly the width of whatever was missed. That is
+  // what test/gui/functional/test_shell_chrome.cpp's alignment case is for; it exercises the
+  // conditional members in both of their states rather than only the default one.
+  const bool has_color_classes = !g_state.raypath_color.empty();
+  bool composite_now = false;
+  bool composite_empty = false;
+  std::string composite_toggle_id;
+  if (has_color_classes) {
+    // The shared signal cache is read BEFORE the toggle is rendered, so the control can be wrapped
+    // in BeginDisabled() when the composite would be empty — otherwise it appears "unclickable /
+    // not responding" with no visual explanation. Reading it here costs nothing: the poll behind it
+    // is throttled to 500 ms and is unaffected by call-site order, and the Colors window and the
+    // aggregate pip read the same source, so all three cannot disagree.
+    //
+    // "The composite would be empty" is one predicate (NoVisibleMatchedColorClass) covering two
+    // ways of getting there: no rays match any configured class, OR every matching class is
+    // currently hidden (visible=false, or solo'd out by another class). It has a single owner,
+    // shared with the Colors-window Enable checkbox, for that reason — two indicators computing
+    // "empty" separately is two chances to say different things about one composite.
+    composite_now = g_state.last_uploaded_as_composite;
+    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
+    composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
+    composite_toggle_id = std::string(composite_now ? "Colored" : "Full Spectrum") + "##CompositePreviewToggle";
+  }
+  {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float gap = style.ItemSpacing.x;
+    float cluster_w = ButtonWidth(ICON_FA_PALETTE " Colors");
+    if (has_color_classes) {
+      cluster_w += gap + CheckboxWidth(composite_toggle_id.c_str());
+      if (composite_empty) {
+        cluster_w += gap + TextWidth(ICON_FA_TRIANGLE_EXCLAMATION);
+      }
+    }
+    cluster_w += gap + kHairlineWidth + gap + ButtonWidth(ICON_FA_GEAR " Settings");
+    cluster_w += gap + ButtonWidth("View");
+    ImGui::SameLine(ImGui::GetWindowWidth() - cluster_w - style.WindowPadding.x);
+  }
 
   // task-345.5 (⑥): dedicated "feature button" group, immediately right of
   // New/Open/Save. Colors is the first occupant; future cross-cutting toggles
@@ -472,7 +621,7 @@ void RenderTopBar(float window_width) {
   // independent of the Colors window's own render call) is itself the
   // persistent "currently in colored mode" marker required by AC3: closing
   // Colors does not touch this window.
-  if (!g_state.raypath_color.empty()) {
+  if (has_color_classes) {
     ImGui::SameLine();
     // task-349.3 (#4): revert 348.3 icon-only Button back to a plain-text Checkbox
     // (no ICON_FA_PALETTE prefix) so this display-time toggle reads visually
@@ -484,28 +633,16 @@ void RenderTopBar(float window_width) {
     // introduced in 348.3 and stays after the widget-shape revert (a12: two
     // control sites, one write path).
     //
-    // task-349.2 Step 3 (#6): read the shared signal cache BEFORE rendering the
-    // Colored toggle so we can wrap it in BeginDisabled() when every configured
-    // color class matches zero rays (composite would be empty; control would
-    // appear "unclickable / non-responding" without visual explanation). The
-    // 500 ms throttled poll is unaffected by call-site order — same source as
-    // the Colors window and the aggregate pip below, so all three cannot drift.
+    // The state this block reads (composite_now / composite_empty / the label, hence the widget's
+    // width) is computed above, where the cluster is measured: the measurement and the drawing
+    // must see the same values, and the toggle's label alternates between "Colored" and
+    // "Full Spectrum", which are not the same width.
     //
     // Style tokens: Checkbox renders as frame background + check mark, not a
     // button surface — accent must go on FrameBg/FrameBgHovered/CheckMark. Using
     // ImGuiCol_Button here would silently no-op (this was the 346.3→348.3 pitfall
     // recorded in learnings/code-quality.md; reverting the widget type must
     // re-swap the token set).
-    const bool composite_now = g_state.last_uploaded_as_composite;
-    const std::vector<int>& signal_flags = RefreshColorClassSignals(g_state, g_server);
-    // task-fix-color-window-visibility-consistency: merged "composite would be
-    // empty" predicate covers both prior triggers — no rays match, OR every
-    // matching class is currently hidden (visible=false, or solo'd out by
-    // another class). Single owner shared with the Colors-window Enable
-    // checkbox so the two indicators cannot disagree.
-    const bool composite_empty = NoVisibleMatchedColorClass(g_state, signal_flags);
-    const char* mode_label = composite_now ? "Colored" : "Full Spectrum";
-    const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
     if (composite_now) {
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
@@ -513,7 +650,7 @@ void RenderTopBar(float window_width) {
       ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
     ImGui::BeginDisabled(composite_empty);
-    if (Checkbox(checkbox_id.c_str(), &checked)) {
+    if (Checkbox(composite_toggle_id.c_str(), &checked)) {
       ToggleCompositePreview(g_state);
     }
     ImGui::EndDisabled();
@@ -567,18 +704,18 @@ void RenderTopBar(float window_width) {
   // by nobody who had not been told where it was, which is the only measure a settings entry has.
   //
   // Two deliberate choices, both worth knowing before this button gets tidied away again:
-  //   - It is separated from the Colors group by the same "|" the file group uses, because the two
-  //     are different kinds of control. Colors and the Colored checkbox are toggles that change
-  //     what the viewport shows; this opens a modal that edits persistent preferences. Sharing a
-  //     run of buttons with no break would let a modal launcher read as one more view toggle.
+  //   - It is separated from the Colors group by a hairline — the only divider left inside this
+  //     cluster — because the two are different kinds of control. Colors and the Colored checkbox
+  //     are toggles that change what the viewport shows; this opens a modal that edits persistent
+  //     preferences. Sharing a run of buttons with no break would let a modal launcher read as one
+  //     more view toggle. View needs no second hairline: it opens a menu about the window's own
+  //     layout, which is the same kind of thing this button opens.
   //   - It is NOT gated on `busy`. Reading and editing personal defaults is independent of whether
   //     a simulation is running, same as Colors — a settings entry that disappears while the thing
   //     the user is watching runs is a settings entry they cannot find when they think to look.
   // The panel's preset library is one section inside it, so retuning a preset is still reachable;
   // it no longer has a menu item of its own pointing straight at that section.
-  ImGui::SameLine();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine();
+  Hairline();
   if (ImGui::Button(ICON_FA_GEAR " Settings")) {
     OpenDefaultsPanel(g_state, DefaultsPanelSection::kSettings);
   }
@@ -901,60 +1038,78 @@ namespace {
 // below is still the field editor registry's answer, not this call site's.
 void RenderCameraControls() {
   auto& r = g_state.renderer;
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+
   ImGui::SeparatorText("Lens");
-  // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
-  // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
-  if (ImGui::BeginCombo("Lens Type##view", kLensTypeNames[r.lens_type])) {
-    for (int idx : kLensTypePresentationOrder) {
-      bool selected = (r.lens_type == idx);
-      if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
-        // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
-        // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
-        // lens_type directly, so they keep their fov.
-        ApplyLensTypeSelection(r, idx);
+  if (BeginPropertyTable("##cam_lens")) {
+    // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
+    // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
+    PropertyRow("Lens Type");
+    if (ImGui::BeginCombo("##Lens Type##view", kLensTypeNames[r.lens_type])) {
+      for (int idx : kLensTypePresentationOrder) {
+        bool selected = (r.lens_type == idx);
+        if (ImGui::Selectable(kLensTypeNames[idx], selected)) {
+          // The lens switch and its pose fix-ups live in gui_state.hpp, shared with the defaults
+          // panel's per-row lens editor. .lmc loading and tests bypass both controls by writing
+          // lens_type directly, so they keep their fov.
+          ApplyLensTypeSelection(r, idx);
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
       }
-      if (selected) {
-        ImGui::SetItemDefaultFocus();
-      }
+      ImGui::EndCombo();
     }
-    ImGui::EndCombo();
+    // Domain, format and disabled-when all come from the field editor registry rather than being
+    // written here — same for every control below whose field is a registered document leaf. The
+    // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
+    // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
+    const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
+    PropertyRow("FOV");
+    ImGui::BeginDisabled(!fov_c.enabled);
+    DragFloatField("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
+                   fov_c.fmt, fov_c.scale);
+    ImGui::EndDisabled();
+    EndPropertyTable();
   }
-  // Domain, format and disabled-when all come from the field editor registry rather than being
-  // written here — same for every slider below whose field is a registered document leaf. The
-  // bound is the lens' own MaxFov (the registry calls LUMICE_MaxFov), and `enabled` is the
-  // full-sky gate that used to be spelled `BeginDisabled(full_sky)` at this line.
-  const FieldEditorConstraint fov_c = ConstraintFor("renderer.fov", g_state);
-  ImGui::BeginDisabled(!fov_c.enabled);
-  SliderWithInput("FOV##view", &r.fov, static_cast<float>(fov_c.min_value), static_cast<float>(fov_c.max_value),
-                  fov_c.fmt, fov_c.scale);
-  ImGui::EndDisabled();
-  bool is_globe = (r.lens_type == kLensTypeGlobe);
+
+  const bool is_globe = (r.lens_type == kLensTypeGlobe);
+
   ImGui::SeparatorText("Visibility");
-  // Same registry query as the FOV slider above, for the same reason. What used to stand here was
+  // Same registry query as the FOV control above, for the same reason. What used to stand here was
   // a hand-paired nest — `BeginDisabled()` under `full_sky` on the outside, `BeginDisabled(
   // is_globe)` under `!full_sky` on the inside — whose NET effect each widget saw had to be read
   // off the interleaving of four `if`s. The two gates are already registered (renderer.visible →
   // NotUnderFullSky, renderer.front → NotUnderFullSkyOrGlobe), and each already folds the
   // full-sky case in, so the call site needs no nesting: one flat pair per field.
-  const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
-  ImGui::BeginDisabled(!visible_c.enabled);
-  ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
-  ImGui::SameLine();
-  ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
-  ImGui::SameLine();
-  ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
-  ImGui::EndDisabled();
-  // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
-  // next widget, so it is unaffected by — and does not affect — the disabled stack.
-  ImGui::SameLine(0, 20);
-  const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
-  ImGui::BeginDisabled(!front_c.enabled);
-  Checkbox("Front##visible", &r.front);
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+  if (BeginPropertyTable("##cam_visibility")) {
+    // A composite row: the control column holds the whole hemisphere choice rather than a single
+    // widget. The row shape is unchanged — one label on the left, everything it names on the right
+    // — which is what lets a group of buttons share a left edge with the scalars around it.
+    const FieldEditorConstraint visible_c = ConstraintFor("renderer.visible", g_state);
+    // Label-less: the section header one line up already says "Visibility", and a row that repeats
+    // its own section's word says nothing the second time. The row still exists so the choice keeps
+    // the control column's left edge rather than starting at the panel margin.
+    PropertyRow("");
+    ImGui::BeginDisabled(!visible_c.enabled);
+    ImGui::RadioButton("Upper##visible", &r.visible, kVisibleUpper);
+    ImGui::SameLine();
+    ImGui::RadioButton("Full##visible", &r.visible, kVisibleFull);
+    ImGui::SameLine();
+    ImGui::RadioButton("Lower##visible", &r.visible, kVisibleLower);
+    ImGui::EndDisabled();
+    // Between the two pairs rather than inside either: SameLine only moves the draw cursor for the
+    // next widget, so it is unaffected by — and does not affect — the disabled stack.
+    ImGui::SameLine(0, 20);
+    const FieldEditorConstraint front_c = ConstraintFor("renderer.front", g_state);
+    ImGui::BeginDisabled(!front_c.enabled);
+    Checkbox("Front##visible", &r.front);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      ImGui::SetTooltip("Show front hemisphere only\n(combine with Upper/Full/Lower)");
+    }
+    ImGui::EndDisabled();
+    EndPropertyTable();
   }
-  ImGui::EndDisabled();
+
   ImGui::SeparatorText("Pose");
   if (is_globe) {
     ImGui::TextDisabled("(?)");
@@ -962,26 +1117,32 @@ void RenderCameraControls() {
       ImGui::SetTooltip(
           "In Globe lens, Az/El/Roll control the observer's orbit\n"
           "around the sphere, not the camera's own attitude.\n"
-          "Roll is locked to 0 in this mode (slider is greyed out).");
+          "Roll is locked to 0 in this mode (the control is greyed out).");
     }
   }
-  // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
-  // gate the two share, is the registry's to state. Both entries carry the SAME gate
-  // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
-  const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
-  const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
-  ImGui::BeginDisabled(!el_c.enabled);
-  SliderWithInput("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
-                  static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
-  SliderWithInput("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
-                  az_c.fmt, az_c.scale);
-  ImGui::EndDisabled();
-  // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
-  const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
-  ImGui::BeginDisabled(!roll_c.enabled);
-  SliderWithInput("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
-                  roll_c.fmt, roll_c.scale);
-  ImGui::EndDisabled();
+  if (BeginPropertyTable("##cam_pose")) {
+    // The elevation limit backs off one degree from the pole under Globe; that, like the full-sky
+    // gate the two share, is the registry's to state. Both entries carry the SAME gate
+    // (NotUnderFullSky), so which of the two `enabled` values wraps the pair cannot matter.
+    const FieldEditorConstraint el_c = ConstraintFor("renderer.elevation", g_state);
+    const FieldEditorConstraint az_c = ConstraintFor("renderer.azimuth", g_state);
+    ImGui::BeginDisabled(!el_c.enabled);
+    PropertyRow("Elevation");
+    DragFloatField("Elevation##view", &r.elevation, static_cast<float>(el_c.min_value),
+                   static_cast<float>(el_c.max_value), el_c.fmt, el_c.scale);
+    PropertyRow("Azimuth");
+    DragFloatField("Azimuth##view", &r.azimuth, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value),
+                   az_c.fmt, az_c.scale);
+    ImGui::EndDisabled();
+    // roll's gate is the wider one (full-sky OR globe) — again read, not restated.
+    const FieldEditorConstraint roll_c = ConstraintFor("renderer.roll", g_state);
+    PropertyRow("Roll");
+    ImGui::BeginDisabled(!roll_c.enabled);
+    DragFloatField("Roll##view", &r.roll, static_cast<float>(roll_c.min_value), static_cast<float>(roll_c.max_value),
+                   roll_c.fmt, roll_c.scale);
+    ImGui::EndDisabled();
+    EndPropertyTable();
+  }
 
   ImGui::Separator();
   float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -996,8 +1157,6 @@ void RenderCameraControls() {
     r.azimuth = d.azimuth;
     r.roll = d.roll;
   }
-
-  ImGui::PopItemWidth();
 }
 
 }  // namespace
@@ -1210,6 +1369,14 @@ OverlayDecoration BuildOverlayDecoration(const GuiState& st, const ViewProjectio
   return ov;
 }
 
+// The intensities the empty state's CPU-drawn marks are drawn at — the ones the shader would have
+// used, handed over by ApplyEmptyStatePresentation as it mutes its own copy of them. Returned
+// rather than recomputed at the draw site so the scaling below has exactly one owner.
+struct EmptyStateStrokes {
+  float sun_circles_alpha = 0.0f;
+  float sun_marker_alpha = 0.0f;
+};
+
 // How much of the user's overlay intensity the empty state keeps. Half is where the prototype
 // landed: enough to read the sky as "framed and waiting" rather than as a rendered result, which is
 // the whole distinction the empty state is drawing. A starting point, not a derived constant.
@@ -1238,14 +1405,239 @@ constexpr float kEmptyStateOverlayAlphaScale = 0.5f;
 // on top of a rendered image, so halving them is what "dimmer than that" means. The marker has no
 // user setting and never appears over an image — its OverlayDecoration default IS its empty-state
 // value, and halving it would only be halving a number this task chose one line earlier.
-void ApplyEmptyStatePresentation(OverlayDecoration* ov) {
+//
+// Two of the four alphas are not dimmed but ZEROED, and that is a handover rather than a removal:
+// the angular-distance circles and the sun marker are still forced ON one line below, but the
+// EMPTY STATE'S versions of them are a dashed circle with a degree label and a cross-hair, and
+// neither shape is expressible in overlayAuxLines() — the shader draws a solid ring and a filled
+// dot, and it cannot draw text at all. So the empty state draws those two itself, on the CPU, in
+// DrawEmptyStateInstrument below; the alphas it would have drawn them at are returned here and
+// handed to that function, and the shader is muted so the two paths cannot double-draw.
+//
+// Reading only this function, alpha == 0 looks like "invisible". It is not: it means "not the
+// shader's to draw this time". The visible counterpart lives in RenderPreviewPanel's empty-state
+// branch, which carries the reverse pointer back here.
+EmptyStateStrokes ApplyEmptyStatePresentation(OverlayDecoration* ov) {
   ov->horizon_alpha *= kEmptyStateOverlayAlphaScale;
   ov->grid_alpha *= kEmptyStateOverlayAlphaScale;
-  ov->sun_circles_alpha *= kEmptyStateOverlayAlphaScale;
   ov->zenith_nadir_alpha *= kEmptyStateOverlayAlphaScale;
   ov->show_horizon = true;
   ov->show_sun_circles = true;
   ov->show_sun_marker = true;
+
+  EmptyStateStrokes strokes;
+  strokes.sun_circles_alpha = ov->sun_circles_alpha * kEmptyStateOverlayAlphaScale;
+  strokes.sun_marker_alpha = ov->sun_marker_alpha;
+  ov->sun_circles_alpha = 0.0f;
+  ov->sun_marker_alpha = 0.0f;
+  return strokes;
+}
+
+// The empty state's instrument marks: everything the shader was just muted for, plus the two
+// labels it never could have drawn.
+//
+// What this draws, and why here rather than in the shader (doc/gui-layout-architecture.md §4 for
+// what the empty state owes the user, the prototype for the form):
+//   - each angular-distance circle as a DASHED ring with its angle written beside it ("22°"),
+//   - the sun as a CROSS-HAIR rather than a filled dot,
+//   - the horizon line — drawn by the shader, unchanged — labelled HORIZON at its left end.
+// overlayAuxLines() draws solid rings and a filled dot and has no text at all, so all three shapes
+// would have meant editing that fragment shader. That shader is the pixel source of the committed
+// lens_proj reference group, whose scenes are re-shot on a change to it; the empty state is not
+// among them and has no business forcing that. Drawing on the CPU keeps the change where its own
+// evidence is.
+//
+// Every mark projects through overlay_labels.hpp's WorldDirToPixel — the same forward the labels
+// over a rendered result use. Not a copy of it: a second projection would put the "22°" text and
+// the ring it names on two different lenses' worth of maths the first time either changed.
+//
+// Colours are the ones already in play, at the intensities ApplyEmptyStatePresentation handed over:
+// the circles keep the document's own sun_circles_color, the cross keeps the marker's colour, and
+// both labels take ImGuiCol_TextDisabled — the palette's dim text tier (theme.cpp text_dim), the
+// same grade every other secondary reading in this app is set in. No new hue is introduced here.
+
+// Samples per angular-distance ring. 96 puts a vertex every 3.75° of arc, which reads as a circle
+// rather than a polygon at any viewport this panel gets, and leaves the dash rhythm below enough
+// segments to be a rhythm.
+constexpr int kEmptyStateCircleSegments = 96;
+// The dash rhythm, in segments: three drawn, three skipped. Deliberately coarse — the point is that
+// the ring reads as a MEASUREMENT overlaid on the sky rather than as something in the picture.
+constexpr int kEmptyStateDashOnSegments = 3;
+constexpr int kEmptyStateDashOffSegments = 3;
+// Half the length of each arm of the sun's cross-hair, in ImGui pixels. Slightly larger than the
+// filled dot it replaces (OverlayDecoration::sun_marker_radius_px = 5) so the two forms carry
+// about the same visual weight.
+constexpr float kEmptyStateSunCrossArmPx = 8.0f;
+// Gap between a mark and the text naming it.
+constexpr float kEmptyStateLabelGapPx = 4.0f;
+
+// One frame's world → preview-window projection, bound once so every mark below is placed by the
+// same lens, pose and rectangle.
+struct EmptyStateProjection {
+  float view_matrix[9] = {};
+  int lens_type = 0;
+  float fov = 0.0f;
+  float res_x = 0.0f, res_y = 0.0f;                          // viewport in FRAMEBUFFER pixels
+  float vp_x = 0.0f, vp_y = 0.0f, vp_w = 0.0f, vp_h = 0.0f;  // the same rect in ImGui screen space
+
+  // Screen position of a world direction, or false if it is behind the camera, outside this lens's
+  // projection domain, or off the edge of the viewport. The y flip and the framebuffer → screen
+  // scaling are the same two lines ComputeOverlayLabels uses on its own samples.
+  bool ToScreen(const float dir[3], ImVec2* out) const {
+    const ProjectedPixel fp = WorldDirToPixel(dir[0], dir[1], dir[2], res_x, res_y, lens_type, fov, view_matrix);
+    if (!fp.valid) {
+      return false;
+    }
+    const float hw = res_x * 0.5f;
+    const float hh = res_y * 0.5f;
+    if (std::fabs(fp.px) > hw || std::fabs(fp.py) > hh) {
+      return false;
+    }
+    out->x = vp_x + (fp.px + hw) / res_x * vp_w;
+    out->y = vp_y + (hh - fp.py) / res_y * vp_h;
+    return true;
+  }
+};
+
+// Place a label above `anchor`, kept inside the viewport by the same clamp the overlay labels use.
+void DrawEmptyStateLabel(ImDrawList* dl, const EmptyStateProjection& proj, ImVec2 anchor, const char* text,
+                         ImU32 color) {
+  const ImVec2 size = ImGui::CalcTextSize(text);
+  ImVec2 pos(anchor.x - size.x * 0.5f, anchor.y - kEmptyStateLabelGapPx - size.y);
+  pos = detail::ClampLabelPosToViewport(pos, size, proj.vp_x, proj.vp_y, proj.vp_w, proj.vp_h);
+  dl->AddText(pos, color, text);
+}
+
+void DrawEmptyStateInstrument(const EmptyStateProjection& proj, const OverlayDecoration& ov,
+                              const EmptyStateStrokes& strokes, EmptyStateInstrument* out) {
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImU32 label_col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+  const ImU32 circle_col = ImGui::ColorConvertFloat4ToU32(
+      ImVec4(ov.sun_circles_color[0], ov.sun_circles_color[1], ov.sun_circles_color[2], strokes.sun_circles_alpha));
+  const ImU32 cross_col = ImGui::ColorConvertFloat4ToU32(
+      ImVec4(ov.sun_marker_color[0], ov.sun_marker_color[1], ov.sun_marker_color[2], strokes.sun_marker_alpha));
+
+  // An orthonormal basis of the plane perpendicular to the sun, so a ring at angular distance θ is
+  // cos(θ)·sun + sin(θ)·(cos t·u + sin t·v). The sun's azimuth is fixed at 0 in this app
+  // (BuildOverlayDecoration), i.e. sun_dir.y is identically zero, so (0,1,0) is perpendicular to it
+  // for every altitude and the usual "pick a reference axis that is not parallel" fallback has no
+  // case to cover. v then points along the meridian, which is what puts the degree label at the top
+  // of the ring rather than at an angle that moves with the sun.
+  const float* sun = ov.sun_dir;
+  const float u[3] = { 0.0f, 1.0f, 0.0f };
+  const float v[3] = { sun[1] * u[2] - sun[2] * u[1], sun[2] * u[0] - sun[0] * u[2], sun[0] * u[1] - sun[1] * u[0] };
+
+  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+  constexpr float kTwoPi = 2.0f * 3.14159265358979323846f;
+  constexpr int kDashPeriod = kEmptyStateDashOnSegments + kEmptyStateDashOffSegments;
+
+  for (int c = 0; c < ov.sun_circle_count; c++) {
+    const float angle_deg = ov.sun_circle_angles[c];
+    const float theta = angle_deg * kDeg2Rad;
+    const float ct = std::cos(theta);
+    const float st = std::sin(theta);
+
+    ImVec2 pts[kEmptyStateCircleSegments + 1];
+    bool on_screen[kEmptyStateCircleSegments + 1];
+    for (int i = 0; i <= kEmptyStateCircleSegments; i++) {
+      const float t = kTwoPi * static_cast<float>(i) / kEmptyStateCircleSegments;
+      const float cos_t = std::cos(t);
+      const float sin_t = std::sin(t);
+      const float dir[3] = { ct * sun[0] + st * (cos_t * u[0] + sin_t * v[0]),
+                             ct * sun[1] + st * (cos_t * u[1] + sin_t * v[1]),
+                             ct * sun[2] + st * (cos_t * u[2] + sin_t * v[2]) };
+      on_screen[i] = proj.ToScreen(dir, &pts[i]);
+    }
+
+    int drawn_segments = 0;
+    for (int i = 0; i < kEmptyStateCircleSegments; i++) {
+      if (i % kDashPeriod >= kEmptyStateDashOnSegments) {
+        continue;  // the gap half of the rhythm
+      }
+      if (!on_screen[i] || !on_screen[i + 1]) {
+        continue;  // an arc that leaves the frame simply stops, as the shader's ring does
+      }
+      dl->AddLine(pts[i], pts[i + 1], circle_col);
+      drawn_segments++;
+    }
+    if (drawn_segments == 0) {
+      continue;  // this ring is entirely off screen — no ring, and nothing to label
+    }
+    out->dashed_circles++;
+
+    // The label goes at t = 90°, i.e. straight up the meridian from the sun — a fixed parameter ON
+    // THE RING rather than a fixed pixel offset, so it is re-projected every frame and follows the
+    // sun and the lens instead of drifting off the ring the first time either moves.
+    //
+    // When that point is off screen the label walks around the ring to the nearest sample that is
+    // not, in either direction. That is not the curve-centric label placement machinery
+    // (overlay-label-placement.md) and deliberately so — no visibility model, no collision pass,
+    // no scoring; it reads the on_screen[] flags this loop already computed and stops at the first
+    // true. Without it the 46° ring loses its label at the default pose, since its top is above the
+    // frame — the ring is drawn and unnamed, which is the one thing the degree labels exist to fix.
+    const int anchor_index = kEmptyStateCircleSegments / 4;  // t = 90°
+    int label_index = -1;
+    for (int d = 0; d <= kEmptyStateCircleSegments / 2 && label_index < 0; d++) {
+      const int forward = (anchor_index + d) % kEmptyStateCircleSegments;
+      const int backward = (anchor_index - d + kEmptyStateCircleSegments) % kEmptyStateCircleSegments;
+      if (on_screen[forward]) {
+        label_index = forward;
+      } else if (on_screen[backward]) {
+        label_index = backward;
+      }
+    }
+    if (label_index < 0) {
+      continue;  // the whole ring is off screen (its dashes came from the wrap-around sample only)
+    }
+    const ImVec2 label_anchor = pts[label_index];
+    const bool integral = std::fabs(angle_deg - std::round(angle_deg)) < 0.05f;
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), integral ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0", angle_deg);
+    DrawEmptyStateLabel(dl, proj, label_anchor, buf, label_col);
+    // Bounds: ov.sun_circle_count is already min(angles.size(), kMaxSunCircles) at its only
+    // producer (BuildOverlayDecoration), which is the same bound the ring loop reads angles under.
+    out->degree_label_pos[c][0] = label_anchor.x;
+    out->degree_label_pos[c][1] = label_anchor.y;
+    out->degree_labels++;
+  }
+
+  // The sun itself: a cross-hair, which says "this is where it WILL be" in a way a filled dot —
+  // the shape a rendered sun actually has — does not.
+  ImVec2 sun_pos;
+  if (proj.ToScreen(sun, &sun_pos)) {
+    dl->AddLine(ImVec2(sun_pos.x - kEmptyStateSunCrossArmPx, sun_pos.y),
+                ImVec2(sun_pos.x + kEmptyStateSunCrossArmPx, sun_pos.y), cross_col);
+    dl->AddLine(ImVec2(sun_pos.x, sun_pos.y - kEmptyStateSunCrossArmPx),
+                ImVec2(sun_pos.x, sun_pos.y + kEmptyStateSunCrossArmPx), cross_col);
+    out->sun_cross = true;
+    out->sun_cross_pos[0] = sun_pos.x;
+    out->sun_cross_pos[1] = sun_pos.y;
+  }
+
+  // HORIZON, at the left end of the horizon line — the end the prototype labels, and the one a
+  // reader gets to first. Which azimuth that is depends on where the camera points and which lens
+  // it looks through, so it is FOUND rather than computed: walk the altitude-0 circle, keep the
+  // visible sample furthest to the left. A closed-form azimuth would have to re-derive the sign
+  // convention of the view matrix and would still be wrong for the full-sky lenses, whose horizon
+  // does not run left-to-right across the frame at all.
+  ImVec2 left_end;
+  bool found_horizon = false;
+  for (int i = 0; i < kEmptyStateCircleSegments; i++) {
+    const float az = kTwoPi * static_cast<float>(i) / kEmptyStateCircleSegments;
+    const float dir[3] = { -std::cos(az), -std::sin(az), 0.0f };
+    ImVec2 p;
+    if (!proj.ToScreen(dir, &p)) {
+      continue;
+    }
+    if (!found_horizon || p.x < left_end.x) {
+      left_end = p;
+      found_horizon = true;
+    }
+  }
+  if (found_horizon) {
+    DrawEmptyStateLabel(dl, proj, left_end, "HORIZON", label_col);
+    out->horizon_label = true;
+  }
 }
 
 }  // namespace
@@ -1322,6 +1714,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   // BuildOverlayLabelInput below). Read from the document every frame in both states, which is what
   // keeps a stale image and a live coordinate system able to disagree — see BuildOverlayDecoration.
   pp.overlay = BuildOverlayDecoration(g_state, pp.view_proj, g_preview_vp.vp_w, g_preview_vp.vp_h);
+  // Zeroed on EVERY frame, not only on empty ones: it records what the empty state's instrument
+  // drew, so a result frame has to leave it saying "nothing", not saying whatever the last empty
+  // frame said.
+  g_preview_vp.empty_state = EmptyStateInstrument{};
 
   if (g_preview.HasTexture() || g_preview.HasBackground()) {
     float ev_total = rc.exposure_offset + g_state.ev_auto;
@@ -1464,17 +1860,56 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // samples its 1x1 blank in sRGB mode, where neither is read. The drag surface is deliberately
     // NOT submitted — orbiting an empty view is a separate question from previewing one, and this
     // panel keeps its "the surface exists only when there is something to interact with" contract.
-    ApplyEmptyStatePresentation(&pp.overlay);
+    // The circles and the sun marker come back from here with their shader alphas at zero and their
+    // show_* flags forced ON — the empty state draws those two itself, right below, in a form the
+    // shader has no way to express (see ApplyEmptyStatePresentation for the full handover). The
+    // intensities it would have used come back as the return value.
+    const EmptyStateStrokes strokes = ApplyEmptyStatePresentation(&pp.overlay);
     pp.exposure = Exposure{};
     pp.bg = Background::Disabled();
 
+    EmptyStateProjection proj;
+    BuildViewMatrix(rc.elevation, rc.azimuth, rc.roll, proj.view_matrix);
+    proj.lens_type = rc.lens_type;
+    proj.fov = rc.fov;
+    proj.res_x = static_cast<float>(g_preview_vp.vp_w);
+    proj.res_y = static_cast<float>(g_preview_vp.vp_h);
+    // Same anchoring as the result state's overlay labels: draw-list coordinates are absolute OS
+    // screen space under ImGuiConfigFlags_ViewportsEnable, so the panel rect goes through
+    // MainVpPos rather than being used as window-local.
+    const ImVec2 vp_origin = MainVpPos(panel_x, panel_y);
+    proj.vp_x = vp_origin.x;
+    proj.vp_y = vp_origin.y;
+    proj.vp_w = panel_width;
+    proj.vp_h = preview_height;
+    if (proj.res_x > 0.0f && proj.res_y > 0.0f) {
+      DrawEmptyStateInstrument(proj, pp.overlay, strokes, &g_preview_vp.empty_state);
+      g_preview_vp.empty_state.drawn = true;
+    }
+
     // Instructional, not descriptive: it names the next action rather than restating what the user
     // can already see (doc/gui-visual-language.md).
-    const char* kEmptyHint = "Press Run to render this view.";
+    //
+    // Set in three runs rather than one, because the sentence is two statements at two weights: the
+    // sky IS framed (a description of what is already on screen, and so dim — the same
+    // ImGuiCol_TextDisabled grade every other secondary reading uses), and Run is the thing to do
+    // next, so it carries the body text's own weight. The app has one font at one weight, so
+    // emphasis here is contrast, not a bold face; brightening the one word that names a control the
+    // user can go and press is the whole of it.
+    const char* kHintLead = "Sky is framed. Press ";
+    const char* kHintKeyword = "Run";
+    const char* kHintTail = " to expose.";
+    const ImVec2 lead_size = ImGui::CalcTextSize(kHintLead);
+    const ImVec2 keyword_size = ImGui::CalcTextSize(kHintKeyword);
+    const ImVec2 tail_size = ImGui::CalcTextSize(kHintTail);
+    const float hint_width = lead_size.x + keyword_size.x + tail_size.x;
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImVec2 text_size = ImGui::CalcTextSize(kEmptyHint);
-    ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f, (avail.y - text_size.y) * 0.5f));
-    ImGui::TextDisabled("%s", kEmptyHint);
+    ImGui::SetCursorPos(ImVec2((avail.x - hint_width) * 0.5f, (avail.y - lead_size.y) * 0.5f));
+    ImGui::TextDisabled("%s", kHintLead);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextUnformatted(kHintKeyword);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextDisabled("%s", kHintTail);
   }
 
   ImGui::End();
@@ -1491,6 +1926,15 @@ constexpr float kSimTierEdgeWidth = 3.0f;
 // assignment — it has to be a request the next render honours (same shape, and the same reason, as
 // edit_modals.cpp's g_pending_tab_select).
 bool g_strip_select_grade = false;
+
+// Which strip tab is showing, mirrored for BeginFlatTabItem's sake alone — the selection itself
+// still lives in ImGui's TabBar, exactly as g_strip_select_grade's note above says. The mirror is
+// written inside each tab's own branch (and, for the programmatic reset, at the moment the
+// SetSelected flag is armed) so the heads drawn on the next frame know which one to draw bright.
+enum class DisplayStripTab { kGrade, kOverlays, kComponents };
+// Grade, because it is the first item declared in the bar and ImGui selects the first tab when no
+// tab has been selected yet — the mirror's initial value therefore matches the initial frame.
+DisplayStripTab g_display_strip_active_tab = DisplayStripTab::kGrade;
 
 // The sim-tier marker: a bar along the LEADING edge of the control just submitted, saying "editing
 // this re-runs the simulation and discards the accumulated rays" (doc/gui-visual-language.md §7,
@@ -1532,37 +1976,49 @@ void BeginStripTabContent(const char* id) {
 // Laid out across the strip rather than down it: three groups side by side, each two rows tall.
 // The strip is wide and short by construction, and the old one-control-per-row column would have
 // made it four rows tall — which is height taken from the viewport for a shape that does not need
-// it. Column widths stretch, so the same layout holds down to kMinWindowWidth.
+// it.
+//
+// The columns are SizingFixedFit, not SizingStretchSame, and that is the whole of this row's width
+// story. Under StretchSame every column got a third of the strip's width whatever it held, and the
+// controls inside then asked for "the column minus a label" — which is how a combo offering five
+// resolutions ended up ~600 px wide on a wide window. Nobody chose that number; it was the
+// viewport's, read through two containers (doc/gui-visual-language.md §2). FixedFit inverts the
+// direction: each column is as wide as the widest row inside it, and each control states its own
+// width from the token table. The cost is that the three groups no longer divide the strip evenly
+// and may leave slack at the right — accepted deliberately, because the alternative buys even
+// columns by re-attaching every control to the window width.
+//
+// Within a column the two rows stack vertically (they always have), so a column's width is the max
+// of its rows' widths, not their sum: column 1 is set by "Resolution [combo]" rather than by EV.
 void RenderGradeTab(GLFWwindow* window) {
   // Copy-model renderer: GuiState always owns a valid renderer by default construction.
   auto& r = g_state.renderer;
-  const ImGuiStyle& style = ImGui::GetStyle();
 
   // ONE sub-heading for the whole group (doc/gui-visual-language.md §4.6): the three it replaces
   // ("Rendering" / "Aspect Ratio" / "Background") each headed a single row, which is less than a
   // sub-heading has to earn. What they separated is now separated by the columns themselves.
   ImGui::SeparatorText("Rendering");
 
-  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingStretchSame)) {
+  if (ImGui::BeginTable("##GradeLayout", 3, ImGuiTableFlags_SizingFixedFit)) {
     ImGui::TableNextRow();
 
     // ---- Column 1: the image the simulation renders, and how bright it is shown.
     ImGui::TableSetColumnIndex(0);
-    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
-    ImGui::Combo("Resolution##display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
+    InlineFieldLabel("Resolution");
+    ImGui::SetNextItemWidth(kToolbarComboWidth);
+    ImGui::Combo("##resolution_display", &r.sim_resolution_index, kSimResolutionLabels, kSimResolutionCount);
     MarkSimTierEdge();
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
-    ImGui::BeginGroup();
+    InlineFieldLabel("EV");
     const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
-    SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
-                    static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
-    ImGui::EndGroup();
+    ImGui::SetNextItemWidth(kCompactFieldWidth);
+    DragFloatField("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
+                   static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Exposure value offset for display brightness");
     }
-    ImGui::PopItemWidth();
 
     // ---- Column 2: the aspect ratio the preview region is fitted to.
     ImGui::TableSetColumnIndex(1);
@@ -1570,15 +2026,11 @@ void RenderGradeTab(GLFWwindow* window) {
     const char* preview_label = kAspectPresetNames[preset_idx];
     // The orientation button MODIFIES the preset, so it shares the preset's row (AC4 /
     // doc/gui-visual-language.md §4.6). It used to sit on a row of its own, which read as a second,
-    // independent control. Item width is what is left of the cell after the button and the trailing
-    // "Preset" label — the negative-width idiom above cannot express "minus a widget I have not
-    // submitted yet".
+    // independent control.
     const char* flip_label = g_state.aspect_portrait ? "Portrait" : "Landscape";
-    const float flip_w = ImGui::CalcTextSize(flip_label).x + style.FramePadding.x * 2.0f;
-    const float preset_w =
-        std::max(60.0f, ImGui::GetContentRegionAvail().x - flip_w - kLabelColWidth - style.ItemSpacing.x * 2.0f);
-    ImGui::SetNextItemWidth(preset_w);
-    if (ImGui::BeginCombo("Preset##display_aspect", preview_label)) {
+    InlineFieldLabel("Aspect");
+    ImGui::SetNextItemWidth(kAspectPresetComboWidth);
+    if (ImGui::BeginCombo("##aspect_preset_display", preview_label)) {
       for (int i = 0; i < kAspectPresetCount; i++) {
         bool disabled = AspectPresetOptionDisabled(static_cast<AspectPreset>(i), g_preview.HasBackground());
         ImGui::BeginDisabled(disabled);
@@ -1622,7 +2074,6 @@ void RenderGradeTab(GLFWwindow* window) {
 
     // ---- Column 3: the background image shown under the result.
     ImGui::TableSetColumnIndex(2);
-    ImGui::PushItemWidth(-(kLabelColWidth + style.ItemSpacing.x));
     if (ImGui::Button("Load Bg##display")) {
       DoLoadBackground(window);
     }
@@ -1642,11 +2093,12 @@ void RenderGradeTab(GLFWwindow* window) {
     // disabled state is idempotent.
     const FieldEditorConstraint bg_alpha_c = ConstraintFor("bg_alpha", g_state);
     ImGui::BeginDisabled(!bg_alpha_c.enabled);
-    SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
-                    static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
+    InlineFieldLabel("Alpha");
+    ImGui::SetNextItemWidth(kCompactFieldWidth);
+    DragFloatField("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
+                   static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
     ImGui::EndDisabled();
     ImGui::EndDisabled();
-    ImGui::PopItemWidth();
 
     ImGui::EndTable();
   }
@@ -1678,9 +2130,12 @@ void RenderSunCirclesAnglePopup() {
   }
   ImGui::NewLine();
 
-  // Custom angle input
+  // Custom angle input. This popup hangs off the Overlays tab's Angular Distance row, so it is
+  // inside the display strip's width-token scope even though it is a separate ImGui window: a
+  // single numeric field in a horizontal row is exactly what kCompactFieldWidth names. The 60.0f
+  // it replaces was within 2 px of the tier anyway.
   static float custom_angle = 22.0f;
-  ImGui::PushItemWidth(60.0f);
+  ImGui::PushItemWidth(kCompactFieldWidth);
   ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
   ImGui::PopItemWidth();
   ImGui::SameLine();
@@ -1884,14 +2339,21 @@ void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_hei
 
   if (ImGui::BeginTabBar("##DisplayStripTabs")) {
     const ImGuiTabItemFlags grade_flags = g_strip_select_grade ? ImGuiTabItemFlags_SetSelected : 0;
+    if (g_strip_select_grade) {
+      // Same frame as the SetSelected flag, not the frame after: a programmatic reset knows the
+      // answer up front, so it does not have to pay the one-frame mirror lag a click does.
+      g_display_strip_active_tab = DisplayStripTab::kGrade;
+    }
     g_strip_select_grade = false;
-    if (ImGui::BeginTabItem("Grade", nullptr, grade_flags)) {
+    if (BeginFlatTabItem("Grade", g_display_strip_active_tab == DisplayStripTab::kGrade, grade_flags)) {
+      g_display_strip_active_tab = DisplayStripTab::kGrade;
       BeginStripTabContent("##GradeTab");
       RenderGradeTab(window);
       ImGui::EndChild();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem("Overlays")) {
+    if (BeginFlatTabItem("Overlays", g_display_strip_active_tab == DisplayStripTab::kOverlays)) {
+      g_display_strip_active_tab = DisplayStripTab::kOverlays;
       BeginStripTabContent("##OverlaysTab");
       RenderOverlaysTab();
       ImGui::EndChild();
@@ -1903,7 +2365,8 @@ void RenderDisplayStrip(GLFWwindow* window, float window_width, float window_hei
     // strip's edge and height were chosen to fit that future tenant (see kDisplayStripHeight and
     // the strip's bottom-edge placement, doc/gui-layout-architecture.md §4/§6); leaving it out
     // would have made "does this layout hold it" unanswerable until the day it lands.
-    if (ImGui::BeginTabItem("Components")) {
+    if (BeginFlatTabItem("Components", g_display_strip_active_tab == DisplayStripTab::kComponents)) {
+      g_display_strip_active_tab = DisplayStripTab::kComponents;
       BeginStripTabContent("##ComponentsTab");
       ImGui::TextDisabled("Light-path component analysis lands here.");
       ImGui::EndChild();
@@ -1921,84 +2384,105 @@ void RenderStatusBar(float window_width, float window_height) {
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-  // Status indicator
-  switch (g_state.sim_state) {
-    case SimState::kIdle:
-      ImGui::TextColored(GoodTextColor(), "Ready");
-      break;
-    case SimState::kSimulating:
-      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
-      break;
-    case SimState::kStopping:
-      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Stopping...");
-      break;
-    case SimState::kDone:
-      ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");
-      break;
-    case SimState::kModified:
-      ImGui::TextColored(WarningTextColor(), "Modified");
-      break;
-  }
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float spacing = style.ItemSpacing.x;
 
-  // Stats
+  // The row reads left to right as "what is happening / to what / in which file", and right to
+  // left as "how much has been traced / where the log is". The two counters below therefore belong
+  // to the right cluster, and a right-aligned run of items has to know its own width before it can
+  // place its first item — so they are formatted here, before anything is drawn, and the block that
+  // draws them further down consumes exactly these strings. Measuring one string and drawing
+  // another is how a cluster like this ends up hanging off the window edge.
+  std::string total_rays;
+  std::string sampling;
   if (g_state.stats_sim_ray_num > 0) {
-    ImGui::SameLine();
-    LUMICE_RayCount n = g_state.stats_sim_ray_num;
+    const LUMICE_RayCount n = g_state.stats_sim_ray_num;
     char buf[64];
-    // "Total" is the summed count over all discrete wavelengths. Since task-323
-    // `ray_num` is itself the requested total; the actual traced count reported
-    // here is ceil(ray_num / N_wavelengths) × N_wavelengths (may overshoot by <N).
+    // "Total" is the summed count over all discrete wavelengths. `ray_num` is itself the requested
+    // total, so the actual traced count reported here is ceil(ray_num / N_wavelengths) x
+    // N_wavelengths (it may overshoot by fewer than N).
     if (n >= 1'000'000'000ULL) {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^9", n / 1e9);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^9", n / 1e9);
     } else if (n >= 1'000'000ULL) {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^6", n / 1e6);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^6", n / 1e6);
     } else {
-      snprintf(buf, sizeof(buf), "| Total rays: %.1f x10^3", n / 1e3);
+      snprintf(buf, sizeof(buf), "Total rays: %.1f x10^3", n / 1e3);
     }
-    ImGui::Text("%s", buf);
+    total_rays = buf;
 
-    // Sampling density. Deliberately inside the SAME `stats_sim_ray_num > 0` gate as "Total rays"
-    // above and under no additional condition of its own: whether a dimension is randomized is
-    // exactly what this readout is for, so hiding it when a dimension is fixed would suppress the
-    // answer in the case the user most needs it ("1 per 5.4 x10^6 rays" IS the explanation for an
-    // over-sharp render). The shared gate only asks "has a run happened", which is orthogonal.
+    // Sampling density. Deliberately under the SAME "a run has happened" gate as "Total rays" and
+    // under no additional condition of its own: whether a dimension is randomized is exactly what
+    // this readout is for, so hiding it when a dimension is fixed would suppress the answer in the
+    // case the user most needs it ("1 per 5.4 x10^6 rays" IS the explanation for an over-sharp
+    // render).
     //
-    // Plain text on purpose: no progress bar, no color grading, no check/cross. Neither counter has
-    // a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
+    // Plain text on purpose: no progress bar, no colour grading, no check/cross. Neither counter
+    // has a "good" value -- a low shape count is correct for a fixed shape and expected on the GPU
     // route -- so any better/worse styling here would manufacture false alarms.
+    //
     // NOTE: this segment builds its text in a pure function (app.cpp) while "Total rays" above
-    // formats inline. The inconsistency is deliberate, not an oversight — do NOT "unify" it by
+    // formats inline. The inconsistency is deliberate, not an oversight -- do NOT "unify" it by
     // inlining this one. `ImGui::Text`/`TextUnformatted` submit an item ID of 0, so a test cannot
     // address the rendered string through the item API; extracting the text lets the string itself
     // be asserted, with a separate pixel test proving it reaches the framebuffer. A future status
     // bar segment that wants test coverage should follow THIS pattern rather than the inline one.
-    ImGui::SameLine();
-    const std::string sampling =
+    sampling =
         FormatSamplingSegment(g_state.stats_crystal_num, g_state.stats_orientation_num, g_state.stats_sim_ray_num);
-    ImGui::TextUnformatted(sampling.c_str());
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
-                                                    g_state.stats_sim_ray_num)
-                                  .c_str());
+  }
+
+  // ---- Left cluster: state, scene, file ----
+  //
+  // The state leads with a filled dot in its own colour. The word alone had to carry the state
+  // through colour applied to the text itself, which is the weakest place to put it: at 15 px a
+  // coloured word is a few dozen tinted pixels competing with everything else on the row, and the
+  // reader has to be looking AT it to see the colour. A dot is a solid disc of that colour with
+  // nothing else in it -- it is the same information, made legible peripherally, and it costs one
+  // glyph.
+  {
+    const char* label = nullptr;
+    ImVec4 color(1.0f, 1.0f, 1.0f, 1.0f);
+    switch (g_state.sim_state) {
+      case SimState::kIdle:
+        label = ICON_FA_CIRCLE " Ready";
+        color = GoodTextColor();
+        break;
+      case SimState::kSimulating:
+        label = ICON_FA_CIRCLE " Simulating...";
+        color = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+        break;
+      case SimState::kStopping:
+        label = ICON_FA_CIRCLE " Stopping...";
+        color = ImVec4(1.0f, 0.6f, 0.0f, 1.0f);
+        break;
+      case SimState::kDone:
+        label = ICON_FA_CIRCLE " Done";
+        color = ImVec4(0.3f, 0.7f, 1.0f, 1.0f);
+        break;
+      case SimState::kModified:
+        label = ICON_FA_CIRCLE " Modified";
+        color = WarningTextColor();
+        break;
+    }
+    if (label != nullptr) {
+      ImGui::TextColored(color, "%s", label);
     }
   }
 
+  MiddleDot();
+
   // Sim resolution + lens info (renderer is always embedded in GuiState).
   {
-    auto& rc = g_state.renderer;
-    int res = kSimResolutions[rc.sim_resolution_index];
-    ImGui::SameLine();
-    ImGui::Text("| %dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
+    const auto& rc = g_state.renderer;
+    const int res = kSimResolutions[rc.sim_resolution_index];
+    ImGui::TextDisabled("%dx%d  %s  FOV:%.0f", res, res / 2, kLensTypeNames[rc.lens_type], rc.fov);
   }
 
-  ImGui::SameLine();
-  ImGui::Text("|");
-  ImGui::SameLine();
+  MiddleDot();
 
   if (g_state.current_file_path.empty()) {
-    ImGui::Text("No file");
+    ImGui::TextDisabled("No file");
   } else {
-    auto filename = g_state.current_file_path.filename().u8string();
+    const auto filename = g_state.current_file_path.filename().u8string();
     if (g_state.dirty) {
       ImGui::Text("%s *", filename.c_str());
     } else {
@@ -2006,15 +2490,37 @@ void RenderStatusBar(float window_width, float window_height) {
     }
   }
 
-  // task-colored-toggle-to-topbar (346.3): the colored/full-spectrum mode toggle
-  // that used to sit here (task-345.4) moved to the top bar next to the Colors
-  // button. The status bar right cluster now contains only the Log button; the
-  // width formula below dropped `mode_w` and its trailing `mode_gap` term.
+  // ---- Right cluster: the run's counters, then the Log toggle, flush to the right edge ----
+  //
+  // The counters sit here rather than in the left run because they are the only segments of this
+  // row whose WIDTH moves on their own -- a ray count crosses a magnitude and the text under it
+  // changes length. Left-ordered, that shifted every segment after them; against the right edge,
+  // the growth happens into the gap in the middle of the row, where there is nothing to push.
+  //
+  // The colored/full-spectrum mode toggle that used to live at this end moved to the top bar next
+  // to the Colors button, which is why the Log button is the only control left down here.
   {
     const char* log_label = g_state.log_panel_open ? ICON_FA_CHEVRON_DOWN " Log" : ICON_FA_CHEVRON_RIGHT " Log";
-    const float pad_x = ImGui::GetStyle().FramePadding.x * 2;
-    const float log_w = ImGui::CalcTextSize(log_label).x + pad_x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - log_w - ImGui::GetStyle().WindowPadding.x);
+    // SmallButton's own frame padding is (FramePadding.x, 0), so the width is the label plus the
+    // horizontal padding twice, same as a full-height button.
+    float cluster_w = TextWidth(log_label) + style.FramePadding.x * 2.0f;
+    if (!total_rays.empty()) {
+      cluster_w += TextWidth(total_rays.c_str()) + spacing + TextWidth(kMiddleDot) + spacing +
+                   TextWidth(sampling.c_str()) + spacing;
+    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - cluster_w - style.WindowPadding.x);
+
+    if (!total_rays.empty()) {
+      ImGui::TextDisabled("%s", total_rays.c_str());
+      MiddleDot();
+      ImGui::TextDisabled("%s", sampling.c_str());
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", FormatSamplingTooltip(g_state.stats_crystal_num, g_state.stats_orientation_num,
+                                                      g_state.stats_sim_ray_num)
+                                    .c_str());
+      }
+      ImGui::SameLine();
+    }
     if (ImGui::SmallButton(log_label)) {
       g_state.log_panel_open = !g_state.log_panel_open;
     }
@@ -2086,7 +2592,7 @@ void RenderExportOverwriteConfirmPopup() {
   }
 
   if (ImGui::BeginPopupModal("Overwrite Config File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("A file already exists at:");
+    ImGui::TextDisabled("A file already exists at:");
     ImGui::TextUnformatted(PathToU8(g_pending_export_json_path).c_str());
     ImGui::Separator();
     ImGui::TextUnformatted(kExportOverwriteWarningText);
@@ -2363,7 +2869,7 @@ void RenderLogPanel(float window_width, float window_height) {
                                                LUMICE_LOG_INFO,  LUMICE_LOG_WARNING, LUMICE_LOG_ERROR,
                                                LUMICE_LOG_OFF };
 
-  ImGui::Text("GUI");
+  ImGui::TextDisabled("GUI");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##GuiLevel", &g_state.gui_log_level, kLevelNames, 7)) {
@@ -2372,7 +2878,7 @@ void RenderLogPanel(float window_width, float window_height) {
   ImGui::PopItemWidth();
 
   ImGui::SameLine();
-  ImGui::Text("Core");
+  ImGui::TextDisabled("Core");
   ImGui::SameLine();
   ImGui::PushItemWidth(80);
   if (ImGui::Combo("##CoreLevel", &g_state.core_log_level, kLevelNames, 7)) {

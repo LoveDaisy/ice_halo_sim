@@ -99,7 +99,34 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 
 **4.6 子标题粒度** —— 一个 `SeparatorText` 至少要管得起自己占的那一行。Display 组由三个子标题压缩为一个，并把修饰性控件（横竖版切换）并回它所修饰的那一行（该控件原本独占一行，与它修饰的 Preset 被拆开）。
 
-**4.7 左右面板宽度** —— 左面板 400 → 380。左面板承载的信息远少于右面板，等宽以上会读作失衡。
+**4.7 表单列的宽度与「永不横向滚动」** —— 左栏（文档列：树 + 检视器）**400 → 330**，
+`kLeftPanelWidth` 是唯一入口，dock 默认分割比与节点尺寸都由它派生。
+
+这一条最初写的是「左面板 400 → 380，左面板承载的信息远少于右面板，等宽以上会读作失衡」——
+那是**左右双侧栏**时代的判据，右面板随三区重组消失后就失去了参照物。现在的取值不再由平衡感决定，
+而是由两条**实测下限**决定（把 dock 节点宽度逐档扫过、逐档读一帧真实布局得到）：
+
+- 晶体形状表的 Value 列是一排定宽列里唯一的伸缩列，面板收窄的代价全落在它头上：**280 px** 时它恰好
+  等于 `"0.000"` 加边框内衬的宽度，即格子刚好装不下自己要显示的数。
+- 属性行的控件列要装下 Lens Type combo，其最长取值 `Dual Fisheye Stereographic` 需要 **190 px**
+  才不被 ImGui 省略号截断，对应面板 **280 px**。
+
+330 是原型锚点，比两条下限各高约 50 px——这是换一个更长的标签或大一档字体时会被吃掉的余量。它**不是**
+布局的最小可用宽度：用户可以继续把分隔条往里拖，而**拖到多窄都不许有内容溢出**。
+
+后半句是本条真正的规则：**表单列永不横向滚动**。检视器窗口没有开横向滚动条 flag，所以溢出不是「多一根
+滚动条」而是**直接看不见**——必须由机械判据兜住，`ImGuiWindow::ScrollMax.x` 在 `Begin()` 里无条件算出，
+与该 flag 无关，因此可以直接断言（`test/gui/functional/test_inspector_no_hscroll.cpp`：六页 × 默认与
+300 px 两档）。
+
+清零现存违例时发现的机制，比违例本身更值得记住：**只要有东西被钉在一段文本的右侧，这段文本就不能换行**，
+两者会焊成一个固定宽度的整体，而这个宽度就成了整根柱子的下限。两处违例都是这个形状——
+
+- Axis 页的 preset 按钮是一条无条件 `SameLine()` 链（六个按钮 + 前导标签 ≈ 330 px），改为渲染前用
+  `CalcTextSize` 预估、放不下就换行；
+- Filter 页的 token 提示行尾挂了一个 help 图标，两者焊成固定 ~388 px——**比默认宽度下长出竖直滚动条之后
+  的内容宽度（382 px）还宽**，也就是说它在出厂默认宽度下就已经溢出了。改法是把图标画在文本**之前**，
+  文本随后 `TextWrapped`：图标是纯 hover 靶，位置不携带语义，让出这个位置的代价为零。
 
 ## 5. 被证伪的方向（勿重提）
 
@@ -124,8 +151,188 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
   - 每个 canonical 取值都锚定收编前**已存在**的字面量（复用次数最多的那个），不是新拍的折中色——于是 5 处近重复琥珀、3 处近重复红折叠后只有几个百分点的通道位移，而参考图覆盖到的场景**逐像素不变**。
   - 三类颜色**不**在此收编，判据是"颜色是否表达产品对内容的判断"：**强调色**（hover/active/选中高亮）表达交互状态，与语义色取值必须分开，否则"正在被操作"会读成"有风险"；**数据色**（用户在 Overlay 面板配的线色、由组号派生的 sync-group 色板）由用户或索引决定；**结构色**（透明 hover 触发区、占位边框、标签底衬、按填充色 luma 派生的对比文字）不携带判断。
   - 状态栏的 `Simulating...` / `Stopping...` / `Done` 也不并入：它们是进度/信息指示。把"任何非稳态"塞进 warning 会把该档从"内容需要你处理"稀释掉，反而淹没 Resolution 这种真正会触发重跑的提示。
-- **一值两控件仍是主流行式** —— 表格单元格内已验证单控件（`DragFloat`）可行，但推广属控件形态层，见 §6。
-- **左面板空区** —— 见 §2 第 6 条。
+- ~~**一值两控件仍是主流行式**~~ —— **检视器已收口**（457.1）。六页（Sun / Camera / Layer /
+  Crystal / Axis / Filter）的标量行全部改为单个 `DragFloat`（ctrl+click 键入精确值），
+  `[slider][input]` 对不再出现在检视器里；控件 ID 随之丢掉 `_slider` / `_input` 后缀，与显示条
+  Overlays 的 Alpha 单元格（先落地的同一形态）取名一致。
+  - **非线性档的降级是有取舍的**：`DragFloat` 只有速度、没有轨道位置，故 `SliderScale` 的三个
+    非线性档统一走 ImGui 原生 `ImGuiSliderFlags_Logarithmic`。`kLog`/`kLogLinear` 本就是它；
+    `kSqrt`（Axis 的 Std/Range/Amplitude/Scale，量程 0–180/0–360）取 log 而非线性，因为预设库
+    给的典型值是 0.3–1.0 度这一档，线性拖动 1 px ≈ 1.6°，恰好把 sqrt 映射当初存在的理由废掉。
+    拖到最左端仍得到精确 `min`（ImGui 对 `t<=0` 显式短路，不走 log fudge）。
+  - 速度取 `(max-min)/kDragTrackReferenceWidth`（230 px = 旧滑条轨道长度）；log 档下 ImGui 会先
+    把 delta 除以量程，分子正好抵消，两档因此是同一条公式、同一段拖动距离。
+  - **显示条与顶栏也已收口**（457.2）。显示条 Grade 行的 EV 与 Background Alpha 改为单
+    `DragFloat`，顶栏的 Max hits 改为单 `DragInt`（新增 `DragIntField`，`DragFloatField` 的整数
+    版：同一条速度公式、同一条无条件 clamp、同一套 `##<label>` ID 规则，但**不带** `scale` 参数
+    —— 这里的整数字段量程只有几十个取值，log 拖动会把大半条轨道花在最低两档上）。
+  - **未推广到**：顶栏 Rays 滑条（∞ 档位是设计资产，§4.5 —— 拖动只有速度、没有轨道位置，而档位
+    需要一段轨道来放），以及默认值面板（自有任务与参考图组）。`SliderWithInput` /
+    `SliderIntWithInput` 因此仍在，不是残留。
+
+- ~~**显示条与顶栏的宽度仍从容器派生**~~ —— **已收口**（457.2）。检视器（457.1）修的是"控件没有
+  token"，显示条 Grade 行还多一层：`##GradeLayout` 用 `ImGuiTableFlags_SizingStretchSame` 把整条
+  显示条的宽度硬性三等分给每一栏，栏内控件再用 `-(kLabelColWidth + spacing)` 去吃这三分之一 ——
+  于是一个只有五个选项的 Resolution combo 在宽窗口下被撑到 ~600 px。那个数字没有人选过，它是视口
+  的宽度经两层容器读出来的（§2）。
+  - 改法是把该表换成 `ImGuiTableFlags_SizingFixedFit`，**方向就此反过来**：列宽由列内最宽的那行
+    反推，每个控件自己从 token 表声明宽度。栏内两行仍是纵向堆叠，所以一栏的宽度是两行的**较大
+    值**而非两者之和 —— 第一栏由 `Resolution [combo]` 定宽，不是 EV。
+  - **代价是明示接受的**：三栏不再均分显示条，右侧可能留白。原型那种"一行内联流"更紧凑，但换回
+    均分的唯一办法就是把每个控件重新拴到窗口宽度上，那正是被修掉的机制本身。
+  - **前置标签用行内变体，不套 `PropertyRow`**：`InlineFieldLabel`（`app_panels.cpp` 匿名命名
+    空间）只做 `AlignTextToFramePadding` + `TextDisabled` + `SameLine`，视觉契约与 `PropertyRow`
+    一致，但没有固定标签列。理由是这里**没有可对齐的东西**：显示条的字段是横排的，没有两个字段
+    共用一条竖线；把 `"EV"` 撑到 60 px 只会把数值推离它自己的名字，即 §5 已证伪的那笔交易。
+  - **新增两个 token**：`kAspectPresetComboWidth = 144`（实测：最长选项 `"Match Background"`
+    在活字体图集上要求 142 px，向上取到 4 的倍数；`test_view_display_controls.cpp` 从两侧钉死
+    —— 太窄会把**当前选中值**省略号截断，那是内容宽 combo 唯一不能犯的错），以及
+    `kRaysControlWidth = 170`（原为 `app_panels.cpp` 的文件内常量，数值不变，只是搬进共享词表：
+    "宽度必须来自词表"这条 AC 的最严读法不接受"随便一个具名局部常量"）。Resolution combo 复用
+    既有的 `kToolbarComboWidth = 120`。
+  - `kTopBarFieldWidth` 改名为 `kCompactFieldWidth`：它现在同时服务顶栏 Max hits 与显示条的
+    EV / Alpha，名字若停留在最初的宿主就成了历史来源而非当前语义 —— 而"一个概念两个符号"正是
+    token 表要防的那种宽度增殖。
+  - **`RenderOverlaysTab` 零改动**：它早就是目标形态（Alpha 已是单元格宽的单 `DragFloat`；表格
+    外层 `std::min(GetContentRegionAvail().x, 560)` 实现封顶而非跟随拉伸）。这里只做验证，不产
+    出 diff。
+
+- ~~**前置标签未推广**~~ —— **检视器已收口**（457.1）。§5 给出的正解（标签在左、右对齐、暗色）
+  由 `BeginPropertyTable` / `PropertyRow` / `EndPropertyTable`（`src/gui/panels.hpp`）承载：两列
+  ImGui table，固定标签列 + 控件列占余，控件列预置 `SetNextItemWidth(-FLT_MIN)`。
+  - **宽度不再从容器泄漏**：一组具名宽度 token 落在 `src/gui/gui_constants.hpp`「Form width
+    tokens」段，规则是**通栏拉伸默认禁止、例外必须具名**（目前两个具名例外：表达式/路径类文本
+    输入，以及属性行的控件列——它的左缘已由标签列钉死，填满就是对齐本身）。
+  - `kPropertyLabelColWidth = 60` 是**实测值**：六页全部行标签里最宽的是 `"Lens Type"` = 59.0 px
+    （15 px Roboto Medium），向上取到 4 的倍数。**没有**采用原型的 ~104 px：标签列显著宽于其最宽
+    标签，会重新拉开标签↔控件的距离，那正是 §5 里「统一右侧标签列」被证伪的同一机制。
+    `test/gui/functional/test_property_row.cpp` 在活字体图集上重算这个要求并从两侧钉死。
+  - 复合行（Camera 的 Upper/Full/Lower + Front、Crystal 的 Prism/Pyramid、Filter 的
+    Filter In/Out 与 P/B/D）用的是同一个 `PropertyRow`：控件列里放多个 `SameLine` 控件即可，
+    没有为它们另开一层封装 —— 一行标签加一列内容，这个形状本身就够用。
+- ~~**左面板空区**~~ —— **部分收口**（457.5）。§2 第 6 条把这条判为信息架构问题而非样式问题，
+  这一点没有变；变的是"有东西可显示"这一半在文档树里已经兑现：Sun / Camera / Layer / Crystal
+  四类行的右缘各挂一段暗色次级值（`20.0°` / `Linear` / `P 1.00` / `w 100`），随字段编辑逐帧
+  刷新。左栏的空**面积**没有变小——收口的是"光杆行不携带信息"这一半。真正的面积问题仍只能靠
+  docking + 新功能解决，见 §6。
+  - **四类行共用四个具名格式化函数**（`Format*TreeMeta`，`src/gui/panels.hpp`），而不是四处
+    就地 `snprintf`：ImGui 的裸 `Text*` 提交时 id 为 0，gui_test 读不回它画了什么，所以
+    "格式对不对"这一半必须由可直接调用的纯函数承担——与 `FilterSummary` /
+    `FormatSamplingSegment` 同一手法。**诚实边界**：没有任何断言会因为渲染点的
+    `TextDisabled` 调用被删掉而变红（Layer 行是唯一例外，它的删除按钮定位在 meta 下游）；
+    "字符串确实上屏"由参考图承担。
+  - **两种右缘定位机制是刻意的**：Sun / Camera 走绝对定位覆盖在 `Selectable` 之上（`RenderEntryRow`
+    的徽标早就是这么画的），Layer 走 `SameLine` 链（它的删除按钮本就是这么定位的）。各自匹配
+    所在行的既有约定，不是待统一的疏漏。Selectable / TreeNodeEx 的 label 参数逐字未动，因此
+    既有 gui_test 里以行标签寻址的路径零改动。
+
+- ~~**`text_dim` 档只有零星消费者**~~ —— **已收口**（457.5）。全 `src/gui/` 用户可见文字过了一遍，
+  判据只有一条：**这段文字是内容，还是关于内容的说明**。落暗档的四类是单位/前置与行内字段标签、
+  提示与说明段落、meta（分辨率·镜头·FOV、日志文件路径、计数）、次级与派生值（树行 meta、SoP 展开
+  预览、运行计数）；**保持主档**的是身份文字（`Prism · Random`、设置项 key、Overlays 行名、文件名）、
+  modal 主消息（未保存确认、导入警告、覆盖警告）、以及语义色文字（good / warning / destructive，
+  `semantic_colors.hpp` 自有 owner，本次不进入）。消费点由 20 处增至 45 处（`TextDisabled` 调用 17→38，加上把同一色槽压进 `TextWrapped` 的调用点 3→7）。
+  - **只动明度、不动色相/饱和度**：暗档一律经 `ImGuiCol_TextDisabled`（`theme.cpp` 由
+    `Palette::text_dim` 赋值），没有新增色值。`TextWrapped` 没有 disabled 变体，四处说明段落因此
+    在调用点压入同一个色槽（`defaults_panel.cpp` 的 `DimTextWrapped`），仍是同一个值。
+  - **修好了一处同行不一致**：顶栏 `Max hits` 的标签走 `InlineFieldLabel`（暗），而它旁边的
+    `Rays(M)` 走 `FinishSliderLayout`（主档）——同一行两个字段标签两个档位。滑条尾随标签现在也
+    走暗档。
+  - **数值文本走等宽字型：核实后不做**（457.5 顺带项）。字体图集里只有正文 Roboto Medium 与
+    FontAwesome 图标两个实例，没有现成等宽字体；ImGui 的 `AddFontDefault()`（ProggyClean）在
+    正常路径上从不被调用，用它等于新增字体实例，而这一项的前提就是不新增字号/字体实例。
+    更要紧的是**收益已经拿到了**：实测 Roboto Medium 在 15 px 下十个数字的 advance 全部是
+    8.000 px（等宽数字），所以"数值纵向对齐"这个等宽字型的主要卖点，当前字体本就提供。
+    仍不齐的只有 `.` 与空格（各 4.000 px，半个数字宽），即小数点两侧的位移——不足以为它引入
+    第二个字体实例。
+
+- ~~**铬件（顶栏 / 进度条 / 状态栏）本身没有秩序**~~ —— **已收口**（457.4）。宽度 token 化解决的是
+  "控件多宽由谁决定"，铬件这一层剩下的是**分组与分隔的形态**，它由四件事组成：
+
+  - **色槽全量认领**。`ApplyPalette` 此前只写了 58 个 `ImGuiCol_*` 里的 47 个，余下 11 个跑的是
+    ImGui 默认值——包括 `PlotHistogram`，于是运行中的进度条一直是**默认琥珀**，而琥珀在本仓是
+    warning 档（`semantic_colors.hpp`）：一次健康的仿真被画成"需要你注意"。11 个补齐的取值全部由
+    既有调色板派生（Tab overline / Docking 预览与空节点 / Plot 两组 / TextLink / Nav 两项），
+    不引入新色相、不新拍暗度（`NavWindowingDimBg` 与 `ModalWindowDimBg` 共用同一个值）。
+    - 判据不是"数行数"，而是运行时 oracle：把一份 `ImGuiStyle` 填满取值域外的哨兵
+      （`(-1,-2,-3,-4)`，颜色通道是 0..1，任何派生值都撞不上），再跑一遍赋值函数，要求无哨兵存活
+      （`test/gui/functional/test_theme_coverage.cpp`）。它问的是"这个槽有没有被写过"，与写成什么
+      无关——这一点很重要：`BorderShadow` 与 `TableRowBg` 本仓刻意赋成与 ImGui 默认**逐位相同**的
+      全透明值，任何"与默认值比对"的写法都会把它们误报为未认领。同一形态也自动覆盖未来 ImGui
+      升级新增的槽位。
+  - **进度条改 4 px accent 细条**。整行高的框 + 居中百分比读起来是"一个可以输入的文本框"；细条是
+    一条规则线，读不成控件。槽底不用全局 `FrameBg`（那是输入框的蓝，正是要摆脱的读法），改在调用
+    点局部压入 `ChildBg`，真实输入框不受影响。百分比移进 tooltip——4 px 高容不下 15 px 字，二者
+    不可兼得。
+    - **∞ 档从"不给槽位"改为"给同一条细条 + indeterminate 动画"**，这是对一条既有决定的明示推翻，
+      而非补漏：旧论证整个建立在**文字**上（没有分母的百分比只能说谎，且左边三格已经写着
+      "until stopped"），新形态既无数字也无文字，两条都不再成立；剩下的正是无界运行唯一无法从别处
+      读出的信息——它在跑。动画只在真的在跑时动（空闲时槽是空的），否则一条永远滑动的条会把停止的
+      仿真读成运行中。
+    - 滑动片段宽度用的是 ImGui 内建 indeterminate 分支的 20%，不是原型 CSS 里的 30%：后者不经
+      公开 API 暴露，复刻它要手写一份绘制代码，为一个未被验收检验的数字承担与官方实现漂移的风险。
+  - **顶栏分左右两簇，右簇右贴边**。左 = 文件操作，右 = 打开东西的控件（Colors / 复合预览切换 /
+    Settings / View）。**两簇之间不再有分隔符**——一行里位于两端的两串按钮，其留白本身就是分组，
+    这正是原先那串管道符在替代的事。
+    - 右贴边的代价是**簇必须先量测自己**（右对齐的起点等于总宽度），于是每个条件成员的判定被上提
+      到量测点之前，量测与绘制读同一份值。量一份画另一份，簇就会正好偏出被漏掉的那一段宽度；
+      `test_shell_chrome.cpp` 的对齐用例因此逐态遍历条件成员（有无色类、匹配是否被隐藏、复合开关
+      的两种标签宽度），并断言这几态**确实互不相同**——否则用例会把同一态测三遍还全绿。
+  - **分隔符换形态，且顶栏与状态栏各用各的**。顶栏用 hairline（1 px 竖线，取 `ImGuiCol_Separator`，
+    上下内缩）：管道符是**字形**，它的粗细、高度与两侧留白都是字体的决定而不是布局的决定，一行
+    管道符读起来是"带标点的句子"而不是"有结构的分组"。状态栏用中点 `·`：那一行分隔的是读数短语
+    而不是控件组，且 28 px 高的行里不该再画竖线。
+  - **状态栏左右两簇 + 状态圆点**。左 = 圆点与状态词（同色，一次绘制）· 场景 · 文件名；
+    右 = Total rays · 采样密度 · Log，整簇右贴边。圆点的理由是**外围可读性**：颜色加在文字上时，
+    读者必须正看着它才看得见颜色；圆点是一块纯色的实心圆，同样的信息，余光可读，代价是一个字形。
+    计数右置的理由不是构图：它们是本行唯一**宽度会自己变**的段（跨数量级换字），左排时每次换字都
+    推动其后的每一段；贴右之后，增长发生在中间的留白里，没有东西被推。
+
+- ~~**小节标题与 tab 形态未落地**~~ —— **已收口**（457.7）。这两项原本一起被记为"较贵的形态项"，
+  贵在各自需要一样新东西：一个新字号实例，和一套 ImGui 不提供的 tab 着色。
+  - **第二字号实例不是第二套字体机制**。`theme.cpp` 的 `AddBodyFont(io, size_px)` 本来就带尺寸
+    参数，于是 eyebrow 字号（12 px）只是拿同一份构建期嵌入的 Roboto Medium buffer 再喂一次
+    `AddFontFromMemoryTTF`——**零新增构建步骤、零运行期文件依赖**。唯一的硬顺序是它必须排在
+    `MergeIconGlyphs` **之后**：合并配置把字形挂到"最后添加的那个字体"上，先加 eyebrow 实例会把
+    FontAwesome 图标挂到它身上，正文那一份反而没有图标。该顺序依赖写在常量注释里，不靠记忆。
+  - **eyebrow = `SeparatorText` + 小字号 + 暗档**（`panels.cpp::RenderEyebrow`）。hairline 延展到
+    行尾这件事不需要自己画：`style.SeparatorTextAlign = (0, 0.5)` 早就在网格节奏那一版里配好了，
+    本次只是它的第一个消费者。**字距做不到**——ImGui 没有 tracking 控制，所以原型那种"11 px 加宽
+    字距的大写"只由字号 + 大写 + 暗档 + 横线四项近似，缺的那一项是工具箱的边界而不是缺陷。
+    大写由调用点的字面量给（`"LAYERS"` / `"TYPE"` / `"SHAPE"`），不做运行期 `toupper`：控件画它
+    拿到的字面量，与本仓其余控件一致，也不引入 locale 相关的转换。
+  - **tab 压平：两个色槽 + 一个自绘规则线**。`ImGuiCol_Tab` / `ImGuiCol_TabSelected` 压成透明
+    （`WithAlpha(window_bg, 0)`，与 `ScrollbarBg` 同一写法）即去掉盒式底色；`TabHovered` 保留填充，
+    因为 hover 是短暂的指针反馈而不是"常驻的盒子"，且它不含强调色。
+  - ⭐**两处机制性发现，都由白盒读源码 + 像素实测双向坐实**：
+    1. `TabDimmed` / `TabDimmedSelected` / `TabDimmedSelectedOverline` 三槽对**手写的**
+       `BeginTabBar` 恒不生效——`BeginTabBar` 无条件 OR 上 `ImGuiTabBarFlags_IsFocused`
+       （上游把 NavWindow 判断注释掉了），而这三槽只有"未聚焦"的 tab 条才读。
+    2. `ImGuiCol_TabSelectedOverline` 同样读不到：ImGui 画那条规则线的条件是
+       `ImGuiTabBarFlags_DrawSelectedOverline`，而设置该 flag 的地方**只有** `DockNodeUpdateTabBar`
+       ——它是 dock 节点 tab 条的待遇，普通 `BeginTabBar` 永远拿不到。所以那个槽位对 dock 标签有效、
+       对这两条 tab 条无效，只压平配色是拿不到 accent 下划线的（先压平后截图，tab 行内不存在任何
+       带色像素，与源码结论一致）。
+    ⇒ 规则线由 `BeginFlatTabItem` 在 `BeginTabItem` 返回后自绘（2 px，位置在 tab 头下缘 = 下划线
+    而非 ImGui 的顶线），颜色仍取 `ImGuiCol_TabSelectedOverline`——**一个色源、两条绘制路径**，
+    强调色仍然只出现在选中项的那条线上。
+  - **inactive 文字暗档必须由调用方 push**：ImGui 原生不区分 tab 文字的选中态
+    （`TabItemLabelAndCloseButton` 里那段调暗分支被上游 `#if 0` 掉，旁边就写着"要改 tab 文字色是
+    调用方的事"）。而调用方要在 `BeginTabItem` **之前**就知道答案，唯一可用的信息是它自己维护的
+    上一帧镜像（检视器复用既有的 `g_active_tab`，显示条新增 `g_display_strip_active_tab`）。
+    **已知限制**：真鼠标点击切 tab 的那一帧，被点的 tab 用旧镜像画字，暗一帧后才变亮；程序化选中
+    在 arm flag 的同一帧同步镜像，不受影响。下划线**没有**这个滞后，因为它读的是本帧返回值。
+  - **未跟进的范围（留给后续，复用同一 helper 零新增机制）**：Axis / Filter 子页与 Sun / Camera 页
+    的 eyebrow 分组。AC 只点名检视器晶体页与文档树，且那几页不在任何已注册视觉回归组的覆盖范围内，
+    本次扩进去等于扩大重拍半径却拿不到自动化信号。
+
+**as-built 汇总（scrum 457 收口核对）**：本节列出的七项遗留（一值两控件 / 显示条与顶栏宽度 / 前置
+标签 / 左面板空区 / `text_dim` 档 / 铬件秩序 / 小节标题与 tab）均已由 457.1–457.7 逐项收口，记录见
+各自条目；`457.3`（表单列永不横向滚动）的 as-built 落在 §4.7（新立规则而非"遗留"，故不在本节列表）；
+`457.6`（空态仪器感）的 as-built 落在 `doc/gui-layout-architecture.md`（空态天空坐标系一节，笔触细节
+由该文档承接，非本文档主题）。核对方式：逐条搜索本节标题与任务号，七项全部命中，无遗漏、无重复。
+本文档唯一仍未付账的遗留是**正文字体未定案**（§7 第一条）——不在本 scrum 范围内，字体候选与嵌入方式
+未变。
 
 ## 8. 验证方法
 

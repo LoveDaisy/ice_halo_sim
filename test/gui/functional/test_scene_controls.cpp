@@ -37,8 +37,13 @@
 
 namespace {
 
-const char* const kAltitude = "**/##Altitude_input";
-const char* const kDiameter = "**/##Diameter_input";
+// The spectrum picker, addressed by its property table rather than by "**/": ImGui::Combo submits
+// its preview button through BeginCombo, which never reports a label to the test engine, so a
+// wildcard can never match it. The "##sun_props" hop is the property table RenderSunControls opens.
+#define kSpectrumCombo "##sun_props/##Spectrum"
+
+const char* const kAltitude = "**/##Altitude";
+const char* const kDiameter = "**/##Diameter";
 
 // Owns a real server for the length of one case.
 //
@@ -191,7 +196,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_NE(preset_before, gui::kCustomSpectrumIndex);
 
       ctx->SetRef("//##DocumentInspector");
-      ctx->ComboClick("Spectrum/Custom...");
+      ComboPick(ctx, kSpectrumCombo, "Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
 
@@ -206,7 +211,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
 
       // OK is the sole commit point.
       ctx->SetRef("//##DocumentInspector");
-      ctx->ComboClick("Spectrum/Custom...");
+      ComboPick(ctx, kSpectrumCombo, "Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##spec_ok");
@@ -257,7 +262,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
 
       // Away to a preset, through the real combo...
       ctx->SetRef("//##DocumentInspector");
-      ctx->ComboClick("Spectrum/D65");
+      ComboPick(ctx, kSpectrumCombo, "D65");
       ctx->SetRef("");
       ctx->Yield(3);
       IM_CHECK_NE(gui::g_state.sun.spectrum_index, gui::kCustomSpectrumIndex);
@@ -265,7 +270,7 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
 
       // ...and back. The editor opens on the list that was there, not on a fresh seed.
       ctx->SetRef("//##DocumentInspector");
-      ctx->ComboClick("Spectrum/Custom...");
+      ComboPick(ctx, kSpectrumCombo, "Custom...");
       ctx->SetRef("");
       ctx->Yield(3);
       ctx->ItemClick("**/" ICON_FA_CHECK " OK##spec_ok");

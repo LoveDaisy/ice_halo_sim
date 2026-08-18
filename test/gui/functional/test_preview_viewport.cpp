@@ -121,18 +121,113 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       // Not enumerated => still the user's call, and the user said no.
       IM_CHECK(!ov.show_grid);
       // ...at half the intensity they were set at, which is what separates "framed and waiting"
-      // from "rendered". The marker's own alpha is not scaled — it has no full-strength
-      // counterpart, see ApplyEmptyStatePresentation.
+      // from "rendered".
       IM_CHECK_LT(std::fabs(ov.horizon_alpha - gui::g_state.horizon_alpha * 0.5f), 1e-5f);
       IM_CHECK_LT(std::fabs(ov.grid_alpha - gui::g_state.grid_alpha * 0.5f), 1e-5f);
-      IM_CHECK_LT(std::fabs(ov.sun_circles_alpha - gui::g_state.sun_circles_alpha * 0.5f), 1e-5f);
       IM_CHECK_LT(std::fabs(ov.zenith_nadir_alpha - gui::g_state.zenith_nadir_alpha * 0.5f), 1e-5f);
+      // The circles and the marker are the two the SHADER no longer draws: forced on (asserted
+      // above) at zero shader alpha, because the empty state draws its own dashed ring and
+      // cross-hair on the CPU instead (ApplyEmptyStatePresentation's handover). Both halves are
+      // asserted here rather than in two cases, since either alone reads as a different feature —
+      // alpha 0 with the flag off would just be "not drawn", and the flag on at half alpha would
+      // be the pre-457.6 shader-drawn form.
+      IM_CHECK_LT(std::fabs(ov.sun_circles_alpha), 1e-6f);
+      IM_CHECK_LT(std::fabs(ov.sun_marker_alpha), 1e-6f);
+      IM_CHECK(gui::g_preview_vp.empty_state.drawn);
       // The stored toggles came through the forced frame untouched.
       IM_CHECK(!gui::g_state.show_horizon_line);
       IM_CHECK(!gui::g_state.show_sun_circles_line);
       IM_CHECK(!gui::g_state.show_grid_line);
       // No interaction surface: there is nothing to drag.
       IM_CHECK(!ctx->ItemExists(kInteract));
+    };
+  }
+
+  // The four marks the empty state draws ITSELF, on the CPU, because the shader cannot: the
+  // angular-distance rings are dashed rather than solid, each carries its angle as text, the sun is
+  // a cross-hair rather than a filled dot, and the horizon carries a HORIZON label
+  // (doc/gui-layout-architecture.md §4, and the prototype this task worked from).
+  //
+  // Why these counters exist to be asserted at all: an ImGui draw-list call leaves nothing behind,
+  // so without them the only evidence that any of this happened is a screenshot, and the committed
+  // reference image for this frame is re-shot on any layout change — it cannot also be the thing
+  // that says the rings are still dashed. The counters are written as the marks are drawn.
+  //
+  // The pairing with the shader side is the point of asserting both here: the same frame that
+  // reports four CPU-drawn marks reports sun_circles_alpha == 0 on the decoration (the case above),
+  // which is the handover, not a contradiction.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_preview_draws_its_own_instrument_marks");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      SeedPose(gui::kLensTypeLinear, 90.0f, 0.0f, 0.0f);
+      gui::g_state.sun.altitude = 20.0f;
+      ctx->Yield(3);
+
+      IM_CHECK(!gui::g_preview.HasTexture());  // the premise: this is the empty state
+      const auto& inst = gui::g_preview_vp.empty_state;
+      IM_CHECK(inst.drawn);
+      // Every ring the document asks for, not a fixed two: the angles are user-editable
+      // (GuiState::sun_circle_angles), and a hardcoded 22/46 here would pass on an implementation
+      // that ignored the list.
+      IM_CHECK_EQ(inst.dashed_circles, static_cast<int>(gui::g_state.sun_circle_angles.size()));
+      IM_CHECK_EQ(inst.degree_labels, inst.dashed_circles);
+      IM_CHECK(inst.horizon_label);
+      IM_CHECK(inst.sun_cross);
+      IM_CHECK_NE(inst.sun_cross_pos[0], gui::kOverlaySentinel);
+    };
+  }
+
+  // The ring geometry itself, pinned at one configuration rather than left to the screenshot.
+  //
+  // With the camera aimed straight at the sun through the linear lens, the sun lands at the centre
+  // of the frame and each ring becomes a circle around it whose pixel radius is focal·tan(theta).
+  // The focal length and the display scale are both unknown to this case — the viewport is in
+  // framebuffer pixels, the marks are in ImGui screen pixels, and the ratio between them is
+  // whatever the machine's DPI says. So the assertion is their RATIO, which both unknowns cancel
+  // out of: two rings' label anchors sit above the cross in the proportion tan(46°)/tan(22°),
+  // whatever the screen. A basis vector pointing the wrong way, a missing cos(theta) term, or a
+  // ring built at the wrong angular distance all break this; a DPI change does not.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "an_empty_previews_rings_stand_at_their_own_angles");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
+      gui::g_state.sun.altitude = 20.0f;
+      // Elevation = the sun's altitude puts the sun on the view axis. The field of view has to
+      // clear the outer ring at its TOP, where the label anchor is: the linear lens puts a ring at
+      // theta at focal·tan(theta) from the centre, and focal is half the short edge over
+      // tan(fov/2), so the 46° ring only fits inside a half-height above fov ≈ 92°. At 90° the
+      // anchor falls off the top edge and the label walks sideways around the ring — correct
+      // behaviour, and the reason this case cannot use the same pose as the one above.
+      SeedPose(gui::kLensTypeLinear, 120.0f, 0.0f, 20.0f);
+      ctx->Yield(3);
+
+      const auto& inst = gui::g_preview_vp.empty_state;
+      IM_CHECK(inst.drawn);
+      IM_CHECK_EQ(inst.degree_labels, 2);
+      IM_CHECK(inst.sun_cross);
+
+      // Both labels sit straight above the cross: the anchor is the ring's t = 90° point, which is
+      // up the meridian from the sun.
+      const float dx_22 = inst.degree_label_pos[0][0] - inst.sun_cross_pos[0];
+      const float dx_46 = inst.degree_label_pos[1][0] - inst.sun_cross_pos[0];
+      IM_CHECK_LT(std::fabs(dx_22), 1.0f);
+      IM_CHECK_LT(std::fabs(dx_46), 1.0f);
+
+      // ...at radii in the lens's own proportion. Screen y grows downward, so both offsets are
+      // negative and the ratio is taken on their magnitudes.
+      const float dy_22 = inst.sun_cross_pos[1] - inst.degree_label_pos[0][1];
+      const float dy_46 = inst.sun_cross_pos[1] - inst.degree_label_pos[1][1];
+      IM_CHECK_GT(dy_22, 1.0f);
+      IM_CHECK_GT(dy_46, dy_22);
+      const float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+      const float expected_ratio = std::tan(46.0f * kDeg2Rad) / std::tan(22.0f * kDeg2Rad);
+      const float actual_ratio = dy_46 / dy_22;
+      // 2% covers the ring's 96-segment sampling (the anchor is a vertex, not a point on the true
+      // circle) and single-precision projection noise; it does not cover a wrong angle, the
+      // nearest of which (a ring built at 45° instead of 46°) moves this ratio by ~4%.
+      IM_CHECK_LT(std::fabs(actual_ratio - expected_ratio) / expected_ratio, 0.02f);
     };
   }
 
@@ -230,6 +325,14 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ov.show_sun_marker);
       IM_CHECK_LT(std::fabs(ov.horizon_alpha - gui::g_state.horizon_alpha), 1e-6f);
       IM_CHECK_LT(std::fabs(ov.grid_alpha - gui::g_state.grid_alpha), 1e-6f);
+      // ...and the empty state's own marks are gone with it. Asserted on a frame that had no empty
+      // state at all rather than on one that left it: the counters are rebuilt every frame, so a
+      // version that only ever accumulated would read as "still drawing dashed rings over the
+      // result" here — which is what the user would see.
+      const auto& inst = gui::g_preview_vp.empty_state;
+      IM_CHECK(!inst.drawn);
+      IM_CHECK_EQ(inst.dashed_circles, 0);
+      IM_CHECK(!inst.sun_cross);
     };
   }
 

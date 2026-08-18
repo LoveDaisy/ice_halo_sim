@@ -10,6 +10,7 @@
 // clang-format on
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -138,6 +139,20 @@ ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref) {
 
 bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref) {
   return InspectorItemInfo(ctx, ref).ID != 0;
+}
+
+bool ScrollInspectorTo(ImGuiTestContext* ctx, const char* ref) {
+  return ScrollUntilFound(ctx, gui::kDocumentInspectorWindowName, ref).ID != 0;
+}
+
+void ComboPick(ImGuiTestContext* ctx, const char* combo_ref, const char* item_label) {
+  const ImGuiTestRef restore = ctx->GetRef();
+  ctx->ItemClick(combo_ref);
+  // "//$FOCUSED" has to become the REF before the wildcard search rather than be part of the path:
+  // a wildcard prefix is resolved with ImHashDecoratedPath, which does not understand the variable.
+  ctx->SetRef("//$FOCUSED");
+  ctx->ItemClick((std::string("**/") + item_label).c_str());
+  ctx->SetRef(restore);
 }
 
 bool ScrollTreeTo(ImGuiTestContext* ctx, const char* ref) {
@@ -277,6 +292,64 @@ void ResetTestState() {
 // includes imgui_internal.h, where ImGuiItemFlags_Disabled is declared.
 bool IsDisabled(const ImGuiTestItemInfo& info) {
   return (info.ItemFlags & ImGuiItemFlags_Disabled) != 0;
+}
+
+// See the contract note in test_gui_shared.hpp.
+bool CaptureWindowRect(ImGuiTestContext* ctx, const char* window_name, std::vector<unsigned char>* out_pixels,
+                       int* out_w, int* out_h) {
+  ImGuiWindow* win = ctx->GetWindowByRef(window_name);
+  if (win == nullptr) {
+    return false;
+  }
+  // Geometry comes from ImGui's IO rather than from GLFW: glfwGetCurrentContext() is thread-local
+  // and returns null on the test coroutine's thread.
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const int fb_w = static_cast<int>(std::lround(io.DisplaySize.x * sx));
+  const int fb_h = static_cast<int>(std::lround(io.DisplaySize.y * sy));
+
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float lx = win->Pos.x - vp_pos.x;
+  const float ly = win->Pos.y - vp_pos.y;
+  // ImGui (origin top-left, window coords) -> glReadPixels (origin bottom-left, framebuffer).
+  int rx = static_cast<int>(std::lround(lx * sx));
+  int ry = static_cast<int>(std::lround((io.DisplaySize.y - (ly + win->Size.y)) * sy));
+  int rw = static_cast<int>(std::lround(win->Size.x * sx));
+  int rh = static_cast<int>(std::lround(win->Size.y * sy));
+  // Clamped to the framebuffer rather than required to fit inside it: a chrome window pinned to an
+  // edge routinely overhangs it by a few pixels (the status bar's frame is taller than the height
+  // it is given, so its bottom rows fall below y=0), and those rows were never on screen to be
+  // compared. What is NOT allowed is an empty intersection — a rectangle that missed the
+  // framebuffer entirely would otherwise come back as a plausible-looking capture of nothing.
+  const int x0 = rx < 0 ? 0 : rx;
+  const int y0 = ry < 0 ? 0 : ry;
+  const int x1 = rx + rw > fb_w ? fb_w : rx + rw;
+  const int y1 = ry + rh > fb_h ? fb_h : ry + rh;
+  rx = x0;
+  ry = y0;
+  rw = x1 - x0;
+  rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) {
+    return false;
+  }
+
+  g_fullframe_capture.Reset();
+  g_fullframe_capture.rect_x = rx;
+  g_fullframe_capture.rect_y = ry;
+  g_fullframe_capture.rect_w = rw;
+  g_fullframe_capture.rect_h = rh;
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  if (!g_fullframe_capture.done.load() || g_fullframe_capture.pixels.empty()) {
+    return false;
+  }
+  *out_pixels = g_fullframe_capture.pixels;
+  *out_w = g_fullframe_capture.width;
+  *out_h = g_fullframe_capture.height;
+  return true;
 }
 
 // See the contract note in test_gui_shared.hpp.
@@ -631,6 +704,8 @@ int main(int argc, char** argv) {
   RegisterExecutionClusterTests(engine);
   RegisterShellChromeTests(engine);
   RegisterDocumentColumnTests(engine);
+  RegisterInspectorNoHScrollTests(engine);
+  RegisterPropertyRowTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
   RegisterPreviewViewportTests(engine);
@@ -639,6 +714,7 @@ int main(int argc, char** argv) {
   RegisterFaceNumberOverlayTests(engine);
   RegisterRunLifecycleTests(engine);
   RegisterStatusBarTests(engine);
+  RegisterThemeCoverageTests(engine);
   RegisterPreviewAnimationTests(engine);
   RegisterCaptureHarnessTests(engine);
   RegisterSimE2eSmokeTests(engine);

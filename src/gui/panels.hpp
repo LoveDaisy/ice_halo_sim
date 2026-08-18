@@ -10,6 +10,127 @@ namespace lumice::gui {
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 
+// ---- Property rows: the inspector's form layout ----
+//
+// A property row is one label/control pair laid out as two columns of an ImGui table: a
+// fixed-width label column (kPropertyLabelColWidth) whose text is right-aligned and dimmed,
+// and a stretch column the control fills. Every row in one table therefore puts its
+// control's LEFT edge on the same vertical line, and the labels' right edges on another —
+// which is what makes a column of settings read as one thing rather than N.
+//
+// This is the "leading label" shape doc/gui-visual-language.md §5 names as the correct
+// answer, and it is deliberately NOT the "move every label into a shared column on the
+// right" shape the same section records as falsified: there the label ended up ~230 px away
+// from the control it named, trading proximity for alignment. Here the alignment line IS the
+// label's own left edge, and each control still sits next to its own label.
+//
+// Usage:
+//     if (BeginPropertyTable("##sun_props")) {
+//       PropertyRow("Altitude");
+//       DragFloatField("Altitude", &alt, 0.0f, 90.0f);
+//       PropertyRow("Spectrum");
+//       ImGui::Combo("##spectrum", ...);
+//       EndPropertyTable();
+//     }
+//
+// PropertyRow leaves the cursor in the control column with the next item's width already set
+// to fill it, so a call site states the control and nothing about its geometry — that is what
+// keeps the "no bare widths outside the token table" rule enforceable by grep. A control that
+// must be narrower calls SetNextItemWidth itself, which then reads as the exception it is.
+//
+// A row's control column may hold more than one widget (a radio group, a checkbox pair):
+// SameLine works normally inside it, and only the FIRST widget picks up the pre-set width —
+// which is harmless for the button-shaped widgets that appear in such rows, since they size
+// to their own label. `label` may carry an "##id" suffix; only the part before it is drawn.
+//
+// BeginPropertyTable returns false (and must not be paired with EndPropertyTable) when the
+// table is clipped, mirroring ImGui::BeginTable's own contract.
+bool BeginPropertyTable(const char* id);
+void PropertyRow(const char* label);
+void EndPropertyTable();
+
+// ---- Eyebrow: the small-caps section heading ----
+//
+// One line of dimmed, small, upper-case text with a hairline running from its right edge to the
+// end of the row — the device that turns a flat stack of controls into named groups without
+// spending a foldable header (which would promise a click that does nothing here) or a bare
+// Separator (which draws a divider but never says what the group IS).
+//
+// It is ImGui::SeparatorText under a smaller font (theme.hpp's EyebrowFont) and the dimmed text
+// colour, so the hairline placement is ImGui's own: style.SeparatorTextAlign is (0, 0.5) — set by
+// the theme before this helper had a caller — which puts the label flush left and lets the rule
+// take the remaining width.
+//
+// `label` MUST already be upper-case at the call site ("LAYERS", "TYPE"). No run-time toupper: the
+// widget draws the literal it is handed, like every other control here, and a locale-dependent
+// case conversion has no place in a heading. A debug assert states the contract.
+//
+// Letter-spacing is NOT part of this: ImGui has no tracking control, so the prototype's spaced
+// 11px caps are approximated by size + case + colour + rule and stop there. A future reader who
+// finds it looser than the prototype is looking at a known limit of the toolkit, not a defect.
+void RenderEyebrow(const char* label);
+
+// ---- Flat (underline-style) tab items ----
+//
+// ImGui::BeginTabItem with the label drawn in the primary text tier when the tab is the active one
+// and in the dimmed tier when it is not. Everything else about it — the id, the flags, the return
+// value's meaning, the EndTabItem pairing — is ImGui::BeginTabItem's, unchanged.
+//
+// It exists because ImGui has no such thing natively: TabItemLabelAndCloseButton's tab-text tinting
+// branch is `#if 0`-ed out upstream (imgui_widgets.cpp, next to a comment saying that altering tab
+// text colour is the caller's job), so the only place the distinction can be made is before the
+// call. It also draws the selected tab's accent rule itself, for a second and separate reason:
+// ImGui's own overline needs ImGuiTabBarFlags_DrawSelectedOverline, which only a dock node's tab
+// bar ever gets. Together with the theme's transparent Tab / TabSelected slots, those two are what
+// turn a boxed tab bar into an underline one — the selection is stated by a rule and by text tier,
+// not by a filled rectangle behind the head.
+//
+// `is_active` is the CALLER's mirror of the selection, and it governs the TEXT TIER only, because
+// BeginTabItem's own return value arrives after the label has already been drawn. KNOWN LIMIT: on
+// the frame a click moves the selection the mirror is one frame stale, so the tab being clicked
+// draws its label dimmed for that single frame before catching up. The accent rule has no such lag
+// — it is drawn after the call, off the return value. Programmatic selection
+// (ImGuiTabItemFlags_SetSelected) updates the mirror where it arms the flag and is unaffected.
+//
+// `flags` is an int rather than ImGuiTabItemFlags so this header keeps its property of naming no
+// ImGui type in a signature (ImGuiTabItemFlags is itself a typedef for int, so call sites pass the
+// named constants unchanged).
+bool BeginFlatTabItem(const char* label, bool is_active, int flags = 0);
+
+// One control per value: the DragFloat that replaces the [slider][input] pair. Ctrl+click
+// types an exact value, so the input half of the pair is not lost, it is folded in — the
+// same merge already validated on the display strip's Overlays alpha cell (app_panels.cpp).
+// The item id is "##<label>", with no _slider / _input suffix, because there is no longer a
+// pair to distinguish.
+//
+// `scale` keeps meaning what it means for SliderWithInput, but a Drag has no track position
+// to map, only a speed, so the three non-linear modes collapse onto ImGui's own logarithmic
+// drag: kLog and kLogLinear are what it natively is, and kSqrt takes it as the closer of the
+// two available approximations (a linear drag over a 0-360 domain moves ~1.6 deg per pixel,
+// which cannot express the sub-degree spreads the sqrt mapping existed to make reachable).
+// Dragging to either end still yields exactly min / max — ImGui special-cases the extents.
+//
+// The value is clamped to [min_val, max_val] UNCONDITIONALLY, not just when the widget moved it:
+// ImGuiSliderFlags_AlwaysClamp constrains what the widget produces and leaves an out-of-range value
+// it was handed alone, and fields do arrive here from outside any control (a hand-written .lmc, a
+// lens switch that narrows a bound under a value that was legal a frame ago). Returns true when the
+// value is not what it was — clamp included, since a clamp is a change the caller has to commit
+// like any other. Both match what the retired [slider][input] pair did.
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
+                    SliderScale scale = SliderScale::kLinear);
+
+// DragFloatField's integer sibling: one DragInt where an int field used to be a
+// [SliderInt][InputInt] pair. Same id rule ("##<label>", no _slider / _input half), same
+// kDragTrackReferenceWidth-derived speed, and the same UNCONDITIONAL clamp for the same reason
+// — ImGuiSliderFlags_AlwaysClamp constrains what the widget produces and leaves an out-of-range
+// value it was handed alone, while an int field can arrive here from a hand-written .lmc.
+// Returns true when the value is not what it was, clamp included.
+//
+// No `scale` parameter, unlike the float version: the int fields that reach this helper have
+// domains of a few dozen values, where a logarithmic drag would spend most of its track on the
+// bottom two. If one ever needs it, add it then rather than carrying an unused mode.
+bool DragIntField(const char* label, int* value, int min_val, int max_val, const char* fmt = "%d");
+
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
@@ -81,7 +202,11 @@ void SetNextComboPopupTopMost();
 
 // ---- Axis distribution controls (shared between panels and edit modals) ----
 
-// Render axis distribution controls (combo + mean + std sliders).
+// Render one axis' distribution controls as THREE property rows: <label> = distribution type,
+// then Mean, then the spread parameter under whichever name the chosen type gives it.
+// Must be called between BeginPropertyTable / EndPropertyTable, and all three axes belong in ONE
+// table — see the caller contracts above the definition in panels.cpp, which also cover the combo
+// popup's viewport-layer requirement.
 // Returns true if any value changed. Does NOT call MarkDirty() — caller is responsible.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max);
 
@@ -143,6 +268,18 @@ std::string AxisPresetName(const CrystalConfig& c);
 // GUI tests can assert the rendered string directly. Format spec lives next
 // to the implementation in panels.cpp.
 std::string FilterSummary(const std::optional<FilterConfig>& f);
+
+// ---- Document-tree row meta ----
+
+// Format the secondary value shown, dimmed, at the right edge of each document-tree row: the sun's
+// altitude, the camera's projection, a layer's multi-scatter probability, an entry's weight.
+// Exposed for the same reason FilterSummary is: the text is drawn with a bare TextDisabled, which
+// has no item id, so a gui_test asserts the string these return and drives the widget separately to
+// prove the row reads live state.
+std::string FormatSunTreeMeta(float altitude);
+std::string FormatCameraTreeMeta(int lens_type);
+std::string FormatLayerTreeMeta(float probability);
+std::string FormatCrystalTreeMeta(float proportion);
 
 // ---- Panel rendering ----
 

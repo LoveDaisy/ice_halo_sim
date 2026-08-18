@@ -58,7 +58,7 @@ using lumice::test::PrismFacePlaneOffsets;
 
 namespace {
 
-const char* const kHeightInput = "**/##Height##modal_cr_input";
+const char* const kHeightInput = "**/##Height##modal_cr";
 
 
 gui::CrystalConfig& EntryCrystal() {
@@ -109,6 +109,11 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
   OpenFilterTab(ctx);
   ctx->Yield(4);
   if (start_with_filter) {
+    // Scrolled to first: the shared filter controls sit below the token hint, which wraps to a
+    // second line whenever the column is narrow enough — and a clipped item is invisible to
+    // ItemClick (see InspectorItemInfo's declaration). This helper predates InspectorItemClick
+    // below, so it reaches for the same scroll directly rather than through it.
+    ScrollInspectorTo(ctx, "**/Remove Filter##filter");
     ctx->ItemClick("**/Remove Filter##filter");
   } else {
     ctx->ItemInputValue("**/##row_text_0", "3-1-5");
@@ -116,6 +121,26 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
   ctx->Yield(4);
 
   return CommitOutcome{ gui::g_state.dirty, gui::g_state.sim_state, gui::g_state.display_epoch_floor };
+}
+
+// Act on an inspector control after bringing it on screen.
+//
+// The crystal page is taller than the document column, so its lower half — the whole Face Distance
+// section — starts clipped. A clipped item is invisible to ItemClick exactly as it is to ItemExists
+// (the reason is spelled out at InspectorItemInfo's declaration in test_gui_shared.hpp: ImGui never
+// submits a culled table row, so the engine is never told the widget's name). The scroll is
+// therefore part of the action rather than a nicety, and these two wrappers are where it lives so
+// that no case has to remember. ScrollInspectorTo returns immediately when the item is already on
+// screen, so the rows above the fold pay nothing; a failure to find it is left to the ItemClick /
+// ItemInputValue below to report, which keeps the error message the one a reader expects.
+void InspectorItemClick(ImGuiTestContext* ctx, const char* ref) {
+  ScrollInspectorTo(ctx, ref);
+  ctx->ItemClick(ref);
+}
+
+void InspectorItemInputValue(ImGuiTestContext* ctx, const char* ref, float value) {
+  ScrollInspectorTo(ctx, ref);
+  ctx->ItemInputValue(ref, value);
 }
 
 // The id of one axis row's distribution combo.
@@ -130,7 +155,7 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
 // Derived rather than spelled out because the alternative is a literal path through the tab body's
 // BeginChild, whose name ImGui generates; that would pin this file to ImGui's child-naming scheme.
 ImGuiID AxisDistComboId(ImGuiTestContext* ctx, const char* row_label) {
-  const ImGuiTestItemInfo mean = InspectorItemInfo(ctx, (std::string("**/") + row_label + "/##Mean_input").c_str());
+  const ImGuiTestItemInfo mean = InspectorItemInfo(ctx, (std::string("**/") + row_label + "/##Mean").c_str());
   IM_CHECK_RETV(mean.ID != 0, 0);
   return ImHashStr("##dist", 0, mean.ParentID);
 }
@@ -607,7 +632,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/Zenith/##Mean_input", 45.0f);
+      ctx->ItemInputValue("**/Zenith/##Mean", 45.0f);
       ctx->Yield(2);
 
       // ...and again BEFORE Cancel, for the same reason as in the Reset View case above.
@@ -641,16 +666,16 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
-      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Std_input"));
-      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Amplitude_input"));
+      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Std"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Amplitude"));
 
       ctx->ItemClick(AxisDistComboId(ctx, "Zenith"));
       ctx->Yield(2);
       ctx->ItemClick("**/Zigzag");  // the popup's Selectables ARE registered by label
       ctx->Yield(3);
 
-      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Amplitude_input"));
-      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Std_input"));
+      IM_CHECK(InspectorItemExists(ctx, "**/Zenith/##Amplitude"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/Zenith/##Std"));
       ctx->Yield(2);
       IM_CHECK_EQ(static_cast<int>(EntryCrystal().zenith.type), static_cast<int>(gui::AxisDistType::kZigzag));
       IM_CHECK_EQ(EntryCrystal().zenith.std, 90.0f);  // clamped into Zigzag's range on the switch
@@ -673,14 +698,13 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       OpenCrystalTab(ctx);
       ctx->Yield(4);
       IM_CHECK(InspectorItemExists(ctx, kHeightInput));
-      IM_CHECK(!InspectorItemExists(ctx, "**/##Prism H##modal_cr_input"));
+      IM_CHECK(!InspectorItemExists(ctx, "**/##Prism H##modal_cr"));
 
       ctx->ItemClick("**/Pyramid##modal");
       ctx->Yield(3);
       IM_CHECK(!InspectorItemExists(ctx, kHeightInput));
-      for (const char* row :
-           { "**/##Prism H##modal_cr_input", "**/##Upper H##modal_cr_input", "**/##Lower H##modal_cr_input",
-             "**/##Upper A##modal_cr_input", "**/##Lower A##modal_cr_input" }) {
+      for (const char* row : { "**/##Prism H##modal_cr", "**/##Upper H##modal_cr", "**/##Lower H##modal_cr",
+                               "**/##Upper A##modal_cr", "**/##Lower A##modal_cr" }) {
         if (!InspectorItemExists(ctx, row)) {
           IM_ERRORF("pyramid row missing: %s", row);
         }
@@ -723,10 +747,10 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       };
       // Height is kLog over [0.01, 100]; the pyramid H rows are kLinear over [0, 1].
       const Row kRows[] = {
-        { gui::CrystalType::kPrism, "**/##Height##modal_cr_input", 0.0f, 0.01f, "kLog cannot reach zero" },
-        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 0.0f, 0.0f, "kLinear starts at zero" },
-        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 1.5f, 1.0f, "clamped to the upper bound" },
-        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 0.5f, 0.5f, "an in-range value is identity" },
+        { gui::CrystalType::kPrism, "**/##Height##modal_cr", 0.0f, 0.01f, "kLog cannot reach zero" },
+        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr", 0.0f, 0.0f, "kLinear starts at zero" },
+        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr", 1.5f, 1.0f, "clamped to the upper bound" },
+        { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr", 0.5f, 0.5f, "an in-range value is identity" },
       };
 
       for (const Row& row : kRows) {
@@ -783,13 +807,13 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK((InspectorItemInfo(ctx, "**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
       // The checkbox is text-less — the table header names the column — so its id is the suffix.
-      ctx->ItemClick("**/##rnd_Height##modal_cr");
+      InspectorItemClick(ctx, "**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height.type, gui::ShapeDistType::kUniform);
       IM_CHECK_GT(EntryCrystal().height.spread, 0.0f);
       IM_CHECK((InspectorItemInfo(ctx, "**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) == 0);
 
-      ctx->ItemClick("**/##rnd_Height##modal_cr");
+      InspectorItemClick(ctx, "**/##rnd_Height##modal_cr");
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().height.type, gui::ShapeDistType::kNoRandom);
       IM_CHECK_EQ(EntryCrystal().height.spread, 0.0f);
@@ -820,9 +844,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         }
       }
 
-      ctx->ItemClick("**/##rnd_Face 3##modal_fd");
+      InspectorItemClick(ctx, "**/##rnd_Face 3##modal_fd");
       ctx->Yield(2);
-      ctx->ItemClick("**/##rnd_Face 4##modal_fd");
+      InspectorItemClick(ctx, "**/##rnd_Face 4##modal_fd");
       ctx->Yield(2);
       ctx->Yield(6);
 
@@ -914,10 +938,13 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   }
 
   // P62 / P110. The Sync column is fixed-width and Value is the only stretch column, so every pixel
-  // Sync takes comes out of the slider. The failure this catches is invisible in any state
-  // assertion: the slider hitting PrepareSliderLayout's 40 px floor, below which it stops shrinking
-  // and starts overflowing its cell. Measured in the worst case the page supports — a Pyramid with
-  // Face Distance expanded, in a column narrower than the modal this replaced.
+  // Sync takes comes out of the value control. The failure this catches is invisible in any state
+  // assertion, and what it looks like changed when the [slider][input] pair became one DragFloat:
+  // the pair used to OVERFLOW its cell once the slider hit PrepareSliderLayout's 40 px floor,
+  // whereas a single control sized to the cell cannot overflow — it silently clips the number it
+  // is showing instead. So the floor below is stated in terms of the text the control must render.
+  // Measured in the worst case the page supports — a Pyramid with Face Distance expanded, in a
+  // column narrower than the modal this replaced.
   //
   // The modal's companion claim — that the content fits its fixed-height pane without a scrollbar —
   // is gone with the pane. The page is a docked window the user can resize and its content scrolls
@@ -948,17 +975,18 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // takes its width from the dock node.
       IM_CHECK_EQ(win->Size.x, gui::kLeftPanelWidth);
 
-      const auto slider = InspectorItemInfo(ctx, "**/##Face 3##modal_fd_slider");
-      const auto input = InspectorItemInfo(ctx, "**/##Face 3##modal_fd_input");
+      const auto value_ctl = InspectorItemInfo(ctx, "**/##Face 3##modal_fd");
       const auto swatch = InspectorItemInfo(ctx, "**/##sync_Face 3##modal_fd");
       const auto rand_check = InspectorItemInfo(ctx, "**/##rnd_Face 3##modal_fd");
-      // PrepareSliderLayout returns max(avail - kInputWidth - spacing, 40); exactly 40 means the
-      // cell is too narrow for the [slider][input] pair and the input is spilling out of it.
-      IM_CHECK_GT(slider.RectFull.GetWidth(), 40.0f);
-      // The pair must end before the next column's content begins. Column order is
+      // A face distance renders as "0.000" at its widest, plus the frame's own padding. Below this
+      // the cell is too narrow to show the value it holds — the modern shape of "Sync ate the
+      // Value column", and the reason the number is a text measurement rather than a constant.
+      const float min_readable = ImGui::CalcTextSize("0.000").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+      IM_CHECK_GT(value_ctl.RectFull.GetWidth(), min_readable);
+      // The control must end before the next column's content begins. Column order is
       // Param | Value | Sync | Rand | Spread, so the swatch is what it has to clear — and the Rand
       // checkbox is checked too, since the ordering is itself part of the claim.
-      IM_CHECK_LT(input.RectFull.Max.x, swatch.RectFull.Min.x);
+      IM_CHECK_LT(value_ctl.RectFull.Max.x, swatch.RectFull.Min.x);
       IM_CHECK_LT(swatch.RectFull.Max.x, rand_check.RectFull.Min.x);
       // The swatch is square and one frame tall, so it cannot be what drives row height.
       IM_CHECK_EQ(swatch.RectFull.GetWidth(), swatch.RectFull.GetHeight());
@@ -1085,7 +1113,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Face 5 (face_distance[2]) opens a group of its own; nothing else is grouped, so "+ New
       // group" hands out id 1.
-      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 5##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_new");
       ctx->Yield(2);
@@ -1095,9 +1123,9 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Give the group a distinctive distribution, so the snapshot below is checked on all three
       // fields rather than on a centre that happened to match already.
-      ctx->ItemClick("**/##rnd_Face 5##modal_fd");
+      InspectorItemClick(ctx, "**/##rnd_Face 5##modal_fd");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/##Face 5##modal_fd_input", 1.5f);
+      InspectorItemInputValue(ctx, "**/##Face 5##modal_fd", 1.5f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[2].center, 1.5f);
       IM_CHECK_EQ(EntryCrystal().face_distance[2].type, gui::ShapeDistType::kUniform);
@@ -1105,7 +1133,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(leader_spread > 0.0f);
 
       IM_CHECK_EQ(EntryCrystal().face_distance[4].center, 1.0f);  // differs from the leader pre-join
-      ctx->ItemClick("**/##sync_Face 7##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 7##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
@@ -1115,11 +1143,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().face_distance[4].spread, leader_spread);
 
       // Propagation runs from either end: the owner chose writable subordinates over greyed ones.
-      ctx->ItemInputValue("**/##Face 5##modal_fd_input", 0.75f);
+      InspectorItemInputValue(ctx, "**/##Face 5##modal_fd", 0.75f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[2].center, 0.75f);
       IM_CHECK_EQ(EntryCrystal().face_distance[4].center, 0.75f);
-      ctx->ItemInputValue("**/##Face 7##modal_fd_input", 1.25f);
+      InspectorItemInputValue(ctx, "**/##Face 7##modal_fd", 1.25f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[4].center, 1.25f);
       IM_CHECK_EQ(EntryCrystal().face_distance[2].center, 1.25f);
@@ -1150,20 +1178,20 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // A two-member group holding a non-default value, so "unchanged on leave" is a claim about a
       // value the group actually imposed.
-      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_new");
       ctx->Yield(2);
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.75f);
+      InspectorItemInputValue(ctx, "**/##Face 3##modal_fd", 1.75f);
       ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 4##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[1].sync_group, 1);
       IM_CHECK_EQ(EntryCrystal().face_distance[1].center, 1.75f);
 
-      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 4##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_none");
       ctx->Yield(2);
@@ -1173,7 +1201,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().face_distance[0].center, 1.75f);
 
       // ...and it really stopped following: editing the ex-leader leaves it where it is.
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.5f);
+      InspectorItemInputValue(ctx, "**/##Face 3##modal_fd", 0.5f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[0].center, 0.5f);
       IM_CHECK_EQ(EntryCrystal().face_distance[1].center, 1.75f);
@@ -1203,7 +1231,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->ItemClick("**/Pyramid##modal");
       ctx->Yield(3);
 
-      ctx->ItemClick("**/##sync_Upper H##modal_cr");
+      InspectorItemClick(ctx, "**/##sync_Upper H##modal_cr");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_new");
       ctx->Yield(2);
@@ -1251,7 +1279,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
 
-      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 4##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
@@ -1260,11 +1288,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Positive control on the same row: picking a DIFFERENT group does snapshot. Without it, a
       // widget that ignored every popup click would pass the assertions above.
-      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 5##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_new");
       ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Face 4##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 4##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_2");
       ctx->Yield(2);
@@ -1317,7 +1345,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Face 3 (slot 4) joins group 1: it must take upper_h's distribution, not lower_h's. Every
       // face slot is above all three H slots, so no face can be the leader here.
-      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
@@ -1328,7 +1356,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Face 5 (slot 6) joins group 2: the leader is prism_h, not the higher-indexed
       // face_distance[1] that happens to be the lowest member carrying a Sync control.
-      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 5##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_2");
       ctx->Yield(2);
@@ -1413,7 +1441,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // (2) The membership list names the group's real members, Height included — it describes the
       // group the user is about to join, and Height is the member whose value that group carries.
       // Read off the popup item's visible label rather than re-derived.
-      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
       const ImGuiTestItemInfo group_item = InspectorItemInfo(ctx, "**/###sync_group_1");
       IM_CHECK_NE(group_item.ID, (ImGuiID)0);
@@ -1431,7 +1459,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // group's leader, and an edit to the leader is exactly the edit the whole group must follow.
       // Both values sit inside BOTH sliders' ranges (Height's [0.01, 100] and a face's [0, 2]), so
       // nothing here is a clamp; cross-range clamping has its own case.
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.75f);
+      InspectorItemInputValue(ctx, "**/##Face 3##modal_fd", 0.75f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().face_distance[0].center, 0.75f);
       IM_CHECK_EQ(EntryCrystal().height.center, 0.75f);
@@ -1535,7 +1563,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Face 5##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 5##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
@@ -1546,7 +1574,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // core's normalization finds nothing to override — no silent rewrite of the row the user just
       // typed into. Checked against core the same way: after the edit, the grouped config's mesh
       // must equal the mesh of the same values carrying no groups at all.
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 1.25f);
+      InspectorItemInputValue(ctx, "**/##Face 3##modal_fd", 1.25f);
       ctx->Yield(2);
       gui::CrystalConfig after_edit_ungrouped = EntryCrystal();
       for (int s = 0; s < LUMICE_SHAPE_SCALAR_COUNT; ++s) {
@@ -1585,11 +1613,11 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Upper H##modal_cr");
+      InspectorItemClick(ctx, "**/##sync_Upper H##modal_cr");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_new");
       ctx->Yield(2);
-      ctx->ItemClick("**/##sync_Face 3##modal_fd");
+      InspectorItemClick(ctx, "**/##sync_Face 3##modal_fd");
       ctx->Yield(2);
       ctx->ItemClick("**/###sync_group_1");
       ctx->Yield(2);
@@ -1598,7 +1626,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().face_distance[0].center, 0.2f);
 
       // 2.0 is legal for a face distance and outside Upper H's [0, 1].
-      ctx->ItemInputValue("**/##Face 3##modal_fd_input", 2.0f);
+      InspectorItemInputValue(ctx, "**/##Face 3##modal_fd", 2.0f);
       ctx->Yield(2);
       IM_CHECK_EQ(EntryCrystal().upper_h.center, 1.0f);
       IM_CHECK_EQ(EntryCrystal().face_distance[0].center, 1.0f);

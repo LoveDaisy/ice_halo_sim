@@ -328,7 +328,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         gui::g_state.SelectLayer(0);
         ctx->Yield(3);
 
-        const bool disabled = IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0_input"));
+        const bool disabled = IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0"));
         if (disabled != s.expect_disabled) {
           IM_ERRORF("%s: slider disabled=%d, expected %d", s.name, static_cast<int>(disabled),
                     static_cast<int>(s.expect_disabled));
@@ -410,7 +410,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       // The slider lives on the inspector's Layer page; select the layer to reach it.
       gui::g_state.SelectLayer(0);
       ctx->Yield(3);
-      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("**/##Prob.##layer_0")));
     };
   }
 
@@ -555,7 +555,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(4);
       IM_CHECK(gui::g_state.HasValidCrystalSelection());
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 33.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", orig_h + 33.0f);
       ctx->Yield(2);
 
       ctx->MouseMoveToPos(RowSpot(ctx, 0, 0));
@@ -605,7 +605,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK(!ctx->ItemExists("**/Unlink##share"));
 
       // The next edit lands on the fork, and the card left behind keeps what it had.
-      ctx->ItemInputValue("**/##Height##modal_cr_input", shared_h + 7.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", shared_h + 7.0f);
       ctx->Yield(2);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[forked_cid].height, shared_h + 7.0f);
@@ -627,7 +627,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       OpenCrystalTab(ctx);
       ctx->Yield(4);
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", orig_h + 2.0f);
       ctx->Yield(2);
 
       ctx->ItemClick("**/Link to...##share");
@@ -849,6 +849,10 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
 
       OpenFilterTab(ctx);
       ctx->Yield(4);
+      // Scrolled to first: the shared filter controls sit below the page's token hint, which wraps
+      // once the column is narrow enough, and a clipped item is invisible to ItemClick (see
+      // InspectorItemInfo's declaration in test_gui_shared.hpp).
+      ScrollInspectorTo(ctx, "**/Remove Filter##filter");
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
       ctx->Yield(2);

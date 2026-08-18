@@ -211,7 +211,7 @@ struct ValuePreset {
   float value;
 };
 
-// Label precision must match the fmt passed to SliderWithPresetEdit (currently "%.3f").
+// Label precision must match the fmt passed to DragWithPresetEdit (currently "%.3f").
 constexpr ValuePreset kWedgePresets[] = {
   { "{1,0,-1,1} 28.000\xc2\xb0", 28.0f },
   { "{2,0,-2,1} 47.300\xc2\xb0", 47.3f },
@@ -220,62 +220,21 @@ constexpr ValuePreset kWedgePresets[] = {
 };
 constexpr int kWedgePresetCount = 4;
 
-// Render a slider + input + preset dropdown for wedge angle.
+// Render one wedge-angle control: a DragFloat plus the preset dropdown arrow beside it.
 // Edit-buffer context: cannot call MarkDirty internally, so this is a standalone impl.
-// `trailing_label = false` (table-cell mode): mirrors SliderWithInput's switch — omit the
-// trailing text label and drop kLabelColWidth from the width so the [slider][input][▼] group
-// fills the whole table cell (the field name lives in the Parameter column instead).
-bool SliderWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
-                          SliderScale scale, const ValuePreset* presets, int preset_count, bool trailing_label = true) {
-  char display_buf[64];
-  char slider_id[64];
-  char input_id[64];
+//
+// It is NOT DragFloatField plus an arrow at the call site, because the two share a cell and the
+// arrow's width has to come out of the drag's: the reservation is the reason this wrapper exists.
+// Table-cell only — it carries no label of its own, because its one caller renders the field name
+// in the table's Parameter column.
+bool DragWithPresetEdit(const char* label, float* value, float min_val, float max_val, const char* fmt,
+                        SliderScale scale, const ValuePreset* presets, int preset_count) {
+  // The drag gives back exactly the arrow button's width; the arrow is drawn with no spacing
+  // before it, so nothing else needs reserving.
   constexpr float kArrowBtnWidth = 20.0f;
-  float input_w = kInputWidth - kArrowBtnWidth;
+  ImGui::SetNextItemWidth(-kArrowBtnWidth);
 
-  const char* hash_pos = strstr(label, "##");
-  if (hash_pos) {
-    auto len = static_cast<size_t>(hash_pos - label);
-    if (len >= sizeof(display_buf))
-      len = sizeof(display_buf) - 1;
-    memcpy(display_buf, label, len);
-    display_buf[len] = '\0';
-  } else {
-    snprintf(display_buf, sizeof(display_buf), "%s", label);
-  }
-  snprintf(slider_id, sizeof(slider_id), "##%s_slider", label);
-  snprintf(input_id, sizeof(input_id), "##%s_input", label);
-
-  float spacing = ImGui::GetStyle().ItemSpacing.x;
-  float avail_w = ImGui::GetContentRegionAvail().x;
-  // mirrors PrepareSliderLayout: reserve the label column + 2 spacings (slider->input, input->label)
-  // with a trailing label; without it, still reserve the one slider->input spacing (SameLine at the
-  // input below adds it) — omitting it overflows the cell by one ItemSpacing.x and clips the arrow.
-  float slider_w =
-      trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
-  if (slider_w < 40.0f)
-    slider_w = 40.0f;
-
-  bool changed = false;
-
-  ImGui::PushItemWidth(slider_w);
-  // ImGuiSliderFlags_NoInput: see panels.cpp::RenderNonlinearSlider for rationale.
-  if (scale == SliderScale::kSqrt && min_val >= 0.0f) {
-    float sqrt_val = std::sqrt(std::max(*value, 0.0f));
-    float sqrt_max = std::sqrt(max_val);
-    if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
-      *value = sqrt_val * sqrt_val;
-      changed = true;
-    }
-  } else {
-    changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
-  }
-  ImGui::PopItemWidth();
-
-  ImGui::SameLine();
-  ImGui::PushItemWidth(input_w);
-  changed |= ImGui::InputFloat(input_id, value, 0, 0, fmt);
-  ImGui::PopItemWidth();
+  bool changed = DragFloatField(label, value, min_val, max_val, fmt, scale);
 
   char popup_id[64];
   snprintf(popup_id, sizeof(popup_id), "##%s_presets", label);
@@ -297,11 +256,6 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
   }
 
   *value = std::clamp(*value, min_val, max_val);
-
-  if (trailing_label) {
-    ImGui::SameLine();
-    ImGui::TextUnformatted(display_buf);
-  }
   return changed;
 }
 
@@ -590,10 +544,9 @@ static void RenderCrystalPreviewPane(GuiState& /*state*/, float image_size) {
   // Style combo + Reset View (single row — Combo / SameLine / SmallButton).
   // SetNextComboPopupTopMost: see RenderAxisModal for rationale (combo popups
   // need same NSWindow level as the detached modal viewport).
-  ImGui::PushItemWidth(120.0f);
+  ImGui::SetNextItemWidth(kToolbarComboWidth);
   SetNextComboPopupTopMost();
   ImGui::Combo("##ModalCrystalStyle", &g_crystal_style, kCrystalStyleNames, kCrystalStyleCount);
-  ImGui::PopItemWidth();
   ImGui::SameLine();
   if (ImGui::SmallButton("Reset View##modal")) {
     // Reset to the default view derived from the current axis preset + edit-buffer
@@ -612,9 +565,9 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();  // Parameter
   ShapeTableParamLabel(label);
-  ImGui::TableNextColumn();  // Value — slider + input + preset dropdown, filling the cell.
-  bool changed = SliderWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets,
-                                      kWedgePresetCount, /*trailing_label=*/false);
+  ImGui::TableNextColumn();  // Value — one drag control plus its preset dropdown, filling the cell.
+  bool changed =
+      DragWithPresetEdit(label, value, 0.1f, 90.0f, "%.3f", SliderScale::kLinear, kWedgePresets, kWedgePresetCount);
   // Wedge angles are non-randomizable: advance the remaining (kShapeTableColumnCount - content)
   // columns as intentionally-empty cells (Sync / Rand / Spread). Driven by the shared constant
   // rather than a hardcoded 3, so the blank count tracks any column-count change automatically —
@@ -636,16 +589,28 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
   // -- Crystal type --
+  // The page was a flat stack of tables; these two headings are what tell a reader that the radio
+  // pair and the parameter grid below it are two different subjects rather than one long form.
+  RenderEyebrow("TYPE");
+  // A composite property row: one label, and a control column holding the whole choice. The row
+  // exists so the type sits on the same left edge as the Weight control above it and the shape
+  // table's Value column below, rather than starting at the panel's own margin.
   int type_int = static_cast<int>(cr.type);
-  if (ImGui::RadioButton("Prism##modal", &type_int, 0)) {
-    cr.type = CrystalType::kPrism;
-  }
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Pyramid##modal", &type_int, 1)) {
-    cr.type = CrystalType::kPyramid;
+  if (BeginPropertyTable("##crystal_type")) {
+    PropertyRow("Type");
+    if (ImGui::RadioButton("Prism##modal", &type_int, 0)) {
+      cr.type = CrystalType::kPrism;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Pyramid##modal", &type_int, 1)) {
+      cr.type = CrystalType::kPyramid;
+    }
+    EndPropertyTable();
   }
 
-  ImGui::Spacing();
+  // Replaces the bare Spacing that used to separate the two tables: the gap is still there (the
+  // heading occupies a row) and now it is labelled.
+  RenderEyebrow("SHAPE");
 
   // -- Shape parameters (property table) --
   // Every randomizable shape scalar is one RenderShapeDistTableRow (5 aligned columns:
@@ -662,6 +627,10 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // below, so the 6 face rows line up column-for-column with the parameter rows. Value is the only
   // WidthStretch column, so a narrow (vertical-layout) table compresses the slider first rather than
   // clipping the fixed Sync/Rand/Spread cells.
+  // Capped rather than left to stretch: Value is the only WidthStretch column, so on a widened
+  // inspector every extra pixel of panel goes into one drag control. Past kPropertyTableMaxWidth
+  // the table has nothing more to say with the room, so it stops taking it and stays left-aligned.
+  const ImVec2 shape_table_size(std::min(ImGui::GetContentRegionAvail().x, kPropertyTableMaxWidth), 0.0f);
   const auto setup_shape_columns = []() {
     ImGui::TableSetupColumn("Param", ImGuiTableColumnFlags_WidthFixed, kShapeParamColWidth);
     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
@@ -673,7 +642,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
     ImGui::TableSetupColumn("Spread", ImGuiTableColumnFlags_WidthFixed, kShapeSpreadColWidth);
   };
 
-  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags)) {
+  if (ImGui::BeginTable("##shape_params", kShapeTableColumnCount, kTableFlags, shape_table_size)) {
     setup_shape_columns();
     ImGui::TableHeadersRow();
 
@@ -700,7 +669,7 @@ static void RenderCrystalModal(GuiState& /*state*/) {
   // rejected it), so the old unified/mixed-state machinery (and its self-contradiction warning) is
   // gone.
   if (ImGui::CollapsingHeader("Face Distance##modal")) {
-    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags)) {
+    if (ImGui::BeginTable("##face_dist_params", kShapeTableColumnCount, kTableFlags, shape_table_size)) {
       setup_shape_columns();  // no TableHeadersRow — the params table above already labels the columns
       for (int i = 0; i < 6; i++) {
         char label[32];
@@ -747,9 +716,23 @@ static void RenderAxisModal(GuiState& /*state*/) {
   AxisPreset active = ClassifyAxisPreset(g_axis_buf[0], g_axis_buf[1], g_axis_buf[2]);
   const ImVec4 active_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
 
-  ImGui::Text("Presets:");
+  // The row flows: each button goes next to the previous one only while it still fits inside the
+  // content region, and starts a new line when it does not. An unconditional SameLine() chain was
+  // what it used to be, and that made the row a hard lower bound on the panel's width — the six
+  // labels plus the "Presets:" lead-in are ~330 px of text, so at any narrower column the inspector
+  // grew a horizontal scrollbar and every OTHER row on the page paid for this one (the form column
+  // never scrolls horizontally — doc/gui-visual-language.md §4.7). Wrapping is measured before
+  // drawing rather than by drawing and backing out: SmallButton's width is exactly its text plus
+  // FramePadding.x on each side, so it is known without submitting the item.
+  ImGui::TextDisabled("Presets:");
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float content_right_x = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+  float last_item_right_x = ImGui::GetItemRectMax().x;
   for (const auto& entry : kAxisPresets) {
-    ImGui::SameLine();
+    const float button_w = ImGui::CalcTextSize(entry.label).x + style.FramePadding.x * 2.0f;
+    if (last_item_right_x + style.ItemSpacing.x + button_w <= content_right_x) {
+      ImGui::SameLine();
+    }
     bool highlighted = entry.id == active;
     if (highlighted) {
       ImGui::PushStyleColor(ImGuiCol_Button, active_color);
@@ -769,6 +752,7 @@ static void RenderAxisModal(GuiState& /*state*/) {
     if (highlighted) {
       ImGui::PopStyleColor();
     }
+    last_item_right_x = ImGui::GetItemRectMax().x;
   }
 
   ImGui::Separator();
@@ -784,13 +768,20 @@ static void RenderAxisModal(GuiState& /*state*/) {
   // prematurely by that intermediate Begin instead of the combo popup. Verified
   // for the current implementation; if RenderAxisDist is ever refactored to
   // wrap its body in BeginChild for layout purposes, this propagation will
-  // silently break (popup regresses to layer=0).
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
-  SetNextComboPopupTopMost();
-  RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
+  // silently break (popup regresses to layer=0). The property table opened just
+  // below is not such a wrap — a scroll-free BeginTable opens no child window —
+  // and the queue is set INSIDE it, after that call, either way.
+  // One table for all three axes, not one each: the label column is computed per table, so three
+  // tables would line their labels up only by coincidence (see RenderAxisDist's caller contract).
+  if (BeginPropertyTable("##axis_props")) {
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Zenith", g_axis_buf[0], 0.0f, 180.0f);
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Azimuth", g_axis_buf[1], 0.0f, 360.0f);
+    SetNextComboPopupTopMost();
+    RenderAxisDist("Roll", g_axis_buf[2], 0.0f, 360.0f);
+    EndPropertyTable();
+  }
 
   // No OK / Cancel: the page commits every frame (RenderCrystalInspector).
 }
@@ -927,13 +918,17 @@ static void RenderSummandRowList() {
     ImGui::SetTooltip("Maximum OR rows reached (%zu)", kMaxSummandRows);
   }
 
-  // Static hint — includes ';' example post-334.3 (H-A). Kept as one line so
-  // it does not compete with the live-preview block below.
-  ImGui::TextDisabled("e.g. 3-5  or  1-3;3-5 (OR)  or  entry:2 & exit:4  or  3-5 & len:2-3");
-
   // Token help icon: transparent SmallButton acts as a stable hover target
   // (mirrors RenderSharedFilterControls' `kDTooltipText` icon pattern).
-  ImGui::SameLine();
+  //
+  // Drawn BEFORE the hint, not after it on a SameLine. The pair used to be "hint, SameLine, icon",
+  // and that made them one composite of a fixed ~388 px — the hint cannot wrap while something is
+  // pinned to its right edge, because SameLine measures from the whole wrapped block. 388 px is
+  // wider than this column ever is once the page grows a vertical scrollbar (382 px of content at
+  // the default width), so the page scrolled sideways at the SHIPPING width, not only at a
+  // hand-narrowed one. Leading with the icon lets the hint below wrap against the content edge like
+  // any other prose, and costs nothing: the icon is a hover target whose position carries no
+  // meaning.
   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
@@ -956,6 +951,14 @@ static void RenderSummandRowList() {
         "  blank row     = states nothing, dropped (all rows blank = no filter)");
   }
 
+  // Static hint — includes ';' example post-334.3 (H-A). Wrapped rather than kept to one line:
+  // one line was a claim about the panel's width, and the panel is now narrow enough that the
+  // claim is false. It still reads as one unit with the icon it follows.
+  ImGui::SameLine();
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::TextWrapped("e.g. 3-5  or  1-3;3-5 (OR)  or  entry:2 & exit:4  or  3-5 & len:2-3");
+  ImGui::PopStyleColor();
+
   // Live preview of the sum-of-products the current row buffers would
   // expand to on commit. Uses the SAME parse/format helpers as the commit
   // path (BuildSopFromRows -> FormatSopExpansionPreview) so what the user
@@ -972,7 +975,7 @@ static void RenderSummandRowList() {
     ImGui::Separator();
     ImGui::TextDisabled("Preview:");
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(FormatSopExpansionPreview(live_sop).c_str());
+    ImGui::TextDisabled("%s", FormatSopExpansionPreview(live_sop).c_str());
     ImGui::PopTextWrapPos();
 
     // task-gui-feedback-affordances Step 3 (AC4): show the post-Cartesian
@@ -991,9 +994,11 @@ static void RenderSummandRowList() {
                   LUMICE_MAX_CONFIG_CLAUSES);
     if (sop_summary.overflow) {
       ImGui::PushStyleColor(ImGuiCol_Text, DestructiveTextColor());
-      ImGui::TextUnformatted(clause_line);
-      ImGui::SameLine();
-      ImGui::TextUnformatted("(exceeds limit — the previous config will be kept on OK)");
+      // Wrapped, not SameLine'd: the sentence is ~380 px of unbreakable text, so laying it beside
+      // the count made this row the widest thing on the page and the inspector scrolled sideways
+      // to fit it. The row-level validation message a few rows up (RenderFilterRow) already wraps
+      // for the same reason; this one was the leftover.
+      ImGui::TextWrapped("%s (exceeds limit — the previous config will be kept on OK)", clause_line);
       ImGui::PopStyleColor();
     } else {
       ImGui::TextDisabled("%s", clause_line);
@@ -1008,8 +1013,15 @@ static void RenderSummandRowList() {
 // task-356.3 — P/B/D rendering and IsDApplicableGuiAxis moved to
 // gui/symmetry_ui.hpp so color_window.cpp (per-ref row) can reuse them (a12).
 static void RenderSharedFilterControls(bool d_applicable) {
+  // Two composite property rows. The page's own content — the OR rows — is a LIST, not a form, and
+  // stays full-width above; these two are the page's settings and get the same leading-label shape
+  // every other inspector page uses.
+  if (!BeginPropertyTable("##filter_props")) {
+    return;
+  }
   // Action: two RadioButtons (was Combo pre-task; aligns with Crystal tab style).
   // Always rendered — filter_in / filter_out semantics apply to every type.
+  PropertyRow("Action");
   if (ImGui::RadioButton("Filter In##filter_action", g_filter_top.action == 0)) {
     g_filter_top.action = 0;
   }
@@ -1024,7 +1036,11 @@ static void RenderSharedFilterControls(bool d_applicable) {
     ImGui::SetTooltip("Hide rays matching the filter");
   }
 
+  // The row is opened here, not inside RenderSymmetryCheckboxes: that helper is shared with the
+  // Colors window's per-ref row (symmetry_ui.hpp), which is not a property table.
+  PropertyRow("Symmetry");
   RenderSymmetryCheckboxes(g_filter_top.sym_p, g_filter_top.sym_b, g_filter_top.sym_d, d_applicable, "filter_modal");
+  EndPropertyTable();
 }
 
 // Remove Filter — arms g_filter_remove_intent so ApplyBuffersToEntry writes
@@ -1340,8 +1356,11 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
   // + ImGuiTabItemFlags_SetSelected) is delicate and must keep a stable identity.
   const int entry_layer = g_modal_layer_idx;
   const int entry_index = g_modal_entry_idx;
+  // g_active_tab doubles as BeginFlatTabItem's active-mirror: it is written inside each branch
+  // below, i.e. one frame before the heads are drawn again, which is what the underline styling
+  // needs and the only thing available (BeginTabItem tells you the answer after it has drawn).
   if (ImGui::BeginTabBar("##edit_modal_tabs")) {
-    if (ImGui::BeginTabItem(crystal_label, nullptr, crystal_flags)) {
+    if (BeginFlatTabItem(crystal_label, g_active_tab == ActiveTab::kCrystal, crystal_flags)) {
       g_active_tab = ActiveTab::kCrystal;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);
@@ -1350,7 +1369,7 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
       ImGui::PopID();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem(axis_label, nullptr, axis_flags)) {
+    if (BeginFlatTabItem(axis_label, g_active_tab == ActiveTab::kAxis, axis_flags)) {
       g_active_tab = ActiveTab::kAxis;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);
@@ -1359,7 +1378,7 @@ void RenderModalTabBar(GuiState& state, const char* crystal_label, const char* a
       ImGui::PopID();
       ImGui::EndTabItem();
     }
-    if (ImGui::BeginTabItem(filter_label, nullptr, filter_flags)) {
+    if (BeginFlatTabItem(filter_label, g_active_tab == ActiveTab::kFilter, filter_flags)) {
       g_active_tab = ActiveTab::kFilter;
       ImGui::PushID(entry_layer);
       ImGui::PushID(entry_index);
@@ -1504,7 +1523,11 @@ void RenderCrystalInspector(GuiState& state, int layer_idx, int entry_idx) {
     auto& entry = state.layers[layer_idx].entries[entry_idx];
     char weight_label[32];
     snprintf(weight_label, sizeof(weight_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
-    SliderWithInput(weight_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+    if (BeginPropertyTable("##entry_props")) {
+      PropertyRow("Weight");
+      DragFloatField(weight_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+      EndPropertyTable();
+    }
   }
 
   // Preview above, tabs below — the "vertical" arrangement the modal offered as an option is the
@@ -1611,7 +1634,7 @@ void RenderSpectrumModal(GuiState& state) {
     return;
   }
 
-  ImGui::TextUnformatted("Discrete wavelength/weight list");
+  ImGui::TextDisabled("Discrete wavelength/weight list");
   ImGui::Separator();
 
   // No in-modal "import preset": this editor does discrete wavelength editing only. Preset spectra
@@ -1655,7 +1678,7 @@ void RenderSpectrumModal(GuiState& state) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::Text("%d / %d entries", cur_count, kSpectrumHardMax);
+  ImGui::TextDisabled("%d / %d entries", cur_count, kSpectrumHardMax);
 
   if (cur_count > kSpectrumSoftWarnCount) {
     ImGui::TextColored(WarningTextColor(), "Warning: %d > %d wavelengths — per-wavelength sampling becomes noisier.",

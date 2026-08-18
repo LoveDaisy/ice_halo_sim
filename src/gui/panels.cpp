@@ -62,9 +62,182 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
   return changed;
 }
 
+// Copy `label` up to its "##id" suffix into `out`, so a widget id and the text drawn for it
+// can be one argument. Same rule as ImGui's own label parsing.
+static void StripImGuiIdSuffix(const char* label, char* out, size_t out_size) {
+  const char* hash_pos = strstr(label, "##");
+  if (hash_pos) {
+    auto len = static_cast<size_t>(hash_pos - label);
+    if (len >= out_size) {
+      len = out_size - 1;
+    }
+    memcpy(out, label, len);
+    out[len] = '\0';
+  } else {
+    snprintf(out, out_size, "%s", label);
+  }
+}
+
 // ---- Edit request state ----
 
 }  // namespace
+
+// ---- Property rows (see panels.hpp for the shape and the rationale) ----
+
+bool BeginPropertyTable(const char* id) {
+  // No borders and no RowBg: the alignment of the two columns is the whole visual mechanism,
+  // and drawing the grid that produces it would add one box per row to a panel whose entire
+  // theme decision was to stop drawing boxes (theme.cpp, FrameBorderSize = 0).
+  // No scroll flags, deliberately: with ScrollX/ScrollY ImGui::BeginTable opens a child window
+  // (imgui_tables.cpp, `use_child_window`), which would consume a queued SetNextWindowClass —
+  // the mechanism RenderAxisDist's combo-popup contract depends on.
+  if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
+    return false;
+  }
+  ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, kPropertyLabelColWidth);
+  ImGui::TableSetupColumn("##control", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  return true;
+}
+
+void PropertyRow(const char* label) {
+  char display_buf[64];
+  StripImGuiIdSuffix(label, display_buf, sizeof(display_buf));
+
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  // Right-align within the label cell. Overflow (a label wider than the token) is left to run
+  // into the cell's clip rect rather than being centred or ellipsised: it is a calibration bug
+  // in the token, and test_property_row.cpp is what reports it.
+  const float avail = ImGui::GetContentRegionAvail().x;
+  const float text_w = ImGui::CalcTextSize(display_buf).x;
+  if (avail > text_w) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - text_w));
+  }
+  // The control across the row is framed and the label is not, so without this the label sits a
+  // FramePadding.y above the text inside the control it names.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("%s", display_buf);
+
+  ImGui::TableNextColumn();
+  ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+void EndPropertyTable() {
+  ImGui::EndTable();
+}
+
+// ---- Eyebrow section heading (see panels.hpp for the shape and the rationale) ----
+
+void RenderEyebrow(const char* label) {
+  // Debug-only statement of the "caller passes upper case" contract. Cheap here and worth having:
+  // the helper is meant to spread to more pages, and a stray lower-case heading is exactly the
+  // kind of inconsistency nobody notices in review but every screenshot shows.
+  IM_ASSERT([&]() {
+    for (const char* c = label; *c != '\0'; c++) {
+      if (*c >= 'a' && *c <= 'z') {
+        return false;
+      }
+    }
+    return true;
+  }() && "RenderEyebrow expects an already-upper-case label");
+
+  ImFont* font = EyebrowFont();
+  if (font != nullptr) {
+    ImGui::PushFont(font);
+  }
+  // Reuses the theme's dimmed text tier rather than a fresh colour: an eyebrow is secondary
+  // information by definition, and the palette already has exactly one tier that says so.
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::SeparatorText(label);
+  ImGui::PopStyleColor();
+  if (font != nullptr) {
+    ImGui::PopFont();
+  }
+}
+
+// ---- Flat tab items (see panels.hpp for why the caller has to supply `is_active`) ----
+
+namespace {
+
+// Thickness of the accent rule under the selected tab, in pixels. Two, not one: at one pixel the
+// rule reads as a hairline divider (the same weight as Separator) rather than as the mark that
+// says which tab is showing. Same shape as app_panels.cpp's kSimTierEdgeWidth — a drawing
+// dimension of one bespoke mark, named where it is drawn.
+constexpr float kFlatTabUnderlineThickness = 2.0f;
+
+}  // namespace
+
+bool BeginFlatTabItem(const char* label, bool is_active, int flags) {
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(is_active ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+  const bool open = ImGui::BeginTabItem(label, nullptr, static_cast<ImGuiTabItemFlags>(flags));
+  // Popped immediately: the colour is for the tab HEAD, which BeginTabItem has finished drawing by
+  // the time it returns. Held across the `if (BeginFlatTabItem(...))` body it would re-tier every
+  // widget on the page inside it.
+  ImGui::PopStyleColor();
+
+  if (open) {
+    // The accent rule under the selected tab, drawn here because ImGui will not draw it for these
+    // tab bars: its own overline is gated on ImGuiTabBarFlags_DrawSelectedOverline, and the only
+    // place that flag is ever set is DockNodeUpdateTabBar (imgui.cpp) — a plain BeginTabBar never
+    // gets it, so ImGuiCol_TabSelectedOverline renders on docked-window tabs and on nothing else.
+    // Measured, not inferred: with the slot already set to accent and no rule appearing in a
+    // capture of either bar.
+    //
+    // The colour still comes from that slot rather than a second accent constant, so "the selected
+    // tab's rule" keeps one source across the two ways it gets drawn. And unlike the label tier
+    // above, this is driven by BeginTabItem's own return value — the answer for THIS frame — so
+    // the rule never lags a click the way the text colour does.
+    const ImVec2 head_min = ImGui::GetItemRectMin();
+    const ImVec2 head_max = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(head_min.x, head_max.y - kFlatTabUnderlineThickness), head_max,
+                                              ImGui::GetColorU32(ImGuiCol_TabSelectedOverline));
+  }
+  return open;
+}
+
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale) {
+  char drag_id[80];
+  snprintf(drag_id, sizeof(drag_id), "##%s", label);
+
+  ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp;
+  if (scale != SliderScale::kLinear) {
+    flags |= ImGuiSliderFlags_Logarithmic;
+  }
+  // Full domain per kDragTrackReferenceWidth pixels of drag, in both modes: ImGui divides a
+  // logarithmic drag's delta by (max - min) before applying it, which cancels the numerator here.
+  const float speed = (max_val - min_val) / kDragTrackReferenceWidth;
+  const float old_value = *value;
+  ImGui::DragFloat(drag_id, value, speed, min_val, max_val, fmt, flags);
+
+  // Unconditional, and NOT redundant with ImGuiSliderFlags_AlwaysClamp: that flag constrains the
+  // values the widget itself produces, and deliberately leaves a value it was handed out of range
+  // alone. The retired [slider][input] pair ended with exactly this line, and things depend on it
+  // — a .lmc written by hand, or a lens switch that narrows a bound under a value that was legal a
+  // frame ago (the globe's elevation limit), reach the field without going through any control, and
+  // the control is what pulls them back in. Without it the page renders an out-of-domain value as
+  // if it were fine.
+  *value = std::clamp(*value, min_val, max_val);
+  // Same return contract as SliderWithInput: "the value is not what it was", clamp included, since
+  // a clamp is a change the caller has to commit like any other.
+  return *value != old_value;
+}
+
+bool DragIntField(const char* label, int* value, int min_val, int max_val, const char* fmt) {
+  char drag_id[80];
+  snprintf(drag_id, sizeof(drag_id), "##%s", label);
+
+  // Full domain per kDragTrackReferenceWidth pixels of drag, matching DragFloatField. The speed
+  // is a float even for an int drag — ImGui accumulates the sub-unit remainder across frames, so a
+  // domain narrower than the reference width still traverses in exactly that many pixels rather
+  // than snapping one step per pixel.
+  const float speed = static_cast<float>(max_val - min_val) / kDragTrackReferenceWidth;
+  const int old_value = *value;
+  ImGui::DragInt(drag_id, value, speed, min_val, max_val, fmt, ImGuiSliderFlags_AlwaysClamp);
+
+  // Unconditional, for the same reason as DragFloatField's: see the note there.
+  *value = std::clamp(*value, min_val, max_val);
+  return *value != old_value;
+}
 
 // Infer axis orientation preset name from crystal config.
 // Matching logic lives in axis_presets.hpp (shared with edit_modals.cpp; unit-tested).
@@ -255,6 +428,44 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   return body + FilterSummarySuffix(fc);
 }
 
+// ---- Document-tree row meta ("info scent") ----
+//
+// The four functions below format the secondary value each tree row shows at its right edge. They
+// are free functions taking domain values rather than inline snprintf calls at the render sites for
+// one reason: the text is drawn with a bare ImGui::TextDisabled, which carries no item id, so a
+// gui_test cannot read it back through ItemInfo. Splitting the formatting out is the same move
+// FilterSummary and FormatSamplingSegment already make in this repo — the test asserts the string
+// this function returns and separately drives the real widget to prove the render site reads live
+// state.
+//
+// The degree sign is written as its UTF-8 bytes rather than a literal character, matching
+// overlay_labels.cpp: the font atlas is built over the default (Latin-1) glyph range, so the glyph
+// is present, but keeping the escape form makes the source encoding-independent.
+std::string FormatSunTreeMeta(float altitude) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", static_cast<double>(altitude));
+  return buf;
+}
+
+// lens_type indexes kLensTypeNames directly, as every other consumer of the field does
+// (app_panels.cpp's status bar, field_editor_registry.cpp's combo): the value is only ever written
+// by a combo over that same array, so its domain is closed.
+std::string FormatCameraTreeMeta(int lens_type) {
+  return kLensTypeNames[lens_type];
+}
+
+std::string FormatLayerTreeMeta(float probability) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "P %.2f", static_cast<double>(probability));
+  return buf;
+}
+
+std::string FormatCrystalTreeMeta(float proportion) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "w %.0f", static_cast<double>(proportion));
+  return buf;
+}
+
 namespace {
 
 // Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
@@ -306,10 +517,12 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   return slider_w;
 }
 
-// Render the label text after slider + input.
+// Render the label text after slider + input. Dim, like every other field label in this app
+// (PropertyRow's label column, app_panels.cpp's InlineFieldLabel): a name that never changes is
+// what you read once to find the control, not what you come back to read.
 static void FinishSliderLayout(const char* display_label) {
   ImGui::SameLine();
-  ImGui::TextUnformatted(display_label);
+  ImGui::TextDisabled("%s", display_label);
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
@@ -542,23 +755,31 @@ void SetNextComboPopupTopMost() {
 
 // ---- Axis distribution controls (shared with edit modals) ----
 //
-// CALLER CONTRACT: when invoked from a context where the parent window may
-// become a detached OS viewport (currently: Edit Entry modal in multi-viewport
-// mode), the caller must precede this call with `SetNextComboPopupTopMost()`.
-// Without that, the internal `##dist` Combo's popup defaults to NSWindow
-// layer=0 and gets rendered behind the modal at layer=3.
+// CALLER CONTRACT (layout): this emits property ROWS, not a self-contained block — the caller owns
+// the BeginPropertyTable / EndPropertyTable around it. That is not an accident of factoring: with
+// one table per axis, the three axes would each compute their own column widths, and the label
+// column would only line up by coincidence. One table for all three is what makes them one form.
 //
-// IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` /
-// `BeginChild` call before the Combo at line 297 — doing so would consume
-// the caller's queued NextWindowData (WindowClass) prematurely. If layout
-// wrapping is ever required, the SetNextComboPopupTopMost call must be moved
-// inside RenderAxisDist (after any wrapping Begin/BeginChild, immediately
-// before the Combo).
+// CALLER CONTRACT (combo popup): when invoked from a context where the parent window may become a
+// detached OS viewport (currently: the inspector page in multi-viewport mode), the caller must
+// precede this call with `SetNextComboPopupTopMost()`. Without that, the internal `##dist` Combo's
+// popup defaults to NSWindow layer=0 and gets rendered behind the modal at layer=3.
+//
+// IMPLEMENTATION CONTRACT: this function MUST NOT introduce a `Begin` / `BeginChild` call before
+// the `##dist` Combo — doing so would consume the caller's queued NextWindowData (WindowClass)
+// prematurely. If layout wrapping is ever required, the SetNextComboPopupTopMost call must be moved
+// inside RenderAxisDist (after any wrapping Begin/BeginChild, immediately before the Combo).
+// The PropertyRow below is NOT such a wrap: it emits TableNextRow / TableNextColumn / a text item
+// / SetNextItemWidth, none of which touch NextWindowData. The enclosing BeginPropertyTable is not
+// one either — ImGui's BeginTable only opens a child window when ScrollX/ScrollY is set
+// (imgui_tables.cpp, `use_child_window`), and BeginPropertyTable deliberately sets neither. Both
+// checked against the vendored ImGui when the property rows landed.
 bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mean_max) {
   bool changed = false;
   ImGui::PushID(label);
-  ImGui::Text("%s", label);
-  ImGui::SameLine(100);
+  // The axis name labels the distribution-TYPE row: "what kind of spread does Zenith have", with
+  // its parameters on the rows below it.
+  PropertyRow(label);
 
   int dist_type = static_cast<int>(axis.type);
   auto prev_type = axis.type;
@@ -594,24 +815,32 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
     axis.std = std::min(axis.std, max_std);
   }
 
-  changed |= SliderWithInput("Mean", &axis.mean, mean_min, mean_max);
+  PropertyRow("Mean");
+  changed |= DragFloatField("Mean", &axis.mean, mean_min, mean_max);
 
+  // The spread parameter is one field under four names — which name it wears is the distribution's
+  // to say, so the row is emitted inside the switch rather than labelled after it.
   switch (axis.type) {
     case AxisDistType::kGauss:
     case AxisDistType::kGaussLegacy:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Std");
+      changed |= DragFloatField("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kUniform:
-      changed |= SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Range");
+      changed |= DragFloatField("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kZigzag:
-      changed |= SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Amplitude");
+      changed |= DragFloatField("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
       break;
     case AxisDistType::kLaplacian:
-      changed |= SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Scale");
+      changed |= DragFloatField("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
       break;
     default:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+      PropertyRow("Std");
+      changed |= DragFloatField("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
       break;
   }
 
@@ -621,12 +850,19 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
 
 
 void ShapeTableParamLabel(const char* label) {
+  // Dim: this is the shape table's label column, which plays the part PropertyRow's label cell
+  // plays everywhere else. TextDisabled takes no length-delimited overload, so the "##" cut is made
+  // into a buffer first rather than by passing an end pointer.
   const char* hash_pos = strstr(label, "##");
-  if (hash_pos) {
-    ImGui::TextUnformatted(label, hash_pos);
-  } else {
-    ImGui::TextUnformatted(label);
+  if (hash_pos == nullptr) {
+    ImGui::TextDisabled("%s", label);
+    return;
   }
+  char display_buf[64];
+  const std::size_t len = std::min(static_cast<std::size_t>(hash_pos - label), sizeof(display_buf) - 1);
+  std::memcpy(display_buf, label, len);
+  display_buf[len] = '\0';
+  ImGui::TextDisabled("%s", display_buf);
 }
 
 
@@ -985,10 +1221,11 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
   }
   ShapeTableParamLabel(label);
 
-  // Col 1 — center value: slider + input, filling the (stretch) Value column. trailing_label=false
-  // because the name already occupies Col 0.
+  // Col 1 — center value: one DragFloat filling the (stretch) Value column. The name already
+  // occupies Col 0, so the control carries no label of its own.
   ImGui::TableNextColumn();
-  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  changed |= DragFloatField(label, &dist.center, center_min, center_max, center_fmt, center_scale);
 
   // Col 2 — sync group swatch + picker popup. Ahead of Rand/Spread because sync is not a property of
   // randomization: it constrains the row's final value and is equally usable with Rand off. Left
@@ -1128,11 +1365,31 @@ bool PickTargetDisabled(const GuiState& state, int layer_idx, int entry_idx) {
 
 // A fixed, index-free row for one of the document's singletons. Returns nothing: the click writes
 // the selection directly, because there is no deferred-deletion dance to sequence it with.
-void RenderSingletonRow(GuiState& state, const char* label, GuiState::SelectionKind kind) {
+//
+// `meta` is the dimmed secondary value drawn at the row's right edge. It is drawn as absolutely
+// positioned text OVER the Selectable rather than appended to `label`, so the row's id — which
+// gui_test paths name literally ("**/" ICON_FA_SUN " Sun") — stays a constant while the value it
+// previews changes every frame. This is the same overlay-on-Selectable handling RenderEntryRow uses
+// for its badges; RenderLayer below instead extends its existing SameLine chain, because that row
+// already positions its delete button that way. The two mechanisms are each matched to the row they
+// live in, deliberately — not an inconsistency to unify.
+void RenderSingletonRow(GuiState& state, const char* label, GuiState::SelectionKind kind, const char* meta) {
   const bool selected = state.selection.kind == kind;
+  const ImVec2 row_pos = ImGui::GetCursorScreenPos();
   if (ImGui::Selectable(label, selected)) {
     state.selection = GuiState::DocumentSelection{ kind, -1, -1 };
   }
+  if (meta == nullptr || meta[0] == '\0') {
+    return;
+  }
+  // Save the cursor the Selectable left behind and restore it after: everything below relies on the
+  // normal row flow, and a stray absolute position here would land the next row on top of this one.
+  const ImVec2 next_pos = ImGui::GetCursorScreenPos();
+  const float right_edge = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+  const float meta_w = ImGui::CalcTextSize(meta).x;
+  ImGui::SetCursorScreenPos(ImVec2(right_edge - meta_w, row_pos.y));
+  ImGui::TextDisabled("%s", meta);
+  ImGui::SetCursorScreenPos(next_pos);
 }
 
 }  // namespace
@@ -1340,11 +1597,13 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   // inspector's crystal page, because a drag target inside a one-line selectable row competes with
   // the row's own click.
   {
-    char weight_text[16];
-    snprintf(weight_text, sizeof(weight_text), "%.0f", static_cast<double>(entry.proportion));
-    x -= ImGui::CalcTextSize(weight_text).x + kHoverBtnGap * 2.0f;
+    // Formatted by the same FormatCrystalTreeMeta the other three tree rows' meta comes from, so
+    // the four rows' secondary values have one owner rather than one format string each. The "w "
+    // prefix is what makes a bare number read as a weight without a click.
+    const std::string weight_text = FormatCrystalTreeMeta(entry.proportion);
+    x -= ImGui::CalcTextSize(weight_text.c_str()).x + kHoverBtnGap * 2.0f;
     ImGui::SetCursorScreenPos(ImVec2(x, text_y));
-    ImGui::TextDisabled("%s", weight_text);
+    ImGui::TextDisabled("%s", weight_text.c_str());
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Weight (relative ray share within this layer)");
     }
@@ -1393,6 +1652,16 @@ void RenderLayer(GuiState& state, int layer_idx) {
   // one layer exists (the scattering model requires at least one layer).
   bool can_delete_layer = state.layers.size() > 1;
   float layer_del_w = ImGui::CalcTextSize(ICON_FA_XMARK).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+
+  // The layer's info scent — its multi-scatter probability — sits just left of the delete button.
+  // It extends the SameLine chain this row already uses rather than being positioned absolutely
+  // like the singleton rows' meta: the delete button below is placed by an absolute SameLine offset
+  // that this insertion leaves numerically untouched, so the button does not move.
+  const std::string layer_meta = FormatLayerTreeMeta(layer.probability);
+  const float layer_meta_w = ImGui::CalcTextSize(layer_meta.c_str()).x;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w - ImGui::GetStyle().ItemSpacing.x - layer_meta_w);
+  ImGui::TextDisabled("%s", layer_meta.c_str());
+
   ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
   if (can_delete_layer) {
     PushDestructiveStyle();
@@ -1489,13 +1758,7 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
   const bool is_last_layer = layer_idx == static_cast<int>(state.layers.size()) - 1;
   const bool prob_is_zero = IsProbZero(layer.probability);
   const bool disable_slider = is_last_layer && prob_is_zero;
-  ImGui::BeginDisabled(disable_slider);
-  ImGui::BeginGroup();
-  char prob_id[32];
-  snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
-  SliderWithInput(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
-  ImGui::EndGroup();
-  ImGui::EndDisabled();
+  const bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
   const char* prob_tip = nullptr;
   if (disable_slider) {
     prob_tip = "Last layer: all filter-pass rays are effective output; prob does not apply.";
@@ -1507,16 +1770,31 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
   } else {
     prob_tip = "Fraction of rays continuing to the next layer.";
   }
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("%s", prob_tip);
-  }
-  const bool show_warning_icon = (is_last_layer && !prob_is_zero) || (!is_last_layer && prob_is_zero);
-  if (show_warning_icon) {
-    ImGui::SameLine();
-    ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
-    if (ImGui::IsItemHovered()) {
+  char prob_id[32];
+  snprintf(prob_id, sizeof(prob_id), "Prob.##layer_%d", layer_idx);
+  if (BeginPropertyTable("##layer_props")) {
+    PropertyRow("Prob.");
+    if (show_warning_icon) {
+      // Named exception to "the control fills its column": the warning glyph shares the cell, so
+      // the control gives back exactly the glyph's own advance plus one spacing. Reserved rather
+      // than a fixed number so it tracks the font — same formula as the filter editor's delete
+      // column (RenderSummandRowList, edit_modals.cpp).
+      ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(ICON_FA_CIRCLE_EXCLAMATION).x + ImGui::GetStyle().ItemSpacing.x));
+    }
+    ImGui::BeginDisabled(disable_slider);
+    DragFloatField(prob_id, &layer.probability, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       ImGui::SetTooltip("%s", prob_tip);
     }
+    if (show_warning_icon) {
+      ImGui::SameLine();
+      ImGui::TextColored(WarningTextColor(), ICON_FA_CIRCLE_EXCLAMATION);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", prob_tip);
+      }
+    }
+    EndPropertyTable();
   }
 
   // How many crystals this layer holds. The tree above shows them one per row, but a folded layer
@@ -1556,9 +1834,15 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
 void RenderDocumentTreeRows(GuiState& state) {
   // The document's two singletons come first, in the order the light travels: the sun makes the
   // rays, the camera sees them, and everything between is the scattering stack below.
-  RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun);
-  RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera);
-  ImGui::Separator();
+  //
+  // The dimmed right-edge value is the row's "info scent": the tree says WHICH knobs exist, and
+  // this says where each is currently set, so the common check needs no click into the inspector.
+  const std::string sun_meta = FormatSunTreeMeta(state.sun.altitude);
+  const std::string camera_meta = FormatCameraTreeMeta(state.renderer.lens_type);
+  RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun, sun_meta.c_str());
+  RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera, camera_meta.c_str());
+  // Names the group the divider used to only separate: everything below is the scattering stack.
+  RenderEyebrow("LAYERS");
 
   for (int i = 0; i < static_cast<int>(state.layers.size()); i++) {
     RenderLayer(state, i);
@@ -1574,31 +1858,33 @@ void RenderDocumentTreeRows(GuiState& state) {
 // ========== Sun controls (the inspector's Sun page) ==========
 
 void RenderSunControls(GuiState& state) {
-  ImGui::BeginGroup();
+  if (!BeginPropertyTable("##sun_props")) {
+    return;
+  }
   // AC2 migration path (scrum-gui-state-reconcile T0): widget only writes state.sun.altitude; the
   // resulting dirty is derived by ReconcileGuiEffects in SyncFromPoller (diff on state.sun vs.
   // last_committed_state.sun). The pre-migration DIRTY_IF wrapper is retired at this call site.
   // Domain and format read from the field editor registry, not written here. `fmt` is passed
-  // explicitly even though it currently equals SliderWithInput's own default: relying on the
+  // explicitly even though it currently equals DragFloatField's own default: relying on the
   // default would leave the display precision as a second statement this call site makes on its
   // own, which is the thing being removed.
   const FieldEditorConstraint alt_c = ConstraintFor("sun.altitude", state);
-  SliderWithInput("Altitude", &state.sun.altitude, static_cast<float>(alt_c.min_value),
-                  static_cast<float>(alt_c.max_value), alt_c.fmt, alt_c.scale);
-  ImGui::EndGroup();
+  PropertyRow("Altitude");
+  DragFloatField("Altitude", &state.sun.altitude, static_cast<float>(alt_c.min_value),
+                 static_cast<float>(alt_c.max_value), alt_c.fmt, alt_c.scale);
+  // The tooltip now hangs off the control alone rather than a group spanning control + label: the
+  // label lives in the other column, and a group cannot span two table cells.
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Sun elevation angle above the horizon");
   }
-  ImGui::BeginGroup();
   // AC2 migration path: same rationale as sun.altitude above.
   const FieldEditorConstraint dia_c = ConstraintFor("sun.diameter", state);
-  SliderWithInput("Diameter", &state.sun.diameter, static_cast<float>(dia_c.min_value),
-                  static_cast<float>(dia_c.max_value), dia_c.fmt, dia_c.scale);
-  ImGui::EndGroup();
+  PropertyRow("Diameter");
+  DragFloatField("Diameter", &state.sun.diameter, static_cast<float>(dia_c.min_value),
+                 static_cast<float>(dia_c.max_value), dia_c.fmt, dia_c.scale);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
   // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
   static const char* const* kSpectrumComboItems = [] {
@@ -1614,7 +1900,8 @@ void RenderSunControls(GuiState& state) {
   // Cancel leaves it at the prior valid preset. The combo re-reads spectrum_index each frame, so it
   // shows the prior preset while the editor is open and flips to "Custom..." once OK commits.
   int combo_sel = state.sun.spectrum_index;
-  if (ImGui::Combo("Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
+  PropertyRow("Spectrum");
+  if (ImGui::Combo("##Spectrum", &combo_sel, kSpectrumComboItems, kSpectrumComboItemCount)) {
     if (combo_sel == kCustomSpectrumIndex) {
       OpenSpectrumModal(state);  // intent-only: open the editor; OK is the sole commit point
     } else {
@@ -1628,12 +1915,15 @@ void RenderSunControls(GuiState& state) {
         "Light source spectrum for wavelength-dependent refraction.\n"
         "\"Custom...\" opens an editor for a discrete wavelength/weight list.");
   }
-  ImGui::PopItemWidth();
   if (state.sun.spectrum_index == kCustomSpectrumIndex) {
+    // A label-less row rather than a button below the table: the button acts on the row above it,
+    // so lining it up under that row's control is what says so.
+    PropertyRow("");
     if (ImGui::SmallButton("Edit spectrum...##spectrum_edit")) {
       OpenSpectrumModal(state);  // re-open editor for the existing custom spectrum
     }
   }
+  EndPropertyTable();
 
   // The "Simulation" group that used to sit here — Infinite rays / Rays(M) / Max hits / Use GPU —
   // now lives in the top bar's execution cluster (RenderExecutionCluster, app_panels.cpp). It was

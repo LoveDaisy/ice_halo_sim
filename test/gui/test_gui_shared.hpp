@@ -289,6 +289,24 @@ void StopPerfSimulation();
 // ReadOnly, say) for the predicate to still mean "the user cannot operate this".
 bool IsDisabled(const ImGuiTestItemInfo& info);
 
+// Read the live rectangle of a named window out of the DEFAULT framebuffer, through
+// g_fullframe_capture's sub-region protocol. The rectangle is clamped to the framebuffer, so a
+// chrome window that overhangs an edge yields the part of it that was on screen. Returns false if
+// the window is not submitted this frame, if the clamped rectangle is empty, or if the readback did
+// not land.
+//
+// Output is RGBA, four bytes per pixel, origin bottom-left, sized in FRAMEBUFFER pixels — which is
+// twice the ImGui size on a Retina display, so a caller indexing into it must use *out_w / *out_h
+// rather than the window's ImGui size. The coordinate flip and the Retina scaling are the whole
+// reason this is shared: the same arithmetic is open-coded at several capture sites, and getting
+// the y flip subtly wrong yields a plausible-looking capture of the wrong band. New capture sites
+// should call this rather than write it again.
+//
+// The caller is responsible for settling the frame first (and for parking the mouse if a tooltip
+// would otherwise land in the rectangle).
+bool CaptureWindowRect(ImGuiTestContext* ctx, const char* window_name, std::vector<unsigned char>* out_pixels,
+                       int* out_w, int* out_h);
+
 // Hands ImGui's popup stack back when a case leaves, by whichever exit.
 //
 // ResetTestState() reaches everything about a popup this suite opens except the one piece ImGui
@@ -380,6 +398,27 @@ void OpenDisplayStripTab(ImGuiTestContext* ctx, const char* tab_label);
 ImGuiTestItemInfo InspectorItemInfo(ImGuiTestContext* ctx, const char* ref);
 bool InspectorItemExists(ImGuiTestContext* ctx, const char* ref);
 
+// Scroll the inspector until `ref` resolves and LEAVE it there, so an ItemClick / ItemInputValue
+// can follow. Returns whether it resolved. The action-side counterpart to InspectorItemInfo — same
+// relationship ScrollTreeTo has to the tree — and the reason it is separate is the last paragraph
+// above: the action verbs cannot reach an item they were never told the name of, so a case that
+// drives a control near the bottom of a page has to bring it on screen first rather than assume
+// it. Deliberately does NOT restore the scroll, since its whole purpose is to set up an action.
+bool ScrollInspectorTo(ImGuiTestContext* ctx, const char* ref);
+
+// Open the combo at `combo_ref` and click `item_label` inside its popup.
+//
+// Two quirks make this a hand-rolled helper rather than ImGuiTestContext::ComboClick. That one
+// splits its argument at the FIRST '/' and takes everything before it as the combo, so it can only
+// address a combo that is a direct child of the current ref — which excludes every combo inside a
+// PushID scope (the Colors window) or inside a property table (every inspector page). And
+// `combo_ref` must be a LITERAL path, never a "**/" wildcard: ImGui::BeginCombo never calls
+// IMGUI_TEST_ENGINE_ITEM_INFO, so a combo has no registered debug label and a wildcard search,
+// which matches by label, can never find one.
+//
+// The ref is left where it was found, so a caller that had set one up keeps it.
+void ComboPick(ImGuiTestContext* ctx, const char* combo_ref, const char* item_label);
+
 // The tree half's scrolling region. Named here because the rows live in a child window, so the
 // scroll that matters is the child's, not the tree window's.
 inline constexpr const char* kTreeScrollRef = "##DocumentTree/##TreeScroll";
@@ -405,6 +444,8 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine);
 void RegisterExecutionClusterTests(ImGuiTestEngine* engine);
 void RegisterShellChromeTests(ImGuiTestEngine* engine);
 void RegisterDocumentColumnTests(ImGuiTestEngine* engine);
+void RegisterInspectorNoHScrollTests(ImGuiTestEngine* engine);
+void RegisterPropertyRowTests(ImGuiTestEngine* engine);
 void RegisterLogPanelTests(ImGuiTestEngine* engine);
 void RegisterOverlayControlTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
@@ -413,6 +454,7 @@ void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);
+void RegisterThemeCoverageTests(ImGuiTestEngine* engine);
 void RegisterPreviewAnimationTests(ImGuiTestEngine* engine);
 void RegisterCaptureHarnessTests(ImGuiTestEngine* engine);
 void RegisterSimE2eSmokeTests(ImGuiTestEngine* engine);

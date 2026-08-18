@@ -42,6 +42,29 @@ struct OverlayLabelInput {
   float grid_step = 10.0f;
 };
 
+// Forward projection: a world-space unit direction → its pixel offset from the viewport CENTRE.
+//
+// The units are the shader's: `res_x`/`res_y` are the viewport in FRAMEBUFFER pixels, the returned
+// offset is measured from the centre of that rectangle, and it is y-UP (a direction above the
+// camera axis yields a positive `py`), so a caller drawing into an ImGui draw list has to flip y —
+// see how ComputeOverlayLabels maps a sample to `screen_y` for the one expression to copy.
+//
+// `view_matrix` is BuildViewMatrix's column-major 3x3 (preview_renderer.hpp); the full-sky lens
+// branches (dual fisheye 4-6, rectangular 7, dual orthographic 9) ignore it, matching the shader.
+//
+// Exposed rather than kept file-local because this is the repo's ONE forward projection into
+// preview-window pixel space: overlay label placement uses it, and so does the empty state's
+// CPU-drawn instrument (app_panels.cpp). A second copy of the per-lens dispatch is exactly the
+// drift this avoids — the projection each of them draws against has to be the same one, or the
+// dashed 22° circle and the "22°" label beside it would come apart under a lens change.
+struct ProjectedPixel {
+  float px, py;  // offset from viewport centre, y-up
+  bool valid;    // false = behind the camera, or outside this lens's projection domain
+};
+
+ProjectedPixel WorldDirToPixel(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
+                               const float view_matrix[9]);
+
 // Compute labels at viewport edges where overlay lines cross.
 // vp_screen_* are in the same coordinate space as the target ImDrawList:
 //   - For ImGui::GetWindowDrawList() under ImGuiConfigFlags_ViewportsEnable,
@@ -98,26 +121,6 @@ namespace detail {
 //                       left untouched in that case.
 void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
                                const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
-
-// Test-only thin wrapper exposing the anonymous-namespace WorldDirToPixel so
-// unit tests can pin per-lens dispatch (especially the full-sky lens forward
-// projectors added in task-label-placement-impl). Mirror of
-// PixelToWorldDirForTesting.
-//
-// Inputs:
-//   wx, wy, wz         world-space unit direction
-//   res_x, res_y       viewport width / height in pixels
-//   lens_type          LensType enum value (0..10)
-//   fov                horizontal field-of-view in degrees
-//   view_matrix        column-major 3x3 (BuildViewMatrix output); ignored by
-//                      full-sky lens branches.
-//
-// Outputs:
-//   out_px, out_py     pixel offset from viewport center (only set when valid)
-//   out_valid          false if direction is behind camera, outside the
-//                      projection domain, or otherwise unmapped.
-void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float res_y, int lens_type, float fov,
-                               const float view_matrix[9], float* out_px, float* out_py, bool* out_valid);
 
 // Clamp a label's anchor position so the rendered text bounding box stays
 // inside the viewport rect with at least 2 px (`kViewportInsetPx`) margin

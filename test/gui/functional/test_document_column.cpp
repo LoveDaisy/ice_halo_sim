@@ -25,6 +25,8 @@
 #include "IconsFontAwesome6.h"
 #include "gui/dock_layout.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/panels.hpp"
+#include "gui/theme.hpp"
 #include "imgui_internal.h"
 #include "test_gui_shared.hpp"
 
@@ -343,7 +345,13 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       gui::g_state.pick_link_source = gui::GuiState::EntryRef{ 0, 0 };
       ctx->Yield(3);
       IM_CHECK(!gui::g_state.document_tree_folded);
-      IM_CHECK(ctx->ItemExists("**/##row_0_1"));  // the target the user was told to click
+      // The target the user was told to click. ScrollTreeTo rather than a bare ItemExists: a folded
+      // half draws no rows at all (RenderDocumentTree returns before them), so "the rows are back"
+      // is what unfolding has to produce — not "the rows are back AND the half is tall enough to
+      // show all of them at once". The half's height is whatever the previous case left the
+      // splitter at, and a row below the fold is invisible to a wildcard lookup, which matches by
+      // label and only unclipped items register one.
+      IM_CHECK(ScrollTreeTo(ctx, "**/##row_0_1"));
 
       gui::g_state.pick_link_source.reset();
       ctx->Yield(2);
@@ -384,13 +392,13 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kSun);
       IM_CHECK(!ctx->ItemExists("**/###crystal_tab"));
-      IM_CHECK(ctx->ItemExists("**/##Altitude_input"));
+      IM_CHECK(ctx->ItemExists("**/##Altitude"));
 
       IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_CAMERA " Camera"));
       ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
       ctx->Yield(3);
       IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);
-      IM_CHECK(ctx->ItemExists("**/##FOV##view_input"));
+      IM_CHECK(ctx->ItemExists("**/##FOV##view"));
     };
   }
 
@@ -407,7 +415,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
 
       const int crystal_id = gui::g_state.layers[0].entries[1].crystal_id;
       const float before = gui::g_state.crystals[crystal_id].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", before + 3.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", before + 3.0f);
       ctx->Yield(2);
 
       // No OK, no Close, nothing dismissed — and the pool already has it.
@@ -433,7 +441,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       const float base0 = gui::g_state.crystals[id0].height.center;
       const float base1 = gui::g_state.crystals[id1].height.center;
-      ctx->ItemInputValue("**/##Height##modal_cr_input", base0 + 2.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", base0 + 2.0f);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
 
@@ -446,7 +454,7 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
 
       // And an edit here lands here only.
-      ctx->ItemInputValue("**/##Height##modal_cr_input", base1 + 5.0f);
+      ctx->ItemInputValue("**/##Height##modal_cr", base1 + 5.0f);
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.crystals[id1].height.center, base1 + 5.0f);
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, base0 + 2.0f);
@@ -475,7 +483,11 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(gui::g_state.pick_link_source.has_value());
 
-      // Entry 0 adopts entry 1's slot.
+      // Entry 0 adopts entry 1's slot. Scrolled to first, for the same reason the case above this
+      // one does it: arming pick adds the hint bar above the rows, and the tree half is only as
+      // tall as the previous case left the splitter, so the row being clicked is not necessarily
+      // on screen.
+      IM_CHECK(ScrollTreeTo(ctx, "**/##row_0_1"));
       ctx->ItemClick("**/##row_0_1");
       ctx->Yield(4);
       IM_CHECK(!gui::g_state.pick_link_source.has_value());
@@ -515,6 +527,195 @@ void RegisterDocumentColumnTests(ImGuiTestEngine* engine) {
       gui::g_state.SelectCrystal(0, 0);
       ctx->Yield(4);
       IM_CHECK_EQ(gui::g_state.crystals[id0].height.center, external);
+    };
+  }
+
+  // ---- Row meta: the dimmed secondary value at each row's right edge ----
+  //
+  // What these cases are for. The tree names what the document contains; the meta says where each
+  // item is currently set, which is what lets a user check a value without clicking into the
+  // inspector. The proposition that can break is "the row reads LIVE state", not "the format string
+  // is right": a row that formats once and caches, or reads a stale copy, still looks correct in a
+  // screenshot taken before the edit.
+  //
+  // How it is asserted, and why not directly. The meta is drawn with a bare TextDisabled, which
+  // ImGui gives no item id, so ItemInfo cannot read the string back — the same constraint recorded
+  // at the top of functional/test_status_bar.cpp. So the two halves are asserted separately: the
+  // formatting functions are called directly (below), and the render sites are driven through the
+  // real inspector controls with the observable consequence checked in the frame after.
+  //
+  // All four row kinds are driven through a real control here, not just their formatting function.
+  //
+  // What that leaves uncovered, stated rather than implied: none of these cases fails if the
+  // TextDisabled call itself is deleted from the row, because nothing addressable sits downstream
+  // of a string with no id. The one exception is the layer row, whose delete button IS positioned
+  // relative to the meta and is asserted below. That the strings reach the screen at all is covered
+  // by pixels instead — the tree is inside capture_harness/fullframe and visual/left_panel.
+  //
+  // The tier the meta is drawn AT, which is the other half of the same feature. TextDisabled reads
+  // ImGuiCol_TextDisabled by construction, so what is worth asserting is not which call was made
+  // but that the slot it reads is (a) a real second tier rather than the same colour as body text,
+  // and (b) the theme's own value rather than a shade invented at some call site and pushed over
+  // it. ApplyStyle into a scratch style is what makes (b) checkable without exporting the palette:
+  // it is the same seam theme_coverage uses.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "the_dim_tier_is_the_themes_own_second_text_color");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield();
+
+      const ImVec4 live_dim = ImGui::GetStyle().Colors[ImGuiCol_TextDisabled];
+      const ImVec4 live_text = ImGui::GetStyle().Colors[ImGuiCol_Text];
+      IM_CHECK(live_dim.x != live_text.x || live_dim.y != live_text.y || live_dim.z != live_text.z ||
+               live_dim.w != live_text.w);
+
+      ImGuiStyle scratch;
+      gui::ApplyStyle(scratch);
+      const ImVec4 themed_dim = scratch.Colors[ImGuiCol_TextDisabled];
+      IM_CHECK_EQ(live_dim.x, themed_dim.x);
+      IM_CHECK_EQ(live_dim.y, themed_dim.y);
+      IM_CHECK_EQ(live_dim.z, themed_dim.z);
+      IM_CHECK_EQ(live_dim.w, themed_dim.w);
+    };
+  }
+
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "each_row_kind_formats_its_own_secondary_value");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      ctx->Yield();  // the tree these strings are drawn into must exist for the case to be about it
+
+      // Each carries the value, and a different value produces a different string — the pair rules
+      // out both "shows nothing" and "shows a constant".
+      IM_CHECK(gui::FormatSunTreeMeta(20.0f).find("20.0") != std::string::npos);
+      IM_CHECK_STR_NE(gui::FormatSunTreeMeta(20.0f).c_str(), gui::FormatSunTreeMeta(35.5f).c_str());
+
+      IM_CHECK_STR_EQ(gui::FormatCameraTreeMeta(gui::kLensTypeLinear).c_str(), "Linear");
+      IM_CHECK_STR_NE(gui::FormatCameraTreeMeta(gui::kLensTypeLinear).c_str(),
+                      gui::FormatCameraTreeMeta(gui::kLensTypeRectangular).c_str());
+
+      IM_CHECK(gui::FormatLayerTreeMeta(1.0f).find("1.00") != std::string::npos);
+      IM_CHECK_STR_NE(gui::FormatLayerTreeMeta(1.0f).c_str(), gui::FormatLayerTreeMeta(0.25f).c_str());
+
+      IM_CHECK(gui::FormatCrystalTreeMeta(100.0f).find("100") != std::string::npos);
+      IM_CHECK_STR_NE(gui::FormatCrystalTreeMeta(100.0f).c_str(), gui::FormatCrystalTreeMeta(5.0f).c_str());
+    };
+  }
+
+  // The Sun row, edited through the control a user would use. What is checked in the frame after is
+  // that the DOCUMENT holds the new altitude, which is the value the row formats every frame — the
+  // row cannot show the old one without also contradicting this.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "editing_sun_altitude_updates_the_tree_meta");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_SUN " Sun"));
+      ctx->ItemClick("**/" ICON_FA_SUN " Sun");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kSun);
+
+      const float before = gui::g_state.sun.altitude;
+      const std::string meta_before = gui::FormatSunTreeMeta(before);
+      const float after = before + 12.5f;
+      ctx->ItemInputValue("**/##sun_props/##Altitude", after);
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.sun.altitude, after);
+      const std::string meta_after = gui::FormatSunTreeMeta(gui::g_state.sun.altitude);
+      IM_CHECK_STR_NE(meta_before.c_str(), meta_after.c_str());
+      IM_CHECK(meta_after.find("32.5") != std::string::npos);
+    };
+  }
+
+  // The Layer row carries two things on one line — the probability meta and the delete button — and
+  // the meta was inserted into the SameLine chain that positions the button. So this case asserts
+  // both halves: the value the row formats follows the edit, AND the button did not move off the
+  // right edge or lose its enabled state when the text was slipped in front of it.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "document_column", "editing_layer_probability_leaves_the_delete_button_put");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(2, 1);
+      gui::g_state.SelectLayer(0);
+      ctx->Yield(3);
+
+      const float before = gui::g_state.layers[0].probability;
+      const std::string meta_before = gui::FormatLayerTreeMeta(before);
+      ctx->ItemInputValue("**/##Prob.##layer_0", 0.25f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.layers[0].probability, 0.25f);
+      IM_CHECK_STR_NE(meta_before.c_str(), gui::FormatLayerTreeMeta(gui::g_state.layers[0].probability).c_str());
+
+      // Still pinned to the right edge of the tree's scrolling child, and still clickable. This is
+      // stated absolutely rather than as a before/after comparison on purpose: the meta text is
+      // drawn from the same SameLine chain that places this button, so a version of that insertion
+      // that let the text push the button would leave the button wherever the text ended — which a
+      // self-comparison cannot see, because both samples would be equally wrong. A red-state probe
+      // confirmed exactly that (a comparison-only form of this check stayed green against a
+      // deliberately broken insertion; this form goes red).
+      const ImGuiTestItemInfo del = ctx->ItemInfo("**/" ICON_FA_XMARK "##layer_0");
+      IM_CHECK(del.ID != 0);
+      IM_CHECK(!IsDisabled(del));
+      ImGuiWindow* scroller = ctx->WindowInfo(kTreeScrollRef).Window;
+      IM_CHECK(scroller != nullptr);
+      IM_CHECK_LT(ImFabs(del.RectFull.Max.x - scroller->ContentRegionRect.Max.x), 2.0f);
+    };
+  }
+
+  // The Camera row, whose meta is a NAME rather than a number and so is the one that would survive
+  // a format string dropping its value. Driven through the lens picker on the inspector's Camera
+  // page. The explicit combo path (rather than "**/") is the same one test_view_display_controls.cpp
+  // documents: a BeginCombo preview button reports no label, so a wildcard cannot find it.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "switching_the_lens_updates_the_tree_meta");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      IM_CHECK(ScrollTreeTo(ctx, "**/" ICON_FA_CAMERA " Camera"));
+      ctx->ItemClick("**/" ICON_FA_CAMERA " Camera");
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.selection.kind, gui::GuiState::SelectionKind::kCamera);
+
+      const std::string meta_before = gui::FormatCameraTreeMeta(gui::g_state.renderer.lens_type);
+      // Scoped to the inspector window and picked through ComboPick, for the two reasons
+      // test_view_display_controls.cpp records: the combo's preview button is not in the item
+      // registry under a wildcard, and the popup scrolls, so an entry past the fold needs
+      // revealing before it can be clicked.
+      const std::string inspector_ref = std::string("//") + gui::kDocumentInspectorWindowName;
+      ctx->SetRef(inspector_ref.c_str());
+      ComboPick(ctx, "##cam_lens/##Lens Type##view", "Rectangular");
+      ctx->SetRef("");
+      ctx->Yield(3);
+
+      IM_CHECK_EQ(gui::g_state.renderer.lens_type, gui::kLensTypeRectangular);
+      const std::string meta_after = gui::FormatCameraTreeMeta(gui::g_state.renderer.lens_type);
+      IM_CHECK_STR_NE(meta_before.c_str(), meta_after.c_str());
+      IM_CHECK_STR_EQ(meta_after.c_str(), "Rectangular");
+    };
+  }
+
+  // The Crystal row's weight, edited on the inspector page that owns it. The row's badges and hover
+  // buttons are laid out from the right edge inward BEFORE the weight text, so their positions say
+  // nothing about it — there is no addressable widget downstream of this string, which is why this
+  // case asserts the document rather than a pixel or a rect.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "document_column", "editing_a_weight_updates_the_tree_meta");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      BuildScene(1, 1);
+      gui::g_state.layers[0].entries[0].proportion = 5.0f;
+      gui::g_state.SelectCrystal(0, 0);
+      ctx->Yield(3);
+      IM_CHECK_STR_EQ(gui::FormatCrystalTreeMeta(gui::g_state.layers[0].entries[0].proportion).c_str(), "w 5");
+
+      ctx->ItemInputValue("**/##Weight##prop_0_0", 100.0f);
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 100.0f);
+      IM_CHECK_STR_EQ(gui::FormatCrystalTreeMeta(gui::g_state.layers[0].entries[0].proportion).c_str(), "w 100");
     };
   }
 }
