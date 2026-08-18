@@ -359,6 +359,44 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
   return body + FilterSummarySuffix(fc);
 }
 
+// ---- Document-tree row meta ("info scent") ----
+//
+// The four functions below format the secondary value each tree row shows at its right edge. They
+// are free functions taking domain values rather than inline snprintf calls at the render sites for
+// one reason: the text is drawn with a bare ImGui::TextDisabled, which carries no item id, so a
+// gui_test cannot read it back through ItemInfo. Splitting the formatting out is the same move
+// FilterSummary and FormatSamplingSegment already make in this repo — the test asserts the string
+// this function returns and separately drives the real widget to prove the render site reads live
+// state.
+//
+// The degree sign is written as its UTF-8 bytes rather than a literal character, matching
+// overlay_labels.cpp: the font atlas is built over the default (Latin-1) glyph range, so the glyph
+// is present, but keeping the escape form makes the source encoding-independent.
+std::string FormatSunTreeMeta(float altitude) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", static_cast<double>(altitude));
+  return buf;
+}
+
+// lens_type indexes kLensTypeNames directly, as every other consumer of the field does
+// (app_panels.cpp's status bar, field_editor_registry.cpp's combo): the value is only ever written
+// by a combo over that same array, so its domain is closed.
+std::string FormatCameraTreeMeta(int lens_type) {
+  return kLensTypeNames[lens_type];
+}
+
+std::string FormatLayerTreeMeta(float probability) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "P %.2f", static_cast<double>(probability));
+  return buf;
+}
+
+std::string FormatCrystalTreeMeta(float proportion) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "w %.0f", static_cast<double>(proportion));
+  return buf;
+}
+
 namespace {
 
 // Card layout: height is driven by ImGuiChildFlags_AutoResizeY so font/theme
@@ -1249,11 +1287,31 @@ bool PickTargetDisabled(const GuiState& state, int layer_idx, int entry_idx) {
 
 // A fixed, index-free row for one of the document's singletons. Returns nothing: the click writes
 // the selection directly, because there is no deferred-deletion dance to sequence it with.
-void RenderSingletonRow(GuiState& state, const char* label, GuiState::SelectionKind kind) {
+//
+// `meta` is the dimmed secondary value drawn at the row's right edge. It is drawn as absolutely
+// positioned text OVER the Selectable rather than appended to `label`, so the row's id — which
+// gui_test paths name literally ("**/" ICON_FA_SUN " Sun") — stays a constant while the value it
+// previews changes every frame. This is the same overlay-on-Selectable handling RenderEntryRow uses
+// for its badges; RenderLayer below instead extends its existing SameLine chain, because that row
+// already positions its delete button that way. The two mechanisms are each matched to the row they
+// live in, deliberately — not an inconsistency to unify.
+void RenderSingletonRow(GuiState& state, const char* label, GuiState::SelectionKind kind, const char* meta) {
   const bool selected = state.selection.kind == kind;
+  const ImVec2 row_pos = ImGui::GetCursorScreenPos();
   if (ImGui::Selectable(label, selected)) {
     state.selection = GuiState::DocumentSelection{ kind, -1, -1 };
   }
+  if (meta == nullptr || meta[0] == '\0') {
+    return;
+  }
+  // Save the cursor the Selectable left behind and restore it after: everything below relies on the
+  // normal row flow, and a stray absolute position here would land the next row on top of this one.
+  const ImVec2 next_pos = ImGui::GetCursorScreenPos();
+  const float right_edge = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+  const float meta_w = ImGui::CalcTextSize(meta).x;
+  ImGui::SetCursorScreenPos(ImVec2(right_edge - meta_w, row_pos.y));
+  ImGui::TextDisabled("%s", meta);
+  ImGui::SetCursorScreenPos(next_pos);
 }
 
 }  // namespace
@@ -1461,11 +1519,13 @@ bool RenderEntryRow(GuiState& state, int layer_idx, int entry_idx) {
   // inspector's crystal page, because a drag target inside a one-line selectable row competes with
   // the row's own click.
   {
-    char weight_text[16];
-    snprintf(weight_text, sizeof(weight_text), "%.0f", static_cast<double>(entry.proportion));
-    x -= ImGui::CalcTextSize(weight_text).x + kHoverBtnGap * 2.0f;
+    // Formatted by the same FormatCrystalTreeMeta the other three tree rows' meta comes from, so
+    // the four rows' secondary values have one owner rather than one format string each. The "w "
+    // prefix is what makes a bare number read as a weight without a click.
+    const std::string weight_text = FormatCrystalTreeMeta(entry.proportion);
+    x -= ImGui::CalcTextSize(weight_text.c_str()).x + kHoverBtnGap * 2.0f;
     ImGui::SetCursorScreenPos(ImVec2(x, text_y));
-    ImGui::TextDisabled("%s", weight_text);
+    ImGui::TextDisabled("%s", weight_text.c_str());
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Weight (relative ray share within this layer)");
     }
@@ -1514,6 +1574,16 @@ void RenderLayer(GuiState& state, int layer_idx) {
   // one layer exists (the scattering model requires at least one layer).
   bool can_delete_layer = state.layers.size() > 1;
   float layer_del_w = ImGui::CalcTextSize(ICON_FA_XMARK).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+
+  // The layer's info scent — its multi-scatter probability — sits just left of the delete button.
+  // It extends the SameLine chain this row already uses rather than being positioned absolutely
+  // like the singleton rows' meta: the delete button below is placed by an absolute SameLine offset
+  // that this insertion leaves numerically untouched, so the button does not move.
+  const std::string layer_meta = FormatLayerTreeMeta(layer.probability);
+  const float layer_meta_w = ImGui::CalcTextSize(layer_meta.c_str()).x;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w - ImGui::GetStyle().ItemSpacing.x - layer_meta_w);
+  ImGui::TextDisabled("%s", layer_meta.c_str());
+
   ImGui::SameLine(ImGui::GetContentRegionMax().x - layer_del_w);
   if (can_delete_layer) {
     PushDestructiveStyle();
@@ -1686,8 +1756,13 @@ bool RenderLayerInspector(GuiState& state, int layer_idx) {
 void RenderDocumentTreeRows(GuiState& state) {
   // The document's two singletons come first, in the order the light travels: the sun makes the
   // rays, the camera sees them, and everything between is the scattering stack below.
-  RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun);
-  RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera);
+  //
+  // The dimmed right-edge value is the row's "info scent": the tree says WHICH knobs exist, and
+  // this says where each is currently set, so the common check needs no click into the inspector.
+  const std::string sun_meta = FormatSunTreeMeta(state.sun.altitude);
+  const std::string camera_meta = FormatCameraTreeMeta(state.renderer.lens_type);
+  RenderSingletonRow(state, ICON_FA_SUN " Sun", GuiState::SelectionKind::kSun, sun_meta.c_str());
+  RenderSingletonRow(state, ICON_FA_CAMERA " Camera", GuiState::SelectionKind::kCamera, camera_meta.c_str());
   ImGui::Separator();
 
   for (int i = 0; i < static_cast<int>(state.layers.size()); i++) {

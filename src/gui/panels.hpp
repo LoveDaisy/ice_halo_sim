@@ -221,6 +221,18 @@ std::string AxisPresetName(const CrystalConfig& c);
 // to the implementation in panels.cpp.
 std::string FilterSummary(const std::optional<FilterConfig>& f);
 
+// ---- Document-tree row meta ----
+
+// Format the secondary value shown, dimmed, at the right edge of each document-tree row: the sun's
+// altitude, the camera's projection, a layer's multi-scatter probability, an entry's weight.
+// Exposed for the same reason FilterSummary is: the text is drawn with a bare TextDisabled, which
+// has no item id, so a gui_test asserts the string these return and drives the widget separately to
+// prove the row reads live state.
+std::string FormatSunTreeMeta(float altitude);
+std::string FormatCameraTreeMeta(int lens_type);
+std::string FormatLayerTreeMeta(float probability);
+std::string FormatCrystalTreeMeta(float proportion);
+
 // ---- Panel rendering ----
 
 // Render one entry as a compact tree row: thumbnail, "Type · AxisPreset", the weight, the sharing
