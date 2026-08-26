@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787715962181,
+  "lastUpdate": 1787746336986,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "de22a871800c89cf92e502b71a29f91d134fb927",
-          "message": "Merge pull request #173 from LoveDaisy/feat/gui-spectrum-modal-reset-button\n\nfeat(gui): Custom Spectrum modal Reset + overlimit warning polish (GUI small-fixes batch)",
-          "timestamp": "2026-07-05T12:12:29+08:00",
-          "tree_id": "b33e8efd36f103f5d98a7ee3ea26bf4e2008c972",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/de22a871800c89cf92e502b71a29f91d134fb927"
-        },
-        "date": 1783225123484,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 327738,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 609901.9,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 386720.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 362941.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4776,6 +4728,54 @@ window.BENCHMARK_DATA = {
             "value": 309385.8,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "41354876b363944c8882dba3c46014eb797382aa",
+          "message": "Merge pull request #274 from LoveDaisy/task/bg-image-filtering\n\nfix(gui): 底图纹理改用 mipmap + trilinear，修缩小显示时的欠采样混叠",
+          "timestamp": "2026-08-26T20:00:46+08:00",
+          "tree_id": "a5fbb679ee0ffcf9c28c9aec23ea64e6663e04a8",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/41354876b363944c8882dba3c46014eb797382aa"
+        },
+        "date": 1787746335122,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 382839,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 586405.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 377604.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 342723.1,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
