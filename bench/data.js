@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787747562015,
+  "lastUpdate": 1787747564364,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "7c47f07a520ff7130d21cc6c16755c008e6e5c8d",
-          "message": "Merge pull request #174 from LoveDaisy/feat/unify-orientation-sampling-cosine-measure\n\nUnify orientation latitude sampling to a cosine-measure inverse-CDF LUT",
-          "timestamp": "2026-07-06T08:58:34+08:00",
-          "tree_id": "5a7bb8bc6d9e114d130ac42451f7b3b85b9ea5ab",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/7c47f07a520ff7130d21cc6c16755c008e6e5c8d"
-        },
-        "date": 1783299876853,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 82.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 88.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "aff094ef773a9d78983dc1d7d1aabf793757c22d",
           "message": "Merge pull request #175 from LoveDaisy/feat/raypath-color-foundation\n\nraypath-color foundation: per-ray component mask across CPU/Metal/CUDA (scrum-331)",
           "timestamp": "2026-07-06T09:26:54+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.3,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f17b841b725042bd28408b6db3fd1da5cfc7fa8f",
+          "message": "Merge pull request #275 from LoveDaisy/task/bg-image-transform\n\nfeat(gui): 底图可平移缩放，让裁剪过的照片能与仿真结果对齐",
+          "timestamp": "2026-08-26T20:20:53+08:00",
+          "tree_id": "24754ad01298b2e39006a4bc1d728369562e429c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f17b841b725042bd28408b6db3fd1da5cfc7fa8f"
+        },
+        "date": 1787747563685,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 75.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 96.3,
             "unit": "%"
           }
         ]
