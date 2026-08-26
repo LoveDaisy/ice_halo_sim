@@ -93,6 +93,15 @@ struct Background {
   bool enabled = false;
   float alpha = 1.0f;
   float aspect = 1.0f;
+  // 2D pan + zoom of the background image within the viewport rectangle, sourced from
+  // GuiState::bg_offset_x / bg_offset_y / bg_scale. `zoom` here is NOT ViewProjection::fov: it
+  // only scales the background's UV transform (the photo the user is comparing against), and
+  // never touches the simulated frame's camera. Both happen to be reachable from a scroll on the
+  // canvas, told apart by whether the pan/zoom modifier key is held — see kBgModifierName below.
+  // Identity is (0, 0, 1): centered contain fit.
+  float pan_x = 0.0f;
+  float pan_y = 0.0f;
+  float zoom = 1.0f;
 
   static Background Disabled() { return {}; }
 };
@@ -201,6 +210,42 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
 // Isotropic by construction: azimuth and elevation share one scalar, because the
 // radial projection laws are rotationally symmetric about the optical axis.
 float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h);
+
+// The CPU half of the background overlay's contain fit, with the user's pan/zoom folded in.
+// The fragment shader's `bg_uv = v_ndc * u_bg_uv_scale + u_bg_uv_offset` line is unchanged and
+// does not know pan/zoom exists; everything the user dials in arrives through these four numbers.
+//
+// bg_aspect is width/height of the loaded image; vp_w/vp_h are framebuffer pixels. `zoom` divides
+// the scale (a larger zoom samples a smaller UV span, i.e. the photo grows on screen) and `pan`
+// is added straight onto the UV offset, so one unit of pan is one full texture width/height at
+// any zoom. scale_y is negative: stbi loads top-down while the GL texture origin is bottom-left.
+//
+// zoom == 1 && pan == 0 reproduces the historical hard-coded centered fit bit for bit, which is
+// what makes an .lmc written before these fields existed render identically with no compat branch.
+struct BgUvTransform {
+  float scale_x;
+  float scale_y;
+  float offset_x;
+  float offset_y;
+};
+BgUvTransform ComputeBgUvTransform(int vp_w, int vp_h, float bg_aspect, float pan_x, float pan_y, float zoom);
+
+// How the on-screen hint spells the key that arms the background pan/zoom gestures. The key
+// itself is io.KeyAlt on every platform; only its printed name differs, because that is what is
+// engraved on the keyboard the reader is looking at.
+//
+// Cmd on macOS was the obvious-looking alternative and does not work: ImGui, with
+// ConfigMacOSXBehaviors (on by default under __APPLE__), rewrites Super+LeftClick into a RIGHT
+// click at the event-queue level — "Super+Left Click aliased into Right Click", ImGui::
+// AddMouseButtonEvent in imgui.cpp. The left-button drag the canvas handler waits for therefore
+// never arrives, and no amount of correct code downstream can see it. Option/Alt has no such
+// aliasing and is the pan modifier most image tools already use, so there is no platform split in
+// behaviour left to arbitrate — only in wording.
+#if defined(__APPLE__)
+inline constexpr const char* kBgModifierName = "Option";
+#else
+inline constexpr const char* kBgModifierName = "Alt";
+#endif
 
 // Build a ViewProjection from the renderer sub-state of GuiState.
 // roll is wrapped through EffectiveRollForLens so that lens types that ignore

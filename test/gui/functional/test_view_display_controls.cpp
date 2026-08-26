@@ -655,4 +655,82 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       // The background is handed back by ScopedBackground; see it for why not here.
     };
   }
+
+  // The pan/zoom sliders: the OTHER end of the same three fields the canvas gesture writes.
+  //
+  // The point of a case here, given functional/test_preview_viewport.cpp already drives the
+  // gesture, is that these two entry points are one owner and not two. A shadow copy committed on
+  // mouse-up would satisfy every assertion over there and still leave the slider showing a stale
+  // number — so what is checked is that typing lands on the same `g_state` float the gesture
+  // moves, and that the domain the slider advertises is the one actually enforced.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls",
+                                    "the_background_pan_and_zoom_sliders_gate_and_clamp_like_the_alpha");
+    t->GuiFunc = [](ImGuiTestContext*) {
+      if (g_bg_upload_requested) {
+        static const unsigned char kPixels[2 * 2 * 3] = { 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255 };
+        gui::g_preview.UploadBgTexture(kPixels, 2, 2);
+        g_bg_upload_requested = false;
+      }
+    };
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ScopedBackground restore_background;
+      ctx->Yield(2);
+
+      g_bg_upload_requested = true;
+      ctx->Yield(3);
+      IM_CHECK(gui::g_preview.HasBackground());
+
+      // Addressed through the right panel rather than with a `**/` wildcard: a wildcard resolves a
+      // LABEL and a clipped item is registered by id alone, and these three sit low enough in the
+      // Background group to be past the fold at the harness window size. Window-relative ids
+      // resolve and scroll into view. Same reasoning as the grid alpha in test_defaults_panel.cpp.
+      ctx->SetRef("##RightPanel");
+
+      // Written out rather than looped: IM_CHECK expands to a `return`, so a loop would report the
+      // first greyed-out row and silently skip the rest — the shape check_loop_fatal_asserts.py
+      // exists to reject. Three rows do not need the loop anyway.
+      gui::g_state.bg_show = false;
+      ctx->Yield(3);
+      IM_CHECK(IsDisabled(ctx->ItemInfo("##Offset X##display_bg_input")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("##Offset Y##display_bg_input")));
+      IM_CHECK(IsDisabled(ctx->ItemInfo("##Zoom##display_bg_input")));
+
+      gui::g_state.bg_show = true;
+      ctx->Yield(3);
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("##Offset X##display_bg_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("##Offset Y##display_bg_input")));
+      IM_CHECK(!IsDisabled(ctx->ItemInfo("##Zoom##display_bg_input")));
+
+      // Both ends of each domain, driven past them. The reported value is the field itself, so a
+      // clamp that lived only in the widget's display would not satisfy this.
+      ctx->ItemInputValue("##Offset X##display_bg_input", 9.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, 2.0f);
+      ctx->ItemInputValue("##Offset X##display_bg_input", -9.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, -2.0f);
+
+      ctx->ItemInputValue("##Offset Y##display_bg_input", 9.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, 2.0f);
+      ctx->ItemInputValue("##Offset Y##display_bg_input", -9.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, -2.0f);
+
+      // Zoom is multiplicative and its domain is asymmetric, which is why it is spelled out rather
+      // than folded into the loop above: 0 is not merely out of range, it is the value that would
+      // make the UV transform divide by zero if it ever reached the renderer.
+      ctx->ItemInputValue("##Zoom##display_bg_input", 40.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_scale, 5.0f);
+      ctx->ItemInputValue("##Zoom##display_bg_input", 0.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.bg_scale, 0.2f);
+
+      ctx->SetRef("");
+      // The background is handed back by ScopedBackground.
+    };
+  }
 }

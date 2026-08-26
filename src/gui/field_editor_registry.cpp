@@ -498,6 +498,19 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("bg_show", BoolField([](GuiState& s) { return &s.bg_show; }, WhenBackgroundLoaded));
     map.emplace("bg_alpha", FloatField([](GuiState& s) { return &s.bg_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f",
                                        SliderScale::kLinear, WhenBackgroundShown));
+    // Pan is measured in texture widths/heights (see ComputeBgUvTransform), so +-2 lets the user
+    // push the image two full frames off-centre in either direction — comfortably past any real
+    // crop, while still short enough that the slider's travel is usable at photo-alignment
+    // precision. Zoom is multiplicative, hence kLog: a drag from 1.0 to 2.0 should cover the same
+    // slider distance as one from 0.5 to 1.0, and kLog additionally requires min_val > 0.
+    // All three share bg_alpha's WhenBackgroundShown gate, so "can I move the background" answers
+    // the same in the panel and on the canvas.
+    map.emplace("bg_offset_x", FloatField([](GuiState& s) { return &s.bg_offset_x; }, FixedDomain(-2.0f, 2.0f), "%.3f",
+                                          SliderScale::kLinear, WhenBackgroundShown));
+    map.emplace("bg_offset_y", FloatField([](GuiState& s) { return &s.bg_offset_y; }, FixedDomain(-2.0f, 2.0f), "%.3f",
+                                          SliderScale::kLinear, WhenBackgroundShown));
+    map.emplace("bg_scale", FloatField([](GuiState& s) { return &s.bg_scale; }, FixedDomain(0.2f, 5.0f), "%.2f",
+                                       SliderScale::kLog, WhenBackgroundShown));
 
     // ---- auxiliary line overlay ----
     map.emplace("overlay_horizon_line", BoolField([](GuiState& s) { return &s.show_horizon_line; }));

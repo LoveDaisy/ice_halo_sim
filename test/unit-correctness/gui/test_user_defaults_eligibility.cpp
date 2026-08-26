@@ -41,7 +41,7 @@ namespace {
 // run-result readbacks polled off the server's stats, exactly like the stats_ray_seg_num /
 // stats_sim_ray_num pair beside them, so they are kDerivedRuntime and deliberately ineligible as
 // personal defaults — a measurement of the last run is not a preference a user can pre-set.
-constexpr std::size_t kExpectedGovernedFieldCount = 66;
+constexpr std::size_t kExpectedGovernedFieldCount = 69;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -111,6 +111,14 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "renderer", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 1 — kView fields that ARE serialized (default lens / overlays / background).
     { "bg_alpha", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    // The background transform, eligible for the same reason bg_alpha is: serialized kView. Worth
+    // pinning rather than leaving to the branch-coverage tests above, because "a personal default
+    // pan/zoom" is a claim about intent, not just about which branch runs — a user who habitually
+    // aligns against the same cropped lens deserves to keep that alignment across documents, and
+    // nothing about these three is per-document the way a crystal index is.
+    { "bg_offset_x", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "bg_offset_y", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "bg_scale", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "aspect_preset", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "right_panel_collapsed", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_zenith_nadir_line", DefaultEligibility::kEligible, IneligibleReason::kNone },

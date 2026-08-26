@@ -83,6 +83,9 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "bg_path",                    FieldTier::kView,       false },
     { "bg_show",                    FieldTier::kView,       false },
     { "bg_alpha",                   FieldTier::kView,       false },
+    { "bg_offset_x",                FieldTier::kView,       false },
+    { "bg_offset_y",                FieldTier::kView,       false },
+    { "bg_scale",                   FieldTier::kView,       false },
     // Auxiliary-line overlays (horizon / grid / sun-circles)
     { "show_horizon_line",          FieldTier::kView,       false },
     { "show_horizon_label",         FieldTier::kView,       false },

@@ -21,6 +21,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
+#include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName
 #include "gui/semantic_colors.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
@@ -839,6 +840,39 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     SliderWithInput("Alpha##display", &g_state.bg_alpha, static_cast<float>(bg_alpha_c.min_value),
                     static_cast<float>(bg_alpha_c.max_value), bg_alpha_c.fmt, bg_alpha_c.scale);
     ImGui::EndDisabled();
+
+    // Fine adjustment for the same three fields the canvas gesture writes — not a second owner of
+    // the transform, the same `g_state` floats from the other end. A photograph is aligned by
+    // dragging until it is nearly right and then nudging, and a drag cannot nudge.
+    //
+    // `##display_bg`, not the `##display` two of their neighbours carry, is deliberate: the suffix
+    // names the BACKGROUND block, which is how Clear and Show were already addressed before these
+    // three existed. `Load Bg##display` and `Alpha##display` are the outliers, left alone because
+    // renaming a live ImGui id is not free — it is the address existing gui_test cases use.
+    const FieldEditorConstraint bg_ox_c = ConstraintFor("bg_offset_x", g_state);
+    ImGui::BeginDisabled(!bg_ox_c.enabled);
+    SliderWithInput("Offset X##display_bg", &g_state.bg_offset_x, static_cast<float>(bg_ox_c.min_value),
+                    static_cast<float>(bg_ox_c.max_value), bg_ox_c.fmt, bg_ox_c.scale);
+    ImGui::EndDisabled();
+    const FieldEditorConstraint bg_oy_c = ConstraintFor("bg_offset_y", g_state);
+    ImGui::BeginDisabled(!bg_oy_c.enabled);
+    SliderWithInput("Offset Y##display_bg", &g_state.bg_offset_y, static_cast<float>(bg_oy_c.min_value),
+                    static_cast<float>(bg_oy_c.max_value), bg_oy_c.fmt, bg_oy_c.scale);
+    ImGui::EndDisabled();
+    const FieldEditorConstraint bg_scale_c = ConstraintFor("bg_scale", g_state);
+    ImGui::BeginDisabled(!bg_scale_c.enabled);
+    SliderWithInput("Zoom##display_bg", &g_state.bg_scale, static_cast<float>(bg_scale_c.min_value),
+                    static_cast<float>(bg_scale_c.max_value), bg_scale_c.fmt, bg_scale_c.scale);
+    ImGui::EndDisabled();
+
+    // Always on screen rather than a first-run tooltip: this is a gesture reached a few times per
+    // alignment session and then not for weeks, so the moment it needs to be discoverable is the
+    // SECOND time, which is exactly when a one-shot hint is already gone. One dim line is cheap
+    // enough that it need not compete with a tooltip for that job.
+    // Short enough to survive the right panel's width: the sentence this replaced ("...pans the
+    // image, ...wheel zooms it.") ran past the panel edge and lost its last two words, which is a
+    // worse hint than no hint — a truncated instruction reads as a rendering fault.
+    ImGui::TextDisabled("%s+drag pans, %s+wheel zooms", kBgModifierName, kBgModifierName);
     ImGui::EndDisabled();
 
     ImGui::PopItemWidth();
@@ -1004,17 +1038,21 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     int fb_w = 0;
     int fb_h = 0;
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
-    float scale_x = static_cast<float>(fb_w) / window_width;
-    float scale_y = static_cast<float>(fb_h) / window_height;
+    // Named for what they are — the point-to-framebuffer-pixel ratio — because this scope also
+    // holds a BgUvTransform whose own scale_x/scale_y mean something else entirely (the per-axis
+    // UV scale). Two different quantities under one short name is exactly the confusion the
+    // Background::zoom / ViewProjection::fov note guards against a few lines down.
+    float dpi_scale_x = static_cast<float>(fb_w) / window_width;
+    float dpi_scale_y = static_cast<float>(fb_h) / window_height;
 
     auto& rc = g_state.renderer;
 
     // Store viewport for deferred rendering
     g_preview_vp.active = true;
-    g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
-    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
-    g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
-    g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
+    g_preview_vp.vp_x = static_cast<int>(panel_x * dpi_scale_x);
+    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * dpi_scale_y);  // OpenGL Y is bottom-up
+    g_preview_vp.vp_w = static_cast<int>(panel_width * dpi_scale_x);
+    g_preview_vp.vp_h = static_cast<int>(preview_height * dpi_scale_y);
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
@@ -1072,6 +1110,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
+    pp.bg.pan_x = g_state.bg_offset_x;
+    pp.bg.pan_y = g_state.bg_offset_y;
+    pp.bg.zoom = g_state.bg_scale;
 
     // Auxiliary line overlay parameters (line flags only — labels are handled
     // separately via BuildOverlayLabelInput below).
@@ -1138,20 +1179,73 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }
 
-    // Mouse interaction: orbit with drag, FOV with scroll.
-    // Disabled for lenses in kFullSkyLensTypes (dual fisheye 4-6, rectangular 7,
-    // dual orthographic 9): their shader path skips the view matrix so view
-    // angles + FOV have no visual effect.
+    // Mouse interaction: orbit with drag, FOV with scroll — or, with the pan/zoom modifier held,
+    // the background image instead of the camera.
+    //
+    // The camera half is disabled for lenses in kFullSkyLensTypes (dual fisheye 4-6, rectangular
+    // 7, dual orthographic 9): their shader path skips the view matrix so view angles + FOV have
+    // no visual effect. The background half is NOT gated on that, because the background is pinned
+    // to the window rather than seen through the lens — it is composited in NDC by
+    // ComputeBgUvTransform, which never consults the view matrix, so panning it means the same
+    // thing under a full-sky lens as under any other.
     bool full_sky = LensIsFullSky(rc.lens_type);
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::InvisibleButton("##preview_interact", avail);
 
-    if (!full_sky) {
+    {
       bool is_hovered = ImGui::IsItemHovered();
       bool is_active = ImGui::IsItemActive();
-
       ImGuiIO& io = ImGui::GetIO();
-      if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+
+      // Four cases, closed: modifier held + background operable -> move the background; modifier
+      // held + background NOT operable -> nothing at all; modifier not held -> the camera
+      // behaviour below, unchanged. The `!bg_modifier` on the camera branches is what makes the
+      // second case a no-op instead of silently orbiting: a user pressing the modifier over a
+      // hidden background has stated what they meant to move, and swallowing the modifier to move
+      // something else is worse than doing nothing.
+      const bool bg_active = g_preview.HasBackground() && g_state.bg_show;
+      // Alt/Option on every platform. Cmd on macOS is not an option: ImGui aliases Super+Left
+      // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
+      const bool bg_modifier = io.KeyAlt;
+
+      if (bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        // Solve for "the texel under the cursor stays under the cursor". With
+        // bg_uv = ndc * scale + offset, moving the cursor by dndc requires
+        // offset_new = offset_old - dndc * scale; since `scale` already carries the zoom, this is
+        // correct at every zoom level with no separate drag-gain curve.
+        const BgUvTransform t = ComputeBgUvTransform(g_preview_vp.vp_w, g_preview_vp.vp_h, g_preview.GetBgAspect(),
+                                                     g_state.bg_offset_x, g_state.bg_offset_y, g_state.bg_scale);
+        // io.MouseDelta is in ImGui points while vp_w/vp_h are framebuffer pixels; dpi_scale_x/
+        // dpi_scale_y (the DPI factors captured above, NOT t.scale_x/t.scale_y) reconcile the two,
+        // which is what keeps the image glued to the cursor on a HiDPI display rather than moving
+        // at half speed.
+        const float dndc_x = io.MouseDelta.x * dpi_scale_x * 2.0f / static_cast<float>(g_preview_vp.vp_w);
+        // Screen Y grows downward, NDC Y upward.
+        const float dndc_y = -io.MouseDelta.y * dpi_scale_y * 2.0f / static_cast<float>(g_preview_vp.vp_h);
+
+        // Clamp on this path too, not only in the sliders: a slider clamps what IT produces, it
+        // does not retroactively pull an out-of-range value back, so an unclamped drag could park
+        // the offset far past the slider's travel with no way back except touching the slider.
+        const FieldEditorConstraint ox_c = ConstraintFor("bg_offset_x", g_state);
+        const FieldEditorConstraint oy_c = ConstraintFor("bg_offset_y", g_state);
+        g_state.bg_offset_x =
+            std::max(static_cast<float>(ox_c.min_value),
+                     std::min(static_cast<float>(ox_c.max_value), g_state.bg_offset_x - dndc_x * t.scale_x));
+        g_state.bg_offset_y =
+            std::max(static_cast<float>(oy_c.min_value),
+                     std::min(static_cast<float>(oy_c.max_value), g_state.bg_offset_y - dndc_y * t.scale_y));
+      }
+
+      if (bg_active && bg_modifier && is_hovered && io.MouseWheel != 0.0f) {
+        // Multiplicative, so one notch is the same proportional change everywhere on the range —
+        // matching the kLog slider the same field is edited by.
+        const FieldEditorConstraint scale_c = ConstraintFor("bg_scale", g_state);
+        const float zoomed = g_state.bg_scale * std::pow(1.1f, io.MouseWheel);
+        g_state.bg_scale =
+            std::max(static_cast<float>(scale_c.min_value), std::min(static_cast<float>(scale_c.max_value), zoomed));
+      }
+
+      if (!bg_modifier && !full_sky && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 delta = io.MouseDelta;
         // Sensitivity is the lens's angular resolution at the frame center, so one pixel of
         // drag moves the content one pixel whatever the FOV and viewport are. A fixed deg/px
@@ -1183,7 +1277,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         rc.elevation = std::max(-el_lim, std::min(el_lim, rc.elevation));
       }
 
-      if (is_hovered && io.MouseWheel != 0.0f) {
+      if (!bg_modifier && !full_sky && is_hovered && io.MouseWheel != 0.0f) {
         float fov_max = LUMICE_MaxFov(static_cast<LUMICE_LensType>(rc.lens_type));
         rc.fov -= io.MouseWheel * 5.0f;
         rc.fov = std::max(1.0f, std::min(fov_max, rc.fov));

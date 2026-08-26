@@ -607,3 +607,128 @@ TEST(PreviewRenderer, ADirectionOutsideTheImagingCircleIsNotGivenAPixelInTheBlac
   auto wide = MakeVp(lumice::gui::kLensTypeFisheyeEquidist, 180.0f, 0.0f, 0.0f);
   EXPECT_FALSE(IsSentinel(ProjectWorldDirToScreen(wide, dir_60deg, 1920, 1080)));
 }
+
+// ---------------------------------------------------------------------------------------
+// The background overlay's UV transform, and the modifier key that arms its canvas gestures.
+//
+// Both are pure and live in preview_renderer.hpp for the same reason the drag gain does: a GL
+// context is not needed to state what they owe, so they are asserted here rather than in a
+// suite that must open a window.
+// ---------------------------------------------------------------------------------------
+
+// The identity case is the whole backward-compatibility argument, so it is asserted bit for bit
+// rather than within a tolerance. An .lmc written before bg_offset_x/bg_offset_y/bg_scale existed
+// deserializes to (0, 0, 1); if that does not reproduce the historical hard-coded centered fit
+// EXACTLY, every such document renders slightly differently after this change and there is no
+// compat branch anywhere to catch it.
+TEST(BgTransform, TheIdentityTransformReproducesTheHistoricalCenteredFitBitForBit) {
+  struct Row {
+    int vp_w;
+    int vp_h;
+    float bg_aspect;
+  };
+  // Square, both letterbox directions, and a wide viewport against a wide image.
+  const Row kRows[] = {
+    { 800, 800, 1.0f },
+    { 1920, 1080, 1.0f },
+    { 800, 800, 16.0f / 9.0f },
+    { 1920, 1080, 4.0f / 3.0f },
+  };
+
+  for (const Row& row : kRows) {
+    // The expression the production code carried inline before ComputeBgUvTransform existed.
+    const float vp_aspect = static_cast<float>(row.vp_w) / static_cast<float>(row.vp_h);
+    float sx = 1.0f;
+    float sy = 1.0f;
+    if (vp_aspect > row.bg_aspect) {
+      sx = row.bg_aspect / vp_aspect;
+    } else {
+      sy = vp_aspect / row.bg_aspect;
+    }
+
+    const auto t = lumice::gui::ComputeBgUvTransform(row.vp_w, row.vp_h, row.bg_aspect, 0.0f, 0.0f, 1.0f);
+    EXPECT_FLOAT_EQ(t.scale_x, 0.5f / sx) << "vp " << row.vp_w << "x" << row.vp_h;
+    EXPECT_FLOAT_EQ(t.scale_y, -0.5f / sy) << "vp " << row.vp_w << "x" << row.vp_h;
+    EXPECT_FLOAT_EQ(t.offset_x, 0.5f) << "vp " << row.vp_w << "x" << row.vp_h;
+    EXPECT_FLOAT_EQ(t.offset_y, 0.5f) << "vp " << row.vp_w << "x" << row.vp_h;
+  }
+}
+
+// Zoom and pan are independent knobs: zoom moves only the scale, pan moves only the offset. If
+// zoom leaked into the offset the image would slide sideways while being scaled (the classic
+// "zoom is not about the center" bug); if pan leaked into the scale the photo would breathe while
+// being dragged. Both are the kind of coupling that looks fine in a still screenshot.
+TEST(BgTransform, ZoomScalesOnlyTheScaleAndPanShiftsOnlyTheOffset) {
+  const auto base = lumice::gui::ComputeBgUvTransform(1920, 1080, 4.0f / 3.0f, 0.0f, 0.0f, 1.0f);
+
+  for (float zoom : { 0.25f, 0.5f, 2.0f, 4.0f }) {
+    const auto z = lumice::gui::ComputeBgUvTransform(1920, 1080, 4.0f / 3.0f, 0.0f, 0.0f, zoom);
+    EXPECT_FLOAT_EQ(z.scale_x, base.scale_x / zoom) << "zoom " << zoom;
+    EXPECT_FLOAT_EQ(z.scale_y, base.scale_y / zoom) << "zoom " << zoom;
+    EXPECT_FLOAT_EQ(z.offset_x, base.offset_x) << "zoom " << zoom;
+    EXPECT_FLOAT_EQ(z.offset_y, base.offset_y) << "zoom " << zoom;
+  }
+
+  for (float pan : { -0.75f, -0.1f, 0.1f, 0.75f }) {
+    const auto p = lumice::gui::ComputeBgUvTransform(1920, 1080, 4.0f / 3.0f, pan, -pan, 1.0f);
+    EXPECT_FLOAT_EQ(p.scale_x, base.scale_x) << "pan " << pan;
+    EXPECT_FLOAT_EQ(p.scale_y, base.scale_y) << "pan " << pan;
+    EXPECT_FLOAT_EQ(p.offset_x, base.offset_x + pan) << "pan " << pan;
+    EXPECT_FLOAT_EQ(p.offset_y, base.offset_y - pan) << "pan " << pan;
+  }
+}
+
+// A unit of pan is a full texture width whatever the zoom, so the two knobs stay usable together:
+// the slider's ±2 range means the same thing zoomed in as zoomed out. Stated as the round trip
+// that actually matters — the NDC point that samples a given texel — because that is the property
+// the canvas drag inverts to turn a mouse delta into a pan delta.
+TEST(BgTransform, PanIsMeasuredInTextureWidthsIndependentlyOfZoom) {
+  for (float zoom : { 0.5f, 1.0f, 3.0f }) {
+    const auto t = lumice::gui::ComputeBgUvTransform(1024, 1024, 1.0f, 0.0f, 0.0f, zoom);
+    const auto panned = lumice::gui::ComputeBgUvTransform(1024, 1024, 1.0f, 0.25f, 0.0f, zoom);
+
+    // The NDC coordinate that samples u = 0.5 shifts by exactly pan / scale_x, i.e. a quarter of
+    // the texture width expressed in the CURRENT zoom's NDC units.
+    const float ndc_before = (0.5f - t.offset_x) / t.scale_x;
+    const float ndc_after = (0.5f - panned.offset_x) / panned.scale_x;
+    EXPECT_FLOAT_EQ(ndc_after - ndc_before, -0.25f / t.scale_x) << "zoom " << zoom;
+  }
+}
+
+// The letterbox branch is picked by the aspect comparison alone; pan and zoom must not be able to
+// flip which side gets the bars. A viewport wider than the image squeezes x (sx < 1) and leaves y
+// alone, and the other way round — the same split the pixel-level letterbox case in
+// test_background_overlay.cpp checks end to end.
+TEST(BgTransform, TheLetterboxBranchIsChosenByAspectAloneAndSurvivesPanAndZoom) {
+  // Viewport 2:1 against a 1:1 image — bars left and right, so x is the squeezed axis.
+  for (float zoom : { 0.5f, 1.0f, 2.0f }) {
+    const auto t = lumice::gui::ComputeBgUvTransform(1600, 800, 1.0f, 0.3f, -0.2f, zoom);
+    // sx = 1/2, sy = 1  =>  |scale_x| = 2 * |scale_y|
+    EXPECT_FLOAT_EQ(t.scale_x, 1.0f / zoom);
+    EXPECT_FLOAT_EQ(t.scale_y, -0.5f / zoom);
+  }
+
+  // Viewport 1:1 against a 2:1 image — bars top and bottom, so y is the squeezed axis.
+  for (float zoom : { 0.5f, 1.0f, 2.0f }) {
+    const auto t = lumice::gui::ComputeBgUvTransform(800, 800, 2.0f, 0.3f, -0.2f, zoom);
+    EXPECT_FLOAT_EQ(t.scale_x, 0.5f / zoom);
+    EXPECT_FLOAT_EQ(t.scale_y, -1.0f / zoom);
+  }
+}
+
+// The hint's wording, which is all that is left of the modifier's platform split.
+//
+// An earlier revision arbitrated the KEY per platform (Cmd on macOS, Alt elsewhere) and pinned
+// both branches here. That is gone: ImGui rewrites Super+LeftClick into a right click under
+// ConfigMacOSXBehaviors, so the Cmd branch could not have worked on the platform it was written
+// for — a fact no assertion about a pure arbitration function could have surfaced, since the
+// function was right and its premise was wrong. The gesture now reads io.KeyAlt everywhere and
+// there is no behavioural branch left to pin; what remains is a label, checked here so the two
+// spellings cannot silently drift into naming a key the handler does not read.
+TEST(BgTransform, TheModifierHintNamesTheKeyThisPlatformEngraves) {
+#if defined(__APPLE__)
+  EXPECT_STREQ(lumice::gui::kBgModifierName, "Option");
+#else
+  EXPECT_STREQ(lumice::gui::kBgModifierName, "Alt");
+#endif
+}

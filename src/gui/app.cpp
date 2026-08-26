@@ -825,6 +825,14 @@ void DoLoadBackground(GLFWwindow* window) {
   g_state.bg_path = path;
   g_state.bg_show = true;
   g_state.bg_alpha = 0.5f;  // Start at 50% to immediately show overlay effect
+  // A new image starts from the identity transform: the pan/zoom the user dialed in for the
+  // PREVIOUS photo is meaningless for this one (it was fitted to that photo's crop), and leaving
+  // it in place would open the new image already off-frame with no visible cause. Same timing as
+  // bg_alpha above. DoClearBackground deliberately does not reset these, matching bg_alpha's
+  // existing asymmetry there rather than inventing a second rule.
+  g_state.bg_offset_x = 0.0f;
+  g_state.bg_offset_y = 0.0f;
+  g_state.bg_scale = 1.0f;
   g_state.aspect_preset = AspectPreset::kMatchBg;
   ApplyAspectRatio(window, AspectPreset::kMatchBg, false, g_preview.GetBgAspect());
 }

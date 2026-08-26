@@ -1413,7 +1413,15 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       gui::g_state.grid_alpha = 0.3f;
       ctx->Yield(2);
-      ctx->ItemInputValue("**/##Alpha##grid_input", 7.5f);
+      // Addressed through its window rather than with a `**/` wildcard, unlike the FOV control
+      // above. A wildcard lookup resolves a LABEL, and a clipped item is registered by id without
+      // one (imgui_te_context.cpp says so where it tries to pan the window looking for the item);
+      // the Overlay group sits past the right panel's fold at the harness window size, so the
+      // wildcard finds nothing while the window-relative id resolves and scrolls to it. The FOV
+      // control is above the fold and either form reaches it — this one has no choice.
+      ctx->SetRef("##RightPanel");
+      ctx->ItemInputValue("##Alpha##grid_input", 7.5f);
+      ctx->SetRef("");
       ctx->Yield(3);
       IM_CHECK_EQ(alpha_from_table, gui::g_state.grid_alpha);
       IM_CHECK_EQ(alpha_from_table, 1.0f);
