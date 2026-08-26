@@ -1622,7 +1622,13 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
         cid = it_c->second;
       }
       dst_layer.entries[k].crystal_id = cid;
-      dst_layer.entries[k].proportion = entry.proportion;
+      // enabled=false is translated here — the single GUI->core assembly point — into the
+      // proportion=0 the engine already handles (trace_backend.hpp: such a (layer, ci) never
+      // reaches MakeCrystal). entry.proportion itself is left alone, so the user's stored weight
+      // survives a disable/enable round trip. Both SceneIntents get the same translation: a
+      // scene exported for the CLI must reproduce what the preview actually renders, and the core
+      // JSON schema has no "enabled" key, so proportion=0 is the only faithful expression of it.
+      dst_layer.entries[k].proportion = entry.enabled ? entry.proportion : 0.0f;
 
       if (entry.filter_id.has_value()) {
         int fpool = *entry.filter_id;
@@ -2498,6 +2504,7 @@ std::string SerializeGuiStateJson(const GuiState& state) {
       json je;
       je["crystal"] = SerializeCrystal(state.crystals[entry.crystal_id], ser_crystal_id++);
       je["proportion"] = entry.proportion;
+      je["enabled"] = entry.enabled;
       if (entry.filter_id.has_value()) {
         je["filter"] = SerializeFilterForGui(state.filters[*entry.filter_id], ser_filter_id++);
       }
@@ -2621,6 +2628,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
             state.crystals.emplace_back();
           }
           entry.proportion = je.value("proportion", EntryCard{}.proportion);
+          // Absent key = a document written before the toggle existed; those entries all
+          // participated, which is exactly EntryCard{}.enabled.
+          entry.enabled = je.value("enabled", EntryCard{}.enabled);
           if (je.contains("filter") && !je["filter"].is_null()) {
             // nullopt = the file's filter object stated no predicate, so the entry gets no filter
             // and nothing enters the pool (NoFilterIfNoPredicate). Same end state as an entry whose
@@ -2681,6 +2691,10 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
               state.crystals.emplace_back();
             }
             entry.proportion = je.value("proportion", EntryCard{}.proportion);
+            // Same backward-compatible default as the v2 branch above. Both read paths must be
+            // patched together: a document reaching the GUI through only one of them would
+            // silently lose the toggle state.
+            entry.enabled = je.value("enabled", EntryCard{}.enabled);
             int filter_id = je.value("filter_id", -1);
             if (filter_id >= 0 && filter_map.count(filter_id)) {
               auto it = filter_id_to_pool.find(filter_id);

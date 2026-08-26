@@ -766,26 +766,41 @@ struct FilterConfig {
 // entries sharing the same crystal_id automatically observe pool mutations on
 // the next render, no mirror logic needed.
 //
-// operator== compares ids + proportion only (intentional: pool contents are
-// compared via the pool itself in ConfigSnapshot/round-trip tests). Adding a
-// field here requires updating operator== too.
+// operator== compares ids + proportion + enabled only (intentional: pool
+// contents are compared via the pool itself in ConfigSnapshot/round-trip
+// tests). Adding a field here requires updating operator== too.
 struct EntryCard {
   int crystal_id = 0;
   std::optional<int> filter_id;
   float proportion = 100.0f;
 
+  // "Participates in the simulation" toggle. GUI-only concept: it never
+  // crosses the C API — BuildScene translates enabled=false into the
+  // proportion=0 the engine already understands, leaving `proportion` itself
+  // untouched so the user's weight survives a disable/enable round trip.
+  //
+  // Semantics are "exclude, then re-run", NOT display-time subtraction: the
+  // excluded crystal's share of the fixed total ray count is redistributed to
+  // its siblings by PartitionCrystalRayNum, so the remaining crystals get more
+  // samples (less noise, and auto-EV brightness moves with it). This is why the
+  // card's toggle must not reuse the Colors panel's eye glyph, which does mean
+  // display-time subtraction.
+  bool enabled = true;
+
   friend bool operator==(const EntryCard& a, const EntryCard& b) {
-    return a.crystal_id == b.crystal_id && a.filter_id == b.filter_id && a.proportion == b.proportion;
+    return a.crystal_id == b.crystal_id && a.filter_id == b.filter_id && a.proportion == b.proportion &&
+           a.enabled == b.enabled;
   }
   friend bool operator!=(const EntryCard& a, const EntryCard& b) { return !(a == b); }
 };
 // Apple Silicon + libc++ only. New EntryCard layout (post ID-pool migration):
-// int crystal_id (4) + optional<int> filter_id (8) + float proportion (4) = 16 bytes.
+// int crystal_id (4) + optional<int> filter_id (8) + float proportion (4)
+// + bool enabled (1, padded to 4) = 20 bytes.
 // Pinning the Apple build catches accidental field additions during local dev;
 // Linux/Windows CI still compiles the struct.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(EntryCard) == 16,
-              "EntryCard size changed (check id fields / proportion / operator== for new fields)");
+static_assert(sizeof(EntryCard) == 20,
+              "EntryCard size changed (check id fields / proportion / enabled / operator== for new fields)");
 #endif
 
 struct Layer {
@@ -882,6 +897,19 @@ constexpr float kProbZeroEps = 0.005f;
 constexpr float kDefaultContinuationProb = 0.8f;
 inline bool IsProbZero(float p) {
   return p < kProbZeroEps;
+}
+
+// True when the layer has entries but every one of them is toggled out of the
+// simulation, i.e. the layer contributes nothing. Kept as a free function (same
+// pattern as IsProbZero above) so the panel's warning predicate is testable
+// without an ImGui context: the warning itself is drawn with TextColored, which
+// IsItemHovered/ItemExists cannot reach from a gui_test.
+//
+// An empty layer is deliberately NOT "all disabled" — it has no toggles in it,
+// so the "you turned everything off" message would be misleading.
+inline bool AllEntriesDisabled(const Layer& layer) {
+  return !layer.entries.empty() &&
+         std::all_of(layer.entries.begin(), layer.entries.end(), [](const EntryCard& e) { return !e.enabled; });
 }
 
 struct GuiState {

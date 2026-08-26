@@ -1039,13 +1039,60 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
   auto thumb_tex = g_thumbnail_cache.GetTexture(entry.crystal_id);
   ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
+  // An excluded entry draws its thumbnail dimmed so the card reads as "out" at a
+  // glance, from across the panel, without having to find the toggle glyph.
+  const ImU32 thumb_tint = entry.enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 70);
   if (thumb_tex != 0) {
     // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
-    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0));
+    draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0),
+                        thumb_tint);
   } else {
-    draw_list->AddRectFilled(thumb_pos, thumb_br, IM_COL32(60, 60, 60, 255));
+    draw_list->AddRectFilled(thumb_pos, thumb_br,
+                             entry.enabled ? IM_COL32(60, 60, 60, 255) : IM_COL32(45, 45, 45, 255));
   }
   draw_list->AddRect(thumb_pos, thumb_br, IM_COL32(100, 100, 100, 255));
+
+  // ---- Participation toggle (always visible) ----
+  // Semantics: "exclude this crystal, then re-run". Turning it off does NOT subtract this
+  // crystal from the current image — it hands its share of the fixed total ray count back to
+  // its siblings on the next run, so the rest of the scene gets MORE samples. That is a
+  // different operation from the Colors panel's per-component eye, which is display-time
+  // subtraction, so the glyph here deliberately is not an eye.
+  //
+  // Placement: overlaid on the thumbnail's top-left corner. Unlike Delete/Duplicate this is not
+  // a hover-revealed action — "does this card count?" has to be as scannable as the Weight
+  // number — and the thumbnail corner is the only always-free real estate on the card that does
+  // not push the right column's four rows out of their shared three-column alignment.
+  {
+    // "###" and not "##": the visible glyph flips with the state, and with "##" the id hashes the
+    // whole label, so the button would become a different widget the instant it is clicked —
+    // losing ImGui's active-id continuity and leaving no stable path for a test to address. Same
+    // reasoning as the defaults panel's state-dependent cells.
+    char toggle_id[48];
+    snprintf(toggle_id, sizeof(toggle_id), "%s###enabled_%d_%d", entry.enabled ? ICON_FA_TOGGLE_ON : ICON_FA_TOGGLE_OFF,
+             layer_idx, entry_idx);
+    constexpr float kTogglePad = 3.0f;
+    ImGui::SetCursorScreenPos(ImVec2(thumb_pos.x + kTogglePad, thumb_pos.y + kTogglePad));
+    if (!entry.enabled) {
+      // Theme-owned disabled tone, not a semantic_colors.hpp grade: "excluded" is a state of
+      // this control, not a judgement about the crystal (see that header's scope note).
+      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    }
+    const bool toggle_clicked = ImGui::SmallButton(toggle_id);
+    if (!entry.enabled) {
+      ImGui::PopStyleColor();
+    }
+    if (toggle_clicked) {
+      entry.enabled = !entry.enabled;
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", entry.enabled ?
+                                  "Participating. Click to exclude this crystal from the next run — its share of "
+                                  "the total ray count goes to the other crystals (they get more samples)." :
+                                  "Excluded from the next run. Its Weight is kept and takes effect again when you "
+                                  "turn it back on.");
+    }
+  }
 
   // Right column — layout matches SliderWithInput's three-column model:
   //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
@@ -1120,7 +1167,15 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
   char prop_label[32];
   snprintf(prop_label, sizeof(prop_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
+  // Greyed out while excluded so it is visible that the number is currently inert — same
+  // disable-when-inert convention as the layer prob slider. BeginDisabled only blocks
+  // interaction; entry.proportion keeps its value, which is what makes the toggle reversible.
+  ImGui::BeginDisabled(!entry.enabled);
   SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+  ImGui::EndDisabled();
+  if (!entry.enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Weight is inert while this crystal is excluded. The value is kept.");
+  }
 
   // Hover action buttons: stacked vertically at the right edge of the card —
   // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
@@ -1192,6 +1247,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     EntryCard new_entry;
     new_entry.crystal_id = static_cast<int>(state.crystals.size());
     new_entry.proportion = entry.proportion;
+    // Duplicate builds the clone field-by-field rather than copying the struct, so every
+    // EntryCard field needs a line here. Carrying `enabled` over keeps duplicate a pure clone:
+    // without it, duplicating an excluded card would hand back a participating one.
+    new_entry.enabled = entry.enabled;
     state.crystals.push_back(std::move(cloned_crystal));
     if (cloned_filter.has_value()) {
       new_entry.filter_id = static_cast<int>(state.filters.size());
@@ -1392,6 +1451,19 @@ void RenderLayer(GuiState& state, int layer_idx) {
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", prob_tip);
       }
+    }
+
+    // Every crystal in this layer excluded: the layer contributes nothing to the next run.
+    // Non-blocking on purpose — it is a legitimate transient state while the user toggles cards
+    // one at a time, and the engine already handles it (PartitionCrystalRayNum returns an
+    // all-zero allocation for a zero total; see its AllZeroProportions unit test), so there is
+    // nothing to guard against, only something to point out.
+    if (AllEntriesDisabled(layer)) {
+      // Its own line rather than SameLine on the prob row: that row may already be showing a
+      // CIRCLE_EXCLAMATION for the prob footguns, and two identical glyphs side by side saying
+      // different things is worse than no icon at all.
+      ImGui::TextColored(WarningTextColor(),
+                         ICON_FA_CIRCLE_EXCLAMATION " All crystals excluded — layer produces no rays");
     }
 
     // Render entry cards with deferred deletion

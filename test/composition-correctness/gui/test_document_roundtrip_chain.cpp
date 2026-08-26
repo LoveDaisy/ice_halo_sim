@@ -123,6 +123,21 @@ const std::vector<FieldProbe>& FieldProbes() {
       // how much of it, which is why nothing on screen says the file came back different.
       [](GuiState& s) { s.layers.at(0).entries.at(0).proportion = 75.0f; },
       [](const GuiState& s) { return std::to_string(s.layers.at(0).entries.at(0).proportion); } },
+    { "entry.enabled",
+      // Whether this entry takes part in the run at all. It is probed alongside a proportion that
+      // is emphatically not zero, because the failure mode is a writer that decides `enabled` is
+      // derivable from the weight: dropping the field then reloads an excluded crystal as a
+      // participating one at full weight, and the run comes back with the crystal the user
+      // switched off. The weight itself must survive the trip untouched — that is what makes the
+      // exclusion reversible.
+      [](GuiState& s) {
+        s.layers.at(0).entries.at(0).enabled = false;
+        s.layers.at(0).entries.at(0).proportion = 42.0f;
+      },
+      [](const GuiState& s) {
+        const EntryCard& e = s.layers.at(0).entries.at(0);
+        return std::string(e.enabled ? "on" : "off") + " @" + std::to_string(e.proportion);
+      } },
     { "sun.custom_spectrum",
       // The discrete spectrum is a list, not a name, and it is the one light-source field whose
       // absence leaves a perfectly valid document that simulates a different colour of sunlight.
@@ -467,6 +482,68 @@ TEST(DocumentRoundtripChain, AFilterWithNoRuleInItIsDroppedAndCounted) {
         << c.name << ": the document was changed on load with nothing to report it, or the reverse";
     EXPECT_EQ(TakeFilterNoPredicateDowngradeCount(), 0)
         << c.name << ": the counter did not clear on read, so a notice would never go away";
+  }
+}
+
+// E1 — a document written before the participation toggle existed loads as participating, on both
+// read paths.
+//
+// The probe sweep above cannot reach this. It writes with SerializeGuiStateJson and reads back with
+// DeserializeGuiStateJson, so both halves are the current version by construction, and the key is
+// always present. What ships is the other direction: every .lmc already on a user's disk is missing
+// this key, and the reader's answer to a missing key decides whether those documents come back
+// intact or with crystals silently switched off. `false` is the value a default-initialised bool
+// would have had, which is why the absent-key answer is worth pinning rather than assuming.
+//
+// Both branches of DeserializeGuiStateJson are exercised, not just the current one. The reader
+// picks its branch on the document's shape — "layers" is the v2 inline form, "crystals" +
+// "scattering" the legacy v1 pool form — and the two parse entries with separate code that shares
+// no helper for this field. A patch applied to one of them alone is green on every test that only
+// feeds the other, and the documents that would lose their toggle state are precisely the older
+// ones, i.e. the ones the compatibility default exists for. Present-key cases are here too: an
+// absent-key default of `true` is also what a reader that ignores the key entirely produces, so
+// without them the two branches would pass while never reading the field at all.
+TEST(DocumentRoundtripChain, AnEntryWithNoEnabledKeyLoadsAsParticipatingOnBothReadPaths) {
+  struct Case {
+    const char* name;
+    std::string doc;
+    bool expect_enabled;
+    float expect_proportion;
+  };
+
+  const char* kPrism = R"("crystal": {"type": "prism", "shape": {"height": 1.0}})";
+  const auto v2 = [&](const char* entry_tail) {
+    return std::string(R"({"layers": [{"prob": 0.0, "entries": [{)") + kPrism + entry_tail + R"(}]}]})";
+  };
+  const auto v1 = [](const char* entry_body) {
+    return std::string(R"({"crystals": [], "scattering": [{"prob": 0.0, "entries": [{)") + entry_body + R"(}]}]})";
+  };
+
+  const Case kCases[] = {
+    { "v2 inline, no enabled key", v2(R"(, "proportion": 42.0)"), true, 42.0f },
+    { "v2 inline, enabled false", v2(R"(, "proportion": 42.0, "enabled": false)"), false, 42.0f },
+    { "v2 inline, enabled true", v2(R"(, "proportion": 42.0, "enabled": true)"), true, 42.0f },
+    { "legacy v1 pool, no enabled key", v1(R"("crystal_id": 0, "proportion": 42.0)"), true, 42.0f },
+    { "legacy v1 pool, enabled false", v1(R"("crystal_id": 0, "proportion": 42.0, "enabled": false)"), false, 42.0f },
+    { "legacy v1 pool, enabled true", v1(R"("crystal_id": 0, "proportion": 42.0, "enabled": true)"), true, 42.0f },
+  };
+
+  for (const Case& c : kCases) {
+    GuiState loaded;
+    if (!DeserializeGuiStateJson(c.doc, loaded)) {
+      ADD_FAILURE() << c.name << ": the document failed to deserialize";
+      continue;  // nothing loaded to inspect; the remaining cases still get checked
+    }
+    if (loaded.layers.size() != 1 || loaded.layers.at(0).entries.size() != 1) {
+      ADD_FAILURE() << c.name << ": expected exactly one layer with one entry";
+      continue;
+    }
+    const EntryCard& e = loaded.layers.at(0).entries.at(0);
+    EXPECT_EQ(e.enabled, c.expect_enabled) << c.name << ": the entry came back with the wrong participation state";
+    // The weight rides along in every case: a reader that decided the two fields were one thing
+    // would satisfy the enabled check above and still lose the number the exclusion has to
+    // preserve.
+    EXPECT_FLOAT_EQ(e.proportion, c.expect_proportion) << c.name << ": the stored weight did not survive the load";
   }
 }
 
