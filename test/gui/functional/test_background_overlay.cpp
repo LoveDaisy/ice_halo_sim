@@ -26,6 +26,7 @@
 #include <stb_image.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -84,6 +85,128 @@ void LoadRenderAndBackground(ImGuiTestContext* ctx, const BgImage& img) {
   ctx->Yield(3);
   IM_CHECK(g_bg_test.bg_upload_done);
   IM_CHECK(gui::g_preview.HasBackground());
+}
+
+// ===== The synthetic photograph the minification cases push through the renderer =====
+//
+// Why synthesize one rather than load bg_test_landscape.jpg. A background whose aspect differs
+// from the viewport's is fitted inside it and letterboxed, and comparing the fitted region against
+// anything requires re-deriving where the contain fit put its borders — one pixel of disagreement
+// with the CPU-side rounding and the comparison is measuring the misalignment instead of what it
+// was asked about. Synthesized at exactly kNoiseScale x (vp_w, vp_h), the fit degenerates to
+// sx = sy = 1: no bars, UVs covering [0,1] squared, and every exported pixel owning one whole
+// kNoiseScale x kNoiseScale block of source.
+//
+// Why per-pixel noise. The report is about photographic grain — the highest-frequency content a
+// sky shot carries, and the part with no structure coarser than the block being averaged, so it is
+// the signal that undersampling destroys most completely.
+//
+// kNoiseScale = 4 is the reduction a ~6000px photograph meets in a ~1000px preview panel, i.e. the
+// case the report describes, and it keeps the source under 40 MB at this harness's viewport.
+constexpr int kNoiseScale = 4;
+
+// The pixels UploadBgTexture has to be handed from the main thread, and the flags that say when.
+struct NoiseBgUpload {
+  std::vector<unsigned char> rgb;
+  int width = 0;
+  int height = 0;
+  bool requested = false;
+  bool done = false;
+};
+NoiseBgUpload g_noise_bg;
+
+// xorshift32 rather than <random>: the distributions in <random> are not specified to produce the
+// same sequence across standard libraries, and a threshold calibrated on one machine has to be
+// describing the same image on the next.
+uint32_t NextNoise(uint32_t& state) {
+  state ^= state << 13;
+  state ^= state >> 17;
+  state ^= state << 5;
+  return state;
+}
+
+void FillNoise(std::vector<unsigned char>& rgb, int w, int h, uint32_t seed) {
+  rgb.assign(static_cast<size_t>(w) * h * 3, 0);
+  uint32_t state = seed;
+  for (unsigned char& byte : rgb) {
+    byte = static_cast<unsigned char>(NextNoise(state) >> 24);  // high bits: the low ones are the weakest
+  }
+}
+
+// What a correct minification produces: the mean of each kNoiseScale x kNoiseScale block. `k`
+// divides both dimensions exactly by construction, so every output pixel owns a whole block and no
+// partial-pixel weighting enters — which is the reason the source is sized off the viewport rather
+// than the other way round.
+std::vector<unsigned char> BoxDownsample(const std::vector<unsigned char>& src, int src_w, int src_h, int k) {
+  const int dst_w = src_w / k;
+  const int dst_h = src_h / k;
+  std::vector<unsigned char> dst(static_cast<size_t>(dst_w) * dst_h * 3);
+  const double inv = 1.0 / (static_cast<double>(k) * k);
+  for (int y = 0; y < dst_h; ++y) {
+    for (int x = 0; x < dst_w; ++x) {
+      double sum[3] = { 0.0, 0.0, 0.0 };
+      for (int dy = 0; dy < k; ++dy) {
+        const size_t row = (static_cast<size_t>(y) * k + dy) * static_cast<size_t>(src_w);
+        for (int dx = 0; dx < k; ++dx) {
+          const size_t idx = (row + static_cast<size_t>(x) * k + dx) * 3;
+          sum[0] += src[idx];
+          sum[1] += src[idx + 1];
+          sum[2] += src[idx + 2];
+        }
+      }
+      const size_t out = (static_cast<size_t>(y) * dst_w + x) * 3;
+      for (int c = 0; c < 3; ++c) {
+        dst[out + c] = static_cast<unsigned char>(sum[c] * inv + 0.5);
+      }
+    }
+  }
+  return dst;
+}
+
+// Main-thread work for the minification cases: the render layer the export path insists on, plus
+// the background upload, which is a GL call and so cannot happen on the test coroutine.
+void NoisyBackgroundGuiFunc(ImGuiTestContext* ctx) {
+  BackgroundGuiFunc(ctx);  // render layer; its own bg branch stays idle, g_bg_test is never armed here
+  if (g_noise_bg.requested && !g_noise_bg.done) {
+    gui::g_preview.UploadBgTexture(g_noise_bg.rgb.data(), g_noise_bg.width, g_noise_bg.height);
+    g_noise_bg.done = true;
+  }
+}
+
+void UploadSyntheticBackground(ImGuiTestContext* ctx, int w, int h, uint32_t seed) {
+  FillNoise(g_noise_bg.rgb, w, h, seed);
+  g_noise_bg.width = w;
+  g_noise_bg.height = h;
+  g_noise_bg.done = false;
+  g_noise_bg.requested = true;
+  ctx->Yield(3);
+  IM_CHECK(g_noise_bg.done);
+}
+
+// Export the frame and report how far it is from the box average of the image currently loaded —
+// i.e. how far the renderer's minification is from the one the pixels actually call for. Out-param
+// rather than a return value because IM_CHECK returns void on failure.
+void MeasureAgainstBoxAverage(ImGuiTestContext* ctx, const char* tag, double* out_psnr) {
+  *out_psnr = -1.0;
+  const std::string path = GuiTestTempPath(std::string("lumice_bg_minify_") + tag + ".png").string();
+  IM_CHECK(RequestAndWaitPreviewExport(ctx, gui::g_preview_vp, path));
+
+  std::vector<unsigned char> frame;
+  int w = 0, h = 0, ch = 0;
+  IM_CHECK(lumice::test::LoadPng(path.c_str(), frame, w, h, ch));
+  IM_CHECK_EQ(w, g_noise_bg.width / kNoiseScale);
+  IM_CHECK_EQ(h, g_noise_bg.height / kNoiseScale);
+  IM_CHECK_EQ(ch, 4);
+
+  // The shader writes alpha = 1 everywhere, so only the colour channels carry a claim.
+  const std::vector<unsigned char> rgb = lumice::test::StripAlpha(frame.data(), w, h);
+  const std::vector<unsigned char> truth =
+      BoxDownsample(g_noise_bg.rgb, g_noise_bg.width, g_noise_bg.height, kNoiseScale);
+  *out_psnr = lumice::test::ComputePsnr(rgb.data(), truth.data(), w, h, 3);
+  fprintf(stderr, "[background_overlay] minify %s: %dx%d -> %dx%d, PSNR vs box average = %.2f dB\n", tag,
+          g_noise_bg.width, g_noise_bg.height, w, h, *out_psnr);
+
+  std::remove(path.c_str());
 }
 
 // Mean channel value over one column of an RGB image. A column rather than a single pixel because
@@ -288,6 +411,59 @@ void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine) {
       IM_CHECK_GT(middle, 10.0);  // and the photograph inside it (this one is a dark night sky)
 
       std::remove(path.c_str());
+    };
+  }
+
+  // Minification. The background is almost always larger than the viewport it is fitted into — a
+  // 6000x4000 photograph in a ~1000px preview is a 4x reduction — and a bilinear tap averages 2x2
+  // texels however large the block under it is. What the user reported was a loaded sky's grain
+  // turning into flickering speckle on zoom-out; what the frame contained was an undersampled
+  // signal, and its distance from the correctly averaged image is a number rather than an opinion.
+  //
+  // Both upload branches are measured, and the order is the point. ResetTestState clears the
+  // renderer's cached dimensions, so the first upload reallocates the texture (glTexImage2D) and
+  // the second, at identical dimensions, overwrites it in place (glTexSubImage2D). Whatever
+  // prepares the texture for minification has to run on both: if it ran only on the reallocating
+  // branch, the second frame would be filtered through the FIRST image's data — a ghost of a
+  // photograph the user has already replaced, and one no single-upload case can see.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "background_overlay", "a_minified_background_is_averaged_not_undersampled");
+    t->GuiFunc = NoisyBackgroundGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      g_noise_bg = NoiseBgUpload{};
+      g_export_test.Reset();
+      g_export_test.upload_requested = true;  // the render layer ExportPreviewPng's first guard demands
+      ctx->Yield(3);
+      IM_CHECK_EQ(gui::g_preview.HasBackground(), false);  // so the first upload takes the reallocating branch
+
+      // Read the viewport before there is a background to read it from: vp_w/vp_h are rewritten
+      // every frame from the panel layout, and the aspect preset stays Free here, so loading an
+      // image cannot move them afterwards.
+      const int vp_w = gui::g_preview_vp.vp_w;
+      const int vp_h = gui::g_preview_vp.vp_h;
+      IM_CHECK_GT(vp_w, 0);
+      IM_CHECK_GT(vp_h, 0);
+
+      UploadSyntheticBackground(ctx, vp_w * kNoiseScale, vp_h * kNoiseScale, 0x9E3779B9u);
+      ctx->ItemClick("**/Show##display_bg");
+      gui::g_state.bg_alpha = 0.0f;  // photograph only: the render layer must not enter the comparison
+      ctx->Yield(2);                 // let RenderPreviewPanel bake the new params
+      IM_CHECK_EQ(gui::g_preview_vp.params.bg.enabled, true);
+
+      double psnr_realloc = -1.0;
+      MeasureAgainstBoxAverage(ctx, "realloc", &psnr_realloc);
+
+      // Same dimensions, different content: the in-place branch, and the one that would serve a
+      // stale image if the two branches were not treated alike.
+      UploadSyntheticBackground(ctx, vp_w * kNoiseScale, vp_h * kNoiseScale, 0x85EBCA6Bu);
+      ctx->Yield(2);
+
+      double psnr_inplace = -1.0;
+      MeasureAgainstBoxAverage(ctx, "inplace", &psnr_inplace);
+
+      IM_CHECK_GT(psnr_realloc, 0.0);
+      IM_CHECK_GT(psnr_inplace, 0.0);
     };
   }
 }
