@@ -1089,6 +1089,27 @@ std::array<float, 2> ProjectWorldDirToScreen(const ViewProjection& vp, const flo
 // LUMICE_MaxFov() keeps every expression finite over each lens's legal FOV range
 // (linear caps at 179°, short of tan's pole at 180°; globe at 90°), so no extra
 // numerical guard is needed beyond the degenerate-viewport check.
+// bg_uv = v_ndc * scale + offset maps NDC [-1,1] to texture UV [0,1] with a contain fit
+// (letterbox on aspect mismatch), then the user's pan/zoom on top. See the header for the
+// conventions; the identity case is asserted bit-for-bit in test_preview_renderer.cpp.
+BgUvTransform ComputeBgUvTransform(int vp_w, int vp_h, float bg_aspect, float pan_x, float pan_y, float zoom) {
+  float vp_aspect = static_cast<float>(vp_w) / static_cast<float>(vp_h);
+  float sx = 1.0f;
+  float sy = 1.0f;
+  if (vp_aspect > bg_aspect) {
+    sx = bg_aspect / vp_aspect;
+  } else {
+    sy = vp_aspect / bg_aspect;
+  }
+  BgUvTransform t{};
+  t.scale_x = 0.5f / (sx * zoom);
+  // Y flip: stbi loads top-down, GL texture origin is bottom-left
+  t.scale_y = -0.5f / (sy * zoom);
+  t.offset_x = 0.5f + pan_x;
+  t.offset_y = 0.5f + pan_y;
+  return t;
+}
+
 float ComputeDragGainDegPerPixel(int lens_type, float fov_deg, int vp_w, int vp_h) {
   constexpr float kPi = 3.14159265358979323846f;
   // Pre-fov-aware sensitivity. Only reachable via the default branch below, which
@@ -1212,22 +1233,12 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   if (params.bg.enabled) {
     glUniform1f(glGetUniformLocation(shader_program_, "u_overlay_alpha"), params.bg.alpha);
 
-    // CPU-side contain mode UV calculation
-    // bg_uv = v_ndc * scale + offset maps NDC [-1,1] to texture UV [0,1]
-    // with contain fit (letterbox for aspect mismatch)
-    float vp_aspect = static_cast<float>(vp_w) / static_cast<float>(vp_h);
-    float sx = 1.0f;
-    float sy = 1.0f;
-    if (vp_aspect > params.bg.aspect) {
-      sx = params.bg.aspect / vp_aspect;
-    } else {
-      sy = vp_aspect / params.bg.aspect;
-    }
-    float scale_x = 0.5f / sx;
-    // Y flip: stbi loads top-down, GL texture origin is bottom-left
-    float scale_y = -0.5f / sy;
-    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_scale"), scale_x, scale_y);
-    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_offset"), 0.5f, 0.5f);
+    // CPU-side contain-fit + pan/zoom UV calculation (ComputeBgUvTransform, declared in the
+    // header so it is unit-testable without a GL context).
+    const BgUvTransform bg_uv =
+        ComputeBgUvTransform(vp_w, vp_h, params.bg.aspect, params.bg.pan_x, params.bg.pan_y, params.bg.zoom);
+    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_scale"), bg_uv.scale_x, bg_uv.scale_y);
+    glUniform2f(glGetUniformLocation(shader_program_, "u_bg_uv_offset"), bg_uv.offset_x, bg_uv.offset_y);
 
     // Bind bg texture to unit 1
     glActiveTexture(GL_TEXTURE1);

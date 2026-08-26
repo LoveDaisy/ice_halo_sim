@@ -155,10 +155,14 @@ const std::vector<FieldProbe>& FieldProbes() {
         s.bg_path = "/some/test/path.png";
         s.bg_show = true;
         s.bg_alpha = 0.7f;
+        s.bg_offset_x = -0.35f;
+        s.bg_offset_y = 0.2f;
+        s.bg_scale = 1.75f;
       },
       [](const GuiState& s) {
         return s.bg_path.string() + " " + std::to_string(static_cast<int>(s.bg_show)) + " " +
-               std::to_string(s.bg_alpha);
+               std::to_string(s.bg_alpha) + " " + std::to_string(s.bg_offset_x) + " " + std::to_string(s.bg_offset_y) +
+               " " + std::to_string(s.bg_scale);
       } },
     { "filter.raypath_text",
       [](GuiState& s) {

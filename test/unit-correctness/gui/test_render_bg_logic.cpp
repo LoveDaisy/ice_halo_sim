@@ -44,6 +44,13 @@ TEST(LegacyLmcCompat, AbsentAspectAndBackgroundFieldsTakeTheFactoryValues) {
   EXPECT_TRUE(loaded.bg_path.empty());
   EXPECT_EQ(loaded.bg_show, false);
   EXPECT_TRUE(std::abs(loaded.bg_alpha - 1.0f) < 0.01f);
+  // The pan/zoom identity. These three are load-bearing beyond "a default came back": the
+  // renderer has no compat branch for a document that predates them, so an .lmc missing these
+  // keys renders unchanged ONLY IF it lands on exactly (0, 0, 1) — see the bit-for-bit identity
+  // case in test_preview_renderer.cpp for the other half of that argument.
+  EXPECT_FLOAT_EQ(loaded.bg_offset_x, 0.0f);
+  EXPECT_FLOAT_EQ(loaded.bg_offset_y, 0.0f);
+  EXPECT_FLOAT_EQ(loaded.bg_scale, 1.0f);
 }
 
 // Every preset reports the ratio its own name promises — the exact number, not a sanity band.
