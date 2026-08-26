@@ -1064,8 +1064,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // number — and the thumbnail corner is the only always-free real estate on the card that does
   // not push the right column's four rows out of their shared three-column alignment.
   {
+    // "###" and not "##": the visible glyph flips with the state, and with "##" the id hashes the
+    // whole label, so the button would become a different widget the instant it is clicked —
+    // losing ImGui's active-id continuity and leaving no stable path for a test to address. Same
+    // reasoning as the defaults panel's state-dependent cells.
     char toggle_id[48];
-    snprintf(toggle_id, sizeof(toggle_id), "%s##enabled_%d_%d", entry.enabled ? ICON_FA_TOGGLE_ON : ICON_FA_TOGGLE_OFF,
+    snprintf(toggle_id, sizeof(toggle_id), "%s###enabled_%d_%d", entry.enabled ? ICON_FA_TOGGLE_ON : ICON_FA_TOGGLE_OFF,
              layer_idx, entry_idx);
     constexpr float kTogglePad = 3.0f;
     ImGui::SetCursorScreenPos(ImVec2(thumb_pos.x + kTogglePad, thumb_pos.y + kTogglePad));

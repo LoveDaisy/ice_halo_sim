@@ -717,5 +717,100 @@ TEST(SceneCommitChain, APoolFilterStatingNothingIsNeverReadAsMatchAll) {
   EXPECT_EQ(skipped, 0) << "nothing was there to skip";
 }
 
+// ---------------------------------------------------------------------------------------------
+// Excluding a crystal is exactly hand-zeroing its weight, and it does not consume the weight.
+
+// The claim the card's participation toggle makes is an equivalence: switching a crystal off and
+// re-running gives the run the user would have got by dragging that crystal's Weight to zero
+// themselves — the operation it replaces. It is asserted at the seam rather than on pixels because
+// that is where it is decidable. BuildScene is the single GUI->core emitter, so two documents that
+// emit the same scene are the same run by construction: the engine is deterministic given the same
+// input and seed, and comparing two rendered images instead would answer a noisier question at far
+// greater cost.
+//
+// The comparison is the WHOLE scene document, not just the one proportion. `enabled` is a GUI-only
+// concept translated at exactly one line, and the failure worth catching is a second translation
+// appearing somewhere else — an excluded entry that also drops its filter, renumbers a crystal id,
+// or vanishes from the scattering list would still satisfy an assertion written on proportion
+// alone, while being a different run.
+//
+// Both intents are compared for the same reason the exposure case above compares both: the export
+// path feeds the CLI, and an exported config that still carries the excluded crystal at full weight
+// reproduces a picture the preview never showed.
+TEST(SceneCommitChain, ExcludingAnEntryCommitsTheSameSceneAsZeroingItsWeightByHand) {
+  // Two entries, not one: with a single entry both arms sum to zero total weight and the scene
+  // would compare equal even if the emitter ignored `enabled` and wrote 42 for it. The sibling is
+  // what makes the excluded entry's committed number observable.
+  const auto seed_two = [](bool use_toggle) {
+    SeedOneEntryDocument();
+    EntryCard sibling = g_state.layers[0].entries[0];
+    sibling.proportion = 58.0f;
+    g_state.layers[0].entries.push_back(sibling);
+    EntryCard& excluded = g_state.layers[0].entries[0];
+    excluded.proportion = use_toggle ? 42.0f : 0.0f;
+    excluded.enabled = use_toggle ? false : true;
+  };
+
+  seed_two(true);
+  const nlohmann::json toggled = CommitSceneJson(g_state);
+  const std::string toggled_export = CoreJson(g_state);
+  // The weight the user typed is still theirs after the commit: BuildScene takes a const GuiState&
+  // and translates on the way out, so turning the crystal back on restores 42 rather than 0. This
+  // is the half of the toggle that the equivalence above cannot show — an emitter that zeroed
+  // entry.proportion in place would pass every assertion below and still destroy the setting.
+  EXPECT_FLOAT_EQ(g_state.layers.at(0).entries.at(0).proportion, 42.0f)
+      << "committing consumed the excluded entry's stored weight";
+  EXPECT_FALSE(g_state.layers.at(0).entries.at(0).enabled) << "committing flipped the toggle back on";
+
+  seed_two(false);
+  const nlohmann::json by_hand = CommitSceneJson(g_state);
+  const std::string by_hand_export = CoreJson(g_state);
+
+  ASSERT_FALSE(toggled.is_null()) << "the document with an excluded entry did not commit at all";
+  ASSERT_FALSE(by_hand.is_null()) << "the hand-zeroed document did not commit at all";
+  EXPECT_FLOAT_EQ(toggled["scene"]["scattering"][0]["entries"][0]["proportion"].get<float>(), 0.0f)
+      << "the excluded entry reached the simulator at its stored weight: "
+      << toggled["scene"]["scattering"][0]["entries"][0].dump();
+  EXPECT_FLOAT_EQ(toggled["scene"]["scattering"][0]["entries"][1]["proportion"].get<float>(), 58.0f)
+      << "excluding one entry rewrote its sibling's weight";
+  EXPECT_EQ(toggled, by_hand) << "excluding a crystal is not the same run as zeroing its weight";
+  EXPECT_EQ(toggled_export, by_hand_export) << "the two are the same run but export as different configs";
+}
+
+// A layer with every crystal excluded is a state the GUI has to survive, not one it has to prevent.
+//
+// The engine already handles it: PartitionCrystalRayNum returns an all-zero allocation for a
+// zero total (its AllZeroProportions unit test pins that), and a zero-proportion entry never
+// reaches MakeCrystal. So the disposition here is a notice, not a guard — and a notice is only
+// honest if the thing it describes actually commits. What this pins is that it does: the commit
+// produces a scene rather than a null, with the layer's entries all at zero.
+//
+// AllEntriesDisabled is checked in the same case because it is the predicate the panel's notice is
+// drawn from, and the notice itself is TextColored, which no gui_test assertion can reach. Its
+// empty-layer answer is pinned too: an empty layer holds no toggles, so reporting "you turned
+// everything off" about it would be a message about something the user never did.
+TEST(SceneCommitChain, ALayerWithEveryCrystalExcludedStillCommits) {
+  SeedOneEntryDocument();
+  EntryCard sibling = g_state.layers[0].entries[0];
+  g_state.layers[0].entries.push_back(sibling);
+  EXPECT_FALSE(AllEntriesDisabled(g_state.layers[0])) << "a fully participating layer reported as all-excluded";
+
+  for (EntryCard& e : g_state.layers[0].entries) {
+    e.enabled = false;
+  }
+  EXPECT_TRUE(AllEntriesDisabled(g_state.layers[0])) << "every entry is excluded and the predicate disagrees";
+
+  const nlohmann::json scene = CommitSceneJson(g_state);
+  ASSERT_FALSE(scene.is_null()) << "a layer with everything excluded refused to commit";
+  const nlohmann::json& entries = scene["scene"]["scattering"][0]["entries"];
+  ASSERT_EQ(entries.size(), 2u) << "the excluded entries were dropped from the scene rather than zeroed";
+  for (const nlohmann::json& je : entries) {
+    EXPECT_FLOAT_EQ(je["proportion"].get<float>(), 0.0f) << je.dump();
+  }
+
+  Layer empty;
+  EXPECT_FALSE(AllEntriesDisabled(empty)) << "a layer with no entries at all was reported as all-excluded";
+}
+
 }  // namespace
 }  // namespace lumice::gui

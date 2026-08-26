@@ -42,6 +42,7 @@
 #include <string>
 
 #include "IconsFontAwesome6.h"
+#include "gui/edit_modals.hpp"  // IsEditModalOpen — the toggle must not also trip the card's click handler
 #include "gui/gui_state.hpp"
 #include "imgui_internal.h"  // ImGuiWindow — a card's widgets are not addressable by path; see CardWindow
 #include "test_gui_shared.hpp"
@@ -448,6 +449,68 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
 
       gui::g_state.crystals[dup_cid].prism_h = 3.7f;
       IM_CHECK_EQ(gui::g_state.crystals[orig_cid].prism_h, 2.5f);
+    };
+  }
+
+  // The participation toggle, driven through the real button, on the two properties that make it a
+  // toggle rather than a shortcut for dragging Weight to zero.
+  //
+  // First: it is reversible. The operation it replaces destroys the number — a user who "excluded" a
+  // crystal by dragging its Weight to 0 has no way back to the share they had chosen, and finds out
+  // only when they try to bring it back. So the weight is read before, between and after, and it has
+  // to be the same 42 every time; a toggle implemented as "write 0, remember nothing" satisfies
+  // every other assertion here and fails exactly this one.
+  //
+  // Second: the button is a real item, which is what keeps the card's own click handler off it. The
+  // card body opens the edit modal on any click that no item claimed (IsAnyItemHovered), and a
+  // toggle drawn with the draw list instead of as a widget would flip the state AND open the modal
+  // over the panel. That is asserted here rather than reasoned about, because the toggle sits on top
+  // of the thumbnail — inside the very rectangle CardBlankSpot uses as "nothing here to click".
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "the_participation_toggle_flips_without_touching_weight");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.layers[0].entries[0].proportion = 42.0f;
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].enabled);
+
+      ctx->ItemClick("**/###enabled_0_0");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].enabled);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 42.0f);
+      IM_CHECK(!gui::IsEditModalOpen());
+
+      // Back on through the same id: the label's glyph flipped with the state, so a button whose id
+      // hashed its label would no longer be at this path at all.
+      ctx->ItemClick("**/###enabled_0_0");
+      ctx->Yield(2);
+      IM_CHECK(gui::g_state.layers[0].entries[0].enabled);
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].proportion, 42.0f);
+      IM_CHECK(!gui::IsEditModalOpen());
+    };
+  }
+
+  // Excluding a crystal is a change to the document, so the run that is on screen no longer matches
+  // it. Pinned through the frame-tail reconcile the same way the duplicate case below is: nothing at
+  // the click site marks anything: the reconciler notices because EntryCard::operator== compares
+  // `enabled`, and an operator that did not would leave the user looking at a stale picture with the
+  // crystal still in it and the GUI reporting everything up to date.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "excluding_a_crystal_marks_the_run_out_of_date");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.run_intent = gui::RunIntent::kLoaded;
+      gui::g_state.sim_state = gui::GuiState::SimState::kDone;
+      gui::g_state.dirty = false;
+      gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.dirty);
+
+      ctx->ItemClick("**/###enabled_0_0");
+      ctx->Yield(2);
+      IM_CHECK(!gui::g_state.layers[0].entries[0].enabled);
+      IM_CHECK(gui::g_state.dirty);
     };
   }
 
