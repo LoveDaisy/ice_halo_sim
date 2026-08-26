@@ -544,10 +544,20 @@ bool PreviewRenderer::Init() {
   // GL sequence + xyz_mode_ = false side effect).
   UploadBlankSimTexture();
 
-  // Create background texture
+  // Create background texture.
+  //
+  // The background is a photograph, and it is nearly always larger than the viewport it is fitted
+  // into: a 6000x4000 frame in a ~900px preview panel is a 4x reduction, and the loader only halves
+  // images past 4096 on a side, so the texture reaching this point is still several times the
+  // viewport. GL_LINEAR averages 2x2 texels however large the footprint under a fragment is, so at
+  // that reduction it reads 4 texels of a 16-texel block and calls the result the block's colour —
+  // undersampling, which turns photographic grain into speckle that reshuffles itself whenever the
+  // view moves. GL_LINEAR_MIPMAP_LINEAR reads a mip level chosen for the actual footprint instead,
+  // where the averaging has already been done. MAG stays GL_LINEAR: magnification has no footprint
+  // to cover and no mip level above 0 to reach for.
   glGenTextures(1, &bg_texture_);
   glBindTexture(GL_TEXTURE_2D, bg_texture_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -755,6 +765,14 @@ void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int 
   } else {
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
   }
+
+  // After the branches meet, so that both are covered. The MIN filter set in Init() samples mip
+  // levels, and only level 0 was written above; without this the smaller levels hold whatever the
+  // previous image left there. That is a live hazard on the glTexSubImage2D branch in particular:
+  // it overwrites the pixels in place and leaves the rest of the chain untouched, so a user
+  // swapping one photograph for another of the same size would keep seeing the old one wherever the
+  // fit minifies.
+  glGenerateMipmap(GL_TEXTURE_2D);
 
   bg_aspect_ = static_cast<float>(width) / static_cast<float>(height);
   glBindTexture(GL_TEXTURE_2D, 0);
