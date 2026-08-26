@@ -4,7 +4,7 @@
 // Which serialized settings can be edited in place, and with WHAT constraint.
 //
 // One entry per editable leaf of the serialized GuiState document, keyed by the SERIALIZED key
-// path ("overlay_grid_color", not the C++ field name `grid_color` — 18 of the 42 leaves differ,
+// path ("overlay_grid_color", not the C++ field name `grid_color` — 18 of the 45 leaves differ,
 // and the key path is what the diff engine, the override file and the user all speak).
 //
 // REGISTERED, NOT GENERATED — the opposite of defaults_diff.hpp, and the split is deliberate:
