@@ -21,7 +21,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
-#include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / BgTransformModifierDown / kBgModifierName
+#include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName
 #include "gui/semantic_colors.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
@@ -864,7 +864,10 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     // alignment session and then not for weeks, so the moment it needs to be discoverable is the
     // SECOND time, which is exactly when a one-shot hint is already gone. One dim line is cheap
     // enough that it need not compete with a tooltip for that job.
-    ImGui::TextDisabled("%s+drag pans the image, %s+wheel zooms it.", kBgModifierName, kBgModifierName);
+    // Short enough to survive the right panel's width: the sentence this replaced ("...pans the
+    // image, ...wheel zooms it.") ran past the panel edge and lost its last two words, which is a
+    // worse hint than no hint — a truncated instruction reads as a rendering fault.
+    ImGui::TextDisabled("%s+drag pans, %s+wheel zooms", kBgModifierName, kBgModifierName);
     ImGui::EndDisabled();
 
     ImGui::PopItemWidth();
@@ -1192,7 +1195,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // hidden background has stated what they meant to move, and swallowing the modifier to move
       // something else is worse than doing nothing.
       const bool bg_active = g_preview.HasBackground() && g_state.bg_show;
-      const bool bg_modifier = BgTransformModifierDown(io.KeyAlt, io.KeySuper, kBgModifierIsApple);
+      // Alt/Option on every platform. Cmd on macOS is not an option: ImGui aliases Super+Left
+      // into a right click before this handler runs — see kBgModifierName in preview_renderer.hpp.
+      const bool bg_modifier = io.KeyAlt;
 
       if (bg_active && bg_modifier && is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         // Solve for "the texel under the cursor stays under the cursor". With

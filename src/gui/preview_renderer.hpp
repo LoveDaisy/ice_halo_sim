@@ -97,7 +97,7 @@ struct Background {
   // GuiState::bg_offset_x / bg_offset_y / bg_scale. `zoom` here is NOT ViewProjection::fov: it
   // only scales the background's UV transform (the photo the user is comparing against), and
   // never touches the simulated frame's camera. Both happen to be reachable from a scroll on the
-  // canvas, told apart by the pan/zoom modifier key — see BgTransformModifierDown below.
+  // canvas, told apart by whether the pan/zoom modifier key is held — see kBgModifierName below.
   // Identity is (0, 0, 1): centered contain fit.
   float pan_x = 0.0f;
   float pan_y = 0.0f;
@@ -230,25 +230,20 @@ struct BgUvTransform {
 };
 BgUvTransform ComputeBgUvTransform(int vp_w, int vp_h, float bg_aspect, float pan_x, float pan_y, float zoom);
 
-// Which modifier key arms the background pan/zoom gestures on the canvas.
+// How the on-screen hint spells the key that arms the background pan/zoom gestures. The key
+// itself is io.KeyAlt on every platform; only its printed name differs, because that is what is
+// engraved on the keyboard the reader is looking at.
 //
-// NOTE: this is INPUT-layer platform arbitration, not part of the UV math above — it shares this
-// header only to reuse the "pure helper, unit-testable with no window" arrangement
-// ComputeDragGainDegPerPixel established, so both of its platform branches run in gui_unit_test
-// on every platform. Written as a parameter rather than an inline `#if`, because an `#if` would
-// make the macOS branch structurally absent from the Ubuntu CI binary — not merely unexercised.
-// macOS uses Cmd (reported by ImGui as io.KeySuper), everything else uses Alt/Option (io.KeyAlt).
-inline bool BgTransformModifierDown(bool key_alt, bool key_super, bool is_apple) {
-  return is_apple ? key_super : key_alt;
-}
-
-// The single place the platform is read. Call sites pass this into BgTransformModifierDown and
-// use it to pick the "Cmd"/"Alt" wording in the on-screen hint, so no other file needs an `#if`.
+// Cmd on macOS was the obvious-looking alternative and does not work: ImGui, with
+// ConfigMacOSXBehaviors (on by default under __APPLE__), rewrites Super+LeftClick into a RIGHT
+// click at the event-queue level — "Super+Left Click aliased into Right Click", ImGui::
+// AddMouseButtonEvent in imgui.cpp. The left-button drag the canvas handler waits for therefore
+// never arrives, and no amount of correct code downstream can see it. Option/Alt has no such
+// aliasing and is the pan modifier most image tools already use, so there is no platform split in
+// behaviour left to arbitrate — only in wording.
 #if defined(__APPLE__)
-inline constexpr bool kBgModifierIsApple = true;
-inline constexpr const char* kBgModifierName = "Cmd";
+inline constexpr const char* kBgModifierName = "Option";
 #else
-inline constexpr bool kBgModifierIsApple = false;
 inline constexpr const char* kBgModifierName = "Alt";
 #endif
 

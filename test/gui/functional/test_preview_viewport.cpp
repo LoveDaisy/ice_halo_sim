@@ -23,9 +23,13 @@
 // that spins the sky at a speed unrelated to how zoomed in they are, or an azimuth that jams at
 // due south instead of carrying on round.
 
+#include <stb_image.h>
+
 #include <cmath>
+#include <string>
 
 #include "gui/gui_state.hpp"
+#include "gui/preview_renderer.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -62,6 +66,76 @@ void SeedPose(int lens_type, float fov, float az, float el) {
   gui::g_state.renderer.azimuth = az;
   gui::g_state.renderer.elevation = el;
   gui::g_state.renderer.roll = 0.0f;
+}
+
+// ---- the background pan/zoom gesture ------------------------------------------------------
+//
+// Alt is the modifier on every platform, and these cases are the reason it is. The gesture was
+// first written to take Cmd on macOS, which reads as the native choice and cannot work: ImGui
+// rewrites Super+LeftClick into a RIGHT click at the event queue (ConfigMacOSXBehaviors, on by
+// default under __APPLE__), so the left drag never reaches the handler. Only a case that drove a
+// real mac frame could say so — the pure function deciding WHICH key to read was correct, and the
+// premise underneath it was false. Which is also why these live here and not beside the
+// background's pixels: what is asserted is the ROUTING, that the modifier hands the canvas to
+// exactly one of the two owners and the other sees nothing. A suite that only drove the
+// background could not tell "the camera was left alone" from "the camera was never reachable".
+constexpr ImGuiKey kBgMod = ImGuiMod_Alt;
+
+// The background image the gesture cases push in, borrowed from the background suite's references.
+// Landscape against the harness's landscape viewport, so the contain fit squeezes one axis and
+// neither scale_x nor scale_y is 1 — an image whose aspect matched the viewport would let a
+// transform that ignored the fit pass.
+const char* const kBgFile = LUMICE_TEST_REF_DIR "/bg_test_landscape.jpg";
+
+// Both uploads are GL calls, so they happen here rather than in the test coroutine. Same shape as
+// UploadSynthTexture above; the render texture is still required, since a background alone would
+// leave the export path (and, historically, several viewport invariants) on a different branch
+// from the one every other case in this file exercises.
+void UploadSynthTextureAndBackground(ImGuiTestContext*) {
+  UploadSynthTexture(nullptr);
+  if (g_bg_test.bg_upload_requested && !g_bg_test.bg_upload_done) {
+    int w = 0;
+    int h = 0;
+    int channels = 0;
+    unsigned char* raw = stbi_load(g_bg_test.bg_image_path.c_str(), &w, &h, &channels, 3);
+    if (raw) {
+      gui::g_preview.UploadBgTexture(raw, w, h);
+      stbi_image_free(raw);
+    }
+    g_bg_test.bg_upload_done = true;
+  }
+}
+
+// Put a render texture and a background in place and return once both have landed. `shown` is the
+// bg_show flag rather than a second helper because "loaded but hidden" is one of the cases below.
+void LoadBackground(ImGuiTestContext* ctx, bool shown) {
+  g_upload_done = false;
+  g_bg_test.Reset();
+  g_bg_test.bg_image_path = kBgFile;
+  g_bg_test.bg_upload_requested = true;
+  ctx->Yield(4);
+  IM_CHECK(g_bg_test.bg_upload_done);
+  IM_CHECK(gui::g_preview.HasBackground());
+  gui::g_state.bg_show = shown;
+  ctx->Yield(2);
+}
+
+// One modifier-held drag on the canvas.
+void ModDrag(ImGuiTestContext* ctx, ImVec2 delta) {
+  ctx->KeyDown(kBgMod);
+  ctx->ItemDragWithDelta(kInteract, delta);
+  ctx->KeyUp(kBgMod);
+  ctx->Yield(2);
+}
+
+// One modifier-held wheel notch over the canvas. The hover has to be re-established each time:
+// the wheel is delivered to whatever the mouse is over, not to whatever was last dragged.
+void ModWheel(ImGuiTestContext* ctx, float delta) {
+  ctx->MouseMove(kInteract);
+  ctx->KeyDown(kBgMod);
+  ctx->MouseWheelY(delta);
+  ctx->KeyUp(kBgMod);
+  ctx->Yield(2);
 }
 
 }  // namespace
@@ -335,6 +409,178 @@ void RegisterPreviewViewportTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.renderer.azimuth, 0.0f);
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 0.0f);
       IM_CHECK_EQ(gui::g_state.renderer.fov, fov_before);
+    };
+  }
+
+  // The routing itself: with the modifier held, the drag owns the background and the camera does
+  // not move. Both halves matter — a handler that moved the background AND kept orbiting would
+  // satisfy any assertion that only looked at bg_offset_*.
+  //
+  // Direction is asserted, not just "the value changed". A sign error here is the failure this
+  // gesture is most likely to ship with: everything still moves, smoothly, at the right speed, in
+  // the wrong direction, and no structural test can tell. Dragging right must slide the image
+  // right, which means sampling FURTHER LEFT in the texture, which means a SMALLER u offset — so
+  // the offset moves opposite to the cursor, and that is what is pinned.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "preview_viewport", "the_modifier_drag_pans_the_background_and_leaves_the_camera_put");
+    t->GuiFunc = UploadSynthTextureAndBackground;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      LoadBackground(ctx, /*shown=*/true);
+      SeedPose(gui::kLensTypeFisheyeEquidist, 60.0f, 12.0f, -7.0f);
+      ctx->Yield(2);
+
+      ModDrag(ctx, ImVec2(60.0f, 0.0f));
+      const float after_right_x = gui::g_state.bg_offset_x;
+      IM_CHECK_LT(after_right_x, 0.0f);                   // image followed the cursor to the right
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, 0.0f);        // a horizontal drag is horizontal only
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 12.0f);  // the camera saw none of it
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -7.0f);
+
+      // Down the screen. Independent axis, and its own sign: the texture's v runs opposite to the
+      // screen's y (scale_y is negative), so this is not the x case restated.
+      gui::g_state.bg_offset_x = 0.0f;
+      ctx->Yield(2);
+      ModDrag(ctx, ImVec2(0.0f, 40.0f));
+      IM_CHECK_LT(gui::g_state.bg_offset_y, 0.0f);
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, 0.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 12.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -7.0f);
+    };
+  }
+
+  // Twice the drag moves twice as far, and twice the zoom moves half as far.
+  //
+  // The second half is the claim that makes the gesture usable at all: the pan is solved from the
+  // same scale the fragment shader samples with, so the image stays glued to the cursor at every
+  // zoom level rather than needing a separate sensitivity curve the way the camera drag does. A
+  // pan that ignored zoom would pass every other case in this file and then feel broken the moment
+  // anyone zoomed in.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport", "the_background_pan_tracks_the_cursor_at_any_zoom");
+    t->GuiFunc = UploadSynthTextureAndBackground;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      LoadBackground(ctx, /*shown=*/true);
+
+      ModDrag(ctx, ImVec2(40.0f, 0.0f));
+      const float one_unit = std::fabs(gui::g_state.bg_offset_x);
+      IM_CHECK_GT(one_unit, 0.0f);  // the premise: the drag did something
+
+      gui::g_state.bg_offset_x = 0.0f;
+      ctx->Yield(2);
+      ModDrag(ctx, ImVec2(80.0f, 0.0f));
+      const float two_units = std::fabs(gui::g_state.bg_offset_x);
+      IM_CHECK_LT(std::fabs(two_units - 2.0f * one_unit), 0.1f * one_unit);
+
+      // Same 40 px at 2x zoom. The offset is in texture widths, and at 2x each screen pixel covers
+      // half a texture width of what it did, so the same drag is worth half the offset.
+      gui::g_state.bg_offset_x = 0.0f;
+      gui::g_state.bg_scale = 2.0f;
+      ctx->Yield(2);
+      ModDrag(ctx, ImVec2(40.0f, 0.0f));
+      const float zoomed = std::fabs(gui::g_state.bg_offset_x);
+      IM_CHECK_LT(std::fabs(zoomed - 0.5f * one_unit), 0.1f * one_unit);
+    };
+  }
+
+  // The unmodified gesture, unchanged. This is the other half of AC3 and the reason the camera
+  // branches carry an explicit `!bg_modifier`: the claim is not merely that the new code works,
+  // it is that the old code was not disturbed, which only a case that drives it can say.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "preview_viewport", "a_plain_drag_still_turns_the_camera_with_a_background_loaded");
+    t->GuiFunc = UploadSynthTextureAndBackground;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      LoadBackground(ctx, /*shown=*/true);
+      SeedPose(gui::kLensTypeFisheyeEquidist, 60.0f, 0.0f, 0.0f);
+      ctx->Yield(2);
+
+      const float expected = ExpectedDeg(gui::kLensTypeFisheyeEquidist, 60.0f, 60.0f);
+      ctx->ItemDragWithDelta(kInteract, ImVec2(60.0f, 0.0f));
+      ctx->Yield(2);
+
+      IM_CHECK_LT(std::fabs(gui::g_state.renderer.azimuth + expected), 0.5f);  // the pre-existing law
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, 0.0f);                             // and the background sat still
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, 0.0f);
+    };
+  }
+
+  // The wheel, both ways round. One case rather than two, because the property is the SPLIT: each
+  // owner must move under its own modifier state and stay put under the other's. Two cases could
+  // both pass against a handler that moved both every time.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "preview_viewport",
+                         "the_modifier_sends_the_wheel_to_the_background_and_bare_wheel_to_the_field_of_view");
+    t->GuiFunc = UploadSynthTextureAndBackground;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      LoadBackground(ctx, /*shown=*/true);
+      SeedPose(gui::kLensTypeFisheyeEquidist, 60.0f, 0.0f, 0.0f);
+      ctx->Yield(2);
+
+      ModWheel(ctx, 2.0f);
+      IM_CHECK_GT(gui::g_state.bg_scale, 1.0f);       // scrolling up magnifies the photograph
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 60.0f);  // and the lens did not move
+
+      const float zoomed = gui::g_state.bg_scale;
+      ctx->MouseMove(kInteract);
+      ctx->MouseWheelY(2.0f);
+      ctx->Yield(2);
+      IM_CHECK_LT(gui::g_state.renderer.fov, 60.0f);  // bare wheel still narrows the field of view
+      IM_CHECK_EQ(gui::g_state.bg_scale, zoomed);     // and the photograph did not move
+    };
+  }
+
+  // The fourth square of the routing table, and the one an implementation gets wrong by omission:
+  // modifier held with nothing to move. The gesture must do NOTHING — not fall through to the
+  // camera. A user pressing the modifier has said what they meant to move; silently orbiting
+  // instead is a worse answer than no answer, because it is indistinguishable from a plain drag
+  // and leaves them with a pose they did not ask for.
+  //
+  // Driven at both reachable spellings of "nothing to move": no image at all, and an image that is
+  // loaded but hidden. They are separate branches of `bg_active` and a check of only one would
+  // pass against a handler that tested HasBackground() and forgot bg_show.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_viewport",
+                                    "the_modifier_gesture_does_nothing_when_there_is_no_background_to_move");
+    t->GuiFunc = UploadSynthTextureAndBackground;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      // No background at all: only the render texture, which is what puts the canvas on screen.
+      ResetTestState();
+      g_upload_done = false;
+      ctx->Yield(4);
+      IM_CHECK(gui::g_preview.HasTexture());
+      IM_CHECK(!gui::g_preview.HasBackground());
+      SeedPose(gui::kLensTypeFisheyeEquidist, 60.0f, 5.0f, 3.0f);
+      ctx->Yield(2);
+
+      ModDrag(ctx, ImVec2(60.0f, 40.0f));
+      ModWheel(ctx, 2.0f);
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, 0.0f);
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, 0.0f);
+      IM_CHECK_EQ(gui::g_state.bg_scale, 1.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 5.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 3.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 60.0f);
+
+      // Loaded but hidden. Same expectation, different branch.
+      ResetTestState();
+      LoadBackground(ctx, /*shown=*/false);
+      SeedPose(gui::kLensTypeFisheyeEquidist, 60.0f, 5.0f, 3.0f);
+      ctx->Yield(2);
+
+      ModDrag(ctx, ImVec2(60.0f, 40.0f));
+      ModWheel(ctx, 2.0f);
+      IM_CHECK_EQ(gui::g_state.bg_offset_x, 0.0f);
+      IM_CHECK_EQ(gui::g_state.bg_offset_y, 0.0f);
+      IM_CHECK_EQ(gui::g_state.bg_scale, 1.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.azimuth, 5.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 3.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.fov, 60.0f);
     };
   }
 }

@@ -716,35 +716,19 @@ TEST(BgTransform, TheLetterboxBranchIsChosenByAspectAloneAndSurvivesPanAndZoom) 
   }
 }
 
-// Both platform branches of the pan/zoom modifier, on every platform that runs this suite.
+// The hint's wording, which is all that is left of the modifier's platform split.
 //
-// The point of the `is_apple` parameter is exactly this test: spelled as an `#if` inside the call
-// site, the macOS branch would not exist in the Ubuntu CI binary at all, so "CI is green" would
-// say nothing about it. What remains outside any automated reach is the platform FACT that a real
-// mac reports Cmd as io.KeySuper — that is one layer below this function and is tracked as a
-// human-verification item, not as something these assertions claim.
-TEST(BgTransform, BothPlatformBranchesOfTheModifierKeyArePinned) {
-  // Non-Apple: Alt arms it, Cmd/Super does not.
-  EXPECT_TRUE(lumice::gui::BgTransformModifierDown(/*key_alt=*/true, /*key_super=*/false, /*is_apple=*/false));
-  EXPECT_FALSE(lumice::gui::BgTransformModifierDown(/*key_alt=*/false, /*key_super=*/true, /*is_apple=*/false));
-
-  // Apple: Cmd arms it, Alt/Option does not.
-  EXPECT_TRUE(lumice::gui::BgTransformModifierDown(/*key_alt=*/false, /*key_super=*/true, /*is_apple=*/true));
-  EXPECT_FALSE(lumice::gui::BgTransformModifierDown(/*key_alt=*/true, /*key_super=*/false, /*is_apple=*/true));
-
-  // Neither key down is never armed; both down is armed on either platform, so a user holding an
-  // extra modifier does not silently lose the gesture.
-  EXPECT_FALSE(lumice::gui::BgTransformModifierDown(false, false, false));
-  EXPECT_FALSE(lumice::gui::BgTransformModifierDown(false, false, true));
-  EXPECT_TRUE(lumice::gui::BgTransformModifierDown(true, true, false));
-  EXPECT_TRUE(lumice::gui::BgTransformModifierDown(true, true, true));
-
-  // The build's own platform constant must agree with the compiler's view of it.
+// An earlier revision arbitrated the KEY per platform (Cmd on macOS, Alt elsewhere) and pinned
+// both branches here. That is gone: ImGui rewrites Super+LeftClick into a right click under
+// ConfigMacOSXBehaviors, so the Cmd branch could not have worked on the platform it was written
+// for — a fact no assertion about a pure arbitration function could have surfaced, since the
+// function was right and its premise was wrong. The gesture now reads io.KeyAlt everywhere and
+// there is no behavioural branch left to pin; what remains is a label, checked here so the two
+// spellings cannot silently drift into naming a key the handler does not read.
+TEST(BgTransform, TheModifierHintNamesTheKeyThisPlatformEngraves) {
 #if defined(__APPLE__)
-  EXPECT_TRUE(lumice::gui::kBgModifierIsApple);
-  EXPECT_STREQ(lumice::gui::kBgModifierName, "Cmd");
+  EXPECT_STREQ(lumice::gui::kBgModifierName, "Option");
 #else
-  EXPECT_FALSE(lumice::gui::kBgModifierIsApple);
   EXPECT_STREQ(lumice::gui::kBgModifierName, "Alt");
 #endif
 }
