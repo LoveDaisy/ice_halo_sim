@@ -844,6 +844,11 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     // Fine adjustment for the same three fields the canvas gesture writes — not a second owner of
     // the transform, the same `g_state` floats from the other end. A photograph is aligned by
     // dragging until it is nearly right and then nudging, and a drag cannot nudge.
+    //
+    // `##display_bg`, not the `##display` two of their neighbours carry, is deliberate: the suffix
+    // names the BACKGROUND block, which is how Clear and Show were already addressed before these
+    // three existed. `Load Bg##display` and `Alpha##display` are the outliers, left alone because
+    // renaming a live ImGui id is not free — it is the address existing gui_test cases use.
     const FieldEditorConstraint bg_ox_c = ConstraintFor("bg_offset_x", g_state);
     ImGui::BeginDisabled(!bg_ox_c.enabled);
     SliderWithInput("Offset X##display_bg", &g_state.bg_offset_x, static_cast<float>(bg_ox_c.min_value),
@@ -1033,17 +1038,21 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     int fb_w = 0;
     int fb_h = 0;
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
-    float scale_x = static_cast<float>(fb_w) / window_width;
-    float scale_y = static_cast<float>(fb_h) / window_height;
+    // Named for what they are — the point-to-framebuffer-pixel ratio — because this scope also
+    // holds a BgUvTransform whose own scale_x/scale_y mean something else entirely (the per-axis
+    // UV scale). Two different quantities under one short name is exactly the confusion the
+    // Background::zoom / ViewProjection::fov note guards against a few lines down.
+    float dpi_scale_x = static_cast<float>(fb_w) / window_width;
+    float dpi_scale_y = static_cast<float>(fb_h) / window_height;
 
     auto& rc = g_state.renderer;
 
     // Store viewport for deferred rendering
     g_preview_vp.active = true;
-    g_preview_vp.vp_x = static_cast<int>(panel_x * scale_x);
-    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * scale_y);  // OpenGL Y is bottom-up
-    g_preview_vp.vp_w = static_cast<int>(panel_width * scale_x);
-    g_preview_vp.vp_h = static_cast<int>(preview_height * scale_y);
+    g_preview_vp.vp_x = static_cast<int>(panel_x * dpi_scale_x);
+    g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * dpi_scale_y);  // OpenGL Y is bottom-up
+    g_preview_vp.vp_w = static_cast<int>(panel_width * dpi_scale_x);
+    g_preview_vp.vp_h = static_cast<int>(preview_height * dpi_scale_y);
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     float ev_total = rc.exposure_offset + g_state.ev_auto;
@@ -1206,12 +1215,13 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         // correct at every zoom level with no separate drag-gain curve.
         const BgUvTransform t = ComputeBgUvTransform(g_preview_vp.vp_w, g_preview_vp.vp_h, g_preview.GetBgAspect(),
                                                      g_state.bg_offset_x, g_state.bg_offset_y, g_state.bg_scale);
-        // io.MouseDelta is in ImGui points while vp_w/vp_h are framebuffer pixels; scale_x/scale_y
-        // (the DPI factors captured above, not the transform's) reconcile the two, which is what
-        // keeps the image glued to the cursor on a HiDPI display rather than moving at half speed.
-        const float dndc_x = io.MouseDelta.x * scale_x * 2.0f / static_cast<float>(g_preview_vp.vp_w);
+        // io.MouseDelta is in ImGui points while vp_w/vp_h are framebuffer pixels; dpi_scale_x/
+        // dpi_scale_y (the DPI factors captured above, NOT t.scale_x/t.scale_y) reconcile the two,
+        // which is what keeps the image glued to the cursor on a HiDPI display rather than moving
+        // at half speed.
+        const float dndc_x = io.MouseDelta.x * dpi_scale_x * 2.0f / static_cast<float>(g_preview_vp.vp_w);
         // Screen Y grows downward, NDC Y upward.
-        const float dndc_y = -io.MouseDelta.y * scale_y * 2.0f / static_cast<float>(g_preview_vp.vp_h);
+        const float dndc_y = -io.MouseDelta.y * dpi_scale_y * 2.0f / static_cast<float>(g_preview_vp.vp_h);
 
         // Clamp on this path too, not only in the sliders: a slider clamps what IT produces, it
         // does not retroactively pull an out-of-range value back, so an unclamped drag could park

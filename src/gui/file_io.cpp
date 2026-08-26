@@ -20,6 +20,7 @@
 
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
+#include "gui/field_editor_registry.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
@@ -2747,9 +2748,21 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_path = PathFromU8(root.value("bg_path", PathToU8(GuiState{}.bg_path)));
   state.bg_show = root.value("bg_show", GuiState{}.bg_show);
   state.bg_alpha = root.value("bg_alpha", GuiState{}.bg_alpha);
-  state.bg_offset_x = root.value("bg_offset_x", GuiState{}.bg_offset_x);
-  state.bg_offset_y = root.value("bg_offset_y", GuiState{}.bg_offset_y);
-  state.bg_scale = root.value("bg_scale", GuiState{}.bg_scale);
+  // Clamped on the way in, not merely on the way out of a slider. The three interactive writers
+  // (the Display sliders, the modifier-drag and the modifier-wheel) each clamp what THEY produce,
+  // but a value arriving from a file was produced by none of them: a hand-edited .lmc — or a
+  // hand-edited user-defaults overlay, which merges through this very function — can carry
+  // bg_scale = 0, and that reaches ComputeBgUvTransform as a divisor. The result is Inf/NaN UV
+  // uniforms and a background of garbage pixels, with no error, no degraded path, and no way back
+  // except touching the slider or reloading the image. Domains come from ConstraintFor so this
+  // cannot drift from the editors' bounds — the registry stays the one home for them.
+  const auto clamp_to_field_domain = [&state](const char* key_path, float value) {
+    const FieldEditorConstraint c = ConstraintFor(key_path, state);
+    return std::max(static_cast<float>(c.min_value), std::min(static_cast<float>(c.max_value), value));
+  };
+  state.bg_offset_x = clamp_to_field_domain("bg_offset_x", root.value("bg_offset_x", GuiState{}.bg_offset_x));
+  state.bg_offset_y = clamp_to_field_domain("bg_offset_y", root.value("bg_offset_y", GuiState{}.bg_offset_y));
+  state.bg_scale = clamp_to_field_domain("bg_scale", root.value("bg_scale", GuiState{}.bg_scale));
 
   // Auxiliary line overlay (backward compatible: legacy `overlay_<x>` key maps to
   // both line and label = legacy_value; new keys override per-axis when present).

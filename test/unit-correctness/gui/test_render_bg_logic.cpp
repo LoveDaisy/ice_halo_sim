@@ -27,6 +27,7 @@
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/log_sink.hpp"
+#include "gui/preview_renderer.hpp"
 #include "lumice.h"
 #include "support/scoped_result_frame.hpp"
 
@@ -51,6 +52,49 @@ TEST(LegacyLmcCompat, AbsentAspectAndBackgroundFieldsTakeTheFactoryValues) {
   EXPECT_FLOAT_EQ(loaded.bg_offset_x, 0.0f);
   EXPECT_FLOAT_EQ(loaded.bg_offset_y, 0.0f);
   EXPECT_FLOAT_EQ(loaded.bg_scale, 1.0f);
+}
+
+// A document may carry a background transform no control could have produced, and the load path is
+// where that has to be caught. The three interactive writers (the Display sliders, the
+// modifier-drag, the modifier-wheel) each clamp what THEY produce; none of them is involved when a
+// hand-edited .lmc — or a hand-edited user-defaults overlay, which merges through this same
+// DeserializeGuiStateJson — arrives with bg_scale = 0. That zero is not merely out of range: it is
+// the divisor in ComputeBgUvTransform, so unclamped it turns the whole background into Inf/NaN UV
+// uniforms silently, and nothing restores it but touching the slider or reloading the image.
+//
+// The finiteness assertions are the point of the pairing: clamping to the registry's domain is the
+// mechanism, but "no non-finite uniform reaches the shader" is the property, and only the second
+// one still means something if the domain is ever widened.
+TEST(BackgroundTransformLoad, OutOfDomainValuesAreClampedInsteadOfReachingTheRenderer) {
+  struct Row {
+    const char* json;
+    float expect_offset_x;
+    float expect_offset_y;
+    float expect_scale;
+  };
+  // Domains: offsets [-2, 2], scale [0.2, 5] (field_editor_registry.cpp). Rows walk both ends of
+  // all three, plus the zero and the negative that are the actual divide-by-zero carriers.
+  const Row kRows[] = {
+    { R"({"crystals":[],"renderers":[],"filters":[],"bg_scale":0.0})", 0.0f, 0.0f, 0.2f },
+    { R"({"crystals":[],"renderers":[],"filters":[],"bg_scale":-3.0})", 0.0f, 0.0f, 0.2f },
+    { R"({"crystals":[],"renderers":[],"filters":[],"bg_scale":1000.0})", 0.0f, 0.0f, 5.0f },
+    { R"({"crystals":[],"renderers":[],"filters":[],"bg_offset_x":9.0,"bg_offset_y":-9.0})", 2.0f, -2.0f, 1.0f },
+  };
+
+  for (const Row& row : kRows) {
+    gui::GuiState loaded;
+    EXPECT_TRUE(gui::DeserializeGuiStateJson(row.json, loaded)) << row.json;
+    EXPECT_FLOAT_EQ(loaded.bg_offset_x, row.expect_offset_x) << row.json;
+    EXPECT_FLOAT_EQ(loaded.bg_offset_y, row.expect_offset_y) << row.json;
+    EXPECT_FLOAT_EQ(loaded.bg_scale, row.expect_scale) << row.json;
+
+    const gui::BgUvTransform t =
+        gui::ComputeBgUvTransform(800, 600, 1.5f, loaded.bg_offset_x, loaded.bg_offset_y, loaded.bg_scale);
+    EXPECT_TRUE(std::isfinite(t.scale_x)) << row.json;
+    EXPECT_TRUE(std::isfinite(t.scale_y)) << row.json;
+    EXPECT_TRUE(std::isfinite(t.offset_x)) << row.json;
+    EXPECT_TRUE(std::isfinite(t.offset_y)) << row.json;
+  }
 }
 
 // Every preset reports the ratio its own name promises — the exact number, not a sanity band.
