@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787748628524,
+  "lastUpdate": 1787748631766,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "aff094ef773a9d78983dc1d7d1aabf793757c22d",
-          "message": "Merge pull request #175 from LoveDaisy/feat/raypath-color-foundation\n\nraypath-color foundation: per-ray component mask across CPU/Metal/CUDA (scrum-331)",
-          "timestamp": "2026-07-06T09:26:54+08:00",
-          "tree_id": "3cd3bee8f8ae3b0625d56d07253b29d0593b3f46",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/aff094ef773a9d78983dc1d7d1aabf793757c22d"
-        },
-        "date": 1783301594366,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 895624.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1176692,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 884335,
-            "unit": "rays/sec",
-            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 640984.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "b634945ce767a3531a89893427812f8f4a905607",
           "message": "Merge pull request #176 from LoveDaisy/chore/pre-release\n\nchore: pre-release housekeeping + raypath-color phase-3 blueprint",
           "timestamp": "2026-07-06T11:09:46+08:00",
@@ -9552,6 +9504,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 655167.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e23d669872bbfb1762a95659960d412d793c55e9",
+          "message": "Merge pull request #276 from LoveDaisy/task/crystal-enable-toggle\n\nfeat(gui): 晶体卡新增「参与仿真」toggle，替代把权重拖到 0",
+          "timestamp": "2026-08-26T20:39:00+08:00",
+          "tree_id": "4b0f2abbc5fcc90f68d6ae6281bfef446c82cc03",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e23d669872bbfb1762a95659960d412d793c55e9"
+        },
+        "date": 1787748631266,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 997764.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1168653.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 767739.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 654684.9,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
