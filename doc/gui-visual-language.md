@@ -1,6 +1,12 @@
 # 设计：GUI 视觉语言（排版 / 色彩 / 尺寸节奏 / 信息形态）
 
-> 状态：blueprint，已由可运行原型逐项验证（2026-08-13）。改动 GUI 外观、面板排版、控件形态，或在 docking 迁移中重排面板 shell 之前先读。
+> 状态：blueprint，已由可运行原型逐项验证（2026-08-13）；**§4 的定案已落地并留在 `main` 上**（PR #271）。
+> 改动 GUI 外观、面板排版、控件形态之前先读。
+>
+> ⚠️ **2026-08-26 更正时态**：与本文并行的面板形态重排（`doc/gui-layout-architecture.md`）曾经实施，
+> 随后被小范围内测否决并从 `main` 回退，见该文 §8。今天 `main` 上是**老 shell + 本文的视觉语言**。
+> 本文凡提到「docking 迁移」处一律读作「将来任何一次面板重排」，而不是一件在途的事。
+> ⚠️ 内测反馈是聚合的，没有区分拒的是形态还是外观 —— 本文留在 `main` 上不构成「外观已被接受」的证据。
 >
 > 关联：`doc/gui-state-governance.md`（状态转换治理，与本文正交——那份管"值怎么变"，本文管"怎么显示"）、`doc/testing-architecture.md` §4.6（视觉回归参考图的重拍成本）。
 
@@ -107,7 +113,10 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 - **把所有标签移进统一的右侧标签列** —— 竖线确实接上了，但复选框与它自己的标题被拉开约 230px，**邻近性被牺牲**，已看不出哪个框对应哪个标签。对齐与邻近都是排版原则，该做法用一个换了另一个。若要两全，正解是**前置标签**（标签在左、控件在右）：竖线是标签的左边缘（连续），每个控件紧跟自己的标签（邻近）。代价是 combo / checkbox / radio 每一类都要包一层，属调用点级工作量。
 - **去色中性化** —— 见 §3，基于对现状色彩的误判。
 
-## 6. 与 docking 迁移的顺序约束
+## 6. 与面板重排的顺序约束
+
+（原标题「与 docking 迁移的顺序约束」。那次迁移已实施并被回退，见 `doc/gui-layout-architecture.md` §8；
+本节约束对**将来任何一次重排**依然成立，且已由那一轮实施反向印证：视觉语言确实可以正交先行并单独留下。）
 
 两件事处在**同一层**（面板 shell 的排布），因此顺序不是自由的：
 
@@ -119,7 +128,7 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 
 ## 7. 已知遗留
 
-- **正文字体未定案** —— 三个候选（Roboto Medium 15 / Karla 16 / Droid Sans 15）观感均优于现状，但未择一。另需决定分发方式：现状 FontAwesome 走构建期嵌入（`scripts/embed_binary.py`），正文字体宜比照，而非运行期读文件。
+- ~~**正文字体未定案**~~ —— **已定案并落地**：Roboto Medium 15px。分发按当时判断比照 FontAwesome，走构建期嵌入（`scripts/embed_binary.py` 生成 `roboto_medium_embed.cpp`，声明头 `src/gui/roboto_medium_embed.h`），运行期不读文件；字体与 style 的初始化收敛到单一 owner `src/gui/theme.{hpp,cpp}`（此前 `src/gui/main.cpp` 与 `test/gui/test_gui_main.cpp` 各写一遍，截图与真 app 只是碰巧一致——见 §1）。
 - ~~**颜色存在第二个 owner**~~ —— **已收口**：good / warning / destructive 三档语义色现由 `src/gui/semantic_colors.hpp` 单一定义，21 处调用点（绿色 Run 按钮、锈色 Resolution 输入框、Stop 按钮、日志级别色、filter 编辑器的三态校验底色等）改为引用具名函数。每档提供两种消费形态——`*TextColor()` 亮色用于文本/图标/边框，`*FillColor(alpha)` 哑光用于 FrameBg/CellBg 背景染色，alpha 由调用点给（各调用点的强调程度本就有意不同）。按钮三态只在存在消费者的档位提供：good 在同一头文件，destructive 仍是 `src/gui/destructive_style.hpp` 的 `PushDestructiveStyle`/`PopDestructiveStyle`（12 处配对调用的既有实现，一档一形态只留一个 owner），warning 无按钮消费者故不预先实现。
   - 每个 canonical 取值都锚定收编前**已存在**的字面量（复用次数最多的那个），不是新拍的折中色——于是 5 处近重复琥珀、3 处近重复红折叠后只有几个百分点的通道位移，而参考图覆盖到的场景**逐像素不变**。
   - 三类颜色**不**在此收编，判据是"颜色是否表达产品对内容的判断"：**强调色**（hover/active/选中高亮）表达交互状态，与语义色取值必须分开，否则"正在被操作"会读成"有风险"；**数据色**（用户在 Overlay 面板配的线色、由组号派生的 sync-group 色板）由用户或索引决定；**结构色**（透明 hover 触发区、占位边框、标签底衬、按填充色 luma 派生的对比文字）不携带判断。
