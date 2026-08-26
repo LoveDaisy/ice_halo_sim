@@ -2539,6 +2539,9 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["bg_path"] = PathToU8(state.bg_path);
   root["bg_show"] = state.bg_show;
   root["bg_alpha"] = state.bg_alpha;
+  root["bg_offset_x"] = state.bg_offset_x;
+  root["bg_offset_y"] = state.bg_offset_y;
+  root["bg_scale"] = state.bg_scale;
 
   // Auxiliary line overlay (line / label visibility split since task-overlay-line-label-toggle).
   // Old key `overlay_<x>` (single visibility) is no longer written; readers fall back to it
@@ -2744,6 +2747,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.bg_path = PathFromU8(root.value("bg_path", PathToU8(GuiState{}.bg_path)));
   state.bg_show = root.value("bg_show", GuiState{}.bg_show);
   state.bg_alpha = root.value("bg_alpha", GuiState{}.bg_alpha);
+  state.bg_offset_x = root.value("bg_offset_x", GuiState{}.bg_offset_x);
+  state.bg_offset_y = root.value("bg_offset_y", GuiState{}.bg_offset_y);
+  state.bg_scale = root.value("bg_scale", GuiState{}.bg_scale);
 
   // Auxiliary line overlay (backward compatible: legacy `overlay_<x>` key maps to
   // both line and label = legacy_value; new keys override per-axis when present).

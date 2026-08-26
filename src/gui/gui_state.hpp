@@ -944,6 +944,16 @@ struct GuiState {
   std::filesystem::path bg_path;
   bool bg_show = false;
   float bg_alpha = 1.0f;
+  // 2D pan + zoom of the background image, in normalized image space. The background is pinned to
+  // the viewport rectangle, NOT to the sky: it never goes through the lens inverse the simulated
+  // frame does, so turning the camera / switching lens_type / changing fov leaves it where it is.
+  // That independence is what makes "nudge the photo, look at the gap, turn the camera, nudge
+  // again" converge, and it is why a cropped photo whose optical center is off-frame cannot be
+  // aligned by elevation/azimuth instead. Identity is (0, 0, 1) = today's hard-coded centered
+  // contain fit, which is what an .lmc written before these fields existed deserializes to.
+  float bg_offset_x = 0.0f;
+  float bg_offset_y = 0.0f;
+  float bg_scale = 1.0f;
 
   // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot).
   // Each overlay has independent toggles for line and label visibility, allowing
