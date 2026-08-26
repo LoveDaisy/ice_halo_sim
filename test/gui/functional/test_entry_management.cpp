@@ -514,6 +514,36 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Duplicating an excluded card produces an excluded card.
+  //
+  // Duplicate does not copy the struct — it default-constructs an EntryCard and assigns the fields
+  // it means to carry, one by one — so a field that nobody remembers to list is not copied badly,
+  // it is silently reset to its default. `enabled` defaults to true, which makes the omission read
+  // as "the copy joined the run": the user duplicates a crystal they had switched off, and gets one
+  // that is switched on, at full weight. That is a change to the scene made by an operation whose
+  // whole promise is that it changes nothing but the count.
+  //
+  // Driven through the real button because the field list lives in the click handler; a test
+  // written against a helper would be pinning a copy of the list rather than the list.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "duplicating_an_excluded_card_copies_the_exclusion");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_state.layers[0].entries[0].enabled = false;
+      gui::g_state.layers[0].entries[0].proportion = 42.0f;
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/" ICON_FA_COPY "##dup_0_0");
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(static_cast<int>(gui::g_state.layers[0].entries.size()), 2);
+      IM_CHECK(!gui::g_state.layers[0].entries[1].enabled);
+      // The weight rides along the same way it does everywhere else: a clone that kept the
+      // exclusion but reset the weight would come back at 100 the moment it is switched on.
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[1].proportion, 42.0f);
+    };
+  }
+
   // Duplicating a card that carries a filter appends a filter pool slot, which the reconciler reads
   // as a structural change and therefore as grounds to restart the run. Pinned end to end through
   // the real button, because the effect is produced by the frame-tail reconcile rather than by the
