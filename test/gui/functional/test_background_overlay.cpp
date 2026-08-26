@@ -105,6 +105,16 @@ void LoadRenderAndBackground(ImGuiTestContext* ctx, const BgImage& img) {
 // case the report describes, and it keeps the source under 40 MB at this harness's viewport.
 constexpr int kNoiseScale = 4;
 
+// How close to the box average the exported frame has to land. Calibrated, not chosen: three
+// full-suite runs put both measurement points at 63.4 dB with the mipmapped filter in place, and
+// the threshold is the worst of those minus the 3 dB margin this repository already uses for
+// buffer-to-buffer PSNR gates. The same three runs against a plain GL_LINEAR filter read 18.05 dB
+// — which is also what the analysis predicts for a 2x2 tap over a 4x4 block of white noise
+// (18.0 dB), so the gap between the two states is a mechanism, not a tuning artefact, and a
+// threshold sitting 42 dB above the broken reading has real detection power rather than a
+// comfortable-looking number.
+constexpr double kMinifyPsnrDb = 60.41;
+
 // The pixels UploadBgTexture has to be handed from the main thread, and the flags that say when.
 struct NoiseBgUpload {
   std::vector<unsigned char> rgb;
@@ -462,8 +472,8 @@ void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine) {
       double psnr_inplace = -1.0;
       MeasureAgainstBoxAverage(ctx, "inplace", &psnr_inplace);
 
-      IM_CHECK_GT(psnr_realloc, 0.0);
-      IM_CHECK_GT(psnr_inplace, 0.0);
+      IM_CHECK_GT(psnr_realloc, kMinifyPsnrDb);
+      IM_CHECK_GT(psnr_inplace, kMinifyPsnrDb);
     };
   }
 }
