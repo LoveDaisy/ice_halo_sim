@@ -84,13 +84,15 @@ ImGuiWindow* CardWindow(int index) {
 // draw list rather than submitted as an item — and this stays inside its left edge, clear of the
 // right column's four rows of widgets and of the Delete/Duplicate stack at the card's right edge.
 //
-// Vertically it aims at the thumbnail's lower half rather than a fixed offset from the top. The
-// top-left corner used to be blank and no longer is: the participation toggle is overlaid there,
-// and while it does correctly keep the card's click handler off itself (IsAnyItemHovered), a
-// helper still pointing at that corner reports it as "nothing to click" and silently turns three
-// unrelated cases into a click on the toggle. Anything added to a card's corners in future needs
-// this same second look — the constraint is that the returned point hits no item, and no compiler
-// or gate enforces it.
+// Vertically it takes three quarters of the card's own height, which under the current layout
+// lands in the thumbnail's lower half — the card is the thumbnail plus window padding, so the
+// two are not independent quantities, but neither is the correspondence enforced anywhere. A
+// fixed offset from the top would not do: the top-left corner used to be blank and no longer is,
+// because the participation toggle is overlaid there, and while it does correctly keep the card's
+// click handler off itself (IsAnyItemHovered), a helper still pointing at that corner reports it
+// as "nothing to click" and silently turns three unrelated cases into a click on the toggle.
+// Anything added to a card's corners in future needs this same second look — the constraint is
+// that the returned point hits no item, and no compiler or gate enforces it.
 ImVec2 CardBlankSpot(int index) {
   ImGuiWindow* w = CardWindow(index);
   IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
