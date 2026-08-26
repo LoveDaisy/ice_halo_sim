@@ -80,12 +80,21 @@ ImGuiWindow* CardWindow(int index) {
 //
 // There is no widget there to click, and that is the point of the proposition: RenderEntryCard
 // hit-tests the card rectangle itself so the whole card is a target, and a test that clicked a
-// button instead would not exercise it. 30 px in from the card's left edge is inside the thumbnail,
-// which is drawn rather than submitted as an item.
+// button instead would not exercise it. The thumbnail is the blank half — it is drawn into the
+// draw list rather than submitted as an item — and this stays inside its left edge, clear of the
+// right column's four rows of widgets and of the Delete/Duplicate stack at the card's right edge.
+//
+// Vertically it aims at the thumbnail's lower half rather than a fixed offset from the top. The
+// top-left corner used to be blank and no longer is: the participation toggle is overlaid there,
+// and while it does correctly keep the card's click handler off itself (IsAnyItemHovered), a
+// helper still pointing at that corner reports it as "nothing to click" and silently turns three
+// unrelated cases into a click on the toggle. Anything added to a card's corners in future needs
+// this same second look — the constraint is that the returned point hits no item, and no compiler
+// or gate enforces it.
 ImVec2 CardBlankSpot(int index) {
   ImGuiWindow* w = CardWindow(index);
   IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
-  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + 20.0f);
+  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + w->Size.y * 0.75f);
 }
 
 // A second entry in layer 0, bound to a pool slot of its own.
