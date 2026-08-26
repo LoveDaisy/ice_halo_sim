@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787711365357,
+  "lastUpdate": 1787712079183,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "32962163bd51949dbeed818117d5126fdc0b35f3",
-          "message": "Merge pull request #171 from LoveDaisy/feat/near-pole-area-measure-sampling\n\nfix(gpu): root-fix near-pole rejection waste via unified tight-envelope area-measure sampling (scrum-328)",
-          "timestamp": "2026-07-04T19:38:44+08:00",
-          "tree_id": "471a6c43b8b361b747c4f824aa4b6910c5746a76",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/32962163bd51949dbeed818117d5126fdc0b35f3"
-        },
-        "date": 1783165503691,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 496912.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 610909.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 401662.2,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 359790.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4776,6 +4728,54 @@ window.BENCHMARK_DATA = {
             "value": 379053.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "840bc16a46aa7fc6e6265bd34609af330a10af64",
+          "message": "docs(gui-layout): 形态层的锚点从 v4.4.2-new 标签改为分支 + commit\n\n内测反馈已到手，v4.4.2-new 标签与 release 随之删除（留着它就是把已被\n否决的界面挂在 Latest release 上发给外部用户）。但 §8 与 AGENTS.md 索引\n都拿这个标签当「形态层保存在哪里」的锚点，标签一删锚点就悬空。\n\n改为锚在分支 feat/new-gui-layout 与 commit 7a66c523——commit hash 是\n永久锚点，分支是可读入口。§8 同时留一句说明标签删除的原因和重出该构建\n的办法（从该分支重新打标签），免得下一个读者以为构建丢了。",
+          "timestamp": "2026-08-26T10:28:26+08:00",
+          "tree_id": "c793fa450b5d26416c5676defa6dd7ccb9d2badc",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/840bc16a46aa7fc6e6265bd34609af330a10af64"
+        },
+        "date": 1787712077664,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 359688.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 586359.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 397075.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 345279.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
