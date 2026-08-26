@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787080146169,
+  "lastUpdate": 1787711359743,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "026928a679c7e511723436c1dd4d8f3ae18c16ab",
-          "message": "Merge pull request #169 from LoveDaisy/feat/gui-ms-prob-footguns\n\ngui: MS layer prob footgun guards (four-state slider, +Layer promotion, CLI warning)",
-          "timestamp": "2026-07-04T01:22:18+08:00",
-          "tree_id": "8ebb7d1b8443f8baf800439ff34a54dfd2e8a09e",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/026928a679c7e511723436c1dd4d8f3ae18c16ab"
-        },
-        "date": 1783099701122,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 402910.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 611864.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 394653.3,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 354181.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4782,6 +4734,48 @@ window.BENCHMARK_DATA = {
             "value": 294919,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "f1228505c4ed659c006158629ed8b4501eba7074",
+          "message": "docs(gui-layout): 记录内测否决，蓝图从待办降为设计记录\n\nv4.4.2（老 shell）与 v4.4.2-new（新 shell）小范围内测对比后，几乎全部\n内测用户选择回到老 shell。main 回退到 PR #271：视觉语言层留下，形态层\n（PR #272 shell 重组 + PR #273 控件精修）退出，实现保存在分支\nfeat/new-gui-layout 与 tag/release v4.4.2-new。\n\n三处改动都是为了让下一个读者不把已被否决的方向当成在途的待办：\n\n1. gui-layout-architecture.md 顶部状态改写 + 新增 §8。记下三件事：反馈\n   粒度未知（聚合结论没区分拒的是形态还是外观，故保留视觉语言层既不由\n   它支持也不被它否定，下一步取证是老 shell 上单发视觉语言层做窄 A/B）；\n   方法层教训（原型验收与 owner 上手两道闸共享同一盲区——都在问「形态\n   本身好不好」，没问「熟练用户是否愿意换」，而后者才是内测在问的）；\n   以及没有被否决的部分（§0 诊断对今天的老 shell 仍为真，§5 六条被推翻\n   形态不恢复候选资格）。\n\n2. gui-visual-language.md 更正时态。该文 §4 定案随 PR #271 留在 main 上，\n   但文中多处把 docking 迁移写成在途的事，回退后不再成立，一律改读作\n   「将来任何一次面板重排」。同时补回 §7 正文字体的收口——字体定案\n   （Roboto Medium 15 构建期嵌入）随 PR #271 落地，而写下这条收口的文档\n   改动落在 PR #273 里，被本次回退一并带走，留下文档说「未定案」而代码\n   已定案的漂移。\n\n3. AGENTS.md 两条索引同步。索引是这两份文档唯一的必经检索入口，否决\n   记录只写在文档里而不写在索引上，等于没写。",
+          "timestamp": "2026-08-26T10:15:35+08:00",
+          "tree_id": "0508524749ee48fed4c9dbf374750ff51a0579f3",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f1228505c4ed659c006158629ed8b4501eba7074"
+        },
+        "date": 1787711358071,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 397295.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 586121.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 379053.6,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
           }
         ]
       }
