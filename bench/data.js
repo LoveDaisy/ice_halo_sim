@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787715957403,
+  "lastUpdate": 1787715960149,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "21cba8ceb52eb890be158eb7ae8abf66a3036414",
-          "message": "Merge pull request #172 from LoveDaisy/feat/capi-filter-typed-commit\n\nC API filter typed-struct commit convergence (327) + backend-swap preview fix",
-          "timestamp": "2026-07-04T21:12:29+08:00",
-          "tree_id": "b0c7d73eda939b5e2e3ab1873a5585a6d28b8373",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/21cba8ceb52eb890be158eb7ae8abf66a3036414"
-        },
-        "date": 1783171120098,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1142601.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1222798.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 785725.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 675339.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "de22a871800c89cf92e502b71a29f91d134fb927",
           "message": "Merge pull request #173 from LoveDaisy/feat/gui-spectrum-modal-reset-button\n\nfeat(gui): Custom Spectrum modal Reset + overlimit warning polish (GUI small-fixes batch)",
           "timestamp": "2026-07-05T12:12:29+08:00",
@@ -9554,6 +9506,54 @@ window.BENCHMARK_DATA = {
             "value": 643315.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "9be4b99e4907e79992121a4e19f6dd742ba03dea",
+          "message": "docs(gui-layout): 原型取证锚点随原型分支一同退役\n\n三个 spike 分支（gui-layout-prototype / gui-visual-language / imgui-docking）\n从未推送、只存在于本地，随新布局方向被内测否决一并删除。布局蓝图开头\n把其中 gui-layout-prototype 及三个 commit 写作「取证锚点」，分支一删这行\n就指不到任何东西。\n\n改为如实说明：取证现场已不存在，§1–§5 此后是已记录的判断而非可重新核验\n的断言；要看那一版形态实际长什么样，去 feat/new-gui-layout——同一形态的\n完整实现，完成度高于原型，只不含 §5 那六条从未被实现的候选。\n\n§5 开头补一句界定：六条结论不因原型删除而撤销，重提的一方承担举证责任。\n顺带修一处漂移：视觉语言 §4.1 仍写着「具体字体尚未定案」，而 §7 的收口\n和 main 上的代码都已是 Roboto Medium 15。",
+          "timestamp": "2026-08-26T11:34:40+08:00",
+          "tree_id": "f4517359a5286de30e0bd6f6f01ac44f5b0b416e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9be4b99e4907e79992121a4e19f6dd742ba03dea"
+        },
+        "date": 1787715959733,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 815579,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1163503.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 919002.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 583903.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
