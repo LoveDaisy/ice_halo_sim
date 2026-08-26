@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787749581037,
+  "lastUpdate": 1787749583614,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "b634945ce767a3531a89893427812f8f4a905607",
-          "message": "Merge pull request #176 from LoveDaisy/chore/pre-release\n\nchore: pre-release housekeeping + raypath-color phase-3 blueprint",
-          "timestamp": "2026-07-06T11:09:46+08:00",
-          "tree_id": "9f67656a300d6ed2c850553edb269e19f5effc58",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b634945ce767a3531a89893427812f8f4a905607"
-        },
-        "date": 1783307747434,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 785235.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1187612.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 783213.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 596320.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "fc59c7253b6ae043676a2692ef0b8e55ea060405",
           "message": "Merge pull request #177 from LoveDaisy/feat/filter-editor-uplift\n\nfeat(gui): H5 sum-of-products filter editor + input ergonomics (scrum-333/334)",
           "timestamp": "2026-07-07T01:14:22+08:00",
@@ -9554,6 +9506,54 @@ window.BENCHMARK_DATA = {
             "value": 654684.9,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "423ff22e33a81fc6521fb8da4f55037e88e7ac93",
+          "message": "docs(gui-layout): 内测反馈的细粒度到手，改掉三处已被它推翻的记录\n\n上一轮记录写于反馈只有聚合结论时，有三处现在是错的，且都写在下一个读者\n必经的位置上。\n\n1. 「反馈粒度未知」作废。细粒度反馈是：配色被接受（用户对配色的接受范围\n   很宽），被拒的是形态，理由具体——不如老 plain 布局一眼看到所有信息，\n   典型操作「同时快速调整冰晶与太阳高度」要多点好几步、来回切换不便。\n   于是原计划的「老 shell 上单发视觉语言层做窄 A/B」不必做了：那道取证是\n   为了问出粒度，粒度已经有了。\n\n   机制不是打磨不足，是 master-detail 的结构性代价：老 shell 左栏晶体卡与\n   右栏 Scene（含太阳）永久同时在屏，导航成本为零；新形态里太阳是检视器的\n   一个 page，晶体是同一检视器的另一个 page，一次只看得见一个对象。\n\n2. 方法层教训改写。原先写作「两道闸共享盲区＝没问熟练用户是否愿意换，\n   验收链必须含一条能测迁移成本的证据」——这个说法经不起推敲：本地开发阶段\n   必然只能问「这个形态好不好」，必然要发版才拿得到用户反馈，那不是一道\n   本可设而没设的闸，而是结构性事实；发版、拿反馈、便宜回退、分支留存，\n   这个环当时是通的。真正的偏差是验收问错了量——两道闸问的都是「形态本身\n   好不好用」，而用户答的是两个本地就能机械量出来却从没被量过的数：常见\n   任务的操作步数，以及一屏同时可见的字段集合。\n\n3. §0 第一条补一个维度。§0 骂老 shell「分割轴任意」属实，但「任意」不等于\n   「差」：那条任意的轴恰好让最常一起调的两组永久同屏，而 §0 从未度量过\n   同屏可见性这一维，用户却只在这一维上表了态。因此追加一条硬约束——将来\n   任何一次重排，最常一起调的字段组必须保持同屏可见——地位等同 §5 那六条\n   被推翻形态。\n\ngui-visual-language.md 顶部同步：那条「不构成外观已被接受的证据」作废，但\n边界要写清楚，被问到的只有配色，§4 其余条目仍只是「没有被反对」。\nAGENTS.md 两条索引一并同步——索引是这两份文档唯一的必经检索入口。\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-08-26T20:49:35+08:00",
+          "tree_id": "6b66463dd3987722c0987a1f07a416d5332cca1b",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/423ff22e33a81fc6521fb8da4f55037e88e7ac93"
+        },
+        "date": 1787749583230,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 859159.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1183857,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 720033.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 711061.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz\\nCores: 4"
           }
         ]
       }
