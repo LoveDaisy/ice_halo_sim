@@ -305,11 +305,20 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   snprintf(label_id, label_id_size, "##%s_label", label);
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
+  float label_gap = ImGui::GetStyle().ItemInnerSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  // With the trailing label: subtract kLabelColWidth + 2 SameLine spacings
-  // (slider→input, input→label). Without it: only the slider→input spacing.
-  float slider_w =
-      reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
+  // With the trailing label: subtract kLabelColWidth + the slider→input spacing + the
+  // input→label gap. Without it: only the slider→input spacing.
+  //
+  // The two gaps are different constants on purpose. The control→label gap is ItemInnerSpacing.x
+  // because ImGui's own Combo uses that one and hardcodes it inside BeginCombo, so a combo row and
+  // a row built here can only put their labels on the same vertical line if this side moves. It
+  // must stay paired with FinishSliderLayout's SameLine below: the label's x is
+  // (right edge − kLabelColWidth) whatever value the pair takes — the term cancels — but the
+  // CONTROL's right edge is this value, so a mismatched pair moves the controls out of their
+  // column while leaving the labels looking correct.
+  float slider_w = reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing - label_gap) :
+                                       (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
   return slider_w;
@@ -352,7 +361,7 @@ static void TextWithLabelProbe(const char* display_label, const char* probe_id) 
 
 // Render the label text after slider + input.
 static void FinishSliderLayout(const char* display_label, const char* label_id) {
-  ImGui::SameLine();
+  ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);  // paired with PrepareSliderLayout
   TextWithLabelProbe(display_label, label_id);
 }
 
@@ -1203,9 +1212,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // Right column — layout matches SliderWithInput's three-column model:
   //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
   // so Row 1-3 align column boundaries with Row 4 automatically.
+  const float label_gap_x = ImGui::GetStyle().ItemInnerSpacing.x;
   float right_x = thumb_pos.x + thumb_display_size + spacing_x;
   float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
-  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
+  // Same two-different-gaps split as PrepareSliderLayout, and for the same reason: the Weight row
+  // below is drawn by it, so a card whose button rows kept spacing_x on the label side would put
+  // its own four rows in two different columns.
+  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x - label_gap_x);
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
                       const char* row_label, bool clip_text, const char* tooltip = nullptr) {
@@ -1232,7 +1245,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
       g_edit_request = { target, layer_idx, entry_idx };
     }
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, label_gap_x);  // paired with text_w above
     // Same addressable-label probe as FinishSliderLayout — this row shares the label column with
     // the Weight row below it, so the invariant is only checkable if both ends can be read.
     char label_probe_id[64];
@@ -1653,7 +1666,7 @@ void RenderSceneControls(GuiState& state) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
   // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
   static const char* const* kSpectrumComboItems = [] {
@@ -1691,7 +1704,7 @@ void RenderSceneControls(GuiState& state) {
   }
 
   ImGui::SeparatorText("Simulation");
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
   Checkbox("Infinite rays", &state.sim.infinite);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Run simulation continuously until manually stopped");

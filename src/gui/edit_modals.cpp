@@ -257,11 +257,13 @@ bool SliderWithPresetEdit(const char* label, float* value, float min_val, float 
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float avail_w = ImGui::GetContentRegionAvail().x;
-  // mirrors PrepareSliderLayout: reserve the label column + 2 spacings (slider->input, input->label)
-  // with a trailing label; without it, still reserve the one slider->input spacing (SameLine at the
+  // mirrors PrepareSliderLayout: reserve the label column + the slider->input spacing + the
+  // input->label gap (ItemInnerSpacing.x, the gap ImGui's own Combo hardcodes — see there) with a
+  // trailing label; without it, still reserve the one slider->input spacing (SameLine at the
   // input below adds it) — omitting it overflows the cell by one ItemSpacing.x and clips the arrow.
-  float slider_w =
-      trailing_label ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
+  float slider_w = trailing_label ?
+                       (avail_w - kInputWidth - kLabelColWidth - spacing - ImGui::GetStyle().ItemInnerSpacing.x) :
+                       (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
 
