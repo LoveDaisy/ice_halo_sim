@@ -290,6 +290,11 @@ constexpr float kUncheckedBoxBorderAlpha = 0.13f;
 
 }  // namespace
 
+ImVec4 AccentColor(float alpha) {
+  const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+  return ImVec4(accent.x, accent.y, accent.z, accent.w * alpha);
+}
+
 bool Checkbox(const char* label, bool* v) {
   const bool changed = ImGui::Checkbox(label, v);
   if (!*v) {

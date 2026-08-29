@@ -311,6 +311,63 @@ void RegisterThemeScanTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The thumbnail PLACEHOLDER, which the scene above cannot photograph however long it waits: the
+  // cache renders a texture within a frame or two of the cards appearing, and from then on the card
+  // composites an image. The placeholder is what stands in until then, and it had its own pair of
+  // greys.
+  //
+  // Reaching it deterministically is a matter of arithmetic rather than timing luck. The cache
+  // rebuilds at most kMaxThumbnailUpdatesPerFrame (2) slots per frame, so seven cards on seven
+  // distinct pool slots, invalidated all at once, cannot all be back before the readback lands —
+  // and the case asserts afterwards that at least one really was still waiting, so a future change
+  // to that budget turns this into a red rather than into a scene that quietly photographs nothing.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "theme_scan", "thumb_placeholder");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+      std::vector<int> ids;
+      ids.push_back(g_state.layers[0].entries[0].crystal_id);
+      for (int i = 0; i < 6; ++i) {
+        gui::CrystalConfig extra;
+        gui::EntryCard card;
+        card.crystal_id = static_cast<int>(g_state.crystals.size());
+        g_state.crystals.push_back(extra);
+        g_state.layers[0].entries.push_back(card);
+        ids.push_back(card.crystal_id);
+      }
+      gui::g_thumbnail_cache.OnLayerStructureChanged();
+      // Long enough for every card to have got its texture, so what follows is a transition from
+      // "all present" to "most missing" rather than a state that was never established. The cursor
+      // is parked BEFORE the invalidation, not after: Settle()'s three frames are three frames of
+      // rebuilding, which is most of the budget this scene is spending.
+      Settle(ctx);
+      ctx->Yield(40);
+      gui::g_thumbnail_cache.InvalidateAll();
+      // One frame, and exactly one. The test engine's coroutine runs at the END of an ImGui frame,
+      // so a cache invalidated here first reaches the cards on the NEXT frame — while the capture
+      // hook fires at the end of the CURRENT one. Requesting the readback without this yield
+      // photographs the frame that was drawn before the invalidation, i.e. the textures. Each
+      // further frame rebuilds two more slots, so anything beyond one gives the queue time to
+      // finish and the scene stops reaching the branch at all.
+      ctx->Yield(1);
+      ExportRegion(ctx, "##LeftPanel", "thumb_placeholder");
+      if (ctx->IsError()) {
+        return;
+      }
+
+      int still_pending = 0;
+      for (int id : ids) {
+        if (gui::g_thumbnail_cache.GetTexture(id) == 0) {
+          ++still_pending;
+        }
+      }
+      ctx->LogInfo("[theme_scan] thumb_placeholder: %d/%d slots still rendering at capture time", still_pending,
+                   static_cast<int>(ids.size()));
+      IM_CHECK_GT(still_pending, 0);
+    };
+  }
+
   // The co-shared border: with the edit modal open on one card, every OTHER card bound to the same
   // (crystal, filter) pair is outlined to say the in-flight edit will reach it too. That outline is
   // the one card-chrome colour not reachable from the scene above, because it needs a modal open.

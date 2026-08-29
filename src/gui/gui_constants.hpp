@@ -96,6 +96,15 @@ constexpr float kHoverBtnGap = 4.0f;
 // PushStyleVar(ImGuiStyleVar_ChildBorderSize).
 constexpr float kActiveCardBorder = 2.0f;
 
+// Border strength of a card that shares its (crystal, filter) pair with the one whose edit modal
+// is open. The accent at this alpha is theme.cpp's established "about to be acted on" marker.
+constexpr float kCoSharedBorderAlpha = 0.55f;
+
+// Opacity of an excluded entry card's thumbnail area — the rendered image, the placeholder that
+// stands in for it, and the frame around both. One constant rather than a per-branch literal so
+// "excluded" is one visual statement instead of two that can drift apart.
+constexpr float kExcludedThumbAlpha = 70.0f / 255.0f;
+
 // Default camera zoom for the crystal renderer. Lower value → crystal fills
 // more of the canvas (screen coverage ≈ 1/zoom). Must stay in sync between
 // the thumbnail cache and the edit-modal preview so the crystal does not
