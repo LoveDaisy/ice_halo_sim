@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787977874492,
+  "lastUpdate": 1787981567492,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "b7b53fef279f91c39cc06311da7ba1a5b5f52ceb",
-          "message": "Merge pull request #178 from LoveDaisy/perf/latlut-shared-cache\n\nperf(latlut): fix mixed-axis multi-crystal LUT rebuild thrash (~20x)",
-          "timestamp": "2026-07-07T09:10:44+08:00",
-          "tree_id": "c5f07544b862c9153a6ffd644ad93eba311fa21a",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/b7b53fef279f91c39cc06311da7ba1a5b5f52ceb"
-        },
-        "date": 1783387057271,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 363945.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 587405.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 388091.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 345113.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4776,6 +4728,54 @@ window.BENCHMARK_DATA = {
             "value": 312610.2,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff02ed3a487ac6e46dd2720351057ed2314aa60b",
+          "message": "Merge pull request #278 from LoveDaisy/task/full-sphere-roll-flip\n\nfix(core+gui): 全球面快路径补 roll 旋转对称条件，修滑条端点浮点漂移导致的采样路静默切换",
+          "timestamp": "2026-08-29T13:20:57+08:00",
+          "tree_id": "12a2380afc7b07d8b15f664fa3f2bf288d3e7f1e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ff02ed3a487ac6e46dd2720351057ed2314aa60b"
+        },
+        "date": 1787981566213,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 369068,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 579860.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 487148.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 344830.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
