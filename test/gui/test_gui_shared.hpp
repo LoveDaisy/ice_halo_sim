@@ -289,6 +289,77 @@ void StopPerfSimulation();
 // ReadOnly, say) for the predicate to still mean "the user cannot operate this".
 bool IsDisabled(const ImGuiTestItemInfo& info);
 
+// ========== The trailing-label column ==========
+//
+// Several panels build their rows on one three-column model — [wide control][value][label] — and
+// the claim these helpers exist to check is that the last two boundaries are single vertical
+// lines, no matter which widget family drew the row. Two families share the model and neither can
+// see the other: the hand-built [slider][input] rows in panels.cpp place their own label, while
+// ImGui's Combo places its label itself at a spacing constant hardcoded inside BeginCombo. A row
+// family that picks the other constant lands its controls and its label on lines 4px away from
+// everyone else's, which is a defect no per-family test can state.
+//
+// Both numbers come out of geometry ImGui reports, never out of a constant copied from the panel
+// code — an assertion built from kLabelColWidth and ItemSpacing.x would restate the layout code
+// rather than check it.
+struct LabelColumnRow {
+  const char* name = "";       // for the failure message; the row as a user would name it
+  float control_right = 0.0f;  // right edge of the row's last interactive control
+  float label_left = 0.0f;     // left edge of the row's trailing label
+};
+
+// A hand-built row: the InputFloat/InputInt reports its own frame, and the trailing label is
+// addressable because panels.cpp submits an InvisibleButton of the label's exact horizontal
+// extent over it (see TextWithLabelProbe there).
+inline LabelColumnRow MeasureWidgetRow(ImGuiTestContext* ctx, const char* name, const char* input_ref,
+                                       const char* label_probe_ref) {
+  LabelColumnRow row;
+  row.name = name;
+  row.control_right = ctx->ItemInfo(input_ref).RectFull.Max.x;
+  row.label_left = ctx->ItemInfo(label_probe_ref).RectFull.Min.x;
+  return row;
+}
+
+// A Combo row. ImGui places a combo's trailing label itself, and there is no item to read it
+// from: BeginCombo registers its item with the NAV rectangle — the drawn frame, label excluded
+// (`ItemAdd(total_bb, id, &bb)`, imgui_widgets.cpp; the test engine records the third argument) —
+// and never calls the test engine's label hook at all, so the label is neither addressable nor
+// inside the reported rectangle. What IS pinned down is where BeginCombo puts it: at
+// `bb.Max.x + style.ItemInnerSpacing.x`, a constant hardcoded in that function. So the frame's
+// right edge is measured and the label's left edge is that plus the one ImGui spacing — no
+// constant from the panel code enters, which is what keeps this from restating the layout code.
+// (Being unable to change that constant from outside is the reason the panel had to move to it.)
+inline LabelColumnRow MeasureComboRow(ImGuiTestContext* ctx, const char* name, const char* combo_ref) {
+  LabelColumnRow row;
+  row.name = name;
+  row.control_right = ctx->ItemInfo(combo_ref).RectFull.Max.x;
+  row.label_left = row.control_right + ImGui::GetStyle().ItemInnerSpacing.x;
+  return row;
+}
+
+// Both columns of every row, against the first row's.
+//
+// Non-fatal per row on purpose: the proposition is "all the families agree", so stopping at the
+// first family that does not would report one number and hide which of the others is the odd one
+// — the difference between "combo rows are 4px off" and "everything but combo rows is". The
+// tolerance is sub-pixel: these are positions on a pixel grid, reached by different float
+// arithmetic, so what is being asserted is the same column, not the same bit pattern.
+inline void CheckLabelColumn(const char* group, const std::vector<LabelColumnRow>& rows) {
+  IM_CHECK_GT(rows.size(), (size_t)1);  // one row cannot disagree with anything
+  constexpr float kTolPx = 0.5f;
+  const LabelColumnRow& ref = rows[0];
+  for (size_t i = 1; i < rows.size(); ++i) {
+    if (ImFabs(rows[i].control_right - ref.control_right) > kTolPx) {
+      IM_ERRORF("%s: control right edge %s=%.1f vs %s=%.1f (delta %.1f px)", group, rows[i].name, rows[i].control_right,
+                ref.name, ref.control_right, rows[i].control_right - ref.control_right);
+    }
+    if (ImFabs(rows[i].label_left - ref.label_left) > kTolPx) {
+      IM_ERRORF("%s: label left edge %s=%.1f vs %s=%.1f (delta %.1f px)", group, rows[i].name, rows[i].label_left,
+                ref.name, ref.label_left, rows[i].label_left - ref.label_left);
+    }
+  }
+}
+
 // Hands ImGui's popup stack back when a case leaves, by whichever exit.
 //
 // ResetTestState() reaches everything about a popup this suite opens except the one piece ImGui

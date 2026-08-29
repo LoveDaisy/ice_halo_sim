@@ -488,4 +488,36 @@ void RegisterSceneControlTests(ImGuiTestEngine* engine) {
       }
     };
   }
+
+  // The Scene group's half of the trailing-label column. Two widget families share this group's
+  // three-column rows and neither can see the other: the four sun/simulation rows are hand-built
+  // in panels.cpp, the Spectrum row is an ImGui Combo that places its own label at a spacing
+  // constant hardcoded inside BeginCombo. Both boundaries are asserted, because the two are one
+  // decision: the label column can be squared up by widening the controls of one family only, and
+  // that trades a visible misalignment for a different one.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "scene_controls", "the_trailing_label_column_is_one_line_across_row_families");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      // Collected before anything is asserted: every ImGuiTestContext action opens with
+      // `if (IsError()) return;`, so an assertion between two ItemInfo calls would leave the rest
+      // of the rows unmeasured and report the first offender as if it were the only one.
+      // Addressed under the panel window rather than through "**/": a wildcard resolves by the
+      // debug label an item registers, and BeginCombo registers none — the Spectrum row would be
+      // unreachable, which is the row the invariant is about.
+      ctx->SetRef("//##RightPanel");
+      std::vector<LabelColumnRow> rows;
+      rows.push_back(MeasureWidgetRow(ctx, "Altitude", "##Altitude_input", "##Altitude_label"));
+      rows.push_back(MeasureWidgetRow(ctx, "Diameter", "##Diameter_input", "##Diameter_label"));
+      rows.push_back(MeasureComboRow(ctx, "Spectrum", "Spectrum"));
+      rows.push_back(MeasureWidgetRow(ctx, "Rays(M)", "##Rays(M)_input", "##Rays(M)_label"));
+      rows.push_back(MeasureWidgetRow(ctx, "Max hits", "##Max hits_input", "##Max hits_label"));
+      ctx->SetRef("");
+
+      CheckLabelColumn("scene", rows);
+    };
+  }
 }

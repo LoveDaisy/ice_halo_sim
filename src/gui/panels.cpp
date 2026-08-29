@@ -315,37 +315,45 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   return slider_w;
 }
 
-// Give the row-trailing label text an addressable ID, without changing a single pixel.
+// Draw a row-trailing label that the GUI test engine can locate, without changing a single pixel.
 //
 // The three-column rows draw their trailing label with TextUnformatted, which submits its item
-// under id 0 — so the GUI test engine cannot locate it and cannot report its rectangle. That is
-// exactly the quantity the label-column alignment invariant is about, and deriving it from the
-// preceding widget's rectangle plus the spacing constant would compare the layout code against
-// itself. So the text is drawn first, then the cursor is put back on it and an InvisibleButton of
-// the same size is submitted over it: InvisibleButton draws nothing (RenderNavCursor is the only
-// thing it could draw, and it cannot fire here — see below), and IMGUI_TEST_ENGINE_ITEM_INFO in
-// its body is what makes the rectangle readable from a test.
+// under id 0 — so a test cannot ask where it is. That position is exactly the quantity the
+// label-column alignment invariant is about, and deriving it from the preceding widget's
+// rectangle plus a spacing constant would compare the layout code against itself. So an
+// InvisibleButton of the label's own size is submitted at the label's own position first: it
+// draws nothing, and the IMGUI_TEST_ENGINE_ITEM_INFO in its body is what makes the rectangle
+// readable. Its horizontal extent is the text's, exactly — same cursor x, same CalcTextSize —
+// which is the axis the invariant is stated on; vertically it sits on the line box rather than on
+// the glyph box, because the text's baseline offset is only applied inside TextEx.
 //
-// Why it does not perturb the app: without ImGuiButtonFlags_EnableNav, ImGui 1.91's
+// Order matters and is not interchangeable. ImGui derives a line's height from the LAST item
+// submitted on it (ItemSize reads DC.CurrLineSize, which the previous ItemSize zeroed), so a
+// probe submitted after the text ends the row on the probe's text-height box instead of the
+// row's frame-height box — one pixel per row, accumulating down the panel into a visible shift.
+// Submitting the probe first and then handing the line back (SameLine restores CurrLineSize and
+// the baseline offset from the probe's PrevLine values; SetCursorScreenPos puts x back) leaves
+// TextUnformatted as the item that closes the line, exactly as before.
+//
+// Why it does not perturb navigation: without ImGuiButtonFlags_EnableNav, ImGui 1.91's
 // InvisibleButton adds its item with ImGuiItemFlags_NoNav (imgui_widgets.cpp), so it takes no Tab
-// stop and no nav focus — the keyboard traversal order of every panel that uses these rows is
-// unchanged, and the nav cursor it would otherwise render can never be drawn. It is submitted
-// last on its line, so its ItemSize repeats the newline the text already performed and leaves the
-// cursor where the text left it.
-static void EmitLabelProbe(const char* probe_id, const ImVec2& label_min, const ImVec2& label_max) {
-  const ImVec2 size(label_max.x - label_min.x, label_max.y - label_min.y);
-  if (size.x <= 0.0f || size.y <= 0.0f) {
-    return;  // InvisibleButton asserts on a zero extent; an empty label has nothing to address.
+// stop and no nav focus — the keyboard traversal order of every panel built from these rows is
+// unchanged, and the nav cursor it would otherwise render can never be drawn.
+static void TextWithLabelProbe(const char* display_label, const char* probe_id) {
+  const ImVec2 size = ImGui::CalcTextSize(display_label);
+  if (size.x > 0.0f && size.y > 0.0f) {  // InvisibleButton asserts on a zero extent
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(probe_id, size);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::SetCursorScreenPos(pos);
   }
-  ImGui::SetCursorScreenPos(label_min);
-  ImGui::InvisibleButton(probe_id, size);
+  ImGui::TextUnformatted(display_label);
 }
 
 // Render the label text after slider + input.
 static void FinishSliderLayout(const char* display_label, const char* label_id) {
   ImGui::SameLine();
-  ImGui::TextUnformatted(display_label);
-  EmitLabelProbe(label_id, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+  TextWithLabelProbe(display_label, label_id);
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
@@ -1225,12 +1233,11 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
       g_edit_request = { target, layer_idx, entry_idx };
     }
     ImGui::SameLine();
-    ImGui::TextUnformatted(row_label);
     // Same addressable-label probe as FinishSliderLayout — this row shares the label column with
     // the Weight row below it, so the invariant is only checkable if both ends can be read.
     char label_probe_id[64];
     snprintf(label_probe_id, sizeof(label_probe_id), "##card_%d_%d_row_%d_label", layer_idx, entry_idx, row_idx);
-    EmitLabelProbe(label_probe_id, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    TextWithLabelProbe(row_label, label_probe_id);
   };
 
   // Row 1: Crystal type (resolved from pool)
