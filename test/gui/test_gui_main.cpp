@@ -552,6 +552,7 @@ int main(int argc, char** argv) {
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
   RegisterThemeCoverageTests(engine);
+  RegisterThemeScanTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete
