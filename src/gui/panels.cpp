@@ -1263,8 +1263,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   // Row 1: Crystal type (resolved from pool)
   const CrystalConfig& crystal_ref = state.crystals[entry.crystal_id];
-  const char* type_name = (crystal_ref.type == CrystalType::kPrism) ? "Prism" : "Pyramid";
-  emit_row(0, type_name, "Edit##cr", EditTarget::kCrystal, "Crystal", false);
+  emit_row(0, CrystalTypeName(crystal_ref.type), "Edit##cr", EditTarget::kCrystal, "Crystal", false);
 
   // Row 2: Axis preset (resolved from pool)
   std::string preset = AxisPresetName(crystal_ref);
@@ -1431,7 +1430,8 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
               if (!list.empty()) {
                 list += "\n";
               }
-              list += "Layer " + std::to_string(li) + " / Entry " + std::to_string(ei);
+              list += "Layer " + std::to_string(DisplayLayerNumber(li)) + " / Entry " +
+                      std::to_string(DisplayEntryNumber(ei));
             }
           }
         }

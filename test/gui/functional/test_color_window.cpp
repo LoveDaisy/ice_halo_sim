@@ -508,7 +508,9 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
 
       ctx->ItemClick("**/" ICON_FA_FILE_IMPORT " Import from filter");
       ctx->Yield(2);
-      ClickInFocusedPopup(ctx, "L0 \xc2\xb7 cr \xc2\xb7 fx##imp_0");
+      // "L1" (1-based layer) and the crystal rendered as the shared identity string
+      // `#0 · cr · Prism` rather than the bare name.
+      ClickInFocusedPopup(ctx, "L1 \xc2\xb7 #0 \xc2\xb7 cr \xc2\xb7 Prism \xc2\xb7 fx##imp_0");
       ctx->Yield(2);
 
       IM_CHECK_EQ(static_cast<int>(gui::g_state.raypath_color.size()), 1);
@@ -872,7 +874,11 @@ void RegisterColorWindowTests(ImGuiTestEngine* engine) {
       ctx->ItemOpenAll(kColorsWindowRef);
       ctx->Yield(2);
 
-      ComboPick(ctx, "$$0/##body/$$0/##layer", "Layer 1");
+      // "Layer 2", not "Layer 1": the combo's labels are 1-based (DisplayLayerNumber), and the
+      // layer this case means is index 1 — the one holding the OTHER crystal, which is the whole
+      // point of the case. This edit is a semantic re-point, not a cosmetic relabel: before the
+      // numbering was unified, "Layer 1" here addressed index 1, and after it addresses index 0.
+      ComboPick(ctx, "$$0/##body/$$0/##layer", "Layer 2");
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.raypath_color[0].match[0].layer_idx, 1);
       IM_CHECK_EQ(gui::g_state.raypath_color[0].match[0].crystal_pool_id, 1);

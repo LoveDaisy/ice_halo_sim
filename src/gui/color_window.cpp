@@ -115,15 +115,14 @@ std::string BuildClassSummary(const GuiState& state, const ColorClassConfig& cls
     }
     const auto& ref = cls.match[i];
     char layer_tag[16];
-    std::snprintf(layer_tag, sizeof(layer_tag), "L%d", ref.layer_idx);
+    std::snprintf(layer_tag, sizeof(layer_tag), "L%d", DisplayLayerNumber(ref.layer_idx));
     out += layer_tag;
-    if (ref.crystal_pool_id >= 0 && static_cast<size_t>(ref.crystal_pool_id) < state.crystals.size()) {
-      const auto& cr = state.crystals[static_cast<size_t>(ref.crystal_pool_id)];
-      out += "·";
-      out += cr.name.empty() ? std::string("crystal#") + std::to_string(ref.crystal_pool_id) : cr.name;
-    } else {
-      out += "·<missing>";
-    }
+    // Same identity string the card and the combos below render, not a second name-or-fallback
+    // spelling of it — the two spellings disagreeing is exactly the defect this collapses. The
+    // summary line does get longer for it; a shorter form, if one is ever wanted, has to be a
+    // variant OF FormatCrystalIdentity (and must still lead with `#N`), not a fresh inline rule.
+    out += "·";
+    out += FormatCrystalIdentity(state, ref.crystal_pool_id);
     if (ref.match_all) {
       out += " · whole";
     } else if (!ref.predicate_text.empty()) {
@@ -309,20 +308,6 @@ std::vector<int> CrystalPoolsInLayer(const GuiState& state, int layer_idx) {
   return out;
 }
 
-const char* CrystalDisplayName(const GuiState& state, int pool_id) {
-  static thread_local std::string buf;
-  if (pool_id < 0 || static_cast<size_t>(pool_id) >= state.crystals.size()) {
-    buf = "<missing>";
-    return buf.c_str();
-  }
-  const auto& cr = state.crystals[static_cast<size_t>(pool_id)];
-  if (!cr.name.empty()) {
-    return cr.name.c_str();
-  }
-  buf = std::string("crystal#") + std::to_string(pool_id);
-  return buf.c_str();
-}
-
 // -------------------- window body --------------------
 
 // T1: no `server` parameter — display push derived by the frame-tail reconciler from the
@@ -374,7 +359,7 @@ void RenderImportFromFilterUI(GuiState& state) {
       const char* crystal_name = CrystalDisplayName(state, p.crystal_pool_id);
       const auto& f = state.filters[static_cast<size_t>(*p.filter_id)];
       char label[256];
-      std::snprintf(label, sizeof(label), "L%d · %s · %s##imp_%zu", p.layer_idx, crystal_name,
+      std::snprintf(label, sizeof(label), "L%d · %s · %s##imp_%zu", DisplayLayerNumber(p.layer_idx), crystal_name,
                     f.name.empty() ? "filter" : f.name.c_str(), i);
       if (ImGui::Selectable(label)) {
         int skipped = 0;
@@ -402,52 +387,93 @@ void RenderRefRow(GuiState& state, ColorClassConfig& cls, size_t ref_idx, bool& 
   ImGui::PushID(static_cast<int>(ref_idx));
   auto& ref = cls.match[ref_idx];
 
-  // Layer combo.
+  // Layer + crystal combos. Both are BeginCombo rather than Combo because their PREVIEW has to be
+  // able to say something no list item says — "the thing this ref stores is gone" — while the list
+  // itself still offers only the values that do exist, so the user can repair the ref in place.
+  // Writing the stored value back into the ref is done ONLY on a click in the list; rendering never
+  // writes (see ResolveColorRef in color_window.hpp for what that rule is guarding against).
+  const ColorRefResolution resolution = ResolveColorRef(state, ref);
   const int layer_count = static_cast<int>(state.layers.size());
-  std::vector<std::string> layer_labels(static_cast<size_t>(layer_count));
-  std::vector<const char*> layer_ptrs(static_cast<size_t>(layer_count));
-  for (int i = 0; i < layer_count; i++) {
-    layer_labels[static_cast<size_t>(i)] = "Layer " + std::to_string(i);
-    layer_ptrs[static_cast<size_t>(i)] = layer_labels[static_cast<size_t>(i)].c_str();
+
+  const bool layer_broken = resolution == ColorRefResolution::kLayerMissing;
+  std::string layer_preview = FormatColorRefLayerLabel(state, ref);
+  if (layer_broken) {
+    layer_preview = ICON_FA_CIRCLE_EXCLAMATION " " + layer_preview;
   }
-  int layer_idx = std::clamp(ref.layer_idx, 0, std::max(0, layer_count - 1));
   ImGui::PushItemWidth(90);
-  if (ImGui::Combo("##layer", &layer_idx, layer_ptrs.data(), layer_count)) {
-    ref.layer_idx = layer_idx;
-    // Reset crystal choice to the new layer's first placement so we never
-    // leave a stale (invalid-for-this-layer) pool id in the ref.
-    const auto pools = CrystalPoolsInLayer(state, layer_idx);
-    if (!pools.empty() && std::find(pools.begin(), pools.end(), ref.crystal_pool_id) == pools.end()) {
-      ref.crystal_pool_id = pools.front();
+  if (layer_broken) {
+    ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
+  }
+  const bool layer_open = ImGui::BeginCombo("##layer", layer_preview.c_str());
+  const bool layer_hovered = !layer_open && ImGui::IsItemHovered();
+  if (layer_broken) {
+    ImGui::PopStyleColor();
+  }
+  if (layer_open) {
+    for (int i = 0; i < layer_count; i++) {
+      const std::string item = "Layer " + std::to_string(DisplayLayerNumber(i));
+      const bool selected = i == ref.layer_idx;
+      if (ImGui::Selectable(item.c_str(), selected)) {
+        ref.layer_idx = i;
+        // Reset crystal choice to the new layer's first placement so we never
+        // leave a stale (invalid-for-this-layer) pool id in the ref.
+        const auto new_pools = CrystalPoolsInLayer(state, i);
+        if (!new_pools.empty() &&
+            std::find(new_pools.begin(), new_pools.end(), ref.crystal_pool_id) == new_pools.end()) {
+          ref.crystal_pool_id = new_pools.front();
+        }
+        // T1: structural (ColorClassStructState.match) → reconciler routes to hard-reset lane.
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
     }
-    // T1: structural (ColorClassStructState.match) → reconciler routes to hard-reset lane.
+    ImGui::EndCombo();
+  }
+  if (layer_broken && layer_hovered) {
+    ImGui::SetTooltip("This class still points at layer %d, which no longer exists.\nPick a layer to repair it.",
+                      DisplayLayerNumber(ref.layer_idx));
   }
   ImGui::PopItemWidth();
 
   // Crystal combo (deduped placements in the selected layer).
   ImGui::SameLine();
   const auto pools = CrystalPoolsInLayer(state, ref.layer_idx);
-  std::vector<std::string> crystal_labels(pools.size());
-  std::vector<const char*> crystal_ptrs(pools.size());
-  int current_choice = -1;
-  for (size_t i = 0; i < pools.size(); i++) {
-    crystal_labels[i] = CrystalDisplayName(state, pools[i]);
-    crystal_ptrs[i] = crystal_labels[i].c_str();
-    if (pools[i] == ref.crystal_pool_id) {
-      current_choice = static_cast<int>(i);
-    }
+  const bool crystal_broken = resolution == ColorRefResolution::kCrystalNotInLayer;
+  std::string crystal_preview = FormatColorRefCrystalLabel(state, ref);
+  if (crystal_broken) {
+    crystal_preview = ICON_FA_CIRCLE_EXCLAMATION " " + crystal_preview;
   }
   ImGui::PushItemWidth(120);
-  if (!pools.empty()) {
-    if (current_choice < 0) {
-      current_choice = 0;
-    }
-    if (ImGui::Combo("##crystal", &current_choice, crystal_ptrs.data(), static_cast<int>(pools.size()))) {
-      ref.crystal_pool_id = pools[static_cast<size_t>(current_choice)];
-      // T1: structural → reconciler.
-    }
-  } else {
+  if (pools.empty() && !crystal_broken) {
     ImGui::TextDisabled("<no placements>");
+  } else {
+    if (crystal_broken) {
+      ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
+    }
+    const bool crystal_open = ImGui::BeginCombo("##crystal", crystal_preview.c_str());
+    const bool crystal_hovered = !crystal_open && ImGui::IsItemHovered();
+    if (crystal_broken) {
+      ImGui::PopStyleColor();
+    }
+    if (crystal_open) {
+      for (size_t i = 0; i < pools.size(); i++) {
+        const std::string item = FormatCrystalIdentity(state, pools[i]);
+        const bool selected = pools[i] == ref.crystal_pool_id;
+        if (ImGui::Selectable(item.c_str(), selected)) {
+          ref.crystal_pool_id = pools[i];
+          // T1: structural → reconciler.
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
+      }
+      ImGui::EndCombo();
+    }
+    if (crystal_broken && crystal_hovered) {
+      ImGui::SetTooltip("No crystal in this layer is %s.\nPick one to repair the reference.",
+                        FormatCrystalIdentity(state, ref.crystal_pool_id).c_str());
+    }
   }
   ImGui::PopItemWidth();
 
@@ -599,6 +625,44 @@ WindowLocalState& GetLocalState() {
 }
 
 }  // namespace
+
+// Thin `const char*` adapter over FormatCrystalIdentity — ImGui's Combo wants an array of
+// `const char*`, and the identity itself must have exactly one owner (gui_state.hpp). This function
+// contributes nothing but the storage; if you find yourself about to add a branch here, the branch
+// belongs in FormatCrystalIdentity where the card sees it too.
+const char* CrystalDisplayName(const GuiState& state, int pool_id) {
+  static thread_local std::string buf;
+  buf = FormatCrystalIdentity(state, pool_id);
+  return buf.c_str();
+}
+
+ColorRefResolution ResolveColorRef(const GuiState& state, const ColorClassRefConfig& ref) {
+  if (ref.layer_idx < 0 || static_cast<size_t>(ref.layer_idx) >= state.layers.size()) {
+    return ColorRefResolution::kLayerMissing;
+  }
+  const auto pools = CrystalPoolsInLayer(state, ref.layer_idx);
+  if (std::find(pools.begin(), pools.end(), ref.crystal_pool_id) == pools.end()) {
+    return ColorRefResolution::kCrystalNotInLayer;
+  }
+  return ColorRefResolution::kResolved;
+}
+
+std::string FormatColorRefLayerLabel(const GuiState& state, const ColorClassRefConfig& ref) {
+  std::string label = "Layer " + std::to_string(DisplayLayerNumber(ref.layer_idx));
+  if (ResolveColorRef(state, ref) == ColorRefResolution::kLayerMissing) {
+    label += " (deleted)";
+  }
+  return label;
+}
+
+std::string FormatColorRefCrystalLabel(const GuiState& state, const ColorClassRefConfig& ref) {
+  std::string label = FormatCrystalIdentity(state, ref.crystal_pool_id);
+  if (ResolveColorRef(state, ref) == ColorRefResolution::kCrystalNotInLayer) {
+    label += " (not in this layer)";
+  }
+  return label;
+}
+
 
 // task-348.1 fix: poll GetColorClassSignal into a caller-owned buffer sized to
 // state.raypath_color.size(). Resize semantics: new entries default to 1

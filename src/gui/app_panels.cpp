@@ -540,7 +540,7 @@ void RenderLeftPanel(float window_height) {
     const auto& src = *g_state.pick_link_source;
     ImGui::PushStyleColor(ImGuiCol_Text, WarningTextColor());
     ImGui::TextWrapped("Pick mode: click an entry to share crystal/filter from Layer %d / Entry %d (Esc to cancel)",
-                       src.layer_idx, src.entry_idx);
+                       DisplayLayerNumber(src.layer_idx), DisplayEntryNumber(src.entry_idx));
     ImGui::PopStyleColor();
     ImGui::Separator();
   }
