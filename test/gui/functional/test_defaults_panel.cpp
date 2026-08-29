@@ -1420,7 +1420,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // wildcard finds nothing while the window-relative id resolves and scrolls to it. The FOV
       // control is above the fold and either form reaches it — this one has no choice.
       ctx->SetRef("##RightPanel");
-      ctx->ItemInputValue("##Alpha##grid_input", 7.5f);
+      ctx->ItemInputValue("##grid_alpha", 7.5f);
       ctx->SetRef("");
       ctx->Yield(3);
       IM_CHECK_EQ(alpha_from_table, gui::g_state.grid_alpha);

@@ -153,7 +153,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
         { "**/Scene", "**/##Altitude_input" },
         { "**/View", "**/##FOV##view_input" },
         { "**/Display", "**/##EV##display_input" },
-        { "**/Overlay", "**/Line##horizon" },
+        { "**/Overlay", "**/##horizon_line" },
       };
 
       ResetTestState();
