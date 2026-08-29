@@ -88,7 +88,9 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 
 实测收益：同一面板在字号更大的前提下，可见内容反而**多于**现状（现状 Overlay 组被截断，量化后连末尾的半径行都可见）。
 
-**4.3 调色板** —— 见 §3 定案列。核心两条规则：强调色只在**交互进行中**出现；分组标题是**染色**不是实心条。
+**4.3 调色板** —— 见 §3 定案列。核心两条规则：**强调色不做大面积常驻填充，且滑条静止态不上色**；分组标题是**染色**不是实心条。
+
+⚠️ 这条规则曾被写成"强调色只在**交互进行中**出现"，那个措辞是错的，且会主动否掉正确答案。`src/gui/theme.cpp` 的 `ApplyPalette` 自己就把 accent 给了**静止的**勾选态（`c[ImGuiCol_CheckMark] = p.accent`），而紧随其后那段注释解释的其实是**滑条**——"Grab neutral at rest, accent only while dragging"，理由是滑条是面板里重复次数最多的控件，它的静止色调定全局基调。所以规则真正管的是**面积**与**滑条**，不是"任何交互态都不许常驻上色"：勾选态本身就是内容（"这一项被选中"），涂色是内容的一部分，不是装饰性强调。同理，卡片的关联边框（`src/gui/panels.cpp` 的 active / co-shared 两态）、状态栏的 `Simulating...`、LINK 徽标都用 accent 而不违反这条——它们都是细线或短文本，且都在陈述"此刻是这个"。
 
 **4.4 重复记录 → 表格** —— 形态错配的判据是：**若干条目共享同一记录结构**（同样的字段集），却用竖直堆叠 + 每条重复标签来表达。Overlay 的四个辅助线正是如此（颜色 / 线 / 文字标签 / 透明度，外加仅标记点具备的像素半径）。
 
@@ -132,8 +134,32 @@ ScrollbarRounding 3  WindowRounding 4  PopupRounding 4
 - ~~**正文字体未定案**~~ —— **已定案并落地**：Roboto Medium 15px。分发按当时判断比照 FontAwesome，走构建期嵌入（`scripts/embed_binary.py` 生成 `roboto_medium_embed.cpp`，声明头 `src/gui/roboto_medium_embed.h`），运行期不读文件；字体与 style 的初始化收敛到单一 owner `src/gui/theme.{hpp,cpp}`（此前 `src/gui/main.cpp` 与 `test/gui/test_gui_main.cpp` 各写一遍，截图与真 app 只是碰巧一致——见 §1）。
 - ~~**颜色存在第二个 owner**~~ —— **已收口**：good / warning / destructive 三档语义色现由 `src/gui/semantic_colors.hpp` 单一定义，21 处调用点（绿色 Run 按钮、锈色 Resolution 输入框、Stop 按钮、日志级别色、filter 编辑器的三态校验底色等）改为引用具名函数。每档提供两种消费形态——`*TextColor()` 亮色用于文本/图标/边框，`*FillColor(alpha)` 哑光用于 FrameBg/CellBg 背景染色，alpha 由调用点给（各调用点的强调程度本就有意不同）。按钮三态只在存在消费者的档位提供：good 在同一头文件，destructive 仍是 `src/gui/destructive_style.hpp` 的 `PushDestructiveStyle`/`PopDestructiveStyle`（12 处配对调用的既有实现，一档一形态只留一个 owner），warning 无按钮消费者故不预先实现。
   - 每个 canonical 取值都锚定收编前**已存在**的字面量（复用次数最多的那个），不是新拍的折中色——于是 5 处近重复琥珀、3 处近重复红折叠后只有几个百分点的通道位移，而参考图覆盖到的场景**逐像素不变**。
-  - 三类颜色**不**在此收编，判据是"颜色是否表达产品对内容的判断"：**强调色**（hover/active/选中高亮）表达交互状态，与语义色取值必须分开，否则"正在被操作"会读成"有风险"；**数据色**（用户在 Overlay 面板配的线色、由组号派生的 sync-group 色板）由用户或索引决定；**结构色**（透明 hover 触发区、占位边框、标签底衬、按填充色 luma 派生的对比文字）不携带判断。
-  - 状态栏的 `Simulating...` / `Stopping...` / `Done` 也不并入：它们是进度/信息指示。把"任何非稳态"塞进 warning 会把该档从"内容需要你处理"稀释掉，反而淹没 Resolution 这种真正会触发重跑的提示。
+  - 三类颜色**不**在此收编，判据是"颜色是否表达产品对内容的判断"：**强调色**（hover/active/选中高亮）表达交互状态，与语义色取值必须分开，否则"正在被操作"会读成"有风险"；**数据色**（用户在 Overlay 面板配的线色、由组号派生的 sync-group 色板）由用户或索引决定；**画布内容色**（画在预览图 / 3D 渲染之上的标注、以及渲染自身的底色）不携带判断。
+  - 状态栏的 `Simulating...` / `Stopping...` / `Done` 也不并入：它们是进度/信息指示。把"任何非稳态"塞进 warning 会把该档从"内容需要你处理"稀释掉，反而淹没 Resolution 这种真正会触发重跑的提示。它们的归宿是下面那条"中性刻度"。
+- **调用点颜色是否跟着色盘走：判据与豁免清单** —— 上一条解决的是"同一语义的颜色有几个 owner"；这一条解决的是另一个正交问题：一个调用点自己挑的颜色，**换一套色盘时跟不跟着变**。跟不着变的即为泄漏，必须改为读色槽（`ImGui::GetStyleColorVec4` / `ImGui::GetColorU32`）或读 `lumice::gui::AccentColor()`。
+
+  判据本身可机械检验，不必靠人工点检：`src/gui/theme_test_hooks.hpp` 暴露一个 test-only 的对照色盘（`ApplyContrastPaletteForTest`，取值与生产色盘每个字段的欧氏距离 ≥ 0.54），`gui_test --theme-palette contrast` 用它重跑 `theme_scan` 类别的场景，`scripts/scan_theme_leaks.py` 逐像素比较两套色盘下的同一批截图并高亮**两次色值相同**的像素。它产出的是**候选**不是判决——豁免类颜色本来就应当不变——但"哪些像素没跟着色盘动"这个问题从此有机械答案。
+
+  **豁免只有三类，其余一律视为泄漏**（面板铬件——缩略图边框、日志正文档位、按钮/复选框染色——一律不豁免）：
+
+  | 可豁免 | 判据 | 实例 |
+  |---|---|---|
+  | **数据色** | 取值由**用户或索引**决定，不由主题决定 | `panels.cpp` 的 `kSyncGroupPalette` 六色板；Overlay 面板里用户配的辅助线色 |
+  | **画布内容色** | 画在**预览图 / 3D 渲染**之上或之下，对比对象是**图像**而不是面板 | `overlay_labels.cpp` 的标签黑底、`face_number_overlay.cpp` 的面号描边；以及 `crystal_renderer.cpp` 渲染晶体缩略图/预览时自己的 `glClearColor` 底色 |
+  | **内容语义色** | 携带"这个值健康 / 需要注意 / 危险"的产品判断，与皮肤无关（正如 OS 深浅色切换通常不会改变错误红的色相） | `semantic_colors.hpp` 的 good / warning / destructive 三档，含绿色 Run 按钮与 `destructive_style.hpp` 的按钮三态 |
+
+  ⚠️ **"结构色"这个旧类别已废止**。它曾被用来豁免占位边框、标签底衬一类颜色，在本判据下站不住：缩略图的占位块与边框正是靠它免检，而它们换肤时会原样留在原地。今天它们读 `ImGuiCol_FrameBg` / `ImGuiCol_Border`。仍然合法的只是它当年混进去的另外两样：**全透明**的 hover 触发区（`ImVec4(0,0,0,0)`，alpha=0 画不出像素，谈不上跟不跟色盘）与**由填充色派生**的对比文字（`panels.cpp` 里按 sync-group 填充色的 luma 在黑/白之间取值——它的输入是数据色，派生规则本身不是颜色选择）。
+
+  **不带判断的进度/状态文字取"中性刻度"**：主题给的三档是 `ImGuiCol_Text`（静息）/ `ImGuiCol_TextDisabled`（暗淡）/ accent（此刻正在发生）。状态栏据此为 `Simulating...` = accent、`Stopping...` = `TextDisabled`（同一帧里 Stop 按钮本就是灰掉且禁用的）、`Done` = `Text`；日志面板的 trace/debug = `TextDisabled`、默认档 = `Text`。带判断的两态仍走语义色（`Ready` = good，`Modified` = warning）。
+
+  **顶栏那两处自造蓝一并归 accent**，但它们的语义**并不同类**，这一点必须记下来，否则这次合并会变成一个没人记得的隐性决定：
+
+  - Composite 勾选框的勾选态（`app_panels.cpp`，条件是 `composite_now`）是**同一个控件的不同状态**。主题本来就把 accent 花在静止的勾选态上（`theme.cpp` 的 `c[ImGuiCol_CheckMark] = p.accent`），所以这处属既有做法。
+  - 顶栏 Colors 按钮的三态（条件是 `ShouldTintColorsButton`，即文档里配了色类）是**内容状态投影到控件上的徽章**——按钮在两种情况下行为完全相同，染色只是在窗口打开**之前**就告诉你染色配没配。
+
+  两者仍都进 accent，理由是**举证责任**而不是语义相同：为徽章单开一档 `Palette` 角色，今天只有**一个**调用点撑着。⭐ **触发条件登记：出现第二个"内容非空 → 给控件染色"的徽章式用法时**，才是把它从 accent 里拆出来、单立一档 `Palette` 角色的时机。
+
+  ⭐ **另一条边界，同样先登记不动手**：`crystal_renderer.cpp` 的画布底色被豁免为画布内容色，但它是**整块可见面积**。若将来真的出第二套皮肤（尤其是浅色），这块底色与画在它上面的线框色**必须作为同一个画布问题一起重新决定**，不能只改其中一个——单独改任何一侧都会破坏它们之间的对比关系。
 - **一值两控件仍是主流行式** —— 表格单元格内已验证单控件（`DragFloat`）可行，但推广属控件形态层，见 §6。
 - **左面板空区** —— 见 §2 第 6 条。
 
