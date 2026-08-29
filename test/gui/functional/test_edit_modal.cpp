@@ -1298,6 +1298,38 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // Dragging a sqrt-scaled slider to its stop must store the bound itself, not the bound recovered
+  // through the sqrt round trip. sqrtf(360)^2 is 359.999969 — 3.05e-5 short, invisible behind the
+  // "%.1f" readout, and enough for core's FloatEqual (1e-5) to stop calling the axis a full turn,
+  // which silently reroutes the whole orientation sampler. The mapping itself is unit-tested
+  // (SliderMapping.EndpointSnappingWritesBackTheBoundExactly); what needs a live frame, and is the
+  // only reason this case is here, is that the real widget path reaches it — that ImGui hands the
+  // stop position back as exactly the v_max it was given, so the snap actually fires.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "dragging_a_range_slider_to_its_stop_stores_the_exact_bound");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      auto& cr = EntryCrystal();
+      cr.zenith = gui::AxisDist{ gui::AxisDistType::kUniform, 0.0f, 90.0f };
+      ctx->Yield(2);
+
+      ctx->ItemClick("**/Edit##ax");
+      ctx->Yield(4);
+      ctx->ItemClick("**/###axis_tab");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemExists("**/Zenith/##Range_slider"));
+
+      // Far enough right that ImGui clamps at v_max whatever the slider's on-screen width.
+      ctx->ItemDragWithDelta("**/Zenith/##Range_slider", ImVec2(2000.0f, 0.0f));
+      ctx->Yield(3);
+      ctx->ItemClick(kOk);
+      ctx->Yield(2);
+
+      IM_CHECK_EQ(EntryCrystal().zenith.std, 360.0f);
+    };
+  }
+
   // ===================================================================================
   // The shape table: rows, domains, randomization, and the width budget.
   // ===================================================================================

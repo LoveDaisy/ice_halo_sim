@@ -41,19 +41,22 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
     if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
-      *value = sqrt_val * sqrt_val;
+      // The *Snapped inverses here are load-bearing, not tidiness: at a slider stop the plain
+      // round trip lands a few ULP short of the bound, which core's absolute-epsilon predicates
+      // read as a different value entirely. See slider_mapping.hpp for the full account.
+      *value = slider_mapping::SqrtNormToValueSnapped(sqrt_val, sqrt_max, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLog && min_val > 0.0f) {
     float norm = slider_mapping::LogValueToNorm(*value, min_val, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
-      *value = slider_mapping::LogNormToValue(norm, min_val, max_val);
+      *value = slider_mapping::LogNormToValueSnapped(norm, min_val, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
     float norm = slider_mapping::LogLinearValueToNorm(*value, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
-      *value = slider_mapping::LogLinearNormToValue(norm, max_val);
+      *value = slider_mapping::LogLinearNormToValueSnapped(norm, max_val);
       changed = true;
     }
   } else {

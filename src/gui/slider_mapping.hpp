@@ -65,6 +65,55 @@ inline float LogLinearNormToValue(float norm, float max_val) {
   return kLogLinearX0 * std::exp(t_log * log_ratio);
 }
 
+// --- Endpoint-snapped inverse mappings ---
+//
+// Every inverse above round-trips through sqrt or exp/log, and neither is bit-exact at the ends:
+// sqrtf(360.0f) squared back is 359.999969f, 3.05e-5 short. That residue is invisible in the UI
+// (the paired InputFloat prints "%.1f") but not to core, which uses absolute-epsilon predicates on
+// exactly these quantities to pick a sampling path — FloatEqual's threshold is 1e-5, so a Range
+// slider dragged to its stop silently stopped meaning "360". Round-tripping is the right behavior
+// everywhere except at the two ends, where the intended value is known exactly rather than
+// approximated: ImGui::SliderFloat clamps its output to the v_min / v_max it was handed, so
+// "the handle is at the stop" is an exact comparison, not a tolerance.
+//
+// Use these wherever a slider position is converted back into a stored value. The bare functions
+// above stay as they are — their interior approximation is fine, and their own tests pin it.
+
+// Sqrt-scale inverse with both ends snapped. `sqrt_val` and `sqrt_max` live in sqrt space;
+// `max_val` is the target-space bound (i.e. sqrt_max * sqrt_max as the caller means it).
+inline float SqrtNormToValueSnapped(float sqrt_val, float sqrt_max, float max_val) {
+  if (sqrt_val <= 0.0f) {
+    return 0.0f;
+  }
+  if (sqrt_val >= sqrt_max) {
+    return max_val;
+  }
+  return sqrt_val * sqrt_val;
+}
+
+// Log-scale inverse with both ends snapped.
+inline float LogNormToValueSnapped(float norm, float min_val, float max_val) {
+  if (norm <= 0.0f) {
+    return min_val;
+  }
+  if (norm >= 1.0f) {
+    return max_val;
+  }
+  return LogNormToValue(norm, min_val, max_val);
+}
+
+// LogLinear hybrid inverse with both ends snapped. The lower end is 0 by construction (this pair
+// is purpose-built for min_val == 0; see LogLinearValueToNorm's note).
+inline float LogLinearNormToValueSnapped(float norm, float max_val) {
+  if (norm <= 0.0f) {
+    return 0.0f;
+  }
+  if (norm >= 1.0f) {
+    return max_val;
+  }
+  return LogLinearNormToValue(norm, max_val);
+}
+
 }  // namespace lumice::gui::slider_mapping
 
 #endif  // LUMICE_GUI_SLIDER_MAPPING_HPP
