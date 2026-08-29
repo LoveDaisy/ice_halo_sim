@@ -210,6 +210,14 @@ button appears to the right of the D checkbox. Hovering over it shows the toolti
 This design follows a "weak hint" principle: the user retains control and is not blocked from
 checking D, but is informed when the toggle has no practical effect.
 
+The indicator asks the engine's own predicate rather than re-deriving the condition: the GUI calls
+`LUMICE_IsDApplicable`, which forwards to the same `detail::IsDApplicableParams` the simulator uses.
+It used to keep a private transcription instead, and the two had drifted to different float
+tolerances (1e-3 against core's 1e-5) — so for an azimuth range 3.05e-5° short of a full turn, which
+is what the sqrt-scaled Range slider once stored at its stop, the hint said D was live while the
+engine had already dropped it. A hint that disagrees with the thing it describes is worse than no
+hint, which is why this one has no copy of the rule to drift.
+
 ---
 
 ## 7. Out of Scope
