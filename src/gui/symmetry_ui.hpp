@@ -16,7 +16,12 @@ namespace lumice::gui {
 
 // Returns true when the given (azimuth, roll) axis config satisfies D-symmetry
 // conditions: azimuth uniform 360° AND roll mean a multiple of 30°.
-// Mirrors core detail::IsDApplicable (src/core/crystal.cpp). Keep in sync.
+//
+// Delegates to core's own predicate through LUMICE_IsDApplicable — it does not mirror it. This
+// used to be a transcription with a "keep in sync" note, and it had drifted: a 1e-3 tolerance
+// against core's 1e-5, which on a 3.05e-5 azimuth-range residue (what a Range slider dragged to
+// its stop used to store) made the checkbox report D as live while the engine had already
+// dropped it. A comment asking two copies to agree is not a mechanism; one owner is.
 bool IsDApplicableGuiAxis(const AxisDist& az, const AxisDist& roll);
 
 // Renders the "P B D [i]" checkbox row (ImGui). `id_suffix` disambiguates ImGui

@@ -354,12 +354,29 @@ struct BuiltMesh {
 };
 BuiltMesh BuildMeshFromCfGeom(const CrystalGeom& g);
 
+// Returns true if roll's anchor slot (Distribution::center, whatever the type calls it) is a
+// multiple of 30° within FloatEqual precision.
+bool IsRollAnchorAtMultipleOf30(float roll_anchor_deg);
+
 // Returns true if roll_mean_deg is a multiple of 30° (within FloatEqual precision).
 bool IsRollMeanAtMultipleOf30(const AxisDistribution& d);
 
 // Compute σ-mirror parameter a (0..5) from roll_mean_deg.
 // Formula: n = ((int)round(roll_mean / 30.0f) % 6 + 6) % 6; a = (6 - n) % 6.
 int ComputeSigmaA(float roll_mean_deg);
+
+// D applicability over the three raw quantities the rule actually reads, and nothing else:
+// azimuth's distribution type, azimuth's full range in degrees, and roll's anchor slot in degrees.
+// This is the owner; IsDApplicable(const AxisDistribution&) below is a projection onto it.
+//
+// Stated this way so a caller holding the fields but not an AxisDistribution can ask directly.
+// That caller is the C API's LUMICE_IsDApplicable, added so the GUI stops carrying its own
+// transcription of this rule — the copy in symmetry_ui.cpp had drifted to a 1e-3 tolerance against
+// core's 1e-5, which on a 3.05e-5 azimuth-range residue made the checkbox say D was live while the
+// engine had already dropped it. The alternative shape (a wrapper that fills a stand-in
+// AxisDistribution and calls the struct form) would put "which fields are read" in a comment
+// rather than in a signature, and nothing would catch it going stale.
+bool IsDApplicableParams(DistributionType azimuth_type, float azimuth_full_range_deg, float roll_anchor_deg);
 
 // Returns true if D symmetry is applicable for the given axis distribution.
 // Requires azimuth full-360° uniform AND roll mean at a multiple of 30°.

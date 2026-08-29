@@ -560,13 +560,18 @@ bool AxisDistribution::IsFullSphereUniform() const {
 }
 
 
+bool IsFullTurnUniform(DistributionType type, float full_range_deg) {
+  return type == DistributionType::kUniform && FloatEqual(full_range_deg, 360.0f);
+}
+
+
 bool AxisDistribution::IsAzRotationallySymmetric() const {
-  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformFullRange(), 360.0f);
+  return IsFullTurnUniform(azimuth_dist.type, azimuth_dist.spread);
 }
 
 
 bool AxisDistribution::IsRollRotationallySymmetric() const {
-  return roll_dist.type == DistributionType::kUniform && FloatEqual(roll_dist.UniformFullRange(), 360.0f);
+  return IsFullTurnUniform(roll_dist.type, roll_dist.spread);
 }
 
 

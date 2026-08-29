@@ -1238,6 +1238,24 @@ const char* LUMICE_ShapeIndicesKeyName(int upper);
 // internal latitude (zenith = 90 - latitude): the key names the file format, not the field.
 const char* LUMICE_AxisScalarKeyName(int slot);
 
+// Returns non-zero when D (the sigma-d mirror) is applicable to a crystal whose axis has this
+// azimuth distribution and this roll anchor. D needs the azimuth to be uniform over a full turn
+// and the roll anchor to sit on a multiple of 30 degrees; an axis failing either condition has its
+// D flag silently ignored by the engine.
+//
+// Arguments are the three raw quantities the rule reads and no others:
+//   azimuth_dist_type      one of LUMICE_DIST_*, from the azimuth LUMICE_Distribution's .type
+//   azimuth_full_range_deg that distribution's .spread (for LUMICE_DIST_UNIFORM, the full width)
+//   roll_anchor_deg        the roll LUMICE_Distribution's .center, read type-erased -- it is a
+//                          tilt offset for ZIGZAG and an interval midpoint for UNIFORM, so do not
+//                          read the name as "the statistical mean of the roll angle"
+//
+// This is core's own predicate, not a second copy of it. Ask it rather than transcribing the rule:
+// a GUI-side transcription is exactly what once let a checkbox report D as live while the engine
+// had already dropped it, the two having drifted to different float tolerances (1e-3 against
+// 1e-5) on a difference of 3.05e-5.
+int LUMICE_IsDApplicable(int azimuth_dist_type, float azimuth_full_range_deg, float roll_anchor_deg);
+
 // =============== Raypath Validation ===============
 // Validation state for raypath text input (GUI border color + OK gate).
 typedef enum LUMICE_RaypathValidationState_ {

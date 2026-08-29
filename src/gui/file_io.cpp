@@ -1199,27 +1199,7 @@ static bool FillColorPredicate(LUMICE_ColorPredicate* dst, const ColorClassRefCo
 // ========== Build a LUMICE_Scene handle (for LUMICE_CommitScene / LUMICE_SceneToJson) ==========
 
 static void FillAxisDist(const AxisDist& src, LUMICE_Distribution* dst) {
-  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update FillAxisDist when adding new AxisDistType");
-  switch (src.type) {
-    case AxisDistType::kGauss:
-      dst->type = LUMICE_DIST_GAUSS;
-      break;
-    case AxisDistType::kUniform:
-      dst->type = LUMICE_DIST_UNIFORM;
-      break;
-    case AxisDistType::kZigzag:
-      dst->type = LUMICE_DIST_ZIGZAG;
-      break;
-    case AxisDistType::kLaplacian:
-      dst->type = LUMICE_DIST_LAPLACIAN;
-      break;
-    case AxisDistType::kGaussLegacy:
-      dst->type = LUMICE_DIST_GAUSS_LEGACY;
-      break;
-    default:
-      dst->type = LUMICE_DIST_GAUSS;
-      break;
-  }
+  dst->type = AxisDistTypeToWire(src.type);
   dst->center = src.mean;
   dst->spread = src.std;
 }

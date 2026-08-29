@@ -3187,6 +3187,37 @@ const char* LUMICE_AxisScalarKeyName(int slot) {
   return ns::AxisScalarKeyName(slot);
 }
 
+int LUMICE_IsDApplicable(int azimuth_dist_type, float azimuth_full_range_deg, float roll_anchor_deg) {
+  // Spelled as a switch rather than a cast: the header promises only that LUMICE_DIST_* stays
+  // self-consistent, not that it stays numerically equal to core's DistributionType (every other
+  // translation in this file goes through a string switch for the same reason). An unrecognised
+  // value answers the negative, matching LUMICE_IsLegalFace / LUMICE_IsShapeScalarApplicable.
+  ns::DistributionType az_type{};
+  switch (azimuth_dist_type) {
+    case LUMICE_DIST_NO_RANDOM:
+      az_type = ns::DistributionType::kNoRandom;
+      break;
+    case LUMICE_DIST_UNIFORM:
+      az_type = ns::DistributionType::kUniform;
+      break;
+    case LUMICE_DIST_GAUSS:
+      az_type = ns::DistributionType::kGaussian;
+      break;
+    case LUMICE_DIST_ZIGZAG:
+      az_type = ns::DistributionType::kZigzag;
+      break;
+    case LUMICE_DIST_LAPLACIAN:
+      az_type = ns::DistributionType::kLaplacian;
+      break;
+    case LUMICE_DIST_GAUSS_LEGACY:
+      az_type = ns::DistributionType::kGaussianLegacy;
+      break;
+    default:
+      return 0;
+  }
+  return ns::detail::IsDApplicableParams(az_type, azimuth_full_range_deg, roll_anchor_deg) ? 1 : 0;
+}
+
 
 // =============== Raypath Validation ===============
 LUMICE_ErrorCode LUMICE_ValidateRaypathText(const char* text, LUMICE_CrystalKind kind,

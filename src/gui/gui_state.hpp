@@ -45,6 +45,30 @@ enum class RunIntent { kNone, kLoaded, kRunning, kStopping, kStopped, kRunComple
 // Values must stay contiguous 0..N-1 — ImGui RadioButton relies on static_cast<int>.
 enum class AxisDistType { kGauss, kUniform, kZigzag, kLaplacian, kGaussLegacy, kCount };
 
+// The GUI enum above is a UI presentation order (it is what a RadioButton row indexes); the
+// LUMICE_DIST_* constants are the wire encoding. They are different orders, so every place that
+// hands a GUI distribution to the C API needs this translation — file_io.cpp when it builds a
+// LUMICE_Scene, symmetry_ui.cpp when it asks LUMICE_IsDApplicable. One owner, so a sixth type
+// cannot be added to one and forgotten in the other.
+inline int AxisDistTypeToWire(AxisDistType type) {
+  static_assert(static_cast<int>(AxisDistType::kCount) == 5, "Update AxisDistTypeToWire when adding new AxisDistType");
+  switch (type) {
+    case AxisDistType::kGauss:
+      return LUMICE_DIST_GAUSS;
+    case AxisDistType::kUniform:
+      return LUMICE_DIST_UNIFORM;
+    case AxisDistType::kZigzag:
+      return LUMICE_DIST_ZIGZAG;
+    case AxisDistType::kLaplacian:
+      return LUMICE_DIST_LAPLACIAN;
+    case AxisDistType::kGaussLegacy:
+      return LUMICE_DIST_GAUSS_LEGACY;
+    case AxisDistType::kCount:
+      break;
+  }
+  return LUMICE_DIST_GAUSS;
+}
+
 // Aspect ratio presets for preview window
 enum class AspectPreset { kFree, k16x9, k3x2, k4x3, k1x1, k2x1, kMatchBg };
 inline const char* const kAspectPresetNames[] = { "Free", "16:9", "3:2", "4:3", "1:1", "2:1", "Match Background" };
