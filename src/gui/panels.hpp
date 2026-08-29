@@ -10,6 +10,29 @@ namespace lumice::gui {
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 
+// One control per value: a single DragFloat where a [slider][input] pair would otherwise sit.
+// Ctrl+click (or, with io.ConfigDragClickToInputText on, a plain click-release) types an exact
+// value, so the input half is not lost, it is folded in. The item id is "##<label>", with no
+// _slider / _input suffix, because there is no longer a pair to distinguish. Today's only call
+// sites are the Overlays table's alpha cells (RenderOverlaysTab, app_panels.cpp), where a cell
+// has room for exactly one control; SliderWithInput remains the default elsewhere.
+//
+// `scale` keeps meaning what it means for SliderWithInput, but a Drag has no track position
+// to map, only a speed, so the three non-linear modes collapse onto ImGui's own logarithmic
+// drag: kLog and kLogLinear are what it natively is, and kSqrt takes it as the closer of the
+// two available approximations (a linear drag over a 0-360 domain moves ~1.6 deg per pixel,
+// which cannot express the sub-degree spreads the sqrt mapping existed to make reachable).
+// Dragging to either end still yields exactly min / max — ImGui special-cases the extents.
+//
+// The value is clamped to [min_val, max_val] UNCONDITIONALLY, not just when the widget moved it:
+// ImGuiSliderFlags_AlwaysClamp constrains what the widget produces and leaves an out-of-range value
+// it was handed alone, and fields do arrive here from outside any control (a hand-written .lmc, a
+// lens switch that narrows a bound under a value that was legal a frame ago). Returns true when the
+// value is not what it was — clamp included, since a clamp is a change the caller has to commit
+// like any other. Both match what SliderWithInput does.
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
+                    SliderScale scale = SliderScale::kLinear);
+
 // Slider + InputFloat + label text, laid out as: [slider] [input] Label
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.

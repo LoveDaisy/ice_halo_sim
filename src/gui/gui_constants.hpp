@@ -72,6 +72,15 @@ constexpr unsigned long long kMinRaysFloor = 5000;
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
 
+// Reference drag track length, in pixels: the horizontal distance a DragFloat traverses to
+// cross its whole domain. It is the width SliderWithInput's slider half gets, so a merged
+// single control keeps the same "how far do I have to drag" feel rather than inheriting
+// ImGui's default (range/100, i.e. 100 px for the full domain — more than twice as twitchy).
+// Consumed by DragFloatField (panels.cpp), which derives v_speed = (max - min) / this. In
+// logarithmic mode ImGui divides the delta by the domain size itself, so the same formula
+// lands the same 230 px full-domain traversal there.
+constexpr float kDragTrackReferenceWidth = 230.0f;
+
 // Card thumbnail (offscreen crystal rendering)
 // Currently used for both FBO render resolution and UI display size.
 // If HiDPI support is needed later, split into separate render/display constants.
