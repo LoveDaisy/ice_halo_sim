@@ -127,6 +127,44 @@ std::filesystem::path GuiTestTempPath(const std::string& filename) {
   return dir / filename;
 }
 
+ImGuiWindow* CardWindow(int index) {
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  int seen = 0;
+  for (ImGuiWindow* w : g.Windows) {
+    if (w->WasActive && (w->Flags & ImGuiWindowFlags_ChildWindow) != 0 && std::strstr(w->Name, "##card") != nullptr) {
+      if (seen == index) {
+        return w;
+      }
+      ++seen;
+    }
+  }
+  return nullptr;
+}
+
+ImVec2 CardBlankSpot(int index) {
+  ImGuiWindow* w = CardWindow(index);
+  IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
+  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + w->Size.y * 0.75f);
+}
+
+void OpenCardEditor(ImGuiTestContext* ctx, int index, const char* tab_ref) {
+  ctx->MouseMoveToPos(CardBlankSpot(index));
+  ctx->MouseClick(ImGuiMouseButton_Left);
+  // Four, not one: the click sets an EditRequest that the next frame's app_panels pass turns into
+  // an open modal, and the modal's first frame is when its tab bar is first submitted — the tab
+  // click below has nothing to hit before then.
+  ctx->Yield(4);
+  // A card clicked while the modal is CLOSED always resolves to the Crystal tab (app_panels.cpp
+  // pins EditTarget::kCrystal on that branch), so clicking the tab would be a no-op. Skipping it is
+  // not just tidiness: every frame spent here is a frame the modal is up, and the crystal preview's
+  // animation ticker runs off frame time — the cases that assert on its FIRST built frame have
+  // roughly a tick's worth of budget between opening the modal and reading the mesh.
+  if (std::strcmp(tab_ref, kCrystalTabRef) != 0) {
+    ctx->ItemClick(tab_ref);
+    ctx->Yield(2);
+  }
+}
+
 void ResetTestState() {
   // Document state (delegates to DoNew: g_state, g_preview, g_crystal_mesh_id/hash)
   gui::DoNew();

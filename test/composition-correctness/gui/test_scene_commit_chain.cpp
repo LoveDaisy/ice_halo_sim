@@ -454,23 +454,30 @@ TEST(SceneCommitChain, EveryFilterShapeHasAnEntryCardSummary) {
             std::string::npos);
 }
 
-// A raypath longer than the card can show is truncated at 12 characters plus an ellipsis, and the
-// 12 is a real constant rather than "whatever fits": panels.cpp's FilterSummary picks it so the card
-// text stays inside the row it shares with the Edit button, which is drawn from a different code
-// path and would simply overlap. Asserted here because the truncation used to be pinned by a
-// gui_test case that was retired with test_gui_interaction.cpp, and nothing replaced it — a
-// silently-widened cut would show up as overlapping text on a card and nowhere else.
-TEST(SceneCommitChain, ALongRaypathIsCutToTwelveCharactersOnTheCard) {
+// A raypath longer than the card can show is truncated at kFilterSummaryBodyChars characters plus
+// an ellipsis, and that number is a measurement of the card's value column rather than "whatever
+// fits" — see the note on FilterSummary in panels.cpp for what it was measured against. Asserted
+// here because the truncation used to be pinned by a gui_test case that was retired with
+// test_gui_interaction.cpp, and nothing replaced it — a silently-widened cut would show up as
+// overrun text on a card and nowhere else.
+//
+// The literals below are written out rather than built from the constant: a test that computes its
+// expectation the same way the code does agrees with the code by construction, including when both
+// are wrong. Widening the column is a deliberate act and updating these two strings is the cost of
+// it.
+TEST(SceneCommitChain, ALongRaypathIsCutToTheCardsBodyLimit) {
   FilterConfig fc;
   RaypathParams rp;
-  rp.raypath_text = "1-2-3-4-5-6-7-8";  // 15 characters
+  rp.raypath_text = "1-2-3-4-5-6-7-8-9-1";  // 19 characters
   fc.SetRaypath(rp);
   const std::string summary = FilterSummary(std::optional<FilterConfig>{ fc });
-  EXPECT_EQ(summary.rfind("1-2-3-4-5-6-...", 0), 0u) << "got '" << summary << "'";
+  EXPECT_EQ(summary.rfind("1-2-3-4-5-6-7-8-...", 0), 0u) << "got '" << summary << "'";
 
   // ...and one that fits is left alone, so the cut is a bound rather than an unconditional trim.
+  // 15 characters: this one WAS truncated under the pre-widening limit, so it also witnesses that
+  // the column really did grow rather than the test merely following it.
   RaypathParams shorter;
-  shorter.raypath_text = "1-2-3-4-5";  // 9 characters
+  shorter.raypath_text = "1-2-3-4-5-6-7-8";  // 15 characters
   fc.SetRaypath(shorter);
   const std::string untouched = FilterSummary(std::optional<FilterConfig>{ fc });
   EXPECT_EQ(untouched.find("..."), std::string::npos) << "got '" << untouched << "'";

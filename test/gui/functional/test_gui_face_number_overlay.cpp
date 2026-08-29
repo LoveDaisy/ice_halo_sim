@@ -40,7 +40,7 @@ void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine) {
       ResetTestState();
       lumice::gui::ResetLastCrystalMesh();
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
 
       const auto* mesh = lumice::gui::GetLastCrystalMesh();

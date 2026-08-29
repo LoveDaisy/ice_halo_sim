@@ -101,7 +101,7 @@ CommitOutcome RunFilterPresenceToggle(ImGuiTestContext* ctx, bool start_with_fil
   gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
   ctx->Yield(2);
 
-  ctx->ItemClick("**/Edit##fi");
+  OpenCardEditor(ctx, 0, kFilterTabRef);
   ctx->Yield(4);
   ctx->ItemClick("**/###filter_tab");
   ctx->Yield(4);
@@ -171,7 +171,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ImGuiWindow* blocking = ImGui::GetTopMostPopupModal();
       IM_CHECK(blocking != nullptr);
@@ -200,7 +200,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
 
@@ -236,7 +236,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       auto open = [ctx]() {
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(4);
         ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
         IM_CHECK(w != nullptr);
@@ -283,7 +283,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemInputValue(kHeightInput, orig_h + 4.0f);
       ctx->Yield(2);
@@ -292,7 +292,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().height, orig_h + 4.0f);
 
       // Reopen: the value came back from the entry, not from a buffer that outlived the window.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK_EQ(EntryCrystal().height, orig_h + 4.0f);
       ctx->ItemInputValue(kHeightInput, orig_h + 5.0f);
@@ -316,7 +316,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/###crystal_tab"));
 
@@ -348,7 +348,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ImGuiWindow* w = ctx->GetWindowByRef("Edit Entry");
       IM_CHECK(w != nullptr);
@@ -382,7 +382,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##ax");
+      OpenCardEditor(ctx, 0, kAxisTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
@@ -439,7 +439,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       // Both exits unbind: a Cancel that left the target set would keep a card highlighted with no
       // modal on screen.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(gui::IsEditModalOpen());
       IM_CHECK_EQ(gui::GetEditModalTarget().layer_idx, 0);
@@ -452,7 +452,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         return;
       }
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick(kOk);
       ctx->Yield(2);
@@ -496,7 +496,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const gui::CrystalConfig baseline = EntryCrystal();
 
       // Cancel first, so the OK half below starts from a known-unchanged entry.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, baseline.height.center + 3.0f);
       ctx->Yield(2);
@@ -504,7 +504,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK(EntryCrystal() == baseline);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, 5.0f);
       ctx->Yield(2);
@@ -534,7 +534,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.dirty = false;
       ctx->Yield();
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemClick(kOk);
       ctx->Yield(2);
@@ -570,7 +570,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.last_committed_state = gui::GuiState::ConfigSnapshot::From(gui::g_state);
       ctx->Yield();
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
@@ -624,7 +624,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemInputValue(kHeightInput, orig_h + 2.5f);
       ctx->Yield(2);
@@ -659,7 +659,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield();
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Immediate##edit_modal");
       ctx->Yield(6);
@@ -705,7 +705,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
@@ -764,7 +764,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/##modal_preview_interact"));
       // The right pane resolved to a non-zero width, or the tab bar would not have been submitted.
@@ -807,7 +807,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const float orig_h = EntryCrystal().height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
       IM_CHECK(!TabIsDirty(ctx, "**/###axis_tab"));
@@ -830,7 +830,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemClick(kCancel);
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
 
@@ -839,7 +839,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       ctx->ItemClick(kOk);
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(!TabIsDirty(ctx, "**/###crystal_tab"));
       ctx->ItemClick(kCancel);
@@ -848,7 +848,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // Immediate mode: every edit is already applied, so no tab may claim to be dirty.
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemInputValue(kHeightInput, orig_h + 4.0f);
       ctx->Yield(2);
@@ -872,7 +872,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = false;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/###filter_tab");
       ctx->Yield(4);
@@ -1100,7 +1100,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         IM_CHECK_EQ(static_cast<int>(gui::ClassifyAxisPreset(cr.zenith, cr.azimuth, cr.roll)),
                     static_cast<int>(preset));
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(3);
         ctx->ItemClick("**/Reset View##modal");
         ctx->Yield(2);
@@ -1173,7 +1173,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         ResetTestState();
         const ScopedPopups popup_guard(ctx);
         ctx->Yield(2);
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(3);
         ctx->ItemClick("**/###axis_tab");
         ctx->Yield(2);
@@ -1235,7 +1235,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
 
       // Snapshot AFTER the drag, so the baseline is the dragged pose rather than the open-time one.
@@ -1277,7 +1277,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       cr.zenith = gui::AxisDist{ gui::AxisDistType::kGauss, 0.0f, 150.0f };  // legal for Gauss (max 180)
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##ax");
+      OpenCardEditor(ctx, 0, kAxisTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
@@ -1314,7 +1314,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       cr.zenith = gui::AxisDist{ gui::AxisDistType::kUniform, 0.0f, 90.0f };
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##ax");
+      OpenCardEditor(ctx, 0, kAxisTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/###axis_tab");
       ctx->Yield(2);
@@ -1344,7 +1344,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists(kHeightInput));
       IM_CHECK(!ctx->ItemExists("**/##Prism H##modal_cr_input"));
@@ -1412,7 +1412,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         EntryCrystal().type = row.type;
         ctx->Yield();
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(3);
         ctx->ItemInputValue(row.input, row.typed);
         ctx->Yield();
@@ -1456,7 +1456,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         }
       }
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK((ctx->ItemInfo("**/##spread_Height##modal_cr").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
@@ -1490,7 +1490,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");  // default-collapsed
       ctx->Yield(2);
@@ -1537,7 +1537,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // A non-default baseline, so "back to defaults" has something to differ from.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, 5.0f);
       ctx->Yield();
@@ -1555,7 +1555,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const gui::CrystalConfig before_modal = EntryCrystal();
 
       // First: Reset All followed by Cancel must leave the entry untouched.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
       ctx->ItemClick("**/Reset All##modal_cr");
       ctx->Yield();
@@ -1564,7 +1564,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK(EntryCrystal() == before_modal);
 
       // Then: the same Reset All followed by OK does commit it.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(3);
       ctx->ItemInputValue(kHeightInput, 2.0f);
       ctx->Yield();
@@ -1627,7 +1627,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
 
       gui::g_state.modal_layout_vertical = false;
       ctx->Yield(2);
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       gui::g_state.modal_layout_vertical = true;
       ctx->Yield(6);
@@ -1715,7 +1715,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         // Same flag-flip dance as the case above, for the same reason.
         gui::g_state.modal_layout_vertical = !vertical;
         ctx->Yield(2);
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(4);
         gui::g_state.modal_layout_vertical = vertical;
         ctx->Yield(6);
@@ -1796,7 +1796,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -1864,7 +1864,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = true;
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -1921,7 +1921,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       EntryCrystal().face_distance[1].sync_group = 2;
       const gui::CrystalConfig baseline = EntryCrystal();
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -1965,7 +1965,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       EntryCrystal().height.sync_group = 4;
       EntryCrystal().type = gui::CrystalType::kPrism;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Pyramid##modal");
       ctx->Yield(3);
@@ -2016,7 +2016,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       const gui::ShapeDist leader_before = EntryCrystal().face_distance[0];
       const gui::ShapeDist member_before = EntryCrystal().face_distance[1];
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2083,7 +2083,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       cr.face_distance[1] = gui::ShapeDist{ gui::ShapeDistType::kUniform, 1.5f, 0.3f };
       cr.face_distance[1].sync_group = 2;  // slot 5 — the lowest slot the user can reach
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2177,7 +2177,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(EntryCrystal().height.sync_group, 1);
       IM_CHECK_EQ(EntryCrystal().face_distance[0].sync_group, 1);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2313,7 +2313,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // Face 5 joining group 1 snapshots from whatever the GUI thinks the leader is, so the value
       // that lands in the row IS the GUI's answer — read through a real click rather than by calling
       // the predicate.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2366,7 +2366,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       EntryCrystal().type = gui::CrystalType::kPyramid;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);
@@ -2412,7 +2412,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       gui::g_state.modal_immediate_mode = false;  // OK is what commits; this is the full user path
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemOpen("**/Face Distance##modal");
       ctx->Yield(2);

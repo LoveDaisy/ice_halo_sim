@@ -47,7 +47,7 @@ const char* const kAddRow = "**/+ Add OR row##summand_add";
 // Open the entry's Edit modal on its Filter tab. Four frames because the tab's SetSelected only
 // takes effect on the frame after the popup opens.
 void OpenFilterModal(ImGuiTestContext* ctx) {
-  ctx->ItemClick("**/Edit##fi");
+  OpenCardEditor(ctx, 0, kFilterTabRef);
   ctx->Yield(4);
 }
 

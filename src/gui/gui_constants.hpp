@@ -1,6 +1,8 @@
 #ifndef LUMICE_GUI_CONSTANTS_HPP
 #define LUMICE_GUI_CONSTANTS_HPP
 
+#include <cstddef>
+
 namespace lumice::gui {
 
 // Layout constants
@@ -72,6 +74,12 @@ constexpr unsigned long long kMinRaysFloor = 5000;
 constexpr float kLabelColWidth = 70.0f;
 constexpr float kInputWidth = 60.0f;
 
+// How many characters of a filter's raypath body the entry card's summary keeps before it cuts to
+// "...". A named constant rather than a literal at each of its two sites, so that the number and
+// the reasoning about the card column it was measured against (FilterSummary in panels.cpp) can be
+// found from either end — the previous literal could only be reached by grepping the function name.
+constexpr size_t kFilterSummaryBodyChars = 16;
+
 // Reference drag track length, in pixels: the horizontal distance a DragFloat traverses to
 // cross its whole domain. It is the width SliderWithInput's slider half gets, so a merged
 // single control keeps the same "how far do I have to drag" feel rather than inheriting
@@ -99,6 +107,17 @@ constexpr float kActiveCardBorder = 2.0f;
 // Border strength of a card that shares its (crystal, filter) pair with the one whose edit modal
 // is open. The accent at this alpha is theme.cpp's established "about to be acted on" marker.
 constexpr float kCoSharedBorderAlpha = 0.55f;
+
+// Border strength of the card the pointer is over. Deliberately the WEAKEST of the three card
+// border states: the other two say something about the open edit modal, this one only says the
+// pointer is here, and a hover that competed with them would make the informative pair harder to
+// distinguish from each other. Consumed by RenderEntryCard.
+constexpr float kCardHoverBorderAlpha = 0.30f;
+
+// Outline drawn over the entry card's "Link to" rail slot when that card shares its
+// (crystal, filter) pair with another. An outline rather than a different glyph: what the button
+// DOES is constant, and sharing is a separate fact drawn on top of it.
+constexpr float kSharedOutlineThickness = 1.5f;
 
 // Opacity of an excluded entry card's thumbnail area — the rendered image, the placeholder that
 // stands in for it, and the frame around both. One constant rather than a per-branch literal so

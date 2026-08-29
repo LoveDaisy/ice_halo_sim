@@ -181,9 +181,19 @@ std::string FilterSummarySuffix(const FilterConfig& fc) {
 //   - Raypath:    "<raypath_text or *> <In|Out>[ <sym>]"        (e.g. "3-1-5 In PBD")
 //   - EntryExit:  "EE:<entry>-><exit> <In|Out>[ <sym>]"
 //
-// 12-character truncation on the raypath body keeps the card text inside the row
-// it shares with the Edit button. Pinned by
-// `SceneCommitChain.ALongRaypathIsCutToTwelveCharactersOnTheCard` in
+// kFilterSummaryBodyChars-character truncation on the raypath body keeps the card text inside its
+// row. The number is a measurement of the card's value column, not a preference, so it moved when
+// the column did: the column was 121px while an Edit button shared the row with it, and is 151px
+// now that the button is gone, which is 16 body characters plus the ellipsis and the longest
+// direction/symmetry suffix. That is the whole reason the truncation is worth revisiting at all —
+// the button was spending a quarter of the row on making the filter less readable.
+//
+// Approximate on purpose, in both directions: the widest suffix (" Out PBD") overruns by about a
+// pixel, and an EntryExit body can be far longer than any of this, because what actually keeps a
+// value out of the icon rail is the card's clip rect. Truncation only decides where a long value
+// reads as CUT rather than as running off the edge.
+//
+// Pinned by `SceneCommitChain.ALongRaypathIsCutToTheCardsBodyLimit` in
 // test/composition-correctness/gui/test_scene_commit_chain.cpp. Other types
 // emit short prefixes that fit comfortably without truncation; if they ever
 // need truncation, add it per-type.
@@ -208,8 +218,8 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
             if (p.raypath_text.empty()) {
               return "*";
             }
-            if (p.raypath_text.size() > 12) {
-              return p.raypath_text.substr(0, 12) + "...";
+            if (p.raypath_text.size() > kFilterSummaryBodyChars) {
+              return p.raypath_text.substr(0, kFilterSummaryBodyChars) + "...";
             }
             return p.raypath_text;
           } else if constexpr (std::is_same_v<T, EntryExitParams>) {
@@ -257,8 +267,8 @@ std::string FilterSummary(const std::optional<FilterConfig>& f) {
     if (first.empty()) {
       first = "*";
     }
-    if (first.size() > 12) {
-      first = first.substr(0, 12) + "...";
+    if (first.size() > kFilterSummaryBodyChars) {
+      first = first.substr(0, kFilterSummaryBodyChars) + "...";
     }
     body = first;
     if (fc.param.size() > 1) {
@@ -279,7 +289,10 @@ namespace {
 }  // namespace
 
 
-// Sole owner of the control-to-trailing-label gap; rationale in panels.hpp.
+// Sole owner of the control-to-label gap: the input->label gap under kTrailing, the
+// label->controls gap under kLeading. Rationale for the VALUE in panels.hpp; the reason it is one
+// named quantity rather than a literal at each site is that the two placements are then GUARANTEED
+// to reserve the same width, so a row switching between them cannot shift its neighbours.
 float LabelColumnGapX() {
   return ImGui::GetStyle().ItemInnerSpacing.x;
 }
@@ -290,13 +303,14 @@ void PushLabelColumnItemWidth() {
 
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
-// When `reserve_label_col` is false the trailing text label is omitted (table-cell
-// mode): the width no longer reserves kLabelColWidth nor its extra SameLine spacing,
-// so the [slider][input] pair fills the whole cell (GetContentRegionAvail() ==
-// column width inside a BeginTable cell).
+// Under LabelPlacement::kNone the text label is omitted (table-cell mode): the width no longer
+// reserves kLabelColWidth nor its gap, so the [slider][input] pair fills the whole cell
+// (GetContentRegionAvail() == column width inside a BeginTable cell). kLeading and kTrailing return
+// the SAME width — the label column is reserved either way, only the draw order differs.
 static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
                                  size_t slider_id_size, char* input_id, size_t input_id_size, char* label_id,
-                                 size_t label_id_size, bool reserve_label_col = true) {
+                                 size_t label_id_size, LabelPlacement label_placement = LabelPlacement::kTrailing,
+                                 float avail_override = 0.0f) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* hash_pos = strstr(label, "##");
   if (hash_pos) {
@@ -315,18 +329,19 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
   float label_gap = LabelColumnGapX();
-  float avail_w = ImGui::GetContentRegionAvail().x;
-  // With the trailing label: subtract kLabelColWidth + the slider→input spacing + the
-  // input→label gap. Without it: only the slider→input spacing.
+  float avail_w = avail_override > 0.0f ? avail_override : ImGui::GetContentRegionAvail().x;
+  // With a label (either side): subtract kLabelColWidth + the slider->input spacing + the
+  // control<->label gap. Without one (kNone, table-cell mode): only the slider->input spacing.
   //
-  // The two gaps are different constants on purpose. The control→label gap comes from
-  // LabelColumnGapX() (see panels.hpp for why that value and not ItemSpacing.x). It
-  // must stay paired with FinishSliderLayout's SameLine below: the label's x is
-  // (right edge − kLabelColWidth) whatever value the pair takes — the term cancels — but the
-  // CONTROL's right edge is this value, so a mismatched pair moves the controls out of their
-  // column while leaving the labels looking correct.
-  float slider_w = reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing - label_gap) :
-                                       (avail_w - kInputWidth - spacing);
+  // The two gaps are different constants on purpose. The control<->label gap comes from
+  // LabelColumnGapX() (see panels.hpp for why that value and not ItemSpacing.x). It must stay
+  // paired with FinishSliderLayout's SameLine below and with BeginLeadingLabelLayout's cursor
+  // jump: the label's x is (right edge - kLabelColWidth) whatever value the pair takes -- the term
+  // cancels -- but the CONTROL's right edge is this value, so a mismatched pair moves the controls
+  // out of their column while leaving the labels looking correct.
+  float slider_w = label_placement == LabelPlacement::kNone ?
+                       (avail_w - kInputWidth - spacing) :
+                       (avail_w - kInputWidth - kLabelColWidth - spacing - label_gap);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
   return slider_w;
@@ -367,6 +382,25 @@ static void TextWithLabelProbe(const char* display_label, const char* probe_id) 
   ImGui::TextUnformatted(display_label);
 }
 
+// Draw the label BEFORE slider + input, then park the cursor at the start of the control column.
+// The jump is by absolute position rather than SameLine's advance so that a short label and a long
+// one put their controls in the same place — which is the entire reason the label column has a
+// fixed width. Returns nothing; the caller draws the controls at the cursor it leaves behind.
+//
+// The gap term is LabelColumnGapX(), the same owner FinishSliderLayout's SameLine takes: a leading
+// row and a trailing row reserve the same width, so switching a row between them cannot move its
+// neighbours' controls.
+static void BeginLeadingLabelLayout(const char* display_label, const char* label_id) {
+  const ImVec2 line_start = ImGui::GetCursorScreenPos();
+  // Centres the label text against the frame-height controls that follow it, the same way an ImGui
+  // widget's own label is centred. Without it the label sits at the top of the row while the
+  // slider fills it, and a column of leading labels reads as drifting upward.
+  ImGui::AlignTextToFramePadding();
+  TextWithLabelProbe(display_label, label_id);
+  ImGui::SameLine();
+  ImGui::SetCursorScreenPos(ImVec2(line_start.x + kLabelColWidth + LabelColumnGapX(), line_start.y));
+}
+
 // Render the label text after slider + input.
 static void FinishSliderLayout(const char* display_label, const char* label_id) {
   ImGui::SameLine(0.0f, LabelColumnGapX());  // paired with PrepareSliderLayout
@@ -374,16 +408,20 @@ static void FinishSliderLayout(const char* display_label, const char* label_id) 
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
-                     bool trailing_label, bool* committed, bool* active) {
+                     LabelPlacement label_placement, bool* committed, bool* active, float avail_override) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
   char label_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), label_id, sizeof(label_id), trailing_label);
+                                       sizeof(input_id), label_id, sizeof(label_id), label_placement,
+                                       avail_override);
 
   const float old_value = *value;
 
+  if (label_placement == LabelPlacement::kLeading) {
+    BeginLeadingLabelLayout(display_buf, label_id);
+  }
   ImGui::PushItemWidth(slider_w);
   RenderNonlinearSlider(slider_id, value, min_val, max_val, fmt, scale);
   const bool slider_committed = ImGui::IsItemDeactivatedAfterEdit();
@@ -406,7 +444,7 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
     *active = slider_active || input_active;
   }
 
-  if (trailing_label) {
+  if (label_placement == LabelPlacement::kTrailing) {
     FinishSliderLayout(display_buf, label_id);
   }
   return *value != old_value;
@@ -446,17 +484,20 @@ bool DragFloatField(const char* label, float* value, float min_val, float max_va
 
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
 // Returns true if value changed.
-bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label, bool* committed,
-                        bool* active) {
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, LabelPlacement label_placement,
+                        bool* committed, bool* active) {
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
   char label_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), label_id, sizeof(label_id), trailing_label);
+                                       sizeof(input_id), label_id, sizeof(label_id), label_placement);
 
   const int old_value = *value;
 
+  if (label_placement == LabelPlacement::kLeading) {
+    BeginLeadingLabelLayout(display_buf, label_id);
+  }
   ImGui::PushItemWidth(slider_w);
   ImGui::SliderInt(slider_id, value, min_val, max_val, "%d", ImGuiSliderFlags_NoInput);
   const bool slider_committed = ImGui::IsItemDeactivatedAfterEdit();
@@ -479,7 +520,9 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
     *active = slider_active || input_active;
   }
 
-  FinishSliderLayout(display_buf, label_id);
+  if (label_placement == LabelPlacement::kTrailing) {
+    FinishSliderLayout(display_buf, label_id);
+  }
   return *value != old_value;
 }
 
@@ -966,7 +1009,8 @@ bool RenderShapeDistTableRow(const char* label, CrystalConfig& cr, int slot) {
   // Col 1 — center value: slider + input, filling the (stretch) Value column. trailing_label=false
   // because the name already occupies Col 0.
   ImGui::TableNextColumn();
-  changed |= SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, false);
+  changed |=
+      SliderWithInput(label, &dist.center, center_min, center_max, center_fmt, center_scale, LabelPlacement::kNone);
 
   // Col 2 — sync group swatch + picker popup. Ahead of Rand/Spread because sync is not a property of
   // randomization: it constrains the row's final value and is equally usable with Rand off. Left
@@ -1127,12 +1171,29 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
   }
 
-  ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-
-  // Previous-frame hover state controls the alpha of the hover-action buttons
-  // (always-render + alpha transition to keep click paths stable).
+  // ---- Whole-card hover feedback ----
+  // The card opens its edit modal when clicked anywhere, and that was previously invisible: the
+  // three Edit buttons were the only thing on the card saying "this is editable", and they are
+  // gone. A border that brightens under the pointer is what replaces them — it makes the whole
+  // card read as one control, which is what it has always actually been.
+  //
+  // Hover is read from the PREVIOUS frame, and out of the parent window's storage rather than the
+  // child's, because the border colour has to be pushed BEFORE BeginChild — the child paints its
+  // own border, and by the time we are inside it the paint has happened. Same one-frame lag the
+  // hover-revealed buttons ran on; a border is even less sensitive to it than they were.
+  //
+  // It yields to `active` and `co_shared`: those two say something about the open modal, this one
+  // only says "the pointer is here", and stacking a third border strength on top of either would
+  // make the two that carry information harder to tell apart.
+  ImGuiStorage* card_storage = ImGui::GetStateStorage();
   ImGuiID hover_persist_id = ImGui::GetID("##card_hover_persist");
-  bool hover_prev = ImGui::GetStateStorage()->GetBool(hover_persist_id, false);
+  bool hover_prev = card_storage->GetBool(hover_persist_id, false);
+  const bool hover_border = hover_prev && !active && !co_shared;
+  if (hover_border) {
+    ImGui::PushStyleColor(ImGuiCol_Border, AccentColor(kCardHoverBorderAlpha));
+  }
+
+  ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
   // Use frame-height spacing so each row reserves room for the Edit button (taller than text);
   // otherwise Row 0-2 buttons would overlap the Weight slider in Row 3.
@@ -1175,101 +1236,89 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   }
   draw_list->AddRect(thumb_pos, thumb_br, ImGui::GetColorU32(ImGuiCol_Border, thumb_alpha));
 
-  // ---- Participation toggle (always visible) ----
-  // Semantics: "exclude this crystal, then re-run". Turning it off does NOT subtract this
-  // crystal from the current image — it hands its share of the fixed total ray count back to
-  // its siblings on the next run, so the rest of the scene gets MORE samples. That is a
-  // different operation from the Colors panel's per-component eye, which is display-time
-  // subtraction, so the glyph here deliberately is not an eye.
+  // ---- Right column geometry ----
   //
-  // Placement: overlaid on the thumbnail's top-left corner. Unlike Delete/Duplicate this is not
-  // a hover-revealed action — "does this card count?" has to be as scannable as the Weight
-  // number — and the thumbnail corner is the only always-free real estate on the card that does
-  // not push the right column's four rows out of their shared three-column alignment.
-  {
-    // "###" and not "##": the visible glyph flips with the state, and with "##" the id hashes the
-    // whole label, so the button would become a different widget the instant it is clicked —
-    // losing ImGui's active-id continuity and leaving no stable path for a test to address. Same
-    // reasoning as the defaults panel's state-dependent cells.
-    char toggle_id[48];
-    snprintf(toggle_id, sizeof(toggle_id), "%s###enabled_%d_%d", entry.enabled ? ICON_FA_TOGGLE_ON : ICON_FA_TOGGLE_OFF,
-             layer_idx, entry_idx);
-    constexpr float kTogglePad = 3.0f;
-    ImGui::SetCursorScreenPos(ImVec2(thumb_pos.x + kTogglePad, thumb_pos.y + kTogglePad));
-    if (!entry.enabled) {
-      // Theme-owned disabled tone, not a semantic_colors.hpp grade: "excluded" is a state of
-      // this control, not a judgement about the crystal (see that header's scope note).
-      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    }
-    const bool toggle_clicked = ImGui::SmallButton(toggle_id);
-    if (!entry.enabled) {
-      ImGui::PopStyleColor();
-    }
-    if (toggle_clicked) {
-      entry.enabled = !entry.enabled;
-    }
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("%s", entry.enabled ?
-                                  "Participating. Click to exclude this crystal from the next run — its share of "
-                                  "the total ray count goes to the other crystals (they get more samples)." :
-                                  "Excluded from the next run. Its Weight is kept and takes effect again when you "
-                                  "turn it back on.");
-    }
-  }
+  // Four rows, each `[label kLabelColWidth][gap][value ...]`, sharing one right edge, with a
+  // four-slot icon rail beyond it. The rail's slots are frame-height and the rows are
+  // frame-height-with-spacing, so four slots fill the card's height exactly — the rail is why the
+  // card is four rows tall and not some other number.
+  //
+  // Leading labels (label left, value right) rather than the trailing ones this card used to have:
+  // with the label at the END of the row, the value and its name sat ~190px apart with an Edit
+  // button between them, so reading "what kind of crystal is this" meant crossing the row. See
+  // doc/gui-visual-language.md §5, which names leading labels as the resolution of exactly this.
+  //
+  // The three Edit buttons that used to occupy the middle column are gone. They were never three
+  // things: the modal they opened is ONE modal with a tab bar, and clicking anywhere on the card
+  // already opens it (EditTarget::kCard, resolved to a tab in app_panels.cpp), so each button was a
+  // shortcut to a tab. What they cost was the whole middle column of every row — which is what the
+  // filter summary's 12-character truncation was paying for — plus the ~190px label separation.
+  // What they provided, and what the whole-card hover highlight below has to replace, is the only
+  // visible evidence on the card that any of this is editable at all.
+  float frame_pad_x = ImGui::GetStyle().FramePadding.x;
+  float rail_glyph_w = std::max({ ImGui::CalcTextSize(ICON_FA_TOGGLE_ON).x, ImGui::CalcTextSize(ICON_FA_TOGGLE_OFF).x,
+                                  ImGui::CalcTextSize(ICON_FA_LINK).x, ImGui::CalcTextSize(ICON_FA_COPY).x,
+                                  ImGui::CalcTextSize(ICON_FA_XMARK).x });
+  float rail_btn_w = rail_glyph_w + frame_pad_x * 2.0f;
+  float rail_btn_h = ImGui::GetFrameHeight();
 
-  // Right column — layout matches SliderWithInput's three-column model:
-  //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
-  // so Row 1-3 align column boundaries with Row 4 automatically.
-  const float label_gap_x = LabelColumnGapX();
   float right_x = thumb_pos.x + thumb_display_size + spacing_x;
   float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
-  // Same two-different-gaps split as PrepareSliderLayout, and for the same reason: the Weight row
-  // below is drawn by it, so a card whose button rows kept spacing_x on the label side would put
-  // its own four rows in two different columns.
-  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x - label_gap_x);
+  float rail_x = right_x + avail_w - rail_btn_w;
+  // Width of one row, label column included. Every row is laid out against this single number, so
+  // the four right edges cannot drift apart and the rail can never be overlapped by a value.
+  float row_w = std::max(kLabelColWidth + kInputWidth, avail_w - rail_btn_w - spacing_x);
+  // Same gap owner the Weight row's own leading label uses (BeginLeadingLabelLayout), so the four
+  // rows put their values in one column rather than two.
+  float value_x = right_x + kLabelColWidth + LabelColumnGapX();
+  float value_w = std::max(20.0f, right_x + row_w - value_x);
 
-  auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
-                      const char* row_label, bool clip_text, const char* tooltip = nullptr) {
+  auto emit_row = [&](int row_idx, const char* row_label, const char* text_content, bool clip_text,
+                      const char* tooltip = nullptr) {
     ImVec2 line_start(right_x, thumb_pos.y + row_h * static_cast<float>(row_idx));
     ImGui::SetCursorScreenPos(line_start);
+    // Same vertical centring the Weight row's leading label gets from BeginLeadingLabelLayout, so
+    // all four labels sit on one grid whether their row holds text or a slider.
+    ImGui::AlignTextToFramePadding();
+    // Same addressable-label probe FinishSliderLayout / BeginLeadingLabelLayout use. This row
+    // shares its label column with the Weight row below, so the alignment invariant is only
+    // checkable if both ends of that column can be located from a real frame.
+    char label_probe_id[64];
+    snprintf(label_probe_id, sizeof(label_probe_id), "##card_%d_%d_row_%d_label", layer_idx, entry_idx, row_idx);
+    TextWithLabelProbe(row_label, label_probe_id);
+    ImGui::SetCursorScreenPos(ImVec2(value_x, line_start.y));
+    ImGui::AlignTextToFramePadding();
     if (clip_text) {
-      ImVec2 clip_min = line_start;
-      ImVec2 clip_max(line_start.x + text_w, line_start.y + ImGui::GetTextLineHeight() + 2.0f);
+      ImVec2 clip_min(value_x, line_start.y);
+      ImVec2 clip_max(value_x + value_w, line_start.y + row_h);
+      // The clip rect, not the character count, is what keeps a value out of the rail. Truncation
+      // exists to make a long value READ well, and is allowed to be approximate because this is
+      // here underneath it.
       ImGui::PushClipRect(clip_min, clip_max, true);
       ImGui::TextUnformatted(text_content);
       ImGui::PopClipRect();
     } else {
       ImGui::TextUnformatted(text_content);
     }
-    // Optional hover tooltip — shows the full multi-row SoP for non-degenerate
-    // filters where the summary line is inherently lossy (only the first row
-    // + "(+N more)" fits). Follows the same "TextUnformatted then IsItemHovered"
-    // pattern as the fa-link badge below.
     if (tooltip != nullptr && ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", tooltip);
     }
-    ImGui::SameLine();
-    ImGui::SetCursorScreenPos(ImVec2(line_start.x + text_w + spacing_x, line_start.y));
-    if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
-      g_edit_request = { target, layer_idx, entry_idx };
-    }
-    ImGui::SameLine(0.0f, label_gap_x);  // paired with text_w above
-    // Same addressable-label probe as FinishSliderLayout — this row shares the label column with
-    // the Weight row below it, so the invariant is only checkable if both ends can be read.
-    char label_probe_id[64];
-    snprintf(label_probe_id, sizeof(label_probe_id), "##card_%d_%d_row_%d_label", layer_idx, entry_idx, row_idx);
-    TextWithLabelProbe(row_label, label_probe_id);
   };
 
-  // Row 1: Crystal type (resolved from pool)
+  // Row 0: which crystal this is. The identity string (`#N · name · type`) is the same one the
+  // Colors window shows, from the same formatter — before it existed, a colour class naming
+  // `crystal#2` referred to something the left panel never printed anywhere.
   const CrystalConfig& crystal_ref = state.crystals[entry.crystal_id];
-  emit_row(0, CrystalTypeName(crystal_ref.type), "Edit##cr", EditTarget::kCrystal, "Crystal", false);
+  const std::string identity = FormatCrystalIdentity(state, entry.crystal_id);
+  // Unconditional tooltip, unlike the Filter row's: a clipped identity has no "degenerate vs not"
+  // distinction to gate on, and a name long enough to clip is exactly when the full one is wanted.
+  emit_row(0, "Crystal", identity.c_str(), true, identity.c_str());
 
-  // Row 2: Axis preset (resolved from pool)
+  // Row 1: Axis preset
   std::string preset = AxisPresetName(crystal_ref);
-  emit_row(1, preset.c_str(), "Edit##ax", EditTarget::kAxis, "Axis", false);
+  emit_row(1, "Axis", preset.c_str(), false);
 
-  // Row 3: Filter summary (may exceed text_w — clip so it doesn't overlap the Edit button).
+  // Row 2: Filter summary (may exceed value_w — clipped above).
   // For non-degenerate SoP (>1 row or >1 factor), build a tooltip listing every
   // row's canonical text so users can see the full predicate without opening
   // the modal.
@@ -1291,9 +1340,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     filter_tooltip_storage = gui::FormatSopExpansionPreview(filter_opt->param);
     filter_tooltip = filter_tooltip_storage.c_str();
   }
-  emit_row(2, filter_text.c_str(), "Edit##fi", EditTarget::kFilter, "Filter", true, filter_tooltip);
+  emit_row(2, "Filter", filter_text.c_str(), true, filter_tooltip);
 
-  // Row 4: Weight — reuse SliderWithInput for [slider][input] layout
+  // Row 3: Weight — SliderWithInput in leading-label mode, so its label lands in the same column
+  // as the three text rows above and its input's right edge on their shared right edge.
   ImGui::SetCursorScreenPos(ImVec2(right_x, thumb_pos.y + row_h * 3.0f));
   char prop_label[32];
   snprintf(prop_label, sizeof(prop_label), "Weight##prop_%d_%d", layer_idx, entry_idx);
@@ -1301,69 +1351,149 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // disable-when-inert convention as the layer prob slider. BeginDisabled only blocks
   // interaction; entry.proportion keeps its value, which is what makes the toggle reversible.
   ImGui::BeginDisabled(!entry.enabled);
-  SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f");
+  SliderWithInput(prop_label, &entry.proportion, 0.0f, 100.0f, "%.1f", SliderScale::kLinear, LabelPlacement::kLeading,
+                  nullptr, nullptr, row_w);
   ImGui::EndDisabled();
   if (!entry.enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
     ImGui::SetTooltip("Weight is inert while this crystal is excluded. The value is kept.");
   }
 
-  // Hover action buttons: stacked vertically at the right edge of the card —
-  // Delete (×) on top, Duplicate (D) below, separated by kHoverBtnGap. Alpha is
-  // driven by previous-frame hover state; buttons are always in the ImGui tree
-  // so click paths remain stable, only visibility transitions.
+  // ---- Icon rail: four always-visible slots down the right edge ----
   //
-  // Fast-swipe mitigation: vertical stacking (v6/card-layout-v2) prevents a
-  // single horizontal swipe from crossing the always-hit-tested Delete button,
-  // which was the original backlog concern. Confirm dialog / undo intentionally
-  // avoided — v5 verified that BeginDisabled(!hover_prev) and clicked+hover_prev
-  // both break imgui_test_engine MouseMove+Yield+ItemClick timing.
+  // Participating / Link to / Duplicate / Delete, one per row, all four permanently drawn. Delete
+  // and Duplicate used to fade in on hover and Link-to was not on the card at all (it lived inside
+  // the modal, one click deeper). Four constant slots beat "three plus one that comes and goes":
+  // a rail whose slot count changes with hover has no shape to learn, and an action nobody can see
+  // is an action nobody uses.
   //
-  // AutoResizeY first-frame drift (backlog Minor 3): ImGuiChildFlags_AutoResizeY
-  // only auto-fits the Y dimension; X is driven by the parent layout and stable
-  // on the first frame. The Y coordinates (del_y/dup_y) anchor to card_top, not
-  // WindowSize.y, so they are also frame-stable. No positional fix needed.
+  // Delete stays reachable at all times, which the fade previously guarded against. The guard is
+  // now positional: it is the BOTTOM slot, furthest from the toggle at the top, so a fast
+  // horizontal swipe across the card crosses the three harmless slots and not this one. A confirm
+  // step is still deliberately not added — BeginDisabled(!hover_prev) and clicked+hover_prev were
+  // both measured to break imgui_test_engine's MouseMove+Yield+ItemClick timing.
   //
-  // Coordinate strategy:
-  //   x: card_right - btn_w - kHoverBtnPad
-  //   delete y: card_top + kHoverBtnPad
-  //   duplicate y: delete_y + btn_h + kHoverBtnGap
+  // AutoResizeY first-frame drift: the slot y coordinates anchor to thumb_pos.y (the card's first
+  // row), not to WindowSize.y, so they are stable on the first frame like the rows they align with.
+  auto rail_slot_pos = [&](int slot) { return ImVec2(rail_x, thumb_pos.y + row_h * static_cast<float>(slot)); };
+
+  // Slot 0 — participation toggle. Semantics: "exclude this crystal, then re-run". Turning it off
+  // does NOT subtract this crystal from the current image — it hands its share of the fixed total
+  // ray count back to its siblings on the next run, so the rest of the scene gets MORE samples.
+  // That is a different operation from the Colors panel's per-component eye, which is display-time
+  // subtraction, so the glyph here deliberately is not an eye.
+  //
+  // The thumbnail keeps carrying the same fact by dimming (kExcludedThumbAlpha), which is what
+  // makes "is this card in?" answerable from across the panel; moving the toggle off the thumbnail
+  // corner into the rail therefore loses no information.
+  {
+    // "###" and not "##": the visible glyph flips with the state, and with "##" the id hashes the
+    // whole label, so the button would become a different widget the instant it is clicked —
+    // losing ImGui's active-id continuity and leaving no stable path for a test to address. Same
+    // reasoning as the defaults panel's state-dependent cells.
+    char toggle_id[48];
+    snprintf(toggle_id, sizeof(toggle_id), "%s###enabled_%d_%d", entry.enabled ? ICON_FA_TOGGLE_ON : ICON_FA_TOGGLE_OFF,
+             layer_idx, entry_idx);
+    ImGui::SetCursorScreenPos(rail_slot_pos(0));
+    if (!entry.enabled) {
+      // Theme-owned disabled tone, not a semantic_colors.hpp grade: "excluded" is a state of
+      // this control, not a judgement about the crystal (see that header's scope note).
+      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    }
+    const bool toggle_clicked = ImGui::Button(toggle_id, ImVec2(rail_btn_w, rail_btn_h));
+    if (!entry.enabled) {
+      ImGui::PopStyleColor();
+    }
+    if (toggle_clicked) {
+      entry.enabled = !entry.enabled;
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", entry.enabled ?
+                                  "Participating. Click to exclude this crystal from the next run — its share of "
+                                  "the total ray count goes to the other crystals (they get more samples)." :
+                                  "Excluded from the next run. Its Weight is kept and takes effect again when you "
+                                  "turn it back on.");
+    }
+  }
+
+  // Slot 1 — Link to... The button's identity is CONSTANT: this glyph, this click behaviour, at all
+  // times. Sharing state is drawn ON TOP of it as an accent outline rather than by swapping the
+  // glyph or the label, because "what does this button do" and "is this card sharing" are two
+  // independent facts and a control that answers both by changing shape answers neither reliably.
+  // (This slot replaces the separate static fa-link badge that used to sit below the hover
+  // buttons — same glyph, same sharing tooltip, now also clickable.)
+  const int shared_count = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
+  {
+    char link_id[32];
+    snprintf(link_id, sizeof(link_id), ICON_FA_LINK "##link_%d_%d", layer_idx, entry_idx);
+    const ImVec2 slot_pos = rail_slot_pos(1);
+    ImGui::SetCursorScreenPos(slot_pos);
+    if (ImGui::Button(link_id, ImVec2(rail_btn_w, rail_btn_h))) {
+      StartLinkPickMode(state, layer_idx, entry_idx);
+    }
+    if (shared_count >= 2) {
+      // Accent outline: the accent is already the theme's "look here, these belong together" tone,
+      // which is exactly what sharing is. Drawn after the button so it sits over the frame.
+      draw_list->AddRect(slot_pos, ImVec2(slot_pos.x + rail_btn_w, slot_pos.y + rail_btn_h),
+                         ImGui::GetColorU32(AccentColor()), ImGui::GetStyle().FrameRounding, 0,
+                         kSharedOutlineThickness);
+    }
+    if (ImGui::IsItemHovered()) {
+      std::string tip = "Link to... — click, then click another card to adopt its crystal and filter.";
+      if (shared_count >= 2) {
+        std::string list;
+        for (int li = 0; li < static_cast<int>(state.layers.size()); ++li) {
+          for (int ei = 0; ei < static_cast<int>(state.layers[li].entries.size()); ++ei) {
+            const auto& other = state.layers[li].entries[ei];
+            if (other.crystal_id == entry.crystal_id && other.filter_id == entry.filter_id) {
+              if (li == layer_idx && ei == entry_idx) {
+                continue;  // skip self in the tooltip list
+              }
+              if (!list.empty()) {
+                list += "\n";
+              }
+              list += "Layer " + std::to_string(DisplayLayerNumber(li)) + " / Entry " +
+                      std::to_string(DisplayEntryNumber(ei));
+            }
+          }
+        }
+        if (list.empty()) {
+          list = "(no other entries)";
+        }
+        tip += "\n\nShared with:\n" + list;
+      }
+      ImGui::SetTooltip("%s", tip.c_str());
+    }
+  }
+
+  // Slot 2 — Duplicate.
   char dup_id[32];
-  char del_id[32];
   snprintf(dup_id, sizeof(dup_id), ICON_FA_COPY "##dup_%d_%d", layer_idx, entry_idx);
-  snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##del_%d_%d", layer_idx, entry_idx);
+  ImGui::SetCursorScreenPos(rail_slot_pos(2));
+  bool dup_clicked = ImGui::Button(dup_id, ImVec2(rail_btn_w, rail_btn_h));
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Duplicate this card into an independent copy.");
+  }
 
-  float frame_pad_x = ImGui::GetStyle().FramePadding.x;
-  float dup_glyph_w = ImGui::CalcTextSize(ICON_FA_COPY).x;
-  float del_glyph_w = ImGui::CalcTextSize(ICON_FA_XMARK).x;
-  float btn_w = std::max(dup_glyph_w, del_glyph_w) + frame_pad_x * 2.0f;
-  float btn_h = ImGui::GetFrameHeight();
-  constexpr float kHoverBtnPad = 2.0f;
-  ImVec2 card_win_pos = ImGui::GetWindowPos();
-  ImVec2 card_win_sz = ImGui::GetWindowSize();
-  float btn_x = card_win_pos.x + card_win_sz.x - btn_w - kHoverBtnPad;
-  float del_y = card_win_pos.y + kHoverBtnPad;
-  float dup_y = del_y + btn_h + kHoverBtnGap;
-
-  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, hover_prev ? 1.0f : 0.0f);
-  // Delete button (top): red when enabled (destructive action); auto-greyed when
+  // Slot 3 — Delete: red when enabled (destructive action); auto-greyed when
   // disabled (only one entry in layer — cannot remove last entry).
-  ImGui::SetCursorScreenPos(ImVec2(btn_x, del_y));
+  char del_id[32];
+  snprintf(del_id, sizeof(del_id), ICON_FA_XMARK "##del_%d_%d", layer_idx, entry_idx);
+  ImGui::SetCursorScreenPos(rail_slot_pos(3));
   bool can_delete_entry = state.layers[layer_idx].entries.size() > 1;
   if (can_delete_entry) {
     PushDestructiveStyle();
   } else {
     ImGui::BeginDisabled();
   }
-  bool delete_clicked = ImGui::SmallButton(del_id);
+  bool delete_clicked = ImGui::Button(del_id, ImVec2(rail_btn_w, rail_btn_h));
   if (can_delete_entry) {
     PopDestructiveStyle();
   } else {
     ImGui::EndDisabled();
   }
-  // Duplicate button (below)
-  ImGui::SetCursorScreenPos(ImVec2(btn_x, dup_y));
-  bool dup_clicked = ImGui::SmallButton(dup_id);
-  ImGui::PopStyleVar();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", can_delete_entry ? "Delete this card." : "A layer must keep at least one crystal.");
+  }
 
   if (dup_clicked) {
     // Duplicate = clone-to-pool: append new CrystalConfig (and new FilterConfig
@@ -1392,56 +1522,14 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   }
 
   // Persist hover state for next frame (computed while still inside the child
-  // window so widget hover does not disqualify it).
+  // window so widget hover does not disqualify it), into the PARENT's storage — see the
+  // hover-feedback note above BeginChild for why it has to be readable from out there.
   bool hover_now = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
-  ImGui::GetStateStorage()->SetBool(hover_persist_id, hover_now);
+  card_storage->SetBool(hover_persist_id, hover_now);
 
-  // ---- fa-link badge (static sharing indicator) ----
-  // Drawn AFTER all inner widgets but BEFORE the pick-mode overlay so it shows
-  // through the click-through invisible button. Predicate: (crystal_id,
-  // filter_id) is shared by 2+ entries across all layers (this card included).
-  {
-    const int shared = CountEntriesSharing(state, entry.crystal_id, entry.filter_id);
-    if (shared >= 2) {
-      // Anchor: third slot in the right-edge column, directly below the
-      // hover-revealed Delete (top) / Duplicate (middle) buttons. Stays
-      // visible regardless of hover (it's a persistent state indicator, not
-      // an action). Horizontally centered within the column for visual
-      // alignment with the buttons above.
-      const float glyph_w = ImGui::CalcTextSize(ICON_FA_LINK).x;
-      const float badge_x = btn_x + (btn_w - glyph_w) * 0.5f;
-      const float badge_y = dup_y + btn_h + kHoverBtnGap;
-      ImGui::SetCursorScreenPos(ImVec2(badge_x, badge_y));
-      // Accent: the badge points at a relationship between cards, which is exactly the "look
-      // here, these belong together" job the accent does elsewhere. It was its own lighter blue,
-      // close enough to the accent to look intentional and independent enough to stop following it.
-      ImGui::PushStyleColor(ImGuiCol_Text, AccentColor());
-      ImGui::TextUnformatted(ICON_FA_LINK);
-      ImGui::PopStyleColor();
-      if (ImGui::IsItemHovered()) {
-        std::string list;
-        for (int li = 0; li < static_cast<int>(state.layers.size()); ++li) {
-          for (int ei = 0; ei < static_cast<int>(state.layers[li].entries.size()); ++ei) {
-            const auto& other = state.layers[li].entries[ei];
-            if (other.crystal_id == entry.crystal_id && other.filter_id == entry.filter_id) {
-              if (li == layer_idx && ei == entry_idx) {
-                continue;  // skip self in the tooltip list
-              }
-              if (!list.empty()) {
-                list += "\n";
-              }
-              list += "Layer " + std::to_string(DisplayLayerNumber(li)) + " / Entry " +
-                      std::to_string(DisplayEntryNumber(ei));
-            }
-          }
-        }
-        if (list.empty()) {
-          list = "(no other entries)";
-        }
-        ImGui::SetTooltip("Shared with:\n%s", list.c_str());
-      }
-    }
-  }
+
+  ImVec2 card_win_pos = ImGui::GetWindowPos();
+  ImVec2 card_win_sz = ImGui::GetWindowSize();
 
   // ---- Card-area click handling ----
   // Detect a click anywhere inside the card area via a non-layout-affecting
@@ -1491,6 +1579,9 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
 
   ImGui::EndChild();  // ##card — must be unconditional
 
+  if (hover_border) {
+    ImGui::PopStyleColor();
+  }
   if (active) {
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();

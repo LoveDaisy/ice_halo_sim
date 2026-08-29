@@ -211,6 +211,53 @@ std::filesystem::path GuiTestTempPath(const std::string& filename);
 // ========== Shared functions (defined in test_gui_main.cpp) ==========
 
 void ResetTestState();
+
+// ---- Entry card addressing ----
+//
+// ImGuiWindow is forward-declared rather than included for the same reason IsDisabled is defined
+// out of line below: it lives in imgui_internal.h, and a header every suite includes is the wrong
+// place to drag that in. A caller that dereferences the returned pointer includes it itself.
+//
+// A card's widgets cannot be addressed by a path. RenderScatteringSection pushes the layer index
+// and RenderEntryCard the entry index, so every card's controls carry the same LABEL and a
+// different id — which is exactly the case a label wildcard cannot resolve (it stops at the first
+// match) and a literal path cannot either (the ids live under a BeginChild whose name ImGui
+// generates). What is unambiguous is the child window each card opens: they are submitted in card
+// order, so the n-th of them is the n-th card.
+struct ImGuiWindow;
+ImGuiWindow* CardWindow(int index);
+
+// The blank area of a card, in screen coordinates.
+//
+// There is no widget there, and that is the point: RenderEntryCard hit-tests the card rectangle
+// itself so the whole card is a target. The thumbnail is the blank half — it is drawn into the
+// draw list rather than submitted as an item — and this stays inside its left edge, clear of the
+// right column's four rows of widgets and of the icon rail at the card's right edge.
+//
+// Vertically it takes three quarters of the card's own height, which under the current layout
+// lands in the thumbnail's lower half — the card is the thumbnail plus window padding, so the
+// two are not independent quantities, but neither is the correspondence enforced anywhere. A
+// fixed offset from the top would not do: the top-left corner was blank, then was not (the
+// participation toggle was overlaid there for a while), and is blank again now that the toggle
+// moved into the rail. Anything added to a card's corners in future needs this same second look —
+// the constraint is that the returned point hits no item, and no compiler or gate enforces it.
+ImVec2 CardBlankSpot(int index);
+
+// The unified edit modal's three tab ids. Spelled once here rather than at each of the ~65 places
+// that open a tab, because they are also what OpenCardEditor dispatches on.
+constexpr const char* kCrystalTabRef = "**/###crystal_tab";
+constexpr const char* kAxisTabRef = "**/###axis_tab";
+constexpr const char* kFilterTabRef = "**/###filter_tab";
+
+// Open card `index`'s editor on `tab_ref`, the way a user does it: click the card, then pick the
+// tab. There is no other way left — the card used to carry one Edit button per tab, and the tab
+// bar was reachable only after one of them had been pressed. The buttons are gone (they were
+// shortcuts into a single tabbed modal, and they cost the middle column of every card row), so
+// every case that used to press one goes through here.
+//
+// Requires the modal to be CLOSED: it is a blocking popup, so a click aimed at a card behind it
+// does not reach the card. Cases that reopen the modal already close it first.
+void OpenCardEditor(ImGuiTestContext* ctx, int index, const char* tab_ref = kCrystalTabRef);
 // Pump frames until texture_upload_count has advanced past `baseline_upload_count`, or the
 // wall-clock budget runs out. Returns whether it advanced.
 //

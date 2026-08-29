@@ -54,51 +54,6 @@ namespace {
 // run about the wrong thing.
 constexpr int kThumbnailFrames = 10;
 
-// The n-th entry card's window, in submission order.
-//
-// A card's widgets cannot be addressed by a path. RenderScatteringSection pushes the layer index
-// and RenderEntryCard the entry index, so every card's Edit button carries the same LABEL and a
-// different id — which is exactly the case a label wildcard cannot resolve (it stops at the first
-// match) and a literal path cannot either (the ids live under a BeginChild whose name ImGui
-// generates). What is unambiguous is the child window each card opens: they are submitted in card
-// order, so the n-th of them is the n-th card.
-ImGuiWindow* CardWindow(int index) {
-  ImGuiContext& g = *ImGui::GetCurrentContext();
-  int seen = 0;
-  for (ImGuiWindow* w : g.Windows) {
-    if (w->WasActive && (w->Flags & ImGuiWindowFlags_ChildWindow) != 0 && std::strstr(w->Name, "##card") != nullptr) {
-      if (seen == index) {
-        return w;
-      }
-      ++seen;
-    }
-  }
-  return nullptr;
-}
-
-// The blank area of a card, in screen coordinates.
-//
-// There is no widget there to click, and that is the point of the proposition: RenderEntryCard
-// hit-tests the card rectangle itself so the whole card is a target, and a test that clicked a
-// button instead would not exercise it. The thumbnail is the blank half — it is drawn into the
-// draw list rather than submitted as an item — and this stays inside its left edge, clear of the
-// right column's four rows of widgets and of the Delete/Duplicate stack at the card's right edge.
-//
-// Vertically it takes three quarters of the card's own height, which under the current layout
-// lands in the thumbnail's lower half — the card is the thumbnail plus window padding, so the
-// two are not independent quantities, but neither is the correspondence enforced anywhere. A
-// fixed offset from the top would not do: the top-left corner used to be blank and no longer is,
-// because the participation toggle is overlaid there, and while it does correctly keep the card's
-// click handler off itself (IsAnyItemHovered), a helper still pointing at that corner reports it
-// as "nothing to click" and silently turns three unrelated cases into a click on the toggle.
-// Anything added to a card's corners in future needs this same second look — the constraint is
-// that the returned point hits no item, and no compiler or gate enforces it.
-ImVec2 CardBlankSpot(int index) {
-  ImGuiWindow* w = CardWindow(index);
-  IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
-  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + w->Size.y * 0.75f);
-}
-
 // A second entry in layer 0, bound to a pool slot of its own.
 void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
   gui::CrystalConfig second;
@@ -591,19 +546,23 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // Opening the modal from a card.
   // ================================================================================
 
-  // P66. Each of the three Edit buttons is a shortcut to one tab, not three ways to open the same
-  // one — the whole point of having three is that the user lands where they were going.
+  // P66. Opening a card and picking a tab lands on that tab's body — each of the three, from a
+  // cold open, without the previous tab's controls left standing.
+  //
+  // This used to be stated of three per-tab Edit buttons on the card ("each is a shortcut to one
+  // tab, not three ways to open the same one"). The buttons are gone; what is left is the path
+  // every user now takes, and it still has to land where it was going.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "each_edit_button_opens_the_modal_on_its_own_tab");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "opening_a_card_on_a_tab_lands_on_that_tabs_body");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       struct Shortcut {
-        const char* button;
+        const char* tab_ref;
         const char* tab_content;  // an item that exists only while that tab's body is up
       };
       const Shortcut kShortcuts[] = {
-        { "Edit##cr", "**/##Height##modal_cr_input" },
-        { "Edit##ax", "**/Zenith/##Mean_input" },
-        { "Edit##fi", "**/##row_text_0" },
+        { kCrystalTabRef, "**/##Height##modal_cr_input" },
+        { kAxisTabRef, "**/Zenith/##Mean_input" },
+        { kFilterTabRef, "**/##row_text_0" },
       };
 
       for (const Shortcut& s : kShortcuts) {
@@ -615,10 +574,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         // closes the modal regardless, so that click has nothing left to do once this iteration
         // has already failed.
         const ScopedPopups popup_guard(ctx);
-        ctx->ItemClick((std::string("**/") + s.button).c_str());
-        ctx->Yield(4);
+        OpenCardEditor(ctx, 0, s.tab_ref);
         if (!ctx->ItemExists(s.tab_content)) {
-          IM_ERRORF("%s did not land on the tab that owns %s", s.button, s.tab_content);
+          IM_ERRORF("opening on %s did not land on the tab that owns %s", s.tab_ref, s.tab_content);
         }
         if (ctx->IsError()) {
           break;
@@ -701,7 +659,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const ScopedPopups popup_guard(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(gui::IsEditModalOpen());
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
@@ -743,7 +701,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, shared_cid, std::nullopt), 2);
       const float shared_h = gui::g_state.crystals[shared_cid].height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/Unlink##share"));
       ctx->ItemClick("**/Unlink##share");
@@ -776,7 +734,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       AddSecondEntryOnItsOwnSlot(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
@@ -831,7 +789,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         AddSecondEntryOnItsOwnSlot(ctx);
         const int cid_before = gui::g_state.layers[0].entries[1].crystal_id;
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(4);
         ctx->ItemClick("**/Link to...##share");
         ctx->Yield(4);
@@ -902,7 +860,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const int source_cid_before = gui::g_state.layers[0].entries[0].crystal_id;
       IM_CHECK_NE(target_cid, source_cid_before);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Link to...##share");
       ctx->Yield(4);
@@ -959,7 +917,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemInputValue("**/##row_text_0", "3-5");
       ctx->Yield(2);
@@ -993,7 +951,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);

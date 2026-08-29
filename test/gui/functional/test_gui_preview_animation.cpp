@@ -57,7 +57,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
           gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id]));
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       const std::vector<float> before = SnapshotPreviewVertices();
 
@@ -84,7 +84,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
           gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id]));
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       const std::vector<float> baseline = SnapshotPreviewVertices();
 
@@ -141,7 +141,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       // First session: advance well past two ticks so the internal seed has moved off the fixed seed.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->Yield(kFramesPastOneTick * 2);
       const std::vector<float> advanced = SnapshotPreviewVertices();
@@ -151,7 +151,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
 
       // Reopen the same entry: the first built frame must match the fixed-seed reference exactly,
       // proving the ticker reset rather than resuming the prior session's seed.
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       const std::vector<float> reopened = SnapshotPreviewVertices();
 
@@ -181,7 +181,7 @@ void RegisterPreviewAnimationTests(ImGuiTestEngine* engine) {
       RandomizeEntry0FaceDistance();
       ctx->Yield(2);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
 
       float rot_before[16];

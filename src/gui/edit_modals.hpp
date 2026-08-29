@@ -45,6 +45,20 @@ EditModalTarget GetEditModalTarget();
 // kCard edit requests — do not use for other purposes.
 EditTarget GetActiveTabAsEditTarget();
 
+// Arm the "Link to..." eyedropper on (layer_idx, entry_idx): the next entry card the user clicks
+// becomes the model whose crystal / filter this entry adopts.
+//
+// Two entry points reach this — the entry card's rail button and the edit modal's own
+// "Link to..." — and they must not each carry their own copy of the sequence, because the part
+// that is easy to leave out is invisible when it is missing: if the modal is open, its edit
+// buffers hold changes that have not been applied to the pool yet, and arming pick mode without
+// committing them first silently discards whatever the user just typed. That commit is why this
+// lives in edit_modals (the buffers and the open-modal statics are its), not in panels.
+//
+// Does NOT call ImGui::CloseCurrentPopup(): that is only legal from inside the popup's own scope,
+// so the modal call site adds it and the card call site does not.
+void StartLinkPickMode(GuiState& state, int layer_idx, int entry_idx);
+
 // Reset all modal-internal static state (active modal, edit buffers, pending flags).
 // Called by test teardown (ResetTestState) to prevent state leakage between tests.
 void ResetModalState();
