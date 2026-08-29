@@ -41,22 +41,35 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
     float sqrt_val = std::sqrt(std::max(*value, 0.0f));
     float sqrt_max = std::sqrt(max_val);
     if (ImGui::SliderFloat(slider_id, &sqrt_val, 0.0f, sqrt_max, "", ImGuiSliderFlags_NoInput)) {
-      *value = sqrt_val * sqrt_val;
+      // The *Snapped inverses here are load-bearing, not tidiness: at a slider stop the plain
+      // round trip lands a few ULP short of the bound, which core's absolute-epsilon predicates
+      // read as a different value entirely. See slider_mapping.hpp for the full account.
+      *value = slider_mapping::SqrtNormToValueSnapped(sqrt_val, sqrt_max, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLog && min_val > 0.0f) {
     float norm = slider_mapping::LogValueToNorm(*value, min_val, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
-      *value = slider_mapping::LogNormToValue(norm, min_val, max_val);
+      *value = slider_mapping::LogNormToValueSnapped(norm, min_val, max_val);
       changed = true;
     }
   } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
     float norm = slider_mapping::LogLinearValueToNorm(*value, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
-      *value = slider_mapping::LogLinearNormToValue(norm, max_val);
+      *value = slider_mapping::LogLinearNormToValueSnapped(norm, max_val);
       changed = true;
     }
   } else {
+    // Linear: no *Snapped counterpart, and none is needed. The three branches above snap because
+    // they round-trip the value through a transform and its inverse, which lands a few ULP short
+    // of the bound at a stop. This branch hands `value` to ImGui untransformed, and ImGui itself
+    // special-cases the extents -- ScaleValueFromRatioT (imgui_widgets.cpp) opens with
+    // `if (t <= 0.0f ...) return v_min; if (t >= 1.0f) return v_max;`, so a stop yields the bound
+    // bit-for-bit. Verified against the vendored copy rather than inferred from the other
+    // branches, because it matters here: the Mean slider runs through this branch, and its value
+    // feeds the same family of absolute-epsilon predicates (IsRollMeanAtMultipleOf30, and the
+    // 90-degree latitude center inside IsFullSphereUniform) that a few ULP would flip exactly as
+    // the Range slider's drift once flipped IsFullSphereUniform.
     changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   return changed;

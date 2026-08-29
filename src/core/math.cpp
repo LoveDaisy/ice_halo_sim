@@ -553,14 +553,33 @@ std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
 
 
 bool AxisDistribution::IsFullSphereUniform() const {
+  // The az / lat halves read through UniformCenter() / UniformFullRange() while the roll half
+  // (IsRollRotationallySymmetric -> detail::IsFullTurnUniform) reads the raw `spread`. The two are
+  // same value: for kUniform, UniformFullRange() returns `spread` outright. The accessors are
+  // kept here because they assert the kUniform precondition, which the preceding `type ==` in
+  // each conjunct establishes; detail::IsFullTurnUniform cannot use them because it is also the entry
+  // point for callers that have not yet checked the type.
   return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformCenter(), 0.0f) &&
          FloatEqual(azimuth_dist.UniformFullRange(), 360.0f) && latitude_dist.type == DistributionType::kUniform &&
-         FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f);
+         FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f) &&
+         IsRollRotationallySymmetric();
+}
+
+
+// Qualified definition rather than a `namespace detail { ... }` block, matching
+// detail::NormalizeLatitude above — this file spells detail members that way.
+bool detail::IsFullTurnUniform(DistributionType type, float full_range_deg) {
+  return type == DistributionType::kUniform && FloatEqual(full_range_deg, 360.0f);
 }
 
 
 bool AxisDistribution::IsAzRotationallySymmetric() const {
-  return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformFullRange(), 360.0f);
+  return detail::IsFullTurnUniform(azimuth_dist.type, azimuth_dist.spread);
+}
+
+
+bool AxisDistribution::IsRollRotationallySymmetric() const {
+  return detail::IsFullTurnUniform(roll_dist.type, roll_dist.spread);
 }
 
 

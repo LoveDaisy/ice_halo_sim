@@ -477,6 +477,43 @@ TEST(SliderMapping, EachLawIsInvertibleAndNeverGoesBackwards) {
 // assert, and five cases asserting std::clamp were exactly that -- so the coverage that matters
 // lives where the call site is driven, in gui_test's pyramid_h_* modal cases.
 
+using lumice::gui::slider_mapping::LogLinearNormToValueSnapped;
+using lumice::gui::slider_mapping::LogNormToValueSnapped;
+using lumice::gui::slider_mapping::SqrtNormToValueSnapped;
+
+// At a slider stop the value written back must be the bound itself, bit for bit -- not the bound
+// recovered through sqrt or exp/log. EXPECT_EQ, not EXPECT_NEAR, is the point of this case: the
+// residue these snaps remove is 3.05e-5 on a 360 deg range, which every tolerance above would
+// happily accept, and which core's FloatEqual (threshold 1e-5) reads as a different value. That is
+// how an azimuth range dragged to its stop stopped counting as a full turn, and with it a crystal
+// axis stopped counting as full-sphere uniform. The interior of each law is unchanged and is pinned
+// by the EXPECT_NEAR cases above; these three only bind the ends.
+TEST(SliderMapping, EndpointSnappingWritesBackTheBoundExactly) {
+  // The uniform-distribution Range slider: sqrt scale over [0, 360].
+  const float sqrt_max_360 = std::sqrt(360.0f);
+  EXPECT_NE(sqrt_max_360 * sqrt_max_360, 360.0f) << "premise of this case: the plain round trip is not exact here";
+  EXPECT_EQ(SqrtNormToValueSnapped(sqrt_max_360, sqrt_max_360, 360.0f), 360.0f);
+  EXPECT_EQ(SqrtNormToValueSnapped(0.0f, sqrt_max_360, 360.0f), 0.0f);
+  // Past the stop (ImGui clamps, but the guard must not depend on that) and inside it.
+  EXPECT_EQ(SqrtNormToValueSnapped(sqrt_max_360 * 1.5f, sqrt_max_360, 360.0f), 360.0f);
+  EXPECT_EQ(SqrtNormToValueSnapped(-1.0f, sqrt_max_360, 360.0f), 0.0f);
+  EXPECT_FLOAT_EQ(SqrtNormToValueSnapped(3.0f, sqrt_max_360, 360.0f), 9.0f);
+
+  // Prism height: log scale over [0.01, 100].
+  EXPECT_EQ(LogNormToValueSnapped(1.0f, 0.01f, 100.0f), 100.0f);
+  EXPECT_EQ(LogNormToValueSnapped(0.0f, 0.01f, 100.0f), 0.01f);
+  EXPECT_EQ(LogNormToValueSnapped(2.0f, 0.01f, 100.0f), 100.0f);
+  EXPECT_EQ(LogNormToValueSnapped(-0.5f, 0.01f, 100.0f), 0.01f);
+  EXPECT_FLOAT_EQ(LogNormToValueSnapped(0.5f, 0.01f, 100.0f), LogNormToValue(0.5f, 0.01f, 100.0f));
+
+  // Pyramid prism height: log-linear hybrid over [0, 100].
+  EXPECT_EQ(LogLinearNormToValueSnapped(1.0f, 100.0f), 100.0f);
+  EXPECT_EQ(LogLinearNormToValueSnapped(0.0f, 100.0f), 0.0f);
+  EXPECT_EQ(LogLinearNormToValueSnapped(1.25f, 100.0f), 100.0f);
+  EXPECT_EQ(LogLinearNormToValueSnapped(-0.25f, 100.0f), 0.0f);
+  EXPECT_FLOAT_EQ(LogLinearNormToValueSnapped(0.5f, 100.0f), LogLinearNormToValue(0.5f, 100.0f));
+}
+
 using lumice::gui::AspectFitResult;
 using lumice::gui::ClampWindowSizeToWorkarea;
 using lumice::gui::kAspectClampTolerance;

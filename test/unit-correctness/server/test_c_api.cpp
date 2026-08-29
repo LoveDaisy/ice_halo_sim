@@ -1709,6 +1709,41 @@ TEST(ShapeScalarApplicableApi, PyramidOwnsThreeHeightsAndTheSixFaces) {
   EXPECT_EQ(LUMICE_IsShapeScalarApplicable(LUMICE_CRYSTAL_PYRAMID, LUMICE_SHAPE_SCALAR_HEIGHT), 0);
 }
 
+// ============================================================
+// LUMICE_IsDApplicable
+// ============================================================
+
+// The rule: azimuth uniform over a full turn AND the roll anchor on a multiple of 30 deg.
+TEST(IsDApplicableApi, AnswersTheTwoConditionsAndNothingElse) {
+  EXPECT_NE(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, 0.0f), 0);
+  EXPECT_NE(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, 30.0f), 0);
+  EXPECT_NE(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, -60.0f), 0);
+  EXPECT_NE(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, 180.0f), 0);
+
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, 15.0f), 0);   // roll off the grid
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 180.0f, 0.0f), 0);    // not a full turn
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_GAUSS, 360.0f, 0.0f), 0);      // wrong type
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_NO_RANDOM, 360.0f, 0.0f), 0);  // wrong type
+}
+
+// The tolerance is core's, not a second one chosen here. 3.05e-5 is the residue a sqrt-mapped
+// Range slider used to leave behind at its stop, and it is the value on which the GUI's former
+// private copy (1e-3) and core (1e-5) gave opposite answers -- the checkbox saying D was live
+// while the engine had already dropped it. This case is the pin that they now cannot disagree:
+// whatever core answers here is what the GUI shows, because the GUI asks this function.
+TEST(IsDApplicableApi, TheToleranceIsCoresOwn) {
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f - 3.05e-5f, 0.0f), 0);
+  EXPECT_EQ(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f, 3.05e-5f), 0)
+      << "a roll anchor off the 30 deg grid by more than core's epsilon must not pass either";
+  // Just inside it, so the case above is testing the threshold and not merely "any nonzero delta".
+  EXPECT_NE(LUMICE_IsDApplicable(LUMICE_DIST_UNIFORM, 360.0f - 1e-6f, 0.0f), 0);
+}
+
+TEST(IsDApplicableApi, AnUnrecognisedDistributionTypeAnswersFalse) {
+  EXPECT_EQ(LUMICE_IsDApplicable(-1, 360.0f, 0.0f), 0);
+  EXPECT_EQ(LUMICE_IsDApplicable(999, 360.0f, 0.0f), 0);
+}
+
 TEST(ShapeScalarApplicableApi, OutOfRangeSlotsAnswerFalseRatherThanTrapping) {
   for (auto kind : { LUMICE_CRYSTAL_PRISM, LUMICE_CRYSTAL_PYRAMID }) {
     EXPECT_EQ(LUMICE_IsShapeScalarApplicable(kind, -1), 0);

@@ -707,14 +707,18 @@ float Crystal::GetRefractiveIndex(float wl) const {
 
 namespace detail {
 
+bool IsRollAnchorAtMultipleOf30(float roll_anchor_deg) {
+  float remainder = std::fmod(std::fmod(roll_anchor_deg, 30.0f) + 30.0f, 30.0f);
+  return FloatEqual(remainder, 0.0f) || FloatEqual(remainder, 30.0f);
+}
+
+
 bool IsRollMeanAtMultipleOf30(const AxisDistribution& d) {
   // Deliberately type-erased: the anchor slot is read for every DistributionType, not just the
   // Gaussian family, so the generic `center` member is the correct access (a named accessor would
   // assert on the other types). Do NOT read this as "the statistical mean of the roll angle" —
   // for kZigzag it is a tilt offset, for kUniform an interval midpoint.
-  float mean = d.roll_dist.center;
-  float remainder = std::fmod(std::fmod(mean, 30.0f) + 30.0f, 30.0f);
-  return FloatEqual(remainder, 0.0f) || FloatEqual(remainder, 30.0f);
+  return IsRollAnchorAtMultipleOf30(d.roll_dist.center);
 }
 
 int ComputeSigmaA(float roll_mean_deg) {
@@ -725,8 +729,16 @@ int ComputeSigmaA(float roll_mean_deg) {
   return (6 - n) % 6;
 }
 
+bool IsDApplicableParams(DistributionType azimuth_type, float azimuth_full_range_deg, float roll_anchor_deg) {
+  return IsFullTurnUniform(azimuth_type, azimuth_full_range_deg) && IsRollAnchorAtMultipleOf30(roll_anchor_deg);
+}
+
+
 bool IsDApplicable(const AxisDistribution& d) {
-  return d.IsAzRotationallySymmetric() && IsRollMeanAtMultipleOf30(d);
+  // Both fields are read type-erased (raw `spread` / `center`, not the named accessors) for the
+  // reason IsRollMeanAtMultipleOf30 gives above: the arguments are evaluated before either
+  // conjunct has established a type, and the named accessors assert on it.
+  return IsDApplicableParams(d.azimuth_dist.type, d.azimuth_dist.spread, d.roll_dist.center);
 }
 
 }  // namespace detail

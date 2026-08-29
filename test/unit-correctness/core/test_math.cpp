@@ -401,6 +401,7 @@ TEST(IsAxisDeterministic, FullSphereUniform_ReturnsFalse) {
   AxisDistribution d{};
   d.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   d.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  d.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   ASSERT_TRUE(d.IsFullSphereUniform());
   EXPECT_FALSE(d.IsAxisDeterministic());
 }

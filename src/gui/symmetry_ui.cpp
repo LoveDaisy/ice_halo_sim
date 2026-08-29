@@ -5,6 +5,7 @@
 #include "IconsFontAwesome6.h"
 #include "gui/theme.hpp"
 #include "imgui.h"
+#include "lumice.h"
 
 namespace lumice::gui {
 
@@ -17,10 +18,7 @@ constexpr const char* kDTooltipText =
 }  // namespace
 
 bool IsDApplicableGuiAxis(const AxisDist& az, const AxisDist& roll) {
-  const bool az_sym = az.type == AxisDistType::kUniform && std::fabs(az.std - 360.0f) < 1e-3f;
-  const float rem = std::fmod(std::fmod(roll.mean, 30.0f) + 30.0f, 30.0f);
-  const bool roll_ok = rem < 1e-3f || std::fabs(rem - 30.0f) < 1e-3f;
-  return az_sym && roll_ok;
+  return LUMICE_IsDApplicable(AxisDistTypeToWire(az.type), az.std, roll.mean) != 0;
 }
 
 void RenderSymmetryCheckboxes(bool& sym_p, bool& sym_b, bool& sym_d, bool d_applicable, const char* id_suffix) {
