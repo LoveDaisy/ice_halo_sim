@@ -1127,9 +1127,15 @@ void CommitAllBuffersImmediate(GuiState& state);
 
 void StartLinkPickMode(GuiState& state, int layer_idx, int entry_idx) {
   if (g_active_modal == ActiveModal::kOpen) {
-    // Commit whichever entry the modal is bound to — that is the one whose buffers are in flight,
-    // and it is not necessarily `entry_idx` (the card rail can arm pick mode on a different card
-    // while a modal is open on another one).
+    // Commit whichever entry the modal is bound to — that is the one whose buffers are in flight.
+    //
+    // Today it is always `entry_idx`: the modal is a blocking popup, so a click aimed at another
+    // card behind it never reaches that card, and the only caller that can run with a modal open is
+    // the modal's own "Link to..." button, which passes the entry the modal is bound to. The commit
+    // is written against g_modal_* rather than against `entry_idx` anyway, because THAT is where
+    // the in-flight buffers belong — reading the argument here would make this correct only for as
+    // long as the two cannot diverge, which is a property of the popup being blocking rather than
+    // of anything in this function.
     CommitAllBuffersImmediate(state);
     g_active_modal = ActiveModal::kNone;
   }

@@ -38,8 +38,11 @@
 // two cards independent; or a new layer that receives no rays at all because the layer above it
 // still passes none on.
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/edit_modals.hpp"  // IsEditModalOpen — the toggle must not also trip the card's click handler
@@ -75,6 +78,75 @@ void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
 struct ScopedColorWindow {
   ~ScopedColorWindow() { gui::g_state.color_window_open = false; }
 };
+
+// Read one card's own rectangle back out of the default framebuffer.
+//
+// The theme_scan suite does this same rect arithmetic in ExportRegion, but it writes a PNG for a
+// human to look at and drops the pixels; the hover case below has to compare two captures, so this
+// one keeps them. Coordinates: ImGui screen space → framebuffer, which means scaling by the Retina
+// factor and flipping the origin (GL reads from the bottom-left, ImGui measures from the top-left).
+bool CaptureCardRect(ImGuiTestContext* ctx, int index, std::vector<unsigned char>& out, int& w_out, int& h_out) {
+  ImGuiWindow* card = CardWindow(index);
+  IM_CHECK_RETV(card != nullptr, false);
+  g_fullframe_capture.Reset();
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const float fb_w = io.DisplaySize.x * sx;
+  const float fb_h = io.DisplaySize.y * sy;
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float x0 = std::max(0.0f, (card->Pos.x - vp_pos.x) * sx);
+  const float y0 = std::max(0.0f, (card->Pos.y - vp_pos.y) * sy);
+  const float x1 = std::min(fb_w, (card->Pos.x - vp_pos.x + card->Size.x) * sx);
+  const float y1 = std::min(fb_h, (card->Pos.y - vp_pos.y + card->Size.y) * sy);
+  g_fullframe_capture.rect_x = static_cast<int>(std::lround(x0));
+  g_fullframe_capture.rect_y = static_cast<int>(std::lround(fb_h - y1));
+  g_fullframe_capture.rect_w = static_cast<int>(std::lround(x1 - x0));
+  g_fullframe_capture.rect_h = static_cast<int>(std::lround(y1 - y0));
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield();
+  }
+  IM_CHECK_RETV(g_fullframe_capture.done.load(), false);
+  out = g_fullframe_capture.pixels;
+  w_out = g_fullframe_capture.width;
+  h_out = g_fullframe_capture.height;
+  return true;
+}
+
+// Pixels that differ between two same-sized RGBA captures, counted only inside the outermost
+// `ring` rows and columns. The highlight under test is a BORDER colour, so it lives exactly there;
+// restricting the count to the ring is what keeps the card's interior — thumbnail included — out
+// of the comparison, so nothing the thumbnail cache does between two captures can reach it.
+//
+// Depth is device pixels, so `ring` covers one logical pixel of border on a Retina framebuffer and
+// two on a plain one; ImGui draws the child border one logical pixel wide.
+int EdgeRingDiff(const std::vector<unsigned char>& a, const std::vector<unsigned char>& b, int w, int h, int ring) {
+  if (a.size() != b.size() || w <= 2 * ring || h <= 2 * ring) {
+    return -1;
+  }
+  int diff = 0;
+  for (int y = 0; y < h; ++y) {
+    const bool edge_row = y < ring || y >= h - ring;
+    for (int x = 0; x < w; ++x) {
+      if (!edge_row && x >= ring && x < w - ring) {
+        continue;
+      }
+      const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4;
+      if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2]) {
+        ++diff;
+      }
+    }
+  }
+  return diff;
+}
+
+// Somewhere that is not a card. The highlight is driven by the card child window's own hover
+// state, so any point outside every card leaves all of them cold.
+ImVec2 PointOffEveryCard() {
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  return ImVec2(vp->Pos.x + vp->Size.x * 0.7f, vp->Pos.y + vp->Size.y * 0.5f);
+}
 
 }  // namespace
 
@@ -933,6 +1005,70 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(6);
       IM_CHECK(!gui::g_state.pick_link_source.has_value());
       IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, target_cid);
+    };
+  }
+
+  // The card's only remaining statement that anything on it can be edited.
+  //
+  // Three Edit buttons used to make that statement, and clicking the card itself made none — it is
+  // an invisible interaction. Removing the buttons is a net LOSS of discoverability unless the
+  // whole-card hover highlight replaces them, so "the highlight actually draws" is the load-bearing
+  // half of that trade, not a cosmetic detail.
+  //
+  // Read back in pixels rather than asserted on a style variable, because there is no variable left
+  // to read: the border colour is pushed before BeginChild and popped after EndChild, so by the
+  // time the test coroutine runs at the end of the frame, nothing records whether it was ever
+  // applied. Only the framebuffer does.
+  //
+  // The control capture is what makes the comparison mean anything. Two captures taken with the
+  // pointer in the SAME place must be identical on the ring; if they are not, the ring is noisy and
+  // a difference measured across a pointer move would prove nothing. Assert that first, then move.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "hovering_a_card_lights_its_border");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+
+      constexpr int kRing = 2;
+      ctx->MouseMoveToPos(PointOffEveryCard());
+      ctx->Yield(4);
+
+      std::vector<unsigned char> cold_a;
+      std::vector<unsigned char> cold_b;
+      int w = 0;
+      int h = 0;
+      int w_b = 0;
+      int h_b = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, cold_a, w, h));
+      ctx->Yield(3);
+      IM_CHECK(CaptureCardRect(ctx, 0, cold_b, w_b, h_b));
+      IM_CHECK_EQ(w, w_b);
+      IM_CHECK_EQ(h, h_b);
+      IM_CHECK_EQ(EdgeRingDiff(cold_a, cold_b, w, h, kRing), 0);
+
+      ctx->MouseMoveToPos(CardBlankSpot(0));
+      // The card writes its hover state into ImGuiStorage at the END of the frame it is hovered and
+      // reads it back on the NEXT one, so the highlight trails the pointer by a frame by design.
+      ctx->Yield(4);
+      std::vector<unsigned char> hot;
+      int w_hot = 0;
+      int h_hot = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, hot, w_hot, h_hot));
+      IM_CHECK_EQ(w, w_hot);
+      IM_CHECK_EQ(h, h_hot);
+      IM_CHECK_GT(EdgeRingDiff(cold_b, hot, w, h, kRing), 0);
+
+      // And it goes back: a highlight that never clears would be a card stuck looking hovered.
+      ctx->MouseMoveToPos(PointOffEveryCard());
+      ctx->Yield(4);
+      std::vector<unsigned char> cooled;
+      int w_c = 0;
+      int h_c = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, cooled, w_c, h_c));
+      IM_CHECK_EQ(w, w_c);
+      IM_CHECK_EQ(h, h_c);
+      IM_CHECK_EQ(EdgeRingDiff(cold_b, cooled, w, h, kRing), 0);
     };
   }
 

@@ -289,10 +289,18 @@ namespace {
 }  // namespace
 
 
-// Sole owner of the control-to-label gap: the input->label gap under kTrailing, the
-// label->controls gap under kLeading. Rationale for the VALUE in panels.hpp; the reason it is one
-// named quantity rather than a literal at each site is that the two placements are then GUARANTEED
-// to reserve the same width, so a row switching between them cannot shift its neighbours.
+// The horizontal gap between a field's controls and its name — the input->label gap under
+// kTrailing, the label->controls gap under kLeading, and the entry card's value-column offset.
+// One named quantity rather than a literal at each site, for two reasons: the placements are then
+// GUARANTEED to reserve the same width (a row switching between them cannot shift its
+// neighbours), and the choice of style constant lands in one place rather than four.
+//
+// That single-owner property, not the numeric value, is what stops a second convention from
+// existing — which is why the value could be settled independently of the layout work that
+// consumes it. It is settled: ItemInnerSpacing.x, because ImGui's own Combo hardcodes its label at
+// `bb.Max.x + ItemInnerSpacing.x` inside BeginCombo where no caller can reach it, so a hand-built
+// row can only share a vertical line with a combo row by following it. Full rationale in
+// panels.hpp.
 float LabelColumnGapX() {
   return ImGui::GetStyle().ItemInnerSpacing.x;
 }
