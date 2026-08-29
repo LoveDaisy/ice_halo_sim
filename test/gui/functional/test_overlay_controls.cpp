@@ -34,10 +34,17 @@
 // name, or a 22-degree halo circle added twice and drawn at double brightness.
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "gui/gui_state.hpp"
+// imgui_internal.h is normally an anti-pattern in this suite. One claim below has no public
+// reading: what text a table's HEADER draws. A blank header submits no addressable item, and the
+// word this one stopped drawing ("Overlay") is still on screen one line above it as the group's
+// CollapsingHeader — so a "**/Overlay" lookup answers about the wrong widget whether the header is
+// blank or not. TableGetColumnName reads the name the column was actually set up with.
+#include "imgui_internal.h"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -152,77 +159,138 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_NE(ctx->ItemInfo("**/##horizon_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##grid_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##sun_circles_label").ID, (ImGuiID)0);
+
+      // The header row. The name column draws none, because the group's own CollapsingHeader
+      // already says "Overlay" one line above it and a word repeated directly under itself reads as
+      // a second, different thing. Stated together with the four that DO draw one, so "blank"
+      // cannot be satisfied by a header row that failed to render at all. The table is found by the
+      // same three-seed id the swatch lookup above reconstructs.
+      const ImGuiTestItemInfo any_row = ctx->ItemInfo("**/##horizon_line");
+      ImGuiTable* table = nullptr;
+      if (any_row.Window != nullptr) {
+        table = ImGui::TableFindByID(ImGui::GetIDWithSeed("##OverlaysTable", nullptr, any_row.Window->ID));
+      }
+      IM_CHECK(table != nullptr);
+      // Everything from "##" on is id, not text — what a header draws is what comes before it.
+      auto header_text = [table](int column_n) {
+        const char* name = ImGui::TableGetColumnName(table, column_n);
+        const char* id_part = std::strstr(name, "##");
+        return std::string(name, id_part != nullptr ? static_cast<size_t>(id_part - name) : std::strlen(name));
+      };
+      IM_CHECK(header_text(1).empty());
+      IM_CHECK_EQ(header_text(2), std::string("Line"));
+      IM_CHECK_EQ(header_text(3), std::string("Label"));
+      IM_CHECK_EQ(header_text(4), std::string("Alpha"));
     };
   }
 
   // The other half of "empty cell is the information": the fold column. Only two of the four rows
   // have a field the others lack, and only those two offer the button — a fold button on every row
   // would say the opposite of what this layout is for.
+  //
+  // Read in the DEFAULT document state, both sun-circle switches off, and that is the point: which
+  // rows offer a fold is a property of the ROWS — of which of them owns a field the others lack —
+  // and not of any other control's current value. Opening the one this case is named for is part of
+  // the same claim: a button that is offered but leads nowhere is not an offer.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls", "only_the_rows_with_an_extra_field_offer_a_fold");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
-      // The angle fold is gated on the circles being drawn (see the case below); turn them on so
-      // this case measures the fold column and not that gate.
-      gui::g_state.show_sun_circles_line = true;
+      const ScopedPopups popup_guard(ctx);
       ctx->Yield(3);
-      // Named ref for the reason the case above gives: without it a fold button scrolled out of
-      // view would satisfy the negative checks as readily as one that is not offered.
-      const ScopedRef panel_ref(ctx, "//##RightPanel");
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
+      IM_CHECK(!gui::g_state.show_sun_circles_label);
 
-      IM_CHECK(!ctx->ItemExists("**/###horizon_fold"));
-      IM_CHECK(!ctx->ItemExists("**/###grid_fold"));
-      IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
-      IM_CHECK(ctx->ItemExists("**/###zenith_nadir_fold"));
+      {
+        // Named ref for the reason the case above gives: without it a fold button scrolled out of
+        // view would satisfy the negative checks as readily as one that is not offered. Scoped to
+        // just this block because the editor it opens is a different window, which a
+        // panel-prefixed ref would exclude.
+        const ScopedRef panel_ref(ctx, "//##RightPanel");
 
-      gui::g_state.show_sun_circles_line = false;
+        IM_CHECK(!ctx->ItemExists("**/###horizon_fold"));
+        IM_CHECK(!ctx->ItemExists("**/###grid_fold"));
+        IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
+        IM_CHECK(ctx->ItemExists("**/###zenith_nadir_fold"));
+
+        ctx->ItemClick("**/###sun_circles_fold");
+      }
+      ctx->Yield(3);
+      // A preset button, i.e. the angle editor really is on screen and not merely a button that
+      // consumed a click.
+      IM_CHECK(ctx->ItemExists("**/9\xc2\xb0"));
+
+      ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
     };
   }
 
-  // P32. The angle editor is offered only while a sun-circle overlay is actually being drawn —
-  // editing the angle list of something invisible is a control with no feedback.
+  // P32, restated. Reaching the angle editor is a property of the Angular Dist. row itself — the
+  // row owns a field the others lack, so it offers a fold — and not of whether the circles happen
+  // to be drawn at the moment. All four combinations of the row's two switches, because "reachable
+  // regardless" is a claim about the whole square and not about the one corner a new document
+  // opens in.
+  //
+  // It used to be the opposite claim: the button appeared only once a sun-circle overlay was on.
+  // Stacked vertically that condition had nothing to be read against; in the table its cell sits
+  // directly above an unconditional fold on the Zenith/Nadir row, and an empty cell there reads as
+  // the feature having gone missing rather than as a considered condition. There is deliberately
+  // no !ItemExists assertion left in this case — the invariant is that the fold is offered in
+  // every state, so any surviving negative check would be re-asserting the gate somewhere else.
   {
     ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "overlay_controls", "the_angle_editor_is_offered_only_while_the_circles_show");
+        IM_REGISTER_TEST(engine, "overlay_controls", "the_angle_editor_is_reachable_regardless_of_the_circles_toggle");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
       ctx->Yield(3);
-      // Everything this case looks up lives in the right panel, and it is named rather than left to
-      // the default ref because the negative checks below depend on it. The Overlay group is the
-      // last one in a scrollable panel; a wildcard lookup resolves an item by its LABEL, and the
-      // engine records no label for a clipped item, so a clipped button reads exactly like an
-      // absent one. The engine recovers by panning the window, but only when the ref names the
-      // window to pan. Without it, `!ItemExists` would be satisfied by "scrolled out of view" as
-      // readily as by "not offered", and whether the case passes would turn on whether some earlier
-      // ItemClick happened to scroll the panel first.
-      //
-      // Scoped as an object rather than a matching SetRef("") at the tail, for the same reason
-      // ScopedPopups above is: several of the IM_CHECKs this ref covers are exactly the ones a real
-      // regression would trip, and a fatal one exits the lambda before a tail-of-function SetRef("")
-      // would run, leaving the ref pinned for the rest of the test process.
-      const ScopedRef panel_ref(ctx, "//##RightPanel");
       IM_CHECK(!gui::g_state.show_sun_circles_line);
       IM_CHECK(!gui::g_state.show_sun_circles_label);
-      IM_CHECK(!ctx->ItemExists("**/###sun_circles_fold"));
 
-      // Either switch is enough — the lines and the labels are two ways of showing the same set.
-      ctx->ItemClick("**/##sun_circles_line");
+      // Both helpers name the right panel for their lookup, for the reason the cases above give: a
+      // fold button scrolled out of view is indistinguishable from one that is not offered unless
+      // the ref names the window the engine may pan. Neither helper reports a failure itself — it
+      // returns, and the caller checks — so a failure is fatal to the CASE instead of merely
+      // ending the helper and leaving the rest of the case driving an invalid state.
+      auto click_in_panel = [ctx](const char* item) {
+        const ScopedRef panel_ref(ctx, "//##RightPanel");
+        ctx->ItemClick(item);
+      };
+      auto editor_opens = [ctx]() -> bool {
+        {
+          const ScopedRef panel_ref(ctx, "//##RightPanel");
+          if (!ctx->ItemExists("**/###sun_circles_fold")) {
+            return false;
+          }
+          ctx->ItemClick("**/###sun_circles_fold");
+        }
+        ctx->Yield(3);
+        // Released before the lookup: the editor is a popup, a different window.
+        const bool opened = ctx->ItemExists("**/9\xc2\xb0");
+        ctx->KeyPress(ImGuiKey_Escape);
+        ctx->Yield(2);
+        return opened;
+      };
+
+      IM_CHECK(editor_opens());  // neither switch: the state a new document opens in
+
+      click_in_panel("**/##sun_circles_line");
       ctx->Yield(3);
       IM_CHECK(gui::g_state.show_sun_circles_line);
-      IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
+      IM_CHECK(editor_opens());  // lines only
 
-      ctx->ItemClick("**/##sun_circles_line");
+      click_in_panel("**/##sun_circles_label");
       ctx->Yield(3);
-      IM_CHECK(!ctx->ItemExists("**/###sun_circles_fold"));
+      IM_CHECK(gui::g_state.show_sun_circles_label);
+      IM_CHECK(editor_opens());  // lines and labels
 
-      ctx->ItemClick("**/##sun_circles_label");
+      click_in_panel("**/##sun_circles_line");
       ctx->Yield(3);
-      IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
+      IM_CHECK(!gui::g_state.show_sun_circles_line);
+      IM_CHECK(editor_opens());  // labels only
 
-      ctx->ItemClick("**/##sun_circles_label");
-      ctx->Yield(3);
+      click_in_panel("**/##sun_circles_label");
+      ctx->Yield(2);
     };
   }
 
@@ -308,17 +376,20 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // Named ref so the negative check reads "not submitted inline" and not "scrolled past" —
         // see the case above. Released before the popup, which is a different window.
         const ScopedRef panel_ref(ctx, "//##RightPanel");
-        IM_CHECK(!ctx->ItemExists("**/##Radius##zenith_nadir_input"));  // folded away, not shown inline
+        // The selector lost SliderWithInput's "_input" half along with the control: the radius is
+        // the same DragFloatField the alpha cells use now, and that submits ONE item whose id is
+        // "##" + the label it was handed.
+        IM_CHECK(!ctx->ItemExists("**/##Radius##zenith_nadir"));  // folded away, not shown inline
         ctx->ItemClick("**/###zenith_nadir_fold");
       }
       ctx->Yield(3);
 
       // Both ends of the declared domain (2..20 px), so the popup's control is the registry's
       // control and not a second opinion about the range.
-      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", 100.0f);
+      ctx->ItemInputValue("**/##Radius##zenith_nadir", 100.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
-      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", -5.0f);
+      ctx->ItemInputValue("**/##Radius##zenith_nadir", -5.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 2.0f);
 

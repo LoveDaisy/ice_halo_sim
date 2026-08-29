@@ -698,8 +698,20 @@ void RenderSunCirclesAnglePopup() {
 // uncut name (doc/gui-visual-language.md §4.4).
 void RenderZenithNadirRadiusPopup() {
   const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-  SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
-                  static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
+  // The same control the four alpha cells of this table use, one row above. It was a
+  // [slider][input][label] triple, which is a second answer to "how is a bounded float edited
+  // here?" given a cell's width away from the first one.
+  //
+  // The name has to be drawn here rather than passed in: DragFloatField folds its whole label
+  // argument into the widget id ("##" + label), so nothing of it is ever displayed. Worth drawing
+  // — the alpha cells get their name from the column header they sit under, and a fold has no
+  // header, so without this the popup would hold one bare number.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Radius");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(100.0f);
+  DragFloatField("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
+                 static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
 }
 
 // What a row's fold holds, when it holds anything. Two of the four overlays have a field the others
@@ -781,7 +793,11 @@ void RenderOverlaysTab() {
     return;
   }
   ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
-  ImGui::TableSetupColumn("Overlay", ImGuiTableColumnFlags_WidthStretch);
+  // Id only, no header text: this column's header would sit directly under the "Overlay" the
+  // group's own CollapsingHeader already carries, and a word repeated one line below itself reads
+  // as a second, different thing. The other four headers name what their cells hold, which the
+  // group title does not say.
+  ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
   ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
   ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
   ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
@@ -825,13 +841,12 @@ void RenderOverlaysTab() {
       continue;  // Empty fold cell: this overlay has no field the others lack.
     }
     ImGui::TableSetColumnIndex(5);
-    // The angle list is offered only while the circles are actually drawn — editing the angles of
-    // something invisible is a control with no feedback. The radius has no such gate: the markers'
-    // own Line checkbox is right there in the same row.
-    const bool circles_shown = g_state.show_sun_circles_line || g_state.show_sun_circles_label;
-    if (row.fold == OverlayFold::kSunCircleAngles && !circles_shown) {
-      continue;
-    }
+    // Unconditional, for both folds. Whether a row offers one is a property of the ROW — of whether
+    // it owns a field the others lack — and the fold cells of the four rows sit in one column,
+    // directly above one another. A cell left empty by anything else than "this row has no extra
+    // field" says the wrong thing in that column, which is what a condition on the circles being
+    // drawn used to say here: it read as the angle editor having gone missing, not as a considered
+    // state (test_overlay_controls.cpp pins this across both switches).
     if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
       ImGui::OpenPopup(row.fold_id);
     }
