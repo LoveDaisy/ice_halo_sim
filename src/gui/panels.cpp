@@ -345,6 +345,38 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   return *value != old_value;
 }
 
+bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale) {
+  char drag_id[80];
+  snprintf(drag_id, sizeof(drag_id), "##%s", label);
+
+  ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp;
+  if (scale != SliderScale::kLinear) {
+    flags |= ImGuiSliderFlags_Logarithmic;
+  }
+  // Full domain per kDragTrackReferenceWidth pixels of drag, in both modes: ImGui divides a
+  // logarithmic drag's delta by (max - min) before applying it, which cancels the numerator here.
+  const float speed = (max_val - min_val) / kDragTrackReferenceWidth;
+  const float old_value = *value;
+  ImGui::DragFloat(drag_id, value, speed, min_val, max_val, fmt, flags);
+
+  // ImGui does not give DragFloat a resize cursor on its own (unlike a window border or a table
+  // column boundary), so the affordance has to be set explicitly for hover and drag alike.
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+
+  // Unconditional, and NOT redundant with ImGuiSliderFlags_AlwaysClamp: that flag constrains the
+  // values the widget itself produces, and deliberately leaves a value it was handed out of range
+  // alone. SliderWithInput ends with exactly this line, and things depend on it — a .lmc written by
+  // hand, or a lens switch that narrows a bound under a value that was legal a frame ago (the
+  // globe's elevation limit), reach the field without going through any control, and the control is
+  // what pulls them back in. Without it the page renders an out-of-domain value as if it were fine.
+  *value = std::clamp(*value, min_val, max_val);
+  // Same return contract as SliderWithInput: "the value is not what it was", clamp included, since
+  // a clamp is a change the caller has to commit like any other.
+  return *value != old_value;
+}
+
 // SliderInt + InputInt + label text, same layout as SliderWithInput.
 // Returns true if value changed.
 bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label, bool* committed,

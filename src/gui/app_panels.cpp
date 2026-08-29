@@ -627,6 +627,226 @@ void RenderLeftPanel(float window_height) {
   ImGui::End();
 }
 
+namespace {
+
+// The angle list behind the Angular Dist. row's fold: presets, a custom-angle input, and the
+// current list with per-entry delete.
+//
+// A named function rather than statements inside the row loop. A table row IS a loop body here, so
+// a popup written inline would be built once per row — four popups sharing one name, of which the
+// last one submitted wins. Having exactly one construction site is a property worth being able to
+// check by reading, not by trusting the loop's shape to stay what it is today.
+void RenderSunCirclesAnglePopup() {
+  bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
+
+  // Preset buttons
+  const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
+  for (float p : presets) {
+    const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
+    char label[16];
+    std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
+    ImGui::BeginDisabled(already || at_limit);
+    if (ImGui::Button(label)) {
+      g_state.sun_circle_angles.push_back(p);
+      std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+  }
+  ImGui::NewLine();
+
+  // Custom angle input
+  static float custom_angle = 22.0f;
+  ImGui::PushItemWidth(60.0f);
+  ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
+  ImGui::PopItemWidth();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(at_limit);
+  if (ImGui::Button("+##add_circle")) {
+    custom_angle = ClampSunCircleAngle(custom_angle);
+    g_state.sun_circle_angles.push_back(custom_angle);
+    std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
+  }
+  ImGui::EndDisabled();
+
+  // Current list with delete buttons
+  ImGui::Separator();
+  int remove_idx = -1;
+  for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
+    ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
+    ImGui::SameLine();
+    char del_label[32];
+    std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
+    if (ImGui::SmallButton(del_label)) {
+      remove_idx = i;
+    }
+  }
+  if (remove_idx >= 0) {
+    g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
+  }
+}
+
+// The pixel radius behind the Zenith/Nadir row's fold. It is the one field only that row has, and
+// giving it a column of its own would have cost every other row an empty cell (and the name column
+// the width) to say something about one of the four — the fold is what buys "Angular Dist." its
+// uncut name (doc/gui-visual-language.md §4.4).
+void RenderZenithNadirRadiusPopup() {
+  const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
+  SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
+                  static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
+}
+
+// What a row's fold holds, when it holds anything. Two of the four overlays have a field the others
+// do not, and they are not the same field.
+enum class OverlayFold {
+  kNone,
+  kSunCircleAngles,
+  kZenithNadirRadius,
+};
+
+// One auxiliary line, as the table reads it. Every row answers the same questions — colour, name,
+// line, text label, opacity — which is exactly why the table is the right shape for them
+// (doc/gui-visual-language.md §4.4). `label` is null for a row that draws no text label at all;
+// that cell is then left EMPTY rather than filled with a disabled control or an explanatory word,
+// because "this one has no text" is what an empty cell in a labelled column already says.
+struct OverlayRowSpec {
+  const char* name;
+  const char* color_id;
+  float* color;
+  const char* line_id;
+  bool* line;
+  const char* label_id;  // null ⇒ no text label for this overlay; the cell stays empty.
+  bool* label;
+  const char* alpha_id;
+  const char* alpha_field;
+  float* alpha;
+  // Triple hash, unlike every other id above, and not a slip: the fold button's label carries a
+  // visible glyph, and ImGui hashes the WHOLE label for "glyph##suffix" — the id would then contain
+  // the icon codepoint, so renaming the icon would silently rename the item. "###suffix" hashes the
+  // suffix alone. Null for a row with no fold.
+  const char* fold_id;
+  OverlayFold fold;
+};
+
+// The Overlay group: the four auxiliary lines drawn over the preview, as one table.
+//
+// It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
+// their checkboxes at an x computed from the width of the longest name — an arrangement in which
+// adding a name longer than "Angular Distance" silently overlapped the Line column.
+void RenderOverlaysTab() {
+  const OverlayRowSpec rows[] = {
+    { "Horizon", "##horizon_color", g_state.horizon_color, "##horizon_line", &g_state.show_horizon_line,
+      "##horizon_label", &g_state.show_horizon_label, "##horizon_alpha", "overlay_horizon_alpha",
+      &g_state.horizon_alpha, nullptr, OverlayFold::kNone },
+    { "Grid", "##grid_color", g_state.grid_color, "##grid_line", &g_state.show_grid_line, "##grid_label",
+      &g_state.show_grid_label, "##grid_alpha", "overlay_grid_alpha", &g_state.grid_alpha, nullptr,
+      OverlayFold::kNone },
+    // "Angular Dist." rather than the field's full name "Angular Distance": the name column is what
+    // every other column's declared width leaves over, and on this 300 px panel the full spelling is
+    // what the width budget cannot afford. Display string only — no id, no serialization key.
+    { "Angular Dist.", "##sun_circles_color", g_state.sun_circles_color, "##sun_circles_line",
+      &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
+      "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", OverlayFold::kSunCircleAngles },
+    // The marker pair: pixel-space dots at the zenith and the nadir. No text label — hence a null
+    // label id — and the only row with a radius.
+    { "Zenith/Nadir", "##zenith_nadir_color", g_state.zenith_nadir_color, "##zenith_nadir_line",
+      &g_state.show_zenith_nadir_line, nullptr, nullptr, "##zenith_nadir_alpha", "overlay_zenith_nadir_alpha",
+      &g_state.zenith_nadir_alpha, "###zenith_nadir_fold", OverlayFold::kZenithNadirRadius },
+  };
+
+  const float swatch_w = ImGui::GetFrameHeight();
+  const float check_w = ImGui::GetFrameHeight();
+  const float fold_w = ImGui::GetFrameHeight();
+  // Calibrated against THIS panel's width budget, not carried over from the wider layout this table
+  // was first written for: the right panel is kRightPanelWidth (300 px) wide, which leaves the table
+  // ~274 px, and the fixed columns plus cell padding claim all but ~129 px of it. Anything this
+  // column takes comes straight off the Name column, which is the only stretching one — so this
+  // number is the name column's budget stated from the other side. The arbiter is not this comment
+  // but test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off: if a font or style
+  // change makes a name overflow, this literal is the one knob to turn.
+  constexpr float kAlphaColWidth = 54.6f;
+
+  // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
+  // every other column states the width it needs, and whatever is left goes to the names — rather
+  // than the names getting what is left over after an x anchor derived from the longest of them.
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+  const ImVec2 outer_size(ImGui::GetContentRegionAvail().x, 0.0f);
+  if (!ImGui::BeginTable("##OverlaysTable", 6, kFlags, outer_size)) {
+    return;
+  }
+  ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
+  ImGui::TableSetupColumn("Overlay", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
+  ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
+  ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+  ImGui::TableHeadersRow();
+
+  for (const OverlayRowSpec& row : rows) {
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::ColorEdit3(row.color_id, row.color, ImGuiColorEditFlags_NoInputs);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(row.name);
+
+    ImGui::TableSetColumnIndex(2);
+    Checkbox(row.line_id, row.line);
+
+    // Empty cell, on purpose — see OverlayRowSpec::label.
+    if (row.label != nullptr) {
+      ImGui::TableSetColumnIndex(3);
+      Checkbox(row.label_id, row.label);
+    }
+
+    ImGui::TableSetColumnIndex(4);
+    const FieldEditorConstraint alpha_c = ConstraintFor(row.alpha_field, g_state);
+    // A single DragFloat rather than the [slider][input] pair the panel used: the pair needs about
+    // twice this cell's width, and the width it would take comes straight off the name column
+    // (doc/gui-visual-language.md §7 records the cell-sized single control as the verified form).
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    // row.alpha_id already carries its own leading "##" (e.g. "##grid_alpha"); DragFloatField
+    // prepends another "##" itself, so the +2 here skips the one already present — without it the
+    // resolved id would be "####grid_alpha", not the "##grid_alpha" that this table's own gui_test
+    // reference (test_overlay_controls.cpp) and test_defaults_panel.cpp both depend on. Not a typo
+    // — do not "clean up".
+    DragFloatField(row.alpha_id + 2, row.alpha, static_cast<float>(alpha_c.min_value),
+                   static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+
+    if (row.fold == OverlayFold::kNone) {
+      continue;  // Empty fold cell: this overlay has no field the others lack.
+    }
+    ImGui::TableSetColumnIndex(5);
+    // The angle list is offered only while the circles are actually drawn — editing the angles of
+    // something invisible is a control with no feedback. The radius has no such gate: the markers'
+    // own Line checkbox is right there in the same row.
+    const bool circles_shown = g_state.show_sun_circles_line || g_state.show_sun_circles_label;
+    if (row.fold == OverlayFold::kSunCircleAngles && !circles_shown) {
+      continue;
+    }
+    if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
+      ImGui::OpenPopup(row.fold_id);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(row.fold == OverlayFold::kSunCircleAngles ? "Edit angles" : "Marker radius");
+    }
+    if (ImGui::BeginPopup(row.fold_id)) {
+      if (row.fold == OverlayFold::kSunCircleAngles) {
+        RenderSunCirclesAnglePopup();
+      } else {
+        RenderZenithNadirRadiusPopup();
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  ImGui::EndTable();
+}
+
+}  // namespace
+
 void RenderRightPanel(GLFWwindow* window, float window_width, float window_height) {
   float panel_height = window_height - kTopBarHeight - kStatusBarHeight;
 
@@ -880,125 +1100,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // ---- Overlay Group ----
   if (ImGui::CollapsingHeader("Overlay", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
-    ImGui::SeparatorText("Auxiliary Lines");
-    // Per-overlay row layout: color picker + name (variable width) + Line / Label
-    // checkboxes anchored at fixed X so the two checkbox columns align across rows
-    // even though the name column has different widths (Horizon / Grid / Angular Distance).
-    // Second row: Alpha slider.
-    const ImGuiStyle& style = ImGui::GetStyle();
-    // Anchor checkbox columns at fixed X derived from the longest overlay name
-    // plus widget metrics. The trailing pad (ItemSpacing.x × 2) protects against
-    // ColorEdit3 / CalcTextSize sub-pixel rounding under HiDPI so the long name
-    // ("Angular Distance") never overlaps the Line checkbox.
-    float color_w = ImGui::GetFrameHeight();                       // ColorEdit3 NoInputs is a frame_h square
-    float name_col_w = ImGui::CalcTextSize("Angular Distance").x;  // widest overlay name
-    float check_box_w = ImGui::GetFrameHeight();                   // checkbox tick area
-    float line_text_w = ImGui::CalcTextSize("Line").x;
-    float line_col_x = color_w + style.ItemSpacing.x + name_col_w + style.ItemSpacing.x * 2.0f;
-    float label_col_x = line_col_x + check_box_w + style.ItemInnerSpacing.x + line_text_w + style.ItemSpacing.x * 2.0f;
-
-    auto overlay_row = [&](const char* name, const char* color_id, float* color, const char* line_id, bool* line_v,
-                           const char* label_id, bool* label_v) {
-      ImGui::ColorEdit3(color_id, color, ImGuiColorEditFlags_NoInputs);
-      ImGui::SameLine();
-      ImGui::TextUnformatted(name);
-      ImGui::SameLine(line_col_x);
-      Checkbox(line_id, line_v);
-      ImGui::SameLine(label_col_x);
-      Checkbox(label_id, label_v);
-    };
-
-    overlay_row("Horizon", "##horizon_color", g_state.horizon_color, "Line##horizon", &g_state.show_horizon_line,
-                "Label##horizon", &g_state.show_horizon_label);
-    const FieldEditorConstraint horizon_a_c = ConstraintFor("overlay_horizon_alpha", g_state);
-    SliderWithInput("Alpha##horizon", &g_state.horizon_alpha, static_cast<float>(horizon_a_c.min_value),
-                    static_cast<float>(horizon_a_c.max_value), horizon_a_c.fmt, horizon_a_c.scale);
-
-    overlay_row("Grid", "##grid_color", g_state.grid_color, "Line##grid", &g_state.show_grid_line, "Label##grid",
-                &g_state.show_grid_label);
-    const FieldEditorConstraint grid_a_c = ConstraintFor("overlay_grid_alpha", g_state);
-    SliderWithInput("Alpha##grid", &g_state.grid_alpha, static_cast<float>(grid_a_c.min_value),
-                    static_cast<float>(grid_a_c.max_value), grid_a_c.fmt, grid_a_c.scale);
-
-    overlay_row("Angular Distance", "##sun_circles_color", g_state.sun_circles_color, "Line##sun_circles",
-                &g_state.show_sun_circles_line, "Label##sun_circles", &g_state.show_sun_circles_label);
-    const FieldEditorConstraint sun_a_c = ConstraintFor("overlay_sun_circles_alpha", g_state);
-    SliderWithInput("Alpha##sun_circles", &g_state.sun_circles_alpha, static_cast<float>(sun_a_c.min_value),
-                    static_cast<float>(sun_a_c.max_value), sun_a_c.fmt, sun_a_c.scale);
-
-    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
-      if (ImGui::Button("Edit Angles...##overlay")) {
-        ImGui::OpenPopup("SunCirclesEdit");
-      }
-      if (ImGui::BeginPopup("SunCirclesEdit")) {
-        bool at_limit = SunCirclesAtLimit(g_state.sun_circle_angles.size());
-
-        // Preset buttons
-        const float presets[] = { 9.0f, 22.0f, 28.0f, 46.0f };
-        for (float p : presets) {
-          const bool already = SunCircleAlreadyPresent(g_state.sun_circle_angles, p);
-          char label[16];
-          std::snprintf(label, sizeof(label), "%.0f\xc2\xb0", p);
-          ImGui::BeginDisabled(already || at_limit);
-          if (ImGui::Button(label)) {
-            g_state.sun_circle_angles.push_back(p);
-            std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-          }
-          ImGui::EndDisabled();
-          ImGui::SameLine();
-        }
-        ImGui::NewLine();
-
-        // Custom angle input
-        static float custom_angle = 22.0f;
-        ImGui::PushItemWidth(60.0f);
-        ImGui::InputFloat("##custom_angle", &custom_angle, 0.0f, 0.0f, "%.1f");
-        ImGui::PopItemWidth();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(at_limit);
-        if (ImGui::Button("+##add_circle")) {
-          custom_angle = ClampSunCircleAngle(custom_angle);
-          g_state.sun_circle_angles.push_back(custom_angle);
-          std::sort(g_state.sun_circle_angles.begin(), g_state.sun_circle_angles.end());
-        }
-        ImGui::EndDisabled();
-
-        // Current list with delete buttons
-        ImGui::Separator();
-        int remove_idx = -1;
-        for (int i = 0; i < static_cast<int>(g_state.sun_circle_angles.size()); i++) {
-          ImGui::Text("%.1f\xc2\xb0", g_state.sun_circle_angles[i]);
-          ImGui::SameLine();
-          char del_label[32];
-          std::snprintf(del_label, sizeof(del_label), "x##del_%d", i);
-          if (ImGui::SmallButton(del_label)) {
-            remove_idx = i;
-          }
-        }
-        if (remove_idx >= 0) {
-          g_state.sun_circle_angles.erase(g_state.sun_circle_angles.begin() + remove_idx);
-        }
-
-        ImGui::EndPopup();
-      }
-    }
-
-    // Zenith / Nadir pixel-space marker. Single line toggle (no label column —
-    // markers don't carry text); radius slider mirrors the per-overlay alpha row.
-    ImGui::ColorEdit3("##zenith_nadir_color", g_state.zenith_nadir_color, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Zenith/Nadir");
-    ImGui::SameLine(line_col_x);
-    Checkbox("##zenith_nadir_line", &g_state.show_zenith_nadir_line);
-    const FieldEditorConstraint zn_a_c = ConstraintFor("overlay_zenith_nadir_alpha", g_state);
-    SliderWithInput("Alpha##zenith_nadir", &g_state.zenith_nadir_alpha, static_cast<float>(zn_a_c.min_value),
-                    static_cast<float>(zn_a_c.max_value), zn_a_c.fmt, zn_a_c.scale);
-    const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-    SliderWithInput("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
-                    static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
-
-    ImGui::PopItemWidth();
+    RenderOverlaysTab();
   }
 
   ImGui::End();
