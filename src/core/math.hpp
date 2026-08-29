@@ -268,19 +268,29 @@ void Normalized3(const float* vec, float* vec_out);
 void Vec3FromTo(const float* vec1, const float* vec2, float* vec);
 void TriangleNormal(const float* p1, const float* p2, const float* p3, float* normal);
 
+namespace detail {
+
 //! @brief Whether a distribution over an angle is unchanged by an arbitrary constant rotation —
 //!   i.e. kUniform spanning a full turn.
 //! @details The shared primitive under AxisDistribution::IsAzRotationallySymmetric and
 //!   ::IsRollRotationallySymmetric, and the one place the 360° tolerance is spelled. Stated over
 //!   the two raw fields it reads rather than over a Distribution, so a caller holding the fields
-//!   but not the struct — the C API's LUMICE_IsDApplicable, which the GUI consults instead of
-//!   keeping its own copy of this rule — can ask without assembling a stand-in object whose unread
-//!   members are a contract no compiler checks. `full_range_deg` is read type-erased (the raw
-//!   `Distribution::spread`, not UniformFullRange()) because it is passed unconditionally, before
-//!   the type has been established.
+//!   but not the struct can ask without assembling a stand-in object whose unread members are a
+//!   contract no compiler checks. Its direct callers are the two AxisDistribution members below
+//!   and detail::IsDApplicableParams (crystal.cpp); the reason the raw-field form exists at all
+//!   is two hops further out — LUMICE_IsDApplicable (c_api.cpp) reaches it through
+//!   IsDApplicableParams, and the GUI consults that instead of keeping its own copy of this rule.
+//!   `full_range_deg` is read type-erased (the raw `Distribution::spread`, not
+//!   UniformFullRange()) because it is passed unconditionally, before the type has been
+//!   established.
 //! @note Deliberately says nothing about the center: a full-period uniform is rotation invariant
 //!   wherever it is centered.
+//! @note Lives in `detail` for the same reason detail::NormalizeLatitude and
+//!   detail::IsDApplicableParams do: a core-internal primitive that is consumed across files but
+//!   is not part of the stable surface a caller outside core should bind to.
 bool IsFullTurnUniform(DistributionType type, float full_range_deg);
+
+}  // namespace detail
 
 struct AxisDistribution {
   AxisDistribution();
