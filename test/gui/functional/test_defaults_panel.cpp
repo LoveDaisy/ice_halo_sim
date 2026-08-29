@@ -1419,8 +1419,14 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // the Overlay group sits past the right panel's fold at the harness window size, so the
       // wildcard finds nothing while the window-relative id resolves and scrolls to it. The FOV
       // control is above the fold and either form reaches it — this one has no choice.
+      //
+      // "##OverlaysTable/" is part of that window-relative path and not decoration: the alpha cell
+      // is a table cell, and BeginTable pushes the table's own id as an override, so every widget
+      // inside hashes against THAT rather than against the window (imgui_tables.cpp). Drop the
+      // segment and the id resolves to nothing — which is what a missing control and a mis-spelled
+      // path look like alike.
       ctx->SetRef("##RightPanel");
-      ctx->ItemInputValue("##grid_alpha", 7.5f);
+      ctx->ItemInputValue("##OverlaysTable/##grid_alpha", 7.5f);
       ctx->SetRef("");
       ctx->Yield(3);
       IM_CHECK_EQ(alpha_from_table, gui::g_state.grid_alpha);

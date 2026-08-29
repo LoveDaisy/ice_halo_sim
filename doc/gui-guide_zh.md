@@ -131,7 +131,9 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
 
 ### Overlay（叠加）
 
-Render Preview 上的三组互相独立的辅助线：`Horizon`（地平线）、`Grid`（经纬网格）、`Angular Distance`（以太阳为中心的等角距环，例如 22°/46° 晕环）。每组都有颜色块、`Line` 与 `Label` 双复选框（分别控制线条和边缘标签的显隐，可独立组合 line-only / label-only / 全开 / 全关）、以及 alpha 滑块。`Angular Distance` 还提供 `Edit Angles...` 弹窗，支持 9° / 22° / 28° / 46° 预设角度以及任意自定义角度。
+Render Preview 上的辅助线，以一张表格呈现——每条辅助线回答的是同一组问题，所以它们是表格的行而不是堆叠的区块。列依次为：颜色块、名称、`Line` 与 `Label` 双复选框（分别控制线条和边缘标签的显隐，可独立组合 line-only / label-only / 全开 / 全关）、可拖动的 `Alpha` 单元格（单击即可键入精确值），以及行末的 `⋯` 折叠——里面放的是“只有这一行才有”的那个字段。
+
+共四行：`Horizon`（地平线）、`Grid`（经纬网格）、`Angular Dist.`（以太阳为中心的等角距环，例如 22°/46° 晕环；名称列宽度有限，故缩写）、`Zenith/Nadir`（天顶/天底的像素空间标记点，不带文字标签，因此它的 `Label` 单元格是空的）。`Angular Dist.` 的角度编辑器在折叠里——支持 9° / 22° / 28° / 46° 预设角度以及任意自定义角度——且仅在等角距环确实在绘制时才提供。`Zenith/Nadir` 的标记点半径（像素）则在它自己的折叠里。
 
 ## Render Preview（渲染预览）
 

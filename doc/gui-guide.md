@@ -131,7 +131,9 @@ The lens choice changes the geometry of the projected image dramatically:
 
 ### Overlay
 
-Three independent auxiliary lines on top of the Render Preview: `Horizon`, `Grid`, and `Angular Distance` (iso-angular rings centered on the sun, e.g. the 22° / 46° halos). Each has a colour swatch, separate `Line` and `Label` checkboxes (toggle the projected line and the viewport-edge label independently — line-only, label-only, both, or neither), and an alpha slider. `Angular Distance` can be customised through an `Edit Angles...` popup that supports preset angles (9° / 22° / 28° / 46°) and arbitrary custom angles.
+The auxiliary lines drawn on top of the Render Preview, as one table — every overlay answers the same questions, so they are read as rows rather than as stacked blocks. The columns are: a colour swatch, the name, `Line` and `Label` checkboxes (toggle the projected line and the viewport-edge label independently — line-only, label-only, both, or neither), an `Alpha` cell you drag (click it to type an exact value), and a trailing `⋯` fold for the one field a row has that the others do not.
+
+Four rows: `Horizon`, `Grid`, `Angular Dist.` (iso-angular rings centered on the sun, e.g. the 22° / 46° halos — abbreviated to fit the panel's name column), and `Zenith/Nadir` (pixel-space marker dots, which carry no text label, so their `Label` cell is empty). `Angular Dist.` opens its angle editor behind the fold — preset angles (9° / 22° / 28° / 46°) plus arbitrary custom angles — and it is offered only while the circles are actually being drawn. `Zenith/Nadir` holds its marker radius in pixels behind its own fold.
 
 ## Render Preview
 
