@@ -555,12 +555,18 @@ std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
 bool AxisDistribution::IsFullSphereUniform() const {
   return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformCenter(), 0.0f) &&
          FloatEqual(azimuth_dist.UniformFullRange(), 360.0f) && latitude_dist.type == DistributionType::kUniform &&
-         FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f);
+         FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f) &&
+         IsRollRotationallySymmetric();
 }
 
 
 bool AxisDistribution::IsAzRotationallySymmetric() const {
   return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformFullRange(), 360.0f);
+}
+
+
+bool AxisDistribution::IsRollRotationallySymmetric() const {
+  return roll_dist.type == DistributionType::kUniform && FloatEqual(roll_dist.UniformFullRange(), 360.0f);
 }
 
 

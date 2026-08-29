@@ -272,7 +272,10 @@ struct AxisDistribution {
   AxisDistribution();
 
   //! @brief Check if this distribution represents full-sphere uniform sampling.
-  //! @details Only checks azimuth and latitude — roll does not participate in sphere sampling dispatch.
+  //! @details Checks all three of azimuth, latitude AND roll. Roll is not decorative here: the
+  //!   fast path this predicate dispatches to never applies the pole-crossing `roll += π`
+  //!   correction that the general LatLut path applies on a flip, so the two paths only agree
+  //!   when roll is invariant under that +180° shift. See IsRollRotationallySymmetric.
   //! @warning The parameterized SampleSphericalPointsSph does NOT include the asin(u) Jacobian correction.
   //!   For full-sphere uniform, the caller must use the parameter-less overload instead.
   bool IsFullSphereUniform() const;
@@ -280,6 +283,24 @@ struct AxisDistribution {
   //! @brief Check if azimuth is uniformly distributed over the full 360°.
   //! @details Only checks the azimuth type and its full range; latitude and roll are ignored.
   bool IsAzRotationallySymmetric() const;
+
+  //! @brief Check whether roll is invariant under the pole-crossing +180° correction — i.e.
+  //!   sampling roll and sampling roll+π yield the same distribution.
+  //! @details This is what makes the kFullSphere fast path a provable optimization rather than a
+  //!   semantic fork: detail::NormalizeLatitude reflects a latitude past the pole and reports a
+  //!   `flip`, on which the general path adds π to BOTH azimuth and roll (Rz(roll) has period 2π),
+  //!   while the fast path adds nothing at all. Equal distributions therefore require roll's own
+  //!   distribution to be unchanged by a +π shift.
+  //! @warning The condition implemented below — kUniform spanning a full 360° — is STRICTER than
+  //!   the mathematical requirement. The requirement is only "invariant under a +180° shift"; a
+  //!   full-period uniform is merely the one non-degenerate form among the six DistributionTypes
+  //!   this repo has today that satisfies it (which is also why, like
+  //!   IsAzRotationallySymmetric, it need not check the center: a full-period uniform is shift
+  //!   invariant regardless of where it is centered). If a new DistributionType is added, do not
+  //!   copy this implementation mechanically — ask whether the new type can be +180°-invariant
+  //!   without being a full-range uniform (e.g. a symmetric two-lobe form), and widen the
+  //!   predicate rather than assuming uniform is the only answer.
+  bool IsRollRotationallySymmetric() const;
 
   //! @brief Check whether every one of azimuth/latitude/roll is kNoRandom — i.e. this axis
   //!   never consumes the RNG and yields one fixed orientation for every ray.
@@ -297,11 +318,18 @@ struct AxisDistribution {
   //!   bit-identical rotation for every ray, and a stochastic one really does vary. That is what
   //!   the sample count depends on, and it is invisible to a truth-table test — a change making
   //!   kNoRandom consume the RNG turns the pin red while every truth-table case stays green
-  //!   (verified by mutation). It does NOT pin which branch InitRay_rot takes: since the unified
-  //!   area-measure LatLut, the full_sphere fast path and the parameterized path are
-  //!   statistically equivalent (measured: fraction of |world z| < 0.5 is 0.5000 vs 0.4977 over
-  //!   20k samples), so that branch is an optimization rather than a correctness fork and
-  //!   decoupling it is not behaviorally detectable. Do not add a test claiming otherwise.
+  //!   (verified by mutation). It does NOT pin which branch InitRay_rot takes.
+  //! @note This comment used to claim the two sampler paths were "statistically equivalent", on
+  //!   the strength of a measurement of the fraction of |world z| < 0.5 (0.5000 vs 0.4977 over 20k
+  //!   samples), and told the reader not to add a test claiming otherwise. That claim was wrong and
+  //!   the measurement could not have caught it: |world z| reads the sampled AXIS DIRECTION only,
+  //!   and the difference between the two paths lives entirely in roll — the fast path drops the
+  //!   pole-crossing `roll += π` that the general path applies on a flip. A yardstick that cannot
+  //!   see the quantity under test reports agreement no matter what (a16). The two paths are now
+  //!   made equivalent by construction instead: IsFullSphereUniform requires
+  //!   IsRollRotationallySymmetric, so the fast path is only ever taken where the correction is a
+  //!   no-op in distribution. RollFlipDivergence.* (test_simulator.cpp) measures roll directly and
+  //!   pins that.
   bool IsAxisDeterministic() const;
 
   Distribution azimuth_dist;
