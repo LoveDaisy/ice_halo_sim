@@ -34,10 +34,17 @@
 // name, or a 22-degree halo circle added twice and drawn at double brightness.
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "gui/gui_state.hpp"
+// imgui_internal.h is normally an anti-pattern in this suite. One claim below has no public
+// reading: what text a table's HEADER draws. A blank header submits no addressable item, and the
+// word this one stopped drawing ("Overlay") is still on screen one line above it as the group's
+// CollapsingHeader — so a "**/Overlay" lookup answers about the wrong widget whether the header is
+// blank or not. TableGetColumnName reads the name the column was actually set up with.
+#include "imgui_internal.h"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -152,6 +159,28 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_NE(ctx->ItemInfo("**/##horizon_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##grid_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##sun_circles_label").ID, (ImGuiID)0);
+
+      // The header row. The name column draws none, because the group's own CollapsingHeader
+      // already says "Overlay" one line above it and a word repeated directly under itself reads as
+      // a second, different thing. Stated together with the four that DO draw one, so "blank"
+      // cannot be satisfied by a header row that failed to render at all. The table is found by the
+      // same three-seed id the swatch lookup above reconstructs.
+      const ImGuiTestItemInfo any_row = ctx->ItemInfo("**/##horizon_line");
+      ImGuiTable* table = nullptr;
+      if (any_row.Window != nullptr) {
+        table = ImGui::TableFindByID(ImGui::GetIDWithSeed("##OverlaysTable", nullptr, any_row.Window->ID));
+      }
+      IM_CHECK(table != nullptr);
+      // Everything from "##" on is id, not text — what a header draws is what comes before it.
+      auto header_text = [table](int column_n) {
+        const char* name = ImGui::TableGetColumnName(table, column_n);
+        const char* id_part = std::strstr(name, "##");
+        return std::string(name, id_part != nullptr ? static_cast<size_t>(id_part - name) : std::strlen(name));
+      };
+      IM_CHECK(header_text(1).empty());
+      IM_CHECK_EQ(header_text(2), std::string("Line"));
+      IM_CHECK_EQ(header_text(3), std::string("Label"));
+      IM_CHECK_EQ(header_text(4), std::string("Alpha"));
     };
   }
 
@@ -347,17 +376,20 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // Named ref so the negative check reads "not submitted inline" and not "scrolled past" —
         // see the case above. Released before the popup, which is a different window.
         const ScopedRef panel_ref(ctx, "//##RightPanel");
-        IM_CHECK(!ctx->ItemExists("**/##Radius##zenith_nadir_input"));  // folded away, not shown inline
+        // The selector lost SliderWithInput's "_input" half along with the control: the radius is
+        // the same DragFloatField the alpha cells use now, and that submits ONE item whose id is
+        // "##" + the label it was handed.
+        IM_CHECK(!ctx->ItemExists("**/##Radius##zenith_nadir"));  // folded away, not shown inline
         ctx->ItemClick("**/###zenith_nadir_fold");
       }
       ctx->Yield(3);
 
       // Both ends of the declared domain (2..20 px), so the popup's control is the registry's
       // control and not a second opinion about the range.
-      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", 100.0f);
+      ctx->ItemInputValue("**/##Radius##zenith_nadir", 100.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
-      ctx->ItemInputValue("**/##Radius##zenith_nadir_input", -5.0f);
+      ctx->ItemInputValue("**/##Radius##zenith_nadir", -5.0f);
       ctx->Yield();
       IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 2.0f);
 
