@@ -114,31 +114,61 @@ bool CaptureCardRect(ImGuiTestContext* ctx, int index, std::vector<unsigned char
   return true;
 }
 
-// Pixels that differ between two same-sized RGBA captures, counted only inside the outermost
-// `ring` rows and columns. The highlight under test is a BORDER colour, so it lives exactly there;
-// restricting the count to the ring is what keeps the card's interior — thumbnail included — out
-// of the comparison, so nothing the thumbnail cache does between two captures can reach it.
+// Pixels that differ between two same-sized RGBA captures, counted separately for each of the four
+// `ring`-deep strips along the rectangle's edge.
 //
-// Depth is device pixels, so `ring` covers one logical pixel of border on a Retina framebuffer and
-// two on a plain one; ImGui draws the child border one logical pixel wide.
-int EdgeRingDiff(const std::vector<unsigned char>& a, const std::vector<unsigned char>& b, int w, int h, int ring) {
+// Per side rather than as one total, because that is what makes the comparison say "a BORDER
+// changed" instead of "some pixel changed". A border wraps the card, so a real one moves all four
+// counts; anything local — a tooltip's corner, a redrawn glyph, one widget's own highlight — lands
+// on one side and leaves the other three at zero. Measured: with the highlight disabled, hovering
+// still moves a 28x2 blob on one edge, which a single "> 0" total would have accepted as proof.
+//
+// The interior is excluded entirely, so nothing the thumbnail cache does between two captures can
+// reach the judgement. Depth is device pixels: `ring` covers one logical pixel of border on a
+// Retina framebuffer and two on a plain one, and ImGui draws the child border one logical pixel
+// wide.
+struct RingDiff {
+  int left = -1;
+  int right = -1;
+  int top = -1;
+  int bottom = -1;
+
+  bool AllZero() const { return left == 0 && right == 0 && top == 0 && bottom == 0; }
+  bool AllChanged() const { return left > 0 && right > 0 && top > 0 && bottom > 0; }
+};
+
+RingDiff EdgeRingDiff(const std::vector<unsigned char>& a, const std::vector<unsigned char>& b, int w, int h,
+                      int ring) {
+  RingDiff out;
   if (a.size() != b.size() || w <= 2 * ring || h <= 2 * ring) {
-    return -1;
+    return out;
   }
-  int diff = 0;
+  out = RingDiff{ 0, 0, 0, 0 };
+  auto differs = [&](int x, int y) {
+    const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4;
+    return a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2];
+  };
   for (int y = 0; y < h; ++y) {
-    const bool edge_row = y < ring || y >= h - ring;
-    for (int x = 0; x < w; ++x) {
-      if (!edge_row && x >= ring && x < w - ring) {
-        continue;
+    for (int x = 0; x < ring; ++x) {
+      if (differs(x, y)) {
+        ++out.left;
       }
-      const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4;
-      if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2]) {
-        ++diff;
+      if (differs(w - 1 - x, y)) {
+        ++out.right;
       }
     }
   }
-  return diff;
+  for (int x = ring; x < w - ring; ++x) {
+    for (int y = 0; y < ring; ++y) {
+      if (differs(x, y)) {
+        ++out.top;
+      }
+      if (differs(x, h - 1 - y)) {
+        ++out.bottom;
+      }
+    }
+  }
+  return out;
 }
 
 // Somewhere that is not a card. The highlight is driven by the card child window's own hover
@@ -1020,9 +1050,14 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // time the test coroutine runs at the end of the frame, nothing records whether it was ever
   // applied. Only the framebuffer does.
   //
-  // The control capture is what makes the comparison mean anything. Two captures taken with the
-  // pointer in the SAME place must be identical on the ring; if they are not, the ring is noisy and
-  // a difference measured across a pointer move would prove nothing. Assert that first, then move.
+  // Two things make the comparison mean something, and both were added after a red-state probe
+  // showed the obvious version of this case passing with the highlight compiled out.
+  //
+  // First, a control capture: two captures taken with the pointer in the SAME place must be
+  // identical on the ring, or the ring is noisy and a difference measured across a pointer move
+  // proves nothing. Second, the difference is required on ALL FOUR sides. Hovering moves a small
+  // blob on one edge even with the highlight gone — a total ">0" accepted that blob as proof, and
+  // a border is the one thing that cannot be local.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "hovering_a_card_lights_its_border");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1045,7 +1080,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureCardRect(ctx, 0, cold_b, w_b, h_b));
       IM_CHECK_EQ(w, w_b);
       IM_CHECK_EQ(h, h_b);
-      IM_CHECK_EQ(EdgeRingDiff(cold_a, cold_b, w, h, kRing), 0);
+      IM_CHECK(EdgeRingDiff(cold_a, cold_b, w, h, kRing).AllZero());
 
       ctx->MouseMoveToPos(CardBlankSpot(0));
       // The card writes its hover state into ImGuiStorage at the END of the frame it is hovered and
@@ -1057,7 +1092,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureCardRect(ctx, 0, hot, w_hot, h_hot));
       IM_CHECK_EQ(w, w_hot);
       IM_CHECK_EQ(h, h_hot);
-      IM_CHECK_GT(EdgeRingDiff(cold_b, hot, w, h, kRing), 0);
+      IM_CHECK(EdgeRingDiff(cold_b, hot, w, h, kRing).AllChanged());
 
       // And it goes back: a highlight that never clears would be a card stuck looking hovered.
       ctx->MouseMoveToPos(PointOffEveryCard());
@@ -1068,7 +1103,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK(CaptureCardRect(ctx, 0, cooled, w_c, h_c));
       IM_CHECK_EQ(w, w_c);
       IM_CHECK_EQ(h, h_c);
-      IM_CHECK_EQ(EdgeRingDiff(cold_b, cooled, w, h, kRing), 0);
+      IM_CHECK(EdgeRingDiff(cold_b, cooled, w, h, kRing).AllZero());
     };
   }
 
