@@ -900,6 +900,76 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The card's rail carries a Link-to button of its own, and it has to arm the SAME pick mode the
+  // modal's does. The two are one function (StartLinkPickMode) precisely so they cannot answer
+  // differently, and this case is what would notice if one of them grew its own copy again: the
+  // sibling case above drives the modal's button through the same assertions.
+  //
+  // Where they legitimately differ is the modal-buffer commit, which only the modal's button can
+  // reach — a card's rail is unclickable while a modal is up, since the modal blocks. That branch
+  // stays covered by link_to_arms_pick_mode_and_says_so_above_the_cards.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "the_cards_link_button_arms_the_same_pick_mode_the_modal_does");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+      AddSecondEntryOnItsOwnSlot(ctx);
+      const int target_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(target_cid, gui::g_state.layers[0].entries[0].crystal_id);
+
+      // No modal anywhere in this path — that is the point of putting the action on the card.
+      ctx->ItemClick("**/" ICON_FA_LINK "##link_0_0");
+      ctx->Yield(4);
+      IM_CHECK(!gui::IsEditModalOpen());
+      IM_CHECK(gui::g_state.pick_link_source.has_value());
+      IM_CHECK_EQ(gui::g_state.pick_link_source->layer_idx, 0);
+      IM_CHECK_EQ(gui::g_state.pick_link_source->entry_idx, 0);
+
+      // And it is a real pick, not just an armed flag: clicking the other card completes the link.
+      ctx->MouseMoveToPos(CardBlankSpot(1));
+      ctx->MouseClick(0);
+      ctx->Yield(6);
+      IM_CHECK(!gui::g_state.pick_link_source.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, target_cid);
+    };
+  }
+
+  // A name typed in the modal reaches the crystal, and Cancel leaves it alone. CrystalConfig::name
+  // has been in the document format all along with no control anywhere in the GUI writing it, so
+  // this is the first path that ever puts one there — and it is what the Colours window shows when
+  // it names a crystal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_name_typed_in_the_modal_reaches_the_crystal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+      const int cid = gui::g_state.layers[0].entries[0].crystal_id;
+      IM_CHECK(gui::g_state.crystals[cid].name.empty());
+
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##crystal_name", "plate");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_STR_EQ(gui::g_state.crystals[cid].name.c_str(), "plate");
+      // The identity string every crystal-naming surface renders now carries it, id still leading.
+      IM_CHECK_STR_EQ(gui::FormatCrystalIdentity(gui::g_state, cid).c_str(), "#0 · plate · Prism");
+
+      // Cancel is a discard like every other field on this tab, not a special case.
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##crystal_name", "column");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_STR_EQ(gui::g_state.crystals[cid].name.c_str(), "plate");
+    };
+  }
+
   // A linked group shares its filter atomically: adding one to either card must bind both, or the
   // group silently stops being a group and the two cards start simulating different things while
   // still claiming to be linked.
