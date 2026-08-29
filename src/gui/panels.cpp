@@ -359,6 +359,12 @@ bool DragFloatField(const char* label, float* value, float min_val, float max_va
   const float old_value = *value;
   ImGui::DragFloat(drag_id, value, speed, min_val, max_val, fmt, flags);
 
+  // ImGui does not give DragFloat a resize cursor on its own (unlike a window border or a table
+  // column boundary), so the affordance has to be set explicitly for hover and drag alike.
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+
   // Unconditional, and NOT redundant with ImGuiSliderFlags_AlwaysClamp: that flag constrains the
   // values the widget itself produces, and deliberately leaves a value it was handed out of range
   // alone. SliderWithInput ends with exactly this line, and things depend on it — a .lmc written by
