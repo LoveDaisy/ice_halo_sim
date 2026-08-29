@@ -60,6 +60,16 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
       changed = true;
     }
   } else {
+    // Linear: no *Snapped counterpart, and none is needed. The three branches above snap because
+    // they round-trip the value through a transform and its inverse, which lands a few ULP short
+    // of the bound at a stop. This branch hands `value` to ImGui untransformed, and ImGui itself
+    // special-cases the extents -- ScaleValueFromRatioT (imgui_widgets.cpp) opens with
+    // `if (t <= 0.0f ...) return v_min; if (t >= 1.0f) return v_max;`, so a stop yields the bound
+    // bit-for-bit. Verified against the vendored copy rather than inferred from the other
+    // branches, because it matters here: the Mean slider runs through this branch, and its value
+    // feeds the same family of absolute-epsilon predicates (IsRollMeanAtMultipleOf30, and the
+    // 90-degree latitude center inside IsFullSphereUniform) that a few ULP would flip exactly as
+    // the Range slider's drift once flipped IsFullSphereUniform.
     changed |= ImGui::SliderFloat(slider_id, value, min_val, max_val, fmt, ImGuiSliderFlags_NoInput);
   }
   return changed;
