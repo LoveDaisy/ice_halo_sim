@@ -288,9 +288,12 @@ void RenderTopBar(float window_width) {
   // with Run (green) / Stop (red).
   const bool tint_colors_button = ShouldTintColorsButton(g_state.raypath_color.empty());
   if (tint_colors_button) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.30f, 0.35f, 0.65f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.40f, 0.45f, 0.75f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25f, 0.28f, 0.55f, 1.0f));
+    // Accent, at the alphas the theme uses for a tint rather than a fill (theme.cpp's header_tint
+    // rule: a surface the size of a button says "look here" by being tinted, not by being flooded).
+    // It was three literal blues, which is why swapping the palette left this badge behind.
+    ImGui::PushStyleColor(ImGuiCol_Button, AccentColor(0.35f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, AccentColor(0.50f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, AccentColor(0.25f));
   }
   if (ImGui::Button(ICON_FA_PALETTE " Colors")) {
     // task-348.3 AC3 (⑦): apply the "default enable on open with no classes" rule
@@ -356,9 +359,12 @@ void RenderTopBar(float window_width) {
     const std::string checkbox_id = std::string(mode_label) + "##CompositePreviewToggle";
     bool checked = composite_now;
     if (composite_now) {
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.35f, 0.55f, 0.85f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.45f, 0.65f, 0.95f, 1.0f));
-      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, AccentColor(0.55f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, AccentColor(0.75f));
+      // The mark has to come off the accent-filled box it sits in, and the theme's own
+      // ImGuiCol_CheckMark IS the accent — so it would vanish. Text is the palette's answer to
+      // "legible on this app's surfaces"; a literal white is only the answer for a dark one.
+      ImGui::PushStyleColor(ImGuiCol_CheckMark, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     }
     ImGui::BeginDisabled(composite_empty);
     if (Checkbox(checkbox_id.c_str(), &checked)) {
@@ -1407,13 +1413,23 @@ void RenderStatusBar(float window_width, float window_height) {
       ImGui::TextColored(GoodTextColor(), "Ready");
       break;
     case SimState::kSimulating:
-      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Simulating...");
+      // Accent, because that is what the accent is for: the one thing on screen that is live right
+      // now. Not a semantic grade — a run in progress is a fact, not a judgement about the
+      // document, and doc/gui-visual-language.md section 7 is explicit that folding progress into
+      // the warning grade would dilute the grade that means "you need to look at this".
+      ImGui::TextColored(AccentColor(), "Simulating...");
       break;
     case SimState::kStopping:
-      ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Stopping...");
+      // Winding down: the same frame greys and disables the Stop button, so the word takes the
+      // dimmed text colour and says the same thing the button already says.
+      ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), "Stopping...");
       break;
     case SimState::kDone:
-      ImGui::TextColored(ImVec4(0.3f, 0.7f, 1.0f, 1.0f), "Done");
+      // A finished, unmodified run is the resting state, so it takes the resting text colour. The
+      // two states that DO carry a judgement keep their grades (Ready good, Modified warning) and
+      // the accent above marks the one that is in flight; between them there is nothing left for
+      // "Done" to claim that would not weaken one of the other three.
+      ImGui::TextUnformatted("Done");
       break;
     case SimState::kModified:
       ImGui::TextColored(WarningTextColor(), "Modified");
@@ -1902,7 +1918,7 @@ void RenderLogPanel(float window_width, float window_height) {
       switch (entry.level) {
         case spdlog::level::trace:
         case spdlog::level::debug:
-          color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+          color = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
           break;
         case spdlog::level::warn:
           color = WarningTextColor();
@@ -1912,7 +1928,7 @@ void RenderLogPanel(float window_width, float window_height) {
           color = DestructiveTextColor();
           break;
         default:
-          color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+          color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
           break;
       }
       ImGui::PushStyleColor(ImGuiCol_Text, color);

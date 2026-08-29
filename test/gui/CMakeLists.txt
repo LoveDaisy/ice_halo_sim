@@ -22,6 +22,8 @@ add_executable(gui_test
     functional/test_scene_controls.cpp
     functional/test_shell_chrome.cpp
     functional/test_log_panel.cpp
+    functional/test_theme_coverage.cpp
+    functional/test_theme_scan.cpp
     functional/test_overlay_controls.cpp
     functional/test_preview_viewport.cpp
     functional/test_preview_texture.cpp

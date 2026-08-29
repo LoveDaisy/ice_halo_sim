@@ -148,6 +148,50 @@ ImVec4 WithAlpha(const ImVec4& c, float a) {
   return ImVec4(c.x, c.y, c.z, a);
 }
 
+// Test-only second palette. Its job is to answer one question mechanically — "does this pixel
+// follow the palette?" — by being applied in place of kIceTruePalette for a second capture of the
+// same frame: a pixel that comes out unchanged is a call site that did not ask the theme.
+//
+// It is NOT a candidate skin and is not meant to be usable or pretty. The one property it must
+// have is distance, and the binding constraint is per-FIELD distance from kIceTruePalette: a
+// contrast field that landed close to its Ice counterpart would leave a genuinely themed pixel
+// looking unchanged, i.e. a false negative in the direction that matters. Measured over all 17
+// fields, the smallest RGB Euclidean distance to the Ice counterpart is 0.54 (grab), well clear
+// of the 0.3 floor this was calibrated against.
+//
+// Secondary, and weaker: every field is also kept ≥0.38 away from each bare colour literal known
+// to exist at a GUI call site (the amber/orange/blue status text, the grey and white log grades,
+// the three thumbnail greys, the LINK blue, the co-shared amber, the two hand-rolled blues). That
+// one does not prevent false negatives — an unchanged literal reads as a candidate whatever its
+// hue — it only keeps the diff's highlight image readable. Hence every field here is bright and
+// saturated: the literals in this tree cluster in the dark greys and the blues, and the cheapest
+// way to stay away from a cluster is to leave the neighbourhood entirely.
+constexpr Palette kContrastPaletteForTest{
+  /*text*/ { 1.000f, 0.300f, 0.850f, 1.00f },
+  /*text_dim*/ { 0.550f, 0.900f, 0.200f, 1.00f },
+  /*window_bg*/ { 0.150f, 0.950f, 0.700f, 1.00f },
+  /*child_bg*/ { 0.300f, 0.990f, 0.550f, 1.00f },
+  /*popup_bg*/ { 0.980f, 0.550f, 0.880f, 1.00f },
+  /*frame_bg*/ { 0.800f, 0.150f, 0.620f, 1.00f },
+  /*frame_hover*/ { 0.900f, 0.320f, 0.740f, 1.00f },
+  /*frame_active*/ { 0.990f, 0.480f, 0.850f, 1.00f },
+  /*button*/ { 0.200f, 0.800f, 0.500f, 1.00f },
+  /*button_hover*/ { 0.350f, 0.920f, 0.640f, 1.00f },
+  /*button_active*/ { 0.100f, 0.660f, 0.380f, 1.00f },
+  // A saturated border rather than another near-black: the production border is (0,0,0,0.55), and
+  // swapping one dark edge for another dark edge is exactly the weak contrast that would let a
+  // hand-drawn grey border (panels.cpp's thumbnail rect) pass for a themed one.
+  /*border*/ { 0.850f, 0.100f, 0.750f, 0.55f },
+  /*title_bg*/ { 0.550f, 0.100f, 0.900f, 1.00f },
+  /*title_active*/ { 0.700f, 0.280f, 0.990f, 1.00f },
+  /*accent*/ { 0.950f, 0.150f, 0.750f, 1.00f },
+  /*grab*/ { 0.550f, 0.850f, 0.150f, 1.00f },
+  // Alpha deliberately equals the Ice tint's 0.16: ApplyPalette derives HeaderHovered/HeaderActive
+  // by scaling it, so holding it fixed keeps the two captures identical in blend weight and
+  // different only in hue — a difference the diff can attribute.
+  /*header_tint*/ { 0.950f, 0.150f, 0.750f, 0.160f },
+};
+
 void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   ImVec4* c = style.Colors;
   c[ImGuiCol_Text] = p.text;
@@ -193,6 +237,34 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   c[ImGuiCol_TabSelected] = p.frame_active;
   c[ImGuiCol_TabDimmed] = p.title_bg;
   c[ImGuiCol_TabDimmedSelected] = p.frame_bg;
+  // The rule under a selected tab head. Nothing draws it today — ImGui gates it on
+  // ImGuiTabBarFlags_DrawSelectedOverline, which only DockNodeUpdateTabBar sets, and the tab bar in
+  // edit_modals.cpp is a plain BeginTabBar. It is assigned anyway because the value ImGui would
+  // otherwise use is not a value anyone chose: StyleColorsDark COPIES it from HeaderActive, so the
+  // moment a dock node appears the overline would arrive in the pre-theme header colour with no
+  // review and no red test. Accent while focused; the Separator white when the bar is dimmed, so an
+  // unfocused bar is demoted rather than recoloured.
+  c[ImGuiCol_TabSelectedOverline] = p.accent;
+  c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(1.0f, 1.0f, 1.0f, 0.10f);
+  // Docking. No DockSpace exists on this branch, so neither slot is reachable; same reasoning as
+  // the overline above — claimed so that introducing docking is a visible decision here rather than
+  // a silent inheritance of ImGui's factory blue. The drag preview follows the file's existing
+  // "accent at low alpha marks the region about to be acted on" convention (SeparatorHovered,
+  // ResizeGripHovered); an empty node takes the window background so it reads as a gap rather than
+  // as a panel with nothing in it.
+  c[ImGuiCol_DockingPreview] = WithAlpha(p.accent, 0.35f);
+  c[ImGuiCol_DockingEmptyBg] = p.window_bg;
+  // Plot slots. Also unreachable — there is no PlotLines/PlotHistogram/ProgressBar call in src/gui/
+  // (app_panels.cpp says so in as many words where the run status is drawn). ImGui's defaults here
+  // are the ones that would hurt most if they ever surfaced: PlotHistogram defaults to
+  // (0.90, 0.70, 0.00), i.e. this app's warning grade, which would announce "needs your attention"
+  // about a plain progress readout.
+  c[ImGuiCol_PlotLines] = p.accent;
+  c[ImGuiCol_PlotLinesHovered] = WithAlpha(p.accent, 0.85f);
+  c[ImGuiCol_PlotHistogram] = p.accent;
+  c[ImGuiCol_PlotHistogramHovered] = WithAlpha(p.accent, 0.85f);
+  // ImGui::TextLink* has no call site here either; accent is the same emphasis a link would want.
+  c[ImGuiCol_TextLink] = p.accent;
   c[ImGuiCol_TableHeaderBg] = p.title_active;
   c[ImGuiCol_TableBorderStrong] = p.border;
   c[ImGuiCol_TableBorderLight] = ImVec4(1.0f, 1.0f, 1.0f, 0.06f);
@@ -201,6 +273,13 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
   c[ImGuiCol_TextSelectedBg] = WithAlpha(p.accent, 0.35f);
   c[ImGuiCol_NavCursor] = p.accent;
   c[ImGuiCol_DragDropTarget] = p.accent;
+  // The Ctrl+Tab window switcher. Unlike the slots above this one IS reachable —
+  // ImGuiConfigFlags_NavEnableKeyboard is set in both main.cpp and the test harness — and it drew
+  // in ImGui's 70% white over a 20% grey dim until this line existed.
+  c[ImGuiCol_NavWindowingHighlight] = p.accent;
+  // One dim value shared by the two things that dim the whole screen behind a foreground window
+  // (the switcher and a modal). A second, slightly different darkness would be a value nobody chose.
+  c[ImGuiCol_NavWindowingDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
   c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
 }
 
@@ -210,6 +289,11 @@ void ApplyPalette(ImGuiStyle& style, const Palette& p) {
 constexpr float kUncheckedBoxBorderAlpha = 0.13f;
 
 }  // namespace
+
+ImVec4 AccentColor(float alpha) {
+  const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+  return ImVec4(accent.x, accent.y, accent.z, accent.w * alpha);
+}
 
 bool Checkbox(const char* label, bool* v) {
   const bool changed = ImGui::Checkbox(label, v);
@@ -229,6 +313,18 @@ bool Checkbox(const char* label, bool* v) {
   return changed;
 }
 
+void ApplyStyle(ImGuiStyle& style) {
+  ApplyGridSpacing(style);
+  ApplyPalette(style, kIceTruePalette);
+}
+
+void ApplyContrastPaletteForTest(ImGuiStyle& style) {
+  // Palette only, no ApplyGridSpacing: the diff this feeds compares two captures of the same
+  // frame, so they must differ in colour and in nothing else. Re-running the spacing would be
+  // a no-op today, but the point is that geometry is not this function's business.
+  ApplyPalette(style, kContrastPaletteForTest);
+}
+
 void ApplyVisualLanguage(ImGuiIO& io) {
   ImGui::StyleColorsDark();
 
@@ -238,9 +334,7 @@ void ApplyVisualLanguage(ImGuiIO& io) {
   // DragFloat/DragInt call site anywhere in the GUI.
   io.ConfigDragClickToInputText = true;
 
-  ImGuiStyle& style = ImGui::GetStyle();
-  ApplyGridSpacing(style);
-  ApplyPalette(style, kIceTruePalette);
+  ApplyStyle(ImGui::GetStyle());
 
   if (!AddBodyFont(io, kBodyFontSizePx)) {
     GUI_LOG_WARNING("Roboto Medium failed to load; falling back to the built-in bitmap font.");

@@ -34,6 +34,7 @@
 #include "gui/log_sink.hpp"
 #include "gui/panels.hpp"
 #include "gui/theme.hpp"
+#include "gui/theme_test_hooks.hpp"
 #include "gui/user_defaults.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -277,6 +278,10 @@ int main(int argc, char** argv) {
   const char* test_filter = nullptr;
   int core_log_level = LUMICE_LOG_INFO;  // Default: INFO
   int gui_log_level = LUMICE_LOG_INFO;
+  // --theme-palette contrast swaps in theme.cpp's test palette after the visual language is
+  // applied, so the same test can be captured twice and the two PNGs diffed. Off by default:
+  // every committed reference image is shot under the production palette.
+  bool use_contrast_palette = false;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--filter") == 0 && i + 1 < argc) {
       test_filter = argv[++i];
@@ -301,6 +306,14 @@ int main(int argc, char** argv) {
     } else if (strcmp(argv[i], "--export-dir") == 0 && i + 1 < argc) {
       // Pin where GuiTestTempPath() writes, so a collector does not have to guess it.
       g_export_dir = argv[++i];
+    } else if (strcmp(argv[i], "--theme-palette") == 0 && i + 1 < argc) {
+      const char* which = argv[++i];
+      if (strcmp(which, "contrast") == 0) {
+        use_contrast_palette = true;
+      } else if (strcmp(which, "default") != 0) {
+        fprintf(stderr, "[FATAL] --theme-palette expects 'default' or 'contrast', got '%s'\n", which);
+        return 1;
+      }
     } else if (strcmp(argv[i], "--fixed-dt") == 0) {
       // Inject deterministic 16.67ms per-frame dt via the test engine and skip
       // the frame-limit sleep (decouples VSync frame-budget semantics from
@@ -437,6 +450,9 @@ int main(int argc, char** argv) {
   io.IniFilename = nullptr;
 
   gui::ApplyVisualLanguage(io);
+  if (use_contrast_palette) {
+    gui::ApplyContrastPaletteForTest(ImGui::GetStyle());
+  }
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
@@ -535,6 +551,8 @@ int main(int argc, char** argv) {
   RegisterDefaultsPanelLayoutTests(engine);
   RegisterLensProjectionTests(engine);
   RegisterModalLayoutTests(engine);
+  RegisterThemeCoverageTests(engine);
+  RegisterThemeScanTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete

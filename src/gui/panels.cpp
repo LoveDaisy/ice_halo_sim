@@ -1056,7 +1056,19 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     }
   }
   if (co_shared) {
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 0.65f, 0.2f, 1.0f));
+    // The same accent the ACTIVE card's border uses, weakened: this card is in the same
+    // relationship to the open modal, just not the one being edited. Distinguishing it by
+    // INTENSITY rather than by a second hue is what keeps it inside the theme — the amber literal
+    // it replaced was a third colour the palette had never heard of, and it stayed amber whatever
+    // palette was installed. The alpha is theme.cpp's existing "accent at 0.55 marks a region
+    // about to be acted on" value (ImGuiCol_SeparatorHovered, ImGuiCol_ResizeGripHovered), which
+    // is the same statement this border makes.
+    //
+    // Telling the two apart never requires judging one border in isolation: a co-shared card only
+    // exists while a modal is open on ANOTHER card, so the full-strength one is always on screen
+    // beside it. Measured against the panel background (12,12,15) the active border peaks at
+    // (50,89,132) and this one at (33,54,79).
+    ImGui::PushStyleColor(ImGuiCol_Border, AccentColor(kCoSharedBorderAlpha));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, kActiveCardBorder);
   }
 
@@ -1086,16 +1098,27 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   ImVec2 thumb_br(thumb_pos.x + thumb_display_size, thumb_pos.y + thumb_display_size);
   // An excluded entry draws its thumbnail dimmed so the card reads as "out" at a
   // glance, from across the panel, without having to find the toggle glyph.
-  const ImU32 thumb_tint = entry.enabled ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 70);
+  //
+  // One rule covers both branches of the thumbnail — the rendered image and the placeholder that
+  // stands in until the cache produces one: an excluded card draws its thumbnail area at
+  // kExcludedThumbAlpha. Written twice as two unrelated pairs of literals (a white tint dropped to
+  // alpha 70, and a second, darker grey), they were free to disagree, and the placeholder pair did
+  // not follow the palette at all.
+  //
+  // The tint stays white because for an image a white tint is the IDENTITY, not a colour choice —
+  // what varies here is opacity. The placeholder takes ImGuiCol_FrameBg, the theme's token for an
+  // inset well with nothing in it yet, and the border ImGuiCol_Border like every other framed thing
+  // in the app.
+  const float thumb_alpha = entry.enabled ? 1.0f : kExcludedThumbAlpha;
+  const ImU32 thumb_tint = ImGui::GetColorU32(IM_COL32(255, 255, 255, 255), thumb_alpha);
   if (thumb_tex != 0) {
     // OpenGL texture Y-axis is flipped relative to ImGui: uv0=(0,1) uv1=(1,0)
     draw_list->AddImage(static_cast<ImTextureID>(thumb_tex), thumb_pos, thumb_br, ImVec2(0, 1), ImVec2(1, 0),
                         thumb_tint);
   } else {
-    draw_list->AddRectFilled(thumb_pos, thumb_br,
-                             entry.enabled ? IM_COL32(60, 60, 60, 255) : IM_COL32(45, 45, 45, 255));
+    draw_list->AddRectFilled(thumb_pos, thumb_br, ImGui::GetColorU32(ImGuiCol_FrameBg, thumb_alpha));
   }
-  draw_list->AddRect(thumb_pos, thumb_br, IM_COL32(100, 100, 100, 255));
+  draw_list->AddRect(thumb_pos, thumb_br, ImGui::GetColorU32(ImGuiCol_Border, thumb_alpha));
 
   // ---- Participation toggle (always visible) ----
   // Semantics: "exclude this crystal, then re-run". Turning it off does NOT subtract this
@@ -1327,7 +1350,10 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
       const float badge_x = btn_x + (btn_w - glyph_w) * 0.5f;
       const float badge_y = dup_y + btn_h + kHoverBtnGap;
       ImGui::SetCursorScreenPos(ImVec2(badge_x, badge_y));
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+      // Accent: the badge points at a relationship between cards, which is exactly the "look
+      // here, these belong together" job the accent does elsewhere. It was its own lighter blue,
+      // close enough to the accent to look intentional and independent enough to stop following it.
+      ImGui::PushStyleColor(ImGuiCol_Text, AccentColor());
       ImGui::TextUnformatted(ICON_FA_LINK);
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered()) {
