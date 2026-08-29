@@ -825,13 +825,12 @@ void RenderOverlaysTab() {
       continue;  // Empty fold cell: this overlay has no field the others lack.
     }
     ImGui::TableSetColumnIndex(5);
-    // The angle list is offered only while the circles are actually drawn — editing the angles of
-    // something invisible is a control with no feedback. The radius has no such gate: the markers'
-    // own Line checkbox is right there in the same row.
-    const bool circles_shown = g_state.show_sun_circles_line || g_state.show_sun_circles_label;
-    if (row.fold == OverlayFold::kSunCircleAngles && !circles_shown) {
-      continue;
-    }
+    // Unconditional, for both folds. Whether a row offers one is a property of the ROW — of whether
+    // it owns a field the others lack — and the fold cells of the four rows sit in one column,
+    // directly above one another. A cell left empty by anything else than "this row has no extra
+    // field" says the wrong thing in that column, which is what a condition on the circles being
+    // drawn used to say here: it read as the angle editor having gone missing, not as a considered
+    // state (test_overlay_controls.cpp pins this across both switches).
     if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + row.fold_id).c_str())) {
       ImGui::OpenPopup(row.fold_id);
     }
