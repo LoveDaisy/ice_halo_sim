@@ -232,6 +232,12 @@ bool Checkbox(const char* label, bool* v) {
 void ApplyVisualLanguage(ImGuiIO& io) {
   ImGui::StyleColorsDark();
 
+  // Lets a click-release (no drag, no ctrl) on a DragFloat enter text-input mode — the only
+  // consumer today is the Overlay table's Alpha cells (RenderOverlaysTab, app_panels.cpp), so
+  // this flag's blast radius is exactly that table. Re-read this note before adding a second bare
+  // DragFloat/DragInt call site anywhere in the GUI.
+  io.ConfigDragClickToInputText = true;
+
   ImGuiStyle& style = ImGui::GetStyle();
   ApplyGridSpacing(style);
   ApplyPalette(style, kIceTruePalette);
