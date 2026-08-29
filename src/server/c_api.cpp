@@ -3189,9 +3189,10 @@ const char* LUMICE_AxisScalarKeyName(int slot) {
 
 int LUMICE_IsDApplicable(int azimuth_dist_type, float azimuth_full_range_deg, float roll_anchor_deg) {
   // Spelled as a switch rather than a cast: the header promises only that LUMICE_DIST_* stays
-  // self-consistent, not that it stays numerically equal to core's DistributionType (every other
-  // translation in this file goes through a string switch for the same reason). An unrecognised
-  // value answers the negative, matching LUMICE_IsLegalFace / LUMICE_IsShapeScalarApplicable.
+  // self-consistent, not that it stays numerically equal to core's DistributionType. Every other
+  // wire-enum translation in this file (LUMICE_DIST_* above, LUMICE_LENS_TYPE_*) goes through an
+  // explicit switch for the same reason. An unrecognised value answers the negative, matching
+  // LUMICE_IsLegalFace / LUMICE_IsShapeScalarApplicable.
   ns::DistributionType az_type{};
   switch (azimuth_dist_type) {
     case LUMICE_DIST_NO_RANDOM:

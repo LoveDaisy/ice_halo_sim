@@ -17,7 +17,14 @@ whether the user had touched the Range slider. The mechanism, in three steps:
 The fix makes ``IsFullSphereUniform`` require roll to be rotationally symmetric, so the
 fast path is only ever taken where dropping the correction is invisible in distribution.
 The three configs below are the user's own, differing only in how they do (or do not)
-approach the full-sphere condition.
+approach the full-sphere condition. They are kept as three full literal copies rather than
+derived from one another at load time, matching the existing convention of this directory
+(see the nine ``degenerate_pipeline_*.json`` siblings, which differ only in one ``std``).
+
+Both cases carry ``@pytest.mark.slow``, which in this repo means "needs the shared-library
+build" (``./scripts/build.sh -sj release``), not "takes a long time" -- these two together run
+in about 2.5 s. The marker is what keeps them out of CI's fast leg, where no shared library
+exists to load; see AGENTS.md under "E2E test split".
 """
 
 from __future__ import annotations

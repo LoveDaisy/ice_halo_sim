@@ -553,6 +553,12 @@ std::pair<float, bool> detail::NormalizeLatitude(float latitude_rad) {
 
 
 bool AxisDistribution::IsFullSphereUniform() const {
+  // The az / lat halves read through UniformCenter() / UniformFullRange() while the roll half
+  // (IsRollRotationallySymmetric -> IsFullTurnUniform) reads the raw `spread`. The two are the
+  // same value: for kUniform, UniformFullRange() returns `spread` outright. The accessors are
+  // kept here because they assert the kUniform precondition, which the preceding `type ==` in
+  // each conjunct establishes; IsFullTurnUniform cannot use them because it is also the entry
+  // point for callers that have not yet checked the type.
   return azimuth_dist.type == DistributionType::kUniform && FloatEqual(azimuth_dist.UniformCenter(), 0.0f) &&
          FloatEqual(azimuth_dist.UniformFullRange(), 360.0f) && latitude_dist.type == DistributionType::kUniform &&
          FloatEqual(latitude_dist.UniformCenter(), 90.0f) && FloatEqual(latitude_dist.UniformFullRange(), 360.0f) &&
