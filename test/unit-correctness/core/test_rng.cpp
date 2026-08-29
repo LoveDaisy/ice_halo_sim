@@ -84,29 +84,61 @@ TEST_F(RngTest, IsFullSphereUniform) {
   using lumice::AxisDistribution;
   using lumice::DistributionType;
 
-  // Default full-sphere: azimuth={kUniform,0,360}, latitude={kUniform,90,360}
+  // Full-sphere: azimuth={kUniform,0,360}, latitude={kUniform,90,360}, roll={kUniform,*,360}.
+  // Roll is a required conjunct, not decoration: the fast path this predicate dispatches to skips
+  // the pole-crossing `roll += pi` the general path applies, so it is only equivalent when roll's
+  // distribution is unchanged by that shift.
   AxisDistribution full_sphere;
   full_sphere.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   full_sphere.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  full_sphere.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   EXPECT_TRUE(full_sphere.IsFullSphereUniform());
 
   // Custom azimuth range -> false
   AxisDistribution custom_az;
   custom_az.azimuth_dist = { DistributionType::kUniform, 45.0f, 90.0f };
   custom_az.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  custom_az.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   EXPECT_FALSE(custom_az.IsFullSphereUniform());
 
   // Custom latitude range -> false
   AxisDistribution custom_lat;
   custom_lat.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   custom_lat.latitude_dist = { DistributionType::kUniform, 60.0f, 60.0f };
+  custom_lat.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   EXPECT_FALSE(custom_lat.IsFullSphereUniform());
 
   // Gaussian type -> false
   AxisDistribution gauss;
   gauss.azimuth_dist = { DistributionType::kGaussian, 0.0f, 10.0f };
   gauss.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  gauss.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   EXPECT_FALSE(gauss.IsFullSphereUniform());
+
+  // Azimuth and latitude full-sphere, but roll fixed -> false. This is the user-reported defect
+  // configuration: the fast path would drop the +180 deg roll correction on half the rays, which is
+  // a different physical distribution, not the same one sampled faster.
+  AxisDistribution fixed_roll;
+  fixed_roll.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  fixed_roll.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  EXPECT_FALSE(fixed_roll.IsFullSphereUniform());  // roll_dist stays the kNoRandom default
+
+  // Roll uniform but only over a half turn -> false: a 180 deg-wide uniform maps onto its
+  // complement under a +180 deg shift, so it is not shift invariant.
+  AxisDistribution half_roll;
+  half_roll.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  half_roll.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  half_roll.roll_dist = { DistributionType::kUniform, 0.0f, 180.0f };
+  EXPECT_FALSE(half_roll.IsFullSphereUniform());
+
+  // Roll centered anywhere is fine as long as it spans a full turn -- shift invariance of a
+  // full-period uniform does not depend on where it is centered (same reason
+  // IsAzRotationallySymmetric ignores the azimuth center).
+  AxisDistribution offset_roll;
+  offset_roll.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  offset_roll.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  offset_roll.roll_dist = { DistributionType::kUniform, 137.0f, 360.0f };
+  EXPECT_TRUE(offset_roll.IsFullSphereUniform());
 
   // Default constructor (kNoRandom) -> false
   AxisDistribution default_ctor;

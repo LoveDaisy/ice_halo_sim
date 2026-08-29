@@ -19,6 +19,7 @@
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
+#include "core/shared/lat_path_selection.hpp"
 #include "core/simulator.hpp"
 #include "core/trace_ops.hpp"
 #include "util/queue.hpp"
@@ -550,10 +551,19 @@ std::vector<std::array<float, 9>> SampleOrientations(const AxisDistribution& axi
 // latitude branch turns the first case red while all five truth-table cases in
 // test_math.cpp stay green, which is the gap this test exists to fill. It does
 // NOT catch InitRay_rot's full_sphere branch being decoupled from
-// IsFullSphereUniform: the two sampler paths are statistically equivalent since
-// the unified area-measure LatLut, so nothing observable changes. Do not "fix"
-// that by weakening these assertions into a distributional check — there is no
-// difference to detect.
+// IsFullSphereUniform.
+//
+// This comment used to justify that last sentence by asserting the two sampler
+// paths were "statistically equivalent since the unified area-measure LatLut, so
+// nothing observable changes", and told the reader not to weaken these
+// assertions into a distributional check because "there is no difference to
+// detect". That was wrong. The difference is real and lives in roll: the
+// full_sphere fast path never applies the pole-crossing `roll += pi` that the
+// LatLut path applies on a flip. The measurement the old claim rested on — the
+// fraction of samples with |world z| < 0.5 — reads the sampled axis direction
+// only, so it is structurally blind to roll and would have reported agreement no
+// matter how far apart the two paths were (a16: the yardstick has to reach the
+// quantity under test). RollFlipDivergence.* below measures roll itself.
 TEST(AxisDeterminismMatchesRuntimeOrientation, DeterministicAxisYieldsOneFixedRotation) {
   AxisDistribution axis;  // default ctor: all three kNoRandom
   ASSERT_TRUE(axis.IsAxisDeterministic());
@@ -568,11 +578,17 @@ TEST(AxisDeterminismMatchesRuntimeOrientation, DeterministicAxisYieldsOneFixedRo
 
 TEST(AxisDeterminismMatchesRuntimeOrientation, FullSphereAxisIsStochasticAndVaries) {
   // roll stays kNoRandom on purpose: this is the combination most likely to be
-  // misjudged by a predicate that stops short of all three fields.
+  // misjudged by a predicate that stops short of all three fields. It used to be
+  // misjudged — this assertion was ASSERT_TRUE, which is exactly how the defect
+  // this test now guards was pinned as expected behavior. An axis whose roll is
+  // fixed cannot take the fast path: that path drops the pole-crossing
+  // `roll += pi`, so on the ~50% of rays that cross a pole it produces a crystal
+  // rotated a further 180 deg about its own c axis relative to what the config
+  // asks for. See RollFlipDivergence.* below for the measurement.
   AxisDistribution axis;
   axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
   axis.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
-  ASSERT_TRUE(axis.IsFullSphereUniform());
+  ASSERT_FALSE(axis.IsFullSphereUniform());
   EXPECT_FALSE(axis.IsAxisDeterministic());
 
   constexpr size_t kN = 16;
@@ -585,6 +601,134 @@ TEST(AxisDeterminismMatchesRuntimeOrientation, FullSphereAxisIsStochasticAndVari
     }
   }
   EXPECT_EQ(distinct_from_first, kN - 1) << "predicate says stochastic but InitRay_rot repeated a rotation";
+}
+
+// --- RollFlipDivergence: the yardstick that can see roll ---
+//
+// Why this suite exists. IsFullSphereUniform dispatches InitRay_rot to a fast
+// path that samples the axis direction directly and never applies the
+// pole-crossing correction detail::NormalizeLatitude reports; the general
+// kLutInverseCdf path adds pi to BOTH azimuth and roll whenever it flips. The
+// two therefore agree on the axis DIRECTION under any roll, and disagree on the
+// crystal's rotation about that axis unless roll's own distribution is
+// unchanged by a +180 deg shift. A criterion built on the sampled direction
+// (the fraction of |world z| < 0.5 that the comments here used to cite) cannot
+// separate them at all. These cases read roll itself.
+//
+// Recovering roll. BuildCrystalRotation composes
+//   M = Rz(azimuth - pi) * Ry(latitude - pi/2) * Rz(roll),
+// a ZYZ Euler triple whose third row is
+//   (-sin(b)*cos(roll), sin(b)*sin(roll), cos(b)),  b = latitude - pi/2.
+// So atan2(M[2][1], -M[2][0]) recovers roll up to a constant pi offset --
+// b ranges over [-pi, 0], where sin(b) <= 0, so the sign never varies mid-run.
+// Every assertion below is about how the recovered values CLUSTER, never about
+// an absolute angle, so that constant offset is immaterial.
+//
+// Near the poles sin(b) -> 0 and the recovery is ill-conditioned (roll and
+// azimuth become the same rotation there). Samples inside that band are
+// dropped; the retained fraction is asserted so a change that pushed most
+// samples to the poles could not quietly empty the measurement.
+constexpr float kPoleGuardSinB = 0.05f;
+
+// Recovered roll angles for `n` production-sampled orientations, one entry per
+// ray outside the pole guard band.
+std::vector<float> SampleRecoveredRolls(const AxisDistribution& axis, size_t n, uint32_t seed) {
+  auto mats = SampleOrientations(axis, n, seed);
+  std::vector<float> out;
+  out.reserve(mats.size());
+  for (const auto& m : mats) {
+    const float m20 = m[6];
+    const float m21 = m[7];
+    if (std::hypot(m20, m21) <= kPoleGuardSinB) {
+      continue;
+    }
+    out.push_back(std::atan2(m21, -m20));
+  }
+  return out;
+}
+
+// The defect the user reported, at the smallest scale that still shows it: an
+// axis whose azimuth and latitude span the full sphere but whose roll is fixed.
+// Before IsFullSphereUniform grew its roll conjunct this axis took the fast
+// path, and both assertions below failed -- the path was kFullSphere, and every
+// ray came back with the same roll instead of the half-and-half split the config
+// actually describes. Latitude is uniform over 360 deg, i.e. it spans the far
+// side of the sphere too, so detail::NormalizeLatitude reflects roughly half the
+// draws back and the general path adds pi to their roll.
+TEST(RollFlipDivergence, FixedRollAxisTakesLutPathAndSplitsRollAcrossHalfTurn) {
+  AxisDistribution axis;
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  // roll_dist stays the kNoRandom default: one fixed roll for every ray.
+
+  ASSERT_EQ(lat_path::SelectLatPath(axis).kind, lat_path::LatPathKind::kLutInverseCdf)
+      << "an axis with a fixed roll must not take the fast path: that path drops the pole-crossing roll += pi";
+
+  constexpr size_t kN = 2000;
+  auto rolls = SampleRecoveredRolls(axis, kN, /*seed=*/20260829);
+  ASSERT_GT(rolls.size(), kN * 95 / 100) << "pole guard dropped an implausible share of the samples";
+
+  // rng.Get on a kNoRandom roll returns the same constant every time, so the
+  // only thing that can move roll is the flip: the recovered angles must sit on
+  // exactly two points half a turn apart, not spread between them.
+  size_t upper = 0;
+  size_t lower = 0;
+  size_t off_cluster = 0;
+  float worst_c = 1.0f;
+  for (float roll : rolls) {
+    const float c = std::cos(roll);
+    if (std::abs(c) <= 0.99f) {
+      off_cluster++;
+      worst_c = std::min(worst_c, std::abs(c));
+    }
+    (c > 0.0f ? upper : lower)++;
+  }
+  EXPECT_EQ(off_cluster, 0u) << off_cluster << " recovered rolls sit between the two discrete values (worst |cos| "
+                             << worst_c << ")";
+  const double upper_frac = static_cast<double>(upper) / static_cast<double>(rolls.size());
+  // A latitude uniform over the full 360 deg crosses a pole on half its draws,
+  // so the split is 50/50. The window is ~4.5 sigma wide at this sample count.
+  EXPECT_GT(upper_frac, 0.45) << "roll flip fires too rarely (" << upper << " of " << rolls.size() << ")";
+  EXPECT_LT(upper_frac, 0.55) << "roll flip fires too often (" << upper << " of " << rolls.size() << ")";
+  EXPECT_EQ(upper + lower, rolls.size());
+}
+
+// The positive half of the same proposition, and the reason the fast path is
+// kept rather than deleted: when roll is uniform over a full turn, adding pi to
+// half the rays is invisible in distribution, so dropping the correction costs
+// nothing and IsFullSphereUniform still routes here.
+TEST(RollFlipDivergence, UniformRollAxisKeepsFastPathAndRollStaysUniform) {
+  AxisDistribution axis;
+  axis.azimuth_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+  axis.latitude_dist = { DistributionType::kUniform, 90.0f, 360.0f };
+  axis.roll_dist = { DistributionType::kUniform, 0.0f, 360.0f };
+
+  ASSERT_TRUE(axis.IsFullSphereUniform());
+  ASSERT_EQ(lat_path::SelectLatPath(axis).kind, lat_path::LatPathKind::kFullSphere);
+
+  constexpr size_t kN = 4000;
+  auto rolls = SampleRecoveredRolls(axis, kN, /*seed=*/20260829);
+  ASSERT_GT(rolls.size(), kN * 95 / 100) << "pole guard dropped an implausible share of the samples";
+
+  constexpr size_t kBins = 8;
+  std::array<size_t, kBins> hist{};
+  for (float roll : rolls) {
+    float t = roll;
+    while (t < 0.0f) {
+      t += 2.0f * math::kPi;
+    }
+    auto bin = static_cast<size_t>(t / (2.0f * math::kPi) * kBins);
+    hist[std::min(bin, kBins - 1)]++;
+  }
+  // Uniform over 8 bins is 0.125 each; sigma is ~0.005 at this sample count, so
+  // the window below is wide enough to be stable and narrow enough that a roll
+  // pinned to one or two values (the failure mode this guards) blows straight
+  // through it.
+  for (size_t i = 0; i < kBins; i++) {
+    const double frac = static_cast<double>(hist[i]) / static_cast<double>(rolls.size());
+    EXPECT_GT(frac, 0.10) << "roll bin " << i << " underfilled: " << hist[i];
+    EXPECT_LT(frac, 0.15) << "roll bin " << i << " overfilled: " << hist[i];
+  }
 }
 
 TEST(DeterministicOrientationCountTest, CountsAxisDeterministicSlotsAcrossLayers) {
