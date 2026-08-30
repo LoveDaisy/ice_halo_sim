@@ -80,6 +80,11 @@ static const char* kLensTypeJsonNames[] = { "linear",
 static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
 static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
               "kVisibleJsonNames must match kVisibleCount");
+// EV-mode JSON names, indexed by GUI RenderConfig::ev_mode and mirroring core's own wire vocabulary
+// ("relative"/"absolute", see config/render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM). Strings
+// rather than the raw int on BOTH the .lmc and the CLI-JSON path, so one word means one thing
+// everywhere and a reader never has to ask which integer this file's 1 was.
+static const char* kEvModeJsonNames[] = { "relative", "absolute" };
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
@@ -899,6 +904,17 @@ static int LensTypeFromString(const std::string& s) {
   return 0;  // default: linear
 }
 
+// Unknown text falls back to relative, which is also the missing-key answer — the same rule core's
+// enum table follows for its own unrecognized strings, so a typo cannot mean different things on
+// the two sides of the boundary.
+static int EvModeFromString(const std::string& s) {
+  for (int i = 0; i < static_cast<int>(sizeof(kEvModeJsonNames) / sizeof(kEvModeJsonNames[0])); i++) {
+    if (s == kEvModeJsonNames[i])
+      return i;
+  }
+  return 0;
+}
+
 static int VisibleFromString(const std::string& s) {
   for (int i = 0; i < kVisibleCount; i++) {
     if (s == kVisibleJsonNames[i])
@@ -956,6 +972,7 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["exposure_offset"] = r.exposure_offset;
+  jr["ev_mode"] = kEvModeJsonNames[r.ev_mode];
   return jr;
 }
 
@@ -992,6 +1009,7 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
       r.ray_color[i] = jr["ray_color"][i].get<float>();
   }
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
+  r.ev_mode = EvModeFromString(jr.value("ev_mode", kEvModeJsonNames[RenderConfig{}.ev_mode]));
   // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
   // unknown keys, so no migration code is needed — the field becomes a silent no-op.
   return r;
@@ -1704,6 +1722,15 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // display-time EV concept — re-rendering the exported config has to reproduce the
     // brightness the user is looking at (the Save Config semantic promise).
     dst.intensity_factor = intent == SceneIntent::kJsonExport ? std::pow(2.0f, r.exposure_offset) : 1.0f;
+    // ev_mode does NOT split by intent, unlike intensity_factor directly above, and the reason is
+    // that they are different kinds of thing. intensity_factor splits because kSimCommit's mono
+    // preview bypasses the server's baking entirely and re-applies EV client-side, so baking it
+    // twice would double it. ev_mode is not "whether EV is applied", it is "which anchor it is
+    // measured from" — and under kSimCommit the composite preview consumes the server's answer
+    // for real (LUMICE_SetCompositeExposure feeds display EV on top of it). Neutralizing it on
+    // that arm would leave the composite preview anchored differently from the image the same
+    // document exports.
+    dst.ev_mode = r.ev_mode == 1 ? LUMICE_EV_MODE_ABSOLUTE : LUMICE_EV_MODE_RELATIVE;
     dst.overlap = kDualFisheyeOverlap;
     // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
     // used to hardcode while re-encoding a renderer now have to be stated here. Core always
@@ -2476,6 +2503,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
     // therefore the struct default pushed through the same 2^x the reader inverts below.
     float ifactor = jr.value("intensity_factor", std::exp2(RenderConfig{}.exposure_offset));
     r.exposure_offset = std::log2(std::max(ifactor, 1e-6f));
+    // Unlike "visible" just above, the fallback here IS the struct default: core's own default
+    // for this field is kRelative, which is the same value, so the two answers coincide and there
+    // is nothing to distinguish.
+    r.ev_mode = EvModeFromString(jr.value("ev_mode", kEvModeJsonNames[RenderConfig{}.ev_mode]));
 
     state.renderer = r;
   } else {

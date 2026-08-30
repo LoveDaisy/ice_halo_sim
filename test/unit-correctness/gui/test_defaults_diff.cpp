@@ -663,6 +663,11 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "renderer.background", true, Kind::kColor },
     { "renderer.ray_color", true, Kind::kColor },
     { "renderer.exposure_offset", true, Kind::kFloatSlider },
+    // v4.16, and the third deliberately-unregistered leaf. It is listed (so it can be adopted as
+    // a personal default like any other document field) but has no inline editor, because no
+    // control edits it anywhere in the app yet. When one lands, this row and its registry entry
+    // change together.
+    { "renderer.ev_mode", false, Kind::kCombo },
     { "aspect_ratio", true, Kind::kCombo },
     { "aspect_portrait", true, Kind::kCheckbox },
     { "bg_path", false, Kind::kCheckbox },

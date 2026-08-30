@@ -368,12 +368,23 @@ struct RenderConfig {
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
+  // Which anchor the SERVER measures its exposure scale against, mirroring core
+  // RenderConfig::EvMode (0 = relative / P99 self-anchor, 1 = absolute / emitted energy).
+  // 0 matches core's default, so a document that never mentions it renders the way the GUI
+  // preview always has.
+  //
+  // Held as a plain int, deliberately not registered in field_editor_registry.cpp: there is no
+  // control that edits it yet, so it travels only with a whole document (open / save / import /
+  // export). Not being in the registry is what keeps it out of the tier machinery it would
+  // otherwise need an editor to justify.
+  int ev_mode = 0;
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            front == o.front && std::equal(background, background + 3, o.background) &&
-           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset;
+           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset &&
+           ev_mode == o.ev_mode;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -464,7 +475,15 @@ struct RenderConfigResimFields {
 // it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
 // is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
 // (like background — see ConfigSnapshot::renderer_background).
-static_assert(sizeof(RenderConfig) == 60, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+//
+// ev_mode (v4.16) is EXCLUDED, and the reason is that the table has nothing to decide about it
+// yet. Every member above is there because a control can edit it mid-document, which is what makes
+// "has this changed since the commit?" a question worth asking. ev_mode has no such control: it
+// arrives only with a whole document (open / import), and that path resets the commit baseline
+// along with everything else, so no comparison this table drives can ever see it move. Adding it
+// would be dead weight that reads as a decision. When a control for it lands, this line is the
+// thing that has to be revisited with it.
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on

@@ -458,6 +458,39 @@ TEST(JsonImportContractChain, AJsonRenderLensMissingTypeWarnsAndKeepsLinear) {
 // SOURCE array index — correct only while nothing is ever dropped — would punch a hole in that
 // invariant the moment dropping became possible. Hence the surviving class is the second one, and
 // its expected z_order is 0 rather than merely "non-negative".
+// A CLI-authored config's ev_mode must survive the import, and — because this is the only path
+// where the GUI reads core's own wire format — must read the same two words core writes.
+//
+// The absent case is the one that matters most in practice and is asserted against a SEEDED
+// non-default: every config written before this key existed comes through here, and "it loaded as
+// relative" has to mean the reader chose relative, not that it never wrote the field at all.
+TEST(JsonImportContractChain, AJsonRenderEvModeIsImportedAndAbsenceMeansRelative) {
+  struct Row {
+    const char* render_json;
+    int expected;
+    const char* label;
+  };
+  const Row kRows[] = {
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64], "ev_mode": "absolute"}])", 1,
+      "absolute" },
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64], "ev_mode": "relative"}])", 0,
+      "relative" },
+    { R"([{"id": 1, "lens": {"type": "linear", "fov": 60}, "resolution": [64, 64]}])", 0, "<absent>" },
+  };
+  for (const Row& row : kRows) {
+    const std::string doc = DocWithParts(kWellFormedLightSource, row.render_json, "");
+    GuiState scratch;
+    scratch.renderer.ev_mode = 1;  // seed non-default: an unread field must be visibly overwritten
+    if (!DeserializeFromJson(doc, scratch)) {
+      // Non-fatal per row: the absent case is the one that matters most and it is last, so a
+      // fatal assert on either of the two before it would leave it unreported.
+      ADD_FAILURE() << row.label << ": the import rejected the document outright";
+      continue;
+    }
+    EXPECT_EQ(scratch.renderer.ev_mode, row.expected) << row.label;
+  }
+}
+
 TEST(JsonImportContractChain, AJsonColorClassMissingColorIsDroppedNotDefaultColored) {
   const std::string doc = DocWithParts(kWellFormedLightSource, kWellFormedRender, R"(,
     "raypath_color": {"mode": "painter", "classes": [

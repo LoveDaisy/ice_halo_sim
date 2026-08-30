@@ -135,6 +135,51 @@ TEST(SceneCommitChain, OnlyTheExposureDiffersBetweenTheRunAndExportIntents) {
   }
 }
 
+// ev_mode reaches the scene on BOTH intents, carrying the document's value rather than a constant.
+//
+// The case above already forbids an intent split here — it compares the two documents field by
+// field with only intensity_factor removed, so an ev_mode that diverged by intent fails there. What
+// it cannot see is an ev_mode that never varies at all: a BuildScene that hardcoded "relative"
+// would satisfy it perfectly, and every absolute document would silently render relative. So this
+// case varies the document and reads the emitted word.
+TEST(SceneCommitChain, TheDocumentsEvModeReachesBothIntents) {
+  struct Row {
+    int value;
+    const char* spelling;
+  };
+  for (const Row& row : { Row{ 0, "relative" }, Row{ 1, "absolute" } }) {
+    SeedOneEntryDocument();
+    g_state.renderer.ev_mode = row.value;
+
+    // Every failure below is non-fatal + continue, for the reason the intent case above states:
+    // one spelling that fails to commit must not suppress the other's report, and "which
+    // spelling" is what says whether the break is in the mapping or in the commit path.
+    nlohmann::json commit_doc = CommitSceneJson(g_state);
+    if (commit_doc.is_null() || commit_doc["render"].size() != 1u) {
+      ADD_FAILURE() << row.spelling << ": the run intent produced no single-renderer scene";
+      continue;
+    }
+    EXPECT_EQ(commit_doc["render"][0]["ev_mode"].get<std::string>(), row.spelling)
+        << row.spelling << ": the composite preview would anchor differently from the document";
+
+    // Guarded like its sibling above: operator[] auto-vivifies a missing key to null and
+    // get<std::string>() then throws, which would leave the loop entirely.
+    nlohmann::json export_doc;
+    try {
+      export_doc = nlohmann::json::parse(CoreJson(g_state));
+    } catch (const nlohmann::json::exception& e) {
+      ADD_FAILURE() << row.spelling << ": the export intent emitted something unparseable: " << e.what();
+      continue;
+    }
+    if (export_doc.is_null() || export_doc["render"].size() != 1u) {
+      ADD_FAILURE() << row.spelling << ": the export intent produced no single-renderer scene";
+      continue;
+    }
+    EXPECT_EQ(export_doc["render"][0]["ev_mode"].get<std::string>(), row.spelling)
+        << row.spelling << ": the exported config would open at a different brightness";
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The crystal side: what the user shaped is what gets simulated.
 
