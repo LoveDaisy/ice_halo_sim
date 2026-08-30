@@ -279,6 +279,15 @@ namespace {
 }  // namespace
 
 
+// Sole owner of the control-to-trailing-label gap; rationale in panels.hpp.
+float LabelColumnGapX() {
+  return ImGui::GetStyle().ItemInnerSpacing.x;
+}
+
+void PushLabelColumnItemWidth() {
+  ImGui::PushItemWidth(-(kLabelColWidth + LabelColumnGapX()));
+}
+
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
 // When `reserve_label_col` is false the trailing text label is omitted (table-cell
@@ -305,14 +314,13 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
   snprintf(label_id, label_id_size, "##%s_label", label);
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
-  float label_gap = ImGui::GetStyle().ItemInnerSpacing.x;
+  float label_gap = LabelColumnGapX();
   float avail_w = ImGui::GetContentRegionAvail().x;
   // With the trailing label: subtract kLabelColWidth + the slider→input spacing + the
   // input→label gap. Without it: only the slider→input spacing.
   //
-  // The two gaps are different constants on purpose. The control→label gap is ItemInnerSpacing.x
-  // because ImGui's own Combo uses that one and hardcodes it inside BeginCombo, so a combo row and
-  // a row built here can only put their labels on the same vertical line if this side moves. It
+  // The two gaps are different constants on purpose. The control→label gap comes from
+  // LabelColumnGapX() (see panels.hpp for why that value and not ItemSpacing.x). It
   // must stay paired with FinishSliderLayout's SameLine below: the label's x is
   // (right edge − kLabelColWidth) whatever value the pair takes — the term cancels — but the
   // CONTROL's right edge is this value, so a mismatched pair moves the controls out of their
@@ -361,7 +369,7 @@ static void TextWithLabelProbe(const char* display_label, const char* probe_id) 
 
 // Render the label text after slider + input.
 static void FinishSliderLayout(const char* display_label, const char* label_id) {
-  ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);  // paired with PrepareSliderLayout
+  ImGui::SameLine(0.0f, LabelColumnGapX());  // paired with PrepareSliderLayout
   TextWithLabelProbe(display_label, label_id);
 }
 
@@ -1212,7 +1220,7 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // Right column — layout matches SliderWithInput's three-column model:
   //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
   // so Row 1-3 align column boundaries with Row 4 automatically.
-  const float label_gap_x = ImGui::GetStyle().ItemInnerSpacing.x;
+  const float label_gap_x = LabelColumnGapX();
   float right_x = thumb_pos.x + thumb_display_size + spacing_x;
   float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
   // Same two-different-gaps split as PrepareSliderLayout, and for the same reason: the Weight row
@@ -1666,7 +1674,7 @@ void RenderSceneControls(GuiState& state) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
+  PushLabelColumnItemWidth();
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
   // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
   static const char* const* kSpectrumComboItems = [] {
@@ -1704,7 +1712,7 @@ void RenderSceneControls(GuiState& state) {
   }
 
   ImGui::SeparatorText("Simulation");
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
+  PushLabelColumnItemWidth();
   Checkbox("Infinite rays", &state.sim.infinite);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Run simulation continuously until manually stopped");

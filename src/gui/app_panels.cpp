@@ -893,7 +893,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // ---- View Group ----
   if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
+    PushLabelColumnItemWidth();
     ImGui::SeparatorText("Lens");
     // Use BeginCombo + Selectable to honour kLensTypePresentationOrder (gui_state.hpp).
     // The enum value (r.lens_type) is preserved unchanged; only the display order differs.
@@ -994,7 +994,7 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 
   // ---- Display Group ----
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemInnerSpacing.x));
+    PushLabelColumnItemWidth();
     ImGui::SeparatorText("Rendering");
     // Rust-tinted input: changing Resolution re-runs the simulation and discards accumulated rays.
     // The warning is the point — see doc/gui-visual-language.md §7.
