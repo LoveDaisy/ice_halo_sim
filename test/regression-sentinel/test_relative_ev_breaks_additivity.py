@@ -35,8 +35,9 @@ the raw luminance of the same pixel, and the median taken over pixels in a band 
 both uint8 quantization at the bottom and the [0,1] clamp at the top. Recomputing the formula
 would make the test agree with render.cpp by construction and go green on any pair of modes
 whose formulas were both copied here correctly -- including a pair that never reached the
-renderer at all. The recovery is accurate to about 1%: it puts kNormScale at 0.0793 against
-its declared 0.08, which is the quantization bias and is 450x smaller than the effect below.
+renderer at all. The recovery lives in ``test/e2e/_display_scale.py``, shared with the
+ray-count suite, and is accurate to about 1%: it puts kNormScale at 0.0793 against its declared
+0.08, which is the quantization bias and is 450x smaller than the effect below.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from test.e2e._display_scale import recover_applied_scale
 from test.e2e.capi_runner import run_scene_capi_buffered
 from test.e2e.runner import get_project_root
 
@@ -75,17 +77,6 @@ _DISPLAY_ADD_TOL = 0.06
 # the same reason: it has to be a margin no Monte-Carlo noise could produce.
 _DISPLAY_ADD_MIN_BREAK = 0.50
 
-# The band the scale is recovered over. Below ~0.05 linear the uint8 grid is coarse enough to
-# bias the ratio; above ~0.60 a pixel is approaching the clamp, where the ratio stops being a
-# ratio at all.
-_BAND_LO = 0.05
-_BAND_HI = 0.60
-
-
-def _srgb_to_linear(u8: np.ndarray) -> np.ndarray:
-    u = u8.astype(np.float64) / 255.0
-    return np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4)
-
 
 def _config_path(split: str, mode: str) -> Path:
     stem = f"absolute_additivity_{split}" + ("_relative" if mode == "relative" else "")
@@ -103,18 +94,9 @@ def _measure(split: str, mode: str) -> dict:
     result = run_scene_capi_buffered(str(path), sim_seed=_SEED, backend="legacy", timeout_sec=600)
     assert result.has_valid_data, f"{path.name}: simulation produced no data"
 
-    raw_y = result.flt_buf[:, :, 1].astype(np.float64)
-    linear = _srgb_to_linear(result.rgb_buf)
-    # sRGB luminance weights: the Y row of the sRGB->XYZ matrix, so this recovers the same Y
-    # channel the raw buffer holds.
-    displayed_y = 0.2126 * linear[:, :, 0] + 0.7152 * linear[:, :, 1] + 0.0722 * linear[:, :, 2]
-
-    band = (raw_y > 0.0) & (displayed_y > _BAND_LO) & (displayed_y < _BAND_HI)
-    assert band.sum() > 1000, f"{path.name}: only {band.sum()} pixels in the recovery band"
-    scale = float(np.median(displayed_y[band] / raw_y[band]))
-
+    scale = recover_applied_scale(result, label=path.name)
     return {
-        "sum_y": float(raw_y.astype(np.float64).sum()),
+        "sum_y": float(result.flt_buf[:, :, 1].astype(np.float64).sum()),
         # The applied scale with the config's own EV knob divided out. What is left is the
         # ANCHOR -- the part the mode selects. Leaving intensity_factor in would make the two
         # halves differ by their deliberate half-stop in both modes and hide the effect.
