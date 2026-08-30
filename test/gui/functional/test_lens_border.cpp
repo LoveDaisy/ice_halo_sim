@@ -23,6 +23,8 @@
 // therefore unambiguous.
 
 #include <cmath>
+#include <cstddef>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -202,9 +204,16 @@ void RegisterLensBorderTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // AC1's pixel half + AC3. One case, because they are one render: with visible=upper the shader
-  // discards the lower half-sky, so the SAME frame answers "is the border where the formula says"
-  // (upper azimuths) and "does it survive the visibility gate" (lower azimuths).
+  // AC1's pixel half + AC3, over all three single-lens families that carry a border. One case,
+  // because they are one render per family: with visible=upper the shader discards the lower
+  // half-sky, so the SAME frame answers "is the border where the arithmetic says" (upper azimuths)
+  // and "does it survive the visibility gate" (lower azimuths).
+  //
+  // This is what stops a wrong coefficient in the GLSL from passing. The unit-correctness sibling
+  // proves the ARITHMETIC against an independent inverse; it reads no pixels, so on its own it is
+  // satisfied by a shader that computes something else entirely. Measured: changing the equal-area
+  // branch from sin(half_fov/2) to sin(half_fov) in the shader left every other assertion in this
+  // task green — these rows are what turns that red.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "lens_border", "the_border_is_drawn_whole_through_the_visibility_gate");
     t->GuiFunc = LensBorderGuiFunc;
@@ -212,46 +221,84 @@ void RegisterLensBorderTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      // Orthographic at fov=180: r_boundary = 1 / sin(90°) = 1 image radius, i.e. the circle
-      // inscribed in this square frame — entirely on screen, which the wider-radius lenses would
-      // not be at this size.
-      constexpr float kRadiusPx = kProbeH * 0.5f;
-      const std::vector<unsigned char> frame =
-          RenderFrame(ctx, gui::kLensTypeFisheyeOrthographic, 180.0f, gui::kVisibleUpper, true);
-      IM_CHECK(!frame.empty());
+      struct Row {
+        int lens_type;
+        float fov;
+        float radius_px;
+        const char* name;
+      };
+      // radius_px is spelled as a NUMBER, not recomputed from the shader's formula, so a reader can
+      // check it by hand and so a shared helper cannot make this case agree with the shader by
+      // construction. img_radius is min(w,h)/2 = 128 px at this probe size.
+      //
+      //   equal area   fov=200: 1 / sin(50°)  = 1.30541 img radii -> 167.09 px
+      //   equidistant  fov=270: pi / (135°)   = 1.33333 img radii -> 170.67 px
+      //   orthographic fov=180: 1 / sin(90°)  = 1.00000 img radii -> 128.00 px
+      //
+      // The FOVs are chosen so the three radii separate: each one is more than the search window
+      // away from what the OTHER two formulas would give for the same lens, so a coefficient copied
+      // between branches lands outside the window and is not found.
+      const Row kRows[] = {
+        { gui::kLensTypeFisheyeEqualArea, 200.0f, 167.09f, "fisheye equal-area fov=200" },
+        { gui::kLensTypeFisheyeEquidist, 270.0f, 170.67f, "fisheye equidistant fov=270" },
+        { gui::kLensTypeFisheyeOrthographic, 180.0f, 128.00f, "fisheye orthographic fov=180" },
+      };
 
-      // Azimuths in the KEPT half (+y is up in this convention) and in the DISCARDED half. The
-      // first group is the geometry claim; the second is the one that goes red if the border call
-      // moves back inside the visibility gate.
-      const float kUpperPhis[] = { 0.25f * kPi, 0.5f * kPi, 0.75f * kPi };
-      const float kLowerPhis[] = { -0.25f * kPi, -0.5f * kPi, -0.75f * kPi };
+      // Diagonal azimuths, not the axes: a circle of radius up to ~181 px is fully addressable at
+      // 45° in a 256x256 frame, whereas on the axes the widest of these three circles would run off
+      // the edge and the probe would silently find nothing to read.
+      const float kUpperPhis[] = { 0.25f * kPi, 0.75f * kPi };
+      const float kLowerPhis[] = { -0.25f * kPi, -0.75f * kPi };
 
-      // Reported non-fatally throughout: the frame is already captured, so nothing below is driving
-      // the GUI and a later azimuth cannot be invalidated by an earlier failure. WHICH azimuths fail
-      // is the whole diagnostic — all six means the radius is wrong, only the lower three means the
-      // border went back behind the visibility gate.
-      for (float phi : kUpperPhis) {
-        if (!BorderFoundNear(frame, 0.0f, 0.0f, kRadiusPx, phi)) {
-          IM_ERRORF("no border at azimuth %.2f rad, radius %.1f px (kept half-sky)", static_cast<double>(phi),
-                    static_cast<double>(kRadiusPx));
+      // Every frame is captured FIRST, then every frame is examined. Not a stylistic split: an
+      // ImGuiTestContext action opens with `if (IsError()) return;`, so a report raised while
+      // examining row 1 would silently turn row 2's render into a no-op and its failures into
+      // echoes of row 1's. Rendering up front keeps all three diagnoses independent, which is the
+      // point of having three rows.
+      std::vector<std::vector<unsigned char>> frames;
+      for (const Row& row : kRows) {
+        frames.push_back(RenderFrame(ctx, row.lens_type, row.fov, gui::kVisibleUpper, true));
+      }
+
+      // Nothing below drives the GUI — these are buffer reads — so every failure is reported
+      // non-fatally and examination continues. WHICH azimuths fail is the whole diagnostic: all
+      // four means the radius is wrong, only the lower two means the border went back behind the
+      // visibility gate.
+      for (std::size_t i = 0; i < std::size(kRows); ++i) {
+        const Row& row = kRows[i];
+        const std::vector<unsigned char>& frame = frames[i];
+        if (frame.empty()) {
+          IM_ERRORF("%s: the off-screen render produced no pixels", row.name);
+          continue;
+        }
+
+        for (float phi : kUpperPhis) {
+          if (!BorderFoundNear(frame, 0.0f, 0.0f, row.radius_px, phi)) {
+            IM_ERRORF("%s: no border at azimuth %.2f rad, radius %.1f px (kept half-sky)", row.name,
+                      static_cast<double>(phi), static_cast<double>(row.radius_px));
+          }
+        }
+        for (float phi : kLowerPhis) {
+          // Not a repetition of the loop above: this half of the sky is discarded, so every pixel
+          // here is black unless the border was drawn outside the visibility gate.
+          if (!BorderFoundNear(frame, 0.0f, 0.0f, row.radius_px, phi)) {
+            IM_ERRORF(
+                "%s: no border at azimuth %.2f rad, radius %.1f px — the DISCARDED half-sky, so "
+                "the border is being gated by pixel_visible",
+                row.name, static_cast<double>(phi), static_cast<double>(row.radius_px));
+          }
+        }
+
+        // The border is a CIRCLE, not a fill: a point at the frame centre must stay black. Without
+        // this, a shader that painted the whole disc would satisfy every check above.
+        unsigned char inner[3] = {};
+        if (!ReadPixel(frame, 0.0f, 0.0f, inner)) {
+          IM_ERRORF("%s: the frame centre is not readable", row.name);
+        } else if (inner[0] >= 40) {
+          IM_ERRORF("%s: the frame centre reads r=%d — the border is filling the disc, not tracing it", row.name,
+                    (int)inner[0]);
         }
       }
-      for (float phi : kLowerPhis) {
-        // Not a repetition of the loop above: this half of the sky is discarded, so every pixel
-        // here is black unless the border was drawn outside the gate.
-        if (!BorderFoundNear(frame, 0.0f, 0.0f, kRadiusPx, phi)) {
-          IM_ERRORF(
-              "no border at azimuth %.2f rad, radius %.1f px — the discarded half-sky, so the border "
-              "is being gated by pixel_visible",
-              static_cast<double>(phi), static_cast<double>(kRadiusPx));
-        }
-      }
-
-      // The border is a CIRCLE, not a fill: a point well inside the radius must stay black.
-      // Without this, a shader that painted the whole disc would satisfy every check above.
-      unsigned char inner[3] = {};
-      IM_CHECK(ReadPixel(frame, 0.0f, 0.0f, inner));
-      IM_CHECK_LT((int)inner[0], 40);
     };
   }
 
