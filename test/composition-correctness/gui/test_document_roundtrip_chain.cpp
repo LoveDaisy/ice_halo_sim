@@ -885,6 +885,20 @@ TEST(DocumentRoundtripChain, MigratedDocumentSurvivesTheNextRoundTrip) {
   EXPECT_EQ(TakeRaypathCommaMigratedCount(), 0) << "a re-saved document should need no second migration";
 }
 
+TEST(DocumentRoundtripChain, MigrationCountDoesNotLeakFromAPreviousLoad) {
+  // The count belongs to one load, and the load is what says so — not the caller's discipline in
+  // draining it. Two callers reach DeserializeGuiStateJson (LoadLmcFile and the user-defaults
+  // merge), and a count carried over from the first would make the second announce a migration
+  // that did not happen in it.
+  GuiState first;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3-5,1-2"), first));
+
+  GuiState second;
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3-5"), second));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 0) << "the clean load inherited the previous load's count";
+}
+
 TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
   // The version the writer stamps is what dates a file's ',' for anyone who later has to decide
   // what a ',' in it meant. Asserted as a literal, not as a read of the writer's own constant.
