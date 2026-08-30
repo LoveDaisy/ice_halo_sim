@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GUI background colour reaches the picture** (469.4): the preview, the three PNG exports
+  (screenshot / dual-fisheye / equirectangular) and the frame baked into a saved `.lmc` now all
+  paint the configured background colour behind the halo. Previously only the CLI did, so the GUI
+  colour picker moved and nothing on screen changed. The colour is composited additively in linear
+  RGB before the sRGB transfer curve, which makes a pixel carrying no halo energy render as exactly
+  the sRGB triple the picker showed; it is painted only where the lens actually images sky, so the
+  black surround outside a fisheye's image circle stays black. Expect halo-against-sky contrast to
+  drop against a bright background — that is what the sRGB curve does, and EV is its control.
+- **Two new C API pure functions** (ABI addition, non-breaking):
+  `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, pixel_count, intensity_scale, background_linear)`
+  — the existing `LUMICE_XyzToSrgbUint8` with an additive linear-RGB background composited before
+  the final clamp and gamma, for a consumer baking a frame that has to match what the renderer put
+  on screen; and `LUMICE_SrgbToLinear(srgb, linear)` — the inverse transfer curve over one RGB
+  triple, so a caller converting a picker colour for `LUMICE_RenderParam::background` or for the
+  function above does not hand-roll a copy of the curve that can drift from the forward one.
 - **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
   offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
   persisted in `.lmc` files and core JSON configs.
