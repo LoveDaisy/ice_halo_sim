@@ -18,7 +18,6 @@
 #include "gui/edit_modals.hpp"
 #include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
-#include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"

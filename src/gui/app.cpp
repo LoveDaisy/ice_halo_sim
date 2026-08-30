@@ -20,7 +20,6 @@
 
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
-#include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/user_defaults.hpp"
@@ -1663,7 +1662,7 @@ void SyncFromPoller() {
     g_state.last_uploaded_texture_serial = snap->texture_serial;  // record exact-once cursor
     // Auto-EV: visible framebuffer self-P99 normalization (see doc/adaptive-brightness.md).
     g_state.p99_raw_y = payload->p99_y;
-    g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
+    g_state.ev_auto = LUMICE_ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
   }
 }

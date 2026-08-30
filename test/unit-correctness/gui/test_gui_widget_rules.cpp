@@ -24,7 +24,6 @@
 #include "gui/composite_exposure_push.hpp"
 #include "gui/edit_modal_rules.hpp"
 #include "gui/gui_constants.hpp"
-#include "gui/gui_ev_auto.hpp"
 #include "gui/shape_scalar_domain.hpp"
 #include "gui/sim_state_rules.hpp"
 #include "gui/slider_mapping.hpp"
@@ -290,65 +289,6 @@ TEST(ShapeScalarDomain, LogScaledSlotsHaveAStrictlyPositiveLowerBound) {
       EXPECT_GT(d.min_value, 0.0f) << "slot " << slot;
     }
   }
-}
-
-// Helper: build a packed XYZ buffer (stride 3) of size w*h, with Y filled from a row-major
-// vector of length w*h and X/Z left at 0 (ComputeP99Y looks only at channel 1).
-std::vector<float> MakeXyz(int w, int h, const std::vector<float>& y_values) {
-  std::vector<float> data(static_cast<size_t>(w) * static_cast<size_t>(h) * 3, 0.0f);
-  for (size_t i = 0; i < y_values.size(); ++i) {
-    data[i * 3 + 1] = y_values[i];
-  }
-  return data;
-}
-
-// (The former T1 pinned the f=1 fine path against a no-sizes overload of ComputeP99Y. That
-// overload is gone: the function now takes a borrowed `const float*`, which carries no length to
-// fall back on, so img_width/img_height became required. With only one call shape left the case
-// reduced to asserting a value equals itself, so it was deleted rather than kept as a tautology.
-// T2-T4 below still cover the box-sum exact values, the all-zero fallback and the wc=0 guard.)
-
-// T2 — f=2 correctness on a 4x4 image: hand-verify the box-sum + P99 + /f^2.
-//
-// Layout (Y channel, row-major 4x4):
-//   1  2 |  3  4
-//   5  6 |  7  8
-//   ----+-----
-//   9 10 | 11 12
-//  13 14 | 15 16
-//
-// Four 2x2 coarse bins (f=2), each sum:
-//   top-left:     1+2+5+6   = 14
-//   top-right:    3+4+7+8   = 22
-//   bottom-left:  9+10+13+14= 46
-//   bottom-right: 11+12+15+16=54
-//
-// P99 over the 4 nonzero coarse Y values:
-//   sorted = {14, 22, 46, 54}; idx = floor(4 * 0.99) = 3 -> y_vals[3] = 54.
-// Returned value = 54 / (f^2 = 4) = 13.5.
-TEST(EvAuto, ComputeP99YBoxSumsCoarselyAndFallsBackWhenItCannot) {
-  std::vector<float> y = { 1.0f, 2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
-                           9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f };
-  std::vector<float> xyz = MakeXyz(4, 4, y);
-  EXPECT_FLOAT_EQ(ComputeP99Y(xyz.data(), 4, 4, 2), 13.5f);
-
-  // Sanity: the helper itself returns the raw coarse sums.
-  std::vector<float> coarse = DownsampleBoxSumY(xyz.data(), 4, 4, 2);
-  ASSERT_EQ(coarse.size(), 4u);
-  EXPECT_FLOAT_EQ(coarse[0], 14.0f);  // top-left
-  EXPECT_FLOAT_EQ(coarse[1], 22.0f);  // top-right
-  EXPECT_FLOAT_EQ(coarse[2], 46.0f);  // bottom-left
-  EXPECT_FLOAT_EQ(coarse[3], 54.0f);  // bottom-right
-
-  // T3 — all-zero input on the coarse path returns 0.0f (matches the fine-path empty case).
-  std::vector<float> zeros = MakeXyz(8, 8, std::vector<float>(8 * 8, 0.0f));
-  EXPECT_FLOAT_EQ(ComputeP99Y(zeros.data(), 8, 8, 8), 0.0f);
-
-  // T4 — wc=0 guard: f=8 on a 1x1 image gives wc = hc = 0, so DownsampleBoxSumY collapses to {} and
-  // ComputeP99Y falls back to the fine path (which on a single positive Y returns that value).
-  std::vector<float> tiny = MakeXyz(1, 1, { 7.5f });
-  EXPECT_FLOAT_EQ(ComputeP99Y(tiny.data(), 1, 1, 8), 7.5f);
-  EXPECT_TRUE(DownsampleBoxSumY(tiny.data(), 1, 1, 8).empty());
 }
 
 constexpr float kEpsilon = 1e-4f;

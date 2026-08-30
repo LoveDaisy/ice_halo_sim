@@ -1391,6 +1391,31 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
                                                      float intensity_scale, const float* background_linear);
 
+// =============== EV Auto Anchor ===============
+// P99 anchor of the auto-EV pipeline (doc/ev-pipeline-architecture.md §2.2/§2.5).
+// When downsample_factor > 1 the Y channel is box-summed onto a
+// (img_width/f) x (img_height/f) coarse grid, the P99 is taken over the non-zero coarse bins
+// and divided by f^2, so the result is a **fine-equivalent** P99 rather than a true per-pixel Y
+// statistic. Falls back to the fine per-pixel P99 when downsample_factor <= 1 or the coarse grid
+// collapses to zero dimensions.
+//
+// The coarse and fine paths are not two precisions of one statistic: on a sparse scene they were
+// measured 64x apart and respond to sample count with very different slopes, so which one a
+// caller picks changes auto-EV by several stops. Pick deliberately.
+//
+// xyz_data is a borrowed view of at least img_width*img_height*3 floats (3 floats/pixel,
+// Y = channel 1), read only for the duration of the call; a raw pointer carries no length, so the
+// dimensions passed in are the only bound this function has. Returns 0 if no positive Y entries
+// exist.
+float LUMICE_ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor);
+
+// P99-anchored auto-EV in stops: log2(target_linear / (p99_raw_y / snapshot_intensity)), clamped
+// to [-6, 6]. target_linear is the sRGB reverse transform of target_white (0-255 scale). Feed it
+// the value LUMICE_ComputeP99Y returned, with the FINE snapshot_intensity even when that P99 came
+// from the coarse path — the /f^2 above is what makes the two consistent. Returns 0 if
+// snapshot_intensity or p99_raw_y is non-positive.
+float LUMICE_ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float target_white);
+
 // =============== Preferred Trace Backend ===============
 // Stable backend identifiers. Future backends (e.g. CUDA) append new positive
 // values; 0 stays CPU so default zero-init = legacy behavior.

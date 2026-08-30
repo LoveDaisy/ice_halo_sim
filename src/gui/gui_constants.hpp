@@ -27,6 +27,17 @@ constexpr float kRightPanelWidth = 300.0f;
 constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
+// Auto-EV downsample factor for the box-sum coarse-bin metric — the mono path's choice of the
+// coarse branch of LUMICE_ComputeP99Y (the algorithm itself lives in core, behind the C API;
+// this constant is the call-site decision, not part of it).
+// Rationale: coarse bins have f^2 larger expected hit count than fine pixels in sparse scenes,
+// so the P99-over-lit anchor stabilises earlier and 77halo previews brighten faster. Math
+// equivalence:
+//   ev = log2(target_linear * snapshot_fine / (P99_coarse / f^2))
+// Display path remains fine-res. Final f=8 confirmed by the 25-scene gold harness
+// (22/25 in-band, only ms05_prob0.5_EV0.5/EV1.5 dropped vs 23/25 fine).
+constexpr int kEvAutoDownsampleFactor = 8;
+
 // Live-edit timing constants
 // Invariant: kCommitIntervalMs >= kPollIntervalMs (commit should not be faster than poll)
 constexpr int kCommitIntervalMs =

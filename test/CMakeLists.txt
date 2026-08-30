@@ -55,6 +55,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_simulator.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_exit_records.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_ev_anchor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_pcg_ray_base_split.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_wl_stream_decouple.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"

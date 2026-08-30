@@ -17,6 +17,7 @@
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
+#include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
 #include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
@@ -3307,4 +3308,16 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsign
   }
   ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale, background_linear);
   return LUMICE_OK;
+}
+
+// =============== EV Auto Anchor ===============
+// Thin forwards to core/ev_anchor.hpp, the single owner of the anchor algorithm. The bare-float,
+// no-NULL-check contract matches LUMICE_MaxFov and the precondition documented on the header
+// declaration; it is the contract the GUI-side implementation these replaced already had.
+float LUMICE_ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor) {
+  return ns::ComputeP99Y(xyz_data, img_width, img_height, downsample_factor);
+}
+
+float LUMICE_ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float target_white) {
+  return ns::ComputeEvAuto(p99_raw_y, snapshot_intensity, target_white);
 }

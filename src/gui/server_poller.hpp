@@ -43,9 +43,9 @@ struct TexturePayload {
   // Ray count at the time texture data was captured (not global stats).
   LUMICE_RayCount texture_ray_count = 0;
   // Auto-EV anchor.  When the poller is configured with kEvAutoDownsampleFactor > 1
-  // (see gui_ev_auto.hpp), this is the **fine-equivalent P99** = P99_coarse / f^2 and
+  // (see LUMICE_ComputeP99Y), this is the **fine-equivalent P99** = P99_coarse / f^2 and
   // is NOT a raw per-pixel Y statistic — use it only as the EV anchor that feeds
-  // ComputeEvAuto, never as a true Y measurement.
+  // LUMICE_ComputeEvAuto, never as a true Y measurement.
   float p99_y = 0;
   // RawXyzResult.epoch: the lifecycle epoch this texture was produced under. May lag the
   // bundle epoch when carried forward (1.5 display keying distinguishes the two).
