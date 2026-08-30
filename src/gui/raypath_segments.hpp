@@ -228,11 +228,18 @@ inline GuiValidationResult ValidateRaypathTextMultiSegment(const std::string& te
 // on '-' into "3" / "5,1" / "2", drops only the middle one, and returns {3, 2} — a plausible-
 // looking two-face path that no one asked for. A malformed segment has no path, not a shorter one.
 //
-// This accept set is deliberately the same as ValidateRaypathText's (config/raypath_validation.cpp,
-// ScanTokens + TokenAllDigits): the validator has always required every token to be all-digits, so
-// nothing it admits is dropped here. Keeping them equal is what stops "the validator says invalid,
-// the parser still draws a path" — see the cross-reference comment on TokenAllDigits; the API
-// boundary in AGENTS.md rules out sharing one implementation, so both sides move together by hand.
+// The all-digits judgement here is deliberately the same one ValidateRaypathText makes
+// (config/raypath_validation.cpp, ScanTokens + TokenAllDigits): the validator has always required
+// every token to be all-digits, so nothing it admits is dropped here. Keeping the two equal is
+// what closes the ','-triggered case of "the validator says invalid, the parser still draws a
+// path" — see the cross-reference comment on TokenAllDigits; the API boundary in AGENTS.md rules
+// out sharing one implementation, so both sides move together by hand.
+//
+// Only that case. The empty-token judgement is still split: "3--5" is kInvalid to the validator
+// (found_interior_empty) and {3, 5} to the parser, because an empty token returns from flush()
+// without setting the flag. That divergence predates this function's tightening and is untouched
+// by it — a different predicate on a different input class, left where it was rather than folded
+// in here.
 inline std::vector<int> ParseRaypathSegment(const std::string& seg) {
   std::vector<int> ints;
   std::string tok;
