@@ -945,6 +945,11 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
   jr["visible"] = kVisibleJsonNames[r.visible];
   jr["front"] = r.front;
+  // NOTE: this document's "background" is written and read back verbatim, in whatever space the
+  // GUI's own RenderConfig holds. That is NOT the config-JSON contract, where the key is sRGB and
+  // the two config parsers convert to/from linear at their boundary (config_manager.cpp,
+  // c_api.cpp). Nothing reads the GUI background yet, so the two cannot disagree today; wiring the
+  // GUI preview to it means deciding this document's space too, here and at both reader sites.
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["opacity"] = r.opacity;

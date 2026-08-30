@@ -693,8 +693,12 @@ typedef struct LUMICE_RenderParam_ {
   float view_azimuth;
   float view_elevation;
   float view_roll;
-  int visible;          // LUMICE_VISIBLE_*
-  float background[3];  // linear RGB
+  int visible;  // LUMICE_VISIBLE_*
+  // Linear RGB — it is added to the halo's radiance before the sRGB transfer curve, so it has to
+  // live in the same space the addition does. The JSON "background" key is sRGB instead (what a
+  // color picker shows); both JSON parsers convert at their boundary, so a caller writing this
+  // struct directly passes linear while a caller writing JSON writes sRGB.
+  float background[3];
   // Fixed ray tint in linear RGB, or {-1,-1,-1} (core's default sentinel) for "use the natural
   // spectral color". Zero-init means an all-black tint, NOT the sentinel.
   float ray_color[3];

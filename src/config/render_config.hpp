@@ -82,7 +82,8 @@ struct RenderConfig {
   ViewParam view_{};
   VisibleRange visible_ = kUpper;
 
-  float background_[3]{};                      // r, g, b
+  // Linear RGB. The JSON "background" key is sRGB; to_json / ParseRenderConfig convert.
+  float background_[3]{};
   float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
   float opacity_ = 1.0f;
   // Brightness scaling for CLI output (PostSnapshot). GUI uses exposure_offset (EV stops) in

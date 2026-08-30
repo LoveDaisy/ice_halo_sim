@@ -633,7 +633,7 @@ The render configuration defines the renderer parameters.
 | `lens_shift` | integer array | no | [0, 0] | Lens shift [x, y] |
 | `view` | object | no | see below | View configuration |
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
-| `background` | float array | no | [0, 0, 0] | Background color RGB |
+| `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
 | `opacity` | float | no | 1.0 | Opacity |
 | `intensity_factor` | float | no | 1.0 | Intensity factor |
@@ -756,6 +756,12 @@ The render configuration defines the renderer parameters.
   Legality](#pyramid-shape-legality) below for what each range actually produces.
 - `render[].opacity` should be between 0.0 and 1.0
 - `render[].background` and `ray_color` color values should be between 0.0 and 1.0
+- `render[].background` is **sRGB**: on a pixel with no halo energy, the rendered color is exactly
+  the triple written here. It is converted to linear when the config is read, because the
+  background is added to the halo's radiance and that addition only means anything in linear
+  space; it is converted back to sRGB whenever a config is written out. (`ray_color` is linear —
+  it is a tint applied to radiance, not a color the viewer sees directly. The `LUMICE_RenderParam`
+  C struct is linear on both fields; only the JSON keys differ.)
 
 ### Pyramid Shape Legality
 
