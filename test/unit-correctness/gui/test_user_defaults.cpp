@@ -1097,7 +1097,7 @@ TEST_F(UserDefaults, schema_version_stale_root_key_is_stripped_before_deserializ
   };
 
   for (const json& doc : kPolluted) {
-    const json merged = gui::BuildMergedOverlayDocument(doc);
+    const json merged = gui::detail::BuildMergedOverlayDocument(doc);
     // Non-fatal + `continue` rather than ASSERT: this loop's rows are independent defects, and a
     // fatal report on the first would hide whether the others also regressed.
     if (!merged.contains("schema_version")) {
@@ -1186,6 +1186,46 @@ TEST_F(UserDefaults, schema_version_malformed_stamp_alone_is_still_reported) {
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1)
       << "nothing was left to apply, but the file still says something untrue about itself";
   EXPECT_TRUE(SerializesIdentically(state, gui::MakeNewDocumentState(FreshOverlayDir("stamp_alone_factory"))));
+}
+
+// code-review round 1's Major: nlohmann::json's `dump()` throws (type_error 316) on a string
+// holding a raw invalid UTF-8 byte sequence, and the malformed-shape branch calls `dump()` to
+// render the stamp into its notice text. That call used to run before ApplyUserDefaultsOverlay's
+// own try/catch, so — for a document whose stamp value carries that kind of poison — the
+// exception would escape uncaught and abort loading the ENTIRE overlay, turning "an odd version
+// stamp" into a hard crash on GUI startup / New / Open, exactly what B3/AC5/AC6 rule out.
+//
+// This is NOT reachable through a file on disk: nlohmann::json::parse() validates UTF-8 strictly
+// by default and already rejects malformed byte sequences (including an unpaired UTF-16 surrogate
+// escape like `\ud800`) at parse time, and that rejection is caught by ReadOverlayJsonIfPresent's
+// existing try/catch — so a hand-edited file with such a stamp never reaches this code at all
+// (verified: json::parse(R"({"v":"\ud800"})") throws parse_error.101 in this build's nlohmann_json
+// version). The poison value can only appear via an in-memory nlohmann::json constructed directly
+// from a raw std::string, which bypasses parse()'s validation — dump() re-validates independently
+// and is where it actually throws. Exercised here by calling ApplyUserDefaultsOverlay directly
+// with such a document, skipping the disk round trip that would otherwise mask the scenario.
+//
+// The poisoned value is reported, not stripped, so it survives into BuildMergedOverlayDocument's
+// own merge_patch/dump() further down — the pre-existing try/catch there (not new in this fix)
+// catches that second throw and discards the whole overlay, same as any other field-level type
+// error. So the outcome here is coarser than an ordinary malformed stamp (which never poisons
+// that later dump()): two notices instead of one, and bg_alpha falls back to the factory value
+// instead of surviving. What this test actually pins is narrower and is exactly what the review
+// asked for — no uncaught exception, i.e. loading never aborts outright.
+TEST_F(UserDefaults, schema_version_unprintable_stamp_does_not_throw) {
+  ResetUserDefaultsChannels();
+  json doc;
+  doc["defaults_schema_version"] = std::string("\xC0\x80");  // invalid UTF-8 (overlong encoding)
+  doc["bg_alpha"] = 0.42f;
+
+  gui::GuiState state{};
+  EXPECT_NO_THROW(gui::ApplyUserDefaultsOverlay(state, doc));
+  EXPECT_GE(gui::TakeUserDefaultsDowngradeCount(), 1)
+      << "a stamp nobody can read must still be reported, not silently swallowed";
+  EXPECT_EQ(state.bg_alpha, gui::GuiState{}.bg_alpha)
+      << "the poisoned value survives into the later merge/dump step and takes the whole overlay "
+         "down with it (pre-existing fallback: factory defaults) — this test only pins that "
+         "nothing throws uncaught, see the comment above";
 }
 
 // AC7 — the stamp must not answer "does this user have personal defaults?".

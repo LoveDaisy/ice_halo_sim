@@ -155,25 +155,42 @@ bool IsOverlayDocEffectivelyEmpty(const nlohmann::json& doc) {
 //                     than the pre-stamp behavior it replaces.
 //   at or below this build — the ordinary case (a file this build or an older one wrote). Silent:
 //                     reading an older file is the design's daily job, not an anomaly.
-void CheckUserDefaultsSchemaVersionStamp(const nlohmann::json& doc) {
+void ReportSchemaVersionStampIssues(const nlohmann::json& doc) {
   const auto stamp = doc.find(kUserDefaultsOverlaySchemaVersionKey);
   if (stamp == doc.end()) {
     return;
   }
 
-  if (!stamp->is_number_integer() || stamp->get<long long>() <= 0) {
-    NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
-                              "' is not a positive integer (" + stamp->dump() +
-                              "); treating the file as unstamped and loading it anyway");
-    return;
-  }
+  // The classification below reads a value from a document that need not have come from a
+  // text file this build's own parser validated. `dump()` (used to render the malformed-shape
+  // notice) independently re-validates UTF-8 and throws (nlohmann::json type_error 316) on a
+  // string built in-memory from raw invalid bytes — e.g. `nlohmann::json{}["k"] =
+  // std::string("\xC0\x80")`, which bypasses json::parse()'s own strict UTF-8 checking (that
+  // checking is why a hand-edited FILE containing such a string, like an unpaired UTF-16
+  // surrogate escape `\uD800`, never reaches here at all: parse() rejects it upstream in
+  // ReadOverlayJsonIfPresent, well before this doc exists). This exception would otherwise
+  // escape this function and, since it runs before ApplyUserDefaultsOverlay's own try/catch
+  // (see the call site), abort loading the ENTIRE overlay — turning "an oddly-shaped version
+  // stamp" into exactly the kind of hard failure B3/AC5/AC6 rule out. A malformed stamp must
+  // never do worse than being ignored-and-reported.
+  try {
+    if (!stamp->is_number_integer() || stamp->get<long long>() <= 0) {
+      NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
+                                "' is not a positive integer (" + stamp->dump() +
+                                "); treating the file as unstamped and loading it anyway");
+      return;
+    }
 
-  const long long version = stamp->get<long long>();
-  if (version > kUserDefaultsOverlaySchemaVersion) {
-    NoteUserDefaultsDowngrade("personal defaults were written by a newer version of Lumice (format " +
-                              std::to_string(version) + ", this build understands " +
-                              std::to_string(kUserDefaultsOverlaySchemaVersion) +
-                              "); settings it does not recognize are ignored");
+    const long long version = stamp->get<long long>();
+    if (version > kUserDefaultsOverlaySchemaVersion) {
+      NoteUserDefaultsDowngrade("personal defaults were written by a newer version of Lumice (format " +
+                                std::to_string(version) + ", this build understands " +
+                                std::to_string(kUserDefaultsOverlaySchemaVersion) +
+                                "); settings it does not recognize are ignored");
+    }
+  } catch (const std::exception&) {
+    NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
+                              "' could not be interpreted; treating the file as unstamped and loading it anyway");
   }
 }
 
@@ -273,6 +290,8 @@ nlohmann::json ReadOverlayJsonIfPresent(const std::filesystem::path& dir) {
   }
 }
 
+namespace detail {
+
 // Layer the sparse override onto a full factory document rather than handing the fragment
 // straight to the deserializer. Both routes end at the same values (the deserializer is
 // already "missing key = factory value"), but this one keeps the deserializer's own
@@ -292,6 +311,8 @@ nlohmann::json BuildMergedOverlayDocument(const nlohmann::json& doc) {
   return merged;
 }
 
+}  // namespace detail
+
 void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
   if (!doc.is_object()) {
     return;
@@ -300,7 +321,7 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
   // Before the emptiness check, not after: a document whose ONLY key is a malformed stamp is
   // still a file making a false claim about itself, and the user is owed the notice even though
   // there is nothing left to apply.
-  CheckUserDefaultsSchemaVersionStamp(doc);
+  ReportSchemaVersionStampIssues(doc);
 
   if (IsOverlayDocEffectivelyEmpty(doc)) {
     return;
@@ -309,7 +330,7 @@ void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
   nlohmann::json merged;
   GuiState overlaid;
   try {
-    merged = BuildMergedOverlayDocument(doc);
+    merged = detail::BuildMergedOverlayDocument(doc);
     if (!DeserializeGuiStateJson(merged.dump(), overlaid)) {
       ++g_downgrade_count;
       GUI_LOG_WARNING("[GUI] User defaults: override document could not be applied; using factory defaults");

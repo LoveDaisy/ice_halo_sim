@@ -477,13 +477,18 @@ void ResetUserAxisPresetOverrides();
 // owns "given a document, put it on disk". Returns false + GUI_LOG_WARNING on failure.
 bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::json& doc);
 
+namespace detail {
+
 // Layer a sparse override document over the factory document and hand back the merged JSON, one
 // step short of deserializing it. Pure: no IO, no globals.
 //
-// ⛔ Intended callers: ApplyUserDefaultsOverlay's own body, and gui_unit_test. Production code must
-// NOT call this to assemble an overlay of its own — ApplyUserDefaultsOverlay orchestrates a fixed
-// sequence around it (classify the stamp, then the effectively-empty early return, THEN merge),
-// and reaching straight for the merge step skips the first two.
+// Exposed in detail:: for unit testing; not part of the stable public surface. Intended callers:
+// ApplyUserDefaultsOverlay's own body, and gui_unit_test. Production code must NOT call this to
+// assemble an overlay of its own — ApplyUserDefaultsOverlay orchestrates a fixed sequence around
+// it (classify the stamp, then the effectively-empty early return, THEN merge), and reaching
+// straight for the merge step skips the first two. The detail:: namespace makes that boundary
+// structural rather than comment-only: it keeps the function out of lumice::gui's public surface
+// (and IDE autocomplete there) while still leaving it reachable for gui_unit_test.
 //
 // It exists as a separate, header-visible function only because the invariant below is otherwise
 // untestable. DeserializeGuiStateJson does not read `schema_version` at all, so a polluted value
@@ -499,6 +504,8 @@ bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::jso
 // precisely the thing that starts biting on the day something does, which is the day a version
 // number exists to serve.
 nlohmann::json BuildMergedOverlayDocument(const nlohmann::json& doc);
+
+}  // namespace detail
 
 // Number of override-file degradations since the last call, then resets — same shape as
 // TakeShapeDistDowngradeCount(), so the load-time notice can be surfaced through the same
