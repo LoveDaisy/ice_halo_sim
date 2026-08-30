@@ -31,7 +31,7 @@ cover:
 |------|------------|
 | **internal buffer** | Per-`Consume()` accumulation target (`internal_xyz_`). Written under the consumer mutex; never read by the GUI. |
 | **snapshot buffer** | Point-in-time copy of the internal buffer (`snapshot_xyz_`). Produced by `PrepareSnapshot()`; read by `GetRawXyzResult()` and the poller. |
-| **EV anchor (P99)** | The P99 of the non-zero Y channel of the snapshot, computed **GUI-side** in the poller thread (`ComputeP99Y`, `gui_ev_auto.hpp`). Drives `ev_auto`. Not a server-side field. |
+| **EV anchor (P99)** | The P99 of the non-zero Y channel of the snapshot, computed in the GUI poller thread via `LUMICE_ComputeP99Y` (algorithm: `core/ev_anchor.hpp`). Drives `ev_auto`. Not a server-side field — the GUI initiates the call, core owns the arithmetic. |
 | **`kNormScale`** | Display brightness baseline constant (0.08). Maps per-pixel radiance to a [0, 1] range at EV = 0 so that the average illuminated pixel is ~5% brightness and bright halo features (~20× average) approach full white. Independent of resolution and FOV. Defined in `render.cpp:30`. |
 
 ---
@@ -74,7 +74,7 @@ consumer mutex. It is intentionally minimal — no percentile is computed server
 non-zero pixels into `effective_pix_` (floored to ≥ 1), used for stats display.
 
 **Zero-skip semantics**: the EV anchor population excludes pixels with zero Y. This
-exclusion happens GUI-side in `ComputeP99Y()` (`gui_ev_auto.hpp`, §2.5), which only
+exclusion happens in `LUMICE_ComputeP99Y()` (algorithm: `core/ev_anchor.hpp`, §2.5), which only
 pushes `Y > 0` entries (or `> 0` coarse bins under downsampling) into the percentile
 population. The server snapshot itself is not filtered — it carries the full buffer.
 
@@ -132,11 +132,11 @@ mono path must compute their own.
 > statistic itself the way it does for the mono path. Also, the composite path needs
 > a "participating classes union" anchor rather than the mono full-spectrum P99: mixing
 > non-participating pixels back in was the "composite too dim" root cause task-345.3
-> fixes. The algorithm (`nth_element` at `⌊count × 0.99⌋`) is structurally identical to
-> the fine path of `ComputeP99Y` in `gui_ev_auto.hpp` — the two implementations live
-> apart because pulling a shared header down would drag one layer into the other. If
-> you touch one, mirror the change in the other file (cross-reference comments in
-> both locations).
+> fixes. The algorithm (`nth_element` at `⌊count × 0.99⌋`) has a **single owner**,
+> `core/ev_anchor.hpp::NthElementP99`; both this composite anchor
+> (`ComputeParticipatingP99Y`) and the mono-path `LUMICE_ComputeP99Y` call it, and what
+> stays local to each is only the question of which values participate. No mirror
+> discipline applies — there is one implementation to change.
 
 **Lifetime**: the `xyz_buffer` pointer is valid **for as long as the caller holds the
 `LUMICE_ResultFrame` it was read out of** — acquire with `LUMICE_AcquireResultFrame`, hand it
@@ -167,7 +167,9 @@ The EV anchor is computed on the **poller thread**, not the server. In
 staged_.p99_y = ComputeP99Y(xyz_data, width, height, kEvAutoDownsampleFactor)
 ```
 
-`ComputeP99Y()` (`gui_ev_auto.hpp:76`) with `kEvAutoDownsampleFactor = 8`:
+`LUMICE_ComputeP99Y()` (C API; algorithm in `core/ev_anchor.hpp`) with
+`kEvAutoDownsampleFactor = 8` (`gui_constants.hpp` — the call site's choice of the coarse
+branch, not part of the algorithm):
 
 1. Box-sum downsamples the Y channel onto a coarse `(w/8) × (h/8)` grid
    (`DownsampleBoxSumY`; trailing rows/cols that don't divide evenly are dropped).
@@ -193,7 +195,7 @@ g_state.p99_raw_y          = data.p99_y
 g_state.ev_auto            = ComputeEvAuto(p99_raw_y, snapshot_intensity, target_white)
 ```
 
-`ComputeEvAuto()` (`gui_ev_auto.hpp:123`) returns
+`LUMICE_ComputeEvAuto()` (C API; algorithm in `core/ev_anchor.hpp`) returns
 `log2(target_linear / (p99_raw_y / snapshot_intensity))`, clamped to `[-6, 6]`, or
 `0` if either input is non-positive.
 
@@ -406,8 +408,10 @@ Fix B — **serve-side self-anchor at the compositor**:
 
 - `RenderConsumer::ParticipatingExposureScale(participating_p99_y)` (render.cpp) is a sibling
   of `ExposureScale()` that returns `intensity_factor * target_linear / participating_p99_y`,
-  where `target_linear` is the sRGB reverse transform of `target_white = 135` (mirror of
-  `gui_ev_auto.hpp::ComputeEvAuto`). `snapshot_intensity` does **not** appear in the numerator
+  where `target_linear` is the sRGB reverse transform of `target_white = 135`, obtained from
+  `core/ev_anchor.hpp::TargetWhiteToLinear` — the same sub-piece `ComputeEvAuto` uses. The two
+  share that level and the P99 level, and deliberately nothing beyond:
+  `snapshot_intensity` does **not** appear in the numerator
   — it cancels against the mono shader's downstream `intensity_scale = intensity_factor /
   snapshot_intensity` step, which the composite path lacks (composite applies `s` directly to
   `lane[p]`).
@@ -474,8 +478,9 @@ Regression pins:
 | `Stop()` — `has_ever_consumed_` reset | `server.cpp:487,529` |
 | `NeedsRebuild()` — layout field comparison | `render_config.cpp:165-175` |
 | `sizeof(RenderConfig)` static_assert (136) | `render_config.cpp:167` |
-| `DownsampleBoxSumY()` / `ComputeP99Y()` / `ComputeEvAuto()` | `gui_ev_auto.hpp:27,76,123` |
-| `kEvAutoDownsampleFactor` (8) | `gui_ev_auto.hpp:19` |
+| `DownsampleBoxSumY()` / `ComputeP99Y()` / `ComputeEvAuto()` / `NthElementP99()` / `TargetWhiteToLinear()` | `core/ev_anchor.hpp` |
+| `LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto` (C API surface) | `include/lumice.h`, `c_api.cpp` |
+| `kEvAutoDownsampleFactor` (8) | `gui_constants.hpp` |
 | Poller P99 anchor computation | `server_poller.cpp` — `ServerPoller::PollOnce()` |
 | `SyncFromPoller()` — ev_auto computation | `app.cpp:741` |
 | `BuildExportParams()` — export EV consistency | `app.cpp:284-289` |
