@@ -130,11 +130,17 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   // azimuth / exposure_offset) have no slot here at all — the type does not declare them, so the
   // omission is structural rather than something From() has to remember to skip.
   EXPECT_EQ(snap.renderer_resim.sim_resolution_index, 3);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.background[0], 0.1f);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.background[2], 0.3f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[0], 0.4f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[1], 0.5f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.opacity, 0.65f);
+
+  // background is the third case, and it is NOT the T-view one above: it is absent from the
+  // projection (editing it must not count as a change) but present in the snapshot through its own
+  // slot, because Revert still has to put the previous colour back. Asserting it here, one line
+  // below the projection fields, is what stops a later reader collapsing the two kinds of absence
+  // into "background is not tracked".
+  EXPECT_FLOAT_EQ(snap.renderer_background[0], 0.1f);
+  EXPECT_FLOAT_EQ(snap.renderer_background[2], 0.3f);
 
   // task-349.2 Step 2: raypath_color mirror.
   ASSERT_EQ(snap.raypath_color.size(), s.raypath_color.size());
@@ -205,6 +211,8 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_FLOAT_EQ(target.sun.altitude, source.sun.altitude);
   EXPECT_FLOAT_EQ(target.sim.ray_num_millions, source.sim.ray_num_millions);
   EXPECT_EQ(target.renderer.sim_resolution_index, source.renderer.sim_resolution_index);
+  // Restored through ConfigSnapshot::renderer_background, not through renderer_resim — the
+  // assertion reads the same as the ones around it, but the path behind it is the separate slot.
   EXPECT_FLOAT_EQ(target.renderer.background[1], source.renderer.background[1]);
   EXPECT_FLOAT_EQ(target.renderer.ray_color[2], source.renderer.ray_color[2]);
   EXPECT_FLOAT_EQ(target.renderer.opacity, source.renderer.opacity);
@@ -286,6 +294,11 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);
   EXPECT_EQ(restored.renderer.sim_resolution_index, original.renderer.sim_resolution_index);
   EXPECT_FLOAT_EQ(restored.renderer.opacity, original.renderer.opacity);
+  // background makes the round trip too, by the separate slot rather than the resim projection.
+  // `restored` started from InitDefaultState (background {0,0,0}), so this fails if either half of
+  // the From/ApplyTo pair for renderer_background is missing.
+  EXPECT_FLOAT_EQ(restored.renderer.background[0], original.renderer.background[0]);
+  EXPECT_FLOAT_EQ(restored.renderer.background[2], original.renderer.background[2]);
   // T-view fields do not make the round trip: `restored` keeps the ones it started with.
   // Compared against a second pristine state rather than literals so this stays true if the
   // RenderConfig defaults ever move.

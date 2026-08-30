@@ -1065,6 +1065,8 @@ bool DoRun(bool user_initiated) {
   // exposure_offset) because they are client-side reprojection only — the sim renders a fixed
   // full-sky dual-fisheye and the GUI reprojects it (see gui_state.hpp comment). Dragging the
   // view / switching the lens / toggling the hemisphere clip must not cause a poller Stop here.
+  // `background` is excluded for the same reason (it changes nothing the simulation computes),
+  // and is Revert-tracked separately — see gui_state.hpp's comment block.
   bool expect_rebuild = backend_reconstructed || !g_state.last_committed_state.has_value() ||
                         !g_state.last_committed_state->renderer_resim.Matches(g_state.renderer);
 

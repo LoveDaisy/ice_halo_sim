@@ -109,7 +109,10 @@ void DiffAgainstCommitBaseline(const GuiState& state, GuiEffects& effects) {
   // (defined in gui_state.hpp): it excludes `exposure_offset`, which is a pure display-time
   // field pushed every frame via LUMICE_SetCompositeExposure and never baked into the sim
   // (doc/ev-pipeline-architecture.md §6.4/§6.5). Excluding EV here is what makes dragging the
-  // EV slider not falsely flip a finished sim into kModified. app.cpp::DoRun's expect_rebuild
+  // EV slider not falsely flip a finished sim into kModified. `background` is excluded on the
+  // same grounds — the rays are unchanged, only what shows behind them — but it differs in that
+  // Revert still restores it, out of ConfigSnapshot::renderer_background rather than out of the
+  // projection compared here (rationale in gui_state.hpp's comment block). app.cpp::DoRun's expect_rebuild
   // predicate compares the same projection, and the baseline stores nothing else — single
   // source of truth (see T2 plan §3 design point 1).
   if (state.crystals != baseline.crystals || state.layers != baseline.layers || state.sun != baseline.sun ||
