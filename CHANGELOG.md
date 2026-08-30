@@ -45,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on screen. The inverse sRGB transfer curve a caller needs to convert a picker colour into that
   `background_linear` argument (or into `LUMICE_RenderParam::background`) stays a C++-only inline
   function, `lumice::SrgbToLinearRgb` in `src/util/color_space.hpp` — no new public C API for it.
+- **`LUMICE_RawXyzResult.emitted_energy`** (C API): the total spectral energy the light
+  source emitted into a snapshot -- the quantity the renderer now normalizes by. Raw total,
+  unlike the neighbouring `snapshot_intensity`, which is a per-pixel figure; and a different
+  measurement, not a rescaling of it, since one counts what went in and the other what
+  landed. A consumer reproduces the renderer's own scale as
+  `intensity_factor * kNormScale * total_pixels / emitted_energy`. The field occupies
+  alignment padding that already existed before `epoch`, so `sizeof(LUMICE_RawXyzResult)`
+  stays 64 bytes and every existing field keeps its offset -- a caller compiled against the
+  old header is unaffected, and one recompiled against the new one gains a field without
+  relinking anything else.
 - **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
   offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
   persisted in `.lmc` files and core JSON configs.
@@ -60,6 +70,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way in `doc/configuration.md` (and `_zh`) instead of sitting in the same table as the keys that
   do something, and the shipped `examples/config_example.json` no longer demonstrates a 22 deg
   circle that never appears in the output.
+- **Breaking behavior change (CLI image brightness): display normalization is now absolute.**
+  The renderer divides by the energy the light source EMITTED, where it used to divide by the
+  energy that LANDED on a pixel. The old denominator moved with the scene -- add a filter, or
+  point a narrower lens at the sky, and the image was silently re-brightened by exactly the
+  amount that had been removed, so two renders at the same EV could not be compared. The new
+  one is fixed by the source and the ray budget alone.
+  **Re-running an existing config produces a darker image**, by exactly the fraction of
+  emitted energy that reached the frame: negligible for a full-sphere view (~0.98, under 0.03
+  stop), around 0.4-0.6 for a 90-120 degree lens (~1 stop), and as low as 0.18 for a narrow
+  lens behind a filter (~2.5 stop). Raise EV to taste; the darkening is the change working,
+  not a regression. Cross-lens comparability is a separate matter and is not claimed here:
+  two projections still differ by a per-projection solid-angle constant.
+  The GUI is unaffected -- its display path normalizes through its own auto-EV anchor and
+  never used this scale. `kNormScale` is unchanged at 0.08: it was calibrated on full-sphere
+  views, which is where the two denominators nearly coincide.
+  For an illuminant spectrum the emitted energy is charged at the band expectation of the
+  SPD rather than at the weight of the wavelength each batch happens to draw, so the same
+  config renders at the same brightness at every seed.
 - **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
   type): the value is now **how many distinct crystal geometries the run actually sampled**,
   not how many crystal objects it built. A scene with no random shape distributions reports
