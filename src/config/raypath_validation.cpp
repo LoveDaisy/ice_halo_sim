@@ -12,7 +12,7 @@ namespace lumice {
 namespace {
 
 bool IsSeparator(char c) {
-  return c == '-' || c == ',';
+  return c == '-';
 }
 
 bool AllSeparators(const std::string& text) {
@@ -24,6 +24,13 @@ bool AllSeparators(const std::string& text) {
   return true;
 }
 
+// ⚠️ Cross-file duplicate predicate: `ParseRaypathSegment` (src/gui/raypath_segments.hpp) runs an
+// identical "every character of the token is a digit" test, and the two accept sets MUST stay
+// identical — a validator that accepts what the parser drops (or the reverse) is exactly the
+// two-authority split this separator retirement was written to remove. Sharing one implementation
+// is not possible here: this helper lives in `src/config/`, and AGENTS.md's public-API boundary
+// (enforced by scripts/check_policies.py) forbids `src/gui/` from including config/ or core/
+// headers. So changing either side means changing both, by hand.
 bool TokenAllDigits(const std::string& text, int begin, int end) {
   for (int i = begin; i < end; ++i) {
     if (!std::isdigit(static_cast<unsigned char>(text[i]))) {
@@ -117,6 +124,16 @@ const char* CrystalKindLabel(CrystalKind kind) {
 // syntax-only validator.
 constexpr int kMaxFaceDigits = 3;
 
+// The dedicated message for the retired ',' path connector, used instead of the generic
+// "Invalid raypath". Telling the user which character to type is the entire point: ',' used to be
+// silently normalized to '-', so `3-5,1-2` (meant as two paths) became the single four-face path
+// 3-5-1-2 — legal on a prism, hence green border, hence no diagnostic anywhere. The message names
+// both separators because the two mistakes it has to disambiguate are different: '-' for faces on
+// one path, ';' for alternate paths.
+constexpr const char* kCommaConnectorMessage =
+    "',' is not a path connector: use '-' to join faces on the same path (3-5), "
+    "use ';' to separate different paths (3-5;1-2)";
+
 // Parse the next numeric token starting at `pos`, advancing `pos` past the
 // token and any following separator. Returns true and writes `face` on
 // success; returns false if the token is not a non-negative integer.
@@ -128,7 +145,7 @@ constexpr int kMaxFaceDigits = 3;
 // UB while still reporting the token as illegal).
 bool ExtractNextFace(const std::string& text, size_t& pos, int& face) {
   // Skip any separators.
-  while (pos < text.size() && (text[pos] == '-' || text[pos] == ',')) {
+  while (pos < text.size() && IsSeparator(text[pos])) {
     ++pos;
   }
   if (pos >= text.size()) {
@@ -160,7 +177,9 @@ RaypathValidationResult ValidateRaypathText(const std::string& text, CrystalKind
   if (syntax_state != RaypathValidation::kValid) {
     RaypathValidationResult r;
     r.state = syntax_state;
-    r.message = (syntax_state == RaypathValidation::kInvalid) ? "Invalid raypath" : std::string{};
+    if (syntax_state == RaypathValidation::kInvalid) {
+      r.message = (text.find(',') != std::string::npos) ? kCommaConnectorMessage : "Invalid raypath";
+    }
     return r;
   }
 

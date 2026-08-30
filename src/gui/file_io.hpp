@@ -158,6 +158,13 @@ int TakeShapeDistDowngradeCount();
 // the notice.
 int TakeFilterNoPredicateDowngradeCount();
 
+// Returns the number of raypath texts rewritten since the last call because they used the retired
+// ',' path connector, and resets the counter. Loading rewrites a ',' inside a raypath token to '-'
+// so a document written before the retirement keeps the face path it had then; the rewrite is
+// silent to the state, so this is how a caller learns it happened. Same call discipline as the two
+// above: drain once before a load to discard any stale count, and again after it.
+int TakeRaypathCommaMigratedCount();
+
 // Export preview as PNG (renders via FBO, must be called on GL thread).
 // Thin wrapper over RenderExportToRgba + WriteRgbaBufferToPng.
 bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& renderer, const PreviewViewport& vp);
@@ -190,9 +197,6 @@ std::filesystem::path ShowExportEquirectangularDialog();
 std::filesystem::path ShowExportJsonDialog();
 std::filesystem::path ShowOpenImageDialog();
 
-
-// Parse dash/comma-separated raypath text into face indices (tolerant: skips invalid tokens).
-std::vector<int> ParseRaypathText(const std::string& text);
 
 }  // namespace lumice::gui
 
