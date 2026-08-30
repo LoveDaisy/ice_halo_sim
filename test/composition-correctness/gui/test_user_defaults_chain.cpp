@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -275,6 +276,89 @@ TEST_F(UserDefaultsChain, OverridePresenceIsNotTheSameQuestionAsTheResultingDist
   AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset::kColumn, std::nullopt);
   EXPECT_FALSE(GetUserAxisPresetZenithStdOverride(AxisPreset::kColumn).has_value())
       << "reverting to the factory value must remove the override, not store the factory number";
+}
+
+// ---------------------------------------------------------------------------------------------
+// The override file's provenance stamp, across the write path the panel actually uses.
+//
+// The unit-level half of these claims (the stamp is applied, malformed ones are reported, a
+// stamp-only document loads as nothing) lives in gui_unit_test against WriteUserDefaultsFile
+// directly. What only shows up here is whether the two units still agree once the panel's route
+// runs end to end — WriteActiveOverlayDoc resolving the directory, the store stamping the write,
+// the diff engine walking what came back.
+
+// The stamp has to arrive through the route the panel takes, not only when the store is called
+// directly. defaults_panel commits through WriteActiveOverlayDoc; if the stamping had been put at
+// a call site rather than in the store, THIS is the case that would notice, because it is the only
+// one that never mentions WriteUserDefaultsFile.
+TEST_F(UserDefaultsChain, TheSchemaStampArrivesThroughThePanelsOwnWritePath) {
+  const std::filesystem::path& dir = UseFreshConfigDir("stamp_via_panel_path");
+
+  ASSERT_TRUE(WriteActiveOverlayDoc(nlohmann::json{ { kProbeKey, 0.625f } }));
+
+  std::ifstream in(dir / kUserDefaultsFileName);
+  ASSERT_TRUE(in.is_open()) << "the write reported success but produced no file";
+  const nlohmann::json on_disk = nlohmann::json::parse(in);
+  ASSERT_TRUE(on_disk.contains(kUserDefaultsOverlaySchemaVersionKey))
+      << "the panel's write path reached disk unstamped: " << on_disk.dump();
+  EXPECT_EQ(on_disk[kUserDefaultsOverlaySchemaVersionKey].get<int>(), kUserDefaultsOverlaySchemaVersion);
+  EXPECT_EQ(on_disk[kProbeKey].get<float>(), 0.625f) << "and it must still carry what was being saved";
+}
+
+// Reverting every personal default used to leave `{}` on disk and now leaves a file holding one
+// key the user never set and cannot see. Everything downstream that answers "does this user have
+// personal defaults?" has to keep answering no.
+//
+// Run as a round trip rather than as an assertion about IsOverlayDocEffectivelyEmpty because the
+// regression this guards against is a disagreement BETWEEN units: the writer adding a key and a
+// reader still testing plain emptiness. Each unit is self-consistent in that state; only the
+// composition is wrong.
+TEST_F(UserDefaultsChain, RevertingEveryDefaultLeavesOnlyTheStampAndStillReadsAsNoPersonalDefaults) {
+  const std::filesystem::path& dir = UseFreshConfigDir("stamp_revert_all");
+
+  GuiState current;
+  current.bg_alpha = 0.375f;  // deliberately not the factory value, so the row asks to be adopted
+
+  // Save one personal default the way the panel does, then confirm it really is on disk — the
+  // revert below would otherwise be reverting nothing and the case would pass vacuously.
+  nlohmann::json doc = ReadActiveOverlayDoc();
+  std::vector<DefaultDiffRow> rows = BuildDefaultDiffRows(current, doc);
+  ASSERT_NE(FindRow(rows, kProbeKey), nullptr);
+  ASSERT_TRUE(ApplyCheckedRowsToDoc(doc, rows, { kProbeKey }, current));
+  ASSERT_TRUE(WriteActiveOverlayDoc(doc));
+  // ASSERT on the pointer before dereferencing it: a missing row here is a nullptr deref that
+  // aborts this single-process binary and takes every case after it down too.
+  const std::vector<DefaultDiffRow> saved_rows = BuildDefaultDiffRows(current, ReadActiveOverlayDoc());
+  const DefaultDiffRow* saved = FindRow(saved_rows, kProbeKey);
+  ASSERT_NE(saved, nullptr);
+  ASSERT_TRUE(saved->has_saved_override)
+      << "the precondition never landed, so this case would prove nothing about reverting it";
+
+  // Now the "reset all my defaults" gesture: every row present, none checked.
+  nlohmann::json reverted = ReadActiveOverlayDoc();
+  const std::vector<DefaultDiffRow> all_rows = BuildDefaultDiffRows(current, reverted);
+  ASSERT_TRUE(ApplyCheckedRowsToDoc(reverted, all_rows, {}, current));
+  ASSERT_TRUE(WriteActiveOverlayDoc(reverted));
+
+  std::ifstream in(dir / kUserDefaultsFileName);
+  ASSERT_TRUE(in.is_open());
+  const nlohmann::json on_disk = nlohmann::json::parse(in);
+  ASSERT_TRUE(on_disk.is_object());
+  EXPECT_EQ(on_disk.size(), static_cast<size_t>(1))
+      << "after reverting everything the file must hold the stamp and nothing else: " << on_disk.dump();
+  EXPECT_TRUE(on_disk.contains(kUserDefaultsOverlaySchemaVersionKey)) << on_disk.dump();
+
+  // The claim that matters: that file means "no personal defaults", exactly as `{}` did.
+  ResetUserDefaultsChannels();
+  const GuiState after = MakeNewDocumentState(dir);
+  EXPECT_EQ(SerializeGuiStateJson(after), SerializeGuiStateJson(MakeNewDocumentState(FreshOverlayDir("stamp_none"))))
+      << "a stamp-only file produced a different document than an empty directory";
+  EXPECT_EQ(TakeUserDefaultsDowngradeCount(), 0) << "and it is not a degradation — nothing about it is wrong";
+  const std::vector<DefaultDiffRow> reverted_rows = BuildDefaultDiffRows(current, ReadActiveOverlayDoc());
+  const DefaultDiffRow* reverted_row = FindRow(reverted_rows, kProbeKey);
+  ASSERT_NE(reverted_row, nullptr);
+  EXPECT_FALSE(reverted_row->has_saved_override)
+      << "the panel still shows the reverted key as saved, so the user can never clear it";
 }
 
 }  // namespace
