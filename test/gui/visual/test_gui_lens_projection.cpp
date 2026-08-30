@@ -29,6 +29,7 @@
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"
 #include "test_gui_shared.hpp"
+#include "util/color_space.hpp"
 
 // How a scene installs its projection into PreviewParams.
 enum class LensSetup {
@@ -73,6 +74,15 @@ struct LensProjScene {
   // border is drawn outside the visibility gate that overlayAuxLines sits behind, so putting the
   // two on one flag would stop the reference distinguishing which stage moved.
   bool enable_lens_border = false;
+  // Third controlled exception, same footing as the two above: the sky-colour scene reuses an
+  // already-covered projection branch to cover a DIFFERENT shader stage — the background addition
+  // and the gate it sits behind. Zero here means "black", which is what every scene above renders
+  // with, so their committed references are untouched by this field existing.
+  float background_srgb[3] = { 0.f, 0.f, 0.f };
+  // -1 = inherit whatever the loaded config asked for. Only the sky scene overrides it: with a
+  // black background the visibility gate is invisible in the pixels (black either side of it), so
+  // no earlier scene had any reason to vary this.
+  int visible = -1;
 };
 
 // clang-format off
@@ -184,6 +194,32 @@ static const LensProjScene kScenes[] = {
    /*lens_type=*/0, /*fov=*/0.f, /*elevation=*/0.f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
    /*enable_lens_border=*/true},
+  // The sky-colour scene, and the only one in this group whose frame is not black where nothing
+  // was imaged. It exists because a background is the one thing that makes the shader's gate
+  // VISIBLE: with the black default, "painted the sky where it should not have" and "left it
+  // black" render identically, so no reference above can distinguish them.
+  //
+  // Three regions in one frame, which is why this geometry and not the group's usual square:
+  //   * an equal-area fisheye at fov=180 on a 256x192 canvas puts the image circle at 96 px and
+  //     the shader's own domain edge at 96*sqrt(2) = 135.8 px, while the corners sit at 160 px —
+  //     outside it, and therefore black. On the square frame every other single-lens scene uses,
+  //     the domain edge reaches exactly the corner (128*sqrt(2) = 181) and there is no addressable
+  //     pixel outside it at all.
+  //   * `visible: upper` with the camera on the horizon (elevation 0) puts the discarded half-sky
+  //     in the lower half of the disc — black — and the kept half in the upper, painted.
+  //   * everything else inside the circle is sky, at the colour below.
+  // The same three regions the CLI fixture asserts numerically
+  // (test/e2e-correctness/test_background_visible_hemisphere.py); here they are pinned as pixels,
+  // including the exact shape of the boundaries between them, which region floors cannot see.
+  //
+  // The colour is the one the rest of this scrum probes with, so a byte read off this reference is
+  // directly comparable with the numbers those suites assert.
+  // mean 28.540 σ0.1645
+  {"sky_colour_ea_180",            LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 192, 27.5,  0.4f,
+   LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 0.0f,
+   /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
+   /*enable_lens_border=*/false,
+   /*background_srgb=*/{ 0.2f, 0.35f, 0.6f }, /*visible=*/lumice::gui::kVisibleUpper},
 };
 // clang-format on
 static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -373,6 +409,15 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
       // the lens, the FOV and the viewport.
       if (scene.enable_lens_border) {
         vp.params.overlay.show_lens_border = true;
+      }
+
+      // 7d. Sky colour. Converted here rather than stored linear in the table so the scene row
+      // carries the number a colour picker shows — the same spelling the config JSON, the GUI
+      // control and every other probe in this scrum use. Applied after the switch above for the
+      // same reason 7b is: the visible override belongs to the view_proj the scene just installed.
+      lumice::SrgbToLinearRgb(scene.background_srgb, vp.params.background_color_linear);
+      if (scene.visible >= 0) {
+        vp.params.view_proj.visible = scene.visible;
       }
 
       // 8. Off-screen FBO capture, then compare against the committed reference.
