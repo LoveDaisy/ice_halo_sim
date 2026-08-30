@@ -333,10 +333,11 @@ TEST(VisibleMaskGuiParity, SingleFisheyeAgreesExactlyWhenBothBoundariesAreOffFra
       continue;
     }
     for (RenderConfig::VisibleRange vis : kAllRanges) {
-      // el = 0 (pointed at the horizon) so `upper` and `lower` each keep a real share of the
-      // frame; pointed well above it, `lower` would empty the mask and ExpectIdentical would be
-      // comparing two empty sets.
-      ExpectIdentical(MakeCfg(t, 60.0f, 160, 120, vis, /*el=*/0.0f), "narrow-fov single fisheye");
+      // el = 20: high enough that the horizon crosses the frame as a CURVE, low enough that
+      // `lower` still keeps a crescent. Both halves matter — see the note on
+      // VisibleRangeMatchesTheGuiRule for why el = 0 would make this blind to the radial
+      // mapping, and why an empty `lower` would make it vacuous.
+      ExpectIdentical(MakeCfg(t, 60.0f, 160, 120, vis, /*el=*/20.0f), "narrow-fov single fisheye");
     }
   }
 }
@@ -347,15 +348,23 @@ TEST(VisibleMaskGuiParity, SingleFisheyeAgreesExactlyWhenBothBoundariesAreOffFra
 
 TEST(VisibleMaskGuiParity, VisibleRangeMatchesTheGuiRule) {
   // `upper` and `lower` must cut the same frame in the same place on both sides. Equal-area at a
-  // narrow fov pointed at the horizon: the whole frame is in both domains, so any difference
-  // that shows up here is the visibility rule and nothing else.
+  // narrow fov: the whole frame is inside BOTH domains, so any difference that shows up here is
+  // the visibility rule and nothing else.
+  //
+  // el = 20 rather than 0, and that is load-bearing. Pointed exactly at the horizon the cut is
+  // the frame's horizontal centre line whatever theta(r) each side computes — the sign of a
+  // pixel's elevation then depends only on which half of the frame it is in, so the comparison
+  // would pass even if one side's radial mapping were completely wrong. Tilted up, the horizon
+  // is a curve whose position depends on theta(r), and the comparison becomes sensitive to it.
+  const float kEl = 20.0f;
+  const size_t full_on =
+      CountOn(CoreMask(MakeCfg(LensParam::kFisheyeEqualArea, 60.0f, 160, 120, RenderConfig::kFull, kEl)));
   for (RenderConfig::VisibleRange vis : { RenderConfig::kUpper, RenderConfig::kLower }) {
-    const RenderConfig cfg = MakeCfg(LensParam::kFisheyeEqualArea, 60.0f, 160, 120, vis, /*el=*/0.0f);
-    ExpectIdentical(cfg, "horizon-straddling fisheye");
+    const RenderConfig cfg = MakeCfg(LensParam::kFisheyeEqualArea, 60.0f, 160, 120, vis, kEl);
+    ExpectIdentical(cfg, "horizon-crossing fisheye");
     const size_t on = CountOn(CoreMask(cfg));
     EXPECT_GT(on, 0u);
-    EXPECT_LT(on, CoreMask(MakeCfg(LensParam::kFisheyeEqualArea, 60.0f, 160, 120, RenderConfig::kFull, 0.0f)).size())
-        << "the horizon must actually cut this frame, or the comparison is vacuous";
+    EXPECT_LT(on, full_on) << "the horizon must actually cut this frame, or the comparison is vacuous";
   }
 }
 
