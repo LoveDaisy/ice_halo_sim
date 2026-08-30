@@ -809,6 +809,15 @@ inline std::string FormatSopExpansionPreview(const SumOfProducts& sop) {
 // cheap and safe to run on every load regardless of the document's declared schema_version. That
 // is deliberate: the trigger is the text, not the version number, so a hand-edited file carrying a
 // wrong version still migrates correctly.
+//
+// When it DOES rewrite, the row comes back re-joined from its tokens with a canonical " & ", not
+// patched character by character — so a row that also carried irregular '&' spacing ("a,b&c" or
+// "a,b   &   c") comes back canonically spaced. That is a declared part of the contract, not an
+// accident: the row is already being rewritten, the spacing carries no meaning (SplitSummandTokens
+// trims), and reconstructing from the tokens keeps one code path instead of a second, position-
+// tracking one. Rows with no ',' are untouched, which is the case that actually matters — see
+// MigrationIsAVerbatimNoOpWithoutCommas, and MigrationCanonicalizesRowSpacingWhenItRewrites for
+// the pinned behaviour of this paragraph.
 inline std::string MigrateLegacyRaypathCommaConnector(const std::string& row_text) {
   auto tokens = detail::SplitSummandTokens(row_text);
   bool changed = false;

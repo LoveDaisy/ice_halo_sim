@@ -686,6 +686,17 @@ TEST(FilterSopGrammar, MigrationRewritesInsideEverySemicolonAlternative) {
   EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3,5;1-2"), "3-5;1-2");
 }
 
+TEST(FilterSopGrammar, MigrationCanonicalizesRowSpacingWhenItRewrites) {
+  // The other half of the no-op case above, and the one that was an unstated implementation
+  // detail until it was pinned here: once a row IS being rewritten, it comes back re-joined from
+  // its tokens with a canonical " & " — irregular '&' spacing in the same row is normalized along
+  // with the comma. This is contract, not accident (see the note on the function): the row is
+  // already changing, '&' spacing carries no meaning, and rebuilding from tokens avoids a second
+  // position-tracking code path. Only rows that carry no ',' at all are byte-for-byte preserved.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2&entry:1,2"), "3-5-1-2 & entry:1,2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2   &  len:2"), "3-5-1-2 & len:2");
+}
+
 TEST(FilterSopGrammar, MigrationIsAVerbatimNoOpWithoutCommas) {
   // The common case is a document with no ',' at all, and it must come back byte for byte — not
   // re-joined, re-spaced or trimmed. A migration that reformats every row on every load would
