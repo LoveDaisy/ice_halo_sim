@@ -67,6 +67,12 @@ struct LensProjScene {
   bool enable_overlay = false;
   bool overlay_zenith_nadir = false;
   bool overlay_grid = false;
+  // Second controlled exception, on the same footing as the three above: the lens-border scenes
+  // reuse an already-covered projection branch to cover a DIFFERENT shader stage — the image-circle
+  // outline overlayLensBorder() draws over the projected frame. Independent of enable_overlay: the
+  // border is drawn outside the visibility gate that overlayAuxLines sits behind, so putting the
+  // two on one flag would stop the reference distinguishing which stage moved.
+  bool enable_lens_border = false;
 };
 
 // clang-format off
@@ -157,6 +163,27 @@ static const LensProjScene kScenes[] = {
   {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
+  // Lens-border scenes. Each reuses the setup of the scene named in its own name and changes ONE
+  // thing — the border switch — so a PSNR drop on the pair localizes to overlayLensBorder() and a
+  // drop on both the pair and its twin localizes to the projection underneath. Two of them, one per
+  // shader branch that can draw a border: the single-lens radius formula and the dual-fisheye clip
+  // circle, which are different code with different inputs.
+  //
+  // Ray budgets are inherited from the reused scenes for the reason those budgets exist: the border
+  // is a thin bright curve, so its contribution to PSNR is small, and lowering the budget here would
+  // raise the Monte-Carlo floor the border has to stand out from.
+  // mean 20.013 σ0.0918
+  {"fisheye_equal_area_120_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
+   LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f,
+   /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
+   /*enable_lens_border=*/true},
+  // mean 27.071 σ0.0464 — 0.6 dB under its borderless twin, which is the border's own contribution
+  // to the frame: the two circles are a thin bright curve over an otherwise identical capture.
+  {"dual_fisheye_equal_area_full_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.0, 5.0f,
+   LensSetup::kDualFisheyeExport,
+   /*lens_type=*/0, /*fov=*/0.f, /*elevation=*/0.f,
+   /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
+   /*enable_lens_border=*/true},
 };
 // clang-format on
 static constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
@@ -337,6 +364,15 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           vp.params.overlay.show_grid = true;
           vp.params.overlay.grid_step = 10.f;
         }
+      }
+
+      // 7c. Lens-border scenes. Colour and opacity are left at the OverlayDecoration defaults, so
+      // this reference also pins those defaults — changing them is a re-shoot, which is the correct
+      // coupling: they are what a user sees the first time the switch is turned on. No CPU
+      // precompute of any kind: unlike the markers above, the shader derives the circle itself from
+      // the lens, the FOV and the viewport.
+      if (scene.enable_lens_border) {
+        vp.params.overlay.show_lens_border = true;
       }
 
       // 8. Off-screen FBO capture, then compare against the committed reference.

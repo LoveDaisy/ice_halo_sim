@@ -77,8 +77,14 @@ GROUPS: dict[str, ReferenceGroup] = {
     ),
     # Lens-projection scene names — must match kScenes[] order in test_gui_lens_projection.cpp.
     # One scene per projection branch of the preview fragment shader, plus overlay_ea, which
-    # reuses the equal-area branch to cover the marker/grid overlay stage instead. All share
-    # the same simulated frame, so a PSNR drop localizes to the projection math.
+    # reuses the equal-area branch to cover the marker/grid overlay stage instead, and the two
+    # *_border scenes, which reuse a projection branch to cover the lens-border overlay stage. All
+    # share the same simulated frame, so a PSNR drop localizes to the projection math.
+    #
+    # A scene added to kScenes[] but NOT listed here is silently left without a reference: the
+    # driver's Phase A averages only the scenes it is told about, so the new scene's own gui_test
+    # case keeps failing against a file that was never written, with the regen run reporting
+    # success. Adding a scene means editing both lists.
     "lens_proj": ReferenceGroup(
         key="lens_proj",
         scenes=[
@@ -88,6 +94,8 @@ GROUPS: dict[str, ReferenceGroup] = {
             "dual_fisheye_equal_area_full",
             "rectangular",
             "overlay_ea",
+            "fisheye_equal_area_120_border",
+            "dual_fisheye_equal_area_full_border",
         ],
         modes=[None],
         tmp_prefix="lumice_lens_proj_",
