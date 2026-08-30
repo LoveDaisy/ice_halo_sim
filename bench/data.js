@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788013781752,
+  "lastUpdate": 1788061021922,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "8d88f08734051714d5bb893476504dc8be228f72",
-          "message": "Merge pull request #181 from LoveDaisy/fix/regen-auto-ev-refs\n\nfix(auto-ev): regen stale visual refs + recalibrate thresholds (kill 31% flake)",
-          "timestamp": "2026-07-07T22:15:20+08:00",
-          "tree_id": "41512c22064985ece3e71d5e151eba5e56362085",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8d88f08734051714d5bb893476504dc8be228f72"
-        },
-        "date": 1783434135057,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 451083.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 589827.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 396366.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 332044.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4776,6 +4728,54 @@ window.BENCHMARK_DATA = {
             "value": 341710.8,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "26e730907f491d40869033a4ce67ac66edc88f8a",
+          "message": "Merge pull request #281 from LoveDaisy/task/gui-label-column-gap-alignment\n\nfix(gui): 行末标签列左缘对齐 + 间距收敛为单一 owner",
+          "timestamp": "2026-08-30T11:28:21+08:00",
+          "tree_id": "51266763b2f5e9a7423d99f0a75aaf7d05257f11",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/26e730907f491d40869033a4ce67ac66edc88f8a"
+        },
+        "date": 1788061020777,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 442084.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 578613.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 514765.8,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 415212.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
