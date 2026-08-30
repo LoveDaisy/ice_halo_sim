@@ -1,7 +1,7 @@
 {
   "groups": {
     "capture_harness": {
-      "generated_at": "2026-08-30T13:00:08",
+      "generated_at": "2026-08-30T21:42:13",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -15,9 +15,9 @@
       }
     },
     "lens_proj": {
-      "generated_at": "2026-08-04T13:51:57",
+      "generated_at": "2026-08-30T20:40:36",
       "n_ref_runs": 10,
-      "n_calib_runs": 30,
+      "n_calib_runs": 10,
       "scenes": {
         "dual_fisheye_equal_area_full": {
           "psnr_mean": 27.6657,
@@ -60,6 +60,20 @@
           "identical_runs": 0,
           "n_samples": 30,
           "threshold": 20.0
+        },
+        "dual_fisheye_equal_area_full_border": {
+          "psnr_mean": 27.071,
+          "psnr_std": 0.0464,
+          "identical_runs": 0,
+          "n_samples": 10,
+          "threshold": 26.0
+        },
+        "fisheye_equal_area_120_border": {
+          "psnr_mean": 20.013,
+          "psnr_std": 0.0918,
+          "identical_runs": 0,
+          "n_samples": 10,
+          "threshold": 19.0
         }
       }
     },
@@ -99,7 +113,7 @@
       }
     },
     "defaults_panel_layout": {
-      "generated_at": "2026-08-26T15:32:59",
+      "generated_at": "2026-08-30T20:59:51",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {

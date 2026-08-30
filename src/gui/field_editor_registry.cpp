@@ -534,6 +534,10 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.zenith_nadir_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     map.emplace("overlay_zenith_nadir_radius_px",
                 FloatField([](GuiState& s) { return &s.zenith_nadir_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
+    map.emplace("overlay_lens_border_line", BoolField([](GuiState& s) { return &s.show_lens_border_line; }));
+    map.emplace("overlay_lens_border_color", ColorField([](GuiState& s) { return s.lens_border_color; }));
+    map.emplace("overlay_lens_border_alpha",
+                FloatField([](GuiState& s) { return &s.lens_border_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
 
     // ---- panel state ----
     map.emplace("right_panel_collapsed", BoolField([](GuiState& s) { return &s.right_panel_collapsed; }));

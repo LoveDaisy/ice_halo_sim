@@ -1,7 +1,7 @@
 // The right panel's Overlay group: the auxiliary lines drawn over the preview and the angle list
 // behind the Angular Dist. row's fold.
 //
-// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws four rows of the same
+// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws five rows of the same
 // record — colour, name, line, text label, opacity — as one ImGui table, and its one non-obvious
 // property is a LAYOUT one: the columns have to line up across rows whose names have very different
 // widths, and the longest name must not be cut off. That is only checkable against a rendered
@@ -66,8 +66,8 @@ struct ScopedRef {
   ImGuiTestContext* ctx_;
 };
 
-// The four rows, by the id suffix their widgets carry.
-const char* const kRows[] = { "horizon", "grid", "sun_circles", "zenith_nadir" };
+// The five rows, by the id suffix their widgets carry.
+const char* const kRows[] = { "horizon", "grid", "sun_circles", "zenith_nadir", "lens_border" };
 
 // The name each row displays. Mirrored rather than read from the panel because the panel's row table
 // is file-local to app_panels.cpp — and because a name that changed there without changing here is
@@ -83,7 +83,10 @@ const char* NameOfRow(const std::string& row) {
   if (row == "sun_circles") {
     return "Angular Dist.";
   }
-  return "Zenith/Nadir";
+  if (row == "zenith_nadir") {
+    return "Zenith/Nadir";
+  }
+  return "Lens Border";
 }
 
 }  // namespace
@@ -149,13 +152,15 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           break;
         }
       }
-      IM_CHECK_GT(line_x, 0.0f);  // a run of four misses would leave this unset
+      IM_CHECK_GT(line_x, 0.0f);  // a run of five misses would leave this unset
 
       // "Empty cell IS the information" (doc/gui-visual-language.md §4.4): the marker row carries no
-      // text label, so its Label cell holds nothing — not a disabled checkbox, not a dash. Asserted
-      // against the three rows that DO have one, so the claim is about this row and not about the
-      // id being spelled some other way.
+      // text label, so its Label cell holds nothing — not a disabled checkbox, not a dash. The lens
+      // border row says the same thing for the same reason: what it draws is a circle, not a word.
+      // Asserted against the three rows that DO have one, so the claim is about these two rows and
+      // not about the id being spelled some other way.
       IM_CHECK_EQ(ctx->ItemInfo("**/##zenith_nadir_label", ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
+      IM_CHECK_EQ(ctx->ItemInfo("**/##lens_border_label", ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##horizon_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##grid_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##sun_circles_label").ID, (ImGuiID)0);
@@ -184,7 +189,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The other half of "empty cell is the information": the fold column. Only two of the four rows
+  // The other half of "empty cell is the information": the fold column. Only two of the five rows
   // have a field the others lack, and only those two offer the button — a fold button on every row
   // would say the opposite of what this layout is for.
   //
@@ -212,6 +217,9 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         IM_CHECK(!ctx->ItemExists("**/###grid_fold"));
         IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
         IM_CHECK(ctx->ItemExists("**/###zenith_nadir_fold"));
+        // No fold: unlike the marker pair, the lens border owns no field of its own — the shader
+        // derives the circle from the lens, the FOV and the viewport, so there is nothing to edit.
+        IM_CHECK(!ctx->ItemExists("**/###lens_border_fold"));
 
         ctx->ItemClick("**/###sun_circles_fold");
       }
@@ -398,7 +406,7 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The four alpha cells, at both ends of each declared domain. Literals throughout, for the reason
+  // The five alpha cells, at both ends of each declared domain. Literals throughout, for the reason
   // spelled out at the head of functional/test_scene_controls.cpp: the call site reads the registry,
   // so asking the registry what to expect would compare one line of code against itself.
   //
@@ -414,10 +422,8 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const ScopedRef panel_ref(ctx, "//##RightPanel");
 
       float* const kSlots[] = {
-        &gui::g_state.horizon_alpha,
-        &gui::g_state.grid_alpha,
-        &gui::g_state.sun_circles_alpha,
-        &gui::g_state.zenith_nadir_alpha,
+        &gui::g_state.horizon_alpha,      &gui::g_state.grid_alpha,        &gui::g_state.sun_circles_alpha,
+        &gui::g_state.zenith_nadir_alpha, &gui::g_state.lens_border_alpha,
       };
       for (size_t i = 0; i < IM_ARRAYSIZE(kRows); ++i) {
         const std::string ref = "**/##" + std::string(kRows[i]) + "_alpha";

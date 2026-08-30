@@ -54,6 +54,10 @@ PreviewParams CallerParams() {
   params.overlay.show_horizon = true;
   params.overlay.show_grid = true;
   params.overlay.show_sun_circles = true;
+  // The lens border belongs to the preview's lens, and a panorama export replaces that lens
+  // outright — so drawing the old lens's image circle over the new projection would annotate the
+  // picture with a boundary that is not in it.
+  params.overlay.show_lens_border = true;
   params.bg.enabled = true;
   params.bg.alpha = 0.7f;
   return params;
@@ -81,6 +85,7 @@ TEST(ExportPresets, EachPresetOverwritesOnlyTheViewAndTheDecorations) {
     EXPECT_FALSE(params.overlay.show_horizon) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_grid) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_sun_circles) << preset.name << ": a decoration survived into the export";
+    EXPECT_FALSE(params.overlay.show_lens_border) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.bg.enabled) << preset.name << ": the background survived into the export";
   }
 }

@@ -86,6 +86,14 @@ struct OverlayDecoration {
   float zenith_nadir_alpha = 0.6f;
   float zenith_nadir_radius_px = 8.0f;
 
+  // Lens border: outline of the projection's valid image circle. The shader
+  // derives the geometry itself from lens type / FOV / resolution (see
+  // overlayLensBorder), so unlike the zenith/nadir marker there is no
+  // CPU-precomputed screen position or radius here.
+  bool show_lens_border = false;
+  float lens_border_color[3] = { 0.3f, 0.7f, 1.0f };
+  float lens_border_alpha = 0.6f;
+
   static OverlayDecoration Disabled() { return {}; }
 };
 

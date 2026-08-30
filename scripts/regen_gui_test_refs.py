@@ -77,8 +77,14 @@ GROUPS: dict[str, ReferenceGroup] = {
     ),
     # Lens-projection scene names — must match kScenes[] order in test_gui_lens_projection.cpp.
     # One scene per projection branch of the preview fragment shader, plus overlay_ea, which
-    # reuses the equal-area branch to cover the marker/grid overlay stage instead. All share
-    # the same simulated frame, so a PSNR drop localizes to the projection math.
+    # reuses the equal-area branch to cover the marker/grid overlay stage instead, and the two
+    # *_border scenes, which reuse a projection branch to cover the lens-border overlay stage. All
+    # share the same simulated frame, so a PSNR drop localizes to the projection math.
+    #
+    # A scene added to kScenes[] but NOT listed here is silently left without a reference: the
+    # driver's Phase A averages only the scenes it is told about, so the new scene's own gui_test
+    # case keeps failing against a file that was never written, with the regen run reporting
+    # success. Adding a scene means editing both lists.
     "lens_proj": ReferenceGroup(
         key="lens_proj",
         scenes=[
@@ -88,6 +94,8 @@ GROUPS: dict[str, ReferenceGroup] = {
             "dual_fisheye_equal_area_full",
             "rectangular",
             "overlay_ea",
+            "fisheye_equal_area_120_border",
+            "dual_fisheye_equal_area_full_border",
         ],
         modes=[None],
         tmp_prefix="lumice_lens_proj_",
@@ -516,6 +524,13 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     group_entry = groups_out.get(group.key) if isinstance(groups_out.get(group.key), dict) else {}
     existing_scenes = group_entry.get("scenes") if isinstance(group_entry.get("scenes"), dict) else {}
     existing_scenes.update(scenes_out)
+    # The three fields beside "scenes" are group-scoped and are REWRITTEN whole on every run,
+    # including a --scene run that recalibrated exactly one member. So they describe THIS run,
+    # not the provenance of every scene in the group: after `--scene foo --n-calib 10` inside a
+    # group whose other members were calibrated at 30, the file will read n_calib_runs=10 while
+    # those members keep their original psnr_mean/psnr_std untouched. Do not read these three as
+    # per-scene metadata and do not infer from them that existing scenes were re-calibrated —
+    # the per-scene audit trail is n_samples / identical_runs inside each scene entry.
     groups_out[group.key] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "n_ref_runs": getattr(args, "n", 10),
