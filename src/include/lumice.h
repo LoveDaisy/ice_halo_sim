@@ -971,6 +971,33 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 // display-time surface).
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total);
 
+// Display-time background colour for the composite (raypath_color) path only. `background_linear` is a caller-owned
+// array of 3 floats, ADDITIVE **linear** RGB — the same convention the render config's `background` carries internally
+// (see doc/configuration.md: JSON/picker values are sRGB, the struct side is linear). A caller holding a picker's sRGB
+// triple must pre-convert it with lumice::SrgbToLinearRgb (src/util/color_space.hpp, an inline header function — see
+// LUMICE_XyzToSrgbUint8WithBackground for the same note) before calling. The value is added inside the composite bake
+// to every pixel the lens actually images — outside the image circle, and in the hemisphere `visible` excludes, nothing
+// is painted, matching what the mono path does with the committed config's background.
+//
+// The mono / non-composite path is unaffected: it keeps taking its background from the committed
+// scene. Pushing the SAME colour through both is what makes toggling raypath colour on and off
+// leave the background pixels unchanged.
+//
+// No accumulator reset / no epoch bump / no sim restart — the setter just flips the internal
+// snapshot_dirty_ flag, so the next acquired result frame rebuilds the composite with the new
+// background. Callers that already keep the poller running get it on the next poll; callers that
+// stopped the poller must wake it (mirrors the LUMICE_SetCompositeExposure + poller-wake pattern
+// used by the GUI). All-zero (the server default) is an algebraic no-op, so a caller that never
+// calls this sees byte-identical composites.
+//
+// Returns LUMICE_ERR_NULL_ARG if `server` or `background_linear` is NULL.
+//
+// Thread safety: display-time only; safe relative to other display-time readers
+// (LUMICE_AcquireResultFrame, LUMICE_GetSimLifecycle, LUMICE_SetCompositeExposure, etc.). NOT
+// thread-safe with concurrent LUMICE_CommitScene (same single-owner rule as the rest of the
+// display-time surface).
+LUMICE_ErrorCode LUMICE_SetCompositeBackground(LUMICE_Server* server, const float* background_linear);
+
 // Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
 // whether the class has any non-zero pixel in its snapshot Y-lane on any active RenderConsumer
 // — i.e. whether it has captured any rays yet. Intended for GUI empty-arc warnings when a

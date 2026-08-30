@@ -101,6 +101,13 @@ class ServerImpl {
   // with the new EV. Mono path is untouched (structural AC4).
   Error SetCompositeExposure(float ev_total);
 
+  // Display-time update of the composite-path background colour. `rgb` is ADDITIVE linear RGB (3 floats), added inside
+  // DoSnapshot Phase 2 to every pixel the lens actually images. No sim restart,
+  // no epoch bump: flips snapshot_dirty_ so the next acquired result frame
+  // triggers one composite rebake with the new background. Mono path is
+  // untouched (it takes its background from the committed RenderConfig).
+  Error SetCompositeBackground(const float rgb[3]);
+
   // task-342.3 AC4: per-color-class empty-arc detector. Reads the frozen snapshot
   // lanes (no DoSnapshot trigger — the GUI polling loop is expected to have already
   // acquired a result frame). Writes 1 into out_flags[i] when
@@ -211,6 +218,14 @@ class ServerImpl {
   // Read/write both go through consumer_mutex_ so it composes with the
   // display-time class table under one lock.
   float display_ev_total_ = 0.0f;
+
+  // Display-time ADDITIVE linear-RGB background for the composite path only. All-zero (default) → adding it is an
+  // algebraic no-op → composite behavior is bit-for-bit what it was before this setter existed (the CLI path never
+  // calls SetCompositeBackground). Written by SetCompositeBackground (also flips snapshot_dirty_) and consumed by
+  // DoSnapshot Phase 2's ApplyCompositeBackground call — nowhere else.
+  // Read/write both go through consumer_mutex_ so it composes with the
+  // display-time EV and class table under one lock.
+  float composite_background_linear_[3] = { 0.0f, 0.0f, 0.0f };
 
   QueuePtrS<SimBatch> scene_queue_;
   QueuePtrS<SimData> data_queue_;
@@ -1617,6 +1632,24 @@ Error ServerImpl::SetCompositeExposure(float ev_total) {
 }
 
 
+// =============== ServerImpl::SetCompositeBackground ===============
+// Display-time background colour for the composite path. Same shape as
+// SetCompositeExposure: writes one field under
+// consumer_mutex_ then flips snapshot_dirty_ so the next acquired result frame
+// triggers exactly one composite rebake with the new background. No validation
+// on the components — any finite float is legitimate (the caller owns the
+// sRGB→linear conversion and any clamping; the compositor's final
+// LinearRgbToSrgbU8 clamps to [0,1] anyway). No epoch bump, no consumers
+// rebuild, no scene_mutex_ touched — see SetRaypathColors for the identical
+// discipline this follows.
+Error ServerImpl::SetCompositeBackground(const float rgb[3]) {
+  std::lock_guard<TicketMutex> lock(consumer_mutex_);
+  std::copy(rgb, rgb + 3, std::begin(composite_background_linear_));
+  snapshot_dirty_ = true;
+  return Error::Success();
+}
+
+
 // =============== ServerImpl::GetColorClassSignals ===============
 // task-342.3 AC4: reads snapshot Y-lanes (no DoSnapshot trigger; caller has been
 // polling composite/xyz results and thus has a fresh snapshot). Aggregates
@@ -1798,6 +1831,13 @@ Error Server::SetCompositeExposure(float ev_total) {
     return Error::ServerNotReady("Server is terminated");
   }
   return impl_->SetCompositeExposure(ev_total);
+}
+
+Error Server::SetCompositeBackground(const float rgb[3]) {
+  if (!impl_) {
+    return Error::ServerNotReady("Server is terminated");
+  }
+  return impl_->SetCompositeBackground(rgb);
 }
 
 Error Server::GetColorClassSignals(uint8_t* out_flags, int class_count) {

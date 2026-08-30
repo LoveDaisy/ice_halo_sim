@@ -1208,6 +1208,27 @@ LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_tot
 }
 
 
+// Display-time background colour for the composite path. See the
+// LUMICE_SetCompositeBackground comment in include/lumice.h for
+// the semantics (3 ADDITIVE linear floats, masked to the imaged region, mono
+// path untouched, snapshot_dirty_ flipped so the next acquired result frame
+// rebakes the composite). Unlike the exposure setter this one takes a pointer,
+// so it needs its own null check; component values are not validated for the
+// same reason ev_total is not — the caller owns the colour space conversion and
+// the compositor clamps at the sRGB stage regardless.
+LUMICE_ErrorCode LUMICE_SetCompositeBackground(LUMICE_Server* server, const float* background_linear) {
+  if (!server || !background_linear) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto err = server->server_->SetCompositeBackground(background_linear);
+  if (err) {
+    LOG_ERROR("LUMICE_SetCompositeBackground failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
 // task-342.3 AC4: per-color-class empty-arc detector.
 LUMICE_ErrorCode LUMICE_GetColorClassSignal(LUMICE_Server* server, int* out_flags, int class_count) {
   if (!server) {

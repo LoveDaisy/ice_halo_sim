@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sRGB triple the picker showed; it is painted only where the lens actually images sky, so the
   black surround outside a fisheye's image circle stays black. Expect halo-against-sky contrast to
   drop against a bright background — that is what the sRGB curve does, and EV is its control.
+- **Raypath-colour (composite) display honours the background colour** (469.5): with raypath
+  colouring on, the picture now carries the same background as with it off. Previously the
+  composite was baked server-side with a black surround, so toggling colouring changed the
+  background out from under the user — the visible inconsistency this closes. The colour is added
+  in linear RGB after all exposure handling and before the sRGB transfer curve, only on the pixels
+  the lens actually images, so it agrees byte-for-byte with the mono path outside the halo and
+  leaves the region outside a fisheye's image circle black.
+- **One new C API setter** (ABI addition, non-breaking):
+  `LUMICE_SetCompositeBackground(server, background_linear)` — a display-time push of the
+  composite path's additive linear-RGB background, shaped exactly like `LUMICE_SetCompositeExposure`
+  (no epoch bump, no accumulator reset, no re-simulation; the next acquired result frame re-bakes
+  the composite). All-zero, the default, is an algebraic no-op, so a consumer that never calls it
+  sees byte-identical composites.
 - **One new C API pure function** (ABI addition, non-breaking):
   `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, pixel_count, intensity_scale, background_linear)`
   — the existing `LUMICE_XyzToSrgbUint8` with an additive linear-RGB background composited before
