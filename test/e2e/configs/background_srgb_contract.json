@@ -35,12 +35,13 @@
       "id": 1,
       "lens": {
         "type": "fisheye_equal_area",
-        "fov": 120
+        "fov": 90
       },
       "resolution": [64, 64],
       "view": {
         "elevation": 20
       },
+      "visible": "full",
       "background": [0.2, 0.35, 0.6]
     }
   ]

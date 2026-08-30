@@ -12,6 +12,16 @@ readings by ~70 LSB, far outside the 1 LSB tolerance explained below.
 
 The parser-level unit tests (test_json_parser_parity.cpp) pin the conversion at each boundary; this
 one pins the property those conversions exist for, through the real CLI and the real render path.
+
+The "on a pixel carrying no halo energy" reading depends on the background reaching every pixel of
+the frame, and it no longer does everywhere: the render path adds it only inside the region the
+lens images and the `visible` setting admits (RenderConsumer::PostSnapshot, gated on
+core/lens_proj_build.hpp's BuildVisibleMask). The fixture is therefore chosen so the whole 64x64
+frame is inside that region — `"visible": "full"` removes the horizon cut, and fov=90 puts the
+equal-area image circle at 1.31 frame half-diagonals, leaving the far corners at 75% of the
+boundary rather than the coin flip fov=120 produced (its corner pixels land at r = 0.98). Both
+premises are asserted below rather than assumed, because if either lapsed the frame minimum would
+quietly become a masked black pixel and this test would keep passing while measuring nothing.
 """
 
 import json
@@ -62,6 +72,17 @@ class TestBackgroundColorContract(LumiceTestCase):
             round(c * 255)
             for c in json.loads(CONFIG.read_text())["render"][0]["background"]
         ]
+
+        # Premise of the "whole frame floor" reading below: nothing here is outside the imaged
+        # region. A masked pixel is pure black, so counting black pixels tests it directly.
+        black = sum(1 for p in pixels if p == (0, 0, 0))
+        self.assertEqual(
+            black,
+            0,
+            f"{black} of {len(pixels)} pixels are pure black, i.e. outside the lens's imaged region or the "
+            f"visible hemisphere. The frame-minimum reading below only means 'the background floor' while "
+            f"the background reaches every pixel; re-pick the fixture rather than relaxing this.",
+        )
 
         # The per-channel minimum over the frame IS the background floor: the background is added
         # to every pixel and halo energy only ever adds more, so the darkest value a channel takes
