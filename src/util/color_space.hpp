@@ -15,6 +15,12 @@ void XyzToLinearRgb(const float xyz[3], float rgb[3]);
 // sRGB gamma: linear → sRGB (threshold 0.0031308).
 float LinearToSrgb(float linear);
 
+// Inverse sRGB gamma: sRGB → linear (threshold 0.04045). Analytic inverse of LinearToSrgb; the two
+// thresholds are the same point on the curve expressed in the two spaces (0.0031308 * 12.92 =
+// 0.04045). Used at the JSON boundary: the "background" key is authored in sRGB (what a color
+// picker shows), while the struct field it lands in is linear (what additive blending needs).
+float SrgbToLinear(float srgb);
+
 // sRGB gamma batch in-place.
 void LinearToSrgbBatch(float* rgb, int channel_count);
 

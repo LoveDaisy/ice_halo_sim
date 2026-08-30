@@ -10,6 +10,7 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/def.hpp"
+#include "util/color_space.hpp"
 
 namespace lumice {
 
@@ -59,8 +60,14 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("visible")) {
     j_render.at("visible").get_to(render.visible_);
   }
+  // The JSON key is sRGB (what a color picker shows); RenderConfig::background_ is linear (what
+  // PostSnapshot's additive blend needs). The conversion lives here, at the parser boundary, and
+  // has a twin on the encode side in render_config.cpp's to_json.
   if (j_render.contains("background")) {
     j_render.at("background").get_to(render.background_);
+    for (float& c : render.background_) {
+      c = SrgbToLinear(c);
+    }
   }
   if (j_render.contains("ray_color")) {
     j_render.at("ray_color").get_to(render.ray_color_);

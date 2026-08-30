@@ -110,6 +110,55 @@ TEST(ColorSpace, LinearToSrgbBatch) {
   }
 }
 
+// ---- SrgbToLinear ----
+
+TEST(ColorSpace, SrgbToLinearThreshold) {
+  // Below threshold: linear scaling
+  float below = 0.02f;
+  EXPECT_NEAR(SrgbToLinear(below), below / 12.92f, 1e-6f);
+
+  // Above threshold: power curve
+  float above = 0.5f;
+  float expected = std::pow((above + 0.055f) / 1.055f, 2.4f);
+  EXPECT_NEAR(SrgbToLinear(above), expected, 1e-6f);
+}
+
+TEST(ColorSpace, SrgbToLinearZero) {
+  EXPECT_FLOAT_EQ(SrgbToLinear(0.0f), 0.0f);
+}
+
+TEST(ColorSpace, SrgbToLinearOne) {
+  EXPECT_NEAR(SrgbToLinear(1.0f), 1.0f, 1e-6f);
+}
+
+// The two functions split their domain at the SAME point on the curve, expressed once in each
+// space (0.0031308 linear ↔ 0.04045 sRGB). If either branch were mismatched the piecewise
+// definition would step at the seam, and the round trip below would only hide it away from the
+// seam — so the seam itself is asserted directly.
+TEST(ColorSpace, GammaCurvesAreContinuousAtTheirThresholds) {
+  // Evaluated as the two BRANCH formulas at the seam rather than as samples either side of it:
+  // the linear segment has slope 12.92, so an epsilon step in linear is a 12.92x larger step in
+  // sRGB and a sampled comparison would measure the slope, not a discontinuity.
+  EXPECT_NEAR(0.0031308f * 12.92f, 1.055f * std::pow(0.0031308f, 1.0f / 2.4f) - 0.055f, 1e-5f);
+  EXPECT_NEAR(0.04045f / 12.92f, std::pow((0.04045f + 0.055f) / 1.055f, 2.4f), 1e-5f);
+  // ... and the seam is the same point seen from both spaces.
+  EXPECT_NEAR(LinearToSrgb(0.0031308f), 0.04045f, 1e-5f);
+  EXPECT_NEAR(SrgbToLinear(0.04045f), 0.0031308f, 1e-5f);
+}
+
+// The property the JSON boundary rests on: a value authored in sRGB, decoded to linear on the way
+// in and re-encoded on the way out, comes back unchanged. Both directions are checked because the
+// two parsers use one each (decode side / encode side).
+TEST(ColorSpace, SrgbToLinearInverseOfLinearToSrgb) {
+  const float kValues[] = {
+    0.0f, 0.001f, 0.02f, 0.04f, 0.041f, 0.05f, 0.1f, 0.15f, 0.2f, 0.35f, 0.5f, 0.6f, 0.8f, 1.0f
+  };
+  for (float v : kValues) {
+    EXPECT_NEAR(SrgbToLinear(LinearToSrgb(v)), v, 1e-6f) << "linear→sRGB→linear at " << v;
+    EXPECT_NEAR(LinearToSrgb(SrgbToLinear(v)), v, 1e-6f) << "sRGB→linear→sRGB at " << v;
+  }
+}
+
 // ---- XyzToSrgb (full pipeline) ----
 
 TEST(ColorSpace, XyzToSrgbD65White) {

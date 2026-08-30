@@ -14,6 +14,7 @@
 #include "config/config_manager.hpp"
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch + ParseConfigString + ConfigToJson (internal)
+#include "util/color_space.hpp"       // SrgbToLinear (the JSON boundary conversion under test)
 
 // Differential tests: core's native config parser (config/*::from_json) vs the C API JSON parser
 // behind ParseConfigString / LUMICE_SceneFromJson (server/c_api.cpp::JsonToConfig).
@@ -783,6 +784,61 @@ TEST(JsonParserParity, RendererOpacityAndIntensityFactorOmittedDefaultToOne) {
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, 1.0f);
   EXPECT_FLOAT_EQ(renderer.opacity_, p.core.renderers_.begin()->second.opacity_);
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, p.core.renderers_.begin()->second.intensity_factor_);
+}
+
+// --- render.background: sRGB on the wire, linear in the struct ---
+//
+// The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.
+// Every corpus config writes [0, 0, 0], which is a FIXED POINT of both directions, so the corpus
+// sweep above is structurally blind to this conversion — a non-zero value is the only input that
+// can tell a converting parser from a passthrough one. The round-trip funnel the other pins use
+// (ParseWithBoth) is blind to a one-sided miss for a second reason: it re-encodes the C API's
+// result and hands it back to CORE, so a C API that neither decodes nor encodes cancels itself
+// out and lands on the same value core-direct would. Hence the two direct-read pins below, one
+// per parser, before the round-trip pin.
+
+// A render block carrying an explicit background, everything else minimal.
+std::string WrapRenderWithBackground(const std::string& background_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "background": )" + background_json + " } ] }";
+}
+
+// Well clear of both gamma segments' endpoints, so a passthrough parser and a converting one are
+// far apart in every channel.
+constexpr float kBackgroundSrgb[3] = { 0.2f, 0.35f, 0.6f };
+const std::string kBackgroundSrgbJson = "[0.2, 0.35, 0.6]";
+
+TEST(JsonParserParity, BackgroundNonZeroCoreConvertsSrgbToLinear) {
+  CoreOutcome core = ParseWithCore(WrapRenderWithBackground(kBackgroundSrgbJson));
+  ASSERT_TRUE(core.ok) << core.error;
+  ASSERT_EQ(core.config.renderers_.size(), 1u);
+  const auto& renderer = core.config.renderers_.begin()->second;
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(renderer.background_[j], lumice::SrgbToLinear(kBackgroundSrgb[j]), 1e-6f)
+        << "channel " << j << ": core parser stored the sRGB value verbatim instead of converting";
+  }
+}
+
+TEST(JsonParserParity, BackgroundNonZeroCapiConvertsSrgbToLinear) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  ASSERT_EQ(ParseConfigString(WrapRenderWithBackground(kBackgroundSrgbJson).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.renderer_count, 1);
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(cfg.renderers[0].background[j], lumice::SrgbToLinear(kBackgroundSrgb[j]), 1e-6f)
+        << "channel " << j << ": C API parser stored the sRGB value verbatim instead of converting";
+  }
+}
+
+TEST(JsonParserParity, BackgroundNonZeroRoundTripsIdenticallyBothParsers) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithBackground(kBackgroundSrgbJson), &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& via_capi = p.via_capi.renderers_.begin()->second;
+  const auto& core = p.core.renderers_.begin()->second;
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(via_capi.background_[j], core.background_[j], 1e-6f) << "channel " << j;
+  }
 }
 
 TEST(JsonParserParity, PyramidWedgeAngleOmittedDefaultsTo28) {

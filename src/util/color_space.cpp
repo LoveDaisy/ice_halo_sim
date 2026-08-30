@@ -51,6 +51,13 @@ float LinearToSrgb(float linear) {
   return 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
 }
 
+float SrgbToLinear(float srgb) {
+  if (srgb < 0.04045f) {
+    return srgb / 12.92f;
+  }
+  return std::pow((srgb + 0.055f) / 1.055f, 2.4f);
+}
+
 void LinearToSrgbBatch(float* rgb, int channel_count) {
   for (int i = 0; i < channel_count; i++) {
     rgb[i] = LinearToSrgb(rgb[i]);
