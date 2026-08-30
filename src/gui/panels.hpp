@@ -59,15 +59,26 @@ void PushLabelColumnItemWidth();
 bool DragFloatField(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
                     SliderScale scale = SliderScale::kLinear);
 
-// Slider + InputFloat + label text, laid out as: [slider] [input] Label
+// Where SliderWithInput / SliderIntWithInput put the field's name relative to its controls.
+//
+//   kTrailing  [slider] [input] Label   the panel default (Axis / Sun / Simulation / View / Display)
+//   kLeading   Label [slider] [input]   entry-card rows, whose label column is shared with three
+//                                       plain-text rows above it
+//   kNone      [slider] [input]         TABLE-CELL MODE — this is not a "neither of the above"
+//                                       fallback: it is for a caller whose field name already has
+//                                       a dedicated table column of its own (RenderShapeDistTableRow
+//                                       and the defaults panel's field-editor registry), so drawing
+//                                       one here would print the name twice. Dropping the label also
+//                                       drops kLabelColWidth from the width, letting the pair fill
+//                                       the cell.
+//
+// kLeading and kTrailing reserve the SAME geometry — one kLabelColWidth and the same two gaps — and
+// differ only in draw order, so a row can switch between them without any other row moving.
+enum class LabelPlacement { kTrailing, kLeading, kNone };
+
+// Slider + InputFloat + label text, laid out per `label_placement` (default: [slider] [input] Label).
 // Uses a fixed label column width so vertically stacked sliders align.
 // Returns true if value changed.
-//
-// `trailing_label = false` (table-cell mode): omit the trailing text label and let
-// the [slider][input] pair fill the whole content region — used when the field's
-// name already lives in a dedicated table column (see RenderShapeDistTableRow). The
-// default keeps the ~25 existing panel call sites (Axis / Sun / Simulation / View /
-// Display) byte-for-byte unchanged.
 //
 // `committed` (optional out-param, defaults to nullptr so existing call sites are unaffected):
 // set to `ImGui::IsItemDeactivatedAfterEdit()` semantics OR-ed across the slider AND the input
@@ -85,20 +96,29 @@ bool DragFloatField(const char* label, float* value, float min_val, float max_va
 // would be dropped. The distinction cannot be rebuilt at the call site: only this function sees
 // both sub-widgets' `IsItemActive()`, and after it returns ImGui's "last item" is the input box
 // alone.
+//
+// `avail_override` (0 = use the content region, the default): the width the row is allowed to
+// occupy, when the caller owns a strip NARROWER than the content region and the widget cannot see
+// where it ends. The entry card is the case: its right edge is reserved for an icon rail that is
+// drawn by absolute position, so a row sized to the content region would run underneath it. Passing
+// the number is what makes the card's four rows share one right edge by construction rather than by
+// two formulas that have to agree.
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt = "%.1f",
-                     SliderScale scale = SliderScale::kLinear, bool trailing_label = true, bool* committed = nullptr,
-                     bool* active = nullptr);
+                     SliderScale scale = SliderScale::kLinear,
+                     LabelPlacement label_placement = LabelPlacement::kTrailing, bool* committed = nullptr,
+                     bool* active = nullptr, float avail_override = 0.0f);
 
 // SliderInt + InputInt + label text — SliderWithInput's integer sibling, same layout and the same
-// `trailing_label = false` table-cell mode and the same optional `committed` / `active` out-params.
+// `label_placement` modes and the same optional `committed` / `active` out-params.
 // Returns true if the value changed.
 //
 // Exported (it was file-static in panels.cpp) because the defaults panel's field-editor registry
 // renders integer settings with it: an integer setting has to be edited by the SAME control the
 // main UI uses, or the two disagree about what a valid value is — which is the whole point of that
 // registry.
-bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val, bool trailing_label = true,
-                        bool* committed = nullptr, bool* active = nullptr);
+bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
+                        LabelPlacement label_placement = LabelPlacement::kTrailing, bool* committed = nullptr,
+                        bool* active = nullptr);
 
 // ---- Edit request (shared between panels.cpp and app_panels.cpp) ----
 enum class EditTarget { kNone, kCrystal, kAxis, kFilter, kCard };

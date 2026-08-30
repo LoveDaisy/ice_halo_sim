@@ -15,6 +15,7 @@
 //     GetColorClassLaneY(i) keeps binding to the same class.
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "gui/raypath_segments.hpp"
@@ -25,6 +26,7 @@ namespace lumice::gui {
 struct GuiState;
 struct FilterConfig;
 struct ColorClassConfig;
+struct ColorClassRefConfig;
 
 // Render the non-modal Colors window (Layer 3, floating). No-op when
 // state.color_window_open is false.
@@ -61,6 +63,38 @@ void CompactZOrder(GuiState& state);
 // combine defaults to LUMICE_COLOR_COMBINE_ANY (blueprint case B: one filter
 // UI-row imports to one class with rows OR'd).
 ColorClassConfig BuildClassFromFilter(int layer_idx, int crystal_pool_id, const FilterConfig& f, int& skipped_rows);
+
+// Can this ref still be resolved against the scene as it is now? A ref stores a layer index and a
+// crystal POOL id, and the scene can move out from under both: deleting a layer leaves refs whose
+// layer_idx is past the end, and deleting (or re-pointing) an entry leaves refs naming a crystal
+// that no longer appears in that layer.
+//
+// This exists as a function, and the row renderer calls it, because the previous arrangement had
+// the renderer decide the same question inline AND then hide its own answer: a clamp filled the
+// layer combo with an in-range value that was not the stored one, and a `current_choice = 0`
+// fallback showed the layer's FIRST crystal for a ref pointing at some other one. Both were
+// display-only — nothing was written back — so what reached the scene at commit time was the
+// unclamped, unfallen-back value the user was never shown. The invariant now is that a value the
+// UI cannot honour is displayed as broken, never as some neighbouring value that happens to exist.
+enum class ColorRefResolution {
+  kResolved,           // layer in range AND crystal appears in that layer
+  kLayerMissing,       // layer_idx out of range for the current scene
+  kCrystalNotInLayer,  // layer is fine, but no entry in it uses this crystal pool id
+};
+ColorRefResolution ResolveColorRef(const GuiState& state, const ColorClassRefConfig& ref);
+
+// The text the ref row shows for each of its two combos, in every resolution state. Always carries
+// the STORED value (layer number, `#pool_id`), never a substitute that resolves — the whole point
+// of the pair. The renderer adds the warning glyph and colour; these return the words.
+std::string FormatColorRefLayerLabel(const GuiState& state, const ColorClassRefConfig& ref);
+std::string FormatColorRefCrystalLabel(const GuiState& state, const ColorClassRefConfig& ref);
+
+// `const char*` adapter over FormatCrystalIdentity (gui_state.hpp) for ImGui's combo APIs, which
+// want an array of C strings. Exposed ONLY so a test can pin it to the shared formatter: this is
+// the site that used to carry its own "name if it has one, else crystal#N" spelling while the entry
+// card carried none at all, which is how the Colors window ended up naming crystals the user could
+// not find on any card. The returned pointer is valid until the next call on the same thread.
+const char* CrystalDisplayName(const GuiState& state, int pool_id);
 
 // Validate a per-ref predicate text under the single-atom rule (single Factor,
 // single alternative) — plan §3 decision 3. Empty/whitespace → valid (means

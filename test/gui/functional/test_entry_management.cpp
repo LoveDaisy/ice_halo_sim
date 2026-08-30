@@ -38,8 +38,11 @@
 // two cards independent; or a new layer that receives no rays at all because the layer above it
 // still passes none on.
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "IconsFontAwesome6.h"
 #include "gui/edit_modals.hpp"  // IsEditModalOpen — the toggle must not also trip the card's click handler
@@ -53,51 +56,6 @@ namespace {
 // under test is that the work happens at all, and a tight bound would turn a slow frame into a red
 // run about the wrong thing.
 constexpr int kThumbnailFrames = 10;
-
-// The n-th entry card's window, in submission order.
-//
-// A card's widgets cannot be addressed by a path. RenderScatteringSection pushes the layer index
-// and RenderEntryCard the entry index, so every card's Edit button carries the same LABEL and a
-// different id — which is exactly the case a label wildcard cannot resolve (it stops at the first
-// match) and a literal path cannot either (the ids live under a BeginChild whose name ImGui
-// generates). What is unambiguous is the child window each card opens: they are submitted in card
-// order, so the n-th of them is the n-th card.
-ImGuiWindow* CardWindow(int index) {
-  ImGuiContext& g = *ImGui::GetCurrentContext();
-  int seen = 0;
-  for (ImGuiWindow* w : g.Windows) {
-    if (w->WasActive && (w->Flags & ImGuiWindowFlags_ChildWindow) != 0 && std::strstr(w->Name, "##card") != nullptr) {
-      if (seen == index) {
-        return w;
-      }
-      ++seen;
-    }
-  }
-  return nullptr;
-}
-
-// The blank area of a card, in screen coordinates.
-//
-// There is no widget there to click, and that is the point of the proposition: RenderEntryCard
-// hit-tests the card rectangle itself so the whole card is a target, and a test that clicked a
-// button instead would not exercise it. The thumbnail is the blank half — it is drawn into the
-// draw list rather than submitted as an item — and this stays inside its left edge, clear of the
-// right column's four rows of widgets and of the Delete/Duplicate stack at the card's right edge.
-//
-// Vertically it takes three quarters of the card's own height, which under the current layout
-// lands in the thumbnail's lower half — the card is the thumbnail plus window padding, so the
-// two are not independent quantities, but neither is the correspondence enforced anywhere. A
-// fixed offset from the top would not do: the top-left corner used to be blank and no longer is,
-// because the participation toggle is overlaid there, and while it does correctly keep the card's
-// click handler off itself (IsAnyItemHovered), a helper still pointing at that corner reports it
-// as "nothing to click" and silently turns three unrelated cases into a click on the toggle.
-// Anything added to a card's corners in future needs this same second look — the constraint is
-// that the returned point hits no item, and no compiler or gate enforces it.
-ImVec2 CardBlankSpot(int index) {
-  ImGuiWindow* w = CardWindow(index);
-  IM_CHECK_RETV(w != nullptr, ImVec2(0, 0));
-  return ImVec2(w->Pos.x + 30.0f, w->Pos.y + w->Size.y * 0.75f);
-}
 
 // A second entry in layer 0, bound to a pool slot of its own.
 void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
@@ -120,6 +78,105 @@ void AddSecondEntryOnItsOwnSlot(ImGuiTestContext* ctx) {
 struct ScopedColorWindow {
   ~ScopedColorWindow() { gui::g_state.color_window_open = false; }
 };
+
+// Read one card's own rectangle back out of the default framebuffer.
+//
+// The theme_scan suite does this same rect arithmetic in ExportRegion, but it writes a PNG for a
+// human to look at and drops the pixels; the hover case below has to compare two captures, so this
+// one keeps them. Coordinates: ImGui screen space → framebuffer, which means scaling by the Retina
+// factor and flipping the origin (GL reads from the bottom-left, ImGui measures from the top-left).
+bool CaptureCardRect(ImGuiTestContext* ctx, int index, std::vector<unsigned char>& out, int& w_out, int& h_out) {
+  ImGuiWindow* card = CardWindow(index);
+  IM_CHECK_RETV(card != nullptr, false);
+  g_fullframe_capture.Reset();
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const float fb_w = io.DisplaySize.x * sx;
+  const float fb_h = io.DisplaySize.y * sy;
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float x0 = std::max(0.0f, (card->Pos.x - vp_pos.x) * sx);
+  const float y0 = std::max(0.0f, (card->Pos.y - vp_pos.y) * sy);
+  const float x1 = std::min(fb_w, (card->Pos.x - vp_pos.x + card->Size.x) * sx);
+  const float y1 = std::min(fb_h, (card->Pos.y - vp_pos.y + card->Size.y) * sy);
+  g_fullframe_capture.rect_x = static_cast<int>(std::lround(x0));
+  g_fullframe_capture.rect_y = static_cast<int>(std::lround(fb_h - y1));
+  g_fullframe_capture.rect_w = static_cast<int>(std::lround(x1 - x0));
+  g_fullframe_capture.rect_h = static_cast<int>(std::lround(y1 - y0));
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield();
+  }
+  IM_CHECK_RETV(g_fullframe_capture.done.load(), false);
+  out = g_fullframe_capture.pixels;
+  w_out = g_fullframe_capture.width;
+  h_out = g_fullframe_capture.height;
+  return true;
+}
+
+// Pixels that differ between two same-sized RGBA captures, counted separately for each of the four
+// `ring`-deep strips along the rectangle's edge.
+//
+// Per side rather than as one total, because that is what makes the comparison say "a BORDER
+// changed" instead of "some pixel changed". A border wraps the card, so a real one moves all four
+// counts; anything local — a tooltip's corner, a redrawn glyph, one widget's own highlight — lands
+// on one side and leaves the other three at zero. Measured: with the highlight disabled, hovering
+// still moves a 28x2 blob on one edge, which a single "> 0" total would have accepted as proof.
+//
+// The interior is excluded entirely, so nothing the thumbnail cache does between two captures can
+// reach the judgement. Depth is device pixels: `ring` covers one logical pixel of border on a
+// Retina framebuffer and two on a plain one, and ImGui draws the child border one logical pixel
+// wide.
+struct RingDiff {
+  int left = -1;
+  int right = -1;
+  int top = -1;
+  int bottom = -1;
+
+  bool AllZero() const { return left == 0 && right == 0 && top == 0 && bottom == 0; }
+  bool AllChanged() const { return left > 0 && right > 0 && top > 0 && bottom > 0; }
+};
+
+RingDiff EdgeRingDiff(const std::vector<unsigned char>& a, const std::vector<unsigned char>& b, int w, int h,
+                      int ring) {
+  RingDiff out;
+  if (a.size() != b.size() || w <= 2 * ring || h <= 2 * ring) {
+    return out;
+  }
+  out = RingDiff{ 0, 0, 0, 0 };
+  auto differs = [&](int x, int y) {
+    const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4;
+    return a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2];
+  };
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < ring; ++x) {
+      if (differs(x, y)) {
+        ++out.left;
+      }
+      if (differs(w - 1 - x, y)) {
+        ++out.right;
+      }
+    }
+  }
+  for (int x = ring; x < w - ring; ++x) {
+    for (int y = 0; y < ring; ++y) {
+      if (differs(x, y)) {
+        ++out.top;
+      }
+      if (differs(x, h - 1 - y)) {
+        ++out.bottom;
+      }
+    }
+  }
+  return out;
+}
+
+// Somewhere that is not a card. The highlight is driven by the card child window's own hover
+// state, so any point outside every card leaves all of them cold.
+ImVec2 PointOffEveryCard() {
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  return ImVec2(vp->Pos.x + vp->Size.x * 0.7f, vp->Pos.y + vp->Size.y * 0.5f);
+}
 
 }  // namespace
 
@@ -591,19 +648,23 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
   // Opening the modal from a card.
   // ================================================================================
 
-  // P66. Each of the three Edit buttons is a shortcut to one tab, not three ways to open the same
-  // one — the whole point of having three is that the user lands where they were going.
+  // P66. Opening a card and picking a tab lands on that tab's body — each of the three, from a
+  // cold open, without the previous tab's controls left standing.
+  //
+  // This used to be stated of three per-tab Edit buttons on the card ("each is a shortcut to one
+  // tab, not three ways to open the same one"). The buttons are gone; what is left is the path
+  // every user now takes, and it still has to land where it was going.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "each_edit_button_opens_the_modal_on_its_own_tab");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "opening_a_card_on_a_tab_lands_on_that_tabs_body");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       struct Shortcut {
-        const char* button;
+        const char* tab_ref;
         const char* tab_content;  // an item that exists only while that tab's body is up
       };
       const Shortcut kShortcuts[] = {
-        { "Edit##cr", "**/##Height##modal_cr_input" },
-        { "Edit##ax", "**/Zenith/##Mean_input" },
-        { "Edit##fi", "**/##row_text_0" },
+        { kCrystalTabRef, "**/##Height##modal_cr_input" },
+        { kAxisTabRef, "**/Zenith/##Mean_input" },
+        { kFilterTabRef, "**/##row_text_0" },
       };
 
       for (const Shortcut& s : kShortcuts) {
@@ -615,10 +676,9 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         // closes the modal regardless, so that click has nothing left to do once this iteration
         // has already failed.
         const ScopedPopups popup_guard(ctx);
-        ctx->ItemClick((std::string("**/") + s.button).c_str());
-        ctx->Yield(4);
+        OpenCardEditor(ctx, 0, s.tab_ref);
         if (!ctx->ItemExists(s.tab_content)) {
-          IM_ERRORF("%s did not land on the tab that owns %s", s.button, s.tab_content);
+          IM_ERRORF("opening on %s did not land on the tab that owns %s", s.tab_ref, s.tab_content);
         }
         if (ctx->IsError()) {
           break;
@@ -701,7 +761,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       const ScopedPopups popup_guard(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(gui::IsEditModalOpen());
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
@@ -743,7 +803,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, shared_cid, std::nullopt), 2);
       const float shared_h = gui::g_state.crystals[shared_cid].height.center;
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       IM_CHECK(ctx->ItemExists("**/Unlink##share"));
       ctx->ItemClick("**/Unlink##share");
@@ -776,7 +836,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const ScopedPopups popup_guard(ctx);
       AddSecondEntryOnItsOwnSlot(ctx);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       const float orig_h = gui::g_state.crystals[gui::g_state.layers[0].entries[0].crystal_id].height.center;
       ctx->ItemInputValue("**/##Height##modal_cr_input", orig_h + 2.0f);
@@ -831,7 +891,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
         AddSecondEntryOnItsOwnSlot(ctx);
         const int cid_before = gui::g_state.layers[0].entries[1].crystal_id;
 
-        ctx->ItemClick("**/Edit##cr");
+        OpenCardEditor(ctx, 0, kCrystalTabRef);
         ctx->Yield(4);
         ctx->ItemClick("**/Link to...##share");
         ctx->Yield(4);
@@ -902,7 +962,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       const int source_cid_before = gui::g_state.layers[0].entries[0].crystal_id;
       IM_CHECK_NE(target_cid, source_cid_before);
 
-      ctx->ItemClick("**/Edit##cr");
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Link to...##share");
       ctx->Yield(4);
@@ -942,6 +1002,145 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
+  // The card's rail carries a Link-to button of its own, and it has to arm the SAME pick mode the
+  // modal's does. The two are one function (StartLinkPickMode) precisely so they cannot answer
+  // differently, and this case is what would notice if one of them grew its own copy again: the
+  // sibling case above drives the modal's button through the same assertions.
+  //
+  // Where they legitimately differ is the modal-buffer commit, which only the modal's button can
+  // reach — a card's rail is unclickable while a modal is up, since the modal blocks. That branch
+  // stays covered by link_to_arms_pick_mode_and_says_so_above_the_cards.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "entry_management", "the_cards_link_button_arms_the_same_pick_mode_the_modal_does");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+      AddSecondEntryOnItsOwnSlot(ctx);
+      const int target_cid = gui::g_state.layers[0].entries[1].crystal_id;
+      IM_CHECK_NE(target_cid, gui::g_state.layers[0].entries[0].crystal_id);
+
+      // No modal anywhere in this path — that is the point of putting the action on the card.
+      ctx->ItemClick("**/" ICON_FA_LINK "##link_0_0");
+      ctx->Yield(4);
+      IM_CHECK(!gui::IsEditModalOpen());
+      IM_CHECK(gui::g_state.pick_link_source.has_value());
+      IM_CHECK_EQ(gui::g_state.pick_link_source->layer_idx, 0);
+      IM_CHECK_EQ(gui::g_state.pick_link_source->entry_idx, 0);
+
+      // And it is a real pick, not just an armed flag: clicking the other card completes the link.
+      ctx->MouseMoveToPos(CardBlankSpot(1));
+      ctx->MouseClick(0);
+      ctx->Yield(6);
+      IM_CHECK(!gui::g_state.pick_link_source.has_value());
+      IM_CHECK_EQ(gui::g_state.layers[0].entries[0].crystal_id, target_cid);
+    };
+  }
+
+  // The card's only remaining statement that anything on it can be edited.
+  //
+  // Three Edit buttons used to make that statement, and clicking the card itself made none — it is
+  // an invisible interaction. Removing the buttons is a net LOSS of discoverability unless the
+  // whole-card hover highlight replaces them, so "the highlight actually draws" is the load-bearing
+  // half of that trade, not a cosmetic detail.
+  //
+  // Read back in pixels rather than asserted on a style variable, because there is no variable left
+  // to read: the border colour is pushed before BeginChild and popped after EndChild, so by the
+  // time the test coroutine runs at the end of the frame, nothing records whether it was ever
+  // applied. Only the framebuffer does.
+  //
+  // Two things make the comparison mean something, and both were added after a red-state probe
+  // showed the obvious version of this case passing with the highlight compiled out.
+  //
+  // First, a control capture: two captures taken with the pointer in the SAME place must be
+  // identical on the ring, or the ring is noisy and a difference measured across a pointer move
+  // proves nothing. Second, the difference is required on ALL FOUR sides. Hovering moves a small
+  // blob on one edge even with the highlight gone — a total ">0" accepted that blob as proof, and
+  // a border is the one thing that cannot be local.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "hovering_a_card_lights_its_border");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+
+      constexpr int kRing = 2;
+      ctx->MouseMoveToPos(PointOffEveryCard());
+      ctx->Yield(4);
+
+      std::vector<unsigned char> cold_a;
+      std::vector<unsigned char> cold_b;
+      int w = 0;
+      int h = 0;
+      int w_b = 0;
+      int h_b = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, cold_a, w, h));
+      ctx->Yield(3);
+      IM_CHECK(CaptureCardRect(ctx, 0, cold_b, w_b, h_b));
+      IM_CHECK_EQ(w, w_b);
+      IM_CHECK_EQ(h, h_b);
+      IM_CHECK(EdgeRingDiff(cold_a, cold_b, w, h, kRing).AllZero());
+
+      ctx->MouseMoveToPos(CardBlankSpot(0));
+      // The card writes its hover state into ImGuiStorage at the END of the frame it is hovered and
+      // reads it back on the NEXT one, so the highlight trails the pointer by a frame by design.
+      ctx->Yield(4);
+      std::vector<unsigned char> hot;
+      int w_hot = 0;
+      int h_hot = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, hot, w_hot, h_hot));
+      IM_CHECK_EQ(w, w_hot);
+      IM_CHECK_EQ(h, h_hot);
+      IM_CHECK(EdgeRingDiff(cold_b, hot, w, h, kRing).AllChanged());
+
+      // And it goes back: a highlight that never clears would be a card stuck looking hovered.
+      ctx->MouseMoveToPos(PointOffEveryCard());
+      ctx->Yield(4);
+      std::vector<unsigned char> cooled;
+      int w_c = 0;
+      int h_c = 0;
+      IM_CHECK(CaptureCardRect(ctx, 0, cooled, w_c, h_c));
+      IM_CHECK_EQ(w, w_c);
+      IM_CHECK_EQ(h, h_c);
+      IM_CHECK(EdgeRingDiff(cold_b, cooled, w, h, kRing).AllZero());
+    };
+  }
+
+  // A name typed in the modal reaches the crystal, and Cancel leaves it alone. CrystalConfig::name
+  // has been in the document format all along with no control anywhere in the GUI writing it, so
+  // this is the first path that ever puts one there — and it is what the Colours window shows when
+  // it names a crystal.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_name_typed_in_the_modal_reaches_the_crystal");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      const ScopedPopups popup_guard(ctx);
+      const int cid = gui::g_state.layers[0].entries[0].crystal_id;
+      IM_CHECK(gui::g_state.crystals[cid].name.empty());
+
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##crystal_name", "plate");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_CHECK " OK##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_STR_EQ(gui::g_state.crystals[cid].name.c_str(), "plate");
+      // The identity string every crystal-naming surface renders now carries it, id still leading.
+      IM_CHECK_STR_EQ(gui::FormatCrystalIdentity(gui::g_state, cid).c_str(), "#0 · plate · Prism");
+
+      // Cancel is a discard like every other field on this tab, not a special case.
+      OpenCardEditor(ctx, 0, kCrystalTabRef);
+      ctx->Yield(4);
+      ctx->ItemInputValue("**/##crystal_name", "column");
+      ctx->Yield(2);
+      ctx->ItemClick("**/" ICON_FA_XMARK " Cancel##edit_modal");
+      ctx->Yield(2);
+      IM_CHECK_STR_EQ(gui::g_state.crystals[cid].name.c_str(), "plate");
+    };
+  }
+
   // A linked group shares its filter atomically: adding one to either card must bind both, or the
   // group silently stops being a group and the two cards start simulating different things while
   // still claiming to be linked.
@@ -959,7 +1158,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemInputValue("**/##row_text_0", "3-5");
       ctx->Yield(2);
@@ -993,7 +1192,7 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       ctx->Yield(3);
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, gui::g_state.layers[0].entries[0].filter_id), 2);
 
-      ctx->ItemClick("**/Edit##fi");
+      OpenCardEditor(ctx, 0, kFilterTabRef);
       ctx->Yield(4);
       ctx->ItemClick("**/Remove Filter##filter");
       ctx->Yield(2);
@@ -1006,30 +1205,57 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A card's four rows are one three-column grid: Crystal/Axis/Filter are hand-built
-  // [text][Edit button][label] rows in RenderEntryCard, Weight is a SliderWithInput, and the
-  // comment above emit_row states outright that the four are meant to share their column
-  // boundaries. They are drawn by two different pieces of code that each compute the boundary
-  // from their own copy of the same formula, so the claim is exactly as strong as those two
-  // copies agreeing — which nothing else checks.
+  // A card's four rows are one two-column grid: Crystal/Axis/Filter are hand-built
+  // [label][value text] rows in RenderEntryCard, Weight is a SliderWithInput under
+  // LabelPlacement::kLeading. Both columns are reached by TWO different pieces of code — the hand-
+  // built rows place the value at `value_x`, while the Weight row gets there through
+  // BeginLeadingLabelLayout's own cursor advance — so the claim that the four share their column
+  // boundaries is exactly as strong as those two computations agreeing, which nothing else checks.
+  //
+  // Measured from real frames on both ends (label probe and value probe are pixel-neutral
+  // InvisibleButtons over the text; see TextWithLabelProbe / the value probe in panels.cpp), not
+  // derived from the layout constants — deriving either edge from kLabelColWidth +
+  // LabelColumnGapX() would compare the layout code against itself.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_cards_four_rows_share_their_column_boundaries");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(3);
-      // One card, so the Edit buttons' labels are unambiguous for the wildcard search below.
+      // One card, so the probe ids below are unambiguous for the wildcard search.
       IM_CHECK_EQ(gui::g_state.layers[0].entries.size(), (size_t)1);
 
       // Collected before anything is asserted: every ImGuiTestContext action opens with
       // `if (IsError()) return;`, so an assertion between two ItemInfo calls would leave the rest
       // of the rows unmeasured and report the first offender as if it were the only one.
-      std::vector<LabelColumnRow> rows;
-      rows.push_back(MeasureWidgetRow(ctx, "Crystal", "**/Edit##cr", "**/##card_0_0_row_0_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Axis", "**/Edit##ax", "**/##card_0_0_row_1_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Filter", "**/Edit##fi", "**/##card_0_0_row_2_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Weight", "**/##Weight##prop_0_0_input", "**/##Weight##prop_0_0_label"));
+      struct CardRow {
+        const char* name;
+        float label_left;
+        float value_left;
+      };
+      std::vector<CardRow> rows;
+      rows.push_back({ "Crystal", ctx->ItemInfo("**/##card_0_0_row_0_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_0_value").RectFull.Min.x });
+      rows.push_back({ "Axis", ctx->ItemInfo("**/##card_0_0_row_1_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_1_value").RectFull.Min.x });
+      rows.push_back({ "Filter", ctx->ItemInfo("**/##card_0_0_row_2_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_2_value").RectFull.Min.x });
+      rows.push_back({ "Weight", ctx->ItemInfo("**/##Weight##prop_0_0_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##Weight##prop_0_0_slider").RectFull.Min.x });
 
-      CheckLabelColumn("entry card", rows);
+      // Pure comparison from here on — nothing drives ctx again, so a non-fatal report per
+      // offending row is safe and lets one run name every row that disagrees.
+      constexpr float kTolPx = 1.0f;
+      const CardRow& ref = rows[0];
+      for (size_t i = 1; i < rows.size(); ++i) {
+        if (ImFabs(rows[i].label_left - ref.label_left) > kTolPx) {
+          IM_ERRORF("entry card: label left edge %s=%.1f vs %s=%.1f (delta %.1f px)", rows[i].name, rows[i].label_left,
+                    ref.name, ref.label_left, rows[i].label_left - ref.label_left);
+        }
+        if (ImFabs(rows[i].value_left - ref.value_left) > kTolPx) {
+          IM_ERRORF("entry card: value left edge %s=%.1f vs %s=%.1f (delta %.1f px)", rows[i].name, rows[i].value_left,
+                    ref.name, ref.value_left, rows[i].value_left - ref.value_left);
+        }
+      }
     };
   }
 }

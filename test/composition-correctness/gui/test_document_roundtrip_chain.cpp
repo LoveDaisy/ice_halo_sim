@@ -262,6 +262,13 @@ const std::vector<FieldProbe>& FieldProbes() {
         }
         return out;
       } },
+    // The GUI had no control for this field until the crystal edit modal grew a Name box, so
+    // although both halves of its serialization have existed since the format did, nothing had
+    // ever put a name into a document and read one back. The name is also what the Colours window
+    // shows for a crystal, so a dropped one turns every colour class's subject back into a bare
+    // pool id.
+    { "crystal.name", [](GuiState& s) { s.crystals[0].name = "plate"; },
+      [](const GuiState& s) { return s.crystals.empty() ? std::string("<no crystal>") : s.crystals[0].name; } },
     { "overlay.alphas",
       [](GuiState& s) {
         s.horizon_alpha = 0.3f;

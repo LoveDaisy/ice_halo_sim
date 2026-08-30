@@ -218,6 +218,23 @@ const ColorCase kCases[] = {
       ASSERT_EQ(rc["classes"][0]["match"].size(), 1u);
       EXPECT_EQ(rc["classes"][0]["match"][0]["crystal"].get<int>(), 0);
     } },
+  { "a ref to a layer the scene does not have is dropped",
+    [] {
+      // The default document has one layer, so index 1 is past the end. This is what a class looks
+      // like after the user deletes a scattering layer it pointed into — the ref keeps the index it
+      // was given, and nothing rewrites it. Before the bound was checked here, the index went
+      // straight into LUMICE_ColorClassRef::layer, while the Colors window showed a CLAMPED value,
+      // so the number the user saw and the number the scene received were different numbers.
+      ColorClassConfig cls;
+      cls.match.push_back(MatchAllRef(0, /*layer_idx=*/1));
+      cls.match.push_back(MatchAllRef(0, /*layer_idx=*/0));
+      g_state.raypath_color.push_back(cls);
+    },
+    [](const nlohmann::json& rc) {
+      ASSERT_EQ(rc["classes"].size(), 1u);
+      ASSERT_EQ(rc["classes"][0]["match"].size(), 1u) << "the out-of-range layer ref reached the wire";
+      EXPECT_EQ(rc["classes"][0]["match"][0]["layer"].get<int>(), 0);
+    } },
   { "a predicate with two factors is dropped",
     [] {
       ColorClassConfig cls;

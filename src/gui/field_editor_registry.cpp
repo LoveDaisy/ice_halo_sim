@@ -118,7 +118,7 @@ FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, c
     }
     bool committed = false;
     bool active = false;
-    SliderWithInput(id_base, &drag.working, range.first, range.second, fmt, scale, /*trailing_label=*/false, &committed,
+    SliderWithInput(id_base, &drag.working, range.first, range.second, fmt, scale, LabelPlacement::kNone, &committed,
                     &active);
     drag.was_active = active;
     if (!committed) {
@@ -147,7 +147,7 @@ FieldEditorEntry IntField(int* (*access)(GuiState&), int min_value, int max_valu
     }
     bool committed = false;
     bool active = false;
-    SliderIntWithInput(id_base, &drag.working, min_value, max_value, /*trailing_label=*/false, &committed, &active);
+    SliderIntWithInput(id_base, &drag.working, min_value, max_value, LabelPlacement::kNone, &committed, &active);
     drag.was_active = active;
     if (!committed) {
       return false;

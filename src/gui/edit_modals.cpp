@@ -635,6 +635,36 @@ static bool RenderWedgeTableRow(const char* label, float* value) {
 static void RenderCrystalModal(GuiState& /*state*/) {
   auto& cr = g_crystal_buf;
 
+  // -- Name --
+  // CrystalConfig::name has been read and written by the document format since long before this
+  // control existed, but nothing in the GUI ever set it, so every crystal created here was
+  // nameless — and the Colours window, which addresses crystals by name, had nothing to show but a
+  // pool index for all of them. This box is the missing half.
+  //
+  // No dirty / commit plumbing is needed for it: g_crystal_buf is a whole CrystalConfig held by
+  // value, and CrystalConfig::operator== already compares `name`, so the existing snapshot-diff
+  // picks the field up on both the staged and immediate paths.
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Name");
+  ImGui::SameLine();
+  {
+    char name_buf[64];
+    snprintf(name_buf, sizeof(name_buf), "%s", cr.name.c_str());
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::InputTextWithHint("##crystal_name", "unnamed — shown as its pool id everywhere", name_buf,
+                                 sizeof(name_buf))) {
+      cr.name = name_buf;
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "A name for this crystal, shown on its card and wherever a colour class refers to it.\n"
+        "Names need not be unique — the pool id stays visible alongside so two crystals sharing\n"
+        "a name are still tellable apart.");
+  }
+
+  ImGui::Spacing();
+
   // -- Crystal type --
   int type_int = static_cast<int>(cr.type);
   if (ImGui::RadioButton("Prism##modal", &type_int, 0)) {
@@ -1088,6 +1118,28 @@ EditModalTarget GetEditModalTarget() {
     return { -1, -1 };
   }
   return { g_modal_layer_idx, g_modal_entry_idx };
+}
+
+namespace {
+// Defined further down, in the same anonymous namespace as the modal edit buffers it applies.
+void CommitAllBuffersImmediate(GuiState& state);
+}  // namespace
+
+void StartLinkPickMode(GuiState& state, int layer_idx, int entry_idx) {
+  if (g_active_modal == ActiveModal::kOpen) {
+    // Commit whichever entry the modal is bound to — that is the one whose buffers are in flight.
+    //
+    // Today it is always `entry_idx`: the modal is a blocking popup, so a click aimed at another
+    // card behind it never reaches that card, and the only caller that can run with a modal open is
+    // the modal's own "Link to..." button, which passes the entry the modal is bound to. The commit
+    // is written against g_modal_* rather than against `entry_idx` anyway, because THAT is where
+    // the in-flight buffers belong — reading the argument here would make this correct only for as
+    // long as the two cannot diverge, which is a property of the popup being blocking rather than
+    // of anything in this function.
+    CommitAllBuffersImmediate(state);
+    g_active_modal = ActiveModal::kNone;
+  }
+  state.pick_link_source = GuiState::EntryRef{ layer_idx, entry_idx };
 }
 
 EditTarget GetActiveTabAsEditTarget() {
@@ -1666,9 +1718,7 @@ void RenderEditModals(GuiState& state, GLFWwindow* window) {
       ImGui::SameLine();
       // "Link to..." — commit current buffer, arm pick-mode, close modal.
       if (ImGui::SmallButton("Link to...##share")) {
-        CommitAllBuffersImmediate(state);
-        state.pick_link_source = GuiState::EntryRef{ ly, en };
-        g_active_modal = ActiveModal::kNone;
+        StartLinkPickMode(state, ly, en);
         if (!state.modal_immediate_mode) {
           ImGui::CloseCurrentPopup();
         }

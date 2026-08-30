@@ -1297,6 +1297,62 @@ struct GuiState {
   }
 };
 
+// ---- Display-side identity / numbering formatters (single owner) ----
+//
+// These four live here rather than in each renderer because every one of them had ALREADY drifted
+// across its call sites before being collected: the layer number was written 1-based in the panel
+// header and file_io's overflow locator but 0-based in three places in the Colors window and in the
+// link badge's tooltip, and the crystal's display name was spelled one way in the Colors window and
+// not spelled at all on the card. A `+ 1` re-typed at each site is what let them disagree; the fix
+// is that no site types it.
+//
+// Placement note for whoever adds the next one: gui_state.hpp is "state structures", and
+// FormatCrystalIdentity is not a pure predicate on a struct the way IsProbZero / AllEntriesDisabled
+// are — it reads GuiState and returns a display string. Four of them is still within what this file
+// carries comfortably. If a fifth and sixth formatting free function want in here, that is the
+// signal to split them out into a gui_formatting.{hpp,cpp} instead of letting this file become
+// "state + formatting toolbox". This sentence is the search anchor for that moment; do not delete it.
+
+// Layer / Entry numbers as the USER sees them. The stored indices are 0-based everywhere (they are
+// vector subscripts); every user-visible rendering of them is 1-based. Both directions of the
+// conversion belong to exactly one function each.
+inline int DisplayLayerNumber(int layer_idx) {
+  return layer_idx + 1;
+}
+inline int DisplayEntryNumber(int entry_idx) {
+  return entry_idx + 1;
+}
+
+inline const char* CrystalTypeName(CrystalType type) {
+  return type == CrystalType::kPrism ? "Prism" : "Pyramid";
+}
+
+// The one spelling of "which crystal is this": `#N` (pool id), then the user's name when it has
+// one, then the type. Both the entry card's first row and the Colors window's crystal combos /
+// class summaries render it, so a user reading `#2 · plate · Prism` in the Colors window can find
+// the same string on a card.
+//
+// `#N` is ALWAYS present and is never replaced by the name, even when there is one: nothing stops
+// two crystals from carrying the same name, and two identical entries in a combo are worse than an
+// id-only label. N is the pool index (GuiState::crystals), which is the key the color refs actually
+// store — it is sparse (the pool is append-only; deleting a card never reclaims its slot) but
+// stable, and compacting it to make the numbers prettier would rewrite every ref's key and make the
+// number move whenever an unrelated card is deleted.
+inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
+  std::string out = "#" + std::to_string(pool_id);
+  if (pool_id < 0 || static_cast<size_t>(pool_id) >= state.crystals.size()) {
+    // The id still leads: a dangling ref's whole diagnostic value is WHICH id dangles.
+    return out + " <missing>";
+  }
+  const CrystalConfig& cr = state.crystals[static_cast<size_t>(pool_id)];
+  if (!cr.name.empty()) {
+    out += " · " + cr.name;
+  }
+  out += " · ";
+  out += CrystalTypeName(cr.type);
+  return out;
+}
+
 // Size guard for ConfigSnapshot. If any field changes here, From/ApplyTo below must
 // be audited for matching changes. Apple Silicon + libc++ only (std::vector size varies
 // across stdlib implementations).

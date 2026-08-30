@@ -1387,9 +1387,11 @@ static FilterExpansionOutcome ExpandFilterToScene(const FilterConfig& f, LUMICE_
 }
 
 std::string FormatOverflowLocator(const FilterOverflowInfo& overflow) {
-  // 1-based Layer/Entry to match the panel header convention (panels.cpp "Layer %d").
-  const std::string pos =
-      "Layer " + std::to_string(overflow.layer_index + 1) + " / Entry " + std::to_string(overflow.entry_index + 1);
+  // 1-based Layer/Entry to match the panel header convention (panels.cpp "Layer %d"). The `+ 1`
+  // itself lives in DisplayLayerNumber / DisplayEntryNumber (gui_state.hpp) — this locator was one
+  // of only two sites that got the base right while four others rendered the same indices 0-based.
+  const std::string pos = "Layer " + std::to_string(DisplayLayerNumber(overflow.layer_index)) + " / Entry " +
+                          std::to_string(DisplayEntryNumber(overflow.entry_index));
   if (!overflow.filter_name.empty()) {
     return "filter \"" + overflow.filter_name + "\", " + pos;
   }
@@ -1490,6 +1492,16 @@ static bool AddColorClasses(const GuiState& state, const std::map<int, int>& cry
     const auto& cls = state.raypath_color[i];
     for (int j = 0; j < static_cast<int>(cls.match.size()); j++) {
       const auto& ref = cls.match[j];
+      // Layer bound, mirroring the crystal check right below it. It was missing, and its absence
+      // was the second half of the display/truth split the Colors window used to have: the row
+      // showed a clamped in-range layer while `dref.layer = ref.layer_idx` handed the unclamped
+      // one straight to the scene. The window now shows the stored value as broken; this is the
+      // matching promise on the commit side, that a broken one is not quietly committed either.
+      if (ref.layer_idx < 0 || static_cast<size_t>(ref.layer_idx) >= state.layers.size()) {
+        GUI_LOG_WARNING("[FileIO] raypath_color[{}].match[{}] references layer {} which is not in the scene; skipped.",
+                        i, j, ref.layer_idx);
+        continue;
+      }
       if (crystal_pool_to_core.find(ref.crystal_pool_id) == crystal_pool_to_core.end()) {
         GUI_LOG_WARNING(
             "[FileIO] raypath_color[{}].match[{}] references crystal pool {} not present in scene; skipped.", i, j,

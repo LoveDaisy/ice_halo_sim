@@ -255,6 +255,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
