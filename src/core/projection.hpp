@@ -84,6 +84,26 @@ ProjXY RectangularForward(float dx, float dy, float dz);
 Dir3 RectangularInverse(float lon, float lat);
 
 
+// =============== Globe (outside-in unit sphere) projection ===============
+// The inverse of lm_proj::ProjectExitToPixel's globe branch, expressed in the SAME
+// camera frame that branch uses: c = R^T * (-w), a pinhole camera sitting at
+// (0, 0, -kGlobeCameraD) in that frame and looking toward +z at the unit sphere
+// centred on the origin. The forward maps c to the screen offsets
+//   u = -c.x / (kGlobeCameraD + c.z),   v = c.y / (kGlobeCameraD + c.z)
+// so this function solves that pair together with |c| = 1.
+//
+// PARAMETERIZATION DIFFERS from the fisheye inverses above, deliberately: they take
+// coordinates already normalized so that r = 1 is the coverage boundary, because their
+// domain test IS a radius bound. Globe's domain test is a ray-sphere discriminant, which
+// is not a radius bound, so it takes the RAW screen offsets (x, y) in pixels together
+// with `focal` — numerically the same `scale` ComputeScaleAz0 produces for kGlobe, so a
+// caller passes that value straight through rather than recomputing it.
+//
+// Invalid when the ray misses the sphere (discriminant < 0 — the whole region outside the
+// sphere's silhouette, not an edge case) or when the intersection is behind the camera.
+Dir3 GlobeInverse(float x, float y, float focal);
+
+
 // =============== Dual fisheye texture layout utilities ===============
 // These convert between normalized disc coordinates and continuous pixel coordinates
 // for the left-right dual fisheye layout (upper=left circle, lower=right circle).

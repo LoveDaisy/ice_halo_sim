@@ -153,6 +153,10 @@ LM_CONSTANT int kProjGlobe = 10;
 //   `globeInverse` kGlobeCameraDist) — the CLI↔GUI globe consistency contract
 //   (315.4). The constant cannot cross the C-API boundary, so this comment anchor
 //   plus test/golden-analytic/projection round-trip check guard the two copies.
+//   HOLDERS of this value on the CPU side read it from here rather than restating
+//   it, so they add no new copy to keep in sync: projection.cpp::GlobeInverse (the
+//   analytic inverse of this file's globe branch, used to build the render-domain
+//   mask in lens_proj_build.hpp).
 LM_CONSTANT float kGlobeCameraD = 4.0f;
 
 // Apply the transpose of a row-major 3x3 matrix (equivalent to Rotation::ApplyInverse

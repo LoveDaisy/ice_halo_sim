@@ -54,6 +54,10 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
       .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
       .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
 
+  // Once per consumer, right after rot_ is final — see the member's declaration for why a
+  // single build covers the whole lifetime.
+  visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
+
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
   if (HasColorClasses() && lane_pixel_count_ > 0) {
@@ -525,6 +529,10 @@ void RenderConsumer::PostSnapshot() {
   float scale = ExposureScale();
 
   bool use_real_color = config_.ray_color_[0] < 0;
+  // Defensive: a degenerate resolution leaves the mask empty (BuildVisibleMask's contract).
+  // total_pix > 0 is already guaranteed above, so this only differs from `true` if the two
+  // ever disagree about the pixel count.
+  const bool masked_bg = visible_mask_.size() == static_cast<size_t>(total_pix);
 
   // One pass per pixel, intermediates kept in registers. This used to be four
   // full-buffer passes (memcpy into a work buffer → scale → color transform →
@@ -568,8 +576,19 @@ void RenderConsumer::PostSnapshot() {
     // Background blending + clamp, then sRGB gamma and the narrowing write. The
     // gamma call is the scalar LinearToSrgb the old LinearToSrgbBatch looped
     // over element by element (color_space.cpp), not a different formula.
+    //
+    // The background is added only where the lens actually images visible sky
+    // (visible_mask_, built once at construction). Outside that region — beyond the image
+    // circle, or in the hemisphere `visible` excludes — nothing was ever projected, so
+    // painting it the sky colour would turn e.g. a 180 deg fisheye render into a solid
+    // rectangle of background with an invisible circle inside it. Only the background term
+    // is skipped: clamp, gamma and the narrowing write still run for every pixel, so a
+    // masked pixel goes through the identical chain with a zero background.
+    const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
     for (int j = 0; j < 3; j++) {
-      rgb[j] += config_.background_[j];
+      if (paint_bg) {
+        rgb[j] += config_.background_[j];
+      }
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       rgb[j] = LinearToSrgb(rgb[j]);
       snapshot_image_buffer_[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);

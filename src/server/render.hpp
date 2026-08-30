@@ -174,6 +174,16 @@ class RenderConsumer : public IConsume {
   // precedent as the ComputeParticipatingP99Y / ComputeP99Y pair; keep in sync).
   float ParticipatingExposureScale(float participating_p99_y) const;
 
+  // White-box handle on the per-pixel render-domain mask (core/lens_proj_build.hpp's
+  // BuildVisibleMask), for the tests that pin two things: that it is built once at
+  // construction rather than per snapshot, and that PostSnapshot consumes THAT buffer.
+  // Non-const on purpose — a test corrupts the stored mask and asserts the next
+  // PostSnapshot honours the corruption, which is what separates "reads the cached mask"
+  // from "recomputes an identical one"; a call counter could not tell those apart.
+  // Follows FrameBufferPool::FreeCountForTest above: an accessor onto state the class
+  // holds anyway, not extra per-instance state carried for the tests' benefit.
+  std::vector<uint8_t>& VisibleMaskForTest() { return visible_mask_; }
+
  private:
   // task-339.3: per-class lane accumulation, split out of Consume() to keep its
   // cognitive complexity bounded. For each ray it evaluates the class predicate
@@ -190,6 +200,13 @@ class RenderConsumer : public IConsume {
   RenderConfig config_;
   Rotation rot_;  // camera pose rotation
   float short_pix_ = 0;
+  // Row-major W*H, 1 where the lens images a visible piece of sky. Built once in the
+  // constructor: it is a function of resolution / lens / view / visible / overlap only, and
+  // NeedsRebuild already forces a new consumer when any of those change (background is on
+  // the appearance-only side of that split), so it stays valid for this consumer's whole
+  // life — ResetWith included. Read by PostSnapshot to decide which pixels the background
+  // is added to.
+  std::vector<uint8_t> visible_mask_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
