@@ -184,6 +184,15 @@ class RenderConsumer : public IConsume {
   // holds anyway, not extra per-instance state carried for the tests' benefit.
   std::vector<uint8_t>& VisibleMaskForTest() { return visible_mask_; }
 
+  // Read-only handle on the same per-pixel render-domain mask, for the production consumer
+  // that has to reproduce PostSnapshot's background masking outside this class: the composite
+  // (raypath-colour) image is baked from the per-class lanes by the compositor, which never
+  // goes through PostSnapshot, so it needs THIS buffer to decide which pixels its own
+  // background may touch. Sharing the buffer rather than the predicate is what makes the two
+  // paths agree pixel-for-pixel; see visible_mask_'s own comment for what it is and why it
+  // stays valid for the consumer's whole life.
+  const std::vector<uint8_t>& VisibleMask() const { return visible_mask_; }
+
  private:
   // task-339.3: per-class lane accumulation, split out of Consume() to keep its
   // cognitive complexity bounded. For each ray it evaluates the class predicate

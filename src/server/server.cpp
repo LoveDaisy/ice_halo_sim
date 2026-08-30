@@ -737,6 +737,7 @@ bool ServerImpl::DoSnapshot() {
   ColorClassTable snap_class_table;
   CompositeMode snap_composite_mode = CompositeMode::kDominant;
   float snap_display_ev_total = 0.0f;
+  float snap_composite_background[3] = { 0.0f, 0.0f, 0.0f };
   uint64_t generation = 0;
   bool valid_data = false;
   {
@@ -757,6 +758,8 @@ bool ServerImpl::DoSnapshot() {
     snap_class_table = active_class_table_;
     snap_composite_mode = active_composite_mode_;
     snap_display_ev_total = display_ev_total_;
+    std::copy(std::begin(composite_background_linear_), std::end(composite_background_linear_),
+              std::begin(snap_composite_background));
     valid_data = has_ever_consumed_;
     snapshot_dirty_ = false;
     // Bumping the generation is the shared owner's responsibility (it once lived only
@@ -836,6 +839,12 @@ bool ServerImpl::DoSnapshot() {
                                        linear_rgb_scratch_, &participating_p99)) {
         continue;
       }
+      // The display-time background goes on here: after every mode's exposure handling (all of
+      // which finishes inside the call above) and before the sRGB stage below, on the pixels the
+      // lens images and nowhere else. Same colour, same ordering and the same mask as the mono
+      // path's own background, which is what makes toggling raypath colour leave the background
+      // pixels untouched. All-zero (the default) contributes nothing.
+      ApplyCompositeBackground(rc->VisibleMask(), snap_composite_background, linear_rgb_scratch_);
       CompositeResult cr;
       cr.renderer_id_ = 0;
       // Recover the renderer id from the mono result (RenderResult carries it).

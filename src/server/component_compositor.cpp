@@ -291,6 +291,24 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   return true;
 }
 
+void ApplyCompositeBackground(const std::vector<uint8_t>& visible_mask, const float background_linear[3],
+                              std::vector<float>& linear_rgb) {
+  const size_t total_pix = linear_rgb.size() / 3;
+  // Defensive: a degenerate resolution leaves the mask empty (BuildVisibleMask's contract), and a
+  // mask that disagrees with the pixel count cannot be indexed. Falling back to "paint everything"
+  // rather than "paint nothing" is PostSnapshot's own choice for the same disagreement — one
+  // fallback semantics for the two paths, not two.
+  const bool masked = visible_mask.size() == total_pix;
+  for (size_t i = 0; i < total_pix; ++i) {
+    if (masked && visible_mask[i] == 0) {
+      continue;
+    }
+    for (size_t j = 0; j < 3; ++j) {
+      linear_rgb[i * 3 + j] += background_linear[j];
+    }
+  }
+}
+
 void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t>& out_srgb) {
   const size_t n = linear_rgb.size();
   out_srgb.resize(n);
