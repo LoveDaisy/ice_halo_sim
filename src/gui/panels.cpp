@@ -422,8 +422,7 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   char input_id[64];
   char label_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), label_id, sizeof(label_id), label_placement,
-                                       avail_override);
+                                       sizeof(input_id), label_id, sizeof(label_id), label_placement, avail_override);
 
   const float old_value = *value;
 
@@ -1296,6 +1295,21 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     TextWithLabelProbe(row_label, label_probe_id);
     ImGui::SetCursorScreenPos(ImVec2(value_x, line_start.y));
     ImGui::AlignTextToFramePadding();
+    // The value column gets a probe for the same reason the label column does. Its x is computed
+    // HERE (value_x), while the Weight row below reaches the same column through
+    // BeginLeadingLabelLayout's own advance — two copies of one formula, which is exactly the
+    // shape the card's column invariant exists to catch.
+    char value_probe_id[64];
+    snprintf(value_probe_id, sizeof(value_probe_id), "##card_%d_%d_row_%d_value", layer_idx, entry_idx, row_idx);
+    {
+      const ImVec2 probe_size = ImGui::CalcTextSize(text_content);
+      if (probe_size.x > 0.0f && probe_size.y > 0.0f) {
+        const ImVec2 probe_pos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton(value_probe_id, probe_size);
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::SetCursorScreenPos(probe_pos);
+      }
+    }
     if (clip_text) {
       ImVec2 clip_min(value_x, line_start.y);
       ImVec2 clip_max(value_x + value_w, line_start.y + row_h);

@@ -1,7 +1,7 @@
 {
   "groups": {
     "capture_harness": {
-      "generated_at": "2026-08-30T06:41:19",
+      "generated_at": "2026-08-30T13:00:08",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {

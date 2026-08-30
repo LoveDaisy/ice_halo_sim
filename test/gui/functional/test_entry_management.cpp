@@ -1205,30 +1205,57 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A card's four rows are one three-column grid: Crystal/Axis/Filter are hand-built
-  // [text][Edit button][label] rows in RenderEntryCard, Weight is a SliderWithInput, and the
-  // comment above emit_row states outright that the four are meant to share their column
-  // boundaries. They are drawn by two different pieces of code that each compute the boundary
-  // from their own copy of the same formula, so the claim is exactly as strong as those two
-  // copies agreeing — which nothing else checks.
+  // A card's four rows are one two-column grid: Crystal/Axis/Filter are hand-built
+  // [label][value text] rows in RenderEntryCard, Weight is a SliderWithInput under
+  // LabelPlacement::kLeading. Both columns are reached by TWO different pieces of code — the hand-
+  // built rows place the value at `value_x`, while the Weight row gets there through
+  // BeginLeadingLabelLayout's own cursor advance — so the claim that the four share their column
+  // boundaries is exactly as strong as those two computations agreeing, which nothing else checks.
+  //
+  // Measured from real frames on both ends (label probe and value probe are pixel-neutral
+  // InvisibleButtons over the text; see TextWithLabelProbe / the value probe in panels.cpp), not
+  // derived from the layout constants — deriving either edge from kLabelColWidth +
+  // LabelColumnGapX() would compare the layout code against itself.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_cards_four_rows_share_their_column_boundaries");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       ctx->Yield(3);
-      // One card, so the Edit buttons' labels are unambiguous for the wildcard search below.
+      // One card, so the probe ids below are unambiguous for the wildcard search.
       IM_CHECK_EQ(gui::g_state.layers[0].entries.size(), (size_t)1);
 
       // Collected before anything is asserted: every ImGuiTestContext action opens with
       // `if (IsError()) return;`, so an assertion between two ItemInfo calls would leave the rest
       // of the rows unmeasured and report the first offender as if it were the only one.
-      std::vector<LabelColumnRow> rows;
-      rows.push_back(MeasureWidgetRow(ctx, "Crystal", "**/Edit##cr", "**/##card_0_0_row_0_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Axis", "**/Edit##ax", "**/##card_0_0_row_1_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Filter", "**/Edit##fi", "**/##card_0_0_row_2_label"));
-      rows.push_back(MeasureWidgetRow(ctx, "Weight", "**/##Weight##prop_0_0_input", "**/##Weight##prop_0_0_label"));
+      struct CardRow {
+        const char* name;
+        float label_left;
+        float value_left;
+      };
+      std::vector<CardRow> rows;
+      rows.push_back({ "Crystal", ctx->ItemInfo("**/##card_0_0_row_0_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_0_value").RectFull.Min.x });
+      rows.push_back({ "Axis", ctx->ItemInfo("**/##card_0_0_row_1_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_1_value").RectFull.Min.x });
+      rows.push_back({ "Filter", ctx->ItemInfo("**/##card_0_0_row_2_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##card_0_0_row_2_value").RectFull.Min.x });
+      rows.push_back({ "Weight", ctx->ItemInfo("**/##Weight##prop_0_0_label").RectFull.Min.x,
+                       ctx->ItemInfo("**/##Weight##prop_0_0_slider").RectFull.Min.x });
 
-      CheckLabelColumn("entry card", rows);
+      // Pure comparison from here on — nothing drives ctx again, so a non-fatal report per
+      // offending row is safe and lets one run name every row that disagrees.
+      constexpr float kTolPx = 1.0f;
+      const CardRow& ref = rows[0];
+      for (size_t i = 1; i < rows.size(); ++i) {
+        if (ImFabs(rows[i].label_left - ref.label_left) > kTolPx) {
+          IM_ERRORF("entry card: label left edge %s=%.1f vs %s=%.1f (delta %.1f px)", rows[i].name, rows[i].label_left,
+                    ref.name, ref.label_left, rows[i].label_left - ref.label_left);
+        }
+        if (ImFabs(rows[i].value_left - ref.value_left) > kTolPx) {
+          IM_ERRORF("entry card: value left edge %s=%.1f vs %s=%.1f (delta %.1f px)", rows[i].name, rows[i].value_left,
+                    ref.name, ref.value_left, rows[i].value_left - ref.value_left);
+        }
+      }
     };
   }
 }
