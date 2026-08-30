@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "core/ev_anchor.hpp"
 #include "server/render.hpp"
 #include "util/color_space.hpp"
 #include "util/logger.hpp"
@@ -168,11 +169,10 @@ namespace {
 // dropped them — which is the whole point of "participating union" vs the
 // pre-345.3 mono-xyz-derived P99 that mixed in unrelated pixels.
 //
-// NOTE (task-345.3 review Minor #1): the (idx * 0.99) partial-sort algorithm
-// here is structurally identical to `gui_ev_auto.hpp::ComputeP99Y`'s fine
-// path — the two live apart because pulling a shared header down to server/
-// or up to gui/ would drag one layer into the other. If you touch one, mirror
-// the change here.
+// The (idx * 0.99) partial-sort step itself has a single owner,
+// `core/ev_anchor.hpp::NthElementP99`, shared with the mono-path anchor
+// (`LUMICE_ComputeP99Y`). What stays here is only the composite-specific part:
+// which values participate.
 float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pixel_count) {
   if (active.empty() || pixel_count == 0) {
     return 0.0f;
@@ -194,12 +194,7 @@ float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pi
   if (y_vals.empty()) {
     return 0.0f;
   }
-  auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
-  if (idx >= y_vals.size()) {
-    idx = y_vals.size() - 1;
-  }
-  std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
-  return y_vals[idx];
+  return NthElementP99(y_vals);
 }
 
 }  // namespace

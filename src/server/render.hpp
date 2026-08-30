@@ -175,10 +175,10 @@ class RenderConsumer : public IConsume {
   // applies `s` directly to lane[p], so the effective per-pixel multiplier
   // must be reproduced without the cancelling factor. Returns 0 when
   // participating_p99_y<=0 or snapshot_intensity_<=0 (guard against pre-first
-  // snapshot). MIRROR: the target_white constant and sRGB reverse transform
-  // below are duplicated from gui_ev_auto.hpp::ComputeEvAuto (server/ and gui/
-  // layers cannot share a header without dragging one into the other — same
-  // precedent as the ComputeParticipatingP99Y / ComputeP99Y pair; keep in sync).
+  // snapshot). The sRGB reverse transform this shares with ComputeEvAuto lives
+  // in core/ev_anchor.hpp::TargetWhiteToLinear — shared at that level and at
+  // the P99 level, but deliberately NOT at the level of the final expression,
+  // for the cancellation reason spelled out above.
   float ParticipatingExposureScale(float participating_p99_y) const;
 
   // White-box handle on the per-pixel render-domain mask (core/lens_proj_build.hpp's

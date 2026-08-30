@@ -13,6 +13,7 @@
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
 #include "core/def.hpp"
+#include "core/ev_anchor.hpp"
 #include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
@@ -107,8 +108,7 @@ float RenderConsumer::ExposureScale() const {
 }
 
 // task-347 (Fix B): composite-path self-anchored exposure scale. See
-// declaration comment in render.hpp for the full contract + mirror-precedent
-// note vs gui_ev_auto.hpp::ComputeEvAuto.
+// declaration comment in render.hpp for the full contract.
 //
 // Formula derivation: `ComputeEvAuto` returns EV = log2(target_linear ·
 // snapshot_intensity / p99_raw_y), and the mono pipeline consumes it as
@@ -126,13 +126,11 @@ float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) cons
   if (participating_p99_y <= 0.0f || snapshot_intensity_ <= 0.0f) {
     return 0.0f;
   }
-  // MIRROR gui_ev_auto.hpp::ComputeEvAuto: target_white=135 on the 0-255 sRGB
-  // scale, converted to linear via the piecewise sRGB reverse transform. If
-  // you change either constant, mirror the change in the other file.
+  // target_white=135 on the 0-255 sRGB scale, converted to linear by
+  // `core/ev_anchor.hpp::TargetWhiteToLinear` — the same reverse transform
+  // ComputeEvAuto uses, now with a single owner rather than a mirrored copy.
   constexpr float kTargetWhite = 135.0f;
-  constexpr float kTargetWhiteSrgb = kTargetWhite / 255.0f;
-  const float target_linear =
-      kTargetWhiteSrgb <= 0.04045f ? kTargetWhiteSrgb / 12.92f : std::pow((kTargetWhiteSrgb + 0.055f) / 1.055f, 2.4f);
+  const float target_linear = TargetWhiteToLinear(kTargetWhite);
   if (target_linear <= 0.0f) {
     return 0.0f;
   }
