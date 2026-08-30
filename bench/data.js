@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788068775981,
+  "lastUpdate": 1788068777949,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "11e8a6b1b736e3f9efad2e54fb068a48b09283d3",
-          "message": "Merge pull request #182 from LoveDaisy/feat/color-components\n\nfeat(raypath-color): per-raypath color engine — color-class schema + rule-lane compositor (CLI/core, CPU)",
-          "timestamp": "2026-07-08T00:44:52+08:00",
-          "tree_id": "7eb8f0d87c2ce98aeec8d87910abae09d1f52567",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/11e8a6b1b736e3f9efad2e54fb068a48b09283d3"
-        },
-        "date": 1783443129118,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 84.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 91.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 89.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "79002e6775a0a895acab77df2ac4a9586a5e2105",
           "message": "Merge pull request #183 from LoveDaisy/perf/gui-test-fixed-dt\n\nperf(gui-test): decouple frame budget from wall-clock (--fixed-dt, 16x faster correctness pool)",
           "timestamp": "2026-07-08T16:52:29+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37658798751c385f405d25527fc3226fb807ff08",
+          "message": "Merge pull request #282 from LoveDaisy/task/gui-entry-card-layout-and-crystal-identity\n\n晶体卡片 layout 重排 + 晶体身份可寻址 + Colors 面板编号/失效态",
+          "timestamp": "2026-08-30T13:34:44+08:00",
+          "tree_id": "23118e5367b29ce0c82bda8278360f565c79c8b8",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/37658798751c385f405d25527fc3226fb807ff08"
+        },
+        "date": 1788068777425,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 81.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 98.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 98.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 95.9,
             "unit": "%"
           }
         ]
