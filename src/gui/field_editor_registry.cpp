@@ -470,9 +470,11 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("renderer.visible", ComboField([](GuiState& s) { return &s.renderer.visible; }, kVisibleNames,
                                                kVisibleCount, NotUnderFullSky));
     map.emplace("renderer.front", BoolField([](GuiState& s) { return &s.renderer.front; }, NotUnderFullSkyOrGlobe));
-    // background / ray_color / opacity have NO control anywhere in the main UI — the table is
-    // their first editor rather than a second one. For the two colours that costs nothing (a
-    // colour has no domain to disagree about). `opacity`'s [0,1] IS a new statement, made here
+    // `background` now HAS a main-UI control (Display > Rendering, beside EV), so this row is its
+    // second editor — the one the defaults panel needs in order to edit a personal default without
+    // a document open. `ray_color` and `opacity` still have none, and for them the table remains
+    // the first editor rather than a second one. For the two colours a first editor costs nothing
+    // (a colour has no domain to disagree about). `opacity`'s [0,1] IS a new statement, made here
     // because the value is a multiplier the renderer applies directly; nothing else in the repo
     // constrains it, so this is the definition rather than a copy of one.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));

@@ -1020,6 +1020,31 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Exposure value offset for display brightness");
     }
+    // The sky behind the halo, next to EV rather than anywhere else in the panel. The two are the
+    // same KIND of field, and that is the whole argument: gui_state.hpp's RenderConfigResimFields
+    // carves exactly these two sub-fields out of the re-sim projection while keeping them in the
+    // Revert baseline, and the PreviewParams build below pushes them through the same display-time
+    // channel one after the other (ShouldPushCompositeExposure / ShouldPushCompositeBackground).
+    // A control that changes what the finished rays look like belongs beside the other one.
+    //
+    // Not in the Overlays table: those five rows share one data model (a line, an optional text
+    // label, an alpha, sometimes a radius) and are drawn ON TOP of the image. The sky is the image.
+    // Not in the "Background" block below either — that one is the loaded reference PHOTOGRAPH and
+    // its transform; two different things under one word in one screen is how the word stops
+    // meaning anything.
+    //
+    // ColorEdit3 with NoInputs, the same swatch form the overlay rows and the defaults table use.
+    // Its label sits beside the swatch rather than in the panel's right-hand label column, which is
+    // what every fixed-size widget here does (Checkbox included) — ImGui hardcodes that gap at
+    // ItemInnerSpacing.x inside the widget where no caller can reach it.
+    ImGui::ColorEdit3("Sky Color##display_sky_color", r.background, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Colour of the empty sky, added to the halo in linear RGB before the\n"
+          "gamma curve — so an empty pixel renders exactly the colour picked here.\n"
+          "Only where the lens images something: outside the image circle, and\n"
+          "outside the visible hemisphere, stays black.");
+    }
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
