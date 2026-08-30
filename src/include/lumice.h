@@ -1264,8 +1264,10 @@ typedef enum LUMICE_RaypathValidationState_ {
   LUMICE_RAYPATH_INVALID,     // Non-numeric tokens or illegal face numbers
 } LUMICE_RaypathValidationState;
 
-// Validate a raypath text string (dash- or comma-separated face indices) against
+// Validate a raypath text string (dash-separated face indices, e.g. "3-5") against
 // both syntax rules and face-number legality for the given crystal kind.
+// ',' is retired legacy syntax: a text containing one is LUMICE_RAYPATH_INVALID with a
+// dedicated out_msg naming '-' (join faces on one path) and ';' (separate paths).
 // Used by GUI for raypath filter input validation.
 // out_msg: human-readable error description (empty on kValid/kIncomplete).
 //          Caller provides buffer; recommended size = 256.
