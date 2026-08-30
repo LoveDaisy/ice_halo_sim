@@ -183,10 +183,19 @@ void ReportSchemaVersionStampIssues(const nlohmann::json& doc) {
 
     const long long version = stamp->get<long long>();
     if (version > kUserDefaultsOverlaySchemaVersion) {
+      // COPY CONSTRAINT, same one DescribeAxisPresetClamp above is written under: the sentence
+      // must not assert something the user cannot check and that may well be false. A higher
+      // stamp says only which build wrote the file — it does NOT imply the file holds any key
+      // this build fails to recognize, and the common case is that it holds none (the stamp
+      // rises on every format generation, whether or not the user's own settings changed shape).
+      // "settings it does not recognize are ignored" told every such user their settings had
+      // been dropped, on a load where nothing was. State what always holds: known keys applied,
+      // unknown ones (if any) skipped.
       NoteUserDefaultsDowngrade("personal defaults were written by a newer version of Lumice (format " +
                                 std::to_string(version) + ", this build understands " +
                                 std::to_string(kUserDefaultsOverlaySchemaVersion) +
-                                "); settings it does not recognize are ignored");
+                                "); every setting this build recognizes was applied as usual, and any it does "
+                                "not recognize were skipped");
     }
   } catch (const std::exception&) {
     NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
