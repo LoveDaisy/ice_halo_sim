@@ -69,6 +69,10 @@ RenderConfig MakeSnapshotRenderConfig() {
   cfg.view_.el_ = 90.0f;
   cfg.view_.ro_ = 0.0f;
   cfg.visible_ = RenderConfig::kUpper;
+  // This suite is a byte-level property test over the per-pixel fusion ORDER, which is
+  // orthogonal to which exposure formula produced the scale. Pin the absolute anchor so the
+  // fixed input keeps producing the fixed bytes these cases were calibrated against.
+  cfg.ev_mode_ = RenderConfig::kAbsolute;
   return cfg;
 }
 

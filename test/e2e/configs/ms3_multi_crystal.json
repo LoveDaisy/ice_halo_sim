@@ -185,6 +185,7 @@
         0,
         0
       ],
+      "ev_mode": "absolute",
       "id": 1,
       "intensity_factor": 1,
       "lens": {

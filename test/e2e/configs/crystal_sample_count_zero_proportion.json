@@ -124,6 +124,7 @@
   "filter": [],
   "render": [
     {
+      "ev_mode": "absolute",
       "id": 1,
       "lens": {
         "type": "dual_fisheye_equal_area",

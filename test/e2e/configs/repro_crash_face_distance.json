@@ -9,6 +9,6 @@
                "spectrum": [{"wavelength": 550, "weight": 1.0}] },
     "ray_num": 400000, "max_hits": 8,
     "scattering": [{ "prob": 0.0, "entries": [{"crystal": 1, "proportion": 1, "filter": 1}] }] },
-  "render": [{ "id": 1, "lens": { "type": "linear", "fov": 55 }, "resolution": [400, 300],
+  "render": [{ "ev_mode": "absolute", "id": 1, "lens": { "type": "linear", "fov": 55 }, "resolution": [400, 300],
                "ray_color": [1,1,1], "background_color": [0,0,0] }]
 }

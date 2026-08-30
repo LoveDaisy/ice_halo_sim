@@ -55,6 +55,11 @@ RenderConfig MakeConfig() {
   cfg.view_.ro_ = 0.0f;
   cfg.visible_ = RenderConfig::kUpper;
   cfg.intensity_factor_ = 1.0f;
+  // Pinned explicitly, not left at the default: every case in this file asserts the ABSOLUTE
+  // formula (emitted-energy denominator). RenderConfig's own default is kRelative, so without
+  // this line the suite would silently retarget onto the P99 self-anchor and stop testing what
+  // its names say it tests.
+  cfg.ev_mode_ = RenderConfig::kAbsolute;
   return cfg;
 }
 
