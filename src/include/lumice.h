@@ -62,6 +62,15 @@ extern "C" {
 // BREAKING (v4.16): LUMICE_RenderParam loses its `opacity` field; struct layout changed.
 // See the struct's own BREAKING note for why it went rather than gained an implementation.
 // Recompile against this header.
+// BREAKING (v4.16): LUMICE_RenderParam gains a trailing field, `ev_mode`
+// (LUMICE_EV_MODE_RELATIVE / _ABSOLUTE), selecting which anchor the exposure scale is measured
+// against. This is an APPEND, so every existing field keeps its offset; but sizeof() grows, so a
+// caller that was NOT recompiled hands the API a shorter struct and the new field is read past
+// the end of it. Recompile against this header.
+// Note the accompanying DEFAULT change, which is a behavior break independent of the ABI one: a
+// config with no "ev_mode" key now renders RELATIVE (anchored to the frame's own P99, i.e. what
+// the GUI displays), where the v4.15-era CLI was unconditionally absolute. RELATIVE == 0 keeps
+// that default reachable from a zero-initialized struct.
 #define LUMICE_API_VERSION 416
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
@@ -669,6 +678,15 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC 9
 #define LUMICE_LENS_TYPE_GLOBE 10
 
+// Which anchor the exposure scale is measured against (mirrors core RenderConfig::EvMode).
+//   RELATIVE — anchor to the frame's own P99. The image keeps its look as ray_num grows, but the
+//              config alone does not determine output brightness (ray_num co-determines it).
+//   ABSOLUTE — anchor to the EMITTED energy, so two simulations at the same EV are comparable.
+// RELATIVE == 0 is the default: a zero-initialized LUMICE_RenderParam asks for the mode that
+// reproduces what the GUI displays, which is also what a config with no "ev_mode" key means.
+#define LUMICE_EV_MODE_RELATIVE 0
+#define LUMICE_EV_MODE_ABSOLUTE 1
+
 // Which half of the celestial sphere the renderer draws (mirrors core RenderConfig::VisibleRange).
 #define LUMICE_VISIBLE_UPPER 0
 #define LUMICE_VISIBLE_LOWER 1
@@ -741,6 +759,10 @@ typedef struct LUMICE_RenderParam_ {
   int central_grid_count;
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int elevation_grid_count;
+  // ADDED (v4.16): LUMICE_EV_MODE_*. Appended at the end of the struct, and RELATIVE == 0 so a
+  // zero-initialized param keeps the documented default rather than silently opting into the
+  // absolute anchor.
+  int ev_mode;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

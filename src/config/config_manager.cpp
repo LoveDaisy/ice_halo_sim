@@ -91,6 +91,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("overlap")) {
     render.overlap_ = std::max(0.0f, j_render.at("overlap").get<float>());
   }
+  if (j_render.contains("ev_mode")) {
+    j_render.at("ev_mode").get_to(render.ev_mode_);
+  }
 
   if (j_render.contains("grid")) {
     const auto& j_grid = j_render.at("grid");

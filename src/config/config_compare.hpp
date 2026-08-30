@@ -99,15 +99,15 @@ inline bool operator==(const LensParam& a, const LensParam& b) {
 
 inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig.
-  static_assert(sizeof(RenderConfig) == 136, "Update operator== when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 144, "Update operator== when RenderConfig fields change");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
          a.view_ == b.view_ && a.visible_ == b.visible_ &&
          std::equal(std::begin(a.background_), std::end(a.background_), std::begin(b.background_)) &&
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
-         a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.central_grid_ == b.central_grid_ &&
-         a.elevation_grid_ == b.elevation_grid_ && a.horizon_ == b.horizon_;
+         a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
+         a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ && a.horizon_ == b.horizon_;
 }
 
 // ---- Light config ----
