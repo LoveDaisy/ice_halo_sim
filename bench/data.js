@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788099497164,
+  "lastUpdate": 1788099499620,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "6bd70df3d6b1c12a3ad92d53e65d7c71dc5b9c75",
-          "message": "Merge pull request #184 from LoveDaisy/feat/raypath-color-design2\n\nfeat(raypath-color): phase-3b Design-2 redirect + GUI color window + preview v1 + dynamic-ABI fix",
-          "timestamp": "2026-07-08T23:06:24+08:00",
-          "tree_id": "dd27c9f90fa94a0633710927433158a0da5b81df",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6bd70df3d6b1c12a3ad92d53e65d7c71dc5b9c75"
-        },
-        "date": 1783523621539,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 89.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.8,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 90.5,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "3810ef19d13d584242a467c18b2a4f3236b91c9b",
           "message": "Merge pull request #185 from LoveDaisy/feat/raypath-color-gui-polish\n\nper-raypath 染色 GUI phase-3b polish（scrum-345/346 + task-347）",
           "timestamp": "2026-07-10T08:56:20+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 95.9,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "53299d835046ba74d6f2897c4a1566993368a6bf",
+          "message": "Merge pull request #283 from LoveDaisy/task/gui-fisheye-lens-border\n\nGUI: 鱼眼镜头有效区边框辅助线",
+          "timestamp": "2026-08-30T22:06:58+08:00",
+          "tree_id": "2ba992405cad4908ee5cc797c9404a38a110ff48",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/53299d835046ba74d6f2897c4a1566993368a6bf"
+        },
+        "date": 1788099498760,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 77,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.6,
             "unit": "%"
           }
         ]
