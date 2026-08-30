@@ -253,6 +253,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_server_poller.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_face_number_overlay.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_overlay_labels.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_lens_border_geometry.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
