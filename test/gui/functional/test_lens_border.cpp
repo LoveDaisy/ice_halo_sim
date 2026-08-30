@@ -197,8 +197,11 @@ void RegisterLensBorderTests(ImGuiTestEngine* engine) {
           break;
         }
         if (off != on) {
+          // continue, not break: each lens is an independent claim, and two lenses leaking at
+          // once is a different defect from one leaking. The readback failure above does break,
+          // because there the harness itself is broken and everything after it is meaningless.
           IM_ERRORF("%s: turning the lens border on changed the frame, but this lens has no border", row.name);
-          break;
+          continue;
         }
       }
     };

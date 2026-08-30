@@ -137,7 +137,7 @@ Render Preview 上的辅助线，以一张表格呈现——每条辅助线回�
 
 `Lens Border` 画的是镜头自身的成像圆——即该投影有定义的区域的边界。圆外的预览是纯黑，与背景无法区分，这正是这条线存在的理由：鱼眼投影下有效区通常是一个填不满显示区的圆，而晕/弧若不铺满全天，用户就无从判断镜头边界在哪。默认关闭；不画文字标签（`Label` 单元格为空），也没有折叠——因为它没有属于自己的字段：圆由镜头、FOV 与视口三者推导得到。
 
-生效于存在这种边界的七种鱼眼系镜头——`fisheye_equal_area`、`fisheye_equidistant`、`fisheye_orthographic` 以及四种 `dual_fisheye_*`；对 `linear`、`fisheye_stereographic`、`rectangular`、`globe` 不画任何线，这四者都没有有界的成像圆。单镜头 stereographic 被排除，是因为它的成像总能填满显示区；四种 dual fisheye 全部纳入，是因为它们的黑区来自一道与投影公式无关的硬圆裁剪。FOV 使边界圆落到屏幕外时什么都不画，这是正确行为而非缺线。边框的绘制不受 `Visible` 半天选择的影响：它是镜头的画幅，所以即使它所框住的那半天正被隐藏，圆仍然是完整的。
+生效于存在这种边界的七种鱼眼系镜头——`fisheye_equal_area`、`fisheye_equidistant`、`fisheye_orthographic` 以及四种 `dual_fisheye_*`；对 `linear`、`fisheye_stereographic`、`rectangular`、`globe` 不画任何线。`linear` 与 `rectangular` 确实没有有界成像圆；`globe` 则是**有**的（球的轮廓），它被排除是产品判断，不是因为没有边界。单镜头 stereographic 被排除，是因为它的成像总能填满显示区；四种 dual fisheye 全部纳入，是因为它们的黑区来自一道与投影公式无关的硬圆裁剪。FOV 使边界圆落到屏幕外时什么都不画，这是正确行为而非缺线。边框的绘制不受 `Visible` 半天选择的影响：它是镜头的画幅，所以即使它所框住的那半天正被隐藏，圆仍然是完整的。
 
 ## Render Preview（渲染预览）
 

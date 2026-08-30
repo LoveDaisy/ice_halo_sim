@@ -524,6 +524,13 @@ def phase_b_group(group: ReferenceGroup, args: argparse.Namespace) -> None:
     group_entry = groups_out.get(group.key) if isinstance(groups_out.get(group.key), dict) else {}
     existing_scenes = group_entry.get("scenes") if isinstance(group_entry.get("scenes"), dict) else {}
     existing_scenes.update(scenes_out)
+    # The three fields beside "scenes" are group-scoped and are REWRITTEN whole on every run,
+    # including a --scene run that recalibrated exactly one member. So they describe THIS run,
+    # not the provenance of every scene in the group: after `--scene foo --n-calib 10` inside a
+    # group whose other members were calibrated at 30, the file will read n_calib_runs=10 while
+    # those members keep their original psnr_mean/psnr_std untouched. Do not read these three as
+    # per-scene metadata and do not infer from them that existing scenes were re-calibrated —
+    # the per-scene audit trail is n_samples / identical_runs inside each scene entry.
     groups_out[group.key] = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "n_ref_runs": getattr(args, "n", 10),

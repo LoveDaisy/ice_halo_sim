@@ -209,7 +209,16 @@ inline constexpr bool LensIsFullSky(int lens_type) {
 // (`if (!in_left && !in_right) return 0`), which sits ahead of the per-type theta
 // branch and therefore applies to stereographic too. Note this differs from the
 // single-lens ruling above for a mechanical reason, not an inconsistent one.
-// linear / rectangular / globe have no bounded image circle in this sense.
+// linear and rectangular have no bounded image circle at all. globe DOES have one --
+// globeInverse rejects every ray that misses the sphere (`disc < 0.0`), so the disc
+// edge is a genuine domain boundary -- and it is excluded here on the owner's product
+// call, not for want of a boundary.
+//
+// WHAT THIS ARRAY IS: the set of lenses whose image circle is worth OUTLINING -- a
+// product judgement. It is NOT a predicate for "is this pixel inside the projection
+// domain". The two coincide over the seven members listed here, which is exactly why
+// the distinction is invisible at this call site and worth stating: a per-pixel domain
+// test may exclude no lens at all, globe least of all. Do not reuse this array as one.
 //
 // The static_assert below guards array size; ordering is enforced by
 // kLensTypePresentationOrder in gui_state.hpp.
