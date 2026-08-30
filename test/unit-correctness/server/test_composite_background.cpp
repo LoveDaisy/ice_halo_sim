@@ -258,7 +258,14 @@ TEST_P(CompositeBackgroundModes, ZeroEnergyPixelsInsideTheDomainCarryExactlyTheP
 // path-local check would predict — a different mask, a different clamp point, a different rounding
 // step on the way to uint8.
 TEST_F(CompositeBackground, MonoAndCompositeAgreeOnEveryBackgroundPixel) {
-  RunSim("dominant", "[0.20, 0.35, 0.85]");
+  // Both channels are fed FROM kSkySrgb rather than from a literal that repeats it. "The same
+  // colour goes down both channels" is this case's premise, and a second spelling of the value is
+  // the one edit that can break the premise without breaking the code under test: retuning the
+  // constant then leaves this case comparing two different colours, and it fails with a byte diff
+  // that reads exactly like a real disagreement between the paths.
+  const std::string sky_json =
+      "[" + std::to_string(kSkySrgb[0]) + ", " + std::to_string(kSkySrgb[1]) + ", " + std::to_string(kSkySrgb[2]) + "]";
+  RunSim("dominant", sky_json.c_str());
 
   float sky_linear[3];
   lumice::SrgbToLinearRgb(kSkySrgb, sky_linear);

@@ -14,10 +14,12 @@
 // field is what the sibling suites already do, and it is precisely the step that cannot answer
 // either question.
 //
-//   * the_sky_on_screen_is_the_sky_that_was_picked — the whole chain in one measurement: mouse ->
-//     g_state.renderer.background -> PreviewParams -> shader -> exported pixel, compared against
-//     the closed form the colour-space contract promises. This is "what you pick is what you see"
-//     read off an image rather than off a struct.
+//   * the_sky_on_screen_is_the_sky_that_was_picked — the whole chain, twice: mouse ->
+//     g_state.renderer.background -> PreviewParams -> shader -> pixel, compared against the closed
+//     form the colour-space contract promises. Once off the DEFAULT FRAMEBUFFER (literally what is
+//     on screen) and once off the export FBO. Two readings because every other pixel test of this
+//     colour uses the export FBO, so "the preview shows it" has until now been an inference from
+//     "the exporter produces it".
 //   * picking_a_sky_colour_never_disturbs_the_simulation — the governance promise. Editing the sky
 //     must not restart a run or mark the document as needing one, INCLUDING on the intermediate
 //     frames of a drag, which is when a live preview writes the field most often.
@@ -243,6 +245,46 @@ void RegisterBackgroundMainUiControlTests(ImGuiTestEngine* engine) {
 
       IM_CHECK_GT(gui::g_preview_vp.vp_w, 0);
       IM_CHECK_GT(gui::g_preview_vp.vp_h, 0);
+
+      // Reading 1 — the DEFAULT FRAMEBUFFER, i.e. the pixels actually on the user's screen.
+      // Worth its own reading rather than inferring it from the export below: every existing pixel
+      // test of this colour goes through RenderExportToRgba's off-screen FBO, so "what the preview
+      // shows" has so far only ever been argued from "what the exporter produces". Same shader
+      // program, different framebuffer and different viewport rectangle — the part that is argued
+      // is exactly the part a wrong viewport or a stale bind would break. The capture rect is the
+      // live preview viewport, in the framebuffer coordinates PreviewRenderer::Render was handed.
+      // No overlay lines can land on the sample: every show_*_line defaults off (gui_state.hpp) and
+      // nothing here turns one on.
+      g_fullframe_capture.Reset();
+      g_fullframe_capture.rect_x = gui::g_preview_vp.vp_x;
+      g_fullframe_capture.rect_y = gui::g_preview_vp.vp_y;
+      g_fullframe_capture.rect_w = gui::g_preview_vp.vp_w;
+      g_fullframe_capture.rect_h = gui::g_preview_vp.vp_h;
+      g_fullframe_capture.requested.store(true);
+      for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+        ctx->Yield(1);
+      }
+      IM_CHECK(g_fullframe_capture.done.load());
+      IM_CHECK_EQ(g_fullframe_capture.width, gui::g_preview_vp.vp_w);
+      IM_CHECK_EQ(g_fullframe_capture.height, gui::g_preview_vp.vp_h);
+      {
+        const int cw = g_fullframe_capture.width;
+        const int chh = g_fullframe_capture.height;
+        const size_t screen_off = ((static_cast<size_t>(chh / 2) * cw) + static_cast<size_t>(cw / 2)) * 4;
+        IM_CHECK_LT(screen_off + 2, g_fullframe_capture.pixels.size());
+        for (int j = 0; j < 3; ++j) {
+          const int got = static_cast<int>(g_fullframe_capture.pixels[screen_off + j]);
+          const int want = ExpectedSkyByte(picked[j]);
+          if (std::abs(got - want) > kPickedToleranceLsb) {
+            IM_ERRORF(
+                "on screen, channel %d: the centre of the preview viewport reads %d, the picked sRGB %.4f"
+                " renders as %d. This is the default framebuffer, not the export FBO.",
+                j, got, static_cast<double>(picked[j]), want);
+          }
+        }
+      }
+
+      // Reading 2 — the export path, from the same live viewport params.
       const std::string path = GuiTestTempPath("lumice_sky_control.png").string();
       IM_CHECK(RequestAndWaitPreviewExport(ctx, gui::g_preview_vp, path));
 
@@ -256,6 +298,7 @@ void RegisterBackgroundMainUiControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_GE(ch, 3);
 
       const size_t off = ((static_cast<size_t>(h / 2) * w) + static_cast<size_t>(w / 2)) * ch;
+      // Same claim, second entry point.
       for (int j = 0; j < 3; ++j) {
         const int got = static_cast<int>(img[off + j]);
         const int want = ExpectedSkyByte(picked[j]);
