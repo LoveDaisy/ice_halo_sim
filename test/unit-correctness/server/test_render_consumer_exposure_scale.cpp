@@ -7,14 +7,23 @@
 // removes rays, and two scenes at the same EV therefore differ in brightness by
 // their real physical difference rather than by their pass rates.
 //
-// These cases pin the consequences of that substitution directly, with synthetic
-// batches and no simulation:
-//   - a scene where essentially everything lands is left where it was (the
-//     constant kNormScale was calibrated under the old denominator and is
-//     deliberately unchanged);
-//   - a scene where a filter removes most rays moves, by the amount the filter
-//     removed. Without the second case the first would be satisfied by a scale
-//     that ignores its input entirely.
+// The whole change is one factor: the new scale is the old one times the LANDED
+// FRACTION, the share of emitted energy that reached a pixel. Everything below is
+// that law and its consequences, on synthetic batches with no simulation.
+//
+// Two things remove energy and so lower that fraction, and only the first is
+// usually thought of as "content": a filter rejecting rays, and the lens simply
+// not covering the sky the rays went to. A full-sphere view lands ~0.98 of what
+// it emits and therefore barely moves -- which is why kNormScale, calibrated
+// under the old denominator, is deliberately left alone. A narrow lens lands far
+// less and moves by that much. Both are the intended behavior: an image is no
+// longer rescaled to fill the tonal range regardless of how little of the scene
+// it caught.
+//
+// The "barely moves" case is stated for a full-sphere landed fraction
+// specifically. It is NOT a claim about unfiltered scenes in general, and the
+// cases that must move are what keep it from being read that way -- without them
+// a scale that ignored its input entirely would satisfy it.
 
 #include <gtest/gtest.h>
 
@@ -98,10 +107,10 @@ float LandedWeight() {
 
 // -----------------------------------------------------------------------------
 
-TEST(RenderConsumerExposureScale, UnfilteredSceneKeepsItsBrightnessWithinAFewHundredthsOfAStop) {
-  // A full-sky field of view lands about 98% of what it emits, so the two
-  // denominators differ by ~2% — under 0.03 stop. This is why kNormScale did not
-  // have to be re-derived when the denominator changed.
+TEST(RenderConsumerExposureScale, FullSphereViewKeepsItsBrightnessWithinAFewHundredthsOfAStop) {
+  // A full-sphere field of view with no filter lands about 98% of what it emits,
+  // so the two denominators differ by ~2% — under 0.03 stop. This is the case
+  // kNormScale was checked against, and why it did not have to be re-derived.
   const auto cfg = MakeConfig();
   const float landed = LandedWeight();
   const float emitted = landed / 0.98f;
@@ -114,12 +123,13 @@ TEST(RenderConsumerExposureScale, UnfilteredSceneKeepsItsBrightnessWithinAFewHun
       << "unfiltered scene shifted by " << Stops(absolute, legacy) << " stop; kNormScale would need re-deriving";
 }
 
-TEST(RenderConsumerExposureScale, FilteredSceneGoesDarkerByTheAmountTheFilterRemoved) {
-  // The other half of the pair. If the scale ignored its denominator the case
-  // above would still pass, so a case that MUST move is what gives it teeth.
-  // A filter passing 5% of the rays must darken the image by log2(0.05/0.98)
-  // ≈ 4.3 stops relative to the old self-normalizing behavior — the physical
-  // darkness the old denominator hid by dividing it back out.
+TEST(RenderConsumerExposureScale, ASceneThatLandsLittleGoesDarkerByExactlyThatFraction) {
+  // The other half of the pair, and the general law the case above is one point
+  // of: the ratio to the old scale is the landed fraction, exactly. Here 5% —
+  // reachable by a filter, by a narrow lens, or by the two together — so the
+  // image must come out log2(0.05) darker than the old self-normalizing
+  // behavior. That is the physical darkness the old denominator hid by dividing
+  // it back out.
   const auto cfg = MakeConfig();
   const float landed = LandedWeight();
   const float emitted = landed / 0.05f;
