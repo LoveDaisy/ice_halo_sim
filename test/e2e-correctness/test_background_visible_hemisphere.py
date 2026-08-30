@@ -192,24 +192,42 @@ class TestBackgroundVisibleHemisphere(LumiceTestCase):
 
     def test_the_kept_hemisphere_is_the_one_the_sun_is_in(self):
         """Which half survives is checked against the physics, not against the mask's own
-        arithmetic. The light source sits at altitude +20 deg — above the horizon — so the halo
-        it makes is above the horizon too, and the brightest pixel in the frame must therefore
-        land in the same half that carries the background. An upper/lower swap in the mask would
-        leave every assertion in the case above intact and only fail here.
+        arithmetic. The light source sits at altitude +20 deg — above the horizon — so the halo it
+        makes is above the horizon too, and the half that keeps its background must therefore be
+        the half the brightest pixel is in. Halo energy is not masked (see the module docstring),
+        so the two are measured independently and only then compared: an upper/lower swap moves the
+        background to the other side of the frame while leaving the halo exactly where it was.
         """
         upper, _ = self._render()
+        expected = self._expected()
         altitude = json.loads(CONFIG.read_text())["scene"]["light_source"]["altitude"]
         self.assertGreater(altitude, 0.0, "the fixture's sun must be above the horizon")
 
-        brightest = max(
+        def carries_background(region):
+            floor = self._floor(upper, region)
+            return all(abs(floor[c] - expected[c]) <= TOLERANCE_LSB for c in range(3))
+
+        painted_above = carries_background(self.above)
+        painted_below = carries_background(self.below)
+        self.assertNotEqual(
+            painted_above,
+            painted_below,
+            f"under `visible: upper` exactly one hemisphere may carry the background, but "
+            f"above={painted_above} below={painted_below}",
+        )
+
+        peak_sum, peak_row = max(
             ((sum(upper[x, y]), y) for y in range(HEIGHT) for x in range(WIDTH))
         )
-        peak_sum, peak_row = brightest
-        self.assertGreater(peak_sum, 3 * max(self._expected()), "frame looks empty; no halo to locate")
-        self.assertLess(
-            peak_row,
-            CY,
-            f"the brightest pixel is on row {peak_row}, at or below the horizon row {CY:.0f}, "
-            f"while the sun is {altitude} deg ABOVE it. The kept hemisphere and the lit one have "
-            f"come apart — `visible: upper` is keeping the wrong half.",
+        self.assertGreater(peak_sum, 3 * max(expected), "frame looks empty; no halo to locate")
+        peak_is_above = peak_row < CY
+
+        self.assertEqual(
+            painted_above,
+            peak_is_above,
+            f"the background is in the {'upper' if painted_above else 'lower'} half while the "
+            f"brightest pixel (row {peak_row}, horizon row {CY:.0f}) is in the "
+            f"{'upper' if peak_is_above else 'lower'} one, and the sun is {altitude} deg ABOVE the "
+            f"horizon. The kept hemisphere and the lit one have come apart — `visible: upper` is "
+            f"keeping the wrong half.",
         )
