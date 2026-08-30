@@ -571,7 +571,9 @@ TEST(FilterSopGrammar, ASemicolonSeparatesRaypathAlternativesButNeverStandsAlone
     { "1-3;3-5", LUMICE_RAYPATH_VALID },
     { "1-3;3-5 & entry:2", LUMICE_RAYPATH_VALID },
     { "entry:2 & 1-3;3-5", LUMICE_RAYPATH_VALID },
-    { "1,2;3-5 & entry:2", LUMICE_RAYPATH_VALID },           // ',' inside a segment + ';' separator
+    // Not a legal mixture any more: ',' is retired as a path connector, so the "1,2" segment is
+    // a syntax error even though the ';' around it is well-formed.
+    { "1,2;3-5 & entry:2", LUMICE_RAYPATH_INVALID },
     { "entry:2 & 1-3;3-5 & exit:4", LUMICE_RAYPATH_VALID },  // sandwiched between EE factors
     // Leading / trailing / consecutive ';' are an empty raypath segment. The last row covers
     // ';'+'&' adjacency, which must not slip through as a valid segment.
@@ -646,6 +648,78 @@ TEST(FilterSopPreview, TheRowPreviewExpandsSemicolonAlternativesAndLeavesEveryth
   SumOfProducts blank;
   blank.emplace_back(SummandText{ std::string{}, {} });
   EXPECT_EQ(FormatSopExpansionPreview(blank), "OR of 1 row(s):\n  *");
+}
+
+// ===========================================================================
+// MigrateLegacyRaypathCommaConnector — the load-time rewrite that keeps
+// documents written before the ',' retirement meaning what they meant then.
+//
+// It is tested here rather than next to file_io because it is a pure function
+// over one summand row, and because it tokenizes with the same
+// detail::SplitSummandTokens / detail::IsEeToken pair the grammar above uses —
+// which is the whole reason it can tell a raypath ',' from an EE facelist ','.
+// ===========================================================================
+
+TEST(FilterSopGrammar, MigrationRewritesRaypathCommaToDash) {
+  // The old parser normalized ',' to '-' silently; the migration does the same rewrite out loud,
+  // so the document keeps the four-face path it actually had.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2"), "3-5-1-2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3,5"), "3-5");
+}
+
+TEST(FilterSopGrammar, MigrationLeavesEntryExitFacelistCommasAlone) {
+  // An EE facelist ',' is OR syntax and always was — a different language sharing one character.
+  // Rewriting it would turn "entry face 1 or 2" into a nonsense token.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("entry:1,2"), "entry:1,2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("exit:1,2"), "exit:1,2");
+}
+
+TEST(FilterSopGrammar, MigrationSplitsTheTwoCommaMeaningsWithinOneRow) {
+  // The crossing case: both kinds of ',' in one row. Only the raypath token's is rewritten.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("entry:1,2 & 3-5,1-2"), "entry:1,2 & 3-5-1-2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2 & exit:1,2"), "3-5-1-2 & exit:1,2");
+}
+
+TEST(FilterSopGrammar, MigrationRewritesInsideEverySemicolonAlternative) {
+  // ';' alternatives live inside one raypath token, so a character-wise rewrite within the token
+  // already covers them — no second split needed.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3,5;1-2"), "3-5;1-2");
+}
+
+TEST(FilterSopGrammar, MigrationCanonicalizesRowSpacingWhenItRewrites) {
+  // The other half of the no-op case above, and the one that was an unstated implementation
+  // detail until it was pinned here: once a row IS being rewritten, it comes back re-joined from
+  // its tokens with a canonical " & " — irregular '&' spacing in the same row is normalized along
+  // with the comma. This is contract, not accident (see the note on the function): the row is
+  // already changing, '&' spacing carries no meaning, and rebuilding from tokens avoids a second
+  // position-tracking code path. Only rows that carry no ',' at all are byte-for-byte preserved.
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2&entry:1,2"), "3-5-1-2 & entry:1,2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector("3-5,1-2   &  len:2"), "3-5-1-2 & len:2");
+}
+
+TEST(FilterSopGrammar, MigrationIsAVerbatimNoOpWithoutCommas) {
+  // The common case is a document with no ',' at all, and it must come back byte for byte — not
+  // re-joined, re-spaced or trimmed. A migration that reformats every row on every load would
+  // make every load look like an edit.
+  const std::string kAlreadyCanonical = "3-5 & entry:1,2";
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector(kAlreadyCanonical), kAlreadyCanonical);
+  const std::string kOddSpacing = "3-5   &  len:2";
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector(kOddSpacing), kOddSpacing);
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector(""), "");
+}
+
+TEST(FilterSopGrammar, MigrationOutputPassesTheTightenedValidator) {
+  // The point of the rewrite is that what it produces is accepted by the validator that just
+  // stopped accepting the input. If these two ever disagree, an old document loads into a state
+  // the editor refuses to commit.
+  const std::string migrated = MigrateLegacyRaypathCommaConnector("entry:1,2 & 3-5,1-2");
+  EXPECT_EQ(ValidateSummandText(migrated, LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_VALID);
+  EXPECT_EQ(ValidateSummandText("entry:1,2 & 3-5,1-2", LUMICE_CRYSTAL_PRISM).state, LUMICE_RAYPATH_INVALID);
+}
+
+TEST(FilterSopGrammar, MigrationIsIdempotent) {
+  const std::string once = MigrateLegacyRaypathCommaConnector("entry:1,2 & 3,5;1-2");
+  EXPECT_EQ(MigrateLegacyRaypathCommaConnector(once), once);
 }
 
 }  // namespace

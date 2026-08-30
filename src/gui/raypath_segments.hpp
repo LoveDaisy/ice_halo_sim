@@ -220,31 +220,55 @@ inline GuiValidationResult ValidateRaypathTextMultiSegment(const std::string& te
 }
 
 // Parse a single segment (no ';') into a vector of non-negative face indices.
-// Tolerant: skips invalid tokens, matching the existing ParseRaypathText behavior.
+//
+// A segment whose every token is a non-negative integer parses to those integers; a segment
+// carrying ANY token that is not parses to nothing at all — the empty vector — rather than to the
+// integers of its surviving tokens. The scope of that judgement is the segment, not the token, and
+// it has to be: with a per-token rule "3-5,1-2" (the ',' a user types meaning "two paths") splits
+// on '-' into "3" / "5,1" / "2", drops only the middle one, and returns {3, 2} — a plausible-
+// looking two-face path that no one asked for. A malformed segment has no path, not a shorter one.
+//
+// The all-digits judgement here is deliberately the same one ValidateRaypathText makes
+// (config/raypath_validation.cpp, ScanTokens + TokenAllDigits): the validator has always required
+// every token to be all-digits, so nothing it admits is dropped here. Keeping the two equal is
+// what closes the ','-triggered case of "the validator says invalid, the parser still draws a
+// path" — see the cross-reference comment on TokenAllDigits; the API boundary in AGENTS.md rules
+// out sharing one implementation, so both sides move together by hand.
+//
+// Only that case. The empty-token judgement is still split: "3--5" is kInvalid to the validator
+// (found_interior_empty) and {3, 5} to the parser, because an empty token returns from flush()
+// without setting the flag. That divergence predates this function's tightening and is untouched
+// by it — a different predicate on a different input class, left where it was rather than folded
+// in here.
 inline std::vector<int> ParseRaypathSegment(const std::string& seg) {
   std::vector<int> ints;
-  // Normalize ',' → '-' so both separators work.
-  std::string normalized = seg;
-  for (auto& c : normalized) {
-    if (c == ',') {
-      c = '-';
-    }
-  }
   std::string tok;
-  auto flush = [&ints, &tok]() {
+  bool has_invalid_token = false;
+  auto flush = [&ints, &tok, &has_invalid_token]() {
     if (tok.empty()) {
       return;
+    }
+    for (char c : tok) {
+      if (!std::isdigit(static_cast<unsigned char>(c))) {
+        has_invalid_token = true;
+        tok.clear();
+        return;
+      }
     }
     try {
       int v = std::stoi(tok);
       if (v >= 0) {
         ints.push_back(v);
+      } else {
+        has_invalid_token = true;
       }
     } catch (...) {
+      // Out of int range (e.g. "99999999999") — a digits-only token the value cannot hold.
+      has_invalid_token = true;
     }
     tok.clear();
   };
-  for (char c : normalized) {
+  for (char c : seg) {
     if (c == '-') {
       flush();
     } else {
@@ -252,12 +276,16 @@ inline std::vector<int> ParseRaypathSegment(const std::string& seg) {
     }
   }
   flush();
+  if (has_invalid_token) {
+    return {};
+  }
   return ints;
 }
 
 // Parse multi-segment raypath text into a vector of int vectors, one per
-// segment. Tolerant: skips invalid tokens within each segment. Empty /
-// pure-whitespace segments are dropped from the result. Callers that need
+// segment. Drops any segment containing an invalid token (ParseRaypathSegment
+// returns the empty vector for it, and the empty-result skip below removes it),
+// along with empty / pure-whitespace segments. Callers that need
 // strict rejection of malformed input should run
 // ValidateRaypathTextMultiSegment first.
 inline std::vector<std::vector<int>> ParseRaypathTextMultiSegment(const std::string& text) {
@@ -765,6 +793,59 @@ inline std::string FormatSopExpansionPreview(const SumOfProducts& sop) {
 // (future) 333.3 serialization sites should use these instead of the compat
 // writers when the intent is a true SoP fan-out.
 // ---------------------------------------------------------------------------
+
+// Rewrite a summand row off the retired ',' raypath connector: inside a raypath token every ','
+// becomes '-', which is exactly the normalization ParseRaypathSegment used to do silently, so a
+// document written before the retirement loads with the same face path it had then.
+//
+// EE tokens (entry:/exit:/len:) are left alone. Their ',' is, and always was, OR-list syntax
+// (ValidateFaceNumberListText / GuiValidateFaceNumberListText) — a different language that happens
+// to reuse the character, which is why the token boundary, not the character position, decides.
+// Splitting with detail::SplitSummandTokens / detail::IsEeToken (the same pair ValidateSummandText
+// and ParseSummandText tokenize with) keeps "what the migration calls a token" from drifting away
+// from "what the validator calls a token".
+//
+// Idempotent, and a no-op returning the input verbatim when there is no ',' to rewrite — so it is
+// cheap and safe to run on every load regardless of the document's declared schema_version. That
+// is deliberate: the trigger is the text, not the version number, so a hand-edited file carrying a
+// wrong version still migrates correctly.
+//
+// When it DOES rewrite, the row comes back re-joined from its tokens with a canonical " & ", not
+// patched character by character — so a row that also carried irregular '&' spacing ("a,b&c" or
+// "a,b   &   c") comes back canonically spaced. That is a declared part of the contract, not an
+// accident: the row is already being rewritten, the spacing carries no meaning (SplitSummandTokens
+// trims), and reconstructing from the tokens keeps one code path instead of a second, position-
+// tracking one. Rows with no ',' are untouched, which is the case that actually matters — see
+// MigrationIsAVerbatimNoOpWithoutCommas, and MigrationCanonicalizesRowSpacingWhenItRewrites for
+// the pinned behaviour of this paragraph.
+inline std::string MigrateLegacyRaypathCommaConnector(const std::string& row_text) {
+  auto tokens = detail::SplitSummandTokens(row_text);
+  bool changed = false;
+  for (auto& tok : tokens) {
+    if (detail::IsEeToken(tok)) {
+      continue;
+    }
+    for (auto& c : tok) {
+      if (c == ',') {
+        c = '-';
+        changed = true;
+      }
+    }
+  }
+  if (!changed) {
+    return row_text;
+  }
+  std::string out;
+  bool first = true;
+  for (const auto& tok : tokens) {
+    if (!first) {
+      out += " & ";
+    }
+    out += tok;
+    first = false;
+  }
+  return out;
+}
 
 // Split RaypathParams.raypath_text on ';' into one OR-row per segment. Empty
 // input → empty SoP, which is "no filter" said in the type's own vocabulary and

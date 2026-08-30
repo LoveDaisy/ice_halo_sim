@@ -551,8 +551,11 @@ constexpr const char* kRaypathSepStr = "-";
 // task plan §"数据形态" for the explicit core ↔ GUI field-name mapping.
 
 struct RaypathParams {
-  // Dash- or comma-separated face indices; ';'-separated multi-segment OR
+  // Dash-separated face indices (e.g. "3-5"); ';'-separated multi-segment OR
   // (e.g. "3-5; 1-3"). See raypath_segments.hpp for the parser/validator.
+  // ',' is NOT a path connector and is rejected by the validator with a message naming '-' and
+  // ';' (raypath_validation.cpp). A document written before that was enforced may still carry the
+  // legacy ',' connector; DeserializeGuiStateJson rewrites it to '-' on load.
   std::string raypath_text;
 
   friend bool operator==(const RaypathParams& a, const RaypathParams& b) { return a.raypath_text == b.raypath_text; }

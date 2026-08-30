@@ -193,6 +193,8 @@ A factor is either a **raypath** or an **entry-exit** token:
 | Length (at most) | `len:<=5` | ray length **≤** 5 |
 | Length (range) | `len:2-3` | ray length in **[2, 3]** |
 
+**`,` is not a raypath connector.** Only `-` joins faces on the same path, and `;` separates alternate paths; a raypath token containing `,` (e.g. `3-5,1-2`) is rejected, with a message naming both. It used to be accepted as a second spelling of `-`, which meant `3-5,1-2` — typed to mean *two* paths — silently became the single four-face path `3-5-1-2` and rendered almost nothing. The `entry:1,2` comma in the table above is different, deliberate syntax: an OR-list on one entry/exit token, not a raypath. A `.lmc` written before this was enforced still loads — the `,` in its raypath tokens is rewritten to `-` on load, keeping the path it had, and the file is normalized the next time you save.
+
 `entry:` / `exit:` / `len:` tokens in the **same row** merge into a single entry-exit factor (so `entry:2 & exit:4 & len:<=5` is one entry-exit predicate, not three). Repeating a token in one row is an error — use the comma list for multiple faces (`entry:2,3`, not `entry:2 & entry:3`).
 
 **Examples**

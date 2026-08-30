@@ -25,12 +25,14 @@ struct RaypathValidationResult {
   std::string message;
 };
 
-/// Validate a raypath text string (dash- or comma-separated face indices).
+/// Validate a raypath text string (dash-separated face indices, e.g. "3-5").
 ///
 /// Rules (evaluated in priority order):
 ///   - Empty string → kValid (means "no raypath filter").
 ///   - Consecutive separators anywhere (e.g. "3--5", "--3") → kInvalid.
-///   - Any token that is not a non-negative integer → kInvalid.
+///   - Any token that is not a non-negative integer → kInvalid. This includes any use of ',',
+///     which is retired legacy syntax: '-' joins faces on the same path and ';' separates
+///     alternate paths (the ';' level lives in the GUI's ValidateRaypathTextMultiSegment).
 ///   - Trailing separator (e.g. "3-5-") → kIncomplete.
 ///   - Leading separator (e.g. "-3") → kIncomplete.
 ///   - All tokens are non-negative integers → kValid.
@@ -52,6 +54,10 @@ RaypathValidation ValidateRaypathText(const std::string& text);
 ///   - Finally each token is checked against the kind-specific legal set via
 ///     `IsLegalFace(kind, face)`; the first token that fails yields a
 ///     "Face N is not legal on this crystal type (Prism/Pyramid)" message.
+///   - A ',' anywhere in the text is a syntax error whose message specifically names '-' and ';'
+///     as the correct separators, rather than the generic "Invalid raypath". Telling the user
+///     which character to type is the point: ',' used to be normalized to '-' silently, so
+///     "3-5,1-2" (meant as two paths) validated as one four-face path and rendered nothing.
 ///
 /// The single-argument `ValidateRaypathText(text)` overload remains unchanged
 /// and performs syntax-only validation (so e.g. `"51"` is still kValid).

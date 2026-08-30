@@ -14,7 +14,6 @@
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
-#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -87,30 +86,6 @@ static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0])
 
 
 // ========== Shared helpers ==========
-
-std::vector<int> ParseRaypathText(const std::string& text) {
-  std::vector<int> result;
-  // Normalize: replace ',' with '-' so both separators are accepted
-  std::string normalized = text;
-  for (auto& c : normalized) {
-    if (c == ',')
-      c = '-';
-  }
-  std::istringstream iss(normalized);
-  std::string token;
-  while (std::getline(iss, token, '-')) {
-    if (token.empty())
-      continue;
-    try {
-      int val = std::stoi(token);
-      if (val < 0)
-        continue;
-      result.push_back(val);
-    } catch (...) {
-    }
-  }
-  return result;
-}
 
 static const char* AxisDistTypeToString(AxisDistType t) {
   switch (t) {
@@ -1035,6 +1010,28 @@ int TakeFilterNoPredicateDowngradeCount() {
   return n;
 }
 
+// Count of raypath texts rewritten off the retired ',' connector on load. Same TU-local counter
+// shape and same call discipline as the two above.
+static int g_raypath_comma_migrated_count = 0;
+
+int TakeRaypathCommaMigratedCount() {
+  int n = g_raypath_comma_migrated_count;
+  g_raypath_comma_migrated_count = 0;
+  return n;
+}
+
+// The single place that decides both "how is a legacy ',' rewritten" and "does that count". Both
+// readers below need the pair, and they need the same answer; a second spelling of it is a second
+// thing to keep in sync. The two call sites keep their own downstream construction (a SummandText
+// row vs a FromLegacyRaypath fan-out) — those are different types and do not belong in here.
+static std::string MigrateAndCountRaypathComma(const std::string& text) {
+  std::string migrated = MigrateLegacyRaypathCommaConnector(text);
+  if (migrated != text) {
+    ++g_raypath_comma_migrated_count;
+  }
+  return migrated;
+}
+
 // The single disposition point for "the file's filter object states no predicate".
 //
 // Both readers below can end there — a v3 `summands` array that yields no rows, and a legacy form
@@ -1079,7 +1076,7 @@ static std::optional<FilterConfig> ParseFilterFromGuiJson(const json& jf) {
         GUI_LOG_WARNING("[FileIO] Filter summands entry is not a string; skipping row.");
         continue;
       }
-      std::string text = js.get<std::string>();
+      std::string text = MigrateAndCountRaypathComma(js.get<std::string>());
       sop.push_back(SummandText{ text, ParseSummandText(text) });
     }
     // An empty summands array is not a valid state, and the disposition is the one at the bottom
@@ -1130,7 +1127,8 @@ static std::optional<FilterConfig> ParseFilterFromGuiJson(const json& jf) {
       GUI_LOG_WARNING("[FileIO] Unknown filter type '{}', defaulting to raypath", type);
     }
     // FromLegacyRaypath splits ';' multi-segment sugar into canonical OR rows.
-    f.param = FromLegacyRaypath(RaypathParams{ jf.value("raypath_text", RaypathParams{}.raypath_text) });
+    f.param = FromLegacyRaypath(
+        RaypathParams{ MigrateAndCountRaypathComma(jf.value("raypath_text", RaypathParams{}.raypath_text)) });
   }
   return NoFilterIfNoPredicate(std::move(f));
 }
@@ -2576,10 +2574,12 @@ std::string SerializeGuiStateJson(const GuiState& state) {
 
   // Schema version. v=2 added the filter `type` discriminator; v=3
   // (task-serialization-bidirectional) replaces the per-filter degenerate form
-  // with the full sum-of-products "summands" array. Loader is tolerant of older
-  // forms (v=1/v=2 filters upgrade to a SoP), so this is a soft signal, not a
+  // with the full sum-of-products "summands" array. v=4 retires the ',' raypath-token
+  // connector: a ',' inside a raypath token is rejected by the validator, and one found on
+  // load is rewritten to '-' (see MigrateLegacyRaypathCommaConnector). Loader is tolerant of
+  // older forms (v=1/v=2/v=3 all still migrate correctly), so this is a soft signal, not a
   // load gate — the binary kLmcVersion header is the actual gate (see §2.7).
-  root["schema_version"] = 3;
+  root["schema_version"] = 4;
 
   return root.dump(2);
 }
@@ -2596,6 +2596,7 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   }
 
   state = GuiState{};
+  g_raypath_comma_migrated_count = 0;
 
   // Layers — on-disk format is v2 inline (each entry embeds its crystal/filter
   // JSON). Load path: append each inline crystal/filter into the runtime
@@ -2824,6 +2825,16 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", GuiState{}.right_panel_collapsed);
   state.modal_layout_vertical = root.value("modal_layout_vertical", GuiState{}.modal_layout_vertical);
+
+  // One line per load, not per rewritten row — the count is in the text. Reported here rather than
+  // in each caller so that adding a caller cannot silently drop the notice; this function has
+  // exactly two exits, and the other one (JSON parse failure) precedes any migration.
+  if (g_raypath_comma_migrated_count > 0) {
+    GUI_LOG_WARNING(
+        "[FileIO] This data used the retired ',' raypath connector in {} place(s); rewritten to "
+        "'-' on load (the original path is unchanged). Re-save to store the new spelling.",
+        g_raypath_comma_migrated_count);
+  }
 
   return true;
 }

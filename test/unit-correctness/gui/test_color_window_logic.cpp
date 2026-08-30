@@ -145,6 +145,9 @@ TEST_F(ColorWindow, ARefRejectsAnyTextThatIsMoreThanASingleAtom) {
     // face numbers, so the face-range checks pass and the rejection can only come from the
     // alternative count — otherwise this row would go green for the wrong reason.
     { "two alternatives in one factor", "1-3;5-7", false },
+    // The colour window and the filter edit modal share one validator, so retiring ',' as a path
+    // connector reaches this input box with no code of its own — this row is what says so.
+    { "legacy comma connector", "3,5", false },
   };
 
   for (const AtomCase& c : kCases) {
@@ -153,6 +156,13 @@ TEST_F(ColorWindow, ARefRejectsAnyTextThatIsMoreThanASingleAtom) {
     // A rejection the user cannot read is the same as a silent one.
     EXPECT_EQ(v.message.empty(), c.valid) << c.name;
   }
+
+  // ...and the ',' rejection specifically has to arrive here with the message that names the fix,
+  // not a generic one — the shared validator is only worth sharing if what it says survives the
+  // trip through this window's own wrapper.
+  const auto comma = gui::ValidateSingleAtomText("3,5");
+  EXPECT_NE(comma.message.find("'-'"), std::string::npos) << comma.message;
+  EXPECT_NE(comma.message.find("';'"), std::string::npos) << comma.message;
 }
 
 // ---- Per-ref symmetry ----
