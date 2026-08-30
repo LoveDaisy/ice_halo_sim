@@ -175,3 +175,20 @@
 ⚠️ "没有 `kView` 顶层字段"本身不等于"没有视图性的设置"，因为档位登记在**顶层字段**这一粒度上（`renderer` 整体登记为 `kStructSoft`，`gui_state_tiers.hpp`），一个顶层字段内部的成员不会单独出现在那份七项清单里。但对 `renderer` 这一项，答案现在是明确的：快照存的是 `RenderConfigResimFields renderer_resim` 而**不是**整份 `RenderConfig`，镜头 / fov / elevation / azimuth / roll / visible / front 与 `exposure_offset` 结构性地不在快照里，Revert 不覆盖它们。「Revert 应当覆盖哪些字段」这个语义问题已有答案且只有一个真源——`RenderConfigResimFields`，见 §3 偏离 F。
 
 默认值层复用的是 `ConfigSnapshot` 背后"两份状态结构化 diff、按需派生效果"的**模式**，但不能复用其 struct：两者覆盖的字段集合不同，把默认值的 diff 引擎强行套进 `ConfigSnapshot` 会连带改动 Revert 语义。
+
+### 8.9 覆盖文件的版本戳：只记录，不迁移，不设闸
+
+覆盖文件带一个根级 `defaults_schema_version`（整数，当前 1），由**唯一写入方** `WriteUserDefaultsFile`（`user_defaults.cpp`）在写盘那一刻盖上——不是 diff 行、不由面板决定、调用方自带的值会被覆盖。所以"哪条路径写的文件"这个问题不存在：`src/` 下经 `WriteActiveOverlayDoc` 的那唯一一条生产路径必然带戳，这条单点约束本身由 `scripts/check_policies.py` 的 `user-defaults-single-write-path` 机械守着。
+
+**它记录，但不裁决。** 加载路径上没有任何分支读它做决定：戳缺失 → 静默按正常文件加载（这是版本戳出现之前的所有存量文件，给它们记一条降级警告等于让每个老用户升级后白吃一条提示，与 §8.6 I3 想留痕的那类真实失效不是一回事）；戳的形态非法（字符串 / 负数 / 0 / 小数 / null）→ 等同缺失，但记一条 notice，因为文件对自己说了一句不可能为真的话；戳比当前构建**新** → 记一条 notice，**其余键照常全部生效**。
+
+最后这条是本节与 `.lmc` 策略的分水岭，也是这个设计最容易被"顺手加固"改错的地方。`.lmc` 的 `kLmcVersion` 是硬闸——一份读不全的整份文档不该假装能忠实显示，那是对的。覆盖文件的结构恰好相反：它是一袋各自独立、每个都已有"不存在即取工厂值"回退的提示（§8.4），因为其中一个键来自未来就拒掉整袋，比"忽略不认识的键、其余照常工作"这个**它今天已有的行为**更差。真实场景就摆在这里：用户从 release 页下载多个版本来回切换，跑一次新版再退回旧版，一道闸会让旧版拒掉他全部个人默认值。⇒ **任何情况下都不得因为版本号而拒绝或降级加载整份覆盖文件。**
+
+那它现在有什么用？现在没有，将来才有——而这正是它必须先写进存量文件的原因。本仓库既有的迁移触发器全是**数据形态**而不是版本号（如 `MigrateLegacyRaypathCommaConnector` 每次 load 无条件按文本判别，`raypath_segments.hpp`），键存在性与值形态能覆盖绝大多数变更。它们覆盖不了的恰好是一格：键名没变、值没变、**语义**变了。`presets.axis.*` 存的是裸 zenith std，含义依赖 `ClassifyAxisPreset` 的阈值常量——那两个常量哪天挪动，存量文件里的值就会静默映射到另一个预设，任何形态判别都看不出来。判别位必须在那次变更**之前**就在文件里，所以它今天先写，等有人需要时再读。
+
+⚠️ **与 `kGuiStateSchemaVersion`（`file_io.hpp`，`.lmc` / GuiState payload 的版本）是两个独立计数器，故意不对齐，不得假设二者同步、也不得为了"看起来整齐"把其中一个重新编号。** 两者的键空间**重叠但不相等**：`presets.*` 是覆盖文件独有，`layers` 是 `.lmc` 独有且被覆盖文件整个排除（`kDiffEngineExcludedRootKeys`）——`.lmc` 至今 v1→v4 四次变更全部发生在 `layers` 底下，即覆盖文件的键空间零变更历史。共用一个计数器意味着任何一侧的语义变更都推高另一侧从未变过的数，制造"版本号涨了但其实什么都没变"的噪音。反过来，当一个**两边都能承载**的字段（`layers` 之外的某个 GuiState 序列化键）语义变了，两个计数器都要评估。这条告诫在两处常量旁各写了一遍——只写一处等于没写，改另一处的人看不见。
+
+两条与文件形态相关的连带约束：
+
+- **`schema_version` 与 `defaults_schema_version` 是两个键，不是一个。** 前者是 `SerializeGuiStateJson` 的输出里本来就有的根键（因此被 `kDiffEngineExcludedRootKeys` 排除在 diff 行之外），后者是覆盖文件自己的。同名复用会让同一份合并文档里一个键承载两种含义，打开文件的人无从区分。另外，`ApplyUserDefaultsOverlay` 的 merge 是 `merge_patch`，磁盘文档里任何与工厂文档同名的根键都会覆盖合并结果里的那个（值为 `null` 时更是直接**删除**该键）——所以 `BuildMergedOverlayDocument` 在 merge 之后无条件把 `schema_version` 回写成当前构建值：喂给反序列化器的那份文档描述的是**它自己**，不是它读过的文件。今天无害（反序列化器不读它），它咬人的那天正是版本号开始被用上的那天。
+- **"只含一个版本戳"必须继续读作"没有个人默认值"。** 用户把所有默认值都改回出厂值后，文件从 `{}` 变成只剩这一个键。任何回答"这个用户有没有个人默认值"的判断都不得因此翻面——今天这样的判断只有 `ApplyUserDefaultsOverlay` 的早退一处，它按键名忽略版本戳。
