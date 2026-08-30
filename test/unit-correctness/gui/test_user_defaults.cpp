@@ -1038,3 +1038,168 @@ TEST_F(UserDefaults, bg_degrade_is_wired_into_every_document_path) {
   }
   EXPECT_EQ(raw_loads, 3);  // 1 definition + LoadBackgroundWithDegrade + DoLoadBackground
 }
+
+// ================================================================================
+// The override file's own provenance stamp (`defaults_schema_version`)
+// ================================================================================
+// Prefix these `schema_version_` rather than continuing the `ac2_`/`ac3_` numbering above: those
+// belong to an older effort's own acceptance list, and reusing the numerals would read as the
+// same list continuing.
+//
+// The stamp RECORDS which generation of the key space wrote a file. It never gates: no branch
+// below rejects, discards or downgrades anything on account of it. The cases are grouped around
+// that claim — every one that reports something also asserts the rest of the document still
+// arrived.
+
+// The stamp comes from the write owner, so no writer has to know it exists and none can opt out.
+// The non-object half guards the deliberate "write a malformed file" staging other cases in this
+// suite rely on: stamping that would make it well-formed and quietly retire them.
+TEST_F(UserDefaults, schema_version_write_owner_stamps_every_document) {
+  const auto dir = FreshOverlayDir("stamp_write_owner");
+
+  ASSERT_TRUE(gui::WriteUserDefaultsFile(dir, json{ { "bg_alpha", 0.25f } }));
+  const json stamped = ReadOverlayDoc(dir);
+  ASSERT_TRUE(stamped.contains(gui::kUserDefaultsOverlaySchemaVersionKey))
+      << "a document written through the owner reached disk without a stamp";
+  EXPECT_EQ(stamped[gui::kUserDefaultsOverlaySchemaVersionKey].get<int>(), gui::kUserDefaultsOverlaySchemaVersion);
+  EXPECT_EQ(stamped["bg_alpha"].get<float>(), 0.25f) << "stamping must not disturb what the caller wrote";
+
+  // A caller-supplied stamp is overwritten, not honored: "which build wrote this file" is not a
+  // value any caller gets to choose. (A test that needs a file claiming otherwise writes it raw.)
+  ASSERT_TRUE(gui::WriteUserDefaultsFile(dir, json{ { gui::kUserDefaultsOverlaySchemaVersionKey, 4242 } }));
+  EXPECT_EQ(ReadOverlayDoc(dir)[gui::kUserDefaultsOverlaySchemaVersionKey].get<int>(),
+            gui::kUserDefaultsOverlaySchemaVersion);
+
+  ASSERT_TRUE(gui::WriteUserDefaultsFile(dir, json::array({ 1, 2, 3 })));
+  std::ifstream in(dir / gui::kUserDefaultsFileName);
+  const json non_object = json::parse(in);
+  EXPECT_TRUE(non_object.is_array()) << "a non-object document must land exactly as handed over";
+}
+
+// AC3 — the merged document handed to the deserializer always carries THIS build's
+// kGuiStateSchemaVersion, whatever the file on disk said.
+//
+// Asserted on the merged JSON rather than on the resulting GuiState because there is no assertion
+// available on the GuiState: DeserializeGuiStateJson does not read `schema_version` at all, so a
+// polluted value produces no observable difference downstream and an end-to-end check stays green
+// with the protection deleted. That is the whole reason BuildMergedOverlayDocument is reachable
+// from here.
+//
+// `null` gets its own row because merge_patch treats it as "delete this key", so the failure it
+// would cause is an ABSENT `schema_version`, not a wrong one — a different defect from the same
+// unprotected line.
+TEST_F(UserDefaults, schema_version_stale_root_key_is_stripped_before_deserialize) {
+  const json kPolluted[] = {
+    json{ { "schema_version", 1 }, { "bg_alpha", 0.5f } },        // an older build's value
+    json{ { "schema_version", 999 }, { "bg_alpha", 0.5f } },      // a value from the future
+    json{ { "schema_version", nullptr }, { "bg_alpha", 0.5f } },  // merge_patch would DELETE the key
+    json{ { "bg_alpha", 0.5f } },                                 // the ordinary file: nothing to repair
+  };
+
+  for (const json& doc : kPolluted) {
+    const json merged = gui::BuildMergedOverlayDocument(doc);
+    // Non-fatal + `continue` rather than ASSERT: this loop's rows are independent defects, and a
+    // fatal report on the first would hide whether the others also regressed.
+    if (!merged.contains("schema_version")) {
+      ADD_FAILURE() << "the merged document lost `schema_version` entirely: " << doc.dump();
+      continue;
+    }
+    EXPECT_EQ(merged["schema_version"].get<int>(), gui::kGuiStateSchemaVersion) << doc.dump();
+    EXPECT_EQ(merged["bg_alpha"].get<float>(), 0.5f)
+        << "repairing the version must not cost the overlay its actual content: " << doc.dump();
+  }
+}
+
+// AC4 — every file written before the stamp existed. Silent, and specifically NOT counted as a
+// degradation: otherwise every existing user collects a warning the first time they upgrade, for
+// a file that is in no way wrong.
+TEST_F(UserDefaults, schema_version_missing_key_is_silent) {
+  const auto dir = FreshOverlayDir("stamp_missing");
+  WriteRawOverlay(dir, R"({"bg_alpha": 0.4})");
+
+  const gui::GuiState state = gui::MakeNewDocumentState(dir);
+  EXPECT_EQ(state.bg_alpha, 0.4f) << "an unstamped file is an ordinary file and must load in full";
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+  EXPECT_TRUE(gui::TakeUserDefaultsDowngradeNotices().empty());
+}
+
+// AC5 — a file from a newer build is REPORTED and then applied in full. Both halves are the point:
+// the notice alone would be satisfied by an implementation that also discarded the document, and
+// discarding it is exactly what this design refuses to do (an overlay is a bag of independent
+// hints, so dropping all of them over one key from the future is worse than ignoring that key).
+TEST_F(UserDefaults, schema_version_newer_than_build_reports_but_still_applies_other_keys) {
+  const auto dir = FreshOverlayDir("stamp_newer");
+  WriteRawOverlay(dir, R"({"defaults_schema_version": 9999, "bg_alpha": 0.77, "aspect_portrait": true})");
+
+  const gui::GuiState state = gui::MakeNewDocumentState(dir);
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1) << "a file from the future must say so exactly once";
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(1))
+      << "and the user must be able to read WHICH degradation it was, not just that there was one";
+  EXPECT_EQ(state.bg_alpha, 0.77f) << "the notice must not have cost the overlay its content";
+  EXPECT_TRUE(state.aspect_portrait);
+}
+
+// AC6 — a stamp that cannot mean anything is treated as no stamp, noticed, and costs the file
+// nothing. The legal domain is positive integers: a negative or fractional generation counter has
+// no reading, and 0 was never written by any build (the counter starts at 1).
+//
+// `1e9` is spelled as a JSON float on purpose — it is a perfectly plausible hand-edit that is
+// numerically enormous AND fractionally typed, so an implementation testing only `is_number()`
+// would take it as a version from the future and report the wrong thing.
+TEST_F(UserDefaults, schema_version_malformed_shape_is_ignored_and_reported) {
+  struct MalformedCase {
+    const char* name;
+    const char* raw;
+  };
+  const MalformedCase kCases[] = {
+    { "a string", R"({"defaults_schema_version": "1", "bg_alpha": 0.31})" },
+    { "a negative integer", R"({"defaults_schema_version": -1, "bg_alpha": 0.31})" },
+    { "zero", R"({"defaults_schema_version": 0, "bg_alpha": 0.31})" },
+    { "a fraction", R"({"defaults_schema_version": 1.5, "bg_alpha": 0.31})" },
+    { "a large float", R"({"defaults_schema_version": 1e9, "bg_alpha": 0.31})" },
+    { "null", R"({"defaults_schema_version": null, "bg_alpha": 0.31})" },
+    { "an object", R"({"defaults_schema_version": {"v": 1}, "bg_alpha": 0.31})" },
+  };
+
+  for (const MalformedCase& c : kCases) {
+    ResetUserDefaultsChannels();
+    const auto dir = FreshOverlayDir("stamp_malformed");
+    WriteRawOverlay(dir, c.raw);
+
+    const gui::GuiState state = gui::MakeNewDocumentState(dir);
+    EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1) << c.name;
+    EXPECT_EQ(gui::TakeUserDefaultsDowngradeNotices().size(), static_cast<size_t>(1)) << c.name;
+    EXPECT_EQ(state.bg_alpha, 0.31f) << "a stamp nobody can read must not cost the file its keys: " << c.name;
+  }
+}
+
+// A malformed stamp with NOTHING beside it. The two predicates disagree about this document on
+// purpose — IsOverlayDocEffectivelyEmpty keys off the NAME (so this is "empty" and the merge is
+// skipped), while the stamp check keys off the VALUE (so this is a false claim worth reporting) —
+// and the notice only survives because the classification runs BEFORE the early return. Swap the
+// two lines and this is the only case that notices.
+TEST_F(UserDefaults, schema_version_malformed_stamp_alone_is_still_reported) {
+  const auto dir = FreshOverlayDir("stamp_malformed_alone");
+  WriteRawOverlay(dir, R"({"defaults_schema_version": "nonsense"})");
+
+  const gui::GuiState state = gui::MakeNewDocumentState(dir);
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 1)
+      << "nothing was left to apply, but the file still says something untrue about itself";
+  EXPECT_TRUE(SerializesIdentically(state, gui::MakeNewDocumentState(FreshOverlayDir("stamp_alone_factory"))));
+}
+
+// AC7 — the stamp must not answer "does this user have personal defaults?".
+//
+// Before the stamp, a user who reverted every default was left with `{}`. Now they are left with a
+// file holding exactly one key they never set and cannot see, and any emptiness test that counted
+// it would flip its answer on that alone.
+TEST_F(UserDefaults, schema_version_stamp_only_document_is_effectively_empty) {
+  const auto dir = FreshOverlayDir("stamp_only");
+  WriteRawOverlay(dir, R"({"defaults_schema_version": 1})");
+  const gui::GuiState stamped_only = gui::MakeNewDocumentState(dir);
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0) << "a well-formed stamp of this build's own is not news";
+
+  const gui::GuiState truly_empty = gui::MakeNewDocumentState(FreshOverlayDir("stamp_only_empty"));
+  EXPECT_TRUE(SerializesIdentically(stamped_only, truly_empty))
+      << "a document carrying only the stamp must produce the same state as one carrying nothing";
+}
