@@ -215,6 +215,19 @@ class RenderConsumer : public IConsume {
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
   const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
 
+  // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
+  // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
+  // structure (doc §4.3) and never learns that two anchors exist.
+  //   kRelative: ParticipatingExposureScale(participating_p99_y) — unchanged, the participating
+  //              pixels anchor themselves, so hiding a bright class re-brightens the rest.
+  //   kAbsolute: ExposureScale() — the SAME scalar the mono path uses, argument ignored.
+  //              Sharing the mono scale is the point rather than an economy: composite lanes are
+  //              copies of the same accumulated Y that feeds mono, so any separately-derived
+  //              "absolute composite formula" would differ by some coefficient and break exactly
+  //              the property absolute mode exists for — that two renders at one EV are
+  //              comparable, mono against composite included.
+  float CompositeAnchorScale(float participating_p99_y) const;
+
  private:
   // task-339.3: per-class lane accumulation, split out of Consume() to keep its
   // cognitive complexity bounded. For each ray it evaluates the class predicate

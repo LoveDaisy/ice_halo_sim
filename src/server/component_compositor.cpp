@@ -243,7 +243,11 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   //   - painter: alpha driven by `A` alone (self-anchor only) so the occluder
   //     structure is EV-independent; `display_exposure_scale` becomes a pure
   //     post-composite brightness multiplier + clamp, applied per-pixel below.
-  const float A = consumer.ParticipatingExposureScale(participating_p99);
+  // Which anchor `A` is depends on the renderer's ev_mode; RenderConsumer::CompositeAnchorScale
+  // owns that choice, so everything below stays one single-scalar path. Under kAbsolute the
+  // participating P99 is not the anchor and is still reported out — it remains a true statistic
+  // about the frame, just no longer the thing the exposure is measured against.
+  const float A = consumer.CompositeAnchorScale(participating_p99);
   if (A <= 0.0f) {
     // task-347 semantic tightening: `participating_p99` is now known even on
     // this early-return path (it was computed above). Publish it so consumers

@@ -168,6 +168,13 @@ float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) cons
   return config_.intensity_factor_ * target_linear / participating_p99_y;
 }
 
+float RenderConsumer::CompositeAnchorScale(float participating_p99_y) const {
+  if (config_.ev_mode_ == RenderConfig::kAbsolute) {
+    return ExposureScale();
+  }
+  return ParticipatingExposureScale(participating_p99_y);
+}
+
 
 void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
   // S1 device-fused: backend already accumulated XYZ on-device; skip
