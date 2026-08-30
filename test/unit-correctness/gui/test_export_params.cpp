@@ -42,6 +42,12 @@ constexpr float kMaxAbsDz = 0.1234f;
 constexpr float kRScale = 0.5678f;
 constexpr float kIntensityFactor = 3.5f;
 constexpr float kIntensityScale = 7.25f;
+// The sky colour behind the halo. Its neighbour in the struct — the background IMAGE overlay —
+// is one of the things a preset is REQUIRED to clear, which is exactly why this one has to be
+// asserted: the two read alike and the correct treatment is opposite.
+constexpr float kBackgroundR = 0.0331f;
+constexpr float kBackgroundG = 0.1015f;
+constexpr float kBackgroundB = 0.3185f;
 
 PreviewParams CallerParams() {
   PreviewParams params{};
@@ -60,6 +66,12 @@ PreviewParams CallerParams() {
   params.overlay.show_lens_border = true;
   params.bg.enabled = true;
   params.bg.alpha = 0.7f;
+  // The sky COLOUR, which a preset must keep — unlike the background IMAGE above. A panorama
+  // export is a picture of the same sky the preview shows; dropping the colour would export a
+  // halo on black while the screen shows it on blue.
+  params.background_color_linear[0] = kBackgroundR;
+  params.background_color_linear[1] = kBackgroundG;
+  params.background_color_linear[2] = kBackgroundB;
   return params;
 }
 
@@ -86,7 +98,16 @@ TEST(ExportPresets, EachPresetOverwritesOnlyTheViewAndTheDecorations) {
     EXPECT_FALSE(params.overlay.show_grid) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_sun_circles) << preset.name << ": a decoration survived into the export";
     EXPECT_FALSE(params.overlay.show_lens_border) << preset.name << ": a decoration survived into the export";
-    EXPECT_FALSE(params.bg.enabled) << preset.name << ": the background survived into the export";
+    EXPECT_FALSE(params.bg.enabled) << preset.name << ": the background image survived into the export";
+
+    // Not the same field as the line above, and not the same verdict: the image overlay is
+    // cleared, the sky colour is kept.
+    EXPECT_FLOAT_EQ(params.background_color_linear[0], kBackgroundR)
+        << preset.name << ": the sky colour was dropped on the way into the export";
+    EXPECT_FLOAT_EQ(params.background_color_linear[1], kBackgroundG)
+        << preset.name << ": the sky colour was dropped on the way into the export";
+    EXPECT_FLOAT_EQ(params.background_color_linear[2], kBackgroundB)
+        << preset.name << ": the sky colour was dropped on the way into the export";
   }
 }
 
@@ -108,6 +129,7 @@ TEST(ExportPresets, ApplyingAPresetTwiceIsTheSameAsApplyingItOnce) {
     EXPECT_FLOAT_EQ(twice.source.max_abs_dz, once.source.max_abs_dz) << preset.name;
     EXPECT_EQ(twice.overlay.show_horizon, once.overlay.show_horizon) << preset.name;
     EXPECT_EQ(twice.bg.enabled, once.bg.enabled) << preset.name;
+    EXPECT_FLOAT_EQ(twice.background_color_linear[0], once.background_color_linear[0]) << preset.name;
   }
 }
 

@@ -322,9 +322,22 @@ static void RefreshCpuTextureForSave() {
   float norm_intensity = xyz_results[0].snapshot_intensity;
   float intensity_scale = norm_intensity > 0 ? intensity_factor / norm_intensity : 0.0f;
 
-  // Convert XYZ→sRGB on CPU using the same algorithm as the shader
+  // Convert XYZ→sRGB on CPU using the same algorithm as the shader, background included: this
+  // buffer is what SaveLmcFile bakes into the document, so if it skipped the background the saved
+  // picture would differ from the one on screen in exactly the way this whole path exists to
+  // prevent. The conversion wants LINEAR RGB (the addition happens before the transfer curve)
+  // while GuiState holds the picker's sRGB, hence the conversion first.
+  //
+  // Unconditional, with no visibility gate: this buffer is not a view of the sky, it is the
+  // fixed full-sky dual-fisheye SOURCE the preview re-projects. The gate the shader applies
+  // (result.w >= 0.5 && pixel_visible) is a screen-space property of the current lens / fov /
+  // orientation, which this buffer has none of — every legal world direction lands inside one of
+  // its two discs, and the packing's corner padding is never sampled back out.
+  float background_linear[3];
+  LUMICE_SrgbToLinear(g_state.renderer.background, background_linear);
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
-  LUMICE_XyzToSrgbUint8(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale);
+  LUMICE_XyzToSrgbUint8WithBackground(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale,
+                                      background_linear);
 
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }

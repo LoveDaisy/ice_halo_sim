@@ -97,4 +97,32 @@ void XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, fl
   }
 }
 
+void XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, float intensity_scale,
+                    const float background[3]) {
+  for (int i = 0; i < pixel_count; i++) {
+    float xyz[3];
+    for (int j = 0; j < 3; j++) {
+      xyz[j] = xyz_in[i * 3 + j] * intensity_scale;
+    }
+    float clipped[3];
+    GamutClipXyz(xyz, clipped);
+    float rgb[3];
+    // XyzToLinearRgb clamps to [0,1] internally, which is a no-op right after a gamut clip (the
+    // clip is defined as the scaling that lands the matrix product inside that box). The clamp
+    // that matters runs below, AFTER the background is added — the same composition PostSnapshot
+    // uses, deliberately not folded into one step.
+    XyzToLinearRgb(clipped, rgb);
+    for (int j = 0; j < 3; j++) {
+      rgb[j] = std::clamp(rgb[j] + background[j], 0.0f, 1.0f);
+      out[i * 3 + j] = static_cast<unsigned char>(LinearToSrgb(rgb[j]) * 255.0f);
+    }
+  }
+}
+
+void SrgbToLinearRgb(const float srgb[3], float linear[3]) {
+  for (int j = 0; j < 3; j++) {
+    linear[j] = SrgbToLinear(srgb[j]);
+  }
+}
+
 }  // namespace lumice

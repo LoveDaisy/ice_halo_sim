@@ -1311,6 +1311,31 @@ float LUMICE_MaxFov(LUMICE_LensType type);
 // Returns LUMICE_ERR_NULL_ARG if xyz_in or out is NULL; LUMICE_OK otherwise.
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, float intensity_scale);
 
+// Same conversion with an additive background composited into it — the sibling an editor needs to
+// bake a frame that matches what the renderer put on screen, since the renderer paints the sky
+// behind the halo and a bake without it produces a different picture from the same data.
+//
+// background_linear: LINEAR RGB, 3 floats, added to the halo's radiance AFTER the XYZ->RGB matrix
+//                    and BEFORE the clamp and the sRGB transfer curve. That placement is the whole
+//                    contract: it is what makes a pixel carrying no halo energy come back as
+//                    exactly the sRGB triple a color picker showed. Adding after the curve instead
+//                    gamma-encodes the color a second time (0.2 would render as byte 123, not 51).
+//                    Linear because that is the space the addition means something in — the same
+//                    convention LUMICE_RenderParam::background uses, and the same reason both JSON
+//                    parsers convert at their boundary. Use LUMICE_SrgbToLinear to get here from a
+//                    picker value.
+// Returns LUMICE_ERR_NULL_ARG if any pointer argument is NULL; LUMICE_OK otherwise.
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
+                                                     float intensity_scale, const float* background_linear);
+
+// Inverse sRGB transfer curve over one RGB triple: the color a picker shows -> the space additive
+// blending happens in. Exposed because every consumer that hands this library a color has the same
+// conversion to do at its own boundary (LUMICE_RenderParam::background, the background argument
+// above, a shader uniform), and a hand-rolled copy of the curve is a copy that can drift from the
+// forward curve this library applies on the way out.
+// Returns LUMICE_ERR_NULL_ARG if srgb or linear is NULL; LUMICE_OK otherwise. In-place is allowed.
+LUMICE_ErrorCode LUMICE_SrgbToLinear(const float* srgb, float* linear);
+
 // =============== Preferred Trace Backend ===============
 // Stable backend identifiers. Future backends (e.g. CUDA) append new positive
 // values; 0 stays CPU so default zero-init = legacy behavior.

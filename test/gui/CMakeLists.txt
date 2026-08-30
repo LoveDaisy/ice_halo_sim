@@ -27,6 +27,7 @@ add_executable(gui_test
     functional/test_overlay_controls.cpp
     functional/test_lens_border.cpp
     functional/test_preview_viewport.cpp
+    functional/test_preview_background.cpp
     functional/test_preview_texture.cpp
     functional/test_view_display_controls.cpp
     functional/test_gui_sim_smoke.cpp

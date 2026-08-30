@@ -3282,3 +3282,20 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
   ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale);
   return LUMICE_OK;
 }
+
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
+                                                     float intensity_scale, const float* background_linear) {
+  if (!xyz_in || !out || !background_linear) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale, background_linear);
+  return LUMICE_OK;
+}
+
+LUMICE_ErrorCode LUMICE_SrgbToLinear(const float* srgb, float* linear) {
+  if (!srgb || !linear) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::SrgbToLinearRgb(srgb, linear);
+  return LUMICE_OK;
+}

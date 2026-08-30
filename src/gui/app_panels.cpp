@@ -1236,6 +1236,12 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;
     pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);
+    // The sky colour behind the halo. Stored in GuiState as sRGB (what the picker shows) and
+    // handed to the shader as linear RGB, because the shader adds it to the halo's radiance
+    // before the transfer curve. This one assignment also feeds all three PNG export entry
+    // points: BuildExportParams copies this struct and overrides only the exposure fields.
+    LUMICE_SrgbToLinear(rc.background, pp.background_color_linear);
+
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;
     pp.bg.aspect = g_preview.GetBgAspect();
