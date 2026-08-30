@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788100788596,
+  "lastUpdate": 1788100791957,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "3810ef19d13d584242a467c18b2a4f3236b91c9b",
-          "message": "Merge pull request #185 from LoveDaisy/feat/raypath-color-gui-polish\n\nper-raypath 染色 GUI phase-3b polish（scrum-345/346 + task-347）",
-          "timestamp": "2026-07-10T08:56:20+08:00",
-          "tree_id": "aed23ac51a7a8611ce569fa549c3ffb93fa2d180",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3810ef19d13d584242a467c18b2a4f3236b91c9b"
-        },
-        "date": 1783645442082,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1130717,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1176917.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 778950.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 607579.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "d44e3da99e84bc27666910b9d8bb3c2adb090ef6",
           "message": "Merge pull request #186 from LoveDaisy/feat/raypath-color-gui-polish-2\n\nper-raypath 染色 GUI polish（三轮 on-screen 反馈：状态提示/ergonomics/Open 旧图残留根治）",
           "timestamp": "2026-07-11T07:05:30+08:00",
@@ -9552,6 +9504,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 629884.1,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68f3be6a4fc6353c202b92f6538e7b9c3d5d1100",
+          "message": "Merge pull request #284 from LoveDaisy/task/retire-comma-raypath-separator\n\n退役 raypath 逗号连接符：静默算错改为指名改法的拒绝 + 加载期迁移",
+          "timestamp": "2026-08-30T22:29:34+08:00",
+          "tree_id": "e9cc435a031fe70e00ae4ab2e1c43c075f39eb24",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/68f3be6a4fc6353c202b92f6538e7b9c3d5d1100"
+        },
+        "date": 1788100791417,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1187522.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1173980.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 726593.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 674099.1,
             "unit": "rays/sec",
             "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
           }
