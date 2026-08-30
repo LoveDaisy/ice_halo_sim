@@ -100,10 +100,10 @@ bool RenderConsumer::HasColorClassSignal(size_t class_idx) const {
 // compositor's scale can never drift apart.
 float RenderConsumer::ExposureScale() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  if (total_pix <= 0 || snapshot_intensity_ <= 0.0f) {
+  if (total_pix <= 0 || snapshot_emitted_energy_ <= 0.0f) {
     return 0.0f;
   }
-  return config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_;
+  return config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_;
 }
 
 // task-347 (Fix B): composite-path self-anchored exposure scale. See
@@ -150,6 +150,7 @@ void RenderConsumer::ConsumeDeviceFused(const SimData& data) {
     NeumaierAdd(internal_xyz_[i], comp_xyz_[i], data.xyz_pixel_data_[i]);
   }
   total_intensity_ += data.xyz_landed_weight_;
+  total_emitted_energy_ += data.emitted_energy_;
   // task-358.1 Step 4 (AC3): fold the device per-color-class Y-lane accumulator
   // into lane_y_. Layout (matches Metal MSL write side):
   //     lane_pixel_data_[c * (W*H) + (py*W+px)]
@@ -217,6 +218,14 @@ void RenderConsumer::Consume(const SimData& data) {
   // regardless of whether the simulator ran via the legacy CPU path or a
   // TraceBackend (exit seam). Both converge here and run through the
   // projection pipeline below.
+  // Charged up front, before any early-out or ray-dependent branch below: the
+  // emitted energy of a batch is a property of the batch, not of how many of its
+  // rays survived. A batch whose rays are all filtered away still emitted them,
+  // and under an absolute scale it must still enlarge the denominator — that is
+  // precisely how a heavily filtered scene ends up correctly darker instead of
+  // being re-brightened back to the unfiltered look.
+  total_emitted_energy_ += data.emitted_energy_;
+
   auto t0 = std::chrono::steady_clock::now();
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.
@@ -485,6 +494,7 @@ void RenderConsumer::PrepareSnapshot() {
     snapshot_xyz_[i] = internal_xyz_[i] + comp_xyz_[i];
   }
   snapshot_intensity_ = total_intensity_;
+  snapshot_emitted_energy_ = total_emitted_energy_;
   // task-339.3: shadow per-class lanes into snapshot_lane_y_ under the same
   // two-phase snapshot protocol. lane_y_ has no Neumaier compensation
   // counterpart (single-precision scatter Y is enough for display), so a plain
@@ -524,10 +534,15 @@ void RenderConsumer::PostSnapshot() {
   // Intensity scaling uses config_.intensity_factor_ (from CLI JSON / CommitConfig snapshot).
   // GUI rendering uses a separate path: exposure_offset → shader uniform (see app_panels.cpp).
   // task-336.3: the scale expression now lives in ExposureScale() (single source
-  // shared with the compositor). We are past the total_pix/snapshot_intensity_
-  // guard above, so ExposureScale() returns the same non-zero value the inline
-  // expression used to compute — bit-identical.
+  // shared with the compositor). Its guard is on the emitted-energy denominator,
+  // a different quantity from the snapshot_intensity_ tested above, so ask it for
+  // the value and test that — restating its guard here would be two conditions
+  // free to drift apart.
   float scale = ExposureScale();
+  if (scale <= 0.0f) {
+    std::memset(snapshot_image_buffer_.get(), 0, static_cast<size_t>(total_pix) * 3u);
+    return;
+  }
 
   bool use_real_color = config_.ray_color_[0] < 0;
   // Defensive: a degenerate resolution leaves the mask empty (BuildVisibleMask's contract).
@@ -623,6 +638,11 @@ Result RenderConsumer::GetResult() const {
 RawXyzResult RenderConsumer::GetRawXyzResult() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
   float per_pixel_intensity = total_pix > 0 ? snapshot_intensity_ / (kNormScale * total_pix) : 0.0f;
+  // Note the asymmetry, which the C header documents for callers: the intensity
+  // above is pre-divided into a per-pixel figure, while the emitted energy is
+  // handed over raw. Raw is what a caller needs to reproduce ExposureScale()
+  // itself (scale = intensity_factor · kNormScale · total_pix / emitted_energy);
+  // pre-dividing it would only force every caller to multiply the divisor back.
   return { config_.id_,
            config_.resolution_[0],
            config_.resolution_[1],
@@ -631,7 +651,8 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
            config_.intensity_factor_,
            {},
            {},
-           effective_pix_ };
+           effective_pix_,
+           snapshot_emitted_energy_ };
 }
 
 // See doc/ev-pipeline-architecture.md §3.2
@@ -639,6 +660,8 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
 void RenderConsumer::Reset() {
   total_intensity_ = 0;
   snapshot_intensity_ = 0;
+  total_emitted_energy_ = 0;
+  snapshot_emitted_energy_ = 0;
   effective_pix_ = 0;
   auto buf_size = static_cast<size_t>(config_.resolution_[0]) * config_.resolution_[1] * 3;
   std::memset(internal_xyz_.get(), 0, buf_size * sizeof(float));

@@ -17,6 +17,13 @@ inline constexpr int kCmfMaxWavelength = 830;
 // appears at ~5% brightness, so bright halo features (~20x average) approach
 // full white. Independent of resolution and FOV — use EV (intensity_factor)
 // for user-controlled brightness adjustment.
+//
+// The value was originally calibrated against a denominator of LANDED energy
+// and is now applied against EMITTED energy (see RenderConsumer::ExposureScale).
+// It is unchanged, and deliberately so: the two denominators differ by the
+// landed fraction, which for a full-sky field of view measures ~0.98, i.e. under
+// 0.03 stop — smaller than the calibration's own precision. Re-deriving the
+// constant would move every reference image for less than the eye can see.
 inline constexpr float kNormScale = 0.08f;
 
 // Scatter-add `v[i]` weighted by the CIE 1931 color-matching functions at

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -39,7 +40,15 @@ static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->crystal_num) >= 8, "stats c
 // grew LUMICE_RawXyzResult from 56 → 64 bytes (effective_pixels@48 + 4 pad +
 // epoch@56, 8-aligned). test/e2e/capi_runner.py mirrors this exact size; keep the
 // two in lockstep (measured, not assumed — ctypes.sizeof == 64).
+// The absolute-normalization denominator `emitted_energy` (float) then went into
+// that 4-byte pad at offset 52 rather than onto the end, so the size stays 64 and
+// `epoch` keeps offset 56 — the offset asserts below are what make that a checked
+// claim rather than a hoped-for one.
 static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must be 64 bytes (capi_runner.py mirror)");
+static_assert(offsetof(LUMICE_RawXyzResult, effective_pixels) == 48, "LUMICE_RawXyzResult layout drift");
+static_assert(offsetof(LUMICE_RawXyzResult, emitted_energy) == 52,
+              "emitted_energy must occupy the pre-existing pad, not grow the struct");
+static_assert(offsetof(LUMICE_RawXyzResult, epoch) == 56, "epoch offset must be unchanged by emitted_energy");
 
 // ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
 // task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes

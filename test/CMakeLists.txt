@@ -75,6 +75,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
@@ -92,6 +93,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_threading_pool.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_cpu_info.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_illuminant.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"

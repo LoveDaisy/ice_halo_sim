@@ -149,9 +149,16 @@ class RenderConsumer : public IConsume {
 
   // task-336.3: the SINGLE mono-image exposure scale, the sole source of truth
   // for both PostSnapshot() and the component compositor (plan §1.1). Returns
-  // config_.intensity_factor_ * kNormScale * total_pix / snapshot_intensity_,
-  // or 0 when total_pix<=0 or snapshot_intensity_<=0. Reads the frozen snapshot
-  // (snapshot_intensity_), so it is tearing-free once PrepareSnapshot() has run.
+  // config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_,
+  // or 0 when total_pix<=0 or snapshot_emitted_energy_<=0. Reads the frozen
+  // snapshot, so it is tearing-free once PrepareSnapshot() has run.
+  //
+  // The denominator is the energy EMITTED, not the energy that landed. That is
+  // what makes the resulting scale absolute: it is fixed by the light source and
+  // the ray budget alone, so it does not move when a filter, a low scene pass
+  // rate, or lens clipping removes rays. Under the old landed-weight denominator
+  // a filtered scene was silently re-brightened by exactly the factor it had been
+  // dimmed by, which made two scenes at the same EV incomparable.
   float ExposureScale() const;
 
   // task-347 (Fix B): server-side self-anchored exposure scale for the
@@ -230,6 +237,15 @@ class RenderConsumer : public IConsume {
   std::vector<uint8_t> horizon_mask_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
+  // Σ SimData::emitted_energy_ over every batch consumed since the last Reset(),
+  // and its snapshot freeze — the absolute-scale denominator (see
+  // ExposureScale). Parallel to total_intensity_/snapshot_intensity_ above in
+  // every respect except what they measure: this one counts what the source
+  // emitted, that one what reached a pixel. Both accumulate on BOTH consume
+  // paths (Consume + ConsumeDeviceFused); charging only one of them was the
+  // shape of two historical GUI brightness bugs.
+  float total_emitted_energy_ = 0;
+  float snapshot_emitted_energy_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> comp_xyz_;  // Neumaier compensation buffer (S1 device-fused)

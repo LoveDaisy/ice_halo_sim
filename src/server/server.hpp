@@ -151,6 +151,11 @@ struct RawXyzResult {
   bool has_valid_data_ = false;       // True after first ConsumeData; reset on Stop
   uint64_t snapshot_generation_ = 0;  // Increments on each new snapshot
   int effective_pixels_ = 0;          // Non-zero pixel count for adaptive normalization
+  // Total energy the light source emitted into this snapshot, RAW (not divided
+  // by kNormScale · total_pixels the way snapshot_intensity_ above is). This is
+  // the denominator the renderer normalizes by; a consumer wanting to reproduce
+  // that normalization itself needs the raw total, not a per-pixel figure.
+  float snapshot_emitted_energy_ = 0.0f;
   // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped when the frame is
   // acquired; consumed by the GUI display-keying in 1.5. See
   // doc/gui-preview-lifecycle-architecture.md §4/§5.

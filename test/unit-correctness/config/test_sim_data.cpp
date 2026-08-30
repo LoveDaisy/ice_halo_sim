@@ -62,7 +62,10 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // stochastic half and an overwritten deterministic half (+1 size_t, 8B),
 // bumping 352 → 360. The orientation-sample-count statistic adds its own
 // stochastic/deterministic pair (+2 size_t, 16B), bumping 360 → 376.
-static_assert(sizeof(SimData) == 376,
+// The absolute-normalization denominator adds emitted_energy_ (float, 4B) next
+// to root_ray_count_, padded to 8B by the size_t fields around it, bumping
+// 376 → 384.
+static_assert(sizeof(SimData) == 384,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -87,6 +90,10 @@ SimData MakePopulatedSimData() {
   s.curr_wl_ = 550.0f;
   s.generation_ = 42;
   s.root_ray_count_ = 7;
+  // Deliberately not a whole number and not equal to any other marker in this
+  // helper: a copy that mistakenly picked up a neighbouring field would still
+  // read as "some value" and pass a mere non-zero check.
+  s.emitted_energy_ = 615.375f;
   for (int i = 0; i < 5; i++) {
     s.rays_.EmplaceBack(MakeRay(i), RaypathRecorder{});
   }
@@ -964,6 +971,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_FLOAT_EQ(copy.curr_wl_, 550.0f) << "curr_wl_ not copied";
   EXPECT_EQ(copy.generation_, 42u) << "generation_ not copied";
   EXPECT_EQ(copy.root_ray_count_, 7u) << "root_ray_count_ not copied";
+  EXPECT_FLOAT_EQ(copy.emitted_energy_, 615.375f) << "emitted_energy_ not copied";
 
   // rays_ field assertions.
   EXPECT_EQ(copy.rays_.size_, 5u);
@@ -1032,6 +1040,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_FLOAT_EQ(target.curr_wl_, 550.0f) << "curr_wl_ not assigned";
   EXPECT_EQ(target.generation_, 42u) << "generation_ not assigned";
   EXPECT_EQ(target.root_ray_count_, 7u) << "root_ray_count_ not assigned";
+  EXPECT_FLOAT_EQ(target.emitted_energy_, 615.375f) << "emitted_energy_ not assigned";
   EXPECT_EQ(target.rays_.size_, 5u);
   EXPECT_EQ(target.rays_.capacity_, 8u);
   for (int i = 0; i < 5; i++) {
@@ -1072,6 +1081,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   const float kSnapCurrWl = orig.curr_wl_;
   const uint64_t kSnapGen = orig.generation_;
   const size_t kSnapRoot = orig.root_ray_count_;
+  const float kSnapEmitted = orig.emitted_energy_;
   const size_t kSnapRaysSize = orig.rays_.size_;
   const size_t kSnapRaysCap = orig.rays_.capacity_;
   const float kSnapRay0W = orig.rays_[0].w_;
@@ -1083,6 +1093,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_FLOAT_EQ(orig.curr_wl_, kSnapCurrWl);
   EXPECT_EQ(orig.generation_, kSnapGen);
   EXPECT_EQ(orig.root_ray_count_, kSnapRoot);
+  EXPECT_FLOAT_EQ(orig.emitted_energy_, kSnapEmitted);
   EXPECT_EQ(orig.rays_.size_, kSnapRaysSize);
   EXPECT_EQ(orig.rays_.capacity_, kSnapRaysCap);
   EXPECT_FLOAT_EQ(orig.rays_[0].w_, kSnapRay0W);
@@ -1103,6 +1114,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_FLOAT_EQ(moved.curr_wl_, 550.0f);
   EXPECT_EQ(moved.generation_, 42u);
   EXPECT_EQ(moved.root_ray_count_, 7u);
+  EXPECT_FLOAT_EQ(moved.emitted_energy_, 615.375f);
   EXPECT_EQ(moved.outgoing_d_.size(), 6u);
   EXPECT_EQ(moved.outgoing_w_.size(), 2u);
   EXPECT_EQ(moved.outgoing_component_.size(), 2u);  // task-331.1
@@ -1170,6 +1182,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
       << "stochastic_orientation_sample_count_ not move-assigned";
   EXPECT_EQ(dst.deterministic_orientation_count_, 3u) << "deterministic_orientation_count_ not move-assigned";
   EXPECT_EQ(dst.sim_scene_credit_, 11u) << "sim_scene_credit_ not move-assigned";  // scrum-312
+  EXPECT_FLOAT_EQ(dst.emitted_energy_, 615.375f) << "emitted_energy_ not move-assigned";
   EXPECT_EQ(dst.color_degrade_counts_.symmetry_group_overflow, 5u) << "color_degrade symmetry not move-assigned";
   EXPECT_EQ(dst.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not move-assigned";
   EXPECT_EQ(dst.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not move-assigned";
@@ -1202,6 +1215,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   const size_t kSnapRaysSize = self.rays_.size_;
   RaySeg* snap_rays_ptr = self.rays_.rays_.get();
   const size_t kSnapOutgoingWSize = self.outgoing_w_.size();
+  const float kSnapEmitted = self.emitted_energy_;
   const size_t kSnapCrystalsSize = self.crystals_.size();
 
   // Use an alias reference to bypass -Wself-move warning.
@@ -1213,5 +1227,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_EQ(self.rays_.size_, kSnapRaysSize);
   EXPECT_EQ(self.rays_.rays_.get(), snap_rays_ptr);
   EXPECT_EQ(self.outgoing_w_.size(), kSnapOutgoingWSize);
+  EXPECT_FLOAT_EQ(self.emitted_energy_, kSnapEmitted);
   EXPECT_EQ(self.crystals_.size(), kSnapCrystalsSize);
 }

@@ -214,6 +214,25 @@ struct SimData {
   // accounting; they do not affect the rendered image. Keep them distinct from
   // the physical-result fields above (rays_/xyz_pixel_data_/exit_records_).
   size_t root_ray_count_ = 0;  // Count of root rays (prev_ray_idx_ == kInfSize)
+  // The weighted sibling of root_ray_count_: Σ over this batch of (spectral
+  // weight of an emitted ray) — i.e. the energy the light source PUT IN, before
+  // any ray is filtered, absorbed, or projected off the lens. This is the
+  // denominator the renderer normalizes by, which is what makes the displayed
+  // scale absolute: unlike the landed weight it does not shrink when a filter
+  // rejects rays, so two scenes at the same EV differ in brightness by their
+  // real physical difference rather than by their pass rates.
+  //
+  // Filled on EVERY path that produces a SimData, with the same aggregation
+  // grain as root_ray_count_ beside it: per batch on the single-batch paths,
+  // Σ over the window on the third-clock drain. ACCUMULATED downstream
+  // (RenderConsumer does +=), so on the server's exit-seam chunk split it
+  // belongs on the first chunk only — same side as root_ray_count_.
+  //
+  // The weight used here is deterministic even when the traced weight is not:
+  // an illuminant batch draws its wavelength at random, and accumulating the
+  // drawn weight would make brightness a function of the seed. See
+  // MeanIlluminantWeight (util/illuminant.hpp).
+  float emitted_energy_ = 0.0f;
 
   // The reported crystal-geometry count is carried as TWO fields because its
   // two halves aggregate differently. StatsConsumer reports their sum; see

@@ -1323,6 +1323,14 @@ void ServerImpl::ConsumeData() {
               // totals a single whole-Consume call would yield.
               if (emitted == 0) {
                 chunk.root_ray_count_ = sim_data.root_ray_count_;
+                // Same side of the split as root_ray_count_, for the same
+                // reason: RenderConsumer adds it up, so repeating it on every
+                // chunk would multiply the normalization denominator by the
+                // chunk count and darken the image in proportion to the commit
+                // grain. Omitting it entirely is the other failure — a zero
+                // denominator on this path alone, i.e. a black image only when
+                // the exit-seam backend is in use.
+                chunk.emitted_energy_ = sim_data.emitted_energy_;
                 chunk.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
                 chunk.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
                 chunk.crystals_ = sim_data.crystals_;
@@ -1381,20 +1389,51 @@ void ServerImpl::ConsumeData() {
           }
         } else {
           // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
-          // outgoing_d_ AND rays_ both empty). We deliberately do NOT call
-          // c->Consume() — there is nothing to accumulate and a black batch must
-          // not bias the image. BUT a batch that ran to completion with a
-          // legitimately all-black result is still *valid data*: the simulation
-          // converged, the answer is just zero intensity. We therefore flip
-          // has_ever_consumed_ so the frame's xyz results report has_valid_data=true,
-          // and dirty the snapshot so PrepareSnapshot produces a clean zero
-          // frame (without this, an all-black simulation — e.g. an impossible
-          // raypath filter — never sets has_valid_data, so the buffered poller
-          // waits for "valid data" forever and times out at 600s). The legacy
-          // CPU path never hit this because its rays_ is always non-empty, so
-          // has_renderable stayed true; the exit-seam path (Metal + CUDA) is the
-          // first to surface it. See doc/capi-lifecycle-architecture.md
+          // outgoing_d_ AND rays_ both empty). A batch that ran to completion
+          // with a legitimately all-black result is still *valid data*: the
+          // simulation converged, the answer is just zero intensity. We flip
+          // has_ever_consumed_ so the frame's xyz results report
+          // has_valid_data=true, and dirty the snapshot so PrepareSnapshot
+          // produces a clean zero frame (without this, an all-black simulation
+          // — e.g. an impossible raypath filter — never sets has_valid_data, so
+          // the buffered poller waits for "valid data" forever and times out at
+          // 600s). The legacy CPU path never hit this because its rays_ is
+          // always non-empty, so has_renderable stayed true; the exit-seam path
+          // is the first to surface it. See doc/capi-lifecycle-architecture.md
           // ("zero-output completion").
+          //
+          // The batch contributes no pixels, but it did emit rays, and the
+          // renderer's normalization divides by emitted energy — so it must be
+          // consumed for its bookkeeping even though it has no image to add.
+          // (It used to be dropped whole, which was right while the denominator
+          // was the LANDED weight: a batch that landed nothing owed nothing.
+          // Under an absolute scale that same drop would leave the denominator
+          // counting only the batches that survived their filter, re-brightening
+          // a filtered scene back to the unfiltered look — the exact
+          // content-dependence the absolute scale exists to remove, and worst
+          // where filtering is strictest.) So hand the consumers an
+          // accounting-only SimData: no rays, no outgoing data, no image
+          // contribution, just the counters. root_ray_count_ and the sample
+          // counts ride along because the legacy CPU path already delivers them
+          // for its all-filtered batches — leaving them out here would keep the
+          // stats disagreeing across backends for the same scene. A black batch
+          // still cannot bias the image: RenderConsumer accumulates nothing from
+          // an empty payload.
+          SimData accounting;
+          accounting.curr_wl_ = sim_data.curr_wl_;
+          accounting.generation_ = sim_data.generation_;
+          accounting.root_ray_count_ = sim_data.root_ray_count_;
+          accounting.emitted_energy_ = sim_data.emitted_energy_;
+          accounting.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
+          accounting.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
+          accounting.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
+          accounting.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
+          {
+            std::lock_guard<TicketMutex> lock(consumer_mutex_);
+            for (auto& c : consumers_) {
+              c->Consume(accounting);
+            }
+          }
           snapshot_dirty_ = true;
           has_ever_consumed_ = true;
           ILOG_DEBUG(logger_, "ConsumeData: 0-exit batch (all filtered) — marking valid_data, zero snapshot");

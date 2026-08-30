@@ -1037,18 +1037,18 @@ void Simulator::Run() {
     // and execute the current wavelength on the legacy CPU path here. Crystal
     // cache + workspace + ray_alloc_carry are in Run() scope, so the fallback
     // is a direct re-dispatch — no signature plumbing into the helper.
-    auto run_with_backend = [&](const WlParam& wl_param) {
+    auto run_with_backend = [&](const WlParam& wl_param, float emitted_weight) {
       // Self-guard: every current call site gates on a non-null backend, but this
       // keeps the lambda safe if a future caller forgets — same effect as the
       // catch-block fallback (run the legacy CPU path, report "backend not used").
       if (!backend) {
-        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
-                              generation, ray_alloc_carry);
+        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
+                              crystal_cache, workspace, generation, ray_alloc_carry);
         return false;
       }
       try {
         SimulateOneWavelengthWithBackend(*backend, config, (*batch.renders_)[0], batch.raypath_color_, wl_param,
-                                         batch.ray_num_, generation);
+                                         emitted_weight, batch.ray_num_, generation);
         return true;
       } catch (const BackendUnavailableError& e) {
         ILOG_WARN(
@@ -1056,8 +1056,8 @@ void Simulator::Run() {
             "TraceBackend unavailable ({}); dropping backend and falling back to legacy CPU for the rest of this Run()",
             e.what());
         backend.reset();
-        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
-                              generation, ray_alloc_carry);
+        SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
+                              crystal_cache, workspace, generation, ray_alloc_carry);
         return false;
       }
     };
@@ -1073,6 +1073,13 @@ void Simulator::Run() {
       // consumer renders black (loud) instead of silently collapsing onto a
       // flat spectrum (the bug fixed in a101c53e). Pool-less backends (CPU /
       // cpu_backend / legacy) keep per-batch uniform wl + SPD weight.
+      // The emitted weight charged to the normalization denominator is the
+      // BAND EXPECTATION of this illuminant, not the weight of whichever
+      // wavelength this batch happens to draw. Both sub-branches below use it:
+      // the per-ray-pool branch has no host-side draw to speak of, and the
+      // host-sampling branch has one whose weight varies ~20% per batch — using
+      // it would make the same config render at a different brightness per seed.
+      float emitted_weight = MeanIlluminantWeight(*illuminant);
       bool backend_per_ray_wl = use_backend && backend->WlPoolSize() > 0u;
       if (backend_per_ray_wl) {
         // task-282 fallback samples a host wl (matches the no-backend branch)
@@ -1081,16 +1088,16 @@ void Simulator::Run() {
         // (consistent with pool-driven semantics: no per-batch host wl when the
         // backend owns the pool); subsequent batches take the use_backend == false
         // branch since `backend` is now reset. Nothing more to do on either result.
-        (void)run_with_backend(WlParam{});
+        (void)run_with_backend(WlParam{}, emitted_weight);
       } else {
         float wl = 380.0f + rng_.GetUniform() * 400.0f;  // [380, 780] nm
         float weight = GetIlluminantSpd(*illuminant, wl);
         WlParam wl_param{ wl, weight };
         if (use_backend) {
-          run_with_backend(wl_param);
+          run_with_backend(wl_param, emitted_weight);
         } else {
-          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
-                                generation, ray_alloc_carry);
+          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, emitted_weight, batch.ray_num_,
+                                crystal_cache, workspace, generation, ray_alloc_carry);
         }
       }
     } else {
@@ -1100,11 +1107,13 @@ void Simulator::Run() {
         if (stop_) {
           break;
         }
+        // Discrete spectrum: the traced weight IS deterministic, so the
+        // denominator is charged with it directly — no expectation needed.
         if (use_backend && backend) {
-          run_with_backend(wl_param);
+          run_with_backend(wl_param, wl_param.weight_);
         } else {
-          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, batch.ray_num_, crystal_cache, workspace,
-                                generation, ray_alloc_carry);
+          SimulateOneWavelength(config, batch.raypath_color_.get(), wl_param, wl_param.weight_, batch.ray_num_,
+                                crystal_cache, workspace, generation, ray_alloc_carry);
         }
       }
     }
@@ -1118,8 +1127,8 @@ void Simulator::Run() {
 
 
 void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
-                                      const WlParam& wl_param, size_t ray_num, CrystalCache& crystal_cache,
-                                      SimWorkspace& workspace, uint64_t generation,
+                                      const WlParam& wl_param, float emitted_weight, size_t ray_num,
+                                      CrystalCache& crystal_cache, SimWorkspace& workspace, uint64_t generation,
                                       std::vector<std::vector<double>>& ray_alloc_carry) {
   ILOG_TRACE(logger_, "Run: get config: ray({}), wl({:.1f},{:.2f})",  //
              ray_num, wl_param.wl_, wl_param.weight_);
@@ -1368,6 +1377,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1
   sim_data.root_ray_count_ = original_ray_num;
+  sim_data.emitted_energy_ = emitted_weight * static_cast<float>(original_ray_num);
   // Newly DRAWN stochastic geometries, not materialised instances. `crystals_`
   // keeps every instance (the consumers index into it by per-ray crystal id and
   // need the reuse copies), but reporting its size made the stat a function of
@@ -1431,6 +1441,7 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
   sim_data.curr_wl_ = xyz_win_.wl;
   sim_data.generation_ = xyz_win_.generation;
   sim_data.root_ray_count_ = xyz_win_.root_rays;
+  sim_data.emitted_energy_ = xyz_win_.emitted_energy;
   sim_data.stochastic_crystal_sample_count_ = xyz_win_.stochastic_crystal_samples;
   // OVERWRITE semantics, same as color_degrade_counts_ below: a config constant
   // is carried through the window, never summed over its batches.
@@ -1479,7 +1490,8 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
 void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene,
                                                  const RenderConfig& render,
                                                  std::shared_ptr<const RaypathColorConfig> raypath_color,
-                                                 const WlParam& wl_param, size_t ray_num, uint64_t generation) {
+                                                 const WlParam& wl_param, float emitted_weight, size_t ray_num,
+                                                 uint64_t generation) {
   ILOG_TRACE(logger_, "Run(backend): ray({}), wl({:.1f},{:.2f})", ray_num, wl_param.wl_, wl_param.weight_);
 
   if (ray_num == 0 || scene.ms_.empty()) {
@@ -1584,6 +1596,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
       // hits the batch cap here. This sheds the per-batch synchronous D2H tax.
       xyz_win_.pending = true;
       xyz_win_.root_rays += ray_num;
+      xyz_win_.emitted_energy += emitted_weight * static_cast<float>(ray_num);
       xyz_win_.stochastic_crystal_samples += backend.GetLastBatchStochasticCrystalSampleCount();
       xyz_win_.stochastic_orientation_samples += backend.GetLastBatchStochasticOrientationSampleCount();
       // OVERWRITE (not +=) — config constant, identical on every batch.
@@ -1609,6 +1622,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     sim_data.curr_wl_ = wl_param.wl_;
     sim_data.generation_ = generation;
     sim_data.root_ray_count_ = ray_num;
+    sim_data.emitted_energy_ = emitted_weight * static_cast<float>(ray_num);
     sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
     sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
     sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();
@@ -1681,6 +1695,7 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
   sim_data.root_ray_count_ = ray_num;  // distinguishes a valid backend batch
                                        // from the shutdown sentinel (see
                                        // server.cpp::ConsumeData).
+  sim_data.emitted_energy_ = emitted_weight * static_cast<float>(ray_num);
   sim_data.stochastic_crystal_sample_count_ = backend.GetLastBatchStochasticCrystalSampleCount();
   sim_data.deterministic_crystal_count_ = deterministic_crystal_count_;
   sim_data.stochastic_orientation_sample_count_ = backend.GetLastBatchStochasticOrientationSampleCount();

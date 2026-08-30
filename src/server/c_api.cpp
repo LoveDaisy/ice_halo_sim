@@ -2686,6 +2686,7 @@ LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_R
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
+    out[i].emitted_energy = results[i].snapshot_emitted_energy_;
     out[i].epoch = results[i].epoch_;
   }
 

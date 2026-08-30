@@ -229,7 +229,22 @@ typedef struct LUMICE_RawXyzResult_ {
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for stats display)
-  unsigned long long epoch;                // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
+  // Total spectral energy the light source EMITTED into this snapshot: the sum over every
+  // simulated batch of (per-ray emission weight x rays emitted). Raw total, NOT divided by
+  // kNormScale * total_pixels the way snapshot_intensity above is.
+  //
+  // Distinct from snapshot_intensity in what it measures, not just in scaling: this counts
+  // what went IN, that counts what came out and landed on a pixel. They differ by everything
+  // that removes a ray -- filters, absorption, rays that miss the lens. This is the quantity
+  // the renderer normalizes by, which is what makes its output scale absolute; a consumer can
+  // reproduce that scale as
+  //     scale = intensity_factor * kNormScale * total_pixels / emitted_energy
+  // and two scenes normalized this way are directly comparable in brightness.
+  //
+  // Occupies alignment padding that already existed before `epoch`, so sizeof(LUMICE_RawXyzResult)
+  // is unchanged and `epoch` keeps its offset.
+  float emitted_energy;
+  unsigned long long epoch;  // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {

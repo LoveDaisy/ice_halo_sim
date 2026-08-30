@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -85,6 +86,11 @@ SimData MakeUpwardBatch(const std::vector<float>& weights) {
     data.outgoing_d_.push_back(-1.0f);  // sky-up
   }
   data.outgoing_w_ = weights;
+  // The normalization denominator. In this fixture nothing is filtered and
+  // every ray lands, so the energy emitted equals the energy that arrived — the
+  // batch has to declare it either way, because the renderer divides by what was
+  // emitted and no longer infers it from what landed.
+  data.emitted_energy_ = std::accumulate(weights.begin(), weights.end(), 0.0f);
   return data;
 }
 
