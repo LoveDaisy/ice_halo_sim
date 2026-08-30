@@ -586,7 +586,9 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["resolution"] = { r.resolution_w, r.resolution_h };
   jr["view"] = ns::ViewParam{ r.view_azimuth, r.view_elevation, r.view_roll };
   jr["visible"] = MapVisibleFromCApi(r.visible);
-  jr["background"] = { r.background[0], r.background[1], r.background[2] };
+  // Back to sRGB on the way out — the struct field is linear, the JSON key is not.
+  jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
+                       ns::LinearToSrgb(r.background[2]) };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["opacity"] = r.opacity;
   jr["intensity_factor"] = r.intensity_factor;
@@ -2280,11 +2282,25 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       r.visible = MapVisibleToCApi(visible);
     }
 
+    // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.
+    if (rj.contains("background_color")) {
+      ILOG_WARN(ns::GetGlobalLogger(),
+                "render[id={}]: unknown key \"background_color\" is ignored; the background color key is "
+                "\"background\" (sRGB triple)",
+                r.id);
+    }
+    // The JSON key is sRGB (what a color picker shows); LUMICE_RenderParam::background is linear
+    // (what PostSnapshot's additive blend needs) — see the field's comment in lumice.h. The default
+    // needs no conversion: 0 is a fixed point of both directions. Twin of the encode side in
+    // RendererToJson, and of core's own conversion in config_manager.cpp::ParseRenderConfig.
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
     if (rj.contains("background")) {
       const LUMICE_ErrorCode err = DecodeCoreField(rj.at("background"), r.background);
       if (err != LUMICE_OK) {
         return err;
+      }
+      for (float& c : r.background) {
+        c = ns::SrgbToLinear(c);
       }
     }
 

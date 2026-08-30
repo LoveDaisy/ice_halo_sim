@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
@@ -15,6 +17,7 @@
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch + ParseConfigString + ConfigToJson (internal)
 #include "util/color_space.hpp"       // SrgbToLinear (the JSON boundary conversion under test)
+#include "util/logger.hpp"            // GetSharedSink (dead-key warning capture)
 
 // Differential tests: core's native config parser (config/*::from_json) vs the C API JSON parser
 // behind ParseConfigString / LUMICE_SceneFromJson (server/c_api.cpp::JsonToConfig).
@@ -839,6 +842,78 @@ TEST(JsonParserParity, BackgroundNonZeroRoundTripsIdenticallyBothParsers) {
   for (int j = 0; j < 3; j++) {
     EXPECT_NEAR(via_capi.background_[j], core.background_[j], 1e-6f) << "channel " << j;
   }
+}
+
+// --- render.background_color: a dead key, warned about rather than dropped in silence ---
+//
+// Orthogonal to the sRGB/linear parity above and deliberately grouped apart from it: what is
+// asserted here is that neither parser stays silent about a key it cannot use.
+
+// Captures everything the global logger emits for the lifetime of the object. RAII rather than a
+// manual remove_sink, because GetSharedSink() is a process-wide singleton: an ASSERT_* returning
+// early with the sink still attached would leave later tests in this binary writing into a
+// destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
+    lumice::GetSharedSink()->add_sink(sink_);
+  }
+
+  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
+// A render block carrying only the misspelling, so the warning is the sole observable effect.
+std::string RenderWithDeadBackgroundColorKey() {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "background_color": [0.2, 0.35, 0.6] } ] })";
+}
+
+TEST(JsonParserParity, BackgroundColorDeadKeyWarnsViaCoreParser) {
+  std::string log;
+  CoreOutcome core;
+  {
+    LogCapture capture;
+    core = ParseWithCore(RenderWithDeadBackgroundColorKey());
+    log = capture.Text();
+  }
+  ASSERT_TRUE(core.ok) << "the dead key must be ignored, not rejected: " << core.error;
+  ASSERT_EQ(core.config.renderers_.size(), 1u);
+  // Ignored means ignored: the misspelled value does not reach the field.
+  for (int j = 0; j < 3; j++) {
+    EXPECT_FLOAT_EQ(core.config.renderers_.begin()->second.background_[j], 0.0f);
+  }
+  EXPECT_NE(log.find("background_color"), std::string::npos) << "core parser log: " << log;
+  EXPECT_NE(log.find("\"background\""), std::string::npos)
+      << "the warning must name the key that actually works; core parser log: " << log;
+}
+
+TEST(JsonParserParity, BackgroundColorDeadKeyWarnsViaCapiParser) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  std::string log;
+  LUMICE_ErrorCode status = LUMICE_OK;
+  {
+    LogCapture capture;
+    status = ParseConfigString(RenderWithDeadBackgroundColorKey().c_str(), &cfg);
+    log = capture.Text();
+  }
+  ASSERT_EQ(status, LUMICE_OK) << "the dead key must be ignored, not rejected";
+  ASSERT_EQ(cfg.renderer_count, 1);
+  for (int j = 0; j < 3; j++) {
+    EXPECT_FLOAT_EQ(cfg.renderers[0].background[j], 0.0f);
+  }
+  EXPECT_NE(log.find("background_color"), std::string::npos) << "C API parser log: " << log;
+  EXPECT_NE(log.find("\"background\""), std::string::npos)
+      << "the warning must name the key that actually works; C API parser log: " << log;
 }
 
 TEST(JsonParserParity, PyramidWedgeAngleOmittedDefaultsTo28) {

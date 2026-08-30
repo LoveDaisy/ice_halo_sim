@@ -6,6 +6,7 @@
 
 #include "config/config_compare.hpp"
 #include "core/math.hpp"
+#include "util/color_space.hpp"
 
 namespace lumice {
 
@@ -149,7 +150,9 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["lens_shift"] = r.lens_shift_;
   j["view"] = r.view_;
   j["visible"] = r.visible_;
-  j["background"] = r.background_;
+  // background_ is linear; the JSON key is sRGB. Twin of the decode-side conversion in
+  // config_manager.cpp::ParseRenderConfig.
+  j["background"] = { LinearToSrgb(r.background_[0]), LinearToSrgb(r.background_[1]), LinearToSrgb(r.background_[2]) };
   j["ray_color"] = r.ray_color_;
   j["opacity"] = r.opacity_;
   j["intensity_factor"] = r.intensity_factor_;
