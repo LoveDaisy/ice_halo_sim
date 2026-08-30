@@ -567,6 +567,7 @@ int main(int argc, char** argv) {
   RegisterPreviewPixelTests(engine);
   RegisterPreviewTextureTests(engine);
   RegisterPreviewBackgroundTests(engine);
+  RegisterBackgroundMainUiControlTests(engine);
   RegisterEntryManagementTests(engine);
   RegisterBackgroundOverlayTests(engine);
   RegisterFileOpsTests(engine);
