@@ -36,6 +36,7 @@
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/color_util.hpp"
+#include "core/ev_anchor.hpp"
 #include "server/render.hpp"
 
 namespace lumice {
@@ -218,6 +219,109 @@ TEST(RenderConsumerExposureScale, RawXyzResultCarriesTheRawEmittedTotal) {
   const float reproduced =
       raw.intensity_factor_ * kNormScale * static_cast<float>(total_pix) / raw.snapshot_emitted_energy_;
   EXPECT_FLOAT_EQ(reproduced, rc.ExposureScale());
+}
+
+// =============================================================================
+// ev_mode = kRelative: the frame anchors to ITSELF.
+//
+// Every case above pins the absolute branch (MakeConfig sets kAbsolute explicitly). These pin
+// the other branch, whose defining property is the opposite one: no energy term at all, so the
+// emitted total can move by any factor without moving the scale.
+//
+// The P99 here is genuinely hand-computable rather than re-derived from ComputeP99Y. MakeBatch
+// sends every ray straight up, so on the 16x16 upper-hemisphere fisheye the whole weight lands
+// on ONE pixel and the other 255 are exactly zero. Downsampling by kMonoAnchorDownsampleFactor
+// (8) gives a 2x2 coarse grid with exactly one non-zero bin, whose box sum is that single
+// pixel's Y. One non-zero sample means P99 == that sample, and ComputeP99Y then divides by f^2
+// to return a fine-equivalent figure. So:
+//     p99 = Y_lit / 64
+// with Y_lit read off the published raw buffer (a measurement, not a formula), and therefore
+//     scale = intensity_factor * TargetWhiteToLinear(135) * 64 / Y_lit.
+// =============================================================================
+
+RenderConfig MakeRelativeConfig() {
+  auto cfg = MakeConfig();
+  cfg.ev_mode_ = RenderConfig::kRelative;
+  return cfg;
+}
+
+// Sum of the Y channel over the whole snapshot. With this fixture only one pixel is non-zero,
+// so this IS that pixel's Y — obtained by scanning rather than by assuming which pixel it is.
+float LitPixelY(const RenderConsumer& rc) {
+  const auto raw = rc.GetRawXyzResult();
+  float sum = 0.0f;
+  size_t count = static_cast<size_t>(raw.img_width_) * static_cast<size_t>(raw.img_height_);
+  for (size_t i = 0; i < count; ++i) {
+    sum += raw.xyz_buffer_[i * 3 + 1];
+  }
+  return sum;
+}
+
+TEST(RenderConsumerExposureScaleRelative, MatchesTheHandComputedSelfAnchor) {
+  const auto cfg = MakeRelativeConfig();
+  RenderConsumer rc(cfg, ColorClassTable{});
+  auto data = MakeBatch(Weights(), 1000.0f);
+  rc.Consume(data);
+  rc.PrepareSnapshot();
+
+  const float y_lit = LitPixelY(rc);
+  ASSERT_GT(y_lit, 0.0f);
+  const float f2 = static_cast<float>(kMonoAnchorDownsampleFactor) * static_cast<float>(kMonoAnchorDownsampleFactor);
+  const float p99 = y_lit / f2;
+  const float expected = cfg.intensity_factor_ * TargetWhiteToLinear(kAnchorTargetWhite) / p99;
+
+  EXPECT_FLOAT_EQ(rc.ExposureScale(), expected);
+}
+
+TEST(RenderConsumerExposureScaleRelative, IgnoresTheEmittedTotalTheAbsoluteBranchDividesBy) {
+  // The defining difference between the two modes, stated as a pair of measurements on ONE
+  // fixture: hold the landed content fixed and move only the emitted total. Absolute must track
+  // it exactly (it is the denominator); relative must not see it at all.
+  const auto rel = MakeRelativeConfig();
+  const auto abs_cfg = MakeConfig();
+
+  const float rel_a = ScaleFor(rel, Weights(), 1000.0f);
+  const float rel_b = ScaleFor(rel, Weights(), 4000.0f);
+  const float abs_a = ScaleFor(abs_cfg, Weights(), 1000.0f);
+  const float abs_b = ScaleFor(abs_cfg, Weights(), 4000.0f);
+
+  ASSERT_GT(rel_a, 0.0f);
+  EXPECT_FLOAT_EQ(rel_b, rel_a) << "a self-anchored scale carries no energy term";
+  EXPECT_FLOAT_EQ(abs_b, abs_a / 4.0f) << "the absolute scale is exactly 1/emitted";
+}
+
+TEST(RenderConsumerExposureScaleRelative, IsADifferentNumberFromTheAbsoluteBranch) {
+  // Guards the wiring itself: if ev_mode_ were dropped on the floor somewhere between the config
+  // and ExposureScale(), both modes would silently return whichever branch won, and the two
+  // cases above would still pass on the relative fixture alone.
+  const float rel = ScaleFor(MakeRelativeConfig(), Weights(), 1000.0f);
+  const float abs_scale = ScaleFor(MakeConfig(), Weights(), 1000.0f);
+  ASSERT_GT(rel, 0.0f);
+  ASSERT_GT(abs_scale, 0.0f);
+  EXPECT_NE(rel, abs_scale);
+}
+
+TEST(RenderConsumerExposureScaleRelative, BlackFrameHasNoAnchorAndScoresZero) {
+  // A frame with no lit pixel has no P99 to anchor to. Zero is the same answer the absolute
+  // branch gives for its own undefined case (nothing emitted) — not an exception, not a
+  // silently huge scale from dividing by an epsilon.
+  const auto cfg = MakeRelativeConfig();
+  RenderConsumer rc(cfg, ColorClassTable{});
+  auto data = MakeBatch({ 0.0f, 0.0f }, 1000.0f);
+  rc.Consume(data);
+  rc.PrepareSnapshot();
+
+  EXPECT_EQ(rc.ExposureScale(), 0.0f);
+}
+
+TEST(RenderConsumerExposureScaleRelative, ScalesWithIntensityFactorLikeTheAbsoluteBranchDoes) {
+  // intensity_factor_ is the user's EV offset and multiplies BOTH branches; it is not part of
+  // what the anchor choice changes.
+  auto cfg = MakeRelativeConfig();
+  const float base = ScaleFor(cfg, Weights(), 1000.0f);
+  cfg.intensity_factor_ = 4.0f;
+  const float boosted = ScaleFor(cfg, Weights(), 1000.0f);
+  EXPECT_FLOAT_EQ(boosted, base * 4.0f);
 }
 
 }  // namespace

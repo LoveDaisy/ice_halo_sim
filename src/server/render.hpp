@@ -148,17 +148,28 @@ class RenderConsumer : public IConsume {
   int ImageHeight() const { return config_.resolution_[1]; }
 
   // task-336.3: the SINGLE mono-image exposure scale, the sole source of truth
-  // for both PostSnapshot() and the component compositor (plan §1.1). Returns
-  // config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_,
-  // or 0 when total_pix<=0 or snapshot_emitted_energy_<=0. Reads the frozen
-  // snapshot, so it is tearing-free once PrepareSnapshot() has run.
+  // for both PostSnapshot() and the component compositor (plan §1.1). Reads the
+  // frozen snapshot, so it is tearing-free once PrepareSnapshot() has run, and
+  // returns 0 whenever the resolution is degenerate (total_pix<=0).
   //
-  // The denominator is the energy EMITTED, not the energy that landed. That is
-  // what makes the resulting scale absolute: it is fixed by the light source and
-  // the ray budget alone, so it does not move when a filter, a low scene pass
-  // rate, or lens clipping removes rays. Under the old landed-weight denominator
-  // a filtered scene was silently re-brightened by exactly the factor it had been
-  // dimmed by, which made two scenes at the same EV incomparable.
+  // WHICH scale it is, is `config_.ev_mode_`'s decision — the two modes anchor to
+  // different things and are not two tunings of one formula:
+  //
+  //   kAbsolute: intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_
+  //     (0 if snapshot_emitted_energy_<=0). The denominator is the energy EMITTED, not the
+  //     energy that landed. That is what makes this scale absolute: it is fixed by the light
+  //     source and the ray budget alone, so it does not move when a filter, a low scene pass
+  //     rate, or lens clipping removes rays. Under the old landed-weight denominator a filtered
+  //     scene was silently re-brightened by exactly the factor it had been dimmed by, which made
+  //     two scenes at the same EV incomparable.
+  //
+  //   kRelative (the default): intensity_factor_ * TargetWhiteToLinear(kAnchorTargetWhite)
+  //     / ComputeP99Y(snapshot, kMonoAnchorDownsampleFactor)   (0 if that P99 is 0).
+  //     This is the frame anchoring to ITSELF — algebraically the same per-pixel multiplier the
+  //     GUI's ComputeEvAuto + shader pair has always applied, so a CLI render matches what the
+  //     GUI shows. Being self-anchored, it carries no energy term: the image keeps its look as
+  //     ray_num grows, and correspondingly the config alone does NOT determine output
+  //     brightness. See the derivation at the definition in render.cpp.
   float ExposureScale() const;
 
   // task-347 (Fix B): server-side self-anchored exposure scale for the

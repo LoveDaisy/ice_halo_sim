@@ -145,6 +145,22 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
   return NthElementP99(y_vals);
 }
 
+// The two numbers the P99 self-anchor is parameterised by. They have an owner here because the
+// server now anchors too (RenderConsumer::ExposureScale's kRelative branch), and a second
+// hardcoded copy of each would be a third place for them to drift.
+//
+// Both are MIRRORED, not shared, on the GUI side: `src/gui/` may not include `core/`, so
+// gui_constants.hpp::kEvAutoDownsampleFactor and GuiState::target_white hold the same two values
+// independently. That mirroring predates this owner and is not removed by it — the API boundary
+// is what forbids sharing. What changed is only that the core side now has one named owner
+// instead of a literal repeated per call site.
+//
+// f=8 is the MONO path's choice specifically. Coarse and fine are not two precisions of one
+// statistic (see ComputeP99Y's comment: 64x apart on the 77halo fixture), so the composite path
+// deliberately keeps f=1 and must not be "unified" onto this constant.
+constexpr int kMonoAnchorDownsampleFactor = 8;
+constexpr float kAnchorTargetWhite = 135.0f;
+
 // Compute the P99-anchored auto-EV (in stops) such that the P99 normalised Y
 // maps to target_white on the 0-255 sRGB scale.  Clamps to [-6, 6].
 // Returns 0 if snapshot_intensity or p99_raw_y is non-positive.

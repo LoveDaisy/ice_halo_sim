@@ -101,10 +101,41 @@ bool RenderConsumer::HasColorClassSignal(size_t class_idx) const {
 // compositor's scale can never drift apart.
 float RenderConsumer::ExposureScale() const {
   int total_pix = config_.resolution_[0] * config_.resolution_[1];
-  if (total_pix <= 0 || snapshot_emitted_energy_ <= 0.0f) {
+  if (total_pix <= 0) {
     return 0.0f;
   }
-  return config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_;
+  if (config_.ev_mode_ == RenderConfig::kAbsolute) {
+    if (snapshot_emitted_energy_ <= 0.0f) {
+      return 0.0f;
+    }
+    return config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_;
+  }
+
+  // kRelative: anchor to THIS frame's own P99, reproducing what the GUI displays today.
+  //
+  // The GUI does it in two hops -- ComputeEvAuto returns
+  // ev = log2(target_linear * snapshot_intensity / p99_coarse), the pipeline consumes it as
+  // intensity_factor = 2^ev, and the shader then multiplies raw Y by
+  // intensity_scale = intensity_factor / snapshot_intensity. The snapshot_intensity CANCELS
+  // between those two hops, leaving an effective per-pixel multiplier of
+  // target_linear / p99_coarse. That is why the expression below carries no energy term at all,
+  // neither emitted nor landed: a self-anchored scale cannot contain one. (Same cancellation,
+  // same reason, as ParticipatingExposureScale below -- see its comment for the failure mode a
+  // naive mirror of ComputeEvAuto's numerator produces.)
+  //
+  // What is deliberately NOT reproduced is ComputeEvAuto's clamp to [-6, 6] stops. That clamp
+  // guards a GUI slider's usable range; applying it here would make the CLI's brightness depend
+  // on a UI affordance the CLI does not have.
+  const float p99 =
+      ComputeP99Y(snapshot_xyz_.get(), config_.resolution_[0], config_.resolution_[1], kMonoAnchorDownsampleFactor);
+  if (p99 <= 0.0f) {
+    return 0.0f;
+  }
+  const float target_linear = TargetWhiteToLinear(kAnchorTargetWhite);
+  if (target_linear <= 0.0f) {
+    return 0.0f;
+  }
+  return config_.intensity_factor_ * target_linear / p99;
 }
 
 // task-347 (Fix B): composite-path self-anchored exposure scale. See
@@ -126,11 +157,11 @@ float RenderConsumer::ParticipatingExposureScale(float participating_p99_y) cons
   if (participating_p99_y <= 0.0f || snapshot_intensity_ <= 0.0f) {
     return 0.0f;
   }
-  // target_white=135 on the 0-255 sRGB scale, converted to linear by
+  // target_white on the 0-255 sRGB scale, converted to linear by
   // `core/ev_anchor.hpp::TargetWhiteToLinear` — the same reverse transform
   // ComputeEvAuto uses, now with a single owner rather than a mirrored copy.
-  constexpr float kTargetWhite = 135.0f;
-  const float target_linear = TargetWhiteToLinear(kTargetWhite);
+  // The 135 itself is `kAnchorTargetWhite`, shared with the kRelative branch of ExposureScale().
+  const float target_linear = TargetWhiteToLinear(kAnchorTargetWhite);
   if (target_linear <= 0.0f) {
     return 0.0f;
   }
