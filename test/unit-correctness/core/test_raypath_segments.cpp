@@ -103,10 +103,11 @@ TEST(RaypathSegments, ValidateOneInvalidSegmentRejected) {
   EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
-TEST(RaypathSegments, ValidateSegmentMixedSeparators) {
-  // Both '-' and ',' are accepted within a segment (legacy comma-as-dash).
+TEST(RaypathSegments, ValidateSegmentRejectsLegacyComma) {
+  // ',' inside a segment used to be accepted as a second spelling of '-'. It is retired: the
+  // "3,5" segment is now a syntax error, and one bad segment rejects the whole text.
   auto r = ValidateRaypathTextMultiSegment("3,5; 1-3", LUMICE_CRYSTAL_PRISM);
-  EXPECT_EQ(r.state, LUMICE_RAYPATH_VALID);
+  EXPECT_EQ(r.state, LUMICE_RAYPATH_INVALID);
 }
 
 // ---- ParseRaypathTextMultiSegment ----
@@ -140,11 +141,40 @@ TEST(RaypathSegments, ParseDropsEmptySegments) {
   EXPECT_EQ(v[1], (std::vector<int>{ 5 }));
 }
 
-TEST(RaypathSegments, ParseSegmentMixedSeparators) {
+TEST(RaypathSegments, ParseSegmentDropsLegacyCommaSegment) {
+  // The "3,5" segment yields no path at all, so only the well-formed segment survives. What it
+  // must NOT do is contribute a truncated {3}: std::stoi("3,5") returns 3 without throwing.
   auto v = ParseRaypathTextMultiSegment("3,5; 1-3");
-  ASSERT_EQ(v.size(), 2u);
-  EXPECT_EQ(v[0], (std::vector<int>{ 3, 5 }));
-  EXPECT_EQ(v[1], (std::vector<int>{ 1, 3 }));
+  ASSERT_EQ(v.size(), 1u);
+  EXPECT_EQ(v[0], (std::vector<int>{ 1, 3 }));
+}
+
+// ---- ParseRaypathSegment: whole-segment rejection (the retired ',' connector) ----
+
+TEST(RaypathSegments, ParseSegmentRejectsCommaConnectorEntirely) {
+  // The flagship input. A per-token rule would not be enough here: splitting "3-5,1-2" on '-'
+  // gives "3" / "5,1" / "2", and dropping only the malformed middle token returns {3, 2} — a
+  // plausible-looking two-face path nobody asked for. The segment, not the token, is what is
+  // invalidated.
+  auto v = ParseRaypathSegment("3-5,1-2");
+  EXPECT_TRUE(v.empty());
+  EXPECT_NE(v, (std::vector<int>{ 3, 2 }));
+}
+
+TEST(RaypathSegments, ParseSegmentRejectsSingleCommaToken) {
+  // "3,5" must not come back as {3} — std::stoi stops at the ',' and returns 3 without error,
+  // which is how removing the normalization alone would trade a four-face wrong answer for a
+  // one-face wrong answer.
+  auto v = ParseRaypathSegment("3,5");
+  EXPECT_TRUE(v.empty());
+  EXPECT_NE(v, (std::vector<int>{ 3 }));
+}
+
+TEST(RaypathSegments, ParseSegmentUnchangedForDashOnlyInput) {
+  // The other half of the tightening: well-formed input is untouched. Guards against the
+  // rejection being over-implemented into "anything unusual yields nothing".
+  EXPECT_EQ(ParseRaypathSegment("3-5-1-2"), (std::vector<int>{ 3, 5, 1, 2 }));
+  EXPECT_EQ(ParseRaypathSegment("3"), (std::vector<int>{ 3 }));
 }
 
 }  // namespace

@@ -143,12 +143,15 @@ TEST(ValidateRaypathTextTest, MultipleDashSeparated_IsValid) {
   EXPECT_EQ(ValidateRaypathText("3-1-5"), RaypathValidation::kValid);
 }
 
-TEST(ValidateRaypathTextTest, CommaSeparated_IsValid) {
-  EXPECT_EQ(ValidateRaypathText("3,1,5"), RaypathValidation::kValid);
+TEST(ValidateRaypathTextTest, CommaSeparated_IsInvalid) {
+  // ',' was retired as a path connector: it is no longer a separator, so "3,1,5" is a single
+  // token that is not all digits.
+  EXPECT_EQ(ValidateRaypathText("3,1,5"), RaypathValidation::kInvalid);
 }
 
-TEST(ValidateRaypathTextTest, MixedSeparators_IsValid) {
-  EXPECT_EQ(ValidateRaypathText("3-1,5"), RaypathValidation::kValid);
+TEST(ValidateRaypathTextTest, MixedSeparators_IsInvalid) {
+  // Same reason: the '-' does separate, but the "1,5" it yields is still not a number.
+  EXPECT_EQ(ValidateRaypathText("3-1,5"), RaypathValidation::kInvalid);
 }
 
 TEST(ValidateRaypathTextTest, Zero_IsValid) {
@@ -167,16 +170,18 @@ TEST(ValidateRaypathTextTest, SingleTrailingDash_IsIncomplete) {
   EXPECT_EQ(ValidateRaypathText("3-"), RaypathValidation::kIncomplete);
 }
 
-TEST(ValidateRaypathTextTest, TrailingComma_IsIncomplete) {
-  EXPECT_EQ(ValidateRaypathText("3,"), RaypathValidation::kIncomplete);
+TEST(ValidateRaypathTextTest, TrailingComma_IsInvalid) {
+  // Not kIncomplete any more: kIncomplete means "ends with a separator, user is still typing",
+  // and ',' is no longer a separator — "3," is one malformed token.
+  EXPECT_EQ(ValidateRaypathText("3,"), RaypathValidation::kInvalid);
 }
 
 TEST(ValidateRaypathTextTest, SingleDash_IsIncomplete) {
   EXPECT_EQ(ValidateRaypathText("-"), RaypathValidation::kIncomplete);
 }
 
-TEST(ValidateRaypathTextTest, SingleComma_IsIncomplete) {
-  EXPECT_EQ(ValidateRaypathText(","), RaypathValidation::kIncomplete);
+TEST(ValidateRaypathTextTest, SingleComma_IsInvalid) {
+  EXPECT_EQ(ValidateRaypathText(","), RaypathValidation::kInvalid);
 }
 
 TEST(ValidateRaypathTextTest, LeadingDashSingle_IsIncomplete) {
@@ -200,6 +205,8 @@ TEST(ValidateRaypathTextTest, ConsecutiveDashes_IsInvalid) {
 }
 
 TEST(ValidateRaypathTextTest, ConsecutiveCommas_IsInvalid) {
+  // Still kInvalid, but for a different reason than it used to be: not "interior empty token
+  // between two separators", just one non-digit token. The observable answer is unchanged.
   EXPECT_EQ(ValidateRaypathText("3,,5"), RaypathValidation::kInvalid);
 }
 
@@ -294,14 +301,15 @@ TEST(IsLegalFaceTest, Pyramid_Gaps_Illegal) {
 // Note: The single-argument ValidateRaypathText(text) is kept untouched and
 // remains syntax-only (so "0" and "51" still return kValid). The richer
 // semantics — global-union + kind-specific face-number checks — are confined
-// to the two-argument overload tested below. `-` and `,` are token separators
-// (no range semantics), so e.g. "3-1-5" is equivalent to "3,1,5".
+// to the two-argument overload tested below. `-` is the only token separator (no range
+// semantics); ',' used to be a second one and is now rejected by both overloads — what stayed
+// permissive in the single-argument overload is face-number legality, not the separator set.
 
 TEST(ValidateRaypathTextWithKindTest, Prism_BasicLegal) {
   EXPECT_EQ(ValidateRaypathText("1", CrystalKind::kPrism).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("2", CrystalKind::kPrism).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("3-8", CrystalKind::kPrism).state, RaypathValidation::kValid);
-  EXPECT_EQ(ValidateRaypathText("1,3-5", CrystalKind::kPrism).state, RaypathValidation::kValid);
+  EXPECT_EQ(ValidateRaypathText("1-3-5", CrystalKind::kPrism).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("8", CrystalKind::kPrism).state, RaypathValidation::kValid);  // boundary
 }
 
@@ -311,15 +319,36 @@ TEST(ValidateRaypathTextWithKindTest, Pyramid_BasicLegal) {
   EXPECT_EQ(ValidateRaypathText("3-8", CrystalKind::kPyramid).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("13-18", CrystalKind::kPyramid).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("23-28", CrystalKind::kPyramid).state, RaypathValidation::kValid);
-  EXPECT_EQ(ValidateRaypathText("1,3-5,13", CrystalKind::kPyramid).state, RaypathValidation::kValid);
+  EXPECT_EQ(ValidateRaypathText("1-3-5-13", CrystalKind::kPyramid).state, RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("13", CrystalKind::kPyramid).state, RaypathValidation::kValid);  // boundary
 }
 
 TEST(ValidateRaypathTextWithKindTest, SyntaxInvalid_PropagatesInvalid) {
-  // "3,,5" is a syntax error (empty interior token) → kInvalid, "Invalid raypath".
-  auto r = ValidateRaypathText("3,,5", CrystalKind::kPrism);
+  // "3--5" is a syntax error (empty interior token) → kInvalid, generic "Invalid raypath".
+  // Deliberately comma-free: a text containing ',' now takes the dedicated message instead
+  // (see CommaConnector_IsInvalidWithDedicatedMessage), so this input is what still exercises
+  // the generic branch.
+  auto r = ValidateRaypathText("3--5", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_EQ(r.message, "Invalid raypath");
+}
+
+TEST(ValidateRaypathTextWithKindTest, CommaConnector_IsInvalidWithDedicatedMessage) {
+  // The flagship input: a user meaning "two paths" types "3-5,1-2". It used to normalize to the
+  // single four-face path 3-5-1-2 — legal on a prism, so green border, OK enabled, near-empty
+  // render, no diagnostic. Now it is rejected, and the message has to say what to type instead.
+  auto r = ValidateRaypathText("3-5,1-2", CrystalKind::kPrism);
+  EXPECT_EQ(r.state, RaypathValidation::kInvalid);
+  EXPECT_NE(r.message, "Invalid raypath");
+  // The information that makes this message worth having: it names both separators and what each
+  // one does. Asserted as content, not just as "some other string", so that collapsing the two
+  // branches back into one message cannot pass by accident.
+  EXPECT_NE(r.message.find("'-'"), std::string::npos);
+  EXPECT_NE(r.message.find("';'"), std::string::npos);
+  EXPECT_NE(r.message.find("','"), std::string::npos);
+
+  // The single-argument overload carries no message, but must agree on the state.
+  EXPECT_EQ(ValidateRaypathText("3-5,1-2"), RaypathValidation::kInvalid);
 }
 
 TEST(ValidateRaypathTextWithKindTest, SyntaxIncomplete_TakesPriorityOverFaceCheck) {
@@ -367,8 +396,8 @@ TEST(ValidateRaypathTextWithKindTest, TypeSpecificInvalid_OnPrism) {
 }
 
 TEST(ValidateRaypathTextWithKindTest, FirstInvalidTokenDeterminesMessage) {
-  // Sequence "9,13" on pyramid: 9 is outside-union → message references 9, not 13.
-  auto r = ValidateRaypathText("9,13", CrystalKind::kPyramid);
+  // Sequence "9-13" on pyramid: 9 is outside-union → message references 9, not 13.
+  auto r = ValidateRaypathText("9-13", CrystalKind::kPyramid);
   EXPECT_EQ(r.state, RaypathValidation::kInvalid);
   EXPECT_NE(r.message.find("9"), std::string::npos);
   EXPECT_NE(r.message.find("outside"), std::string::npos);
@@ -381,11 +410,14 @@ TEST(ValidateRaypathTextWithKindTest, SingleArg_Untouched) {
   EXPECT_EQ(ValidateRaypathText("0"), RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("51"), RaypathValidation::kValid);
   EXPECT_EQ(ValidateRaypathText("13"), RaypathValidation::kValid);
-  EXPECT_EQ(ValidateRaypathText("9,13"), RaypathValidation::kValid);
+  EXPECT_EQ(ValidateRaypathText("9-13"), RaypathValidation::kValid);
+  // What stayed permissive is face-number legality, not syntax: the separator set tightened
+  // here too, so a ',' is rejected by this overload as well.
+  EXPECT_EQ(ValidateRaypathText("9,13"), RaypathValidation::kInvalid);
 }
 
 TEST(ValidateRaypathTextWithKindTest, KValidMessageIsEmpty) {
-  auto r = ValidateRaypathText("3-5,1", CrystalKind::kPrism);
+  auto r = ValidateRaypathText("3-5-1", CrystalKind::kPrism);
   EXPECT_EQ(r.state, RaypathValidation::kValid);
   EXPECT_TRUE(r.message.empty());
 }

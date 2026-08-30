@@ -784,5 +784,114 @@ TEST(DocumentRoundtripChain, FaceNumberValidityDependsOnCrystalKind) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// E5 — the retired ',' raypath connector, migrated on load.
+//
+// ',' used to be normalized to '-' by the parser, so a document could be saved with "3-5,1-2" in
+// it and meant the four-face path 3-5-1-2. Now that the validator rejects ',', such a document
+// would open into a state the editor refuses to commit — unless the load rewrites it. These cases
+// are about that rewrite happening on BOTH read paths and stopping exactly at the raypath token.
+//
+// The counter is drained before each load, not only read after: DeserializeGuiStateJson resets it
+// on entry, but a case that only read it afterwards would still pass if that reset were removed
+// and some earlier case had left a count behind.
+
+const char* const kCrystalJson = R"("crystal": {"type": "prism", "shape": {"height": 1.0}}, "proportion": 100.0)";
+
+std::string V3DocWithSummand(const std::string& summand) {
+  return std::string(R"({"schema_version": 3, "layers": [{"prob": 0.0, "entries": [{)") + kCrystalJson +
+         R"(, "filter": {"action": "filter_in", "summands": [")" + summand + R"("]}}]}]})";
+}
+
+std::string LegacyDocWithRaypathText(const std::string& raypath_text) {
+  return std::string(R"({"schema_version": 2, "layers": [{"prob": 0.0, "entries": [{)") + kCrystalJson +
+         R"(, "filter": {"type": "raypath", "action": "filter_in", "raypath_text": ")" + raypath_text + R"("}}]}]})";
+}
+
+const FilterConfig& OnlyFilter(const GuiState& s) {
+  EXPECT_EQ(s.filters.size(), 1u);
+  return s.filters.at(0);
+}
+
+TEST(DocumentRoundtripChain, LegacyCommaRaypathConnectorMigratesToDashOnLoadV3Summands) {
+  GuiState s;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3-5,1-2"), s));
+
+  const FilterConfig& f = OnlyFilter(s);
+  ASSERT_EQ(f.param.size(), 1u);
+  // The path the document meant is preserved; only its spelling changed.
+  EXPECT_EQ(f.param[0].text, std::string("3-5-1-2"));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 1);
+}
+
+TEST(DocumentRoundtripChain, LegacyCommaRaypathConnectorMigratesToDashOnLoadV1V2RaypathText) {
+  GuiState s;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(LegacyDocWithRaypathText("3-5,1-2"), s));
+
+  // The legacy arm reaches the rewrite through FromLegacyRaypath rather than the summands loop.
+  // It is a separate call site, so it needs its own evidence — the v3 case above says nothing
+  // about it.
+  const FilterConfig& f = OnlyFilter(s);
+  ASSERT_EQ(f.param.size(), 1u);
+  EXPECT_EQ(f.param[0].text, std::string("3-5-1-2"));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 1);
+}
+
+TEST(DocumentRoundtripChain, LegacyCommaMigrationLeavesEntryExitFacelistCommaAlone) {
+  GuiState s;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("entry:1,2 & 3-5,1-2"), s));
+
+  // The red line between the two meanings of ',' in one row: the EE facelist keeps its OR comma,
+  // the raypath token loses its connector comma. A migration that walked characters instead of
+  // tokens would turn "entry face 1 or 2" into "entry:1-2" and quietly change what the filter
+  // matches.
+  const FilterConfig& f = OnlyFilter(s);
+  ASSERT_EQ(f.param.size(), 1u);
+  EXPECT_EQ(f.param[0].text, std::string("entry:1,2 & 3-5-1-2"));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 1);
+}
+
+TEST(DocumentRoundtripChain, NoCommaDocumentIsNotTouchedByMigration) {
+  GuiState s;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3-5 & entry:1,2"), s));
+
+  // A document with no retired connector must come back byte for byte and must not be counted:
+  // the load is a no-op here, not a reformat that happens to agree.
+  const FilterConfig& f = OnlyFilter(s);
+  ASSERT_EQ(f.param.size(), 1u);
+  EXPECT_EQ(f.param[0].text, std::string("3-5 & entry:1,2"));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 0);
+}
+
+TEST(DocumentRoundtripChain, MigratedDocumentSurvivesTheNextRoundTrip) {
+  // The end of the story the migration promises: open an old document, save it, and the ',' is
+  // gone from the file for good. Without this, a load that rewrote only the in-memory state would
+  // still pass every case above and write the old spelling back out.
+  GuiState loaded;
+  ASSERT_TRUE(DeserializeGuiStateJson(V3DocWithSummand("3-5,1-2"), loaded));
+
+  const std::string resaved = SerializeGuiStateJson(loaded);
+  EXPECT_EQ(resaved.find("3-5,1-2"), std::string::npos) << "re-saved document still carries the retired ','";
+
+  GuiState reloaded;
+  TakeRaypathCommaMigratedCount();
+  ASSERT_TRUE(DeserializeGuiStateJson(resaved, reloaded));
+  ASSERT_EQ(OnlyFilter(reloaded).param.size(), 1u);
+  EXPECT_EQ(OnlyFilter(reloaded).param[0].text, std::string("3-5-1-2"));
+  EXPECT_EQ(TakeRaypathCommaMigratedCount(), 0) << "a re-saved document should need no second migration";
+}
+
+TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
+  // The version the writer stamps is what dates a file's ',' for anyone who later has to decide
+  // what a ',' in it meant. Asserted as a literal, not as a read of the writer's own constant.
+  const nlohmann::json root = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+  ASSERT_TRUE(root.contains("schema_version"));
+  EXPECT_EQ(root["schema_version"].get<int>(), 4);
+}
+
 }  // namespace
 }  // namespace lumice::gui
