@@ -1,6 +1,8 @@
 #ifndef SRC_UTIL_COLOR_SPACE_H_
 #define SRC_UTIL_COLOR_SPACE_H_
 
+#include <cmath>
+
 namespace lumice {
 
 // ---- Low-level primitives (three independent operations) ----
@@ -19,7 +21,19 @@ float LinearToSrgb(float linear);
 // thresholds are the same point on the curve expressed in the two spaces (0.0031308 * 12.92 =
 // 0.04045). Used at the JSON boundary: the "background" key is authored in sRGB (what a color
 // picker shows), while the struct field it lands in is linear (what additive blending needs).
-float SrgbToLinear(float srgb);
+//
+// inline (not declared-here/defined-in-.cpp like its neighbours): src/gui/ needs this and its
+// GUI/gui_test targets link `lumice`/`lumice_gui_obj`, not `lumice_obj` — a Release shared build
+// hides lumice_obj's non-C-API symbols (-fvisibility=hidden), so an out-of-line definition here
+// fails to link from src/gui/ in that flavor even though the #include itself is within the
+// gui-api-boundary policy (util/ is not core/ or config/). inline compiles this body directly into
+// every translation unit that includes the header, so no cross-library symbol is needed.
+inline float SrgbToLinear(float srgb) {
+  if (srgb < 0.04045f) {
+    return srgb / 12.92f;
+  }
+  return std::pow((srgb + 0.055f) / 1.055f, 2.4f);
+}
 
 // sRGB gamma batch in-place.
 void LinearToSrgbBatch(float* rgb, int channel_count);
@@ -51,7 +65,12 @@ void XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, fl
 // Inverse sRGB gamma over a 3-channel colour: the fixed-size sibling of the scalar SrgbToLinear,
 // shaped like XyzToLinearRgb above. Every caller that hands a picker colour to the additive
 // background path goes through this rather than hand-rolling the same three-iteration loop.
-void SrgbToLinearRgb(const float srgb[3], float linear[3]);
+// inline for the same link-boundary reason as SrgbToLinear above.
+inline void SrgbToLinearRgb(const float srgb[3], float linear[3]) {
+  for (int j = 0; j < 3; j++) {
+    linear[j] = SrgbToLinear(srgb[j]);
+  }
+}
 
 }  // namespace lumice
 

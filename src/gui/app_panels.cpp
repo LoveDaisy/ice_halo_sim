@@ -27,6 +27,7 @@
 #include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
+#include "util/color_space.hpp"
 #include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
 
 // =============================================================================
@@ -1240,7 +1241,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // handed to the shader as linear RGB, because the shader adds it to the halo's radiance
     // before the transfer curve. This one assignment also feeds all three PNG export entry
     // points: BuildExportParams copies this struct and overrides only the exposure fields.
-    LUMICE_SrgbToLinear(rc.background, pp.background_color_linear);
+    lumice::SrgbToLinearRgb(rc.background, pp.background_color_linear);
 
     pp.bg.enabled = g_state.bg_show && g_preview.HasBackground();
     pp.bg.alpha = g_state.bg_alpha;

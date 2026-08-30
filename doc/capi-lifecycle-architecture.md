@@ -279,7 +279,6 @@ These functions have no shared state and are always thread-safe:
 | `LUMICE_MaxFov(type)` | none | Pure function |
 | `LUMICE_XyzToSrgbUint8(xyz_in, out, count, scale)` | `xyz_in != NULL`, `out != NULL` | Batch conversion |
 | `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, count, scale, bg_linear)` | all pointers non-null | Batch conversion with an additive linear-RGB background |
-| `LUMICE_SrgbToLinear(srgb, linear)` | all pointers non-null | Pure function (in-place allowed) |
 
 ### §3.6 Zero-output completion contract (all-black simulation)
 
@@ -347,7 +346,6 @@ false and no snapshot is ever prepared). It still does **not** call
 | `LUMICE_MaxFov` | Yes | — | Pure function |
 | `LUMICE_XyzToSrgbUint8` | Yes | — | Pure function |
 | `LUMICE_XyzToSrgbUint8WithBackground` | Yes | — | Pure function |
-| `LUMICE_SrgbToLinear` | Yes | — | Pure function |
 
 
 **Mutex types**:

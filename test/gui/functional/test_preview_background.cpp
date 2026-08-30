@@ -36,6 +36,7 @@
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "test_gui_shared.hpp"
+#include "util/color_space.hpp"
 
 namespace {
 
@@ -122,7 +123,7 @@ void RunRenderRequest() {
   }
 
   float sky_linear[3];
-  LUMICE_SrgbToLinear(g_req.sky_srgb, sky_linear);
+  lumice::SrgbToLinearRgb(g_req.sky_srgb, sky_linear);
 
   if (g_req.bake_on_cpu) {
     std::vector<unsigned char> baked(static_cast<std::size_t>(n) * 3);
@@ -606,7 +607,7 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
         ctx->Yield(3);
 
         float expected[3];
-        LUMICE_SrgbToLinear(picked, expected);
+        lumice::SrgbToLinearRgb(picked, expected);
         for (int j = 0; j < 3; ++j) {
           const float actual = gui::g_preview_vp.params.background_color_linear[j];
           if (std::fabs(actual - expected[j]) > 1e-6f) {

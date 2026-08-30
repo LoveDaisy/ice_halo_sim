@@ -3291,11 +3291,3 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsign
   ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale, background_linear);
   return LUMICE_OK;
 }
-
-LUMICE_ErrorCode LUMICE_SrgbToLinear(const float* srgb, float* linear) {
-  if (!srgb || !linear) {
-    return LUMICE_ERR_NULL_ARG;
-  }
-  ns::SrgbToLinearRgb(srgb, linear);
-  return LUMICE_OK;
-}

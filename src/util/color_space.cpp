@@ -51,13 +51,6 @@ float LinearToSrgb(float linear) {
   return 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
 }
 
-float SrgbToLinear(float srgb) {
-  if (srgb < 0.04045f) {
-    return srgb / 12.92f;
-  }
-  return std::pow((srgb + 0.055f) / 1.055f, 2.4f);
-}
-
 void LinearToSrgbBatch(float* rgb, int channel_count) {
   for (int i = 0; i < channel_count; i++) {
     rgb[i] = LinearToSrgb(rgb[i]);
@@ -116,12 +109,6 @@ void XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, fl
       rgb[j] = std::clamp(rgb[j] + background[j], 0.0f, 1.0f);
       out[i * 3 + j] = static_cast<unsigned char>(LinearToSrgb(rgb[j]) * 255.0f);
     }
-  }
-}
-
-void SrgbToLinearRgb(const float srgb[3], float linear[3]) {
-  for (int j = 0; j < 3; j++) {
-    linear[j] = SrgbToLinear(srgb[j]);
   }
 }
 

@@ -1322,19 +1322,13 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 //                    gamma-encodes the color a second time (0.2 would render as byte 123, not 51).
 //                    Linear because that is the space the addition means something in — the same
 //                    convention LUMICE_RenderParam::background uses, and the same reason both JSON
-//                    parsers convert at their boundary. Use LUMICE_SrgbToLinear to get here from a
-//                    picker value.
+//                    parsers convert at their boundary. A C++ caller inside this codebase gets here
+//                    from a picker value via lumice::SrgbToLinearRgb (src/util/color_space.hpp, an
+//                    inline header function — no separate C API for this conversion); an external
+//                    C API consumer applies the standard sRGB EOTF inverse itself.
 // Returns LUMICE_ERR_NULL_ARG if any pointer argument is NULL; LUMICE_OK otherwise.
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
                                                      float intensity_scale, const float* background_linear);
-
-// Inverse sRGB transfer curve over one RGB triple: the color a picker shows -> the space additive
-// blending happens in. Exposed because every consumer that hands this library a color has the same
-// conversion to do at its own boundary (LUMICE_RenderParam::background, the background argument
-// above, a shader uniform), and a hand-rolled copy of the curve is a copy that can drift from the
-// forward curve this library applies on the way out.
-// Returns LUMICE_ERR_NULL_ARG if srgb or linear is NULL; LUMICE_OK otherwise. In-place is allowed.
-LUMICE_ErrorCode LUMICE_SrgbToLinear(const float* srgb, float* linear);
 
 // =============== Preferred Trace Backend ===============
 // Stable backend identifiers. Future backends (e.g. CUDA) append new positive

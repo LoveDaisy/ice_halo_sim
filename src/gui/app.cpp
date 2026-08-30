@@ -25,6 +25,7 @@
 #include "gui/gui_state_reconcile.hpp"
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
+#include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 #include "util/result_frame.hpp"
 
@@ -334,7 +335,7 @@ static void RefreshCpuTextureForSave() {
   // orientation, which this buffer has none of — every legal world direction lands inside one of
   // its two discs, and the packing's corner padding is never sampled back out.
   float background_linear[3];
-  LUMICE_SrgbToLinear(g_state.renderer.background, background_linear);
+  lumice::SrgbToLinearRgb(g_state.renderer.background, background_linear);
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
   LUMICE_XyzToSrgbUint8WithBackground(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale,
                                       background_linear);

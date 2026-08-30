@@ -130,6 +130,8 @@ TEST(ExportPresets, ApplyingAPresetTwiceIsTheSameAsApplyingItOnce) {
     EXPECT_EQ(twice.overlay.show_horizon, once.overlay.show_horizon) << preset.name;
     EXPECT_EQ(twice.bg.enabled, once.bg.enabled) << preset.name;
     EXPECT_FLOAT_EQ(twice.background_color_linear[0], once.background_color_linear[0]) << preset.name;
+    EXPECT_FLOAT_EQ(twice.background_color_linear[1], once.background_color_linear[1]) << preset.name;
+    EXPECT_FLOAT_EQ(twice.background_color_linear[2], once.background_color_linear[2]) << preset.name;
   }
 }
 
