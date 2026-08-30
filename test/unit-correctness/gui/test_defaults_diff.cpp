@@ -689,6 +689,9 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "overlay_zenith_nadir_color", true, Kind::kColor },
     { "overlay_zenith_nadir_alpha", true, Kind::kFloatSlider },
     { "overlay_zenith_nadir_radius_px", true, Kind::kFloatSlider },
+    { "overlay_lens_border_line", true, Kind::kCheckbox },
+    { "overlay_lens_border_color", true, Kind::kColor },
+    { "overlay_lens_border_alpha", true, Kind::kFloatSlider },
     { "right_panel_collapsed", true, Kind::kCheckbox },
     { "modal_layout_vertical", true, Kind::kCheckbox },
   };

@@ -250,6 +250,13 @@ const std::vector<FieldProbe>& FieldProbes() {
         s.zenith_nadir_color[2] = 0.6f;
       },
       [](const GuiState& s) { return JoinFloats(s.zenith_nadir_color, 3); } },
+    { "renderer.lens_border_color",
+      [](GuiState& s) {
+        s.lens_border_color[0] = 0.9f;
+        s.lens_border_color[1] = 0.1f;
+        s.lens_border_color[2] = 0.5f;
+      },
+      [](const GuiState& s) { return JoinFloats(s.lens_border_color, 3); } },
     { "overlay.sun_circle_angles",
       // NOT {22, 46}: that is already the default, so a serializer that dropped the key entirely
       // would still round-trip it. The EveryProbeWritesSomethingOtherThanTheDefault case below

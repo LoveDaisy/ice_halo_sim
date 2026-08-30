@@ -2565,6 +2565,10 @@ std::string SerializeGuiStateJson(const GuiState& state) {
                                          state.zenith_nadir_color[2] };
   root["overlay_zenith_nadir_alpha"] = state.zenith_nadir_alpha;
   root["overlay_zenith_nadir_radius_px"] = state.zenith_nadir_radius_px;
+  root["overlay_lens_border_line"] = state.show_lens_border_line;
+  root["overlay_lens_border_color"] = { state.lens_border_color[0], state.lens_border_color[1],
+                                        state.lens_border_color[2] };
+  root["overlay_lens_border_alpha"] = state.lens_border_alpha;
 
   // Panel state
   root["right_panel_collapsed"] = state.right_panel_collapsed;
@@ -2813,6 +2817,9 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   read_color3("overlay_zenith_nadir_color", state.zenith_nadir_color);
   state.zenith_nadir_alpha = root.value("overlay_zenith_nadir_alpha", GuiState{}.zenith_nadir_alpha);
   state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", GuiState{}.zenith_nadir_radius_px);
+  state.show_lens_border_line = root.value("overlay_lens_border_line", GuiState{}.show_lens_border_line);
+  read_color3("overlay_lens_border_color", state.lens_border_color);
+  state.lens_border_alpha = root.value("overlay_lens_border_alpha", GuiState{}.lens_border_alpha);
 
   // Panel state
   state.right_panel_collapsed = root.value("right_panel_collapsed", GuiState{}.right_panel_collapsed);

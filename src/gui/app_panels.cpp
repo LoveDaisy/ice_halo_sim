@@ -694,11 +694,11 @@ void RenderSunCirclesAnglePopup() {
 
 // The pixel radius behind the Zenith/Nadir row's fold. It is the one field only that row has, and
 // giving it a column of its own would have cost every other row an empty cell (and the name column
-// the width) to say something about one of the four — the fold is what buys "Angular Dist." its
+// the width) to say something about one of the five — the fold is what buys "Angular Dist." its
 // uncut name (doc/gui-visual-language.md §4.4).
 void RenderZenithNadirRadiusPopup() {
   const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-  // The same control the four alpha cells of this table use, one row above. It was a
+  // The same control the five alpha cells of this table use, one row above. It was a
   // [slider][input][label] triple, which is a second answer to "how is a bounded float edited
   // here?" given a cell's width away from the first one.
   //
@@ -714,7 +714,7 @@ void RenderZenithNadirRadiusPopup() {
                  static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
 }
 
-// What a row's fold holds, when it holds anything. Two of the four overlays have a field the others
+// What a row's fold holds, when it holds anything. Two of the five overlays have a field the others
 // do not, and they are not the same field.
 enum class OverlayFold {
   kNone,
@@ -746,7 +746,7 @@ struct OverlayRowSpec {
   OverlayFold fold;
 };
 
-// The Overlay group: the four auxiliary lines drawn over the preview, as one table.
+// The Overlay group: the five auxiliary lines drawn over the preview, as one table.
 //
 // It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
 // their checkboxes at an x computed from the width of the longest name — an arrangement in which
@@ -770,6 +770,12 @@ void RenderOverlaysTab() {
     { "Zenith/Nadir", "##zenith_nadir_color", g_state.zenith_nadir_color, "##zenith_nadir_line",
       &g_state.show_zenith_nadir_line, nullptr, nullptr, "##zenith_nadir_alpha", "overlay_zenith_nadir_alpha",
       &g_state.zenith_nadir_alpha, "###zenith_nadir_fold", OverlayFold::kZenithNadirRadius },
+    // The lens image circle. No text label (null label id, empty cell) and no fold: unlike the
+    // marker pair above it has no radius of its own to expose — the shader derives the circle from
+    // the lens type, the FOV and the viewport, so there is nothing here for a user to set.
+    { "Lens Border", "##lens_border_color", g_state.lens_border_color, "##lens_border_line",
+      &g_state.show_lens_border_line, nullptr, nullptr, "##lens_border_alpha", "overlay_lens_border_alpha",
+      &g_state.lens_border_alpha, nullptr, OverlayFold::kNone },
   };
 
   const float swatch_w = ImGui::GetFrameHeight();
@@ -842,7 +848,7 @@ void RenderOverlaysTab() {
     }
     ImGui::TableSetColumnIndex(5);
     // Unconditional, for both folds. Whether a row offers one is a property of the ROW — of whether
-    // it owns a field the others lack — and the fold cells of the four rows sit in one column,
+    // it owns a field the others lack — and the fold cells of the five rows sit in one column,
     // directly above one another. A cell left empty by anything else than "this row has no extra
     // field" says the wrong thing in that column, which is what a condition on the circles being
     // drawn used to say here: it read as the angle editor having gone missing, not as a considered
@@ -1268,6 +1274,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
               std::begin(pp.overlay.zenith_nadir_color));
     pp.overlay.zenith_nadir_alpha = g_state.zenith_nadir_alpha;
     pp.overlay.zenith_nadir_radius_px = g_state.zenith_nadir_radius_px;
+    pp.overlay.show_lens_border = g_state.show_lens_border_line;
+    std::copy(std::begin(g_state.lens_border_color), std::end(g_state.lens_border_color),
+              std::begin(pp.overlay.lens_border_color));
+    pp.overlay.lens_border_alpha = g_state.lens_border_alpha;
     constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
     constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
     auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);

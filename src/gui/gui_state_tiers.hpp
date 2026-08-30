@@ -105,6 +105,10 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "zenith_nadir_color",         FieldTier::kView,       false },
     { "zenith_nadir_alpha",         FieldTier::kView,       false },
     { "zenith_nadir_radius_px",     FieldTier::kView,       false },
+    // Lens border
+    { "show_lens_border_line",      FieldTier::kView,       false },
+    { "lens_border_color",          FieldTier::kView,       false },
+    { "lens_border_alpha",          FieldTier::kView,       false },
     // Panel layout
     { "left_panel_collapsed",       FieldTier::kView,       false },
     { "right_panel_collapsed",      FieldTier::kView,       false },

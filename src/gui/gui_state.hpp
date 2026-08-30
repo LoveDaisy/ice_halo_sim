@@ -1013,11 +1013,14 @@ struct GuiState {
   // shader uniform path (see app_panels.cpp pp.overlay assignment), the label flags
   // drive the CPU label sampling path (see BuildOverlayLabelInput in app.cpp).
   //
-  // Tech-debt note (task-overlay-line-label-toggle, 2026-04-29): currently 12 flat
-  // overlay-related fields (3×color + 3×alpha + 6×bool). When a fourth overlay class
-  // is added (e.g. face number overlay merged into this panel), evaluate collapsing
-  // to a substruct (per-overlay { color, alpha, line, label }) to avoid further
-  // field-name proliferation.
+  // Tech-debt note (2026-04-29): now 19 flat
+  // overlay-related fields (5×color + 5×alpha + 8×bool + zenith_nadir_radius_px).
+  // The original note said "when a fourth overlay class is added, evaluate collapsing
+  // to a substruct (per-overlay { color, alpha, line, label })". Zenith/Nadir was the
+  // fourth and Lens Border is the fifth, so that trigger has now been crossed twice
+  // without the evaluation being done. It is deliberately still not done here (a
+  // different root cause than adding an overlay class), but the debt is now tracked
+  // in the backlog rather than resting on this counter alone.
   bool show_horizon_line = false;
   bool show_horizon_label = false;
   bool show_grid_line = false;
@@ -1039,6 +1042,15 @@ struct GuiState {
   float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
   float zenith_nadir_alpha = 0.6f;
   float zenith_nadir_radius_px = 8.0f;
+
+  // Lens border. Outlines the projection's own
+  // valid image circle, which is otherwise pure black and indistinguishable from the
+  // background. Only the fisheye family has one — see LensHasBorder() in
+  // gui_constants.hpp for the authoritative set. There is no radius field: the shader
+  // derives the circle from lens type / FOV / resolution.
+  bool show_lens_border_line = false;
+  float lens_border_color[3] = { 0.3f, 0.7f, 1.0f };
+  float lens_border_alpha = 0.6f;
 
   // File management
   std::filesystem::path current_file_path;

@@ -71,6 +71,14 @@ uniform float u_zenith_nadir_radius_px;
 uniform vec3 u_zenith_nadir_color;
 uniform float u_zenith_nadir_alpha;
 
+// Lens border uniforms: the outline of the projection's own valid image circle
+// (where the inverse function's domain guard flips w from 1 to 0). Purely a
+// function of u_lens_type / u_fov / u_resolution, so the shader derives the
+// radius itself rather than taking a CPU-precomputed screen position.
+uniform int u_show_lens_border;
+uniform vec3 u_lens_border_color;
+uniform float u_lens_border_alpha;
+
 const float PI = 3.14159265358979323846;
 
 // Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
@@ -374,6 +382,65 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
   return color;
 }
 
+// Lens border: outline the projection's own valid image region — the locus where
+// the active inverse function's domain guard flips w from 1 to 0. Only the fisheye
+// family has one: the single-lens asin guards (equal-area / equidistant /
+// orthographic) and dual fisheye's hard circle clip. linear / single-lens
+// stereographic / rectangular / globe have no such circle and are skipped.
+// Keep in lockstep with fisheyeInverse / dualFisheyeInverse above; the CPU-side
+// classifier is LensHasBorder() in gui_constants.hpp.
+//
+// pos: center-origin, y-up pixel position (the raw `pos` of main(), NOT pos_ovl).
+// The dual-fisheye y flip is irrelevant here because both border circles are
+// centered on y = 0 and are therefore symmetric under it.
+vec3 overlayLensBorder(vec3 color, vec2 pos, float half_fov) {
+  if (u_show_lens_border == 0) return color;
+
+  const float kBorderHalfWidthPx = 1.5;
+  const float kMinSin = 1e-4;  // below this the boundary radius diverges: no border exists
+
+  if ((u_lens_type >= 4 && u_lens_type <= 6) || u_lens_type == 9) {
+    // Dual fisheye: two hard-clipped circles, identical for all four variants
+    // (the clip lives in dualFisheyeInverse before the per-type theta branch).
+    float short_res = min(u_resolution.x * 0.5, u_resolution.y);
+    float circle_radius = short_res * 0.5;
+    float dl = abs(length(pos - vec2(-circle_radius, 0.0)) - circle_radius);
+    float tl = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, dl);
+    color = mix(color, u_lens_border_color, tl * u_lens_border_alpha);
+    float dr = abs(length(pos - vec2(circle_radius, 0.0)) - circle_radius);
+    float tr = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, dr);
+    color = mix(color, u_lens_border_color, tr * u_lens_border_alpha);
+    return color;
+  }
+
+  // Single-lens fisheye family. r_boundary is in units of img_radius, read straight
+  // off the corresponding guard in fisheyeInverse:
+  //   equal area   (type 0): s = r * sin(half_fov/2) > 1  ->  r = 1 / sin(half_fov/2)
+  //   equidistant  (type 1): theta = r * half_fov >= PI   ->  r = PI / half_fov
+  //   orthographic (type 3): s = r * sin(half_fov) > 1    ->  r = 1 / sin(half_fov)
+  float r_boundary = 0.0;
+  if (u_lens_type == 1) {
+    float sn = sin(half_fov * 0.5);
+    if (sn < kMinSin) return color;
+    r_boundary = 1.0 / sn;
+  } else if (u_lens_type == 2) {
+    if (half_fov < kMinSin) return color;
+    r_boundary = PI / half_fov;
+  } else if (u_lens_type == 8) {
+    float sn = sin(half_fov);
+    if (sn < kMinSin) return color;
+    r_boundary = 1.0 / sn;
+  } else {
+    return color;  // 0 linear, 3 stereographic, 7 rectangular, 10 globe: no border
+  }
+
+  float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;
+  float radius_px = img_radius * r_boundary;
+  float d = abs(length(pos) - radius_px);
+  float t = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, d);
+  return mix(color, u_lens_border_color, t * u_lens_border_alpha);
+}
+
 out vec4 frag_color;
 
 void main() {
@@ -458,6 +525,13 @@ void main() {
   if (result.w >= 0.5 && pixel_visible) {
     final_color = overlayAuxLines(world_dir, final_color, pos_ovl);
   }
+
+  // Lens border — deliberately OUTSIDE the `result.w >= 0.5 && pixel_visible` gate.
+  // It draws the lens image circle itself, an optical property of the projection,
+  // so it must stay whole regardless of which half-sky the user chose to display
+  // (u_visible / u_front) and regardless of whether the pixel maps to a direction
+  // at all. That is exactly the black region users cannot tell from the background.
+  final_color = overlayLensBorder(final_color, pos, half_fov);
 
   frag_color = vec4(final_color, 1.0);
 }
@@ -1279,6 +1353,11 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform3f(glGetUniformLocation(shader_program_, "u_zenith_nadir_color"), ov.zenith_nadir_color[0],
               ov.zenith_nadir_color[1], ov.zenith_nadir_color[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_alpha"), ov.zenith_nadir_alpha);
+
+  glUniform1i(glGetUniformLocation(shader_program_, "u_show_lens_border"), ov.show_lens_border ? 1 : 0);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_lens_border_color"), ov.lens_border_color[0],
+              ov.lens_border_color[1], ov.lens_border_color[2]);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_lens_border_alpha"), ov.lens_border_alpha);
 
   // Draw fullscreen quad
   glBindVertexArray(vao_);

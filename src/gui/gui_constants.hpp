@@ -193,6 +193,45 @@ inline constexpr bool LensIsFullSky(int lens_type) {
   return false;
 }
 
+// Lenses that have a lens-border circle: the projection's own valid image region
+// is bounded, so the area outside it renders pure black and is indistinguishable
+// from the background unless outlined. SINGLE SOURCE OF TRUTH for the "has border"
+// set; the shader-side implementation is overlayLensBorder() in preview_renderer.cpp
+// and must stay in lockstep with this array.
+//
+// The three single-lens members are exactly the fisheyeInverse branches carrying a
+// domain guard (equal-area / equidistant asin+theta guards, orthographic asin guard).
+// Single-lens stereographic is excluded on the owner's call: theta never reaches 180
+// so it always fills the display and leaves no black region.
+//
+// All four dual-fisheye variants are included. Their black region does not come from
+// the projection formula at all but from the hard circle clip in dualFisheyeInverse
+// (`if (!in_left && !in_right) return 0`), which sits ahead of the per-type theta
+// branch and therefore applies to stereographic too. Note this differs from the
+// single-lens ruling above for a mechanical reason, not an inconsistent one.
+// linear / rectangular / globe have no bounded image circle in this sense.
+//
+// The static_assert below guards array size; ordering is enforced by
+// kLensTypePresentationOrder in gui_state.hpp.
+inline constexpr int kLensBorderLensTypes[] = {
+  kLensTypeFisheyeEqualArea,        kLensTypeFisheyeEquidist,     kLensTypeFisheyeOrthographic,
+  kLensTypeDualFisheyeEqualArea,    kLensTypeDualFisheyeEquidist, kLensTypeDualFisheyeStereographic,
+  kLensTypeDualFisheyeOrthographic,
+};
+inline constexpr int kLensBorderLensTypeCount = sizeof(kLensBorderLensTypes) / sizeof(*kLensBorderLensTypes);
+static_assert(kLensBorderLensTypeCount == 7,
+              "kLensBorderLensTypes count changed: update both the array and this "
+              "literal in lockstep with the policy change.");
+
+inline constexpr bool LensHasBorder(int lens_type) {
+  for (int v : kLensBorderLensTypes) {
+    if (v == lens_type) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Lenses whose default FOV is 180 degrees (full hemispheric fisheye family).
 // SINGLE SOURCE OF TRUTH for the "FOV=180" set; do NOT confuse with
 // kFullSkyLensTypes (which classifies skip-view-matrix shader paths). These

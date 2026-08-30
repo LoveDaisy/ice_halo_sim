@@ -41,7 +41,10 @@ namespace {
 // run-result readbacks polled off the server's stats, exactly like the stats_ray_seg_num /
 // stats_sim_ray_num pair beside them, so they are kDerivedRuntime and deliberately ineligible as
 // personal defaults — a measurement of the last run is not a preference a user can pre-set.
-constexpr std::size_t kExpectedGovernedFieldCount = 69;
+// 72 since the lens-border overlay added show_lens_border_line / lens_border_color /
+// lens_border_alpha, all kView: they are appearance preferences for the preview, the same shape
+// as the four overlay rows already registered beside them, so all three are eligible.
+constexpr std::size_t kExpectedGovernedFieldCount = 72;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -122,6 +125,7 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "aspect_preset", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "right_panel_collapsed", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_zenith_nadir_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "show_lens_border_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
     { "layers", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
