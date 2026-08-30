@@ -10,6 +10,7 @@
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
 #include "gui/color_window.hpp"
+#include "gui/composite_background_push.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/defaults_panel.hpp"
@@ -1231,6 +1232,35 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
         s_last_pushed_ev = composite_ev_push;
       }
       s_last_composite_active = composite_active;
+
+      // The background colour rides the same display-time channel, and needs it for the same
+      // reason: the composite image is baked server-side into sRGB bytes, so unlike the mono path
+      // there is no shader stage left where a linear background could still be added. Guard shape
+      // (value-changed OR off->on edge) and rationale are shared with the EV push above; see
+      // gui/composite_background_push.hpp.
+      //
+      // SrgbToLinearRgb is called a second time here rather than hoisting the existing
+      // `pp.background_color_linear` assignment (further down) above this block: that assignment is
+      // load-bearing for the preview shader and all three PNG export paths, and moving it to serve
+      // a push would put a verified ordering at risk to save one pure-function call on a value that
+      // cannot change within a frame.
+      static float s_last_pushed_bg[3] = { std::numeric_limits<float>::quiet_NaN(),
+                                           std::numeric_limits<float>::quiet_NaN(),
+                                           std::numeric_limits<float>::quiet_NaN() };
+      static bool s_last_bg_composite_active = false;
+      constexpr float kCompositeBgPushEpsilon = 1e-4f;
+      float bg_push_linear[3];
+      lumice::SrgbToLinearRgb(rc.background, bg_push_linear);
+      if (lumice::gui::ShouldPushCompositeBackground(composite_active, s_last_bg_composite_active, bg_push_linear,
+                                                     s_last_pushed_bg, kCompositeBgPushEpsilon)) {
+        LUMICE_SetCompositeBackground(g_server, bg_push_linear);
+        // Same poller wake as the EV push: a finite sim that already completed leaves the poller
+        // paused, and without this the re-baked composite would not be picked up until something
+        // else woke it. WakeForRefresh (not WakeForRestart) keeps valid=true across the edge.
+        g_server_poller.WakeForRefresh(g_server);
+        std::copy(std::begin(bg_push_linear), std::end(bg_push_linear), std::begin(s_last_pushed_bg));
+      }
+      s_last_bg_composite_active = composite_active;
     }
     float norm_intensity = g_state.snapshot_intensity;
     pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;

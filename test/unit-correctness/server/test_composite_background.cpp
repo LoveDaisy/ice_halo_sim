@@ -246,6 +246,130 @@ TEST_P(CompositeBackgroundModes, ZeroEnergyPixelsInsideTheDomainCarryExactlyTheP
   LUMICE_ReleaseResultFrame(frame);
 }
 
+// The reason this feature exists: toggling raypath colour must not change the background.
+//
+// One committed scene produces BOTH images in the SAME result frame — the mono one from the
+// committed config's background, the composite one from the pushed value — so the comparison needs
+// no assumption that two runs saw the same rays. The same colour goes down both channels (the
+// config carries it as sRGB, the setter as linear, which is the codebase's standing convention),
+// and the comparison is a direct byte diff over the pixels where the picture is background and
+// nothing else. Comparing directly, rather than checking each path against an expected value and
+// concluding they therefore agree, is what makes this sensitive to a disagreement neither
+// path-local check would predict — a different mask, a different clamp point, a different rounding
+// step on the way to uint8.
+TEST_F(CompositeBackground, MonoAndCompositeAgreeOnEveryBackgroundPixel) {
+  RunSim("dominant", "[0.20, 0.35, 0.85]");
+
+  float sky_linear[3];
+  lumice::SrgbToLinearRgb(kSkySrgb, sky_linear);
+  ASSERT_EQ(LUMICE_SetCompositeBackground(server_, sky_linear), LUMICE_OK);
+
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  LUMICE_RenderResult mono[2]{};
+  LUMICE_RenderResult comp[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  ASSERT_EQ(LUMICE_FrameGetRender(frame, mono, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame, comp, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
+  ASSERT_NE(mono[0].img_buffer, nullptr);
+  ASSERT_NE(comp[0].img_buffer, nullptr);
+  ASSERT_NE(xyz[0].xyz_buffer, nullptr);
+
+  // The background region: pixels no ray reached, so whatever they hold is background alone on
+  // both paths. Everywhere else the two images legitimately differ (one is spectral, the other is
+  // a colour class's hue) and comparing them would be meaningless.
+  size_t compared = 0;
+  size_t mismatched = 0;
+  for (int idx = 0; idx < kWidth * kHeight; ++idx) {
+    const float* v = xyz[0].xyz_buffer + static_cast<size_t>(idx) * 3;
+    if (v[0] != 0.0f || v[1] != 0.0f || v[2] != 0.0f) {
+      continue;
+    }
+    const uint8_t* m = mono[0].img_buffer + static_cast<size_t>(idx) * 3;
+    const uint8_t* c = comp[0].img_buffer + static_cast<size_t>(idx) * 3;
+    ++compared;
+    if (std::memcmp(m, c, 3) != 0) {
+      ++mismatched;
+      EXPECT_EQ(0, std::memcmp(m, c, 3)) << "background pixel " << idx << " differs: mono (" << static_cast<int>(m[0])
+                                         << "," << static_cast<int>(m[1]) << "," << static_cast<int>(m[2])
+                                         << ") vs composite (" << static_cast<int>(c[0]) << ","
+                                         << static_cast<int>(c[1]) << "," << static_cast<int>(c[2]) << ")";
+      if (mismatched >= 8) {
+        break;  // enough to diagnose; the count below reports the rest
+      }
+    }
+  }
+  ASSERT_GT(compared, 0u) << "no background pixel to compare — the case would be vacuous";
+  EXPECT_EQ(0u, mismatched) << mismatched << " of " << compared << " background pixels disagree";
+
+  // Power check: at least one compared pixel must be a painted background rather than black,
+  // otherwise "the two agree" would also hold on a build where neither path paints anything.
+  size_t painted = 0;
+  for (int idx = 0; idx < kWidth * kHeight; ++idx) {
+    const float* v = xyz[0].xyz_buffer + static_cast<size_t>(idx) * 3;
+    const uint8_t* c = comp[0].img_buffer + static_cast<size_t>(idx) * 3;
+    if (v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f && (c[0] != 0 || c[1] != 0 || c[2] != 0)) {
+      ++painted;
+    }
+  }
+  EXPECT_GT(painted, 0u) << "every compared pixel is black on both paths — the agreement is vacuous";
+
+  LUMICE_ReleaseResultFrame(frame);
+}
+
+// The display-time half of the contract, asserted rather than argued from the setter's shape: a
+// background change re-bakes the composite and touches nothing else. A setter that took the
+// re-simulation route would bump the epoch and refill the accumulator, so the two things to pin are
+// that the epoch is where it was and that the raw XYZ — the accumulated radiance itself — is
+// unchanged byte for byte, while the composite pixels DID move (without which the case would pass
+// on a setter that quietly did nothing at all).
+TEST_F(CompositeBackground, PushingABackgroundRebakesTheCompositeWithoutResimulating) {
+  RunSim("dominant", "[0, 0, 0]");
+
+  LUMICE_SimLifecycleResult before{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &before), LUMICE_OK);
+
+  LUMICE_ResultFrame* frame0 = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame0), LUMICE_OK);
+  LUMICE_RawXyzResult xyz0[2]{};
+  LUMICE_RenderResult comp0[2]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame0, xyz0, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame0, comp0, 1), LUMICE_OK);
+  ASSERT_NE(xyz0[0].xyz_buffer, nullptr);
+  ASSERT_NE(comp0[0].img_buffer, nullptr);
+  const size_t float_count = static_cast<size_t>(kWidth) * kHeight * 3;
+  const size_t byte_count = static_cast<size_t>(kWidth) * kHeight * 3;
+  std::vector<float> xyz_copy(xyz0[0].xyz_buffer, xyz0[0].xyz_buffer + float_count);
+  std::vector<uint8_t> comp_copy(comp0[0].img_buffer, comp0[0].img_buffer + byte_count);
+  LUMICE_ReleaseResultFrame(frame0);
+
+  LUMICE_ResultFrame* frame1 = nullptr;
+  LUMICE_RenderResult comp1{};
+  PushSkyAndAcquireComposite(&frame1, &comp1);
+  LUMICE_RawXyzResult xyz1[2]{};
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame1, xyz1, 1), LUMICE_OK);
+
+  LUMICE_SimLifecycleResult after{};
+  ASSERT_EQ(LUMICE_GetSimLifecycle(server_, &after), LUMICE_OK);
+  EXPECT_EQ(before.epoch, after.epoch) << "the background setter bumped the commit epoch — it re-committed the scene";
+  EXPECT_EQ(before.lifecycle, after.lifecycle) << "the background setter moved the simulation lifecycle";
+  EXPECT_EQ(0, std::memcmp(xyz1[0].xyz_buffer, xyz_copy.data(), float_count * sizeof(float)))
+      << "the accumulated radiance changed — the background setter re-ran the simulation";
+  EXPECT_NE(0, std::memcmp(comp1.img_buffer, comp_copy.data(), byte_count))
+      << "the composite is byte-identical after the push — the setter had no effect and the case proves nothing";
+
+  LUMICE_ReleaseResultFrame(frame1);
+}
+
+// Parameter validation on the new setter. The pointer argument is the one the exposure setter does
+// not have, so it is the one branch that cannot be inherited from that precedent.
+TEST_F(CompositeBackground, NullArgumentsAreRejected) {
+  const float rgb[3] = { 0.0f, 0.0f, 0.0f };
+  EXPECT_EQ(LUMICE_SetCompositeBackground(nullptr, rgb), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_SetCompositeBackground(server_, nullptr), LUMICE_ERR_NULL_ARG);
+}
+
 INSTANTIATE_TEST_SUITE_P(AllModes, CompositeBackgroundModes, ::testing::Values("dominant", "additive", "painter"),
                          [](const ::testing::TestParamInfo<const char*>& info) { return std::string(info.param); });
 
