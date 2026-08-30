@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on screen. The inverse sRGB transfer curve a caller needs to convert a picker colour into that
   `background_linear` argument (or into `LUMICE_RenderParam::background`) stays a C++-only inline
   function, `lumice::SrgbToLinearRgb` in `src/util/color_space.hpp` — no new public C API for it.
+- **`ev_mode`** -- a first-class choice between the two exposure anchors, reaching core
+  `RenderConfig`, the C API, `.lmc` documents and CLI JSON. `"relative"` (the DEFAULT) anchors
+  the image to its own P99, which is what the GUI preview has always displayed: the picture
+  keeps its look as `ray_num` grows, and correspondingly the config alone does not determine
+  output brightness. `"absolute"` anchors to the energy the light source EMITTED, so two renders
+  at the same EV are comparable -- the behavior the entry below introduced unconditionally.
+  A config with no `ev_mode` key, and one with a misspelled value, both render `relative`.
+  **This replaces that entry's default rather than adding to it**: the CLI was unconditionally
+  absolute for one release cycle, so an existing config re-rendered now switches to the P99
+  self-anchor unless it states `"ev_mode": "absolute"`. Which anchor an image was made with is
+  no longer inferable from the tool version; it is in the document.
+  On the composite (raypath-colour) path the same field selects between the participating-pixel
+  self-anchor and the mono path's absolute scale -- the very same scalar, shared rather than
+  re-derived, so mono and composite stay comparable at one EV.
+  **ABI**: `LUMICE_RenderParam` gains a trailing `int ev_mode` (`LUMICE_EV_MODE_RELATIVE` = 0,
+  `LUMICE_EV_MODE_ABSOLUTE` = 1) and `LUMICE_API_VERSION` moves 415 -> 416. The field is
+  APPENDED, so every existing field keeps its offset, but `sizeof` grows: a caller that was not
+  recompiled hands the API a shorter struct. Recompile against the new header. RELATIVE == 0
+  keeps the documented default reachable from a zero-initialized struct.
 - **`LUMICE_RawXyzResult.emitted_energy`** (C API): the total spectral energy the light
   source emitted into a snapshot -- the quantity the renderer now normalizes by. Raw total,
   unlike the neighbouring `snapshot_intensity`, which is a per-pixel figure; and a different
