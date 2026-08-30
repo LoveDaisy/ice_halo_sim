@@ -254,6 +254,34 @@ inline UserConfigSource ResolveUserConfigSource(UserConfigArgPresence presence, 
 
 inline constexpr const char* kUserDefaultsFileName = "user_defaults.json";
 
+// Provenance stamp for the override file: which generation of this program's key space wrote it.
+// Stamped by WriteUserDefaultsFile (the single write owner), so every writer gets it without
+// knowing it exists.
+//
+// It RECORDS, it does not gate and it does not migrate. Nothing in the load path branches on it:
+// a file from a newer build still has every one of its other keys applied, because an overlay is
+// a bag of independent hints that each already fall back to the factory value when absent, so
+// rejecting the bag over one key from the future is strictly worse than today's "ignore the keys
+// you don't know". (That is the opposite of the `.lmc` policy, where a document read only in part
+// must not be displayed as if it were whole.) The one thing a stamp mismatch produces is a notice
+// through NoteUserDefaultsDowngrade.
+//
+// Its point is future-facing: a key whose NAME and VALUE stay the same while its MEANING moves is
+// invisible to the key-existence/value-shape probing every migration in this codebase actually
+// uses. `presets.axis.*` stores a bare zenith-std whose meaning depends on ClassifyAxisPreset's
+// threshold constants — move those and a stored value silently maps to a different preset. The
+// discriminator has to be in the stored files BEFORE that change, which is why it is written now
+// while nothing reads it.
+//
+// ⚠️ Coupling with kGuiStateSchemaVersion (file_io.hpp) — the `.lmc`/GuiState payload version.
+// TWO INDEPENDENT COUNTERS, deliberately NOT aligned; do not assume they move together, and do
+// not renumber one to match the other. They answer different questions over overlapping but
+// unequal key spaces (`presets.*` is overlay-only; `layers` is `.lmc`-only and is excluded from
+// the overlay wholesale). A semantic change to a field BOTH can carry must be evaluated against
+// both counters.
+inline constexpr const char* kUserDefaultsOverlaySchemaVersionKey = "defaults_schema_version";
+inline constexpr int kUserDefaultsOverlaySchemaVersion = 1;
+
 // Pure OS config-directory computation — no environment reads, no filesystem IO, so all three
 // are testable on any host regardless of which platform it actually is. An absent OR EMPTY
 // input string counts as "unset" (the XDG spec says so explicitly, and an empty %APPDATA% /
@@ -448,6 +476,29 @@ void ResetUserAxisPresetOverrides();
 // the caller's business (the defaults panel decides which keys the user adopted); this only
 // owns "given a document, put it on disk". Returns false + GUI_LOG_WARNING on failure.
 bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::json& doc);
+
+// Layer a sparse override document over the factory document and hand back the merged JSON, one
+// step short of deserializing it. Pure: no IO, no globals.
+//
+// ⛔ Intended callers: ApplyUserDefaultsOverlay's own body, and gui_unit_test. Production code must
+// NOT call this to assemble an overlay of its own — ApplyUserDefaultsOverlay orchestrates a fixed
+// sequence around it (classify the stamp, then the effectively-empty early return, THEN merge),
+// and reaching straight for the merge step skips the first two.
+//
+// It exists as a separate, header-visible function only because the invariant below is otherwise
+// untestable. DeserializeGuiStateJson does not read `schema_version` at all, so a polluted value
+// in the merged document produces NO observable difference in the resulting GuiState — a black-box
+// test through ApplyUserDefaultsOverlay stays green with the protection deleted. Testing it
+// requires looking at the merged document itself, before it is consumed.
+//
+// The invariant: the `schema_version` in the returned document is ALWAYS this build's
+// kGuiStateSchemaVersion, whatever the disk file said. A hand-edited overlay may carry a root
+// `schema_version` of its own (nothing stops a user adding one; the diff engine merely never
+// writes it), and merge_patch would then overwrite the factory value with it — or, for a JSON
+// `null`, delete the key outright. Harmless today because nothing downstream reads it; it is
+// precisely the thing that starts biting on the day something does, which is the day a version
+// number exists to serve.
+nlohmann::json BuildMergedOverlayDocument(const nlohmann::json& doc);
 
 // Number of override-file degradations since the last call, then resets — same shape as
 // TakeShapeDistDowngradeCount(), so the load-time notice can be surfaced through the same

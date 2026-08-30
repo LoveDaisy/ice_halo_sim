@@ -2579,7 +2579,10 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   // load is rewritten to '-' (see MigrateLegacyRaypathCommaConnector). Loader is tolerant of
   // older forms (v=1/v=2/v=3 all still migrate correctly), so this is a soft signal, not a
   // load gate — the binary kLmcVersion header is the actual gate (see §2.7).
-  root["schema_version"] = 4;
+  //
+  // The constant carries the coupling note with the overlay's own independent counter; read it
+  // (file_io.hpp) before bumping this.
+  root["schema_version"] = kGuiStateSchemaVersion;
 
   return root.dump(2);
 }
