@@ -10,6 +10,32 @@ namespace lumice::gui {
 // Slider scale modes for SliderWithInput
 enum class SliderScale { kLinear, kSqrt, kLog, kLogLinear };
 
+// ---- Trailing-label column ----
+
+// The one place this repo decides how wide the gap between a row's last control and its
+// row-trailing label is. Every consumer of that gap — the [slider][input] Label rows, the entry
+// card's button rows, the combo rows, and the wedge-angle editor's mirror of the same layout —
+// takes its value from here, so the gap is a single edit rather than a set of copies that happen
+// to agree today.
+//
+// It forwards ImGui's ItemInnerSpacing.x rather than introducing a constant of its own, and that
+// is deliberate: ImGui's own Combo hardcodes ItemInnerSpacing.x between the frame and the label
+// inside BeginCombo, where no caller can reach it. A combo row and a row laid out here can only
+// put their labels on the same vertical line if this side takes that value; a private constant
+// would just be a second source that has to be kept equal to it by hand.
+float LabelColumnGapX();
+
+// PushItemWidth for a control that is followed by nothing but the row-trailing label: takes the
+// full content width minus the label column and the gap above.
+//
+// This exists as a function rather than an expression repeated at each call site because it is
+// the one shape where the whole expression, not just the gap, is identical everywhere it appears
+// (the Spectrum combo, a no-op push around a Checkbox that reads no item width, and the Lens Type
+// / Resolution combos). The [slider][input] Label rows compute a width from the same gap but also
+// subtract the input column and the slider-to-input spacing, so they take LabelColumnGapX()
+// directly and keep their own formula.
+void PushLabelColumnItemWidth();
+
 // One control per value: a single DragFloat where a [slider][input] pair would otherwise sit.
 // Ctrl+click (or, with io.ConfigDragClickToInputText on, a plain click-release) types an exact
 // value, so the input half is not lost, it is folded in. The item id is "##<label>", with no

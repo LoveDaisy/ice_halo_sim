@@ -279,6 +279,15 @@ namespace {
 }  // namespace
 
 
+// Sole owner of the control-to-trailing-label gap; rationale in panels.hpp.
+float LabelColumnGapX() {
+  return ImGui::GetStyle().ItemInnerSpacing.x;
+}
+
+void PushLabelColumnItemWidth() {
+  ImGui::PushItemWidth(-(kLabelColWidth + LabelColumnGapX()));
+}
+
 // Compute slider width and prepare IDs for the [slider] [input] Label layout.
 // Writes slider_id and input_id buffers, returns the computed slider width.
 // When `reserve_label_col` is false the trailing text label is omitted (table-cell
@@ -286,8 +295,8 @@ namespace {
 // so the [slider][input] pair fills the whole cell (GetContentRegionAvail() ==
 // column width inside a BeginTable cell).
 static float PrepareSliderLayout(const char* label, char* display_label_out, size_t display_buf_size, char* slider_id,
-                                 size_t slider_id_size, char* input_id, size_t input_id_size,
-                                 bool reserve_label_col = true) {
+                                 size_t slider_id_size, char* input_id, size_t input_id_size, char* label_id,
+                                 size_t label_id_size, bool reserve_label_col = true) {
   // Strip ImGui ID suffix (e.g. "Azimuth##view" → display "Azimuth")
   const char* hash_pos = strstr(label, "##");
   if (hash_pos) {
@@ -302,22 +311,66 @@ static float PrepareSliderLayout(const char* label, char* display_label_out, siz
 
   snprintf(slider_id, slider_id_size, "##%s_slider", label);
   snprintf(input_id, input_id_size, "##%s_input", label);
+  snprintf(label_id, label_id_size, "##%s_label", label);
 
   float spacing = ImGui::GetStyle().ItemSpacing.x;
+  float label_gap = LabelColumnGapX();
   float avail_w = ImGui::GetContentRegionAvail().x;
-  // With the trailing label: subtract kLabelColWidth + 2 SameLine spacings
-  // (slider→input, input→label). Without it: only the slider→input spacing.
-  float slider_w =
-      reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing * 2) : (avail_w - kInputWidth - spacing);
+  // With the trailing label: subtract kLabelColWidth + the slider→input spacing + the
+  // input→label gap. Without it: only the slider→input spacing.
+  //
+  // The two gaps are different constants on purpose. The control→label gap comes from
+  // LabelColumnGapX() (see panels.hpp for why that value and not ItemSpacing.x). It
+  // must stay paired with FinishSliderLayout's SameLine below: the label's x is
+  // (right edge − kLabelColWidth) whatever value the pair takes — the term cancels — but the
+  // CONTROL's right edge is this value, so a mismatched pair moves the controls out of their
+  // column while leaving the labels looking correct.
+  float slider_w = reserve_label_col ? (avail_w - kInputWidth - kLabelColWidth - spacing - label_gap) :
+                                       (avail_w - kInputWidth - spacing);
   if (slider_w < 40.0f)
     slider_w = 40.0f;
   return slider_w;
 }
 
-// Render the label text after slider + input.
-static void FinishSliderLayout(const char* display_label) {
-  ImGui::SameLine();
+// Draw a row-trailing label that the GUI test engine can locate, without changing a single pixel.
+//
+// The three-column rows draw their trailing label with TextUnformatted, which submits its item
+// under id 0 — so a test cannot ask where it is. That position is exactly the quantity the
+// label-column alignment invariant is about, and deriving it from the preceding widget's
+// rectangle plus a spacing constant would compare the layout code against itself. So an
+// InvisibleButton of the label's own size is submitted at the label's own position first: it
+// draws nothing, and the IMGUI_TEST_ENGINE_ITEM_INFO in its body is what makes the rectangle
+// readable. Its horizontal extent is the text's, exactly — same cursor x, same CalcTextSize —
+// which is the axis the invariant is stated on; vertically it sits on the line box rather than on
+// the glyph box, because the text's baseline offset is only applied inside TextEx.
+//
+// Order matters and is not interchangeable. ImGui derives a line's height from the LAST item
+// submitted on it (ItemSize reads DC.CurrLineSize, which the previous ItemSize zeroed), so a
+// probe submitted after the text ends the row on the probe's text-height box instead of the
+// row's frame-height box — one pixel per row, accumulating down the panel into a visible shift.
+// Submitting the probe first and then handing the line back (SameLine restores CurrLineSize and
+// the baseline offset from the probe's PrevLine values; SetCursorScreenPos puts x back) leaves
+// TextUnformatted as the item that closes the line, exactly as before.
+//
+// Why it does not perturb navigation: without ImGuiButtonFlags_EnableNav, ImGui 1.91's
+// InvisibleButton adds its item with ImGuiItemFlags_NoNav (imgui_widgets.cpp), so it takes no Tab
+// stop and no nav focus — the keyboard traversal order of every panel built from these rows is
+// unchanged, and the nav cursor it would otherwise render can never be drawn.
+static void TextWithLabelProbe(const char* display_label, const char* probe_id) {
+  const ImVec2 size = ImGui::CalcTextSize(display_label);
+  if (size.x > 0.0f && size.y > 0.0f) {  // InvisibleButton asserts on a zero extent
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(probe_id, size);
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::SetCursorScreenPos(pos);
+  }
   ImGui::TextUnformatted(display_label);
+}
+
+// Render the label text after slider + input.
+static void FinishSliderLayout(const char* display_label, const char* label_id) {
+  ImGui::SameLine(0.0f, LabelColumnGapX());  // paired with PrepareSliderLayout
+  TextWithLabelProbe(display_label, label_id);
 }
 
 bool SliderWithInput(const char* label, float* value, float min_val, float max_val, const char* fmt, SliderScale scale,
@@ -325,8 +378,9 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
+  char label_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), trailing_label);
+                                       sizeof(input_id), label_id, sizeof(label_id), trailing_label);
 
   const float old_value = *value;
 
@@ -353,7 +407,7 @@ bool SliderWithInput(const char* label, float* value, float min_val, float max_v
   }
 
   if (trailing_label) {
-    FinishSliderLayout(display_buf);
+    FinishSliderLayout(display_buf, label_id);
   }
   return *value != old_value;
 }
@@ -397,8 +451,9 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
   char display_buf[64];
   char slider_id[64];
   char input_id[64];
+  char label_id[64];
   float slider_w = PrepareSliderLayout(label, display_buf, sizeof(display_buf), slider_id, sizeof(slider_id), input_id,
-                                       sizeof(input_id), trailing_label);
+                                       sizeof(input_id), label_id, sizeof(label_id), trailing_label);
 
   const int old_value = *value;
 
@@ -424,7 +479,7 @@ bool SliderIntWithInput(const char* label, int* value, int min_val, int max_val,
     *active = slider_active || input_active;
   }
 
-  FinishSliderLayout(display_buf);
+  FinishSliderLayout(display_buf, label_id);
   return *value != old_value;
 }
 
@@ -1165,9 +1220,13 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
   // Right column — layout matches SliderWithInput's three-column model:
   //   [text / slider (text_w)] [Edit button / input (kInputWidth)] [row label (kLabelColWidth)]
   // so Row 1-3 align column boundaries with Row 4 automatically.
+  const float label_gap_x = LabelColumnGapX();
   float right_x = thumb_pos.x + thumb_display_size + spacing_x;
   float avail_w = ImGui::GetContentRegionAvail().x - thumb_display_size - spacing_x;
-  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x * 2);
+  // Same two-different-gaps split as PrepareSliderLayout, and for the same reason: the Weight row
+  // below is drawn by it, so a card whose button rows kept spacing_x on the label side would put
+  // its own four rows in two different columns.
+  float text_w = std::max(40.0f, avail_w - kInputWidth - kLabelColWidth - spacing_x - label_gap_x);
 
   auto emit_row = [&](int row_idx, const char* text_content, const char* btn_id, EditTarget target,
                       const char* row_label, bool clip_text, const char* tooltip = nullptr) {
@@ -1194,8 +1253,12 @@ bool RenderEntryCard(GuiState& state, int layer_idx, int entry_idx) {
     if (ImGui::Button(btn_id, ImVec2(kInputWidth, 0))) {
       g_edit_request = { target, layer_idx, entry_idx };
     }
-    ImGui::SameLine();
-    ImGui::TextUnformatted(row_label);
+    ImGui::SameLine(0.0f, label_gap_x);  // paired with text_w above
+    // Same addressable-label probe as FinishSliderLayout — this row shares the label column with
+    // the Weight row below it, so the invariant is only checkable if both ends can be read.
+    char label_probe_id[64];
+    snprintf(label_probe_id, sizeof(label_probe_id), "##card_%d_%d_row_%d_label", layer_idx, entry_idx, row_idx);
+    TextWithLabelProbe(row_label, label_probe_id);
   };
 
   // Row 1: Crystal type (resolved from pool)
@@ -1611,7 +1674,7 @@ void RenderSceneControls(GuiState& state) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Angular diameter of the sun disk");
   }
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  PushLabelColumnItemWidth();
   // Combo carries kSpectrumCount presets + "Custom..." tail (item count = kSpectrumComboItemCount).
   // Built once from kSpectrumNames so adding/renaming a preset only requires editing kSpectrumNames.
   static const char* const* kSpectrumComboItems = [] {
@@ -1649,7 +1712,7 @@ void RenderSceneControls(GuiState& state) {
   }
 
   ImGui::SeparatorText("Simulation");
-  ImGui::PushItemWidth(-(kLabelColWidth + ImGui::GetStyle().ItemSpacing.x));
+  PushLabelColumnItemWidth();
   Checkbox("Infinite rays", &state.sim.infinite);
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Run simulation continuously until manually stopped");

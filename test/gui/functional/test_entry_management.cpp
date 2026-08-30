@@ -1005,4 +1005,31 @@ void RegisterEntryManagementTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::CountEntriesSharing(gui::g_state, 0, std::nullopt), 2);
     };
   }
+
+  // A card's four rows are one three-column grid: Crystal/Axis/Filter are hand-built
+  // [text][Edit button][label] rows in RenderEntryCard, Weight is a SliderWithInput, and the
+  // comment above emit_row states outright that the four are meant to share their column
+  // boundaries. They are drawn by two different pieces of code that each compute the boundary
+  // from their own copy of the same formula, so the claim is exactly as strong as those two
+  // copies agreeing — which nothing else checks.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "entry_management", "a_cards_four_rows_share_their_column_boundaries");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+      // One card, so the Edit buttons' labels are unambiguous for the wildcard search below.
+      IM_CHECK_EQ(gui::g_state.layers[0].entries.size(), (size_t)1);
+
+      // Collected before anything is asserted: every ImGuiTestContext action opens with
+      // `if (IsError()) return;`, so an assertion between two ItemInfo calls would leave the rest
+      // of the rows unmeasured and report the first offender as if it were the only one.
+      std::vector<LabelColumnRow> rows;
+      rows.push_back(MeasureWidgetRow(ctx, "Crystal", "**/Edit##cr", "**/##card_0_0_row_0_label"));
+      rows.push_back(MeasureWidgetRow(ctx, "Axis", "**/Edit##ax", "**/##card_0_0_row_1_label"));
+      rows.push_back(MeasureWidgetRow(ctx, "Filter", "**/Edit##fi", "**/##card_0_0_row_2_label"));
+      rows.push_back(MeasureWidgetRow(ctx, "Weight", "**/##Weight##prop_0_0_input", "**/##Weight##prop_0_0_label"));
+
+      CheckLabelColumn("entry card", rows);
+    };
+  }
 }

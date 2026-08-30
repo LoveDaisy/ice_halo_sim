@@ -733,4 +733,49 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       // The background is handed back by ScopedBackground.
     };
   }
+
+  // The View and Display groups' half of the trailing-label column, stated per group because each
+  // group is its own PushItemWidth scope and the two could drift apart without either one being
+  // internally inconsistent. Both families are present in each: hand-built [slider][input] rows
+  // from panels.cpp, and ImGui Combos that place their own label at a spacing constant hardcoded
+  // inside BeginCombo. Control right edges are asserted alongside label left edges — squaring up
+  // the labels by widening one family's controls only would trade one visible misalignment for
+  // another.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "the_trailing_label_column_is_one_line_across_row_families");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(3);
+
+      // Collected before anything is asserted: every ImGuiTestContext action opens with
+      // `if (IsError()) return;`, so an assertion between two ItemInfo calls would leave the rest
+      // of the rows unmeasured and report the first offender as if it were the only one.
+      // Addressed under the panel window rather than through "**/": a wildcard resolves by the
+      // debug label an item registers, and BeginCombo registers none — the three combo rows would
+      // be unreachable, which are the rows the invariant is about.
+      ctx->SetRef("//##RightPanel");
+      std::vector<LabelColumnRow> view;
+      view.push_back(MeasureComboRow(ctx, "Lens Type", "Lens Type##view"));
+      view.push_back(MeasureWidgetRow(ctx, "FOV", "##FOV##view_input", "##FOV##view_label"));
+      view.push_back(MeasureWidgetRow(ctx, "Elevation", "##Elevation##view_input", "##Elevation##view_label"));
+      view.push_back(MeasureWidgetRow(ctx, "Azimuth", "##Azimuth##view_input", "##Azimuth##view_label"));
+      view.push_back(MeasureWidgetRow(ctx, "Roll", "##Roll##view_input", "##Roll##view_label"));
+
+      std::vector<LabelColumnRow> display;
+      display.push_back(MeasureComboRow(ctx, "Resolution", "Resolution##display"));
+      display.push_back(MeasureWidgetRow(ctx, "EV", "##EV##display_input", "##EV##display_label"));
+      display.push_back(MeasureComboRow(ctx, "Preset", "Preset##display_aspect"));
+      display.push_back(MeasureWidgetRow(ctx, "Alpha", "##Alpha##display_input", "##Alpha##display_label"));
+      display.push_back(
+          MeasureWidgetRow(ctx, "Offset X", "##Offset X##display_bg_input", "##Offset X##display_bg_label"));
+      display.push_back(
+          MeasureWidgetRow(ctx, "Offset Y", "##Offset Y##display_bg_input", "##Offset Y##display_bg_label"));
+      display.push_back(MeasureWidgetRow(ctx, "Zoom", "##Zoom##display_bg_input", "##Zoom##display_bg_label"));
+      ctx->SetRef("");
+
+      CheckLabelColumn("view", view);
+      CheckLabelColumn("display", display);
+    };
+  }
 }

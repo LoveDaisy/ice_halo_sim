@@ -289,6 +289,227 @@ void StopPerfSimulation();
 // ReadOnly, say) for the predicate to still mean "the user cannot operate this".
 bool IsDisabled(const ImGuiTestItemInfo& info);
 
+// ========== The trailing-label column ==========
+//
+// Several panels build their rows on one three-column model — [wide control][value][label] — and
+// the claim these helpers exist to check is that the last two boundaries are single vertical
+// lines, no matter which widget family drew the row. Two families share the model and neither can
+// see the other: the hand-built [slider][input] rows in panels.cpp place their own label, while
+// ImGui's Combo places its label itself at a spacing constant hardcoded inside BeginCombo. A row
+// family that picks the other constant lands its controls and its label on lines 4px away from
+// everyone else's, which is a defect no per-family test can state.
+//
+// Both numbers come out of geometry ImGui reports, never out of a constant copied from the panel
+// code — an assertion built from kLabelColWidth and ItemSpacing.x would restate the layout code
+// rather than check it.
+struct LabelColumnRow {
+  const char* name = "";       // for the failure message; the row as a user would name it
+  float control_right = 0.0f;  // right edge of the row's last interactive control
+  float label_left = 0.0f;     // left edge of the row's trailing label
+};
+
+// A hand-built row: the InputFloat/InputInt reports its own frame, and the trailing label is
+// addressable because panels.cpp submits an InvisibleButton of the label's exact horizontal
+// extent over it (see TextWithLabelProbe there).
+inline LabelColumnRow MeasureWidgetRow(ImGuiTestContext* ctx, const char* name, const char* input_ref,
+                                       const char* label_probe_ref) {
+  LabelColumnRow row;
+  row.name = name;
+  row.control_right = ctx->ItemInfo(input_ref).RectFull.Max.x;
+  row.label_left = ctx->ItemInfo(label_probe_ref).RectFull.Min.x;
+  return row;
+}
+
+// A Combo row. ImGui places a combo's trailing label itself, and there is no item to read it
+// from: BeginCombo registers its item with the NAV rectangle — the drawn frame, label excluded
+// (`ItemAdd(total_bb, id, &bb)`, imgui_widgets.cpp; the test engine records the third argument) —
+// and never calls the test engine's label hook at all, so the label is neither addressable nor
+// inside the reported rectangle.
+//
+// So the label's left edge is read off the rendered frame instead: a strip of the default
+// framebuffer immediately right of the combo is captured and scanned column by column for the
+// first one carrying ink. Deriving it instead as `frame right + style.ItemInnerSpacing.x` — the
+// spacing BeginCombo is known to hardcode — would be the layout formula this file exists to
+// check, evaluated a second time: it agrees with the drawn label by construction, and stays in
+// agreement if BeginCombo ever stops putting the label there, or if that spacing changes under
+// the row while the frame stays put. Neither is hypothetical; both are exactly the class of drift
+// the trailing-label invariant is about.
+//
+// The frame's own rectangle is still taken from ItemInfo. That is not the same circularity: it is
+// geometry ImGui reports about the item it drew, not a position this test recomputed.
+//
+// The two families' `label_left` therefore mean slightly different things — a hand-built row
+// reports the text's layout origin (CalcTextSize's box, via the InvisibleButton probe), a combo
+// row reports the leftmost inked pixel of the first glyph. They differ by that glyph's left side
+// bearing, which varies per letter, so it is taken back out below from the font's own metrics
+// rather than absorbed into a wider tolerance — a tolerance wide enough to swallow a per-letter
+// offset would be wide enough to swallow part of the defect being looked for.
+inline LabelColumnRow MeasureComboRow(ImGuiTestContext* ctx, const char* name, const char* combo_ref) {
+  LabelColumnRow row;
+  row.name = name;
+
+  // A tooltip drawn over the strip would be scanned as if it were the label. The panels measured
+  // here attach tooltips to their combos, so the pointer is parked off-window first — same
+  // reason visual/left_panel and modal_layout do it before their captures. Done before the
+  // geometry is read so the frame rectangle and the captured pixels describe the same frame.
+  ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
+  ctx->Yield(2);
+
+  const ImRect frame = ctx->ItemInfo(combo_ref).RectFull;
+  row.control_right = frame.Max.x;
+
+  // How far right of the frame the label is searched for. A bound on the search, NOT a source for
+  // the answer — the scan stops at the first inked column, so extra width past the label costs
+  // nothing. Deliberately not the panel's own kLabelColWidth: a layout constant has no business
+  // in an assertion about the layout, not even as a loop bound.
+  constexpr float kProbeWidthPx = 96.0f;
+  // Ink test: sum of |Δ| over R/G/B against the row's own background. The panel background and
+  // the label text are far apart (see the measured margin printed below), so this sits well
+  // clear of both the flat background and the faintest antialiased glyph edge.
+  constexpr int kInkThresholdSum = 32;
+  // Physical pixels of the frame→label gap skipped before sampling the background, so the frame
+  // border's own antialiasing cannot be mistaken for it. The gap is 4 logical px at minimum, so
+  // 2 physical columns are skipped even at scale 1.
+  constexpr int kBorderSkipPx = 2;
+
+  const ImGuiIO& io = ImGui::GetIO();
+  const float sx = io.DisplayFramebufferScale.x;
+  const float sy = io.DisplayFramebufferScale.y;
+  const float win_w = io.DisplaySize.x;
+  const float win_h = io.DisplaySize.y;
+  IM_CHECK_RETV(sx > 0.0f && sy > 0.0f && win_w > 0.0f && win_h > 0.0f, row);
+  auto to_px = [](float v) { return static_cast<int>(ImFloor(v + 0.5f)); };
+  const int fb_w = to_px(win_w * sx);
+  const int fb_h = to_px(win_h * sy);
+
+  // ImGui (origin top-left, window coords) -> glReadPixels (origin bottom-left, framebuffer).
+  const ImVec2 vp_pos = ImGui::GetMainViewport()->Pos;
+  const float lx = frame.Max.x - vp_pos.x;
+  const float ly = frame.Min.y - vp_pos.y;
+  const float lh = frame.Max.y - frame.Min.y;
+  const int rx = to_px(lx * sx);
+  const int ry = to_px((win_h - (ly + lh)) * sy);
+  const int rh = to_px(lh * sy);
+  // Clipped to the framebuffer: the panel these rows live in is docked against the right edge of
+  // the window, so the label column can end within a few pixels of it and the full probe width
+  // would not fit. Clipping the search window is harmless (the scan stops at the first ink); what
+  // must not happen is reading outside the readback rectangle.
+  const int rw = ImMin(to_px(kProbeWidthPx * sx), fb_w - rx);
+  IM_CHECK_RETV(rx >= 0 && ry >= 0 && rh > 0, row);
+  IM_CHECK_RETV(rw > kBorderSkipPx + 1, row);
+  IM_CHECK_RETV(ry + rh <= fb_h, row);
+
+  g_fullframe_capture.Reset();
+  g_fullframe_capture.rect_x = rx;
+  g_fullframe_capture.rect_y = ry;
+  g_fullframe_capture.rect_w = rw;
+  g_fullframe_capture.rect_h = rh;
+  g_fullframe_capture.requested.store(true);
+  for (int i = 0; i < 10 && !g_fullframe_capture.done.load(); ++i) {
+    ctx->Yield(1);
+  }
+  IM_CHECK_RETV(g_fullframe_capture.done.load(), row);
+  IM_CHECK_RETV(g_fullframe_capture.width == rw && g_fullframe_capture.height == rh, row);
+  IM_CHECK_RETV(g_fullframe_capture.pixels.size() == static_cast<size_t>(rw) * rh * 4, row);
+
+  // Pixels come back top-down RGBA (ReadbackGlRegionToRgba flips for PNG).
+  const unsigned char* px = g_fullframe_capture.pixels.data();
+  auto channel = [&](int col, int r, int ch) {
+    return static_cast<int>(px[(static_cast<size_t>(r) * rw + col) * 4 + ch]);
+  };
+  // Background is sampled from the frame→label gap of THIS row rather than from a theme constant:
+  // a constant would be a second copy of a value the code under test also reads.
+  const int bg_col = kBorderSkipPx;
+  const int bg_row = rh / 2;
+  const int bg_r = channel(bg_col, bg_row, 0);
+  const int bg_g = channel(bg_col, bg_row, 1);
+  const int bg_b = channel(bg_col, bg_row, 2);
+
+  int hit_col = -1;
+  int max_diff_seen = 0;
+  for (int col = bg_col + 1; col < rw && hit_col < 0; ++col) {
+    for (int r = 0; r < rh; ++r) {
+      const int diff =
+          ImAbs(channel(col, r, 0) - bg_r) + ImAbs(channel(col, r, 1) - bg_g) + ImAbs(channel(col, r, 2) - bg_b);
+      if (diff > max_diff_seen) {
+        max_diff_seen = diff;
+      }
+      if (diff > kInkThresholdSum) {
+        hit_col = col;
+        break;
+      }
+    }
+  }
+  if (hit_col < 0) {
+    // Not silently degraded to a guess: either the label was not drawn or the strip was computed
+    // wrong, and both have to be visible as failures rather than as a plausible number.
+    IM_ERRORF("%s: no label ink found in strip (%d,%d,%d,%d), bg=(%d,%d,%d), max channel sum diff %d", name, rx, ry, rw,
+              rh, bg_r, bg_g, bg_b, max_diff_seen);
+    return row;
+  }
+
+  // Take the first glyph's left side bearing back out, so the result names the text's layout
+  // origin — the same quantity MeasureWidgetRow's probe reports. The bearing comes from the font,
+  // which is a property of the glyph and not of where the label was placed, so this corrects a
+  // units mismatch without reintroducing the layout formula.
+  //
+  // In WHOLE physical pixels, and that is the point rather than a rounding shortcut: `hit_col` is
+  // already a floor (the first pixel column the glyph put any ink in, i.e. the bearing's whole-
+  // pixel part is exactly the number of blank columns it left), so subtracting the bearing's
+  // fractional part as well would count the same flooring twice and bias the answer left by it.
+  // The first character of `combo_ref` is the first character of the drawn label: ImGui cuts the
+  // label at "##", and neither is a legal leading character for one.
+  int bearing_px = 0;
+  if (combo_ref[0] != '\0') {
+    ImFont* font = ImGui::GetFont();
+    const ImFontGlyph* glyph = font ? font->FindGlyph(static_cast<ImWchar>(combo_ref[0])) : nullptr;
+    if (glyph != nullptr && font->FontSize > 0.0f) {
+      bearing_px = static_cast<int>(ImFloor(glyph->X0 * (ImGui::GetFontSize() / font->FontSize) * sx));
+    }
+  }
+  row.label_left = vp_pos.x + static_cast<float>(rx + hit_col - bearing_px) / sx;
+  // Kept rather than removed after bring-up: the residual error of this measurement is one
+  // physical pixel, so what kLabelTolPx has to cover depends on the framebuffer scale of whoever
+  // is running it, and that number is not otherwise visible anywhere in the output.
+  fprintf(stderr,
+          "[label_column] %s: fbscale=(%.1f,%.1f) strip=(%d,%d,%d,%d) bg=(%d,%d,%d) hit_col=%d bearing_px=%d "
+          "label_left=%.2f control_right=%.2f\n",
+          name, sx, sy, rx, ry, rw, rh, bg_r, bg_g, bg_b, hit_col, bearing_px, row.label_left, row.control_right);
+  return row;
+}
+
+// Both columns of every row, against the first row's.
+//
+// Non-fatal per row on purpose: the proposition is "all the families agree", so stopping at the
+// first family that does not would report one number and hide which of the others is the odd one
+// — the difference between "combo rows are 4px off" and "everything but combo rows is".
+//
+// The two columns get two tolerances, because they are not measured the same way. Every
+// `control_right` is a rectangle ImGui reported, so the only slack it needs is the sub-pixel kind
+// two different float paths to the same position leave behind. `label_left` is that for the
+// hand-built rows but a pixel scan for the combo rows (MeasureComboRow), and a scan cannot
+// resolve finer than the pixel grid it reads: after the bearing correction its residual error is
+// one physical pixel, i.e. 1.0 logical px on an unscaled display and 0.5 on a 2x one. So the
+// label tolerance is that worst case and no more — it stays 4x below the 4 px inter-family gap
+// this whole helper exists to catch, and widening the control tolerance to match would give away
+// resolution on the one column that never lost any.
+inline void CheckLabelColumn(const char* group, const std::vector<LabelColumnRow>& rows) {
+  IM_CHECK_GT(rows.size(), (size_t)1);  // one row cannot disagree with anything
+  constexpr float kControlTolPx = 0.5f;
+  constexpr float kLabelTolPx = 1.0f;
+  const LabelColumnRow& ref = rows[0];
+  for (size_t i = 1; i < rows.size(); ++i) {
+    if (ImFabs(rows[i].control_right - ref.control_right) > kControlTolPx) {
+      IM_ERRORF("%s: control right edge %s=%.1f vs %s=%.1f (delta %.1f px)", group, rows[i].name, rows[i].control_right,
+                ref.name, ref.control_right, rows[i].control_right - ref.control_right);
+    }
+    if (ImFabs(rows[i].label_left - ref.label_left) > kLabelTolPx) {
+      IM_ERRORF("%s: label left edge %s=%.1f vs %s=%.1f (delta %.1f px)", group, rows[i].name, rows[i].label_left,
+                ref.name, ref.label_left, rows[i].label_left - ref.label_left);
+    }
+  }
+}
+
 // Hands ImGui's popup stack back when a case leaves, by whichever exit.
 //
 // ResetTestState() reaches everything about a popup this suite opens except the one piece ImGui
