@@ -77,6 +77,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_celestial_outline.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_composite_background.cpp"
   # Result-frame lifetime guard + the buffer pool underneath it, and the completion/drain
@@ -199,6 +200,7 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/backend/test_multi_ms_golden.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_projection.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_visible_mask.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_celestial_outline_mask.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp"
