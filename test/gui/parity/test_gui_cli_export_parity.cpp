@@ -66,9 +66,11 @@
 //
 //   * The auxiliary-line overlay other than the horizon (altitude grid, sun circles, zenith/nadir
 //     markers, lens border, text labels). These are GUI display-time layers with no encoding in
-//     the config format at all; giving core an annotation layer is a separate design effort, and
-//     until it exists there is nothing on the CLI side to compare against. All of them are off in
-//     both scenes, which is also their default.
+//     the config format at all; giving core an annotation layer is a separate, actively planned
+//     design effort — a known gap this fixture is deliberately leaving alone, not one it missed —
+//     and until core's export format gains that layer there is nothing on the CLI side to compare
+//     against. All of them are off in both scenes, which is also their default. Re-add coverage
+//     here the day that layer exists.
 //   * The horizon in its ON state, and this one is a measured exclusion rather than an assumed
 //     one. Both scenes keep the switch OFF, so what this fixture pins is the direction that
 //     actually regressed before: the export must not assert a horizon line the user switched off
@@ -82,10 +84,11 @@
 //     near the circle rim. Making them agree is the annotation layer's business, not this gate's.
 //   * The single-lens fisheye domain past theta = 90 degrees, where the preview shader keeps
 //     inverting toward the frame corners and core stops. It is real and large — a 4:3 frame at
-//     fov 150 measured 25% of its pixels lit by the GUI and black in the CLI — and it is being
-//     widened on purpose elsewhere, so pinning it here would freeze a shape that is about to
-//     change. The single-lens scene's fov is bounded so the frame stays inside the agreed domain;
-//     see the note on its row.
+//     fov 150 measured 25% of its pixels lit by the GUI and black in the CLI — and it is the
+//     subject of a separate, actively planned widening effort, not an abandoned one; pinning it
+//     here would freeze a shape that is about to change on purpose. The single-lens scene's fov is
+//     bounded so the frame stays inside the agreed domain; see the note on its row. Re-check that
+//     bound once the domain widens.
 //   * A loaded background IMAGE (GuiState::bg_*). Owner-decided GUI-only: it is never exported, so
 //     there is no honest comparison to make. Neither scene loads one.
 //   * RenderConfig::ray_color. The GUI's tint control does not reach the renderer, and the export
@@ -447,6 +450,9 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK(lumice::test::LoadPng(cli_png.c_str(), cli_data, cw, ch, cc));
       IM_CHECK_EQ(gw, cw);
       IM_CHECK_EQ(gh, ch);
+      // The CLI's PNG writer emits RGB, never RGBA, so cc==3 is a format contract, not an
+      // assumption this fixture happens to get away with; if that writer ever gains an alpha
+      // channel this assertion is the thing that should tell you, not a silent 3-vs-4 mismatch.
       IM_CHECK_EQ(cc, 3);
       std::vector<unsigned char> gui_rgb = gc == 4 ? lumice::test::StripAlpha(gui_data.data(), gw, gh) : gui_data;
       const double psnr = lumice::test::ComputePsnr(gui_rgb.data(), cli_data.data(), gw, gh, 3);
