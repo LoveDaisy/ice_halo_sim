@@ -1321,7 +1321,9 @@ TEST_F(UserDefaults, schema_version_stamp_only_document_is_effectively_empty) {
   const gui::GuiState truly_empty = gui::MakeNewDocumentState(FreshOverlayDir("stamp_only_empty"));
   EXPECT_TRUE(SerializesIdentically(stamped_only, truly_empty))
       << "a document carrying only the stamp must produce the same state as one carrying nothing";
-\n// The exposure mode as a personal default, which is the one field where "personal default" and
+}
+
+// The exposure mode as a personal default, which is the one field where "personal default" and
 // "the document decides" pull hardest against each other.
 //
 // Absolute mode is a working preference: someone comparing scenes wants every NEW document to

@@ -1081,7 +1081,8 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "Only where the lens images something: outside the image circle, and\n"
           "outside the visible hemisphere, stays black.");
     }
-\n    // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
+
+    // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
     // mode two open files can sit at different heights on one shared scale. A single-document GUI
     // cannot compare them for the user, but it can refuse to leave the current height implicit.
     // Rendered as a disabled Selectable rather than TextDisabled because an ImGui::Text* submits

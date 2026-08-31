@@ -99,7 +99,7 @@ inline bool operator==(const LensParam& a, const LensParam& b) {
 
 inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig.
-  static_assert(sizeof(RenderConfig) == 144, "Update operator== when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 136, "Update operator== when RenderConfig fields change");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
