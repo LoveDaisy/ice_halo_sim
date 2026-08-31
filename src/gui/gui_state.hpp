@@ -76,6 +76,36 @@ constexpr int kAspectPresetCount = 7;
 static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAspectPresetCount,
               "kAspectPresetNames must match kAspectPresetCount");
 
+// Width / height of a preset, or 0 for the two presets that do not name a ratio at all: kFree is
+// whatever the user dragged the window to, and kMatchBg is whatever the loaded background image
+// happens to be. Callers key off `== 0` to mean "this preset states no ratio" rather than treating
+// it as a degenerate number — ApplyAspectRatio bails out of the window resize on it, and the JSON
+// export falls back to the simulation texture's own shape.
+//
+// Lives here, next to the enum it switches over, rather than in app.cpp where it started: it is a
+// pure function of the enum with no window / GL / preview dependency, and both of its callers
+// (app.cpp's window sizing and file_io.cpp's export) would otherwise have to reach across a layer
+// to get at it. Keeping it single-source matters more than where it sits — a second hand-written
+// ratio table is how the exported picture and the window it was framed in come to disagree.
+inline float GetAspectRatio(AspectPreset preset) {
+  switch (preset) {
+    case AspectPreset::k16x9:
+      return 16.0f / 9.0f;
+    case AspectPreset::k3x2:
+      return 3.0f / 2.0f;
+    case AspectPreset::k4x3:
+      return 4.0f / 3.0f;
+    case AspectPreset::k1x1:
+      return 1.0f;
+    case AspectPreset::k2x1:
+      return 2.0f;
+    case AspectPreset::kFree:
+    case AspectPreset::kMatchBg:
+    default:
+      return 0.0f;
+  }
+}
+
 struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;

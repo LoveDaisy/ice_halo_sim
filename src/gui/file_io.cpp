@@ -26,6 +26,7 @@
 #include "gui/gui_state.hpp"
 #include "gui/preview_renderer.hpp"
 #include "gui/raypath_segments.hpp"
+#include "util/color_space.hpp"
 #include "util/path_utils.hpp"
 
 namespace lumice::gui {
@@ -1172,6 +1173,26 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // Export and simulation therefore reject an over-limit filter identically by construction, not
   // by two implementations agreeing — the latter previously let export silently write a
   // semantically-opposite match-all stand-in for a filter the simulator refused.
+  // The front-hemisphere clip has no encoding on the far side, so the export is refused rather
+  // than approximated. RenderConfig::front is a GUI-only shader crop (preview_renderer.cpp's
+  // u_front) ANDed on top of visible; core's VisibleRange is {upper, lower, full} and
+  // LUMICE_RenderParam has no field for it. The two ways of not-refusing are both worse:
+  //   - Encoding "visible": "front" would be actively dangerous. NLOHMANN_JSON_SERIALIZE_ENUM maps
+  //     any unregistered string to the FIRST table entry, and that entry is kUpper
+  //     (render_config.hpp) — the CLI would silently render the upper hemisphere, no diagnostic.
+  //   - Dropping it silently would export a picture wider than the one on screen, which is the
+  //     exact class of dishonesty this export path was just fixed to stop committing.
+  // So it takes the same false + *out_warning channel the ABI-overflow rejections below use: no
+  // file is written and DoExportConfigJson shows the reason.
+  if (state.renderer.front) {
+    if (out_warning) {
+      *out_warning =
+          "The Front hemisphere clip has no equivalent in the exported config format, and the CLI "
+          "would render the un-clipped view instead.\nNo config was exported. Turn Front off in the "
+          "Display group and try again.";
+    }
+    return false;
+  }
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow);
@@ -1701,10 +1722,34 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
   // loop-of-one structure.
   {
     const auto& r = state.renderer;
+    const bool for_export = intent == SceneIntent::kJsonExport;
     LUMICE_RenderParam dst{};
     int res = kSimResolutions[r.sim_resolution_index];
+    // Canvas. Both arms measure in the same unit (the simulation resolution the user picked), and
+    // the two arms agree numerically whenever the display preset names no ratio — that agreement is
+    // a coincidence of the fallback, NOT a coupling. Do not collapse the branches:
+    //   kSimCommit  — 2:1 is REQUIRED. Core renders one full-sky dual equal-area texture and the
+    //                 preview shader reprojects it; any other shape would resample the sky.
+    //   kJsonExport — the CLI draws directly into this canvas, so it has to be the shape the user
+    //                 framed the picture in (Display group's aspect preset + portrait toggle).
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
+    if (for_export) {
+      // GetAspectRatio returns 0 for kFree and kMatchBg, the two presets that name no ratio: kFree
+      // is whatever the window was dragged to and kMatchBg follows a background image loaded at
+      // runtime. Neither is reproducible from the saved document — an exported config that encoded
+      // "however wide the window happened to be" would render a different picture on the next
+      // machine — so those two keep the 2:1 fallback above rather than inventing a number.
+      float ratio = GetAspectRatio(state.aspect_preset);
+      if (state.aspect_portrait && ratio > 0.0f) {
+        ratio = 1.0f / ratio;  // same inversion ApplyAspectRatio applies to the window (app.cpp)
+      }
+      if (ratio > 0.0f) {
+        const int long_edge = static_cast<int>(std::lround(res * std::max(ratio, 1.0f / ratio)));
+        dst.resolution_w = ratio >= 1.0f ? long_edge : res;
+        dst.resolution_h = ratio >= 1.0f ? res : long_edge;
+      }
+    }
     // doc/ev-pipeline-architecture.md §2.4/§4 — the ONE field where the two
     // SceneIntent arms differ, and the reason SceneIntent exists at all:
     //
@@ -1732,22 +1777,74 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // document exports.
     dst.ev_mode = r.ev_mode == 1 ? LUMICE_EV_MODE_ABSOLUTE : LUMICE_EV_MODE_RELATIVE;
     dst.overlap = kDualFisheyeOverlap;
-    // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
-    // used to hardcode while re-encoding a renderer now have to be stated here. Core always
-    // produces a dual equal-area fisheye full-globe texture; the GUI shader reprojects it to the
-    // user's display projection, so these are GUI policy, not user-facing settings.
-    dst.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;  // was hardcoded in RendererToJson
-    dst.lens_fov = 180.0f;                                     // was hardcoded in RendererToJson
-    dst.visible = LUMICE_VISIBLE_FULL;                         // was hardcoded in RendererToJson
-    // Never encoded pre-v4.11, so there is no prior hardcoded value to reproduce: take core's
-    // authoritative defaults instead. {-1,-1,-1} is RenderConfig::ray_color_'s "use the natural
-    // spectral color" sentinel — a zero-initialized {0,0,0} would tint every ray black.
+    // ===== The projection block: where the two intents describe two different things =====
+    //
+    // These fields once carried kSimCommit's values on BOTH arms, which made the exported config a
+    // transcript of the GUI's internal simulation policy rather than of the picture the user was
+    // looking at. A user viewing linear/55deg got a dual equal-area full-sky config, and
+    // grid.horizon was not merely dropped but INVERTED: the export drew a horizon line the user had
+    // switched off. The two arms answer two different questions and now diverge:
+    //
+    //   kSimCommit  — "what texture must core produce for the preview shader to reproject?"
+    //                 Invariant: a fixed dual equal-area / fov 180 / visible=full / black-background
+    //                 full-sky texture, INDEPENDENT of every view setting. The user's
+    //                 lens/fov/view/visible/background are shader uniforms applied at display time
+    //                 (app.cpp RefreshPreviewParams -> preview_renderer.cpp), so pushing them into
+    //                 the simulation would crop and reproject the sky twice.
+    //   kJsonExport — "what would the CLI have to be told to draw the picture on screen?"
+    //                 Invariant: every field below reflects GuiState, because the CLI has no
+    //                 display-time reprojection stage at all — whatever is not in the config is
+    //                 not in the image. The documented exceptions are lens_shift (no GUI control)
+    //                 and the front-hemisphere clip (rejected in BuildExportJsonOrWarn, which see).
+    if (for_export) {
+      // Both index the same enumeration by construction: kLensTypeNames is declared "order must
+      // match Core's LensParam::LensType enum" (gui_state.hpp) and LUMICE_LENS_TYPE_* is that enum
+      // (lumice.h), so the GUI's combo index IS the C API constant. Same for kVisibleNames
+      // {Upper,Lower,Full} vs LUMICE_VISIBLE_{UPPER,LOWER,FULL} = {0,1,2}.
+      dst.lens_type = r.lens_type;
+      dst.lens_fov = r.fov;
+      dst.visible = r.visible;
+      dst.view_azimuth = r.azimuth;
+      dst.view_elevation = r.elevation;
+      // NOT the stored r.roll: under the Globe lens the preview renders roll=0 while keeping the
+      // user's value stashed for when they switch back (EffectiveRollForLens, gui_state.hpp), so
+      // the stored value is one the user is not currently seeing. Exporting it would tilt the CLI
+      // image against the preview. Same helper every other roll fill site uses.
+      dst.view_roll = EffectiveRollForLens(r.lens_type, r.roll);
+      // RenderConfig::background is sRGB (what the colour picker shows); LUMICE_RenderParam's is
+      // linear RGB, because core adds it to radiance before the transfer curve. Same conversion
+      // app.cpp / app_panels.cpp apply when they push the picker colour at the preview.
+      SrgbToLinearRgb(r.background, dst.background);
+      // The horizon line is the one annotation core actually draws, and its GUI switch lives
+      // outside RenderConfig (GuiState's overlay group). Reading it is what stops the export from
+      // asserting a line the user turned off.
+      dst.horizon = state.show_horizon_line ? 1 : 0;
+    } else {
+      // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
+      // used to hardcode while re-encoding a renderer now have to be stated here.
+      dst.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;  // was hardcoded in RendererToJson
+      dst.lens_fov = 180.0f;                                     // was hardcoded in RendererToJson
+      dst.visible = LUMICE_VISIBLE_FULL;                         // was hardcoded in RendererToJson
+      dst.horizon = 1;                                           // core RenderConfig::horizon_ default (true)
+      // view / background keep their zero-initialized values, matching both the pre-v4.11
+      // hardcoded encoding and core's defaults.
+    }
+    // Intent-independent. Never encoded pre-v4.11, so there is no prior hardcoded value to
+    // reproduce: take core's authoritative defaults instead. {-1,-1,-1} is
+    // RenderConfig::ray_color_'s "use the natural spectral color" sentinel — a zero-initialized
+    // {0,0,0} would tint every ray black. It does NOT split by intent because the sentinel already
+    // IS what the GUI displays: the preview draws the natural spectral colour, and the GUI's own
+    // tint control does not reach the renderer at all.
     dst.ray_color[0] = dst.ray_color[1] = dst.ray_color[2] = -1.0f;
-    dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
-    // view / background / lens_shift / grid counts keep their zero-initialized values, which match
-    // both the pre-v4.11 hardcoded encoding and core's defaults. The GUI's own screen-space
-    // overlay grid (gui_state.show_grid_line) is a display-time layer and is unrelated to
-    // render[].grid, which core bakes into the image.
+    // lens_shift stays zero on BOTH arms — deliberately asymmetric with everything above, and the
+    // asymmetry is that there is nothing to be asymmetric about: the GUI exposes no lens-shift
+    // control anywhere, so there is no user-visible value for the export arm to be honest about.
+    // If one is ever added, this is the line that has to stop being a comment.
+    //
+    // grid counts likewise stay zero on both arms. The GUI's screen-space overlay grid
+    // (gui_state.show_grid_line) is a display-time layer with a different model than render[].grid
+    // (one FOV-adaptive step and a shared colour vs. an explicit list of individually-styled
+    // lines); reconciling them is a design decision that has not been made, not an omission here.
     int renderer_id = -1;
     if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
       GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");
