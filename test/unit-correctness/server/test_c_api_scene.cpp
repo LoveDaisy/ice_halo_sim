@@ -308,7 +308,6 @@ TEST(SceneAddRenderer, MatchesConfigToJson) {
   LUMICE_RenderParam r{};
   r.resolution_w = 800;
   r.resolution_h = 600;
-  r.opacity = 0.5f;
   r.intensity_factor = 2.0f;
   r.overlap = 0.1f;
 
@@ -729,7 +728,6 @@ TEST(SceneRoundTrip, RendererAndScatterLayer) {
   LUMICE_RenderParam r{};
   r.resolution_w = 1024;
   r.resolution_h = 768;
-  r.opacity = 0.8f;
   r.intensity_factor = 1.5f;
   r.overlap = 0.25f;
   // A zero-initialized LUMICE_RenderParam is not committable (lens_fov = 0 is an invalid FOV),
@@ -785,7 +783,6 @@ TEST(SceneRoundTrip, EveryLensTypeAndVisibleRange) {
       LUMICE_RenderParam r{};
       r.resolution_w = 256;
       r.resolution_h = 128;
-      r.opacity = 1.0f;
       r.intensity_factor = 1.0f;
       r.lens_type = lens.type;
       r.lens_fov = lens.fov;
@@ -870,7 +867,6 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   LUMICE_RenderParam r{};
   r.resolution_w = 800;
   r.resolution_h = 800;
-  r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
   // Every v4.11 renderer field gets a NON-default value here: this scene goes through
   // ExpectLosslessRoundTrip, so a field that fails to survive Scene -> JSON -> Scene shows up as a
@@ -1087,7 +1083,6 @@ LUMICE_RenderParam MakeCommitRenderParam() {
   LUMICE_RenderParam r{};
   r.resolution_w = 64;
   r.resolution_h = 32;
-  r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
   r.overlap = 0.0f;
   // Part of "the smallest state core accepts": a zero-initialized LUMICE_RenderParam carries

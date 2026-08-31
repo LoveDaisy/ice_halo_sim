@@ -407,7 +407,7 @@ TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTrip) {
 
 // Every renderer field must survive the round trip — no whitelist. Before v4.11 this asserted the
 // weaker "the expression gap stays confined to the fields the C struct cannot carry" (only
-// id / resolution / opacity / intensity_factor / overlap were compared, because lens / lens_shift
+// id / resolution / intensity_factor / overlap were compared, because lens / lens_shift
 // / view / visible / background / ray_color / grid / celestial_outline had no home in
 // LUMICE_RenderParam and were silently replaced with a hardcoded renderer). The struct now carries
 // all of them, so the comparison is core's own RenderConfig::operator==.
@@ -777,15 +777,13 @@ TEST(JsonParserParity, ScatteringProportionOmittedDefaultsTo100) {
   EXPECT_FLOAT_EQ(p.via_capi.scene_.ms_[0].setting_[0].crystal_proportion_, 100.0f);
 }
 
-TEST(JsonParserParity, RendererOpacityAndIntensityFactorOmittedDefaultToOne) {
+TEST(JsonParserParity, RendererIntensityFactorOmittedDefaultsToOne) {
   const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
   BothParsed p;
   ASSERT_TRUE(ParseWithBoth(text, &p));
   ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
   const auto& renderer = p.via_capi.renderers_.begin()->second;
-  EXPECT_FLOAT_EQ(renderer.opacity_, 1.0f);
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, 1.0f);
-  EXPECT_FLOAT_EQ(renderer.opacity_, p.core.renderers_.begin()->second.opacity_);
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, p.core.renderers_.begin()->second.intensity_factor_);
 }
 

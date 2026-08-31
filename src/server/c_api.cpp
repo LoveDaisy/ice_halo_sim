@@ -590,7 +590,6 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
                        ns::LinearToSrgb(r.background[2]) };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
-  jr["opacity"] = r.opacity;
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
   jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
@@ -2232,13 +2231,9 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     }
     r.resolution_w = rj.at("resolution")[0].get<int>();
     r.resolution_h = rj.at("resolution")[1].get<int>();
-    // opacity / intensity_factor default to 1.0 in core RenderConfig; the zeroed struct would
-    // mean a fully transparent, zero-brightness renderer.
-    r.opacity = 1.0f;
+    // intensity_factor defaults to 1.0 in core RenderConfig; the zeroed struct would mean a
+    // zero-brightness renderer.
     r.intensity_factor = 1.0f;
-    if (rj.contains("opacity")) {
-      r.opacity = rj.at("opacity").get<float>();
-    }
     if (rj.contains("intensity_factor")) {
       r.intensity_factor = rj.at("intensity_factor").get<float>();
     }

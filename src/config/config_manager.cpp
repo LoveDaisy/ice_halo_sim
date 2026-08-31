@@ -85,9 +85,6 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("ray_color")) {
     j_render.at("ray_color").get_to(render.ray_color_);
   }
-  if (j_render.contains("opacity")) {
-    j_render.at("opacity").get_to(render.opacity_);
-  }
   if (j_render.contains("intensity_factor")) {
     j_render.at("intensity_factor").get_to(render.intensity_factor_);
   }

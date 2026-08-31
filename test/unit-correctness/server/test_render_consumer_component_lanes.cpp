@@ -616,7 +616,6 @@ nlohmann::json MakeReuseConfig(ColorForm color) {
   rn["view"]["roll"] = 0.0f;
   rn["visible"] = "upper";
   rn["background"] = { 0.0f, 0.0f, 0.0f };
-  rn["opacity"] = 1.0f;
   rn["intensity_factor"] = 1.0f;
   root["render"] = nlohmann::json::array({ rn });
 

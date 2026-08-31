@@ -64,7 +64,7 @@ std::string ColorConfig(const char* mode, const char* background_srgb) {
     "view": {"elevation": 0, "azimuth": 0, "roll": 0},
     "visible": "full", "background": )") +
          background_srgb + R"(,
-    "opacity": 1.0, "intensity_factor": 1.0
+    "intensity_factor": 1.0
   }],
   "raypath_color": {
     "mode": ")" +

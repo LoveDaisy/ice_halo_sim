@@ -40,7 +40,6 @@
         "type": "rectangular"
       },
       "norm_mode": 0,
-      "opacity": 1.0,
       "resolution": [
         2048,
         1024

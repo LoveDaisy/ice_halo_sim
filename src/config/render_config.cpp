@@ -154,7 +154,6 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   // config_manager.cpp::ParseRenderConfig.
   j["background"] = { LinearToSrgb(r.background_[0]), LinearToSrgb(r.background_[1]), LinearToSrgb(r.background_[2]) };
   j["ray_color"] = r.ray_color_;
-  j["opacity"] = r.opacity_;
   j["intensity_factor"] = r.intensity_factor_;
   j["overlap"] = r.overlap_;
 
@@ -169,7 +168,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
   static_assert(sizeof(RenderConfig) == 136, "Update NeedsRebuild when RenderConfig fields change");
-  // Compare layout-affecting fields only. Appearance fields (background, ray_color, opacity,
+  // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, grids) are handled by ResetWith() without rebuild.
   // id_ is excluded: map key matching guarantees id agreement on the reuse path.
   return !std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) ||

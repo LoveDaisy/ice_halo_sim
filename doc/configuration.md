@@ -616,7 +616,6 @@ The render configuration defines the renderer parameters.
   "visible": "upper" | "lower" | "full",
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
-  "opacity": <float>,
   "intensity_factor": <float>,
   "grid": { ... },
   "filter": [<filter ID array>]
@@ -635,7 +634,6 @@ The render configuration defines the renderer parameters.
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
 | `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
-| `opacity` | float | no | 1.0 | Opacity |
 | `intensity_factor` | float | no | 1.0 | Intensity factor |
 | `grid` | object | no | see below | Grid configuration |
 | `filter` | integer array | no | [] | Multi-scattering filter ID array |
@@ -754,7 +752,6 @@ The render configuration defines the renderer parameters.
   values fold to their absolute value before use, and any value `>= 1.0` reaches the
   same full-apex result as exactly `1.0` — it is not an error. See [Pyramid Shape
   Legality](#pyramid-shape-legality) below for what each range actually produces.
-- `render[].opacity` should be between 0.0 and 1.0
 - `render[].background` and `ray_color` color values should be between 0.0 and 1.0
 - `render[].background` is **sRGB**: on a pixel with no halo energy, the rendered color is exactly
   the triple written here. It is converted to linear when the config is read, because the

@@ -600,7 +600,6 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "visible": "upper" | "lower" | "full",
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
-  "opacity": <浮点数>,
   "intensity_factor": <浮点数>,
   "grid": { ... },
   "filter": [<过滤器ID数组>]
@@ -619,7 +618,6 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `visible` | 字符串 | 否 | "upper" | 可见半球："upper"、"lower"、"full" |
 | `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB，**sRGB** 空间（即取色器上显示的那组数） |
 | `ray_color` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
-| `opacity` | 浮点数 | 否 | 1.0 | 透明度 |
 | `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子 |
 | `grid` | 对象 | 否 | 见下方 | 网格配置 |
 | `filter` | 整数数组 | 否 | [] | 多散射过滤器ID数组 |
@@ -737,7 +735,6 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 - `crystal[].shape.upper_h` 和 `lower_h` 并不被钳制在 `[0.0, 1.0]`：负值会先取绝对值
   再参与构造，任何 `>= 1.0` 的值都得到与恰好 `1.0` 相同的满顶结果——这不是错误。
   各区间实际产出的形状见下方 [pyramid 形状合法性](#pyramid-形状合法性)。
-- `render[].opacity` 应在 0.0 到 1.0 之间
 - `render[].background` 和 `ray_color` 颜色值应在 0.0 到 1.0 之间
 - `render[].background` 是 **sRGB**：在没有晕能量的像素上，渲染出来的颜色就精确等于这里写的三元组。
   读取配置时会转换为线性空间，因为背景是加到晕的辐亮度上的，这个加法只在线性空间里才有意义；

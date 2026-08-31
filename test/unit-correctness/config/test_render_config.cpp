@@ -22,7 +22,6 @@ lumice::RenderConfig MakeBaseline() {
   cfg.ray_color_[0] = 1.0f;
   cfg.ray_color_[1] = 0.5f;
   cfg.ray_color_[2] = 0.0f;
-  cfg.opacity_ = 0.8f;
   cfg.intensity_factor_ = 2.0f;
   cfg.overlap_ = 0.1f;
   cfg.celestial_outline_ = false;
@@ -138,13 +137,6 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "ray_color";
   }
 
-  // opacity
-  {
-    auto mod = base;
-    mod.opacity_ = 0.1f;
-    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "opacity";
-  }
-
   // intensity_factor
   {
     auto mod = base;
@@ -202,7 +194,7 @@ TEST(RenderConfigTest, MixedChanges_LayoutPlusAppearance) {
   auto mod = base;
   mod.resolution_[0] = 3840;
   mod.background_[0] = 0.9f;
-  mod.opacity_ = 0.1f;
+  mod.intensity_factor_ = 0.1f;
   EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "layout change should dominate appearance changes";
 }
 

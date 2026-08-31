@@ -58,7 +58,11 @@ extern "C" {
 // xyz+composite getter existed to guarantee one generation, which any two reads off one frame
 // have by construction; and the cached-stats getter's "may be stale, never triggers a snapshot"
 // mode is gone — a frame carries the stats of the snapshot it is.
-#define LUMICE_API_VERSION 415
+//
+// BREAKING (v4.16): LUMICE_RenderParam loses its `opacity` field; struct layout changed.
+// See the struct's own BREAKING note for why it went rather than gained an implementation.
+// Recompile against this header.
+#define LUMICE_API_VERSION 416
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -673,6 +677,11 @@ typedef struct LUMICE_GridLine_ {
 // dual_fisheye_equal_area/fov180/view000/visible=full/black-background renderer — a config could
 // parse cleanly and then be simulated with a projection the caller never asked for. Callers must
 // recompile.
+// BREAKING (v4.16): opacity field removed; struct layout changed. The core RenderConfig field it
+// mirrored had no drawing consumer anywhere in the tree since the first commit — it parsed,
+// serialized and compared, but never reached a pixel, so every caller setting it was configuring
+// nothing. Removed rather than implemented: the renderer composites into a single image with no
+// layer to be transparent against. Callers must recompile.
 //
 // WARNING: a zero-initialized `LUMICE_RenderParam{}` is NOT a committable state — lens_fov = 0 is
 // rejected as an invalid FOV for every lens type. Callers must set at least lens_type/lens_fov
@@ -684,7 +693,6 @@ typedef struct LUMICE_RenderParam_ {
   int id;
   int resolution_w;
   int resolution_h;
-  float opacity;
   float intensity_factor;
   float overlap;   // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
   int lens_type;   // LUMICE_LENS_TYPE_*
