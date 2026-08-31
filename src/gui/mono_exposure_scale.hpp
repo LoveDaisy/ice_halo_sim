@@ -117,12 +117,19 @@ inline MonoExposure ComputeMonoExposure(int ev_mode, const MonoExposureInput& in
 // physical. Under kRelative the manual offset alone would be misleading — the auto anchor moves
 // underneath it, by many stops in a sparse scene — so all three numbers are shown: what the user
 // set, what the anchor contributed, and what the picture is actually exposed at.
+//
+// Both wordings are kept short enough to fit the Display group's 284px content width at the widest
+// values either can take (a two-digit manual stop count, now that the slider reaches +16). The
+// first draft of the relative one spelled out "manual"/"effective" and measured 308px, so it drew
+// clipped — a readout whose whole purpose is to stop a number being implicit, with the number cut
+// off. test_view_display_controls pins that it is not clipped; measure before lengthening either
+// string.
 inline std::string FormatMonoEvReadout(MonoEvMode mode, float exposure_offset, float ev_auto) {
   char buf[128];
   if (mode == MonoEvMode::kAbsolute) {
     std::snprintf(buf, sizeof(buf), "Absolute | EV %+.2f vs physical", exposure_offset);
   } else {
-    std::snprintf(buf, sizeof(buf), "Relative | EV %+.2f manual %+.2f auto = %+.2f effective", exposure_offset, ev_auto,
+    std::snprintf(buf, sizeof(buf), "Relative | EV %+.2f + auto %+.2f = %+.2f", exposure_offset, ev_auto,
                   exposure_offset + ev_auto);
   }
   return buf;

@@ -968,6 +968,22 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK(ctx->ItemInfo(relative_label.c_str(), ImGuiTestOpFlags_NoError).ID != 0);
       IM_CHECK_EQ(ctx->ItemInfo(wrong_absolute.c_str(), ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
 
+      // ... and it is not clipped, which "the item exists" does not cover and which the first
+      // draft of this readout got wrong: the relative wording spelled out "manual"/"effective",
+      // measured 308px against the Display group's 284px of content width, and drew with its last
+      // number cut off — a permanent readout that exists precisely so a number is never implicit,
+      // with the number missing.
+      //
+      // Read off the item rather than recomputed from the string: a Selectable's box is
+      // max(label width, available width) extended by half the item spacing on each side
+      // (imgui_widgets.cpp), so RectFull always runs a little past the window's work rect and the
+      // clip rect always takes that little back. What only happens when the text does NOT fit is
+      // the clip rect biting deeper than that allowance. Measured on the pre-fix wording, the
+      // difference was 37px against an 8px allowance; on the shipped wording it is 0px.
+      const ImGuiTestItemInfo readout_info = ctx->ItemInfo(relative_label.c_str());
+      IM_CHECK_LE(readout_info.RectFull.GetWidth() - readout_info.RectClipped.GetWidth(),
+                  ImGui::GetStyle().ItemSpacing.x);
+
       ctx->SetRef("");
     };
   }
