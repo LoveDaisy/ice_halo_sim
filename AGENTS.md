@@ -204,6 +204,22 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   touch `ctx`, make it drive `ctx` (`ctx->Yield()` is the frame pump); that states the
   dependency and satisfies the gate. If some case truly cannot be written that way, the rule
   is wrong and the rule changes — in the script, never per case.
+- `test/gui/parity/` is a fourth `gui_test` tag beside `functional/`, `visual/` and
+  `responsiveness/`, and the one whose oracle is neither a committed image nor a widget outcome:
+  **the same document rendered twice by two production paths and compared to each other**. Its
+  member today, `test_gui_cli_export_parity.cpp`, renders through the GUI's own per-frame
+  `PreviewParams` assembly and — in a child process, the first time this tree starts one of its
+  own binaries from a test — through the `Lumice` CLI fed by `BuildExportJsonOrWarn`'s output, so
+  "what the GUI shows is what the exported config renders" can go red. Three consequences worth
+  knowing before adding to it: it owns no reference asset and must never enter
+  `scripts/regen_gui_test_refs.py`'s `GROUPS`; its thresholds are placed against **the smallest
+  break the scene must catch** (measured by breaking each field on purpose) rather than against
+  `visual/`'s cross-machine 1.0 dB floor, which does not apply when both images are made in the
+  same run; and a parity comparison inherits every divergence between the two paths, so its scene
+  design is constrained by measured facts (only equal-area projections are comparable, since the
+  CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of an equal-area texture
+  does not) rather than by preference. `doc/testing-architecture.md` §4.10 has the full statement,
+  including the CMake shape a second child-process test would need.
 - `scripts/check_loop_fatal_asserts.py` is a **fourth** diff-scoped entry point, alongside
   `check_policies.py`, `check_new_refs.py`, and `check_new_gui_tests.py` above (same "checker is
   the rule" discipline; CI `new-refs` job on PRs vs merge-base, pre-commit hook on the staged
