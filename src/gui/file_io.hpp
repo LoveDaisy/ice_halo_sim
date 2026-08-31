@@ -120,6 +120,21 @@ SopExpansionSummary SummarizeSopExpansion(const FilterConfig& f);
 // Deserialize Core JSON string to GuiState, returns true on success
 bool DeserializeFromJson(const std::string& json_str, GuiState& state);
 
+// Format version of the GuiState JSON payload written by SerializeGuiStateJson (the `.lmc`
+// document body). A soft provenance signal, not a load gate: DeserializeGuiStateJson never reads
+// it, and every migration in this file triggers on the DATA's shape instead. The actual gate for
+// `.lmc` is the binary kLmcVersion header.
+//
+// ⚠️ Coupling with the personal-defaults store, which has a SECOND, INDEPENDENT counter:
+// kUserDefaultsOverlaySchemaVersion in user_defaults.hpp. The two are deliberately NOT aligned
+// and must not be assumed to move together — this one tracks the `.lmc` payload (every bump so
+// far happened under `layers`, which the overlay excludes wholesale), the other tracks the
+// overlay's own key space (GuiState's serialized keys minus `layers`, plus `presets.*`). Those
+// key spaces OVERLAP but are not equal. So when the SEMANTICS of a field visible to both change
+// (a serialized GuiState key that is not under `layers`), evaluate BOTH counters — bumping only
+// this one leaves the overlay unable to tell its own generations apart.
+inline constexpr int kGuiStateSchemaVersion = 4;
+
 // Serialize GuiState to full JSON (for .lmc file, preserves all frontend params)
 std::string SerializeGuiStateJson(const GuiState& state);
 

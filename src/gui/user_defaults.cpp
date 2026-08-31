@@ -118,6 +118,91 @@ void ResetIneligibleScalarFields(GuiState& state) {
   state.use_gpu_backend = factory.use_gpu_backend;
 }
 
+// "Does this document say anything the user chose?" — the provenance stamp does not count.
+//
+// The stamp is written by WriteUserDefaultsFile on every save, so a user who reverts every
+// personal default back to factory ends up with a file holding exactly one key instead of the
+// `{}` that meant "nothing saved" before. Anything answering "are there personal defaults?" with
+// a plain emptiness test would flip its answer over a field the user never set and cannot see.
+// Only one such test exists today (ApplyUserDefaultsOverlay's early return, below); this states
+// the rule where the next one will find it, instead of leaving it to be re-derived.
+bool IsOverlayDocEffectivelyEmpty(const nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    return true;
+  }
+  for (const auto& item : doc.items()) {
+    if (item.key() != kUserDefaultsOverlaySchemaVersionKey) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Classify the overlay's provenance stamp and report anything worth telling the user about. It
+// returns nothing and gates nothing: the caller proceeds identically whatever this finds, which
+// is the mechanical form of "record, never refuse" (see kUserDefaultsOverlaySchemaVersion).
+//
+//   absent          — every file written before the stamp existed. Silent, NOT a degradation:
+//                     that is the same reason ReadOverlayJsonIfPresent short-circuits a missing
+//                     file rather than counting it, and folding it in would hand every existing
+//                     user a warning the first time they upgraded.
+//   malformed       — string / null / negative / fractional. Treated as absent, but noticed: the
+//                     file says something about itself that cannot be true, and the legal domain
+//                     is positive integers only (0 was never written by any build, the counter
+//                     starts at 1).
+//   newer than this build — noticed, and that is ALL. The other keys are applied in full; see
+//                     AC5 in the issue and the header note for why refusing them would be worse
+//                     than the pre-stamp behavior it replaces.
+//   at or below this build — the ordinary case (a file this build or an older one wrote). Silent:
+//                     reading an older file is the design's daily job, not an anomaly.
+void ReportSchemaVersionStampIssues(const nlohmann::json& doc) {
+  const auto stamp = doc.find(kUserDefaultsOverlaySchemaVersionKey);
+  if (stamp == doc.end()) {
+    return;
+  }
+
+  // The classification below reads a value from a document that need not have come from a
+  // text file this build's own parser validated. `dump()` (used to render the malformed-shape
+  // notice) independently re-validates UTF-8 and throws (nlohmann::json type_error 316) on a
+  // string built in-memory from raw invalid bytes — e.g. `nlohmann::json{}["k"] =
+  // std::string("\xC0\x80")`, which bypasses json::parse()'s own strict UTF-8 checking (that
+  // checking is why a hand-edited FILE containing such a string, like an unpaired UTF-16
+  // surrogate escape `\uD800`, never reaches here at all: parse() rejects it upstream in
+  // ReadOverlayJsonIfPresent, well before this doc exists). This exception would otherwise
+  // escape this function and, since it runs before ApplyUserDefaultsOverlay's own try/catch
+  // (see the call site), abort loading the ENTIRE overlay — turning "an oddly-shaped version
+  // stamp" into exactly the kind of hard failure B3/AC5/AC6 rule out. A malformed stamp must
+  // never do worse than being ignored-and-reported.
+  try {
+    if (!stamp->is_number_integer() || stamp->get<long long>() <= 0) {
+      NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
+                                "' is not a positive integer (" + stamp->dump() +
+                                "); treating the file as unstamped and loading it anyway");
+      return;
+    }
+
+    const long long version = stamp->get<long long>();
+    if (version > kUserDefaultsOverlaySchemaVersion) {
+      // COPY CONSTRAINT, same one DescribeAxisPresetClamp above is written under: the sentence
+      // must not assert something the user cannot check and that may well be false. A higher
+      // stamp says only which build wrote the file — it does NOT imply the file holds any key
+      // this build fails to recognize, and the common case is that it holds none (the stamp
+      // rises on every format generation, whether or not the user's own settings changed shape).
+      // "settings it does not recognize are ignored" told every such user their settings had
+      // been dropped, on a load where nothing was. State what always holds: known keys applied,
+      // unknown ones (if any) skipped.
+      NoteUserDefaultsDowngrade("personal defaults were written by a newer version of Lumice (format " +
+                                std::to_string(version) + ", this build understands " +
+                                std::to_string(kUserDefaultsOverlaySchemaVersion) +
+                                "); every setting this build recognizes was applied as usual, and any it does "
+                                "not recognize were skipped");
+    }
+  } catch (const std::exception&) {
+    NoteUserDefaultsDowngrade(std::string("'") + kUserDefaultsOverlaySchemaVersionKey +
+                              "' could not be interpreted; treating the file as unstamped and loading it anyway");
+  }
+}
+
 }  // namespace
 
 int TakeUserDefaultsDowngradeCount() {
@@ -214,21 +299,47 @@ nlohmann::json ReadOverlayJsonIfPresent(const std::filesystem::path& dir) {
   }
 }
 
+namespace detail {
+
+// Layer the sparse override onto a full factory document rather than handing the fragment
+// straight to the deserializer. Both routes end at the same values (the deserializer is
+// already "missing key = factory value"), but this one keeps the deserializer's own
+// "no renderer key found" diagnostic honest: it is meant to flag a malformed .lmc, and it
+// would otherwise fire on every startup for a user whose defaults touch no renderer setting.
+nlohmann::json BuildMergedOverlayDocument(const nlohmann::json& doc) {
+  nlohmann::json merged = nlohmann::json::parse(SerializeGuiStateJson(GuiState{}));
+  merged.merge_patch(doc);
+
+  // Unconditional, after the merge and before anyone reads the result: whatever the overlay said
+  // about `schema_version` describes the file it came from, never the document being assembled
+  // here. merge_patch has already either overwritten this build's value with the file's, or —
+  // for a `null` — deleted the key; one assignment repairs both. See the header for why this
+  // cannot be observed through the resulting GuiState, and therefore why this function is
+  // separately visible at all.
+  merged["schema_version"] = kGuiStateSchemaVersion;
+  return merged;
+}
+
+}  // namespace detail
+
 void ApplyUserDefaultsOverlay(GuiState& state, const nlohmann::json& doc) {
-  if (!doc.is_object() || doc.empty()) {
+  if (!doc.is_object()) {
     return;
   }
 
-  // Layer the sparse override onto a full factory document rather than handing the fragment
-  // straight to the deserializer. Both routes end at the same values (the deserializer is
-  // already "missing key = factory value"), but this one keeps the deserializer's own
-  // "no renderer key found" diagnostic honest: it is meant to flag a malformed .lmc, and it
-  // would otherwise fire on every startup for a user whose defaults touch no renderer setting.
+  // Before the emptiness check, not after: a document whose ONLY key is a malformed stamp is
+  // still a file making a false claim about itself, and the user is owed the notice even though
+  // there is nothing left to apply.
+  ReportSchemaVersionStampIssues(doc);
+
+  if (IsOverlayDocEffectivelyEmpty(doc)) {
+    return;
+  }
+
   nlohmann::json merged;
   GuiState overlaid;
   try {
-    merged = nlohmann::json::parse(SerializeGuiStateJson(GuiState{}));
-    merged.merge_patch(doc);
+    merged = detail::BuildMergedOverlayDocument(doc);
     if (!DeserializeGuiStateJson(merged.dump(), overlaid)) {
       ++g_downgrade_count;
       GUI_LOG_WARNING("[GUI] User defaults: override document could not be applied; using factory defaults");
@@ -481,7 +592,20 @@ bool WriteUserDefaultsFile(const std::filesystem::path& dir, const nlohmann::jso
     GUI_LOG_WARNING("[GUI] User defaults: cannot write '{}'; nothing was saved", PathToU8(file));
     return false;
   }
-  out << doc.dump(2) << '\n';
+
+  // Stamp here, in the single write owner, so every writer is stamped without knowing it exists —
+  // and so no caller can choose otherwise. Overwriting any stamp the caller supplied is the point:
+  // "this file was written by this build" has no legitimate caller-chosen value. A test that needs
+  // a file claiming something else writes it raw, outside this owner (WriteRawOverlay).
+  //
+  // A non-object `doc` is left exactly as given. The only thing that hands one over is a test
+  // staging a deliberately malformed file; stamping it would turn it into a well-formed-but-odd
+  // file and quietly retire the case.
+  nlohmann::json stamped = doc;
+  if (stamped.is_object()) {
+    stamped[kUserDefaultsOverlaySchemaVersionKey] = kUserDefaultsOverlaySchemaVersion;
+  }
+  out << stamped.dump(2) << '\n';
   out.flush();
   if (!out.good()) {
     GUI_LOG_WARNING("[GUI] User defaults: write to '{}' failed; the file may be incomplete", PathToU8(file));
