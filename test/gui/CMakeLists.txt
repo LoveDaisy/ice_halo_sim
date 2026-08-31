@@ -37,6 +37,7 @@ add_executable(gui_test
     visual/test_gui_lens_projection.cpp
     visual/test_gui_modal_layout.cpp
     visual/test_gui_defaults_panel.cpp
+    parity/test_gui_cli_export_parity.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
@@ -85,7 +86,13 @@ target_compile_definitions(gui_test PRIVATE
     # task-command-reset-owner AC4: source-scan single-owner gate — the test
     # reads app.cpp to prove reset primitives (InvalidateStagedTexture,
     # g_crystal_mesh_hash=0) only appear inside ResetFrontendState.
-    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp")
+    LUMICE_GUI_APP_CPP_PATH="${CMAKE_SOURCE_DIR}/src/gui/app.cpp"
+    # The CLI binary the export-parity category starts as a child process
+    # (parity/test_gui_cli_export_parity.cpp). A generator expression is only a string, so the
+    # build dependency below is what makes it point at a binary that exists and is current.
+    LUMICE_CLI_BIN_PATH="$<TARGET_FILE:Lumice>")
+
+add_dependencies(gui_test Lumice)
 
 # macOS frameworks required by GLFW
 if(APPLE)
