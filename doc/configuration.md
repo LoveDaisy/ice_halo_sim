@@ -693,7 +693,7 @@ The render configuration defines the renderer parameters.
 {
   "central": [ ... ],
   "elevation": [ ... ],
-  "outline": <boolean>
+  "horizon": <boolean>
 }
 ```
 
@@ -703,7 +703,7 @@ The render configuration defines the renderer parameters.
 |-------|------|----------|---------|-------------|
 | `central` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
 | `elevation` | object array | no | [] | **Parsed but not rendered.** Same as `central`. |
-| `outline` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
+| `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
 
 **Grid lines that are not drawn**
 
@@ -714,7 +714,7 @@ kept in the schema rather than removed because the GUI preview draws its own alt
 and its own sun angular-distance circles, and the two descriptions are not the same shape (the GUI
 derives a single FOV-adaptive step and one shared colour, this schema names each line individually).
 Reconciling them is a design question, not an implementation gap, so the keys stay and this note
-says plainly what they do today. `outline` is the one member of this object that does draw.
+says plainly what they do today. `horizon` is the one member of this object that does draw.
 
 **Grid line configuration**:
 

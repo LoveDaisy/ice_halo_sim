@@ -1716,7 +1716,7 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // authoritative defaults instead. {-1,-1,-1} is RenderConfig::ray_color_'s "use the natural
     // spectral color" sentinel — a zero-initialized {0,0,0} would tint every ray black.
     dst.ray_color[0] = dst.ray_color[1] = dst.ray_color[2] = -1.0f;
-    dst.celestial_outline = 1;  // core RenderConfig::celestial_outline_ default (true)
+    dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
     // view / background / lens_shift / grid counts keep their zero-initialized values, which match
     // both the pre-v4.11 hardcoded encoding and core's defaults. The GUI's own screen-space
     // overlay grid (gui_state.show_grid_line) is a display-time layer and is unrelated to

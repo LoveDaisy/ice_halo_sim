@@ -159,7 +159,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 
   j["grid"].emplace("central", r.central_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
-  j["grid"].emplace("outline", r.celestial_outline_);
+  j["grid"].emplace("horizon", r.horizon_);
 }
 
 

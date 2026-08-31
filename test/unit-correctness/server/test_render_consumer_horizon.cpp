@@ -3,7 +3,7 @@
 // and that turning the flag on mid-run actually reaches the image.
 //
 // The mask itself is pinned analytically elsewhere (golden-analytic/core/
-// test_celestial_outline_mask.cpp); what cannot be seen from there is whether the consumer ever
+// test_horizon_mask.cpp); what cannot be seen from there is whether the consumer ever
 // reads it. That is this file's question, and it is asked by differencing two snapshots of the
 // SAME consumer config — one with the flag off, one on — so that the ray energy in the frame
 // cancels out and the only thing left in the difference is the annotation.
@@ -46,7 +46,7 @@ RenderConfig MakeOutlineConfig(bool outline) {
   cfg.resolution_[1] = kH;
   cfg.view_.el_ = 45.0f;
   cfg.visible_ = RenderConfig::kUpper;
-  cfg.celestial_outline_ = outline;
+  cfg.horizon_ = outline;
   return cfg;
 }
 
@@ -91,7 +91,7 @@ bool IsBlack(const std::vector<uint8_t>& img, int i) {
          img[static_cast<size_t>(i) * 3 + 2] == 0;
 }
 
-TEST(RenderConsumerCelestialOutline, PaintedPixelsAreExactlyTheMaskedOnes) {
+TEST(RenderConsumerHorizon, PaintedPixelsAreExactlyTheMaskedOnes) {
   RenderConsumer off(MakeOutlineConfig(false), ColorClassTable{});
   const std::vector<uint8_t> img_off = SnapshotOnce(&off);
   ASSERT_EQ(img_off.size(), static_cast<size_t>(kTotalPix) * 3);
@@ -100,7 +100,7 @@ TEST(RenderConsumerCelestialOutline, PaintedPixelsAreExactlyTheMaskedOnes) {
   const std::vector<uint8_t> img_on = SnapshotOnce(&on);
   ASSERT_EQ(img_on.size(), static_cast<size_t>(kTotalPix) * 3);
 
-  const std::vector<uint8_t>& mask = on.CelestialOutlineMaskForTest();
+  const std::vector<uint8_t>& mask = on.HorizonMaskForTest();
   ASSERT_EQ(mask.size(), static_cast<size_t>(kTotalPix));
   const size_t marked = static_cast<size_t>(std::count(mask.begin(), mask.end(), uint8_t{ 1 }));
   ASSERT_GT(marked, 0u) << "an empty mask would make every assertion below vacuous — this fixture puts the horizon "
@@ -131,14 +131,14 @@ TEST(RenderConsumerCelestialOutline, PaintedPixelsAreExactlyTheMaskedOnes) {
   EXPECT_EQ(stray, 0u) << "no pixel outside the mask may change colour when the annotation is switched on";
 }
 
-TEST(RenderConsumerCelestialOutline, TheFlagGatesThePaintingNotTheMask) {
+TEST(RenderConsumerHorizon, TheFlagGatesThePaintingNotTheMask) {
   RenderConsumer rc(MakeOutlineConfig(false), ColorClassTable{});
 
   // The mask is built at construction whatever the flag says. That is deliberate: the flag is on
   // the appearance-only side of NeedsRebuild, so it can be turned on through ResetWith without a
   // new consumer, and a mask built only for the construction-time value would be missing exactly
   // then.
-  const std::vector<uint8_t>& mask = rc.CelestialOutlineMaskForTest();
+  const std::vector<uint8_t>& mask = rc.HorizonMaskForTest();
   ASSERT_EQ(mask.size(), static_cast<size_t>(kTotalPix));
   const size_t marked = static_cast<size_t>(std::count(mask.begin(), mask.end(), uint8_t{ 1 }));
   EXPECT_GT(marked, 0u) << "the mask must be built even with grid.outline off";

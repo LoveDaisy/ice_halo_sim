@@ -594,7 +594,7 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["overlap"] = r.overlap;
   jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
-  jr["grid"]["outline"] = r.celestial_outline != 0;
+  jr["grid"]["horizon"] = r.horizon != 0;
   return jr;
 }
 
@@ -2331,7 +2331,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
 
     r.central_grid_count = 0;
     r.elevation_grid_count = 0;
-    r.celestial_outline = 0;  // core RenderConfig::celestial_outline_ defaults to false
+    r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {
@@ -2349,13 +2349,13 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
       }
-      if (gj.contains("outline")) {
+      if (gj.contains("horizon")) {
         bool outline = true;
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("outline"), outline);
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("horizon"), outline);
         if (err != LUMICE_OK) {
           return err;
         }
-        r.celestial_outline = outline ? 1 : 0;
+        r.horizon = outline ? 1 : 0;
       }
     }
   }

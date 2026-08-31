@@ -195,7 +195,7 @@ class RenderConsumer : public IConsume {
 
   // White-box handle on the horizon-annotation mask, for the tests that pin its shape against
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
-  const std::vector<uint8_t>& CelestialOutlineMaskForTest() const { return celestial_outline_mask_; }
+  const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
 
  private:
   // task-339.3: per-class lane accumulation, split out of Consume() to keep its
@@ -222,12 +222,12 @@ class RenderConsumer : public IConsume {
   std::vector<uint8_t> visible_mask_;
   // Row-major W*H, 1 where the celestial horizon (altitude = 0) annotation is drawn. Same
   // lifetime argument as visible_mask_ above, and built the same way — unconditionally, NOT
-  // only when config_.celestial_outline_ is set. The flag is on the appearance-only side of
+  // only when config_.horizon_ is set. The flag is on the appearance-only side of
   // NeedsRebuild, so a config that turns it on mid-run reaches this consumer through
   // ResetWith() with no rebuild; a mask built only for the flag's value at construction would
   // then be empty exactly when the user has just asked for the line. Gating happens at the
   // point of use in PostSnapshot instead.
-  std::vector<uint8_t> celestial_outline_mask_;
+  std::vector<uint8_t> horizon_mask_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot

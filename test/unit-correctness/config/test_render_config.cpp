@@ -24,7 +24,7 @@ lumice::RenderConfig MakeBaseline() {
   cfg.ray_color_[2] = 0.0f;
   cfg.intensity_factor_ = 2.0f;
   cfg.overlap_ = 0.1f;
-  cfg.celestial_outline_ = false;
+  cfg.horizon_ = false;
   // Leave grids and ms_filter empty for baseline.
   return cfg;
 }
@@ -158,11 +158,11 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "elevation_grid";
   }
 
-  // celestial_outline
+  // horizon
   {
     auto mod = base;
-    mod.celestial_outline_ = true;
-    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "celestial_outline";
+    mod.horizon_ = true;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "horizon";
   }
 }
 

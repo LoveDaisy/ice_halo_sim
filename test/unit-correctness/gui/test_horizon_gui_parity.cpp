@@ -15,7 +15,7 @@
 // `clamp(fwidth(altitude_deg), 1e-4, 2.0) * 1.5` band). Only the first of those is duplicated in
 // this repo. `fwidth` is a rasterizer primitive with no C++ counterpart, so BOTH sides of this
 // test necessarily run the same CPU restatement of the width rule —
-// mask_detail::HorizonLineFromAltitudeField, which core's BuildCelestialOutlineMask itself calls.
+// mask_detail::HorizonLineFromAltitudeField, which core's BuildHorizonMask itself calls.
 // Feeding both altitude fields through the one shared rule is what makes this test about the
 // question that HAS two answers. What it therefore does not cover is a divergence between the
 // shader's own fwidth and this CPU forward difference; that is a line-thickness question, and AC6
@@ -80,13 +80,13 @@ RenderConfig MakeCfg(LensParam::LensType type, float fov, int w, int h, RenderCo
   cfg.view_.ro_ = ro;
   cfg.visible_ = vis;
   cfg.overlap_ = 0.0f;  // same reason as the sibling file: the GUI's inverse ignores r_scale
-  cfg.celestial_outline_ = true;
+  cfg.horizon_ = true;
   return cfg;
 }
 
 std::vector<uint8_t> CoreOutline(const RenderConfig& cfg) {
   const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-  return lumice::BuildCelestialOutlineMask(cfg, lumice::MakeCameraRotation(cfg), short_pix);
+  return lumice::BuildHorizonMask(cfg, lumice::MakeCameraRotation(cfg), short_pix);
 }
 
 // The shader's visibility rule, restated exactly as the sibling file does (preview_renderer.cpp
@@ -271,7 +271,7 @@ constexpr RenderConfig::VisibleRange kAllRanges[] = { RenderConfig::kUpper, Rend
 // Lens types whose domains the sibling file established are identical: the horizon must match too
 // =================================================================================================
 
-TEST(CelestialOutlineGuiParity, LinearAgreesExactly) {
+TEST(HorizonGuiParity, LinearAgreesExactly) {
   for (RenderConfig::VisibleRange vis : kAllRanges) {
     // el = 0 puts the horizon across the middle of the frame for every `visible` setting.
     ExpectLinesCoincide(MakeCfg(LensParam::kLinear, 90.0f, 96, 72, vis, /*el=*/0.0f), "linear");
@@ -279,14 +279,14 @@ TEST(CelestialOutlineGuiParity, LinearAgreesExactly) {
   }
 }
 
-TEST(CelestialOutlineGuiParity, RectangularAgreesExactly) {
+TEST(HorizonGuiParity, RectangularAgreesExactly) {
   for (RenderConfig::VisibleRange vis : kAllRanges) {
     ExpectLinesCoincide(MakeCfg(LensParam::kRectangular, 180.0f, 128, 64, vis, 0.0f), "rectangular 2:1");
     ExpectLinesCoincide(MakeCfg(LensParam::kRectangular, 180.0f, 96, 96, vis, 0.0f), "rectangular square");
   }
 }
 
-TEST(CelestialOutlineGuiParity, DualFisheyeAgreesExactlyForAllFourVariants) {
+TEST(HorizonGuiParity, DualFisheyeAgreesExactlyForAllFourVariants) {
   const LensParam::LensType types[] = { LensParam::kDualFisheyeEqualArea, LensParam::kDualFisheyeEquidistant,
                                         LensParam::kDualFisheyeStereographic, LensParam::kDualFisheyeOrthographic };
   for (LensParam::LensType t : types) {
@@ -296,7 +296,7 @@ TEST(CelestialOutlineGuiParity, DualFisheyeAgreesExactlyForAllFourVariants) {
   }
 }
 
-TEST(CelestialOutlineGuiParity, GlobeAgreesExactly) {
+TEST(HorizonGuiParity, GlobeAgreesExactly) {
   for (RenderConfig::VisibleRange vis : kAllRanges) {
     ExpectLinesCoincide(MakeCfg(LensParam::kGlobe, 30.0f, 128, 96, vis, /*el=*/5.0f, /*az=*/40.0f), "globe");
   }
@@ -306,7 +306,7 @@ TEST(CelestialOutlineGuiParity, GlobeAgreesExactly) {
 // The single-fisheye family: the inherited domain divergence, in horizon terms
 // =================================================================================================
 
-TEST(CelestialOutlineGuiParity, SingleFisheyeCoreIsASubsetOfTheGuiHorizon) {
+TEST(HorizonGuiParity, SingleFisheyeCoreIsASubsetOfTheGuiHorizon) {
   // At fov = 180 core's domain stops at the equator and the GUI's does not, so the GUI can carry
   // horizon pixels core never reaches. What must NOT happen is the other direction: a pixel core
   // annotates and the GUI does not would mean the two disagree about where altitude 0 IS, which is
@@ -331,7 +331,7 @@ TEST(CelestialOutlineGuiParity, SingleFisheyeCoreIsASubsetOfTheGuiHorizon) {
   }
 }
 
-TEST(CelestialOutlineGuiParity, SingleFisheyeAgreesExactlyWhenBothBoundariesAreOffFrame) {
+TEST(HorizonGuiParity, SingleFisheyeAgreesExactlyWhenBothBoundariesAreOffFrame) {
   // Narrow FOV keeps both domain boundaries outside the frame, which removes the annulus and with
   // it the only reason the two sides may differ. Asserting equality here is what separates "the
   // subset above is the domain gap" from "the subset above hides a position disagreement".

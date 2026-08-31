@@ -57,7 +57,7 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
   // Once per consumer, right after rot_ is final — see the member's declaration for why a
   // single build covers the whole lifetime.
   visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
-  celestial_outline_mask_ = BuildCelestialOutlineMask(config_, rot_, short_pix_);
+  horizon_mask_ = BuildHorizonMask(config_, rot_, short_pix_);
 
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
@@ -541,8 +541,7 @@ void RenderConsumer::PostSnapshot() {
   // (gui_state.hpp horizon_color / horizon_alpha), converted here because this blend happens in
   // LINEAR RGB — same domain and same place in the chain as the background term below it, which is
   // the repo's standing rule for anything added to radiance before the transfer curve.
-  const bool paint_outline_layer =
-      config_.celestial_outline_ && celestial_outline_mask_.size() == static_cast<size_t>(total_pix);
+  const bool paint_outline_layer = config_.horizon_ && horizon_mask_.size() == static_cast<size_t>(total_pix);
   constexpr float kOutlineAlpha = 0.6f;
   constexpr float kOutlineSrgb[3]{ 0.8f, 0.2f, 0.2f };
   float outline_rgb[3];
@@ -599,7 +598,7 @@ void RenderConsumer::PostSnapshot() {
     // is skipped: clamp, gamma and the narrowing write still run for every pixel, so a
     // masked pixel goes through the identical chain with a zero background.
     const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
-    const bool paint_outline = paint_outline_layer && celestial_outline_mask_[i] != 0;
+    const bool paint_outline = paint_outline_layer && horizon_mask_[i] != 0;
     for (int j = 0; j < 3; j++) {
       if (paint_bg) {
         rgb[j] += config_.background_[j];

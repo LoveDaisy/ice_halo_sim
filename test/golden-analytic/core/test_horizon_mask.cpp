@@ -1,5 +1,5 @@
 // Analytic coverage for the celestial-horizon annotation mask
-// (core/lens_proj_build.hpp::BuildCelestialOutlineMask).
+// (core/lens_proj_build.hpp::BuildHorizonMask).
 //
 // The mask answers "does pixel (px, py) sit on the line at altitude 0?". Its two halves fail
 // differently and are pinned separately here:
@@ -64,7 +64,7 @@ RenderConfig MakeCfg(LensParam::LensType type, float fov, int w, int h,
 
 std::vector<uint8_t> Outline(const RenderConfig& cfg) {
   const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-  return BuildCelestialOutlineMask(cfg, MakeCameraRotation(cfg), short_pix);
+  return BuildHorizonMask(cfg, MakeCameraRotation(cfg), short_pix);
 }
 
 bool At(const std::vector<uint8_t>& mask, const RenderConfig& cfg, int px, int py) {
@@ -150,7 +150,7 @@ const char* TypeName(LensParam::LensType t) {
 // Position — the axis-on-the-horizon prediction, which every rotationally symmetric lens shares.
 // ==================================================================================================
 
-TEST(CelestialOutlineMask, AxisOnTheHorizonImagesTheCentralRow) {
+TEST(HorizonMask, AxisOnTheHorizonImagesTheCentralRow) {
   for (LensParam::LensType type : kSingleLensTypes) {
     const RenderConfig cfg = MakeCfg(type, 90.0f, kW, kH);
     const std::vector<uint8_t> mask = Outline(cfg);
@@ -185,7 +185,7 @@ TEST(CelestialOutlineMask, AxisOnTheHorizonImagesTheCentralRow) {
   }
 }
 
-TEST(CelestialOutlineMask, RollTurnsTheHorizonVertical) {
+TEST(HorizonMask, RollTurnsTheHorizonVertical) {
   // Rolling the camera 90 deg about its axis rotates the image, and with it the line. The
   // prediction is the same diameter, now the vertical one — a mask that had hardcoded "rows near
   // the centre" instead of deriving the direction per pixel passes the previous case and fails
@@ -218,14 +218,14 @@ TEST(CelestialOutlineMask, RollTurnsTheHorizonVertical) {
                              << stray.first;
 }
 
-TEST(CelestialOutlineMask, HorizonOutsideTheFrameDrawsNothing) {
+TEST(HorizonMask, HorizonOutsideTheFrameDrawsNothing) {
   // A 40 deg frame pointed 70 deg up cannot contain altitude 0. Anything drawn here is the line
   // appearing where it does not belong, which is the failure mode a too-wide fixed threshold has.
   const RenderConfig cfg = MakeCfg(LensParam::kLinear, 40.0f, kW, kH, RenderConfig::kFull, 70.0f);
   EXPECT_EQ(CountOn(Outline(cfg)), 0u);
 }
 
-TEST(CelestialOutlineMask, EquirectangularKeepsTheHorizonOnTheCentreRow) {
+TEST(HorizonMask, EquirectangularKeepsTheHorizonOnTheCentreRow) {
   // The equirectangular frame maps latitude linearly onto rows and is horizon-centred by
   // construction (RectangularPixelToWorld does not consult the camera rotation at all), so the
   // line is the centre row across the FULL width, elevation notwithstanding. That last clause is
@@ -265,7 +265,7 @@ TEST(CelestialOutlineMask, EquirectangularKeepsTheHorizonOnTheCentreRow) {
 // Width — the property a fixed angular threshold cannot have.
 // ==================================================================================================
 
-TEST(CelestialOutlineMask, LineWidthTracksDegreesPerPixelRatherThanAFixedAngle) {
+TEST(HorizonMask, LineWidthTracksDegreesPerPixelRatherThanAFixedAngle) {
   // Across this FOV span the degrees-per-pixel at the frame centre changes by more than an order
   // of magnitude. A fixed angular half-width would make the line a hairline at one end and a band
   // at the other; the shader's rule keeps it a couple of pixels at both.
@@ -283,7 +283,7 @@ TEST(CelestialOutlineMask, LineWidthTracksDegreesPerPixelRatherThanAFixedAngle) 
 // DRAWABLE pixels instead of the IMAGED ones.
 // ==================================================================================================
 
-TEST(CelestialOutlineMask, VisibleUpperKeepsTheLineAndClipsItsLowerHalf) {
+TEST(HorizonMask, VisibleUpperKeepsTheLineAndClipsItsLowerHalf) {
   const RenderConfig cfg = MakeCfg(LensParam::kLinear, 90.0f, kW, kH, RenderConfig::kUpper);
   const std::vector<uint8_t> mask = Outline(cfg);
   ASSERT_GT(CountOn(mask), 0u) << "the horizon bounds the upper hemisphere; clipping to it must not erase the line";
@@ -300,7 +300,7 @@ TEST(CelestialOutlineMask, VisibleUpperKeepsTheLineAndClipsItsLowerHalf) {
   EXPECT_EQ(wrong.count, 0u) << "first " << wrong.first;
 }
 
-TEST(CelestialOutlineMask, VisibleLowerKeepsTheLineAndClipsItsUpperHalf) {
+TEST(HorizonMask, VisibleLowerKeepsTheLineAndClipsItsUpperHalf) {
   const RenderConfig cfg = MakeCfg(LensParam::kLinear, 90.0f, kW, kH, RenderConfig::kLower);
   const std::vector<uint8_t> mask = Outline(cfg);
   ASSERT_GT(CountOn(mask), 0u);
@@ -321,7 +321,7 @@ TEST(CelestialOutlineMask, VisibleLowerKeepsTheLineAndClipsItsUpperHalf) {
 // The remaining lens families, and the degenerate input.
 // ==================================================================================================
 
-TEST(CelestialOutlineMask, DualFisheyeAndGlobeDrawAHorizonToo) {
+TEST(HorizonMask, DualFisheyeAndGlobeDrawAHorizonToo) {
   // No closed-form row prediction for these two (the dual layout splits the sphere across two
   // circles, and the globe images a sphere from OUTSIDE, so its horizon is the silhouette-bounded
   // equator, a curve). What is asserted is that the branch produces a LINE: non-empty, and small
@@ -346,7 +346,7 @@ TEST(CelestialOutlineMask, DualFisheyeAndGlobeDrawAHorizonToo) {
   }
 }
 
-TEST(CelestialOutlineMask, EveryMarkedPixelIsInsideTheRenderDomain) {
+TEST(HorizonMask, EveryMarkedPixelIsInsideTheRenderDomain) {
   // The annotation is painted under the same gate as the background (render.cpp PostSnapshot), so
   // a marked pixel outside the render domain would draw a line across a region that images
   // nothing. Stated against BuildVisibleMask, the mask that owns that domain, rather than against
@@ -359,7 +359,7 @@ TEST(CelestialOutlineMask, EveryMarkedPixelIsInsideTheRenderDomain) {
       const RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
       const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
       const Rotation rot = MakeCameraRotation(cfg);
-      const std::vector<uint8_t> outline = BuildCelestialOutlineMask(cfg, rot, short_pix);
+      const std::vector<uint8_t> outline = BuildHorizonMask(cfg, rot, short_pix);
       const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
       if (outline.size() != visible.size()) {
         ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
@@ -378,7 +378,7 @@ TEST(CelestialOutlineMask, EveryMarkedPixelIsInsideTheRenderDomain) {
   }
 }
 
-TEST(CelestialOutlineMask, DegenerateResolutionYieldsAnEmptyMask) {
+TEST(HorizonMask, DegenerateResolutionYieldsAnEmptyMask) {
   RenderConfig cfg = MakeCfg(LensParam::kLinear, 90.0f, kW, kH);
   cfg.resolution_[0] = 0;
   EXPECT_TRUE(Outline(cfg).empty());

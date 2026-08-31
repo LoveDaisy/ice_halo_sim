@@ -671,7 +671,7 @@ typedef struct LUMICE_GridLine_ {
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 // BREAKING (v4.11): extended from the 6-field projection-agnostic subset to the full renderer
 // description (lens / lens_shift / view / visible / background / ray_color / grid /
-// celestial_outline). Before this, those fields had no home in the struct, so every C API entry
+// horizon). Before this, those fields had no home in the struct, so every C API entry
 // point that re-encodes a renderer (LUMICE_SceneFromJson/File, LUMICE_SceneAddRenderer)
 // silently replaced them with a hardcoded
 // dual_fisheye_equal_area/fov180/view000/visible=full/black-background renderer — a config could
@@ -711,16 +711,16 @@ typedef struct LUMICE_RenderParam_ {
   // spectral color". Zero-init means an all-black tint, NOT the sentinel.
   float ray_color[3];
   // Non-zero = draw a line along the celestial horizon (altitude 0). Opt-in: core's
-  // RenderConfig::celestial_outline_ defaults to false, so a zero-initialized struct asks for
+  // RenderConfig::horizon_ defaults to false, so a zero-initialized struct asks for
   // no annotation, which is what the JSON path also gives a config with no "grid" object.
-  int celestial_outline;
+  int horizon;
   // PARSED BUT NOT RENDERED. Both lists are validated, round-tripped through JSON and compared,
   // and no code draws either — a scene that sets them produces exactly the image it would produce
   // without them. They are kept because the far target ("a CLI re-render equals what the GUI
   // showed, annotations included") needs them, and the blocker is not the drawing code but a model
   // mismatch: this schema names every line individually while the GUI derives one FOV-adaptive
   // step and one shared colour, plus a separate list of sun angular-distance circles. Reconciling
-  // the two is a design decision, so the fields stay and say so. celestial_outline above is the
+  // the two is a design decision, so the fields stay and say so. horizon above is the
   // one member of this group that does draw.
   LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int central_grid_count;

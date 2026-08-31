@@ -98,7 +98,7 @@ struct RenderConfig {
   // config that never asked for one (13 of the 14 reference renders in test/e2e-correctness/ set
   // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
   // nobody has made, so the default states the one thing that is certain: draw it when asked.
-  bool celestial_outline_ = false;
+  bool horizon_ = false;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare

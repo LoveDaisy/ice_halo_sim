@@ -329,7 +329,7 @@ compares layout-affecting fields between old and new `RenderConfig`:
 | `resolution_` | `background_` |
 | `lens_` (type + fov) | `ray_color_` |
 | `lens_shift_` | `intensity_factor_` |
-| `view_` | `central_grid_` / `elevation_grid_` / `celestial_outline_` |
+| `view_` | `central_grid_` / `elevation_grid_` / `horizon_` |
 | `visible_` | |
 | `overlap_` | |
 

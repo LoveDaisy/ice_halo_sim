@@ -282,7 +282,7 @@ inline bool VisibleByRange(RenderConfig::VisibleRange range, float wz) {
 
 // The per-pixel inverse, lens branch and all: pixel (px, py) -> the world direction it images.
 // Extracted so that every mask built from this projection reads the SAME inverse. A second
-// annotation mask (BuildCelestialOutlineMask below) exists today and grid annotations may follow;
+// annotation mask (BuildHorizonMask below) exists today and grid annotations may follow;
 // each one re-deriving the direction is how two masks of the same frame start disagreeing about
 // where the sky is.
 inline MaskDir PixelToWorld(const RenderConfig& cfg, const lm_proj::ProjParams& p, const Rotation& rot, int px,
@@ -437,7 +437,7 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
 // the horizon ending at the sky's edge on both sides rather than only on one.
 //
 // Returns an empty vector for a degenerate resolution.
-inline std::vector<uint8_t> BuildCelestialOutlineMask(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
+inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
   const int width = cfg.resolution_[0];
   const int height = cfg.resolution_[1];
   if (width <= 0 || height <= 0) {

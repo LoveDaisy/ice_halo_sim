@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`render[].grid.outline` now defaults to `false`** (469.7). It defaulted to `true` for as long
   as it existed, which cost nothing while nothing drew it; now that it draws, leaving it on would
-  put a horizon line into every existing config that never asked for one. Add `"outline": true` to
+  put a horizon line into every existing config that never asked for one. Add `"horizon": true` to
   a renderer to get the line back. Turning an annotation on for every render is a product decision
   nobody has made, so the default states the one thing that is certain: draw it when asked.
 - **`render[].grid.central` / `grid.elevation` documented as not rendered** (469.7). Both keys are

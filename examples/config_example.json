@@ -281,7 +281,7 @@
       "background": [0, 0, 0],
       "ray_color": [1, 1, 1],
       "grid": {
-        "outline": true
+        "horizon": true
       }
     },
     {

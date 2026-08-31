@@ -408,7 +408,7 @@ TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTrip) {
 // Every renderer field must survive the round trip — no whitelist. Before v4.11 this asserted the
 // weaker "the expression gap stays confined to the fields the C struct cannot carry" (only
 // id / resolution / intensity_factor / overlap were compared, because lens / lens_shift
-// / view / visible / background / ray_color / grid / celestial_outline had no home in
+// / view / visible / background / ray_color / grid / horizon had no home in
 // LUMICE_RenderParam and were silently replaced with a hardcoded renderer). The struct now carries
 // all of them, so the comparison is core's own RenderConfig::operator==.
 // (Formerly JsonParserParity.CorpusRendererGapConfinedToUnrepresentableFields.)
