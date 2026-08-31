@@ -118,8 +118,10 @@ whether the computed exposure *uses* it:
   clipping. This is what makes two differently-configured renders at the same EV
   comparable in absolute brightness, which is the feature `Absolute` mode exists
   for. See [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7 for
-  the exact definition, the measured `landed_fraction` displacement law, and the
-  documented cross-lens boundary.
+  the exact definition, the measured `landed_fraction` displacement law, the
+  documented cross-lens boundary (§7.3), and why an undersampled scene still darkens
+  as `ray_num` grows in `Absolute` mode — a Monte-Carlo estimator property `Relative`
+  happens to compensate for, not a defect `Absolute` introduces (§7.4).
 - `ev_auto` is **not** added to the exposure. Folding a per-frame auto anchor into a
   value meant to read as "stops above or below physical" would put the reading back
   on a moving baseline, defeating the point. The auto anchor is still computed and

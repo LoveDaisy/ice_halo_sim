@@ -79,8 +79,10 @@ g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, t
 - 曝光分母从每像素 landed 强度（`snapshot_intensity`）换成光源**发射**的能量
   （`snapshot_emitted_energy`，来自 `LUMICE_RawXyzResult::emitted_energy`）——由光源与光线预算固定，
   不受 filter、场景通过率或 lens 裁剪影响。这正是让不同配置的两次渲染在同一 EV 下可比较绝对亮度的
-  机制，也是 `Absolute` 模式存在的目的。精确定义、实测的 `landed_fraction` 位移规律与已记录的跨 lens
-  边界见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7。
+  机制，也是 `Absolute` 模式存在的目的。精确定义、实测的 `landed_fraction` 位移规律、已记录的跨 lens
+  边界（§7.3），以及为什么欠采样场景在 `Absolute` 模式下仍会随 `ray_num` 增长而变暗——这是 `Relative`
+  恰好替你抵消掉的一条 Monte Carlo 估计量性质，不是 `Absolute` 引入的缺陷（§7.4）——均见
+  [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7。
 - `ev_auto` **不会**被加进曝光。把一个逐帧变化的自动锚点悄悄叠进一个本该读作"比物理亮/暗几档"的数字上，
   会让这个读数重新落在一个会移动的基线上，违背其本意。自动锚点仍会被计算并显示在 EV 读数旁——标注为
   未生效——因为一个 UI 不再更新的值仍然占着一个标签位，不标注反而像是它悄悄失效了。

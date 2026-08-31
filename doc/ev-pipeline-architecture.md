@@ -599,8 +599,9 @@ Regression pins:
 
 ## §7 Emitted Energy: Definition and Honest Boundary
 
-This section defines the `kAbsolute` denominator precisely and states the one thing
-it deliberately does not fix, so the gap does not get rediscovered as a bug.
+This section defines the `kAbsolute` denominator precisely and states two things it
+deliberately does not compensate for — a spatial one (§7.3, cross-lens) and a
+sampling one (§7.4, undersampling) — so neither gets rediscovered as a bug.
 
 ### §7.1 Definition
 
@@ -691,6 +692,42 @@ permanent** design boundary, not a gap to be closed later:
 If a future need requires true radiance (per-pixel `Ω_p` division) or cross-lens
 comparability, treat it as new scope with its own AC on image-appearance regression,
 not as a follow-up to this feature.
+
+### §7.4 Undersampling Darkens Regardless of Denominator — This Is Not a Defect
+
+§7.2 and §7.3 are about a **spatial** dimension: `landed_fraction` differs by lens,
+filter, and scene pass rate, and that difference is what makes `kAbsolute`
+comparable across configurations. This section is about an orthogonal, **sampling**
+dimension, and is easy to conflate with §7.2 because both involve a denominator —
+they are not the same claim.
+
+At a fixed EV, an undersampled scene's display **darkens as `ray_num` grows**,
+independent of which denominator is used. Measured on the same calibration corpus:
+the sparse-scene N-scaling slope is essentially identical for both denominators
+(landed-weight: **-1.026**; emitted-energy: **-1.027**, on log-log `display / N`).
+The mechanism is ordinary Monte-Carlo behavior, not a normalization artifact: as
+`ray_num` grows, a fixed set of lit pixels accumulates more hits each (their
+per-pixel value does not grow, because they are already at their converged
+intensity), while previously-dark pixels gradually receive their first hit and join
+the lit set — so at any fixed EV, the same total energy spreads over more, fainter
+pixels, and the bright end of the histogram appears to dim as the sample grows. This
+is the renderer displaying its own estimator honestly, not a bug that gets worse the
+longer a simulation runs.
+
+Why `kAbsolute` shows this and `kRelative` does not, despite both denominators
+having the same slope: `kRelative`'s anchor is `ray_num`-dependent by construction —
+it re-derives the P99 from the current frame every time, so as the sparse-pixel
+population's own statistics shift, the self-anchor gain (`target_linear / P99`, §2.6)
+shifts to compensate, and the picture keeps its look. `kAbsolute`'s anchor
+(`snapshot_emitted_energy`) is fixed by the light source and ray budget precisely
+because that fixedness is the feature — so nothing in the formula compensates, and
+the underlying sampling darkening becomes visible on screen.
+
+The correct framing, and the one to use if this is ever reported: **`kAbsolute`
+exposes a fact that was always there and that `kRelative` happens to compensate for
+— it is not a defect introduced by `kAbsolute`.** Do not "fix" it by adding an
+N-dependent term to `kAbsolute`'s formula; that would just rebuild `kRelative`'s
+self-anchor under a different name and defeat the reason `kAbsolute` exists.
 
 ---
 
