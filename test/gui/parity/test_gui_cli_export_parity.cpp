@@ -220,6 +220,7 @@ const ParityScene kScenes[] = {
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/1024, /*expect_h=*/512},
 };
+// clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the
 // export canvas and the GUI capture derive from it, so it fixes the working point the thresholds
 // above were calibrated at; changing it invalidates them.
