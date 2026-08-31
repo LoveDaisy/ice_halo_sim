@@ -1084,11 +1084,15 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
 \n    // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
     // mode two open files can sit at different heights on one shared scale. A single-document GUI
     // cannot compare them for the user, but it can refuse to leave the current height implicit.
-    // Rendered as a disabled Selectable rather than TextDisabled so it carries a real item ID and
-    // the GUI tests can address it; "###" keeps that ID stable while the label tracks the value.
+    // Rendered as a disabled Selectable rather than TextDisabled because an ImGui::Text* submits
+    // with id == 0 and never enters the test engine's item registry — "the value is on screen"
+    // would then not be assertable at all. "##" rather than "###" on purpose: the double form
+    // folds the whole label, text included, into the id, so a test that locates this item by its
+    // rendered string IS asserting the rendered string. The triple form pins the id and throws the
+    // text away, which is the opposite of what needs pinning here.
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::Selectable(
-        (lumice::gui::FormatMonoEvReadout(r.ev_mode, r.exposure_offset, g_state.ev_auto) + "###display_ev_readout")
+        (lumice::gui::FormatMonoEvReadout(r.ev_mode, r.exposure_offset, g_state.ev_auto) + "##display_ev_readout")
             .c_str(),
         false, ImGuiSelectableFlags_Disabled);
     ImGui::PopStyleColor();

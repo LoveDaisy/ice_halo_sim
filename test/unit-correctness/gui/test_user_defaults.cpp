@@ -1321,4 +1321,42 @@ TEST_F(UserDefaults, schema_version_stamp_only_document_is_effectively_empty) {
   const gui::GuiState truly_empty = gui::MakeNewDocumentState(FreshOverlayDir("stamp_only_empty"));
   EXPECT_TRUE(SerializesIdentically(stamped_only, truly_empty))
       << "a document carrying only the stamp must produce the same state as one carrying nothing";
+\n// The exposure mode as a personal default, which is the one field where "personal default" and
+// "the document decides" pull hardest against each other.
+//
+// Absolute mode is a working preference: someone comparing scenes wants every NEW document to
+// start on the absolute scale, and having to flip the combo each time is the friction the
+// defaults namespace exists to remove. But it is also a field that changes what a picture LOOKS
+// like, so the reverse direction has to hold just as firmly — a .lmc that predates the key, or
+// one written by someone who works in relative, must open the way its author saw it and not get
+// silently re-exposed by the reader's preference. That is invariant I1 again, on a field where
+// violating it would be visible as a wrong-looking image rather than as an error.
+TEST_F(UserDefaults, the_exposure_mode_is_adoptable_as_a_personal_default_without_reaching_opened_files) {
+  const auto dir = FreshOverlayDir("ev_mode");
+
+  // Factory is relative — the premise the rest of the case rests on, asserted rather than assumed.
+  EXPECT_EQ(gui::RenderConfig{}.ev_mode, 0);
+
+  json doc;
+  doc["renderer"]["ev_mode"] = "absolute";
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+
+  // Forward: a new document starts in absolute.
+  EXPECT_EQ(gui::MakeNewDocumentState(dir).renderer.ev_mode, 1);
+
+  // Reverse: a document that never mentions the key opens relative, NOT absolute. The personal
+  // default must not reach it.
+  json lmc_doc = json::parse(gui::SerializeGuiStateJson(gui::InitDefaultState()));
+  lmc_doc["renderer"].erase("ev_mode");
+  gui::GuiState opened;
+  opened.renderer.ev_mode = 1;  // seed non-default so a no-op read cannot pass
+  EXPECT_TRUE(gui::DeserializeGuiStateJson(lmc_doc.dump(), opened));
+  EXPECT_EQ(opened.renderer.ev_mode, 0);
+
+  // And a document that states relative explicitly stays relative, with the same default in place.
+  lmc_doc["renderer"]["ev_mode"] = "relative";
+  gui::GuiState explicit_relative;
+  explicit_relative.renderer.ev_mode = 1;
+  EXPECT_TRUE(gui::DeserializeGuiStateJson(lmc_doc.dump(), explicit_relative));
+  EXPECT_EQ(explicit_relative.renderer.ev_mode, 0);
 }

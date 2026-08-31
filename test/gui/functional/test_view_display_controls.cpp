@@ -39,7 +39,9 @@
 #include <cmath>
 #include <string>
 
+#include "gui/app.hpp"  // g_state / g_server / g_preview_vp / DoRun — the exposure-mode case
 #include "gui/gui_state.hpp"
+#include "gui/mono_exposure_scale.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -50,6 +52,20 @@ namespace {
 // "the user was told". The ratio detail printed on the following line is a plain Text and is
 // therefore NOT assertable here — that is a property of ImGui's item registry, not an omission.
 constexpr const char* kClampWarning = "**/Screen too small for this aspect";
+
+// Open the Display group's exposure Mode combo and pick an entry.
+//
+// Hand-rolled rather than ctx->ComboClick() for the same two reasons the colour window's picker
+// is: ImGui::BeginCombo() never calls IMGUI_TEST_ENGINE_ITEM_INFO(), so the combo has no debug
+// label for a "**/" wildcard to match and must be addressed by its literal path; and the popup it
+// opens is a separate window, which only SetRef("//$FOCUSED") can point at — ImHashDecoratedPath
+// does not understand the $FOCUSED variable inside a longer path.
+void PickExposureMode(ImGuiTestContext* ctx, const char* entry) {
+  ctx->ItemClick("//##RightPanel/Mode##display");
+  ctx->SetRef("//$FOCUSED");
+  ctx->ItemClick((std::string("**/") + entry).c_str());
+  ctx->SetRef("");
+}
 
 // Install a clamp signal without going through ApplyAspectRatio.
 //
@@ -764,6 +780,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       std::vector<LabelColumnRow> display;
       display.push_back(MeasureComboRow(ctx, "Resolution", "Resolution##display"));
+      display.push_back(MeasureComboRow(ctx, "Mode", "Mode##display"));
       display.push_back(MeasureWidgetRow(ctx, "EV", "##EV##display_input", "##EV##display_label"));
       display.push_back(MeasureComboRow(ctx, "Preset", "Preset##display_aspect"));
       display.push_back(MeasureWidgetRow(ctx, "Alpha", "##Alpha##display_input", "##Alpha##display_label"));
@@ -776,6 +793,182 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       CheckLabelColumn("view", view);
       CheckLabelColumn("display", display);
+    };
+  }
+
+  // The exposure Mode combo, and the two claims that make it worth having.
+  //
+  // (1) It re-lights the picture in the SAME frame. That is not decoration: it is the entire
+  //     difference between this control and the simulation-semantics toggle that was removed
+  //     years ago. This one changes which anchor the client divides an already-simulated frame
+  //     by, so it costs nothing; that one changed what was simulated and cost a second run. A
+  //     case that only asserted `g_state.renderer.ev_mode == 1` would pass just as well against
+  //     an implementation that quietly needed a re-run to show anything, which is the exact
+  //     regression worth guarding.
+  // (2) It does not disturb the finished run. sim_state stays kDone and run_intent stays
+  //     kRunCompleted — a mode switch must not offer to re-simulate its way to the same rays.
+  //
+  // Needs a real sim because the preview only computes an exposure when it has a texture, and
+  // absolute mode divides by emitted energy, which only a real snapshot carries.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls",
+                                    "the_exposure_mode_combo_relights_the_same_frame_without_re_running");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      gui::g_server_poller.Stop();
+      gui::g_server = LUMICE_CreateServer();
+      IM_CHECK(gui::g_server != nullptr);
+      gui::g_server_is_gpu = false;
+      gui::g_state = gui::InitDefaultState();
+      gui::g_state.sim.infinite = false;
+      gui::g_state.sim.ray_num_millions = 0.2f;
+      gui::g_state.sim.max_hits = 8;
+
+      gui::DoRun(/*user_initiated=*/true);
+      const auto start = std::chrono::steady_clock::now();
+      while (gui::g_state.sim_state != gui::GuiState::SimState::kDone ||
+             gui::g_state.run_intent != gui::RunIntent::kRunCompleted) {
+        ctx->Yield();
+        if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count() > 20) {
+          break;
+        }
+      }
+      IM_CHECK_EQ(gui::g_state.sim_state, gui::GuiState::SimState::kDone);
+      // The premise of everything below: absolute mode's denominator actually arrived from the
+      // C API. Without it the two modes would agree on a scale of zero and the case would pass
+      // while proving nothing.
+      IM_CHECK_GT(gui::g_state.snapshot_emitted_energy, 0.0f);
+      IM_CHECK_GT(gui::g_state.snapshot_intensity, 0.0f);
+
+      ctx->Yield();
+      const float scale_relative = gui::g_preview_vp.params.exposure.intensity_scale;
+      IM_CHECK_GT(scale_relative, 0.0f);
+
+      // One combo pick, then exactly one frame.
+      PickExposureMode(ctx, "Absolute");
+      IM_CHECK_EQ(gui::g_state.renderer.ev_mode, 1);
+      const float scale_before_next_frame = gui::g_preview_vp.params.exposure.intensity_scale;
+      ctx->Yield();
+      const float scale_absolute = gui::g_preview_vp.params.exposure.intensity_scale;
+
+      // Same-frame, stated as a comparison rather than as a bare inequality: the uniform the
+      // preview will draw with now equals what the absolute formula says it should be, computed
+      // here from the same GuiState the panel read.
+      lumice::gui::MonoExposureInput expected_in;
+      expected_in.exposure_offset = gui::g_state.renderer.exposure_offset;
+      expected_in.ev_auto = gui::g_state.ev_auto;
+      expected_in.snapshot_intensity = gui::g_state.snapshot_intensity;
+      expected_in.snapshot_emitted_energy = gui::g_state.snapshot_emitted_energy;
+      expected_in.total_pixels = gui::g_preview.GetTextureWidth() * gui::g_preview.GetTextureHeight();
+      const float expected =
+          lumice::gui::ComputeMonoExposure(lumice::gui::MonoEvMode::kAbsolute, expected_in).intensity_scale;
+      IM_CHECK_GT(expected, 0.0f);
+      IM_CHECK_LT(std::abs(scale_absolute - expected), expected * 1e-4f);
+      // And it really moved — otherwise "matches the absolute formula" would be satisfied by the
+      // two formulas happening to agree on this scene.
+      IM_CHECK(std::abs(scale_absolute - scale_relative) > scale_relative * 1e-3f);
+      // The value captured before the yield is reported, not asserted: the panel may or may not
+      // have already been drawn this frame when the popup closed, so demanding it here would be
+      // asserting a frame-ordering detail rather than the same-frame promise. What the promise
+      // means is that no poll, commit or run stood between the click and the new exposure — which
+      // the run-state checks below are what actually pin.
+      ctx->LogInfo("scale before yield %.6f, after %.6f", scale_before_next_frame, scale_absolute);
+
+      // No re-run was asked for, and none happened.
+      IM_CHECK_EQ(gui::g_state.sim_state, gui::GuiState::SimState::kDone);
+      IM_CHECK_EQ(gui::g_state.run_intent, gui::RunIntent::kRunCompleted);
+      // The unsaved marker does NOT move, and that is measured here rather than assumed, because
+      // it is the one place this control's behaviour is worth stating out loud: `dirty` in this
+      // app is raised only by ApplyGuiEffects, off the resim / hard-reset lanes, so no display-time
+      // field raises it. `exposure_offset` has behaved this way for as long as it has existed, and
+      // ev_mode is deliberately in the same class (gui_state.hpp: it is excluded from
+      // RenderConfigResimFields for the same reason EV is). Both are serialized into the .lmc, so
+      // there IS a gap — change either one, close without saving, and nothing prompts — but it is
+      // one gap belonging to a whole class of fields, not a property of this control, and closing
+      // it for ev_mode alone would make the two halves of the exposure row disagree.
+      //
+      // The EV slider is driven right below so the claim is a measured parity rather than a
+      // reading of the reconciler: whatever `dirty` does for EV, it does for the mode.
+      IM_CHECK_EQ(gui::g_state.dirty, false);
+      const bool dirty_after_mode = gui::g_state.dirty;
+      ctx->ItemInputValue("//##RightPanel/##EV##display_input", 1.5f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, 1.5f);  // the drag really landed
+      IM_CHECK_EQ(gui::g_state.dirty, dirty_after_mode);
+      gui::g_state.renderer.exposure_offset = 0.0f;
+      ctx->Yield();
+
+      // Back to Relative, and the scale comes back with it.
+      PickExposureMode(ctx, "Relative");
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.renderer.ev_mode, 0);
+      IM_CHECK_LT(std::abs(gui::g_preview_vp.params.exposure.intensity_scale - scale_relative), scale_relative * 1e-3f);
+
+      gui::g_server_poller.Stop();
+      LUMICE_StopServer(gui::g_server);
+      LUMICE_DestroyServer(gui::g_server);
+      gui::g_server = nullptr;
+      gui::g_state.run_intent = gui::RunIntent::kNone;
+      gui::g_state.committed_epoch = 0;
+      gui::g_state.display_epoch_floor = 0;
+    };
+  }
+
+  // The permanent EV readout under the slider.
+  //
+  // It is the answer to a mismatch this GUI structurally cannot detect: exposure_offset is saved
+  // per document, so in absolute mode two files sit at two heights on one shared scale and a
+  // single-document app has nothing to compare them against. It cannot warn; what it can do is
+  // never leave the current height implicit, so the height is on screen at all times rather than
+  // inside a tooltip nobody hovers.
+  //
+  // Asserted through the item's own label, which IS the rendered text: the readout is a disabled
+  // Selectable whose "##" id folds the whole label in, so locating it by the exact string the
+  // formatter produces is a claim about the text on screen and not merely about a widget existing.
+  // ("###" would have discarded everything before it — ImHashStr resets on the triple form — and
+  // the two modes' labels would then be indistinguishable to a lookup.) Composing the expected
+  // string from FormatMonoEvReadout rather than retyping it keeps this from becoming a second copy
+  // of the format.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "the_ev_readout_states_the_mode_and_height_on_screen");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+      ctx->SetRef("//##RightPanel");
+
+      // The two phases deliberately use DIFFERENT numbers, so no label string is looked up twice
+      // across the case: ItemInfo registers a task keyed by the resolved path and keeps the answer
+      // for the rest of the run, which would make a second lookup of a now-absent label report the
+      // id it found the first time.
+      //
+      // Phase 1 — absolute, with a sparse-scene auto anchor sitting far from zero. That anchor is
+      // exactly the number the old readout showed drifting while the picture did not move, so the
+      // claim here is as much about what is NOT said as about what is.
+      gui::g_state.renderer.exposure_offset = 2.0f;
+      gui::g_state.ev_auto = -5.66f;
+      gui::g_state.renderer.ev_mode = 1;
+      ctx->Yield();
+      const std::string absolute_label = lumice::gui::FormatMonoEvReadout(1, 2.0f, -5.66f) + "##display_ev_readout";
+      const std::string wrong_relative = lumice::gui::FormatMonoEvReadout(0, 2.0f, -5.66f) + "##display_ev_readout";
+      IM_CHECK(absolute_label != wrong_relative);
+      IM_CHECK(ctx->ItemInfo(absolute_label.c_str(), ImGuiTestOpFlags_NoError).ID != 0);
+      // And the reason a bare "does it exist" would not do: the relative wording must be ABSENT
+      // here. A readout that ignored the mode and always printed the relative form — auto folded
+      // in, the misleading reading this replaces — would satisfy the check above on its own.
+      IM_CHECK_EQ(ctx->ItemInfo(wrong_relative.c_str(), ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
+
+      // Phase 2 — relative, different numbers, both directions again.
+      gui::g_state.renderer.exposure_offset = -1.5f;
+      gui::g_state.ev_auto = 3.25f;
+      gui::g_state.renderer.ev_mode = 0;
+      ctx->Yield();
+      const std::string relative_label = lumice::gui::FormatMonoEvReadout(0, -1.5f, 3.25f) + "##display_ev_readout";
+      const std::string wrong_absolute = lumice::gui::FormatMonoEvReadout(1, -1.5f, 3.25f) + "##display_ev_readout";
+      IM_CHECK(ctx->ItemInfo(relative_label.c_str(), ImGuiTestOpFlags_NoError).ID != 0);
+      IM_CHECK_EQ(ctx->ItemInfo(wrong_absolute.c_str(), ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
+
+      ctx->SetRef("");
     };
   }
 }

@@ -247,6 +247,16 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   // owns that choice, so everything below stays one single-scalar path. Under kAbsolute the
   // participating P99 is not the anchor and is still reported out — it remains a true statistic
   // about the frame, just no longer the thing the exposure is measured against.
+  //
+  // TIMING, and it differs from the mono preview's: `config_.ev_mode_` is refreshed at
+  // CommitConfig, so flipping the GUI's exposure Mode combo reaches THIS path on the next Run,
+  // not on the next frame. The mono preview re-lights immediately because the GUI recomputes its
+  // own scale client-side (gui/mono_exposure_scale.hpp) from raw XYZ it already holds; the
+  // composite is baked here, server-side, and there is no display-time push channel for the mode
+  // the way there is for the manual EV (LUMICE_SetCompositeExposure). Those two are orthogonal
+  // multipliers — the pushed value is a bare stop count with no mode branch in it, and the mode
+  // chooses only which anchor `A` is — so they cannot contradict each other; the composite simply
+  // reaches the new anchor later. Do not read "mono is same-frame" as a promise about this path.
   const float A = consumer.CompositeAnchorScale(participating_p99);
   if (A <= 0.0f) {
     // task-347 semantic tightening: `participating_p99` is now known even on
