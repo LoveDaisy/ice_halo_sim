@@ -45,7 +45,17 @@ From left to right, the Top Bar exposes:
   - `Save` / `Save Copy` — write the project as a `.lmc` file
   - `Screenshot...` — export the current Render Preview as PNG
   - `Dual Fisheye Equal Area...` / `Equirectangular...` — server-side off-screen exports (require a finished simulation)
-  - `Config JSON...` — export the configuration in JSON form
+  - `Config JSON...` — export the configuration in JSON form, for re-rendering with the CLI. The
+    exported renderer describes what the Render Preview is currently showing: the display
+    projection and FOV, the view angles, the visible hemisphere, the background colour, the horizon
+    line switch and the aspect preset's canvas shape, with the manual EV baked into
+    `intensity_factor` (the CLI has no display-time exposure). Three deliberate gaps: overlay
+    annotations other than the horizon line are not exported (the GUI's screen-space grid, labels
+    and sun circles have no equivalent in the config schema); the `Free` and `Match Background`
+    aspect presets fall back to the simulation texture's own 2:1 shape, because neither names a
+    ratio that a saved config could reproduce on another machine; and a view with the **Front**
+    hemisphere clip enabled is refused with a warning rather than exported, since the config format
+    has no way to express that clip and the CLI would otherwise render the un-clipped view.
   - `Include Texture in .lmc` / `Include Overlay in Screenshot` — toggles for the next save / screenshot
 - **Right panel collapse**: `<` / `>` mirror the left toggle (also bound to the `]` key).
 

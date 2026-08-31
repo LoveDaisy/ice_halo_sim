@@ -508,13 +508,19 @@ sites.
 Regression pins:
 
 - `test/composition-correctness/gui/test_scene_commit_chain.cpp` →
-  `SceneCommitChain.OnlyTheExposureDiffersBetweenTheRunAndExportIntents` (AC5 mechanism-layer,
-  `test_scene_commit_chain.cpp:94`).
+  `SceneCommitChain.IntentionalDivergenceFieldsMatchDocumentedSet` (AC5 mechanism-layer).
   Re-anchored 2026-08-10: this proposition used to be pinned by
   `test_gui_import_export.cpp::intensity_factor_ignores_exposure_offset_in_gui_run_path`,
-  which the GUI-suite rewrite replaced with the case above — same claim, plus a field-by-field
+  which the GUI-suite rewrite replaced with a case asserting the same claim plus a field-by-field
   comparison of the two documents with `intensity_factor` removed, so an intent-dependent
-  branch appearing anywhere else also fails it.
+  branch appearing anywhere else also failed it.
+  Renamed 2026-08-31, when the export intent started describing the on-screen picture rather
+  than the simulation's fixed full-sky texture: `intensity_factor` is no longer the only field
+  the intent reaches, so the case that was named `OnlyTheExposureDiffersBetweenTheRunAndExportIntents`
+  now enumerates the divergence set (lens / view / visible / background / resolution / grid
+  alongside `intensity_factor`) and compares everything outside it whole. The EV claim itself is
+  unchanged and still asserted by value on both arms — what changed is that the surrounding
+  field-by-field comparison now overlooks a named list instead of a single key.
 - Resolved 2026-08-11 — this list also named
   `test_gui_composite_preview.cpp::rerun_with_same_ev_produces_identical_composite` (AC1
   end-to-end) and `::display_time_visibility_reanchors_participating_p99` (AC2 display-time
