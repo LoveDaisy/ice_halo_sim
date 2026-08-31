@@ -714,6 +714,14 @@ typedef struct LUMICE_RenderParam_ {
   // RenderConfig::celestial_outline_ defaults to false, so a zero-initialized struct asks for
   // no annotation, which is what the JSON path also gives a config with no "grid" object.
   int celestial_outline;
+  // PARSED BUT NOT RENDERED. Both lists are validated, round-tripped through JSON and compared,
+  // and no code draws either — a scene that sets them produces exactly the image it would produce
+  // without them. They are kept because the far target ("a CLI re-render equals what the GUI
+  // showed, annotations included") needs them, and the blocker is not the drawing code but a model
+  // mismatch: this schema names every line individually while the GUI derives one FOV-adaptive
+  // step and one shared colour, plus a separate list of sun angular-distance circles. Reconciling
+  // the two is a design decision, so the fields stay and say so. celestial_outline above is the
+  // one member of this group that does draw.
   LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int central_grid_count;
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];

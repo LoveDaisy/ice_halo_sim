@@ -24,8 +24,15 @@
 // line has its downward neighbour excluded from the sky. An implementation that measured the
 // local gradient across the DRAWABLE pixels rather than the IMAGED ones would read that
 // difference as zero, clamp the width to 1e-4 deg, and lose the line entirely — precisely in the
-// configuration that asks for it. The upper/lower pair below fails under that defect and passes
-// under the shipped one.
+// configuration that asks for it.
+//
+// MEASURED, not assumed: only the UPPER case catches that defect; the lower one stays green under
+// it. The width rule differences FORWARD (against the right and lower neighbours), so under
+// `visible: lower` the surviving pixel's own forward neighbour is on the drawable side and the
+// gradient still reads correctly. That asymmetry is a property of the forward difference, not of
+// the two hemispheres, and it is the reason the lower case is kept anyway rather than deleted as
+// redundant: it is what would catch the mirror-image defect if the difference direction ever
+// changed.
 
 #include <gtest/gtest.h>
 
@@ -336,6 +343,38 @@ TEST(CelestialOutlineMask, DualFisheyeAndGlobeDrawAHorizonToo) {
     EXPECT_GT(on, 0u) << TypeName(c.type) << ": a view containing the horizon must draw it";
     EXPECT_LT(on, static_cast<size_t>(8 * std::max(c.w, c.h)))
         << TypeName(c.type) << ": " << on << " pixels is a region, not a line";
+  }
+}
+
+TEST(CelestialOutlineMask, EveryMarkedPixelIsInsideTheRenderDomain) {
+  // The annotation is painted under the same gate as the background (render.cpp PostSnapshot), so
+  // a marked pixel outside the render domain would draw a line across a region that images
+  // nothing. Stated against BuildVisibleMask, the mask that owns that domain, rather than against
+  // a second copy of the domain test.
+  const LensParam::LensType types[]{ LensParam::kLinear, LensParam::kFisheyeEqualArea, LensParam::kRectangular,
+                                     LensParam::kDualFisheyeEqualArea, LensParam::kGlobe };
+  const RenderConfig::VisibleRange ranges[]{ RenderConfig::kUpper, RenderConfig::kLower, RenderConfig::kFull };
+  for (LensParam::LensType t : types) {
+    for (RenderConfig::VisibleRange vis : ranges) {
+      const RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
+      const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+      const Rotation rot = MakeCameraRotation(cfg);
+      const std::vector<uint8_t> outline = BuildCelestialOutlineMask(cfg, rot, short_pix);
+      const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
+      if (outline.size() != visible.size()) {
+        ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
+                      << visible.size() << ")";
+        continue;
+      }
+      size_t outside = 0;
+      for (size_t i = 0; i < outline.size(); ++i) {
+        if (outline[i] != 0 && visible[i] == 0) {
+          ++outside;
+        }
+      }
+      EXPECT_EQ(outside, 0u) << TypeName(t) << ", visible " << static_cast<int>(vis) << ": horizon marked on "
+                             << outside << " pixel(s) the lens does not image";
+    }
   }
 }
 

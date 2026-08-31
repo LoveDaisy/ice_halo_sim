@@ -54,7 +54,14 @@ PSNR_THRESHOLDS = {
     "orthographic_180_01": 19.5,
     "parhelion_01": 34.5,
     "pyramid_01": 28.5,
-    "render_opts_01": 30.0,
+    # render_opts: re-shot for 469.7, when `grid.outline` stopped being a no-op and started
+    # drawing the celestial horizon — this config sets it, so the reference now carries a two-pixel
+    # red line across rows 182-183 that the previous reference (taken while the key did nothing)
+    # does not. The old reference scores 29.9 dB against the new render, i.e. the change is real
+    # and this key is no longer structurally blind to the render option in its own name. Same
+    # calibration method as the rest of this table: 3 fresh CLI runs, threshold =
+    # min(PSNR_2vs1, PSNR_3vs1) - 3 dB floored to 0.5 dB precision (measured 32.78 / 33.06 dB).
+    "render_opts_01": 29.5,
     "dual_fisheye_ref_01": 25.8,
 }
 
