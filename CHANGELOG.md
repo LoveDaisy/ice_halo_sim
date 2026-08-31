@@ -133,6 +133,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   For an illuminant spectrum the emitted energy is charged at the band expectation of the
   SPD rather than at the weight of the wavelength each batch happens to draw, so the same
   config renders at the same brightness at every seed.
+  Separately, an undersampled scene darkens as `ray_num` grows under **either** denominator
+  (measured N-scaling slope: -1.026 landed-weight, -1.027 emitted-energy) -- an honest
+  Monte-Carlo estimator property, not something this change introduces or fixes. See
+  `doc/ev-pipeline-architecture.md` §7.4 before reporting it as a regression.
 - **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
   type): the value is now **how many distinct crystal geometries the run actually sampled**,
   not how many crystal objects it built. A scene with no random shape distributions reports
