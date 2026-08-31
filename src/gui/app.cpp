@@ -22,6 +22,7 @@
 #include "gui/file_io.hpp"
 #include "gui/gui_logger.hpp"
 #include "gui/gui_state_reconcile.hpp"
+#include "gui/mono_exposure_scale.hpp"
 #include "gui/user_defaults.hpp"
 #include "gui/window_sizing.hpp"
 #include "util/color_space.hpp"
@@ -317,10 +318,16 @@ static void RefreshCpuTextureForSave() {
   int w = xyz_results[0].img_width;
   int h = xyz_results[0].img_height;
 
-  // Compute intensity_scale matching the shader via ev_total = exposure_offset + ev_auto.
-  float intensity_factor = std::pow(2.0f, g_state.renderer.exposure_offset + g_state.ev_auto);
-  float norm_intensity = xyz_results[0].snapshot_intensity;
-  float intensity_scale = norm_intensity > 0 ? intensity_factor / norm_intensity : 0.0f;
+  // Same exposure the shader is showing, from the same function it uses (mono_exposure_scale.hpp)
+  // — the saved thumbnail must match the picture on screen, mode included. Read off THIS frame
+  // rather than off g_state so the numbers belong to the pixels being converted.
+  lumice::gui::MonoExposureInput ev_in;
+  ev_in.exposure_offset = g_state.renderer.exposure_offset;
+  ev_in.ev_auto = g_state.ev_auto;
+  ev_in.snapshot_intensity = xyz_results[0].snapshot_intensity;
+  ev_in.snapshot_emitted_energy = xyz_results[0].emitted_energy;
+  ev_in.total_pixels = w * h;
+  const lumice::gui::MonoExposure ev = lumice::gui::ComputeMonoExposure(g_state.renderer.ev_mode, ev_in);
 
   // Convert XYZ→sRGB on CPU using the same algorithm as the shader, background included: this
   // buffer is what SaveLmcFile bakes into the document, so if it skipped the background the saved
@@ -336,7 +343,7 @@ static void RefreshCpuTextureForSave() {
   float background_linear[3];
   lumice::SrgbToLinearRgb(g_state.renderer.background, background_linear);
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
-  LUMICE_XyzToSrgbUint8WithBackground(xyz_results[0].xyz_buffer, srgb.data(), w * h, intensity_scale,
+  LUMICE_XyzToSrgbUint8WithBackground(xyz_results[0].xyz_buffer, srgb.data(), w * h, ev.intensity_scale,
                                       background_linear);
 
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
@@ -398,16 +405,21 @@ void DoSaveAs() {
 }
 
 // Build PreviewParams for export: copy current preview viewport params, but override
-// intensity_* fields to sample the GUI EV slider live.
-//   ev_total         = exposure_offset + ev_auto
-//   intensity_factor = 2^ev_total
-//   intensity_scale  = intensity_factor / snapshot_intensity   (0 if snapshot_intensity <= 0)
+// intensity_* fields to sample the GUI EV slider live (the viewport copy carries whatever the
+// last rendered frame used, which is a frame behind a just-moved slider). The exposure itself
+// comes from mono_exposure_scale.hpp, so an export lands at the brightness the preview shows
+// under either mode.
 static PreviewParams BuildExportParams() {
   PreviewParams params = g_preview_vp.params;
-  float ev_total = g_state.renderer.exposure_offset + g_state.ev_auto;
-  params.exposure.intensity_factor = std::pow(2.0f, ev_total);
-  float norm_intensity = g_state.snapshot_intensity;
-  params.exposure.intensity_scale = norm_intensity > 0 ? params.exposure.intensity_factor / norm_intensity : 0.0f;
+  lumice::gui::MonoExposureInput ev_in;
+  ev_in.exposure_offset = g_state.renderer.exposure_offset;
+  ev_in.ev_auto = g_state.ev_auto;
+  ev_in.snapshot_intensity = g_state.snapshot_intensity;
+  ev_in.snapshot_emitted_energy = g_state.snapshot_emitted_energy;
+  ev_in.total_pixels = g_preview.GetTextureWidth() * g_preview.GetTextureHeight();
+  const lumice::gui::MonoExposure ev = lumice::gui::ComputeMonoExposure(g_state.renderer.ev_mode, ev_in);
+  params.exposure.intensity_factor = ev.intensity_factor;
+  params.exposure.intensity_scale = ev.intensity_scale;
   return params;
 }
 
@@ -1657,6 +1669,7 @@ void SyncFromPoller() {
     }
     g_state.last_uploaded_as_composite = effective_composite;
     g_state.snapshot_intensity = payload->snapshot_intensity;
+    g_state.snapshot_emitted_energy = payload->emitted_energy;
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;
     g_state.last_uploaded_texture_serial = snap->texture_serial;  // record exact-once cursor

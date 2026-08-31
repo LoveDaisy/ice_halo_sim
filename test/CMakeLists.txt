@@ -103,6 +103,9 @@ add_executable(unit_correctness_test
   # (every SimState, every AspectPreset, every LUMICE_SHAPE_SCALAR_* slot) instead of one branch
   # per UI-driven case. Header-only and ImGui-free, hence this target rather than gui_unit_test.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_widget_rules.cpp"
+  # Same reason as the line above: mono_exposure_scale.hpp is header-only and ImGui-free, so its
+  # cases belong to the target that does not link lumice_gui_obj.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_mono_exposure_scale.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the

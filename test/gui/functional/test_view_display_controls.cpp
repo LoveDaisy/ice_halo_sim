@@ -599,12 +599,12 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       ResetTestState();
       ctx->Yield(2);
 
-      ctx->ItemInputValue("**/##EV##display_input", 20.0f);
+      ctx->ItemInputValue("**/##EV##display_input", 40.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, 6.0f);
-      ctx->ItemInputValue("**/##EV##display_input", -20.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, 16.0f);
+      ctx->ItemInputValue("**/##EV##display_input", -40.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, -6.0f);
+      IM_CHECK_EQ(gui::g_state.renderer.exposure_offset, -8.0f);
     };
   }
 

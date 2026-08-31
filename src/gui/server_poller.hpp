@@ -38,6 +38,11 @@ struct TexturePayload {
   int width = 0;
   int height = 0;
   float snapshot_intensity = 0;
+  // LUMICE_RawXyzResult::emitted_energy — total energy the source put in, as opposed to
+  // snapshot_intensity's "what landed". The absolute-mode denominator; carried here for the same
+  // reason snapshot_intensity is, so the main thread can re-derive the display scale without
+  // re-acquiring a frame.
+  float emitted_energy = 0;
   float intensity_factor = 1.0f;
   int effective_pixels = 0;
   // Ray count at the time texture data was captured (not global stats).

@@ -19,6 +19,7 @@
 #include "gui/field_editor_registry.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/mono_exposure_scale.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/panels.hpp"
 #include "gui/preview_renderer.hpp"  // ComputeBgUvTransform / kBgModifierName
@@ -1011,13 +1012,49 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("Re-runs simulation; accumulated rays reset");
     }
+    // Exposure mode. Display-time only: it changes which anchor the client-side conversion in
+    // mono_exposure_scale.hpp divides by, so the picture re-lights on the next frame with no
+    // commit and no re-run. Not rust-tinted like Resolution above for exactly that reason —
+    // nothing is discarded.
+    ImGui::Combo("Mode##display", &r.ev_mode, kEvModeNames, kEvModeCount);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+          "Which anchor display brightness is measured against.\n\n"
+          "Relative: each snapshot is re-anchored to its own brightest pixels. This is the "
+          "default and what the preview has always done. Good for looking at one document; "
+          "brightness carries no meaning when compared with another.\n\n"
+          "Absolute: anchored to the energy the light source emitted. EV then reads as stops "
+          "above or below physical, and two scenes at the same EV are directly comparable.\n\n"
+          "Switching only changes how the pixels already simulated are converted. It does not "
+          "re-run the simulation.");
+    }
+
     ImGui::BeginGroup();
     const FieldEditorConstraint ev_c = ConstraintFor("renderer.exposure_offset", g_state);
     SliderWithInput("EV##display", &r.exposure_offset, static_cast<float>(ev_c.min_value),
                     static_cast<float>(ev_c.max_value), ev_c.fmt, ev_c.scale);
     ImGui::EndGroup();
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Exposure value offset for display brightness");
+      if (r.ev_mode == 1) {
+        // The auto anchor is still reported, because it is still computed and a user who came
+        // from relative mode will look for it — but it is reported as NOT applied. Leaving it
+        // out would be quieter and worse: in a sparse scene it drifts by many stops, and a
+        // number that moves while the picture does not is what made the old relative-only
+        // readout misleading in the first place.
+        ImGui::SetTooltip(
+            "Exposure in absolute mode: %+.2f stops above physical.\n\n"
+            "This offset is the whole exposure. Brightness is anchored to emitted energy, so two "
+            "documents at the same EV are directly comparable.\n\n"
+            "The auto anchor is NOT applied here (it would read %+.2f EV in relative mode).",
+            r.exposure_offset, g_state.ev_auto);
+      } else {
+        ImGui::SetTooltip(
+            "Exposure value offset for display brightness.\n\n"
+            "In relative mode this offset sits on top of an auto anchor that re-measures every "
+            "snapshot, currently %+.2f EV, for an effective %+.2f EV. The anchor moves with the "
+            "picture, so this reading is not comparable with another document.",
+            g_state.ev_auto, r.exposure_offset + g_state.ev_auto);
+      }
     }
     // The sky behind the halo, next to EV rather than anywhere else in the panel. The two are the
     // same KIND of field, and that is the whole argument: gui_state.hpp's RenderConfigResimFields
@@ -1044,6 +1081,17 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
           "Only where the lens images something: outside the image circle, and\n"
           "outside the visible hemisphere, stays black.");
     }
+\n    // Permanent readout, not a tooltip: exposure_offset is saved per document, so in absolute
+    // mode two open files can sit at different heights on one shared scale. A single-document GUI
+    // cannot compare them for the user, but it can refuse to leave the current height implicit.
+    // Rendered as a disabled Selectable rather than TextDisabled so it carries a real item ID and
+    // the GUI tests can address it; "###" keeps that ID stable while the label tracks the value.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::Selectable(
+        (lumice::gui::FormatMonoEvReadout(r.ev_mode, r.exposure_offset, g_state.ev_auto) + "###display_ev_readout")
+            .c_str(),
+        false, ImGuiSelectableFlags_Disabled);
+    ImGui::PopStyleColor();
 
     ImGui::SeparatorText("Aspect Ratio");
     int preset_idx = static_cast<int>(g_state.aspect_preset);
@@ -1210,8 +1258,18 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_h = static_cast<int>(preview_height * dpi_scale_y);
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
-    float ev_total = rc.exposure_offset + g_state.ev_auto;
-    pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
+    // Mono exposure, recomputed every frame from GuiState (mono_exposure_scale.hpp). Computing it
+    // here rather than reading a server-side scale is what makes both the EV slider and the
+    // exposure Mode combo take effect on the very next frame with no commit and no re-run: the
+    // pixels are already in the texture, only the multiplier applied to them changes.
+    lumice::gui::MonoExposureInput mono_ev_in;
+    mono_ev_in.exposure_offset = rc.exposure_offset;
+    mono_ev_in.ev_auto = g_state.ev_auto;
+    mono_ev_in.snapshot_intensity = g_state.snapshot_intensity;
+    mono_ev_in.snapshot_emitted_energy = g_state.snapshot_emitted_energy;
+    mono_ev_in.total_pixels = g_preview.GetTextureWidth() * g_preview.GetTextureHeight();
+    const lumice::gui::MonoExposure mono_ev = lumice::gui::ComputeMonoExposure(rc.ev_mode, mono_ev_in);
+    pp.exposure.intensity_factor = mono_ev.intensity_factor;
 
     // task-347 (Fix B) DECOUPLE: the composite path is now server-side self-
     // anchored on participating-P99 (see doc/ev-pipeline-architecture.md §6.6).
@@ -1286,8 +1344,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
       s_last_bg_composite_active = composite_active;
     }
-    float norm_intensity = g_state.snapshot_intensity;
-    pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
+    pp.exposure.intensity_scale = mono_ev.intensity_scale;
     // Overlap parameters for dual fisheye texture sampling.
     pp.source.max_abs_dz = kDualFisheyeOverlap;
     pp.source.r_scale = 1.0f / std::sqrt(1.0f + kDualFisheyeOverlap);

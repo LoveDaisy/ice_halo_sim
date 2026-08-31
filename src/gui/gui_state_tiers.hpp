@@ -153,6 +153,7 @@ inline constexpr const char* kDerivedFieldsExcludeList[] = {
     "stats_crystal_num",
     "stats_orientation_num",
     "snapshot_intensity",
+    "snapshot_emitted_energy",
     "effective_pixels",
     "texture_upload_count",
     // Auto-EV runtime (populated by ComputeEvAuto in SyncFromPoller)

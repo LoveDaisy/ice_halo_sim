@@ -481,6 +481,7 @@ void ServerPoller::PollOnce() {
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
       payload->snapshot_intensity = xyz_results[0].snapshot_intensity;
+      payload->emitted_energy = xyz_results[0].emitted_energy;
       payload->intensity_factor = xyz_results[0].intensity_factor;
       payload->effective_pixels = xyz_results[0].effective_pixels;
       payload->texture_ray_count = cached_stats.sim_ray_num;
