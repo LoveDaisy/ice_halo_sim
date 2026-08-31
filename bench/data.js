@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788152409131,
+  "lastUpdate": 1788152411483,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5e45e77b49c06d5ed9f7ccc5f96770da8e6a371d",
-          "message": "Merge pull request #187 from LoveDaisy/feat/gui-state-reconcile\n\nGUI 状态治理专项：统一状态转换范式（explore-352 → scrum-353 + 354/355）",
-          "timestamp": "2026-07-12T13:55:17+08:00",
-          "tree_id": "a31a72d3fb0389df9c193f47ffdf4a14a1e33b30",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5e45e77b49c06d5ed9f7ccc5f96770da8e6a371d"
-        },
-        "date": 1783836076832,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 78.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.9,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "3ddafb383f6c183c3af704f4b34391509bb2fe09",
           "message": "Merge pull request #188 from LoveDaisy/feat/color-predicate-symmetry\n\nfeat: colour predicate PBD symmetry (scrum-356)",
           "timestamp": "2026-07-12T19:48:34+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "034ab22193bfe8cf4e9efb4aac1599e82c5e3308",
+          "message": "Merge pull request #286 from LoveDaisy/feat/adjustable-background-color\n\n可调背景颜色：GUI/CLI 五路一致 + core 定义域掩码 + 注记层处置",
+          "timestamp": "2026-08-31T12:48:11+08:00",
+          "tree_id": "465ab3c2e3bc53104f4df724fba2c95cd70a2d2c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/034ab22193bfe8cf4e9efb4aac1599e82c5e3308"
+        },
+        "date": 1788152410805,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 98.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.1,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 97.4,
             "unit": "%"
           }
         ]
