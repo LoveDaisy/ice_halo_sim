@@ -4,7 +4,7 @@
 // The proposition. A document is loaded in the GUI, a scene's view settings are applied, the run
 // completes, and two images are produced from that one document:
 //   (1) the GUI side, through the SAME per-frame PreviewParams assembly the product uses
-//       (src/gui/app_panels.cpp fills g_preview_vp.params from GuiState every frame) rendered
+//       (src/gui/app_panels.cpp fills g_preview_vp.params from GuiState every frame), rendered
 //       off-screen by gui::ExportPreviewPng;
 //   (2) the CLI side, by handing gui::BuildExportJsonOrWarn's output to the Lumice CLI binary in
 //       a child process and reading the image it writes.
@@ -31,35 +31,61 @@
 //     which side of which boundary) — something a whole-image PSNR cannot express — and they need
 //     no display, so they run on every platform. Complementary, not duplicated.
 //
-// Field coverage (the fields src/gui/file_io.cpp's BuildScene fills only on its kJsonExport arm):
+// ============================ Field coverage and measured sensitivity ========================
 //
-//   field           | single_lens_angled            | full_sky_dual_fisheye
-//   ----------------|------------------------------|-----------------------------------
-//   lens_type       | fisheye_equal_area (single)  | dual_fisheye_equal_area (full-sky)
-//   lens_fov        | 150 (non-default)            | 180
-//   visible         | upper                        | full
-//   view_azimuth    | 25 (applied)                 | forced to 0 by the full-sky branch
-//   view_elevation  | 30 (applied)                 | forced to 0 by the full-sky branch
-//   view_roll       | 15 (applied)                 | forced to 0 by the full-sky branch
-//   background      | non-black                    | a different non-black
-//   resolution      | 4:3 + portrait -> 512x683    | no ratio named -> 2:1 fallback
-//   horizon         | on                           | off
+// The fields src/gui/file_io.cpp's BuildScene fills only on its kJsonExport arm, and what each
+// scene does with them. The right-hand columns are MEASURED, not asserted: each is the PSNR the
+// scene lands at when that one field is broken single-sided in the export arm (and only there),
+// against a threshold of 25.5 / 26.0 dB. They are what says this gate can actually see the field.
 //
-// Every field appears in both columns, so the table is a BRANCH matrix rather than a checklist:
-// the two rows exercise the two sides of each branch the export arm has (single lens vs the
-// full-sky lens family whose view angles src/gui/app_panels.cpp zeroes; an aspect preset that
-// names a ratio vs the two that name none and fall back to 2:1; horizon on vs off).
+//   field          | single_lens_angled       | broken | full_sky_dual_fisheye     | broken
+//   ---------------|-------------------------|--------|---------------------------|--------
+//   lens_type      | fisheye_equal_area      |  13.31 | dual_fisheye_equal_area   |   n/a
+//   lens_fov       | 96 (non-default)        |  21.32 | 180                       |   n/a
+//   visible        | upper                   |  16.85 | full                      |   n/a
+//   view_azimuth   | 25, applied             |  19.56 | forced to 0 (full-sky)    |   n/a
+//   view_elevation | 30, applied             |  15.31 | forced to 0 (full-sky)    |   n/a
+//   view_roll      | 15, applied             |  19.53 | forced to 0 (full-sky)    |   n/a
+//   background     | (0.10, 0.16, 0.28)      |  17.21 | (0.28, 0.14, 0.10)        |  18.16
+//   resolution     | 4:3 + portrait -> 512x683 | canvas assert | no ratio -> 1024x512 |  n/a
+//   horizon        | off                     |    n/a | off                       |  25.46
 //
-// Deliberately outside this fixture, each for a stated reason rather than by omission:
+// "n/a" means the break does not move that scene, and in every case for a stated reason rather
+// than a gap: the full-sky lens family ignores fov and zeroes the three view angles, so a break in
+// those cannot show there; `visible` and `lens_type` are broken TO the value that scene already
+// holds; and the horizon cell is discussed below. Each field is therefore live in at least one
+// column, and the two columns between them cover both sides of every branch the export arm has —
+// single lens vs the full-sky family, an aspect preset that names a ratio vs the two that name
+// none and fall back to 2:1 — rather than nine unrelated checkmarks.
+//
+// The `resolution` break is the one that does not report as a PSNR drop: the canvas assertion in
+// TestFunc fires first, because a wrong canvas is a finding in its own right and is worth saying
+// as itself. That is deliberate; do not "fix" it into a PSNR comparison by resizing.
+//
+// ================================= Deliberately not covered ==================================
+//
 //   * The auxiliary-line overlay other than the horizon (altitude grid, sun circles, zenith/nadir
 //     markers, lens border, text labels). These are GUI display-time layers with no encoding in
 //     the config format at all; giving core an annotation layer is a separate design effort, and
 //     until it exists there is nothing on the CLI side to compare against. All of them are off in
 //     both scenes, which is also their default.
-//   * The single-lens fisheye domain past theta = 90 degrees, where the preview shader and core
-//     disagree about which directions the lens still images. That divergence is being widened on
-//     purpose elsewhere; pinning it here would freeze the shape that is about to change. Both
-//     scenes stay inside the agreed domain.
+//   * The horizon in its ON state, and this one is a measured exclusion rather than an assumed
+//     one. Both scenes keep the switch OFF, so what this fixture pins is the direction that
+//     actually regressed before: the export must not assert a horizon line the user switched off
+//     (it once wrote the INVERSE of the switch). Turning the switch on is not usable as a probe,
+//     because the two renderers do not draw the same line: measured on the full-sky scene,
+//     enabling it on both sides costs 1.61 dB, of which turning the CLI's line back off recovers
+//     1.43 dB — i.e. nearly all of the mismatch is core's line landing where the GUI's is not.
+//     The GUI's is a shader line whose width comes from fwidth() of the altitude field
+//     (preview_renderer.cpp overlayAuxLines), core's a mask built at a fixed pixel width
+//     (server/render.cpp BuildHorizonMask); on a dual-fisheye frame those two widths part company
+//     near the circle rim. Making them agree is the annotation layer's business, not this gate's.
+//   * The single-lens fisheye domain past theta = 90 degrees, where the preview shader keeps
+//     inverting toward the frame corners and core stops. It is real and large — a 4:3 frame at
+//     fov 150 measured 25% of its pixels lit by the GUI and black in the CLI — and it is being
+//     widened on purpose elsewhere, so pinning it here would freeze a shape that is about to
+//     change. The single-lens scene's fov is bounded so the frame stays inside the agreed domain;
+//     see the note on its row.
 //   * A loaded background IMAGE (GuiState::bg_*). Owner-decided GUI-only: it is never exported, so
 //     there is no honest comparison to make. Neither scene loads one.
 //   * RenderConfig::ray_color. The GUI's tint control does not reach the renderer, and the export
@@ -69,16 +95,19 @@
 //     test is the refusal itself, which lives with the export-fidelity assertions.
 //   * lens_shift. The GUI exposes no control for it, so there is no user-visible value the export
 //     could be dishonest about.
-//   * The exposure anchor. See kScenes[] below: both scenes pin relative EV, and the reason is a
-//     property of absolute mode, not an evasion.
+//   * The exposure anchor. See the note above kScenes[]: both scenes pin relative EV, and what is
+//     left over after that is a measured, stated residual rather than an evasion.
 //
-// Platform reach — do not read a green CI as a green here. gui_test is COMPILED on macOS, Windows
-// and Linux but RUN by exactly one CI leg (.github/workflows/ci.yml, Ubuntu x86_64 under xvfb-run
-// with Mesa llvmpipe), and that leg passes a hand-picked positive filter that names only two
-// reference groups. This category is not in it, in company with most of this binary's categories,
-// so today NO CI job executes this fixture. The two pytest legs build with -DBUILD_GUI=OFF and do
-// not have the binary at all. Where it does run is a developer machine with a working GL context:
-// ./scripts/test.sh {quick,full,pr} runs the correctness pool, which includes this category.
+// ====================================== Platform reach =======================================
+//
+// Do not read a green CI as a green here. gui_test is COMPILED on macOS, Windows and Linux but RUN
+// by exactly one CI leg (.github/workflows/ci.yml, Ubuntu x86_64 under xvfb-run with Mesa
+// llvmpipe), and that leg passes a hand-picked positive filter naming only two reference groups.
+// This category is not in it, in company with most of this binary's categories, so today NO CI job
+// executes this fixture. The two pytest legs build with -DBUILD_GUI=OFF and do not have the binary
+// at all. Where it does run is a developer machine with a working GL context: scripts/build.sh's
+// correctness pool selects tests by a NEGATIVE filter, so this category is included by default,
+// and ./scripts/test.sh {quick,full,pr} therefore executes it.
 //
 // This is also the first place in the repo where a test binary starts the CLI binary as a child
 // process. See RunCliRender below for the mechanics and for what that costs in portability.
@@ -113,7 +142,7 @@ struct ParityScene {
   // Display-group framing.
   gui::AspectPreset aspect_preset;
   bool aspect_portrait;
-  // The one overlay core can also draw.
+  // The one overlay core can also draw. Off in both scenes; see the header's exclusion note.
   bool show_horizon;
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
@@ -125,43 +154,76 @@ struct ParityScene {
   int expect_h;
 };
 
-// Both scenes share one document (halo_22.json: prism crystals, sun at 20 degrees) and differ only
-// in how it is framed, so a PSNR drop localizes to the framing rather than to the scene.
+// Both scenes share one document (test/e2e/configs/halo_22.json: prism crystals, sun at 20
+// degrees) and differ only in how it is framed, so a PSNR drop localizes to the framing rather
+// than to the scene.
 //
 // EXPOSURE. Both scenes pin relative EV, overriding the absolute the document asks for, and that
-// is a statement about what absolute mode promises rather than a convenience. Absolute mode anchors
-// on emitted energy and normalizes by the frame's own pixel COUNT
-// (src/server/render.cpp::ExposureScale, src/gui/mono_exposure_scale.hpp), so the brightness it
+// is a statement about what absolute mode promises rather than a convenience. Absolute mode
+// anchors on emitted energy and normalizes by the frame's own pixel COUNT
+// (src/server/render.cpp ExposureScale, src/gui/mono_exposure_scale.hpp), so the brightness it
 // produces is a function of the canvas and the lens. The GUI preview's pixels come from the
 // full-sky simulation texture and are scaled by THAT texture's pixel count; the CLI renders the
 // scene's own lens directly into the exported canvas and scales by its. The two therefore differ
-// by a fixed factor whenever the exported canvas is not the simulation texture's own shape — which
-// is exactly the "comparable only at equal lens / FOV / resolution" boundary doc/
-// ev-pipeline-architecture.md states for absolute mode, not a defect this fixture should be
-// reporting. Relative mode has no such term: both sides self-anchor on their own frame, so the
-// residual is a difference of anchor POPULATION (percentile over the whole sky vs over the framed
-// view), which is bounded and, being the same thing a user sees, part of what is under test.
+// by a fixed factor whenever the exported canvas is not the simulation texture's own shape —
+// which is the "comparable only at equal lens / FOV / resolution" boundary
+// doc/ev-pipeline-architecture.md states for absolute mode, not a defect for this fixture to
+// report. Relative mode has no such term: both sides self-anchor on their own frame.
 //
-// RAY BUDGET / SIM RESOLUTION. Both sides trace their own independent run: the noise is a real
-// part of the comparison and is not to be removed by pinning a seed on either side (owner
-// decision). What CAN be traded is how much of it there is, which is what the budget below buys;
-// the threshold beside it is measured, not chosen. See the calibration note above each row.
-constexpr int kSimResolutionIndex = 0;  // 512 -> a 1024x512 dual-equal-area simulation texture
-
+// What relative mode leaves behind is a residual, and it is stated rather than hidden: the two
+// anchors are P99 over DIFFERENT pixel populations (the GUI's over the whole simulation texture,
+// the CLI's over the framed view), so a narrow frame reads brighter on the GUI side. Measured on
+// the single-lens scene as the mean ratio over lit pixels: 1.36 at fov 60, 1.21 at fov 96, 1.13 at
+// fov 150 — monotone in how much sky the frame holds. It costs this scene absolute PSNR, and
+// nothing else: it is stable run to run (sigma below), so it lowers the operating point without
+// touching the gate's ability to see a field break, which the table above measures directly.
+//
+// PROJECTION FAMILY. Both scenes use an EQUAL-AREA projection, and that is load-bearing. The CLI
+// renders its lens directly, so each pixel accumulates energy over its own solid angle and the
+// projection's Jacobian is baked into the image; the GUI resamples an equal-area texture, where
+// every texel subtends the same solid angle, and applies no Jacobian. For an equal-area lens the
+// two agree up to a constant. For anything else they do not: a rectilinear scene measured a
+// GUI/CLI brightness ratio of 0.79 at frame centre against 1.35 at the edges — the cos^3 natural
+// vignetting of that projection, present on one side only. A non-equal-area scene added here would
+// be measuring that, not the fields above.
+//
+// SINGLE-LENS FOV BOUND. The single-lens scene's fov is bounded by the frame's corner: the shader
+// keeps inverting past the image circle while core stops, so the corner direction must stay inside
+// the domain both agree on. For an equal-area lens on a 4:3 frame the corner sits at 1.665 image
+// radii, i.e. sin(theta_c/2) = 1.665 * sin(fov/4), and theta_c <= 90 degrees needs fov <= 100.
+// At 96 the measured disagreement is zero pixels either way; at 150 it is 25% of the frame.
+//
+// THRESHOLDS. Calibrated, not chosen: N=12 full runs of this category on an otherwise idle
+// machine, per-scene mean and population sigma recorded on each row. Sigma is an order of
+// magnitude smaller than the visual-regression suites' because neither side of this comparison is
+// a committed asset — both images are produced in the same run from a ray budget fixed by waiting
+// for the run to COMPLETE, so machine load cannot leak into the noise level the way it can when a
+// capture is taken on a counter threshold. Each threshold is placed in the gap between the worst
+// honest run and the smallest break that scene must catch, at least 10 sigma below the mean.
 // clang-format off
 const ParityScene kScenes[] = {
+  // mean 26.512 sigma 0.0777 (N=12, range 26.37-26.63). Threshold 25.5 = mean - 1.0 dB = 13 sigma.
+  // The smallest break this scene owns lands at 21.32 dB (lens_fov), so there is no reason to run
+  // this one tight.
   {"single_lens_angled",
-   lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
+   lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
-   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true,
-   /*ray_num_millions=*/8.0f, /*psnr_threshold=*/10.0, /*expect_w=*/512, /*expect_h=*/683},
+   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/25.5, /*expect_w=*/512, /*expect_h=*/683},
+  // mean 26.893 sigma 0.0259 (N=12, range 26.84-26.93). Threshold 26.0, which is 34 sigma below
+  // the mean and 0.54 dB above the smallest break this scene owns — the horizon at 25.46 dB. That
+  // break is why this row does not simply take mean - 1.0 dB like its neighbour: at 25.9 the gate
+  // would clear the defect by 0.04 dB, which is not a gate.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false,
-   /*ray_num_millions=*/8.0f, /*psnr_threshold=*/10.0, /*expect_w=*/1024, /*expect_h=*/512},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/1024, /*expect_h=*/512},
 };
-// clang-format on
+// 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the
+// export canvas and the GUI capture derive from it, so it fixes the working point the thresholds
+// above were calibrated at; changing it invalidates them.
+constexpr int kSimResolutionIndex = 0;
 constexpr int kSceneCount = sizeof(kScenes) / sizeof(kScenes[0]);
 
 // Same shape and same reason as the guard in test/gui/visual/test_gui_lens_projection.cpp: every
