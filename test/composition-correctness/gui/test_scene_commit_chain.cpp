@@ -230,11 +230,19 @@ TEST(SceneCommitChain, TheExportedRollIsTheOneTheLensActuallyRenders) {
       ADD_FAILURE() << row.what << ": the export intent produced no single-renderer scene";
       continue;
     }
-    EXPECT_FLOAT_EQ(export_doc["render"][0]["view"]["roll"].get<float>(),
-                    EffectiveRollForLens(row.lens_type, row.stored_roll))
+    // Compared against the row's own literal, not a second call to EffectiveRollForLens: reusing
+    // the production call here would let the two sides drift together if the conversion itself
+    // were ever broken, so this pins "production converts" against an independently-stated value.
+    EXPECT_FLOAT_EQ(export_doc["render"][0]["view"]["roll"].get<float>(), row.expected_roll)
         << row.what << ": exported roll " << export_doc["render"][0]["view"]["roll"].get<float>()
         << " is not the roll on screen (" << row.expected_roll << ")";
   }
+
+  // The row literals above assert "production converts roll correctly"; this pins the conversion
+  // function itself, so a broken EffectiveRollForLens cannot make both sides of the comparison
+  // above wrong in the same way and still read as passing.
+  EXPECT_FLOAT_EQ(EffectiveRollForLens(kLensTypeGlobe, 30.0f), 0.0f)
+      << "EffectiveRollForLens no longer zeroes roll for the Globe lens";
 }
 
 // The front-hemisphere clip has nowhere to go: core's visible range is {upper, lower, full} and the
@@ -344,7 +352,11 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "visible",           // hemisphere crop: always full vs. the user's
     "background",        // composited at display time vs. baked by the CLI
     "resolution",        // 2:1 texture vs. the user's canvas shape
-    "grid",              // horizon annotation: always on vs. the user's switch
+    // "grid" is deliberately NOT here: only its "horizon" sub-field diverges (always on vs. the
+    // user's switch), the remaining grid sub-fields (counts, colors, ...) are documented to stay
+    // identical on both arms. Erasing the whole "grid" object would also stop checking those
+    // other sub-fields for an accidental intent-dependent drift, so "horizon" is exempted below
+    // at the sub-key level instead of listing "grid" here.
   };
 
   for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
@@ -391,6 +403,13 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
+    // "grid" itself stays in the comparison below: only its "horizon" sub-field is exempted here,
+    // by sub-key rather than by erasing the whole object, so the remaining grid sub-fields (counts,
+    // colors, ...) keep being checked for an accidental intent-dependent drift.
+    EXPECT_TRUE(commit_doc["render"][0]["grid"].contains("horizon"))
+        << "offset " << offset << ": \"grid.horizon\" is no longer emitted";
+    commit_doc["render"][0]["grid"].erase("horizon");
+    export_doc["render"][0]["grid"].erase("horizon");
     EXPECT_EQ(commit_doc, export_doc) << "offset " << offset
                                       << ": the intent reached a field outside the documented set";
   }

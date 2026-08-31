@@ -1184,6 +1184,12 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   //     exact class of dishonesty this export path was just fixed to stop committing.
   // So it takes the same false + *out_warning channel the ABI-overflow rejections below use: no
   // file is written and DoExportConfigJson shows the reason.
+  //
+  // This check runs before the filter/color-class overflow checks below, and the two families
+  // share the single *out_warning string: if a document trips both, only the front warning is
+  // shown (first-match-wins by check order, not by severity). That is fine with two checks, but
+  // if a third export-time rejection is ever added, reconsider collecting every triggered reason
+  // rather than stacking another early-return silently in front of or behind these.
   if (state.renderer.front) {
     if (out_warning) {
       *out_warning =
