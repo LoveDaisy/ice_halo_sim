@@ -44,13 +44,6 @@ void XyzToLinearRgb(const float xyz[3], float rgb[3]) {
   }
 }
 
-float LinearToSrgb(float linear) {
-  if (linear < 0.0031308f) {
-    return linear * 12.92f;
-  }
-  return 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
-}
-
 void LinearToSrgbBatch(float* rgb, int channel_count) {
   for (int i = 0; i < channel_count; i++) {
     rgb[i] = LinearToSrgb(rgb[i]);
