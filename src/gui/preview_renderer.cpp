@@ -37,6 +37,7 @@ uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform int u_front;         // 1=discard back hemisphere
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
 uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
+uniform vec3 u_background;        // sky colour, LINEAR RGB (see PreviewParams::background_color_linear)
 uniform sampler2D u_bg_texture;
 uniform float u_max_abs_dz;      // overlap zone |sky.z| threshold (0 = no blend)
 uniform float u_r_scale;         // projection r_scale for overlap normalization
@@ -90,8 +91,24 @@ const mat3 kXyzToRgb = mat3(
 );
 const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
 
-// CPU equivalent: lumice::XyzToSrgb() in src/util/color_space.hpp
-vec3 xyzToSrgb(vec3 xyz) {
+// The XYZ->sRGB chain, deliberately in two halves with a seam between them.
+//
+// The seam is where the background colour is added, and it has to be there: the addition is a
+// radiance sum, so it belongs in LINEAR RGB, before the clamp and before the sRGB transfer curve.
+// Add it after the gamma instead and a pixel carrying no halo energy comes back gamma-encoded a
+// second time, i.e. NOT the colour the user picked. Keep the two calls adjacent at every call
+// site — the halves are not independently meaningful.
+//
+// CPU equivalents: lumice::XyzToSrgbUint8(..., background) in src/util/color_space.hpp composes
+// the same two halves around the same seam — that is the one the .lmc bake reaches through
+// LUMICE_XyzToSrgbUint8WithBackground — and so does RenderConsumer::PostSnapshot's use_real_color
+// branch (src/server/render.cpp). Three implementations of one chain: one has to be GLSL, and the
+// other two are separate because the render loop writes bytes as it composites while the batch
+// converter is handed a finished buffer. Nothing enforces that they agree; the pixel comparison in
+// test/gui/functional/test_preview_background.cpp is what holds this one to the CPU one.
+
+// Gamut clip + XYZ->RGB matrix. NOT clamped and NOT gamma-encoded: the background composites here.
+vec3 xyzToLinearRgb(vec3 xyz) {
     // Normalize by accumulated intensity
     xyz *= u_intensity_scale;
     // Gray point (D65 white scaled by luminance Y)
@@ -106,9 +123,15 @@ vec3 xyzToSrgb(vec3 xyz) {
         if (a * b > 0.0 && a / b < s) s = a / b;
     }
     xyz = diff * s + gray;
-    // XYZ→RGB matrix multiply + clamp
-    vec3 rgb = clamp(kXyzToRgb * xyz, 0.0, 1.0);
-    // sRGB gamma (branchless via mix+step)
+    // XYZ→RGB matrix multiply. The clamp the CPU sibling applies here is a no-op after the gamut
+    // clip above (the clip is defined as the scaling that lands this product inside [0,1]); the
+    // clamp that matters runs in clampAndGamma, after the background has been added.
+    return kXyzToRgb * xyz;
+}
+
+// Clamp + sRGB gamma (branchless via mix+step). The second half of the chain above.
+vec3 clampAndGamma(vec3 rgb) {
+    rgb = clamp(rgb, 0.0, 1.0);
     return mix(rgb * 12.92, 1.055 * pow(rgb, vec3(1.0/2.4)) - 0.055, step(0.0031308, rgb));
 }
 
@@ -505,7 +528,33 @@ void main() {
     if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);
       if (u_xyz_mode == 1) {
-        tex_color = xyzToSrgb(tex_color);
+        // The sky colour joins the halo here: inside this gate, and in linear RGB between the two
+        // halves of the colour chain. Both placements are load-bearing.
+        //
+        // Inside the gate, because outside it nothing was ever projected — beyond the lens's image
+        // circle, in the half-sky `visible` discards, behind the camera under `front`. Painting
+        // those would turn a 180 deg fisheye into a solid rectangle of sky with an invisible circle
+        // inside it. Between the halves, because the addition is a radiance sum: after the transfer
+        // curve instead, a pixel with no halo energy comes back gamma-encoded twice and stops being
+        // the colour the user picked.
+        //
+        // KNOWN, DELIBERATE DIVERGENCE FROM THE CLI, on single-lens fisheyes at wide FOV. The CLI's
+        // projection is a forward one and a single lens images one hemisphere, so its background
+        // stops at the equator (theta = 90 deg) whatever the FOV. This shader runs the same law
+        // backwards from a pixel and stops only at that law's own domain, which for equal area at
+        // fov=180 reaches theta = 180 deg — a radius of sqrt(2) image radii. It can, because it is
+        // re-projecting an all-sky source texture rather than imaging a scene through one lens. So
+        // between those two radii is an annulus this renderer paints and the CLI leaves black.
+        // NEITHER SIDE IS A BUG. Do NOT narrow this gate to match the CLI: what a wide-FOV
+        // single-lens preview should show is an open product question, not a defect, and answering
+        // it here would answer it silently. test/gui/functional/test_preview_background.cpp pins
+        // the annulus so that whenever it IS answered, it lands as a red.
+        //
+        // Only in XYZ mode. u_xyz_mode == 0 is a static 8-bit texture — a document loaded from
+        // disk, whose pixels were already baked with whatever background was in effect when it was
+        // saved (LUMICE_XyzToSrgbUint8WithBackground, app.cpp RefreshCpuTextureForSave). Adding
+        // here too would apply it twice.
+        tex_color = clampAndGamma(xyzToLinearRgb(tex_color) + u_background);
       }
       final_color = tex_color;
     }
@@ -1289,6 +1338,8 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.view_proj.visible);
   glUniform1i(glGetUniformLocation(shader_program_, "u_front"), params.view_proj.front ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
+  glUniform3f(glGetUniformLocation(shader_program_, "u_background"), params.background_color_linear[0],
+              params.background_color_linear[1], params.background_color_linear[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.exposure.intensity_scale);
   glUniform1f(glGetUniformLocation(shader_program_, "u_max_abs_dz"), params.source.max_abs_dz);
   glUniform1f(glGetUniformLocation(shader_program_, "u_r_scale"), params.source.r_scale);

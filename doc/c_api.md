@@ -322,7 +322,7 @@ Separately from the core's own rules, the C API enforces per-kind soft capacity 
 `LUMICE_ERR_INVALID_CONFIG`.
 
 Renderers round-trip in full. Up to v4.10 a renderer's `lens` / `lens_shift` / `view` /
-`visible` / `background` / `ray_color` / `grid` / `celestial_outline` had no fields in
+`visible` / `background` / `ray_color` / `grid` / `horizon` had no fields in
 `LUMICE_RenderParam`, so they were dropped on parse and replaced with a hardcoded
 `dual_fisheye_equal_area` / fov 180 / view {0,0,0} / `visible=full` / black-background renderer on
 re-serialization — a document could parse cleanly and then be simulated through a projection the

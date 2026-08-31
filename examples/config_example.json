@@ -280,18 +280,8 @@
       "visible": "upper",
       "background": [0, 0, 0],
       "ray_color": [1, 1, 1],
-      "opacity": 0.8,
       "grid": {
-        "central": [
-          {
-            "value": 22,
-            "color": [1, 1, 1],
-            "opacity": 0.4,
-            "width": 1.2
-          }
-        ],
-        "elevation": [],
-        "outline": true
+        "horizon": true
       }
     },
     {

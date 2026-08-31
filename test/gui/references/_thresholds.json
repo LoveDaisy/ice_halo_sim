@@ -1,7 +1,7 @@
 {
   "groups": {
     "capture_harness": {
-      "generated_at": "2026-08-30T21:42:13",
+      "generated_at": "2026-08-31T06:46:39",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -15,7 +15,7 @@
       }
     },
     "lens_proj": {
-      "generated_at": "2026-08-30T20:40:36",
+      "generated_at": "2026-08-31T05:57:23",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -74,6 +74,13 @@
           "identical_runs": 0,
           "n_samples": 10,
           "threshold": 19.0
+        },
+        "sky_colour_ea_180": {
+          "psnr_mean": 28.542,
+          "psnr_std": 0.1645,
+          "identical_runs": 0,
+          "n_samples": 10,
+          "threshold": 27.5
         }
       }
     },
@@ -113,7 +120,7 @@
       }
     },
     "defaults_panel_layout": {
-      "generated_at": "2026-08-30T20:59:51",
+      "generated_at": "2026-08-31T09:36:03",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {

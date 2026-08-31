@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
+#include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
@@ -14,6 +16,8 @@
 #include "config/config_manager.hpp"
 #include "include/lumice.h"
 #include "server/c_api_internal.hpp"  // ConfigScratch + ParseConfigString + ConfigToJson (internal)
+#include "util/color_space.hpp"       // SrgbToLinear (the JSON boundary conversion under test)
+#include "util/logger.hpp"            // GetSharedSink (dead-key warning capture)
 
 // Differential tests: core's native config parser (config/*::from_json) vs the C API JSON parser
 // behind ParseConfigString / LUMICE_SceneFromJson (server/c_api.cpp::JsonToConfig).
@@ -403,8 +407,8 @@ TEST(JsonParserParity, CorpusValuesSurviveCapiRoundTrip) {
 
 // Every renderer field must survive the round trip — no whitelist. Before v4.11 this asserted the
 // weaker "the expression gap stays confined to the fields the C struct cannot carry" (only
-// id / resolution / opacity / intensity_factor / overlap were compared, because lens / lens_shift
-// / view / visible / background / ray_color / grid / celestial_outline had no home in
+// id / resolution / intensity_factor / overlap were compared, because lens / lens_shift
+// / view / visible / background / ray_color / grid / horizon had no home in
 // LUMICE_RenderParam and were silently replaced with a hardcoded renderer). The struct now carries
 // all of them, so the comparison is core's own RenderConfig::operator==.
 // (Formerly JsonParserParity.CorpusRendererGapConfinedToUnrepresentableFields.)
@@ -773,16 +777,141 @@ TEST(JsonParserParity, ScatteringProportionOmittedDefaultsTo100) {
   EXPECT_FLOAT_EQ(p.via_capi.scene_.ms_[0].setting_[0].crystal_proportion_, 100.0f);
 }
 
-TEST(JsonParserParity, RendererOpacityAndIntensityFactorOmittedDefaultToOne) {
+TEST(JsonParserParity, RendererIntensityFactorOmittedDefaultsToOne) {
   const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
   BothParsed p;
   ASSERT_TRUE(ParseWithBoth(text, &p));
   ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
   const auto& renderer = p.via_capi.renderers_.begin()->second;
-  EXPECT_FLOAT_EQ(renderer.opacity_, 1.0f);
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, 1.0f);
-  EXPECT_FLOAT_EQ(renderer.opacity_, p.core.renderers_.begin()->second.opacity_);
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, p.core.renderers_.begin()->second.intensity_factor_);
+}
+
+// --- render.background: sRGB on the wire, linear in the struct ---
+//
+// The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.
+// Every corpus config writes [0, 0, 0], which is a FIXED POINT of both directions, so the corpus
+// sweep above is structurally blind to this conversion — a non-zero value is the only input that
+// can tell a converting parser from a passthrough one. The round-trip funnel the other pins use
+// (ParseWithBoth) is blind to a one-sided miss for a second reason: it re-encodes the C API's
+// result and hands it back to CORE, so a C API that neither decodes nor encodes cancels itself
+// out and lands on the same value core-direct would. Hence the two direct-read pins below, one
+// per parser, before the round-trip pin.
+
+// A render block carrying an explicit background, everything else minimal.
+std::string WrapRenderWithBackground(const std::string& background_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "background": )" + background_json + " } ] }";
+}
+
+// Well clear of both gamma segments' endpoints, so a passthrough parser and a converting one are
+// far apart in every channel.
+constexpr float kBackgroundSrgb[3] = { 0.2f, 0.35f, 0.6f };
+const std::string kBackgroundSrgbJson = "[0.2, 0.35, 0.6]";
+
+TEST(JsonParserParity, BackgroundNonZeroCoreConvertsSrgbToLinear) {
+  CoreOutcome core = ParseWithCore(WrapRenderWithBackground(kBackgroundSrgbJson));
+  ASSERT_TRUE(core.ok) << core.error;
+  ASSERT_EQ(core.config.renderers_.size(), 1u);
+  const auto& renderer = core.config.renderers_.begin()->second;
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(renderer.background_[j], lumice::SrgbToLinear(kBackgroundSrgb[j]), 1e-6f)
+        << "channel " << j << ": core parser stored the sRGB value verbatim instead of converting";
+  }
+}
+
+TEST(JsonParserParity, BackgroundNonZeroCapiConvertsSrgbToLinear) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  ASSERT_EQ(ParseConfigString(WrapRenderWithBackground(kBackgroundSrgbJson).c_str(), &cfg), LUMICE_OK);
+  ASSERT_EQ(cfg.renderer_count, 1);
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(cfg.renderers[0].background[j], lumice::SrgbToLinear(kBackgroundSrgb[j]), 1e-6f)
+        << "channel " << j << ": C API parser stored the sRGB value verbatim instead of converting";
+  }
+}
+
+TEST(JsonParserParity, BackgroundNonZeroRoundTripsIdenticallyBothParsers) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithBackground(kBackgroundSrgbJson), &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& via_capi = p.via_capi.renderers_.begin()->second;
+  const auto& core = p.core.renderers_.begin()->second;
+  for (int j = 0; j < 3; j++) {
+    EXPECT_NEAR(via_capi.background_[j], core.background_[j], 1e-6f) << "channel " << j;
+  }
+}
+
+// --- render.background_color: a dead key, warned about rather than dropped in silence ---
+//
+// Orthogonal to the sRGB/linear parity above and deliberately grouped apart from it: what is
+// asserted here is that neither parser stays silent about a key it cannot use.
+
+// Captures everything the global logger emits for the lifetime of the object. RAII rather than a
+// manual remove_sink, because GetSharedSink() is a process-wide singleton: an ASSERT_* returning
+// early with the sink still attached would leave later tests in this binary writing into a
+// destroyed ostringstream.
+class LogCapture {
+ public:
+  LogCapture() : sink_(std::make_shared<spdlog::sinks::ostream_sink_mt>(oss_)) {
+    lumice::GetSharedSink()->add_sink(sink_);
+  }
+
+  ~LogCapture() { lumice::GetSharedSink()->remove_sink(sink_); }
+
+  LogCapture(const LogCapture&) = delete;
+  LogCapture& operator=(const LogCapture&) = delete;
+
+  std::string Text() const { return oss_.str(); }
+
+ private:
+  std::ostringstream oss_;
+  std::shared_ptr<spdlog::sinks::ostream_sink_mt> sink_;
+};
+
+// A render block carrying only the misspelling, so the warning is the sole observable effect.
+std::string RenderWithDeadBackgroundColorKey() {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "background_color": [0.2, 0.35, 0.6] } ] })";
+}
+
+TEST(JsonParserParity, BackgroundColorDeadKeyWarnsViaCoreParser) {
+  std::string log;
+  CoreOutcome core;
+  {
+    LogCapture capture;
+    core = ParseWithCore(RenderWithDeadBackgroundColorKey());
+    log = capture.Text();
+  }
+  ASSERT_TRUE(core.ok) << "the dead key must be ignored, not rejected: " << core.error;
+  ASSERT_EQ(core.config.renderers_.size(), 1u);
+  // Ignored means ignored: the misspelled value does not reach the field.
+  for (int j = 0; j < 3; j++) {
+    EXPECT_FLOAT_EQ(core.config.renderers_.begin()->second.background_[j], 0.0f);
+  }
+  EXPECT_NE(log.find("background_color"), std::string::npos) << "core parser log: " << log;
+  EXPECT_NE(log.find("\"background\""), std::string::npos)
+      << "the warning must name the key that actually works; core parser log: " << log;
+}
+
+TEST(JsonParserParity, BackgroundColorDeadKeyWarnsViaCapiParser) {
+  ConfigScratch cfg{};
+  ConfigScratchGuard guard(cfg);
+  std::string log;
+  LUMICE_ErrorCode status = LUMICE_OK;
+  {
+    LogCapture capture;
+    status = ParseConfigString(RenderWithDeadBackgroundColorKey().c_str(), &cfg);
+    log = capture.Text();
+  }
+  ASSERT_EQ(status, LUMICE_OK) << "the dead key must be ignored, not rejected";
+  ASSERT_EQ(cfg.renderer_count, 1);
+  for (int j = 0; j < 3; j++) {
+    EXPECT_FLOAT_EQ(cfg.renderers[0].background[j], 0.0f);
+  }
+  EXPECT_NE(log.find("background_color"), std::string::npos) << "C API parser log: " << log;
+  EXPECT_NE(log.find("\"background\""), std::string::npos)
+      << "the warning must name the key that actually works; C API parser log: " << log;
 }
 
 TEST(JsonParserParity, PyramidWedgeAngleOmittedDefaultsTo28) {

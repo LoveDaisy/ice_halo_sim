@@ -586,14 +586,15 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["resolution"] = { r.resolution_w, r.resolution_h };
   jr["view"] = ns::ViewParam{ r.view_azimuth, r.view_elevation, r.view_roll };
   jr["visible"] = MapVisibleFromCApi(r.visible);
-  jr["background"] = { r.background[0], r.background[1], r.background[2] };
+  // Back to sRGB on the way out — the struct field is linear, the JSON key is not.
+  jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
+                       ns::LinearToSrgb(r.background[2]) };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
-  jr["opacity"] = r.opacity;
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
   jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
-  jr["grid"]["outline"] = r.celestial_outline != 0;
+  jr["grid"]["horizon"] = r.horizon != 0;
   return jr;
 }
 
@@ -1200,6 +1201,27 @@ LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_tot
   auto err = server->server_->SetCompositeExposure(ev_total);
   if (err) {
     LOG_ERROR("LUMICE_SetCompositeExposure failed: {}", err.message);
+    return MapErrorCode(err.code);
+  }
+  return LUMICE_OK;
+}
+
+
+// Display-time background colour for the composite path. See the
+// LUMICE_SetCompositeBackground comment in include/lumice.h for
+// the semantics (3 ADDITIVE linear floats, masked to the imaged region, mono
+// path untouched, snapshot_dirty_ flipped so the next acquired result frame
+// rebakes the composite). Unlike the exposure setter this one takes a pointer,
+// so it needs its own null check; component values are not validated for the
+// same reason ev_total is not — the caller owns the colour space conversion and
+// the compositor clamps at the sRGB stage regardless.
+LUMICE_ErrorCode LUMICE_SetCompositeBackground(LUMICE_Server* server, const float* background_linear) {
+  if (!server || !background_linear) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  auto err = server->server_->SetCompositeBackground(background_linear);
+  if (err) {
+    LOG_ERROR("LUMICE_SetCompositeBackground failed: {}", err.message);
     return MapErrorCode(err.code);
   }
   return LUMICE_OK;
@@ -2209,13 +2231,9 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     }
     r.resolution_w = rj.at("resolution")[0].get<int>();
     r.resolution_h = rj.at("resolution")[1].get<int>();
-    // opacity / intensity_factor default to 1.0 in core RenderConfig; the zeroed struct would
-    // mean a fully transparent, zero-brightness renderer.
-    r.opacity = 1.0f;
+    // intensity_factor defaults to 1.0 in core RenderConfig; the zeroed struct would mean a
+    // zero-brightness renderer.
     r.intensity_factor = 1.0f;
-    if (rj.contains("opacity")) {
-      r.opacity = rj.at("opacity").get<float>();
-    }
     if (rj.contains("intensity_factor")) {
       r.intensity_factor = rj.at("intensity_factor").get<float>();
     }
@@ -2280,11 +2298,25 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       r.visible = MapVisibleToCApi(visible);
     }
 
+    // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.
+    if (rj.contains("background_color")) {
+      ILOG_WARN(ns::GetGlobalLogger(),
+                "render[id={}]: unknown key \"background_color\" is ignored; the background color key is "
+                "\"background\" (sRGB triple)",
+                r.id);
+    }
+    // The JSON key is sRGB (what a color picker shows); LUMICE_RenderParam::background is linear
+    // (what PostSnapshot's additive blend needs) — see the field's comment in lumice.h. The default
+    // needs no conversion: 0 is a fixed point of both directions. Twin of the encode side in
+    // RendererToJson, and of core's own conversion in config_manager.cpp::ParseRenderConfig.
     r.background[0] = r.background[1] = r.background[2] = 0.0f;
     if (rj.contains("background")) {
       const LUMICE_ErrorCode err = DecodeCoreField(rj.at("background"), r.background);
       if (err != LUMICE_OK) {
         return err;
+      }
+      for (float& c : r.background) {
+        c = ns::SrgbToLinear(c);
       }
     }
 
@@ -2299,7 +2331,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
 
     r.central_grid_count = 0;
     r.elevation_grid_count = 0;
-    r.celestial_outline = 1;  // core RenderConfig::celestial_outline_ defaults to true
+    r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {
@@ -2317,13 +2349,13 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
       }
-      if (gj.contains("outline")) {
+      if (gj.contains("horizon")) {
         bool outline = true;
-        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("outline"), outline);
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("horizon"), outline);
         if (err != LUMICE_OK) {
           return err;
         }
-        r.celestial_outline = outline ? 1 : 0;
+        r.horizon = outline ? 1 : 0;
       }
     }
   }
@@ -3264,5 +3296,14 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
     return LUMICE_ERR_NULL_ARG;
   }
   ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale);
+  return LUMICE_OK;
+}
+
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
+                                                     float intensity_scale, const float* background_linear) {
+  if (!xyz_in || !out || !background_linear) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale, background_linear);
   return LUMICE_OK;
 }

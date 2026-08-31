@@ -328,9 +328,9 @@ compares layout-affecting fields between old and new `RenderConfig`:
 |---------------------------|------------------------------------|
 | `resolution_` | `background_` |
 | `lens_` (type + fov) | `ray_color_` |
-| `lens_shift_` | `opacity_` |
-| `view_` | `intensity_factor_` |
-| `visible_` | `central_grid_` / `elevation_grid_` / `celestial_outline_` |
+| `lens_shift_` | `intensity_factor_` |
+| `view_` | `central_grid_` / `elevation_grid_` / `horizon_` |
+| `visible_` | |
 | `overlap_` | |
 
 Those six are the whole of the comparison — the function's `return` expression has

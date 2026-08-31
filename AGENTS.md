@@ -297,13 +297,23 @@ described further down.
 The `lens_proj` references cover the preview fragment shader's projection math
 (`src/gui/preview_renderer.cpp`: `linearInverse` / `fisheyeInverse` / `dualFisheyeInverse` /
 `rectangularInverse`) via an off-screen FBO export, independent of window size or layout — see the
-docking-coupling note below. Six scenes: one per projection branch (`linear`,
+docking-coupling note below. Nine scenes. Five are one per projection branch (`linear`,
 `fisheye_equal_area_120`, `fisheye_orthographic_180`, `dual_fisheye_equal_area_full`,
-`rectangular`), plus `overlay_ea`, which reuses the equal-area branch at elevation 45° with the
-zenith/nadir markers and coordinate grid enabled — it is this repo's only committed pixel coverage
-of the `overlayAuxLines()` stage, and the one scene kept when the `auto_ev` group was retired.
-Regen trigger: any change to that projection math, to the overlay drawing, or to
-`export_fbo_renderer.cpp`'s render path. Command:
+`rectangular`). The other four each REUSE an already-covered projection branch in order to cover a
+different shader stage on top of it, which is why they are exceptions to the one-scene-per-branch
+rule rather than additions to it:
+`overlay_ea` (equal-area at elevation 45° with the zenith/nadir markers and coordinate grid on) is
+this repo's only committed pixel coverage of the `overlayAuxLines()` stage, and the one scene kept
+when the `auto_ev` group was retired; `fisheye_equal_area_120_border` and
+`dual_fisheye_equal_area_full_border` cover `overlayLensBorder()`, one per shader branch that can
+draw a border (the single-lens radius formula and the dual-fisheye clip circle);
+`sky_colour_ea_180` covers the background fill and the gate it sits behind — equal-area at fov 180
+on a deliberately non-square 256×192 canvas with `visible: upper` and the camera on the horizon, so
+one frame carries all three regions (sky, the half-sky `visible` discards, and outside the image
+circle). It is the only scene in the group whose background is not black, and that is the point:
+with the black default, "painted where it should not have" and "left black" are the same pixels.
+Regen trigger: any change to that projection math, to the overlay drawing, to the background fill
+or its gate, or to `export_fbo_renderer.cpp`'s render path. Command:
 `python scripts/regen_gui_test_refs.py --group lens_proj`. Threshold backfill: the
 `psnr_threshold` field of each `kScenes[]` row in `test/gui/visual/test_gui_lens_projection.cpp`.
 

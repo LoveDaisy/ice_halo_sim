@@ -120,6 +120,18 @@ struct PreviewParams {
   Exposure exposure;
   OverlayDecoration overlay;
   Background bg;
+
+  // The sky colour painted behind the halo. Named apart from `bg` above on purpose: that one is
+  // the background IMAGE overlay (a photo the user compares against, blended as a lerp that dims
+  // the halo), this one is a background COLOUR added to the halo's radiance. Different blend laws
+  // for different jobs — see the shader's u_background use and Background's own comment.
+  //
+  // LINEAR RGB, converted from GuiState::RenderConfig::background (which is sRGB, the numbers a
+  // colour picker shows) by whoever fills this struct — app_panels.cpp for the live preview,
+  // inherited unchanged by the three export entry points through BuildExportParams. Linear because
+  // the addition has to happen before the sRGB transfer curve; the default of all zeroes makes the
+  // addition a no-op, so a caller that never touches this field renders exactly as before.
+  float background_color_linear[3] = { 0.0f, 0.0f, 0.0f };
 };
 
 class PreviewRenderer {

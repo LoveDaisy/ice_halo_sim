@@ -113,6 +113,11 @@ const Row kInertRows[] = {
   { "renderer.front", "renderer", [](GuiState& s) { s.renderer.front = !s.renderer.front; }, false, false, false },
   { "renderer.exposure_offset", "renderer", [](GuiState& s) { s.renderer.exposure_offset = 2.0f; }, false, false,
     false },
+  // Not a view field: the background colour is a real configuration value that Revert must undo.
+  // It is here because editing it must not re-run a finished simulation — the rays are the same,
+  // only what shows behind them changes. It stays out of the resim projection while remaining in
+  // the Revert baseline through its own ConfigSnapshot slot (gui_state.hpp).
+  { "renderer.background", "renderer", [](GuiState& s) { s.renderer.background[0] = 0.7f; }, false, false, false },
   // Not part of the committed snapshot at all, so it cannot participate in the diff even in
   // principle — the legacy wrapper owns it.
   { "use_gpu_backend", "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false,

@@ -48,7 +48,7 @@ inline constexpr const char* kFiniteSceneJson = R"({
   },
   "render": [{"id": 1, "lens": {"type": "rectangular", "fov": 180.0},
               "resolution": [256, 128], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
-              "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0}]
+              "visible": "full", "background": [0, 0, 0], "intensity_factor": 1.0}]
 })";
 
 // Never-ending variant of the above: production never stops, so the run never completes and never
@@ -64,7 +64,7 @@ inline constexpr const char* kInfiniteSceneJson = R"({
   },
   "render": [{"id": 1, "lens": {"type": "rectangular", "fov": 180.0},
               "resolution": [256, 128], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
-              "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0}]
+              "visible": "full", "background": [0, 0, 0], "intensity_factor": 1.0}]
 })";
 
 // Monochrome oriented-prism scene. `scattering.prob` is 0.0 here and 1.0 above, and that difference
@@ -93,7 +93,7 @@ inline constexpr const char* kMonoSceneJson = R"({
     "resolution": [128, 64],
     "view": {"elevation": 0, "azimuth": 0, "roll": 0},
     "visible": "full", "background": [0, 0, 0],
-    "opacity": 1.0, "intensity_factor": 1.0
+    "intensity_factor": 1.0
   }]
 })";
 
@@ -121,7 +121,7 @@ inline constexpr const char* kColorSceneJson = R"({
     "resolution": [128, 64],
     "view": {"elevation": 0, "azimuth": 0, "roll": 0},
     "visible": "full", "background": [0, 0, 0],
-    "opacity": 1.0, "intensity_factor": 1.0
+    "intensity_factor": 1.0
   }],
   "raypath_color": {
     "mode": "dominant",
@@ -156,7 +156,7 @@ inline constexpr const char* kTwoColorSceneJson = R"({
     "resolution": [128, 64],
     "view": {"elevation": 0, "azimuth": 0, "roll": 0},
     "visible": "full", "background": [0, 0, 0],
-    "opacity": 1.0, "intensity_factor": 1.0
+    "intensity_factor": 1.0
   }],
   "raypath_color": {
     "mode": "dominant",
@@ -191,7 +191,7 @@ inline constexpr const char* kExactTotalsSceneJson = R"({
   "render": [{
     "id": 1, "lens": {"type": "dual_fisheye_equal_area", "fov": 180.0},
     "resolution": [64, 32], "view": {"elevation": 0, "azimuth": 0, "roll": 0},
-    "visible": "full", "background": [0, 0, 0], "opacity": 1.0, "intensity_factor": 1.0
+    "visible": "full", "background": [0, 0, 0], "intensity_factor": 1.0
   }]
 })";
 inline constexpr LUMICE_RayCount kExactTotalsSimRays = 20000;

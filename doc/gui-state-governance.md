@@ -24,8 +24,10 @@
 | **T-struct·hard** | 拓扑变，清屏 + 抬 epoch floor 栅栏旧世代纹理 | `MarkStructHardDirty()`（gui_state.hpp:782；scrum-353.5 前名 `MarkFilterDirty`，被 S4 正名）= MarkDirty + snapshot_intensity=0 + p99_raw_y=0 + display_epoch_floor=committed_epoch | 编辑谓词/combine/增删类/增删 ref、filter 结构变、staged filter commit |
 | **T-struct·soft** | 配置脏但保留 carry-forward 纹理（不清屏） | `MarkDirty()`（gui_state.hpp:693）只置 dirty | 晶体几何/朝向、光谱、layer/prob、sim_resolution |
 | **T-display** | 纯显示，即时下发 server，**不 dirty / 不 epoch** | `PushDisplayState`→`LUMICE_SetRaypathColors` | color rgb / visible / solo / z_order / composite mode |
-| **T-view** | 纯客户端，仅 preview shader 实时重投影 | 无 server 下发（仿真投影固定全天空 dual-fisheye） | lens / fov / view / exposure / opacity / bg |
+| **T-view** | 纯客户端，仅 preview shader 实时重投影 | 无 server 下发（仿真投影固定全天空 dual-fisheye） | lens / fov / view / exposure |
 | **T-session** | 会话偏好，不持久、不 dirty、不进 ConfigSnapshot | 直接改字段 | show_composite_preview / color_window_open / trackball |
+
+> ⚠️ `renderer.background`（画面背景色，与 `bg_show` / `bg_path` 那组**背景图 overlay** 字段是两回事）**曾**列在 T-view 行的示例里，现已移出：它不是纯客户端重投影参数，编辑它必须能被 Revert 撤销。它今天处在 T-display 的**一半**上——「不 dirty / 不 epoch」已成立（`RenderConfigResimFields` 不再含它，Revert 改由 `ConfigSnapshot::renderer_background` 这个独立槽位追踪），而「即时下发 server」那一半**尚未建立**，所以一次背景色编辑目前不会到达任何地方，要等下一次 commit。故意不写进 T-display 行的示例列：写上去会读成"通道已通"。
 
 > 关键机制：**auto-commit 只在 kSimulating 下发生**（main.cpp:285-299：`dirty && sim_state==kSimulating` 每 kCommitIntervalMs 自动 DoRun）。**kModified（kDone+dirty）不会自动重跑**——用户必须手点 Run。
 
@@ -58,6 +60,8 @@
 - **S5** ~~signal 缓存无 server/epoch 键控~~ **已由 scrum-353.5 落地**：`RefreshColorClassSignals`（color_window.cpp）在入口比较 `(server, committed_epoch)`，任一 mismatch 即清 `signal_flags` + `last_poll_time=-1000` 强制立即重 poll，后端切换/epoch 递增不再展示旧信号。
 - **偏离 E（Save 裁定，已落地）**：owner 裁定 = kModified 态 Save 前弹提示（"Run first / Save anyway / Cancel"）——scrum-353.5 落地。Save anyway 保留"存所见"能力，但由用户显式确认；同时**不清 kModified**（保留视觉线索）。
 - **偏离 F（Revert 字段范围，已落地）**：~~Revert 恢复的 `renderer` 字段集宽于「什么才算改动」判定集——`ConfigSnapshot::From`/`ApplyTo` 整体拷贝 `RenderConfig`，于是改视角/换镜头/调 FOV 这些**从未点亮过 Revert 按钮**的操作会被 Revert 连带回滚（入不算改动、出算回滚）~~ **已修复**：这组字段的清单现在只声明在 `RenderConfigResimFields`（`gui_state.hpp`）一处，**「什么才算改动」与「Revert 恢复什么」读的是同一个真源**——该类型自己拥有三个方向：`From`（捕获）/ `Matches`（判定，`gui_state_reconcile.cpp::DiffAgainstCommitBaseline` 与 `app.cpp::DoRun` 的 `expect_rebuild` 都调它）/ `ApplyTo`（恢复）。`ConfigSnapshot` 的 Revert 基线字段随之从整份 `RenderConfig` 收窄为 `RenderConfigResimFields renderer_resim`，T-view 字段（lens_type / fov / elevation / azimuth / roll / visible / front）与 `exposure_offset` **结构性地不在基线里**（不是"捕获了但恢复时跳过"，那会让 `From`/`ApplyTo` 不对称），Revert 后保持用户当前实时值。
+
+  ⚠️ 后续补充：「不在 `renderer_resim` 里」与「不在 Revert 基线里」这个等价关系**对 `background` 不成立**。它已从 `RenderConfigResimFields` 移出（改背景色不再算改动、不再触发重跑），但仍在 Revert 基线里——走的是 `ConfigSnapshot::renderer_background` 这个与 `renderer_resim` 并列的独立槽位。`RenderConfigResimFields` 单个类型表达不了这个组合（进了它，捕获/判定/恢复三件事绑在一起），所以第三种处置是「排除出判定、但另开槽位保留 Revert 追踪」。加 `RenderConfig` 字段时的三选一，见 `gui_state.hpp` 该类型上方的注释块。
 - **已证伪**：sim_resolution 改动**确实** MarkDirty（app_panels.cpp:726）——非偏离。
 
 ## 4. 目标模型：三支柱 + 文档重置 owner
@@ -172,7 +176,7 @@
 
 `GuiState::ConfigSnapshot`（`gui_state.hpp:1101`）只覆盖七个配置字段（晶体 / filter / layer / `sun` / `sim` / `renderer_resim` / 染色规则），其中没有任何一个**顶层字段**登记为 `FieldTier::kView`——而本层的默认值候选恰恰以 `kView` 为主力（`bg_*` / `show_*` / 各类颜色与 alpha / 面板折叠态）。
 
-⚠️ "没有 `kView` 顶层字段"本身不等于"没有视图性的设置"，因为档位登记在**顶层字段**这一粒度上（`renderer` 整体登记为 `kStructSoft`，`gui_state_tiers.hpp`），一个顶层字段内部的成员不会单独出现在那份七项清单里。但对 `renderer` 这一项，答案现在是明确的：快照存的是 `RenderConfigResimFields renderer_resim` 而**不是**整份 `RenderConfig`，镜头 / fov / elevation / azimuth / roll / visible / front 与 `exposure_offset` 结构性地不在快照里，Revert 不覆盖它们。「Revert 应当覆盖哪些字段」这个语义问题已有答案且只有一个真源——`RenderConfigResimFields`，见 §3 偏离 F。
+⚠️ "没有 `kView` 顶层字段"本身不等于"没有视图性的设置"，因为档位登记在**顶层字段**这一粒度上（`renderer` 整体登记为 `kStructSoft`，`gui_state_tiers.hpp`），一个顶层字段内部的成员不会单独出现在那份七项清单里。但对 `renderer` 这一项，答案现在是明确的：快照存的是 `RenderConfigResimFields renderer_resim` **外加一个 `float renderer_background[3]` 独立槽位**，而**不是**整份 `RenderConfig`，镜头 / fov / elevation / azimuth / roll / visible / front 与 `exposure_offset` 结构性地不在快照里，Revert 不覆盖它们；`background` 则相反——不在 `renderer_resim` 里（改它不算改动）却在快照里（Revert 要撤销它），见 §3 偏离 F 的补充。「Revert 应当覆盖哪些字段」这个语义问题已有答案且只有一个真源——`RenderConfigResimFields`，见 §3 偏离 F。
 
 默认值层复用的是 `ConfigSnapshot` 背后"两份状态结构化 diff、按需派生效果"的**模式**，但不能复用其 struct：两者覆盖的字段集合不同，把默认值的 diff 引擎强行套进 `ConfigSnapshot` 会连带改动 Revert 语义。
 

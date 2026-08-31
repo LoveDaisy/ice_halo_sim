@@ -58,7 +58,11 @@ extern "C" {
 // xyz+composite getter existed to guarantee one generation, which any two reads off one frame
 // have by construction; and the cached-stats getter's "may be stale, never triggers a snapshot"
 // mode is gone — a frame carries the stats of the snapshot it is.
-#define LUMICE_API_VERSION 415
+//
+// BREAKING (v4.16): LUMICE_RenderParam loses its `opacity` field; struct layout changed.
+// See the struct's own BREAKING note for why it went rather than gained an implementation.
+// Recompile against this header.
+#define LUMICE_API_VERSION 416
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -667,12 +671,17 @@ typedef struct LUMICE_GridLine_ {
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 // BREAKING (v4.11): extended from the 6-field projection-agnostic subset to the full renderer
 // description (lens / lens_shift / view / visible / background / ray_color / grid /
-// celestial_outline). Before this, those fields had no home in the struct, so every C API entry
+// horizon). Before this, those fields had no home in the struct, so every C API entry
 // point that re-encodes a renderer (LUMICE_SceneFromJson/File, LUMICE_SceneAddRenderer)
 // silently replaced them with a hardcoded
 // dual_fisheye_equal_area/fov180/view000/visible=full/black-background renderer — a config could
 // parse cleanly and then be simulated with a projection the caller never asked for. Callers must
 // recompile.
+// BREAKING (v4.16): opacity field removed; struct layout changed. The core RenderConfig field it
+// mirrored had no drawing consumer anywhere in the tree since the first commit — it parsed,
+// serialized and compared, but never reached a pixel, so every caller setting it was configuring
+// nothing. Removed rather than implemented: the renderer composites into a single image with no
+// layer to be transparent against. Callers must recompile.
 //
 // WARNING: a zero-initialized `LUMICE_RenderParam{}` is NOT a committable state — lens_fov = 0 is
 // rejected as an invalid FOV for every lens type. Callers must set at least lens_type/lens_fov
@@ -684,7 +693,6 @@ typedef struct LUMICE_RenderParam_ {
   int id;
   int resolution_w;
   int resolution_h;
-  float opacity;
   float intensity_factor;
   float overlap;   // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
   int lens_type;   // LUMICE_LENS_TYPE_*
@@ -693,12 +701,27 @@ typedef struct LUMICE_RenderParam_ {
   float view_azimuth;
   float view_elevation;
   float view_roll;
-  int visible;          // LUMICE_VISIBLE_*
-  float background[3];  // linear RGB
+  int visible;  // LUMICE_VISIBLE_*
+  // Linear RGB — it is added to the halo's radiance before the sRGB transfer curve, so it has to
+  // live in the same space the addition does. The JSON "background" key is sRGB instead (what a
+  // color picker shows); both JSON parsers convert at their boundary, so a caller writing this
+  // struct directly passes linear while a caller writing JSON writes sRGB.
+  float background[3];
   // Fixed ray tint in linear RGB, or {-1,-1,-1} (core's default sentinel) for "use the natural
   // spectral color". Zero-init means an all-black tint, NOT the sentinel.
   float ray_color[3];
-  int celestial_outline;  // non-zero = draw the horizon/celestial outline
+  // Non-zero = draw a line along the celestial horizon (altitude 0). Opt-in: core's
+  // RenderConfig::horizon_ defaults to false, so a zero-initialized struct asks for
+  // no annotation, which is what the JSON path also gives a config with no "grid" object.
+  int horizon;
+  // PARSED BUT NOT RENDERED. Both lists are validated, round-tripped through JSON and compared,
+  // and no code draws either — a scene that sets them produces exactly the image it would produce
+  // without them. They are kept because the far target ("a CLI re-render equals what the GUI
+  // showed, annotations included") needs them, and the blocker is not the drawing code but a model
+  // mismatch: this schema names every line individually while the GUI derives one FOV-adaptive
+  // step and one shared colour, plus a separate list of sun angular-distance circles. Reconciling
+  // the two is a design decision, so the fields stay and say so. horizon above is the
+  // one member of this group that does draw.
   LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int central_grid_count;
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
@@ -966,6 +989,33 @@ LUMICE_ErrorCode LUMICE_SetRaypathColors(LUMICE_Server* server, const LUMICE_Col
 // thread-safe with concurrent LUMICE_CommitScene (same single-owner rule as the rest of the
 // display-time surface).
 LUMICE_ErrorCode LUMICE_SetCompositeExposure(LUMICE_Server* server, float ev_total);
+
+// Display-time background colour for the composite (raypath_color) path only. `background_linear` is a caller-owned
+// array of 3 floats, ADDITIVE **linear** RGB — the same convention the render config's `background` carries internally
+// (see doc/configuration.md: JSON/picker values are sRGB, the struct side is linear). A caller holding a picker's sRGB
+// triple must pre-convert it with lumice::SrgbToLinearRgb (src/util/color_space.hpp, an inline header function — see
+// LUMICE_XyzToSrgbUint8WithBackground for the same note) before calling. The value is added inside the composite bake
+// to every pixel the lens actually images — outside the image circle, and in the hemisphere `visible` excludes, nothing
+// is painted, matching what the mono path does with the committed config's background.
+//
+// The mono / non-composite path is unaffected: it keeps taking its background from the committed
+// scene. Pushing the SAME colour through both is what makes toggling raypath colour on and off
+// leave the background pixels unchanged.
+//
+// No accumulator reset / no epoch bump / no sim restart — the setter just flips the internal
+// snapshot_dirty_ flag, so the next acquired result frame rebuilds the composite with the new
+// background. Callers that already keep the poller running get it on the next poll; callers that
+// stopped the poller must wake it (mirrors the LUMICE_SetCompositeExposure + poller-wake pattern
+// used by the GUI). All-zero (the server default) is an algebraic no-op, so a caller that never
+// calls this sees byte-identical composites.
+//
+// Returns LUMICE_ERR_NULL_ARG if `server` or `background_linear` is NULL.
+//
+// Thread safety: display-time only; safe relative to other display-time readers
+// (LUMICE_AcquireResultFrame, LUMICE_GetSimLifecycle, LUMICE_SetCompositeExposure, etc.). NOT
+// thread-safe with concurrent LUMICE_CommitScene (same single-owner rule as the rest of the
+// display-time surface).
+LUMICE_ErrorCode LUMICE_SetCompositeBackground(LUMICE_Server* server, const float* background_linear);
 
 // Per-color-class empty-arc detector (task-342.3 AC4). For each committed color class, reports
 // whether the class has any non-zero pixel in its snapshot Y-lane on any active RenderConsumer
@@ -1306,6 +1356,25 @@ float LUMICE_MaxFov(LUMICE_LensType type);
 // intensity_scale: scalar applied per-pixel to XYZ before XYZ->sRGB conversion.
 // Returns LUMICE_ERR_NULL_ARG if xyz_in or out is NULL; LUMICE_OK otherwise.
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, int pixel_count, float intensity_scale);
+
+// Same conversion with an additive background composited into it — the sibling an editor needs to
+// bake a frame that matches what the renderer put on screen, since the renderer paints the sky
+// behind the halo and a bake without it produces a different picture from the same data.
+//
+// background_linear: LINEAR RGB, 3 floats, added to the halo's radiance AFTER the XYZ->RGB matrix
+//                    and BEFORE the clamp and the sRGB transfer curve. That placement is the whole
+//                    contract: it is what makes a pixel carrying no halo energy come back as
+//                    exactly the sRGB triple a color picker showed. Adding after the curve instead
+//                    gamma-encodes the color a second time (0.2 would render as byte 123, not 51).
+//                    Linear because that is the space the addition means something in — the same
+//                    convention LUMICE_RenderParam::background uses, and the same reason both JSON
+//                    parsers convert at their boundary. A C++ caller inside this codebase gets here
+//                    from a picker value via lumice::SrgbToLinearRgb (src/util/color_space.hpp, an
+//                    inline header function — no separate C API for this conversion); an external
+//                    C API consumer applies the standard sRGB EOTF inverse itself.
+// Returns LUMICE_ERR_NULL_ARG if any pointer argument is NULL; LUMICE_OK otherwise.
+LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
+                                                     float intensity_scale, const float* background_linear);
 
 // =============== Preferred Trace Backend ===============
 // Stable backend identifiers. Future backends (e.g. CUDA) append new positive

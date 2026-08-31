@@ -616,7 +616,6 @@ The render configuration defines the renderer parameters.
   "visible": "upper" | "lower" | "full",
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
-  "opacity": <float>,
   "intensity_factor": <float>,
   "grid": { ... },
   "filter": [<filter ID array>]
@@ -633,9 +632,8 @@ The render configuration defines the renderer parameters.
 | `lens_shift` | integer array | no | [0, 0] | Lens shift [x, y] |
 | `view` | object | no | see below | View configuration |
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
-| `background` | float array | no | [0, 0, 0] | Background color RGB |
+| `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
-| `opacity` | float | no | 1.0 | Opacity |
 | `intensity_factor` | float | no | 1.0 | Intensity factor |
 | `grid` | object | no | see below | Grid configuration |
 | `filter` | integer array | no | [] | Multi-scattering filter ID array |
@@ -695,7 +693,7 @@ The render configuration defines the renderer parameters.
 {
   "central": [ ... ],
   "elevation": [ ... ],
-  "outline": <boolean>
+  "horizon": <boolean>
 }
 ```
 
@@ -703,9 +701,20 @@ The render configuration defines the renderer parameters.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `central` | object array | no | [] | Central grid line configuration |
-| `elevation` | object array | no | [] | Elevation grid line configuration |
-| `outline` | boolean | no | true | Whether to show the celestial sphere outline |
+| `central` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
+| `elevation` | object array | no | [] | **Parsed but not rendered.** Same as `central`. |
+| `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
+
+**Grid lines that are not drawn**
+
+`central` and `elevation` describe per-line appearance (`value` / `width` / `opacity` / `color`),
+and the renderer has no consumer for either list — a config that sets them parses cleanly, compares
+and serializes correctly, and produces exactly the image it would produce without them. They are
+kept in the schema rather than removed because the GUI preview draws its own altitude/azimuth grid
+and its own sun angular-distance circles, and the two descriptions are not the same shape (the GUI
+derives a single FOV-adaptive step and one shared colour, this schema names each line individually).
+Reconciling them is a design question, not an implementation gap, so the keys stay and this note
+says plainly what they do today. `horizon` is the one member of this object that does draw.
 
 **Grid line configuration**:
 
@@ -754,8 +763,13 @@ The render configuration defines the renderer parameters.
   values fold to their absolute value before use, and any value `>= 1.0` reaches the
   same full-apex result as exactly `1.0` — it is not an error. See [Pyramid Shape
   Legality](#pyramid-shape-legality) below for what each range actually produces.
-- `render[].opacity` should be between 0.0 and 1.0
 - `render[].background` and `ray_color` color values should be between 0.0 and 1.0
+- `render[].background` is **sRGB**: on a pixel with no halo energy, the rendered color is exactly
+  the triple written here. It is converted to linear when the config is read, because the
+  background is added to the halo's radiance and that addition only means anything in linear
+  space; it is converted back to sRGB whenever a config is written out. (`ray_color` is linear —
+  it is a tint applied to radiance, not a color the viewer sees directly. The `LUMICE_RenderParam`
+  C struct is linear on both fields; only the JSON keys differ.)
 
 ### Pyramid Shape Legality
 

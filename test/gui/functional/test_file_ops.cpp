@@ -195,7 +195,7 @@ const char* const kColoredConfig = R"({
     "resolution": [128, 64],
     "view": {"elevation": 0, "azimuth": 0, "roll": 0},
     "visible": "full", "background": [0, 0, 0],
-    "opacity": 1.0, "intensity_factor": 1.0
+    "intensity_factor": 1.0
   }],
   "raypath_color": {
     "mode": "dominant",

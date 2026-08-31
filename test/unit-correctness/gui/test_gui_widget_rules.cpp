@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "gui/aspect_ratio_rules.hpp"
+#include "gui/composite_background_push.hpp"
 #include "gui/composite_exposure_push.hpp"
 #include "gui/edit_modal_rules.hpp"
 #include "gui/gui_constants.hpp"
@@ -383,6 +384,48 @@ TEST(CompositeExposurePush, TheGuardPushesOnTheEdgeOnAChangeAndOnTheFirstBakeAnd
     EXPECT_EQ(ShouldPushCompositeExposure(c.active, c.was_active, c.ev_total, c.last_pushed_ev, kEpsilon),
               c.expect_push)
         << c.name;
+  }
+}
+
+// The background's own display-time push guard. Same four branches as the exposure guard above,
+// but over a 3-vector: the extra propositions worth pinning are that a move in ANY single channel
+// counts as a change (a guard that compared only one component would silently drop a blue-only
+// edit), and that the off->on edge still fires on an unchanged colour — the case that actually
+// bites here, because a colour edited while composite was off never reached the server at all.
+TEST(CompositeBackgroundPush, TheGuardPushesOnTheEdgeOnAnyChannelMoveAndOnTheFirstBakeAndNeverOtherwise) {
+  using lumice::gui::ShouldPushCompositeBackground;
+  struct Case {
+    const char* name;
+    bool active;
+    bool was_active;
+    float bg[3];
+    float last[3];
+    bool expect_push;
+  };
+  const float kNanBg[3] = { kNan, kNan, kNan };
+  const Case kCases[] = {
+    { "composite off, nothing to bake", false, false, { 0.1f, 0.2f, 0.3f }, { 0.1f, 0.2f, 0.3f }, false },
+    { "composite off and never pushed",
+      false,
+      false,
+      { 0.1f, 0.2f, 0.3f },
+      { kNanBg[0], kNanBg[1], kNanBg[2] },
+      false },
+    { "the edge into composite, same colour", true, false, { 0.1f, 0.2f, 0.3f }, { 0.1f, 0.2f, 0.3f }, true },
+    { "already on, red moved", true, true, { 0.5f, 0.2f, 0.3f }, { 0.1f, 0.2f, 0.3f }, true },
+    { "already on, green moved", true, true, { 0.1f, 0.5f, 0.3f }, { 0.1f, 0.2f, 0.3f }, true },
+    { "already on, blue moved", true, true, { 0.1f, 0.2f, 0.5f }, { 0.1f, 0.2f, 0.3f }, true },
+    { "already on, colour unchanged", true, true, { 0.1f, 0.2f, 0.3f }, { 0.1f, 0.2f, 0.3f }, false },
+    { "already on, every channel within epsilon",
+      true,
+      true,
+      { 0.1f + kEpsilon * 0.5f, 0.2f + kEpsilon * 0.5f, 0.3f + kEpsilon * 0.5f },
+      { 0.1f, 0.2f, 0.3f },
+      false },
+    { "already on, first ever push", true, true, { 0.0f, 0.0f, 0.0f }, { kNanBg[0], kNanBg[1], kNanBg[2] }, true },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_EQ(ShouldPushCompositeBackground(c.active, c.was_active, c.bg, c.last, kEpsilon), c.expect_push) << c.name;
   }
 }
 

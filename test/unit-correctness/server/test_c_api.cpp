@@ -581,7 +581,6 @@ static std::string MakeMinimalConfigJson() {
   rn["view"]["roll"] = 0.0f;
   rn["visible"] = "full";
   rn["background"] = { 0.0f, 0.0f, 0.0f };
-  rn["opacity"] = 1.0f;
   rn["intensity_factor"] = 1.0f;
   rn["norm_mode"] = 0;
   root["render"] = nlohmann::json::array({ rn });
@@ -660,7 +659,6 @@ static std::string MakeFullConfigJson() {
   // document core itself rejects.
   rn["lens"]["fov"] = 180.0f;
   rn["resolution"] = { 1024, 512 };
-  rn["opacity"] = 0.9f;
   rn["intensity_factor"] = 2.0f;
   rn["norm_mode"] = 1;
   root["render"] = nlohmann::json::array({ rn });
@@ -702,7 +700,6 @@ TEST(ParseConfigApi, MinimalPrismConfig) {
   EXPECT_EQ(config.renderer_count, 1);
   EXPECT_EQ(config.renderers[0].resolution_w, 800);
   EXPECT_EQ(config.renderers[0].resolution_h, 400);
-  EXPECT_FLOAT_EQ(config.renderers[0].opacity, 1.0f);
 }
 
 

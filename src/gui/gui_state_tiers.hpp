@@ -51,6 +51,14 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "layers",                     FieldTier::kStructSoft, false },
     { "sun",                        FieldTier::kStructSoft, false },
     { "sim",                        FieldTier::kStructSoft, false },
+    // The tier of a RenderConfig SUB-field is not expressible here — this table's grain is the
+    // top-level GuiState field, so `renderer` is one row covering the whole struct. Two sub-fields
+    // are nonetheless carved out individually, and both are written down in gui_state.hpp's
+    // RenderConfigResimFields comment block instead of here: `exposure_offset` (excluded outright)
+    // and `renderer.background` (excluded from resim eligibility but still Revert-tracked, via
+    // ConfigSnapshot::renderer_background). That is two precedents for the same workaround. A
+    // third one is the signal to stop and give sub-field tiers a registry of their own rather than
+    // adding a third prose entry — and to notice that the gate below cannot see any of them.
     { "renderer",                   FieldTier::kStructSoft, false },
     // use_gpu_backend: registered kStructSoft for governance coverage, but NOT in ConfigSnapshot's
     // From/ApplyTo (view/session field intentionally excluded from Revert baseline). No baseline →

@@ -8,11 +8,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`grid.outline` now draws** (469.7): the render config's celestial-outline flag draws a line
+  along the horizon (altitude 0) in CLI/core renders, where for four years it was parsed,
+  validated, serialized and then ignored. The line is placed from the same per-pixel inverse
+  projection the render-domain mask is built from — not a second copy of that math — and is
+  clipped to the hemisphere `visible` admits, so a `visible: upper` render shows the horizon as
+  the edge of its sky. Its width follows the local degrees-per-pixel (the preview shader's own
+  rule), so it stays a couple of pixels across the whole lens/FOV range, and its colour is the
+  GUI overlay's horizon red blended in linear RGB before the sRGB transfer curve. **The default
+  changed to off** — see Changed below.
+- **GUI background colour reaches the picture** (469.4): the preview, the three PNG exports
+  (screenshot / dual-fisheye / equirectangular) and the frame baked into a saved `.lmc` now all
+  paint the configured background colour behind the halo. Previously only the CLI did, so the GUI
+  colour picker moved and nothing on screen changed. The colour is composited additively in linear
+  RGB before the sRGB transfer curve, which makes a pixel carrying no halo energy render as exactly
+  the sRGB triple the picker showed; it is painted only where the lens actually images sky, so the
+  black surround outside a fisheye's image circle stays black. Expect halo-against-sky contrast to
+  drop against a bright background — that is what the sRGB curve does, and EV is its control.
+- **Raypath-colour (composite) display honours the background colour** (469.5): with raypath
+  colouring on, the picture now carries the same background as with it off. Previously the
+  composite was baked server-side with a black surround, so toggling colouring changed the
+  background out from under the user — the visible inconsistency this closes. The colour is added
+  in linear RGB after all exposure handling and before the sRGB transfer curve, only on the pixels
+  the lens actually images, so it agrees byte-for-byte with the mono path outside the halo and
+  leaves the region outside a fisheye's image circle black.
+- **One new C API setter** (ABI addition, non-breaking):
+  `LUMICE_SetCompositeBackground(server, background_linear)` — a display-time push of the
+  composite path's additive linear-RGB background, shaped exactly like `LUMICE_SetCompositeExposure`
+  (no epoch bump, no accumulator reset, no re-simulation; the next acquired result frame re-bakes
+  the composite). All-zero, the default, is an algebraic no-op, so a consumer that never calls it
+  sees byte-identical composites.
+- **One new C API pure function** (ABI addition, non-breaking):
+  `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, pixel_count, intensity_scale, background_linear)`
+  — the existing `LUMICE_XyzToSrgbUint8` with an additive linear-RGB background composited before
+  the final clamp and gamma, for a consumer baking a frame that has to match what the renderer put
+  on screen. The inverse sRGB transfer curve a caller needs to convert a picker colour into that
+  `background_linear` argument (or into `LUMICE_RenderParam::background`) stays a C++-only inline
+  function, `lumice::SrgbToLinearRgb` in `src/util/color_space.hpp` — no new public C API for it.
 - **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
   offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
   persisted in `.lmc` files and core JSON configs.
 
 ### Changed
+- **`render[].grid.outline` now defaults to `false`** (469.7). It defaulted to `true` for as long
+  as it existed, which cost nothing while nothing drew it; now that it draws, leaving it on would
+  put a horizon line into every existing config that never asked for one. Add `"horizon": true` to
+  a renderer to get the line back. Turning an annotation on for every render is a product decision
+  nobody has made, so the default states the one thing that is certain: draw it when asked.
+- **`render[].grid.central` / `grid.elevation` documented as not rendered** (469.7). Both keys are
+  still parsed, validated and round-tripped, and no code draws either — they are now labelled that
+  way in `doc/configuration.md` (and `_zh`) instead of sitting in the same table as the keys that
+  do something, and the shipped `examples/config_example.json` no longer demonstrates a 22 deg
+  circle that never appears in the output.
 - **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
   type): the value is now **how many distinct crystal geometries the run actually sampled**,
   not how many crystal objects it built. A scene with no random shape distributions reports
@@ -49,6 +96,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trajectories. See `scratchpad/task-remove-anchor-lane/bench/bench_results.md`.
 
 ### Removed
+- **Breaking ABI #4**: `LUMICE_RenderParam::opacity` removed, and `render[].opacity` is no longer
+  parsed from JSON (`RenderConfig::opacity_` deleted). The field had no drawing consumer anywhere
+  in the tree since the first commit — setting it changed nothing — and it has no counterpart in
+  the GUI, so nothing was ever going to grow into it. `LUMICE_API_VERSION` is bumped to 416.
+  Drop the assignment from C/FFI callers; old JSON configs keep loading (unknown keys are
+  ignored). Note this is a DIFFERENT field from `LUMICE_GridLine::opacity`, which is untouched.
+  The GUI's mirror of the same field (`renderer.opacity`, editable in the Settings panel and
+  persisted in `.lmc`) is removed with it; a `.lmc` written by an older build still opens.
 - **Breaking ABI #3**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
   fields removed. Struct shrinks from 64 bytes to 56 bytes on 64-bit platforms.
   Update all ctypes / FFI / C callers that reference these fields.

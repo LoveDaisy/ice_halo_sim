@@ -302,7 +302,6 @@
         "fov": 180,
         "type": "dual_fisheye_equal_area"
       },
-      "opacity": 1,
       "overlap": 0.0872,
       "resolution": [
         2048,

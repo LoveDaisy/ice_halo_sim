@@ -600,6 +600,8 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine);
 void RegisterExportPreviewTests(ImGuiTestEngine* engine);
 void RegisterPreviewPixelTests(ImGuiTestEngine* engine);
 void RegisterPreviewTextureTests(ImGuiTestEngine* engine);
+void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine);
+void RegisterBackgroundMainUiControlTests(ImGuiTestEngine* engine);
 void RegisterEntryManagementTests(ImGuiTestEngine* engine);
 void RegisterBackgroundOverlayTests(ImGuiTestEngine* engine);
 void RegisterFileOpsTests(ImGuiTestEngine* engine);

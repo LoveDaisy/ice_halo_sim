@@ -22,7 +22,6 @@ Lumice's JSON schema requires only a handful of fields; the rest fall back to de
 | `render[].view.{azimuth,elevation,roll}` | no | `0.0` each | Camera direction relative to the world frame |
 | `render[].visible` | no | `"upper"` | Hemisphere mask: `"upper"`, `"lower"`, or `"full"` |
 | `render[].background` | no | `[0, 0, 0]` | RGB background |
-| `render[].opacity` | no | `1.0` | Render opacity |
 
 > All field names are exactly as accepted by the JSON parser. The C API mirrors a subset of these — see [`../c_api.md`](../c_api.md).
 

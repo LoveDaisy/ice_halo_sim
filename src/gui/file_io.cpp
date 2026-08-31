@@ -945,9 +945,16 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   jr["sim_resolution"] = kSimResolutions[r.sim_resolution_index];
   jr["visible"] = kVisibleJsonNames[r.visible];
   jr["front"] = r.front;
+  // This document's "background" is sRGB — the numbers a colour picker shows — and is written and
+  // read back verbatim, because RenderConfig::background is sRGB too. Same space as the
+  // config-JSON contract's "background" key, but for a different reason and by a different
+  // mechanism: there the key crosses into a struct that holds LINEAR RGB, so both config parsers
+  // convert at the boundary (config_manager.cpp, c_api.cpp); here the key and the field are one
+  // and the same value, so there is nothing to convert and no second candidate space it could be
+  // in. The conversion for this side happens later and elsewhere — at the point of use, where the
+  // preview shader's uniform and the .lmc bake each ask for linear (app_panels.cpp, app.cpp).
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
-  jr["opacity"] = r.opacity;
   jr["exposure_offset"] = r.exposure_offset;
   return jr;
 }
@@ -972,6 +979,10 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
     r.visible = VisibleFromString(vis_str);
     r.front = jr.value("front", RenderConfig{}.front);
   }
+  // sRGB in, sRGB out — see the note at the writer (SerializeRendererToGuiJson). No conversion
+  // here: the value the picker produced is the value this field holds and the value the key
+  // carries, and the sRGB->linear step happens at the point of use instead (the shader uniform in
+  // app_panels.cpp, the .lmc bake in app.cpp).
   if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
     for (int i = 0; i < 3; i++)
       r.background[i] = jr["background"][i].get<float>();
@@ -980,7 +991,6 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
     for (int i = 0; i < 3; i++)
       r.ray_color[i] = jr["ray_color"][i].get<float>();
   }
-  r.opacity = jr.value("opacity", RenderConfig{}.opacity);
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
   // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
   // unknown keys, so no migration code is needed — the field becomes a silent no-op.
@@ -1677,7 +1687,6 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     int res = kSimResolutions[r.sim_resolution_index];
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
-    dst.opacity = r.opacity;
     // doc/ev-pipeline-architecture.md §2.4/§4 — the ONE field where the two
     // SceneIntent arms differ, and the reason SceneIntent exists at all:
     //
@@ -1707,7 +1716,7 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // authoritative defaults instead. {-1,-1,-1} is RenderConfig::ray_color_'s "use the natural
     // spectral color" sentinel — a zero-initialized {0,0,0} would tint every ray black.
     dst.ray_color[0] = dst.ray_color[1] = dst.ray_color[2] = -1.0f;
-    dst.celestial_outline = 1;  // core RenderConfig::celestial_outline_ default (true)
+    dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
     // view / background / lens_shift / grid counts keep their zero-initialized values, which match
     // both the pre-v4.11 hardcoded encoding and core's defaults. The GUI's own screen-space
     // overlay grid (gui_state.show_grid_line) is a display-time layer and is unrelated to
@@ -2451,6 +2460,10 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       r.front = jr.value("front", RenderConfig{}.front);
     }
 
+    // sRGB, verbatim, for the reason given at SerializeRendererToGuiJson. Note this reader is on
+    // the CORE-config path, where the same key crosses into a linear-RGB struct and the config
+    // parsers therefore DO convert; it does not convert because its destination is the GUI's own
+    // sRGB field, not that struct.
     if (jr.contains("background") && jr["background"].is_array() && jr["background"].size() == 3) {
       for (int i = 0; i < 3; i++)
         r.background[i] = jr["background"][i].get<float>();
@@ -2459,7 +2472,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       for (int i = 0; i < 3; i++)
         r.ray_color[i] = jr["ray_color"][i].get<float>();
     }
-    r.opacity = jr.value("opacity", RenderConfig{}.opacity);
     // The wire carries a linear intensity factor, the struct an EV offset; the fallback is
     // therefore the struct default pushed through the same 2^x the reader inverts below.
     float ifactor = jr.value("intensity_factor", std::exp2(RenderConfig{}.exposure_offset));

@@ -10,6 +10,8 @@
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/def.hpp"
+#include "util/color_space.hpp"
+#include "util/logger.hpp"
 
 namespace lumice {
 
@@ -59,14 +61,29 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("visible")) {
     j_render.at("visible").get_to(render.visible_);
   }
+  // "background_color" is not, and never was, a schema key — but it is a very natural guess next to
+  // ray_color / sun_circles_color / zenith_nadir_color, and the repo's own e2e corpus has written it
+  // by mistake in a dozen files across several commits. Unknown keys are otherwise ignored in
+  // silence, which is exactly why the mistake kept recurring; the value it carries is dropped either
+  // way, so the warning is the only thing that can tell the author. Kept per-parser rather than
+  // factored out: the two parsers are independent implementations by design.
+  if (j_render.contains("background_color")) {
+    LOG_WARNING(
+        "render[id={}]: unknown key \"background_color\" is ignored; the background color key is "
+        "\"background\" (sRGB triple)",
+        render.id_);
+  }
+  // The JSON key is sRGB (what a color picker shows); RenderConfig::background_ is linear (what
+  // PostSnapshot's additive blend needs). The conversion lives here, at the parser boundary, and
+  // has a twin on the encode side in render_config.cpp's to_json.
   if (j_render.contains("background")) {
     j_render.at("background").get_to(render.background_);
+    for (float& c : render.background_) {
+      c = SrgbToLinear(c);
+    }
   }
   if (j_render.contains("ray_color")) {
     j_render.at("ray_color").get_to(render.ray_color_);
-  }
-  if (j_render.contains("opacity")) {
-    j_render.at("opacity").get_to(render.opacity_);
   }
   if (j_render.contains("intensity_factor")) {
     j_render.at("intensity_factor").get_to(render.intensity_factor_);
@@ -83,8 +100,8 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("elevation")) {
       j_grid.at("elevation").get_to(render.elevation_grid_);
     }
-    if (j_grid.contains("outline")) {
-      j_grid.at("outline").get_to(render.celestial_outline_);
+    if (j_grid.contains("horizon")) {
+      j_grid.at("horizon").get_to(render.horizon_);
     }
   }
 

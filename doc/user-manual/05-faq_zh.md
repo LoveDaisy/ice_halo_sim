@@ -22,7 +22,6 @@ Lumice 的 JSON schema 只要求少量字段，其他字段都有默认值。下
 | `render[].view.{azimuth,elevation,roll}` | 否 | 各 `0.0` | 相机相对世界系的指向 |
 | `render[].visible` | 否 | `"upper"` | 半球遮罩：`"upper"` / `"lower"` / `"full"` |
 | `render[].background` | 否 | `[0, 0, 0]` | RGB 背景 |
-| `render[].opacity` | 否 | `1.0` | 渲染不透明度 |
 
 > 字段名为 JSON parser 实际接受的名称。C API 镜像了其中一部分 — 见 [`../c_api_zh.md`](../c_api_zh.md)。
 

@@ -278,6 +278,7 @@ These functions have no shared state and are always thread-safe:
 | `LUMICE_IsLegalFace(kind, face)` | none | Pure function |
 | `LUMICE_MaxFov(type)` | none | Pure function |
 | `LUMICE_XyzToSrgbUint8(xyz_in, out, count, scale)` | `xyz_in != NULL`, `out != NULL` | Batch conversion |
+| `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, count, scale, bg_linear)` | all pointers non-null | Batch conversion with an additive linear-RGB background |
 
 ### §3.6 Zero-output completion contract (all-black simulation)
 
@@ -339,11 +340,13 @@ false and no snapshot is ever prepared). It still does **not** call
 | `LUMICE_ReleaseResultFrame` | Yes | `shared_ptr` control-block refcount (atomic) | NULL-safe no-op; drops one reference. The underlying pixels are freed only when the LAST holder — of any frame sharing that publication — releases |
 | `LUMICE_FrameGetRender` / `FrameGetComposite` / `FrameGetRawXyz` / `FrameGetStats` | Yes | none needed | The frame is immutable once published, so reading it — even the SAME frame from multiple threads — needs no lock |
 | `LUMICE_SetRaypathColors` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates color/visible/solo/z-order/mode on the active class table, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Safe vs `AcquireResultFrame`/`FrameGet*`, but NOT vs a concurrent `LUMICE_CommitScene` (same single-owner rule; the commit writes `active_class_table_` partly outside `consumer_mutex_`, a pre-existing race). |
+| `LUMICE_SetCompositeBackground` | Yes* | `consumer_mutex_` (TicketMutex) | Display-time only: updates the composite-path background linear RGB, sets `snapshot_dirty_`. Never touches Stop/Start/`scene_generation_`/`committed_epoch_`/`consumers_`. *Same caveat as `LUMICE_SetRaypathColors`: safe vs `AcquireResultFrame`/`FrameGet*`, not vs a concurrent `LUMICE_CommitScene`. |
 | `LUMICE_GetCrystalMesh` | Yes | — | No shared state (no `server` param; uses a local RNG per call) |
 | `LUMICE_ValidateRaypathText` | Yes | — | Pure function |
 | `LUMICE_IsLegalFace` | Yes | — | Pure function |
 | `LUMICE_MaxFov` | Yes | — | Pure function |
 | `LUMICE_XyzToSrgbUint8` | Yes | — | Pure function |
+| `LUMICE_XyzToSrgbUint8WithBackground` | Yes | — | Pure function |
 
 
 **Mutex types**:

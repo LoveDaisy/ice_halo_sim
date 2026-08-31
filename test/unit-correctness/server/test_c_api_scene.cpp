@@ -308,7 +308,6 @@ TEST(SceneAddRenderer, MatchesConfigToJson) {
   LUMICE_RenderParam r{};
   r.resolution_w = 800;
   r.resolution_h = 600;
-  r.opacity = 0.5f;
   r.intensity_factor = 2.0f;
   r.overlap = 0.1f;
 
@@ -729,7 +728,6 @@ TEST(SceneRoundTrip, RendererAndScatterLayer) {
   LUMICE_RenderParam r{};
   r.resolution_w = 1024;
   r.resolution_h = 768;
-  r.opacity = 0.8f;
   r.intensity_factor = 1.5f;
   r.overlap = 0.25f;
   // A zero-initialized LUMICE_RenderParam is not committable (lens_fov = 0 is an invalid FOV),
@@ -785,13 +783,12 @@ TEST(SceneRoundTrip, EveryLensTypeAndVisibleRange) {
       LUMICE_RenderParam r{};
       r.resolution_w = 256;
       r.resolution_h = 128;
-      r.opacity = 1.0f;
       r.intensity_factor = 1.0f;
       r.lens_type = lens.type;
       r.lens_fov = lens.fov;
       r.visible = visible;
       r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
-      r.celestial_outline = 1;
+      r.horizon = 1;
       ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK)
           << "lens_type=" << lens.type << " visible=" << visible;
       // The round trip re-parses through core, so a mis-mapped enum surfaces either as a rejection
@@ -870,7 +867,6 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   LUMICE_RenderParam r{};
   r.resolution_w = 800;
   r.resolution_h = 800;
-  r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
   // Every v4.11 renderer field gets a NON-default value here: this scene goes through
   // ExpectLosslessRoundTrip, so a field that fails to survive Scene -> JSON -> Scene shows up as a
@@ -889,7 +885,7 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.ray_color[0] = 0.9f;
   r.ray_color[1] = 0.8f;
   r.ray_color[2] = 0.7f;
-  r.celestial_outline = 0;
+  r.horizon = 0;
   r.central_grid_count = 2;
   r.central_grid[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
   r.central_grid[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
@@ -1087,7 +1083,6 @@ LUMICE_RenderParam MakeCommitRenderParam() {
   LUMICE_RenderParam r{};
   r.resolution_w = 64;
   r.resolution_h = 32;
-  r.opacity = 1.0f;
   r.intensity_factor = 1.0f;
   r.overlap = 0.0f;
   // Part of "the smallest state core accepts": a zero-initialized LUMICE_RenderParam carries

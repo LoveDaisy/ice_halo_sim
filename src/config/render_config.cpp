@@ -6,6 +6,7 @@
 
 #include "config/config_compare.hpp"
 #include "core/math.hpp"
+#include "util/color_space.hpp"
 
 namespace lumice {
 
@@ -149,15 +150,16 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["lens_shift"] = r.lens_shift_;
   j["view"] = r.view_;
   j["visible"] = r.visible_;
-  j["background"] = r.background_;
+  // background_ is linear; the JSON key is sRGB. Twin of the decode-side conversion in
+  // config_manager.cpp::ParseRenderConfig.
+  j["background"] = { LinearToSrgb(r.background_[0]), LinearToSrgb(r.background_[1]), LinearToSrgb(r.background_[2]) };
   j["ray_color"] = r.ray_color_;
-  j["opacity"] = r.opacity_;
   j["intensity_factor"] = r.intensity_factor_;
   j["overlap"] = r.overlap_;
 
   j["grid"].emplace("central", r.central_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
-  j["grid"].emplace("outline", r.celestial_outline_);
+  j["grid"].emplace("horizon", r.horizon_);
 }
 
 
@@ -166,7 +168,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
   static_assert(sizeof(RenderConfig) == 136, "Update NeedsRebuild when RenderConfig fields change");
-  // Compare layout-affecting fields only. Appearance fields (background, ray_color, opacity,
+  // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, grids) are handled by ResetWith() without rebuild.
   // id_ is excluded: map key matching guarantees id agreement on the reuse path.
   return !std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) ||

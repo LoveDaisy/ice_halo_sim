@@ -482,6 +482,85 @@ TEST_F(UserDefaults, ac4_file_value_beats_personal_default) {
   EXPECT_TRUE(opened.bg_alpha != 0.33f);
 }
 
+// The sky colour as a personal default, and the reason it gets its own case rather than riding on
+// the coverage above: every probe field the round-trip cases already use is a SCALAR leaf
+// (`renderer.lens_type` an enum, `bg_alpha` a float). `renderer.background` is an array leaf — "one
+// row carrying the whole triple", as the defaults diff puts it — and the overlay is applied by
+// nlohmann's merge_patch, whose treatment of the two shapes differs: objects merge key by key,
+// arrays are REPLACED whole. A partial override of a scalar is not expressible; a partial override
+// of an array is, which is why the third block below exists.
+//
+// It is also the field this whole scrum exists for. "I always want a blue sky" is the archetypal
+// personal preference, and the eligibility verdict that permits it is inherited: `renderer` is a
+// kStructSoft non-collection field, so ResolveDefaultEligibility("renderer") is kEligible (pinned
+// in test_user_defaults_eligibility.cpp) and every one of its sub-fields rides along inside the
+// single serialized `renderer` object. Nothing about `background` is decided separately — that
+// inheritance IS the verdict, and this case is what shows it reaching a document.
+TEST_F(UserDefaults, a_personal_sky_colour_reaches_new_documents_but_never_overrides_a_file) {
+  const auto dir = FreshOverlayDir("sky_colour");
+
+  // Three distinct channels, none of them 0 or 1: a swapped or dropped channel is then visible,
+  // and none sits on a clamp boundary where an error would be absorbed. Same triple the rest of
+  // this scrum probes with (test_preview_background.cpp, background_srgb_contract.json).
+  constexpr float kSky[3] = { 0.2f, 0.35f, 0.6f };
+  const gui::GuiState factory{};
+  ASSERT_NE(factory.renderer.background[0], kSky[0]) << "probe colour equals the factory value; it proves nothing";
+
+  json doc;
+  doc["renderer"]["background"] = { kSky[0], kSky[1], kSky[2] };
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
+
+  const gui::GuiState fresh = gui::MakeNewDocumentState(dir);
+  for (int j = 0; j < 3; ++j) {
+    EXPECT_EQ(fresh.renderer.background[j], kSky[j]) << "channel " << j;
+  }
+  // The other half of merge_patch's object rule, asserted on the same document: naming one
+  // sub-key of `renderer` must not blank the siblings the user did not mention.
+  EXPECT_EQ(fresh.renderer.fov, factory.renderer.fov);
+  EXPECT_EQ(fresh.renderer.lens_type, factory.renderer.lens_type);
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+
+  // Invariant I1, on an array leaf. A .lmc that states its own sky loads with that sky, and one
+  // that is missing the key falls back to FACTORY — not to the personal default. Otherwise the
+  // same file renders a different picture on two machines, which is precisely the property a
+  // shared document is for.
+  json file_doc = json::parse(gui::SerializeGuiStateJson(gui::InitDefaultState()));
+  file_doc["renderer"]["background"] = { 0.9f, 0.05f, 0.42f };
+  gui::GuiState loaded;
+  EXPECT_TRUE(gui::DeserializeGuiStateJson(file_doc.dump(), loaded));
+  EXPECT_EQ(loaded.renderer.background[0], 0.9f);
+  EXPECT_EQ(loaded.renderer.background[1], 0.05f);
+  EXPECT_EQ(loaded.renderer.background[2], 0.42f);
+
+  json old_doc = file_doc;
+  old_doc["renderer"].erase("background");
+  gui::GuiState old_loaded;
+  EXPECT_TRUE(gui::DeserializeGuiStateJson(old_doc.dump(), old_loaded));
+  for (int j = 0; j < 3; ++j) {
+    EXPECT_EQ(old_loaded.renderer.background[j], factory.renderer.background[j]) << "channel " << j;
+    EXPECT_NE(old_loaded.renderer.background[j], kSky[j]) << "channel " << j << " came from the personal default";
+  }
+
+  // The array-shape hazard, pinned as it currently behaves rather than as it ought to: merge_patch
+  // REPLACES the factory triple with whatever the file holds, so a hand-edited two-element array
+  // reaches the deserializer with no third channel to fall back on. The `size() == 3` guard in
+  // file_io.cpp then skips the key entirely and the document comes back factory-black — silently,
+  // with no downgrade notice, because the guard predates the notice channel. That is a defect in
+  // the READ path (469.3's territory, not this task's), and it is written down here so that a
+  // future fix turns this assertion red instead of going unnoticed.
+  EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, json{ { "renderer", { { "background", { 0.9f, 0.1f } } } } }));
+  // Non-vacuity: the malformed value really is what the store now holds. Without this, the
+  // factory-black assertion below would also pass on a write that silently dropped the key.
+  const json stored = json::parse(std::ifstream(dir / gui::kUserDefaultsFileName));
+  ASSERT_TRUE(stored["renderer"]["background"].is_array());
+  ASSERT_EQ(stored["renderer"]["background"].size(), static_cast<size_t>(2));
+  const gui::GuiState truncated = gui::MakeNewDocumentState(dir);
+  for (int j = 0; j < 3; ++j) {
+    EXPECT_EQ(truncated.renderer.background[j], factory.renderer.background[j])
+        << "channel " << j << ": a malformed override must not half-apply";
+  }
+}
+
 // ================================================================================
 // AC5 — degradation, never a crash
 // ================================================================================

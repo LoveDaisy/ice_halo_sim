@@ -484,6 +484,18 @@ class Server {
    */
   Error SetCompositeExposure(float ev_total);
 
+  /**
+   * @brief Display-time background colour for the composite path only.
+   * @param rgb Three ADDITIVE linear-RGB components, added inside DoSnapshot Phase 2 to every
+   *        pixel the lens actually images (RenderConsumer's per-pixel domain mask — the same one
+   *        the mono path's background honours, so the two paths agree outside the image circle).
+   * @return Error::Success. Mono path is untouched — it keeps taking its background from the
+   *         committed RenderConfig; only the composite result carries this one. Flips
+   *         snapshot_dirty_ so the next acquired result frame re-bakes the composite; no epoch
+   *         bump, no accumulator reset.
+   */
+  Error SetCompositeBackground(const float rgb[3]);
+
  private:
   std::shared_ptr<ServerImpl> impl_;
 };

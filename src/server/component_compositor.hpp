@@ -95,6 +95,26 @@ inline bool CompositeColorClassesLinear(const RenderConsumer& consumer, const Co
   return CompositeColorClassesLinear(consumer, class_table, mode, 1.0f, out_linear_rgb, nullptr);
 }
 
+// Adds an ADDITIVE linear-RGB background to a composited W*H*3 buffer, on the pixels the lens
+// actually images and nowhere else. `visible_mask` is RenderConsumer::VisibleMask() — the same
+// per-pixel render-domain mask PostSnapshot uses for the mono path's background, shared rather
+// than re-derived so the two paths cannot drift apart. Outside that region (beyond the image
+// circle, or in the hemisphere `visible` excludes) nothing was ever projected, so painting it
+// would turn e.g. a 180 deg fisheye into a solid rectangle of sky with an invisible circle in it.
+//
+// Call this AFTER a successful CompositeColorClassesLinear — i.e. after all exposure handling,
+// which every mode finishes inside that call — and BEFORE LinearRgbToSrgbU8's clamp + gamma. That
+// is the same ordering PostSnapshot uses ("add background in linear, let the sRGB stage clamp"),
+// and it is what makes a pixel carrying no halo energy come back as exactly the sRGB triple the
+// background was picked as, on either path.
+//
+// `linear_rgb` is modified in place and must already hold W*H*3 values. Defensive fallback for a
+// mask whose length disagrees with the pixel count: paint every pixel, matching PostSnapshot's
+// own fallback rather than inventing a second semantics. An all-zero background is an algebraic
+// no-op, so a caller that never sets one gets byte-identical output.
+void ApplyCompositeBackground(const std::vector<uint8_t>& visible_mask, const float background_linear[3],
+                              std::vector<float>& linear_rgb);
+
 // Convert a W*H*3 linear-RGB buffer (as produced above) to sRGB uint8, clamping
 // to [0,1] before the sRGB transfer (mirrors PostSnapshot's final stage).
 void LinearRgbToSrgbU8(const std::vector<float>& linear_rgb, std::vector<uint8_t>& out_srgb);

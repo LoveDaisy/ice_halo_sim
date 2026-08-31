@@ -136,6 +136,52 @@ Dir3 RectangularInverse(float lon, float lat) {
 }
 
 
+// =============== Globe (outside-in unit sphere) ===============
+
+// Solved directly from lm_proj::ProjectExitToPixel's globe forward rather than transcribed
+// from the GUI shader, so the pair is a provable mutual inverse in one frame instead of two
+// conventions that have to be argued equal. With s = kGlobeCameraD + c.z the forward reads
+// u = -c.x/s, v = c.y/s, hence c = (-u*s, v*s, s - D); substituting into |c| = 1 gives
+//   (u^2 + v^2 + 1) s^2 - 2 D s + (D^2 - 1) = 0
+// whose near root (the visible surface of the sphere, smallest c.z) is the one taken below.
+//
+// This is the same discriminant the shader's `globeInverse` computes, up to the positive
+// factor 1/(u^2+v^2+1): the shader normalizes its eye-space ray direction first, which
+// divides both b^2 and c by that factor. So the two agree on validity exactly, and — being
+// a function of u^2+v^2 only — that agreement does not depend on the horizontal sign
+// convention the two sides use for u.
+//
+// kGlobeCameraD is shared verbatim with lm_proj (and, by the must-match anchor there, with
+// the GUI); no second literal is introduced here.
+Dir3 GlobeInverse(float x, float y, float focal) {
+  if (!(focal > 0.0f)) {
+    return { 0, 0, 0, false };  // degenerate lens (fov -> 180 deg); nothing is imaged
+  }
+  const float d = lm_proj::kGlobeCameraD;
+  float u = x / focal;
+  float v = y / focal;
+  float a = u * u + v * v + 1.0f;
+  float disc = d * d - a * (d * d - 1.0f);
+  if (disc < 0.0f) {
+    return { 0, 0, 0, false };  // ray misses the sphere
+  }
+  float s = (d - std::sqrt(disc)) / a;
+  if (s <= 0.0f) {
+    return { 0, 0, 0, false };  // intersection behind the camera
+  }
+  // Mathematically |c| == 1 already; normalize to absorb float error near the silhouette
+  // (disc ~ 0), matching the same guard in the GUI's CPU mirror.
+  float cx = -u * s;
+  float cy = v * s;
+  float cz = s - d;
+  float len = std::sqrt(cx * cx + cy * cy + cz * cz);
+  if (len <= 0.0f) {
+    return { 0, 0, 0, false };
+  }
+  return { cx / len, cy / len, cz / len, true };
+}
+
+
 // =============== Dual fisheye layout utilities ===============
 
 void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height, float* fx, float* fy) {

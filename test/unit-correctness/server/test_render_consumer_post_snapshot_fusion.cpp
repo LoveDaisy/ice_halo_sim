@@ -16,6 +16,14 @@
 // silently accept exactly the floating-point reordering the fusion must not
 // introduce.
 //
+// PostSnapshot also skips the background on pixels the lens does not image, so the
+// re-derivation below carries its own domain/visibility predicate (PixelImagesSky). It is
+// written out from the projection primitives rather than calling BuildVisibleMask, for the
+// same reason the rest of this file does not call render.cpp: a contract test that invokes
+// the code under test twice states nothing. This fixture's 16x16 canvas under a 180 deg
+// equal-area fisheye puts all four corners outside the image circle (corner radius
+// 1.33x the circle's), so the predicate is genuinely exercised, not decorative.
+//
 // Coverage: the three branch combinations PostSnapshot can take —
 //   1. use_real_color (ray_color_[0] < 0) with a zero background;
 //   2. the gray + ray_color tint fallback (no gamut clip) with a zero background;
@@ -28,6 +36,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -36,6 +45,9 @@
 #include "config/proj_config.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/geo3d.hpp"
+#include "core/projection.hpp"
+#include "core/scatter_accum.hpp"  // MakeCameraRotation
 #include "server/render.hpp"
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
@@ -76,6 +88,40 @@ SimData MakeUpwardBatch(const std::vector<float>& weights) {
   return data;
 }
 
+// Does pixel `i` image a visible piece of sky? Independent re-derivation of the predicate
+// PostSnapshot gates the background on, for this fixture's lens family (single equal-area
+// fisheye) only — asserting a general mask belongs in the mask's own tests, not here.
+//
+// Deliberately complete rather than fixture-shaped: this fixture's `view.el_ = 90` points the
+// 180 deg field straight up so `visible = kUpper` excludes nothing inside the circle, but the
+// visibility half is still computed. Written the narrow way, changing `el_` here would silently
+// stop testing what this function claims to test.
+bool PixelImagesSky(const RenderConfig& cfg, int i) {
+  const int w = cfg.resolution_[0];
+  const int h = cfg.resolution_[1];
+  const float short_pix = static_cast<float>(std::min(w, h));
+  const float fov_rad = cfg.lens_.fov_ * 3.14159265358979323846f / 180.0f;
+  // Equal-area: r = 1 (the inverse's domain edge) sits at theta = 90 deg.
+  const float scale = short_pix / 2.0f / std::sqrt(2.0f) / std::sin(fov_rad / 4.0f);
+
+  const float u = (static_cast<float>(i % w) + 0.5f - static_cast<float>(w) / 2.0f) / scale;
+  const float v = (static_cast<float>(i / w) + 0.5f - static_cast<float>(h) / 2.0f) / scale;
+  const projection::Dir3 c = projection::FisheyeEqualAreaInverse(-u, v, 1.0f);
+  if (!c.valid) {
+    return false;
+  }
+  float d[3]{ c.x, c.y, c.z };
+  MakeCameraRotation(cfg).Apply(d);
+  const float wz = -d[2];
+  if (cfg.visible_ == RenderConfig::kUpper && wz > 0.0f) {
+    return false;
+  }
+  if (cfg.visible_ == RenderConfig::kLower && wz < 0.0f) {
+    return false;
+  }
+  return true;
+}
+
 // Per-pixel scaled XYZ → linear RGB, i.e. everything PostSnapshot does BEFORE
 // the background blend. Shared by the expected-image builder and the
 // clamp-coverage probe so the two cannot drift apart.
@@ -112,8 +158,11 @@ std::vector<uint8_t> ExpectedImage(const RenderConfig& cfg, const float* xyz_raw
   for (int i = 0; i < total_pix; i++) {
     float rgb[3];
     ScaledXyzToLinearRgb(cfg, xyz_raw, i, scale, rgb);
+    const bool paint_bg = PixelImagesSky(cfg, i);
     for (int j = 0; j < 3; j++) {
-      rgb[j] += cfg.background_[j];
+      if (paint_bg) {
+        rgb[j] += cfg.background_[j];
+      }
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       rgb[j] = LinearToSrgb(rgb[j]);
       out[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
@@ -131,8 +180,9 @@ size_t CountPostBlendClamps(const RenderConfig& cfg, const float* xyz_raw, int t
   for (int i = 0; i < total_pix; i++) {
     float rgb[3];
     ScaledXyzToLinearRgb(cfg, xyz_raw, i, scale, rgb);
+    const float bg_scale = PixelImagesSky(cfg, i) ? 1.0f : 0.0f;
     for (int j = 0; j < 3; j++) {
-      const float blended = rgb[j] + cfg.background_[j];
+      const float blended = rgb[j] + cfg.background_[j] * bg_scale;
       if (blended != std::clamp(blended, 0.0f, 1.0f)) {
         ++clamped;
       }
@@ -144,6 +194,7 @@ size_t CountPostBlendClamps(const RenderConfig& cfg, const float* xyz_raw, int t
 struct Coverage {
   size_t nonzero_bytes = 0;
   size_t clamped_channels = 0;
+  size_t unimaged_pixels = 0;
 };
 
 // Drives one consumer through a snapshot and asserts the produced image is
@@ -182,6 +233,11 @@ void RunAndCompare(const RenderConfig& cfg, const std::vector<float>& weights, c
   }
   cov->nonzero_bytes = nonzero;
   cov->clamped_channels = CountPostBlendClamps(cfg, raw.xyz_buffer_, total_pix, scale);
+  for (int i = 0; i < total_pix; ++i) {
+    if (!PixelImagesSky(cfg, i)) {
+      ++cov->unimaged_pixels;
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -222,6 +278,10 @@ TEST(RenderConsumerPostSnapshotFusion, RealColorNonzeroBackground) {
   EXPECT_GT(cov.nonzero_bytes, 0u) << "an all-black image would make the byte comparison vacuous";
   EXPECT_GT(cov.clamped_channels, 0u) << "the post-blend clamp never fired — retune the background/weights so this "
                                          "scene actually covers the clamp";
+  // With a zero background the mask changes nothing, so only this case can show it works.
+  // 16x16 under a 180 deg equal-area fisheye leaves 48 corner pixels outside the image circle.
+  EXPECT_EQ(cov.unimaged_pixels, 48u) << "no pixel fell outside the lens's domain — this case is what pins that the "
+                                         "background is withheld there, and it just stopped covering it";
 }
 
 }  // namespace

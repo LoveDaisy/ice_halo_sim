@@ -367,15 +367,13 @@ struct RenderConfig {
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
-  float opacity = 1.0f;
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            front == o.front && std::equal(background, background + 3, o.background) &&
-           std::equal(ray_color, ray_color + 3, o.ray_color) && opacity == o.opacity &&
-           exposure_offset == o.exposure_offset;
+           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -408,32 +406,42 @@ struct RenderConfig {
 //   exposure_offset                           — EV (doc/ev-pipeline-architecture.md §6.4/§6.5;
 //                                                pushed every frame via LUMICE_SetCompositeExposure).
 //
-// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus the
-// appearance fields the core NeedsRebuild() treats as appearance-only but which currently reach
-// the server only through the commit payload (background / ray_color / opacity); leave them in so
-// they still get applied on Run until they gain a display-time push path.
+//   background                                — the colour shown behind the rays. Unlike every other
+//                                                name above it is NOT structurally absent from the
+//                                                Revert baseline: it keeps its own slot,
+//                                                ConfigSnapshot::renderer_background, so an edit is
+//                                                undoable without ever counting as a change. That is
+//                                                the "not dirty / not epoch" half of T-display in
+//                                                doc/gui-state-governance.md §2; the other half (a
+//                                                display-time push to the server) does not exist yet,
+//                                                so a background edit currently reaches nothing until
+//                                                the next commit. Do not read this entry as "the push
+//                                                path is built".
+//
+// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus ray_color:
+// the core NeedsRebuild() treats ray_color as appearance-only, but it still reaches the server only
+// through the commit payload, so leaving it in is what keeps Run applying it. It is deliberately
+// not moved alongside background — nothing in this repo pushes it at display time, and it carries
+// an unrelated defect of its own (BuildScene hard-codes ray_color to the "use the material's own
+// spectral colour" sentinel and never reads r.ray_color). That is a separate root cause, to be
+// settled on its own terms rather than folded into this projection's field list. The third member
+// this list used to carry, opacity, is gone: it had no drawing consumer anywhere in the tree, so it
+// was removed rather than left here describing a resim that changed nothing.
 //
 // Consumers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline, app.cpp::DoRun expect_rebuild,
 // and GuiState::ConfigSnapshot's Revert baseline (single source of truth — do not fork).
 struct RenderConfigResimFields {
   int sim_resolution_index;
-  float background[3];
   float ray_color[3];
-  float opacity;
 
   static RenderConfigResimFields From(const RenderConfig& r) {
-    return { r.sim_resolution_index,
-             { r.background[0], r.background[1], r.background[2] },
-             { r.ray_color[0], r.ray_color[1], r.ray_color[2] },
-             r.opacity };
+    return { r.sim_resolution_index, { r.ray_color[0], r.ray_color[1], r.ray_color[2] } };
   }
 
   // Write back onto a live RenderConfig, touching nothing outside this projection.
   void ApplyTo(RenderConfig& r) const {
     r.sim_resolution_index = sim_resolution_index;
-    std::copy(std::begin(background), std::end(background), r.background);
     std::copy(std::begin(ray_color), std::end(ray_color), r.ray_color);
-    r.opacity = opacity;
   }
 
   // Does `live` still agree with this captured baseline on the resim-eligible fields?
@@ -443,9 +451,7 @@ struct RenderConfigResimFields {
   // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
   // built on top of it, not the only intended consumer.
   friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
-    return a.sim_resolution_index == b.sim_resolution_index &&
-           std::equal(a.background, a.background + 3, b.background) &&
-           std::equal(a.ray_color, a.ray_color + 3, b.ray_color) && a.opacity == b.opacity;
+    return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.ray_color, a.ray_color + 3, b.ray_color);
   }
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
@@ -453,15 +459,17 @@ struct RenderConfigResimFields {
 // Apple Silicon + libc++ only. Layout pins, mirroring the EntryCard pattern (see below).
 // Linux/Windows CI still compiles both structs; this only pins the Apple main-dev platform.
 #if defined(__APPLE__) && defined(__aarch64__)
-// RenderConfig: if this fires, a field was added/removed — the author must decide whether it
-// belongs in RenderConfigResimFields above (participates in resim eligibility) or is explicitly
-// excluded (like exposure_offset).
-static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+// RenderConfig: if this fires, a field was added/removed — the author must decide between three
+// dispositions: it belongs in RenderConfigResimFields above (participates in resim eligibility);
+// it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
+// is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
+// (like background — see ConfigSnapshot::renderer_background).
+static_assert(sizeof(RenderConfig) == 60, "RenderConfig size changed — check RenderConfigResimFields for new fields");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
 // the old subset. Pinning the size is what turns that omission into a compile error.
-static_assert(sizeof(RenderConfigResimFields) == 32,
+static_assert(sizeof(RenderConfigResimFields) == 16,
               "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
 #endif
 
@@ -1251,12 +1259,25 @@ struct GuiState {
     std::vector<Layer> layers;
     SunConfig sun;
     SimConfig sim;
-    // Deliberately NOT a whole RenderConfig: only the fields RenderConfigResimFields judges are
-    // captured, so Revert restores exactly the set that counts as a change. The T-view fields
-    // (lens_type / fov / elevation / azimuth / roll / visible / front) and exposure_offset are
-    // absent *structurally* — not captured-then-skipped-on-restore, which would leave From and
-    // ApplyTo asymmetric and the omission easy to lose track of.
+    // Deliberately NOT a whole RenderConfig. Two slots, and the split is the point:
+    // `renderer_resim` holds exactly the fields whose change counts as a change, so Revert
+    // restores that set and nothing wider. The T-view fields (lens_type / fov / elevation /
+    // azimuth / roll / visible / front) and exposure_offset are absent *structurally* — not
+    // captured-then-skipped-on-restore, which would leave From and ApplyTo asymmetric and the
+    // omission easy to lose track of.
     RenderConfigResimFields renderer_resim;
+    // background sits outside the resim projection (see RenderConfigResimFields' comment block)
+    // yet inside the Revert baseline: editing it must not dirty the document or re-run a finished
+    // simulation, but Revert must still put the previous colour back. RenderConfigResimFields
+    // cannot express that combination — membership there binds capture, restore and compare
+    // together — hence a slot of its own.
+    //
+    // A bare array rather than a named type, unlike the other "excluded from resim but still
+    // Revert-tracked" precedent in this file (ColorClassDisplayState, the display half of
+    // raypath_color): that one splits a struct with a dozen mixed-semantics fields, this one is a
+    // single colour. If a second RenderConfig field ever needs the same treatment, that is the
+    // point to reconsider extracting a named RenderConfigDisplayFields — not before.
+    float renderer_background[3];
     std::vector<ColorClassConfig> raypath_color;
 
     // Build a snapshot from the configuration fields of `state`. Implementation is
@@ -1380,7 +1401,15 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // go through MarkStructHardDirty (Revert-completeness fix, plan §3.4).
 // Size then shrank when the Revert baseline narrowed from a full RenderConfig to
 // RenderConfigResimFields: it now holds exactly the fields that count as a change.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 184,
+// The number then held at 184 when `background` moved out of RenderConfigResimFields into its own
+// `renderer_background` slot: the projection lost 12 bytes and the snapshot gained 12 back, so an
+// unchanged size here is the expected outcome of that move, not evidence it was a no-op. Both
+// numbers were read off the compiler rather than hand-computed.
+// Size then shrank 184 → 176 when `opacity` left RenderConfigResimFields with the field itself
+// (it had no drawing consumer anywhere in the tree). The projection lost only 4 bytes; the
+// snapshot lost 8, because the 4 came out of what had been exactly-fitting padding ahead of
+// `raypath_color`. Read off the compiler, not hand-computed — the arithmetic does not predict it.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
@@ -1395,6 +1424,7 @@ inline GuiState::ConfigSnapshot GuiState::ConfigSnapshot::From(const GuiState& s
   s.sun = state.sun;
   s.sim = state.sim;
   s.renderer_resim = RenderConfigResimFields::From(state.renderer);
+  std::copy(std::begin(state.renderer.background), std::end(state.renderer.background), s.renderer_background);
   s.raypath_color = state.raypath_color;
   return s;
 }
@@ -1406,6 +1436,7 @@ inline void GuiState::ConfigSnapshot::ApplyTo(GuiState& state) const {
   state.sun = sun;
   state.sim = sim;
   renderer_resim.ApplyTo(state.renderer);
+  std::copy(std::begin(renderer_background), std::end(renderer_background), state.renderer.background);
   state.raypath_color = raypath_color;
 }
 

@@ -96,6 +96,7 @@ GROUPS: dict[str, ReferenceGroup] = {
             "overlay_ea",
             "fisheye_equal_area_120_border",
             "dual_fisheye_equal_area_full_border",
+            "sky_colour_ea_180",
         ],
         modes=[None],
         tmp_prefix="lumice_lens_proj_",

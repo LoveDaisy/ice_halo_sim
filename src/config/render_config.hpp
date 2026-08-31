@@ -82,9 +82,9 @@ struct RenderConfig {
   ViewParam view_{};
   VisibleRange visible_ = kUpper;
 
-  float background_[3]{};                      // r, g, b
+  // Linear RGB. The JSON "background" key is sRGB; to_json / ParseRenderConfig convert.
+  float background_[3]{};
   float ray_color_[3]{ -1.0f, -1.0f, -1.0f };  // r, g, b
-  float opacity_ = 1.0f;
   // Brightness scaling for CLI output (PostSnapshot). GUI uses exposure_offset (EV stops) in
   // gui_state.hpp directly; the two are related by intensity_factor = 2^exposure_offset but serve
   // different paths and may differ at runtime (GUI updates EV without re-committing config).
@@ -93,7 +93,12 @@ struct RenderConfig {
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
-  bool celestial_outline_ = true;
+  // Opt-in, not on by default. It was `true` for the four years the field parsed and drew nothing,
+  // which cost nothing; now that it draws, `true` would put a horizon line into every existing
+  // config that never asked for one (13 of the 14 reference renders in test/e2e-correctness/ set
+  // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
+  // nobody has made, so the default states the one thing that is certain: draw it when asked.
+  bool horizon_ = false;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
@@ -107,7 +112,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
 void to_json(nlohmann::json& j, const RenderConfig& r);
 
 // Returns true if layout-affecting fields differ (resolution, lens, view, visible, overlap, filter).
-// Appearance-only changes (background, ray_color, opacity, intensity_factor, grids) return false.
+// Appearance-only changes (background, ray_color, intensity_factor, grids) return false.
 bool NeedsRebuild(const RenderConfig& old_cfg, const RenderConfig& new_cfg);
 
 }  // namespace lumice
