@@ -135,6 +135,32 @@ TEST(SceneCommitChain, OnlyTheExposureDiffersBetweenTheRunAndExportIntents) {
   }
 }
 
+// AC0 red-state pin: the exported config must describe the picture on screen, not the fixed
+// full-sky texture the simulator was asked for. Written before the emitter was changed, and it
+// failed then — kJsonExport reused kSimCommit's hardcoded dual_fisheye_equal_area / 180 / view(0,0,0),
+// so "Save Config JSON" handed the CLI a different photograph than the one the user was looking at.
+//
+// Three fields rather than one on purpose: a single lens assertion is satisfiable by an emitter
+// that forwards the projection and keeps hardcoding everything the projection is viewed through,
+// which would still render a different image.
+TEST(SceneCommitChain, TheExportedConfigDescribesTheProjectionOnScreen) {
+  SeedOneEntryDocument();
+  g_state.renderer.lens_type = kLensTypeLinear;
+  g_state.renderer.fov = 55.0f;
+  g_state.renderer.azimuth = 77.0f;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+
+  EXPECT_EQ(export_doc["render"][0]["lens"]["type"].get<std::string>(), "linear")
+      << "the exported config renders a projection the user never selected";
+  EXPECT_FLOAT_EQ(export_doc["render"][0]["lens"]["fov"].get<float>(), 55.0f)
+      << "the exported config renders a field of view the user never set";
+  EXPECT_FLOAT_EQ(export_doc["render"][0]["view"]["azimuth"].get<float>(), 77.0f)
+      << "the exported config points the camera somewhere the user never pointed it";
+}
+
 // ev_mode reaches the scene on BOTH intents, carrying the document's value rather than a constant.
 //
 // The case above already forbids an intent split here — it compares the two documents field by
