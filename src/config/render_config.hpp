@@ -75,6 +75,18 @@ struct RenderConfig {
     kFull,
   };
 
+  // Which anchor the mono/composite exposure scale is measured against. See
+  // doc/ev-pipeline-architecture.md and RenderConsumer::ExposureScale().
+  //   kRelative — anchor to the frame's own P99 (what the GUI has always displayed): the image
+  //               keeps its look as ray_num grows, but the config alone does NOT determine the
+  //               output brightness (ray_num co-determines it). This is the default.
+  //   kAbsolute — anchor to the EMITTED energy: the scale is fixed by light source + ray budget,
+  //               so two simulations at the same EV are directly comparable.
+  enum EvMode {
+    kRelative,
+    kAbsolute,
+  };
+
   IdType id_{};
   LensParam lens_{ LensParam::kLinear, 90.0f };
   int lens_shift_[2]{};  // dx, dy
@@ -90,6 +102,9 @@ struct RenderConfig {
   // different paths and may differ at runtime (GUI updates EV without re-committing config).
   float intensity_factor_ = 1.0f;
   float overlap_ = 0.0f;  // Dual fisheye overlap zone |sky.z| threshold (sin value). 0 = no overlap.
+  // Appearance field (like intensity_factor_): it selects WHICH exposure formula PostSnapshot()
+  // and the compositor use, never the accumulation layout, so a change needs no consumer rebuild.
+  EvMode ev_mode_ = kRelative;
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
@@ -107,6 +122,15 @@ NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
         { RenderConfig::kUpper, "upper" },
         { RenderConfig::kLower, "lower" },
         { RenderConfig::kFull, "full" },
+    })
+
+// kRelative FIRST on purpose: NLOHMANN_JSON_SERIALIZE_ENUM maps any unrecognized string to the
+// first table entry, so a misspelled value lands on the same mode a MISSING key does.
+NLOHMANN_JSON_SERIALIZE_ENUM(  // declare
+    RenderConfig::EvMode,      // type
+    {
+        { RenderConfig::kRelative, "relative" },
+        { RenderConfig::kAbsolute, "absolute" },
     })
 
 void to_json(nlohmann::json& j, const RenderConfig& r);

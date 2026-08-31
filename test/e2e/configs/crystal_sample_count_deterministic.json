@@ -54,6 +54,7 @@
   "filter": [],
   "render": [
     {
+      "ev_mode": "absolute",
       "id": 1,
       "lens": { "type": "dual_fisheye_equal_area", "fov": 360.0 },
       "view": { "azimuth": 0.0, "elevation": 0.0, "roll": 0.0 },

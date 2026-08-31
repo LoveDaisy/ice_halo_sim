@@ -115,6 +115,11 @@ void DiffAgainstCommitBaseline(const GuiState& state, GuiEffects& effects) {
   // projection compared here (rationale in gui_state.hpp's comment block). app.cpp::DoRun's expect_rebuild
   // predicate compares the same projection, and the baseline stores nothing else — single
   // source of truth (see T2 plan §3 design point 1).
+  //
+  // `ev_mode` is excluded for the same reason and is the second field of that kind: the mono
+  // preview re-derives its exposure scale from the mode every frame (mono_exposure_scale.hpp),
+  // reading the already-simulated XYZ rather than asking for new rays, so flipping the Mode combo
+  // must leave a finished run finished.
   if (state.crystals != baseline.crystals || state.layers != baseline.layers || state.sun != baseline.sun ||
       state.sim != baseline.sim || !baseline.renderer_resim.Matches(state.renderer)) {
     effects.need_resim = true;

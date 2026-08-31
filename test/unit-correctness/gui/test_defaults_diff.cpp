@@ -663,6 +663,10 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "renderer.background", true, Kind::kColor },
     { "renderer.ray_color", true, Kind::kColor },
     { "renderer.exposure_offset", true, Kind::kFloatSlider },
+    // v4.16. Registered as of the Display group's Mode combo landing: the field now has a control
+    // in the main UI, so the defaults panel offers the same inline editor rather than a read-only
+    // row. Two values only (Relative / Absolute), so it is a combo like renderer.visible.
+    { "renderer.ev_mode", true, Kind::kCombo },
     { "aspect_ratio", true, Kind::kCombo },
     { "aspect_portrait", true, Kind::kCheckbox },
     { "bg_path", false, Kind::kCheckbox },

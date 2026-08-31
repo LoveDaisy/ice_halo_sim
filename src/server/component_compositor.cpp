@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "core/ev_anchor.hpp"
 #include "server/render.hpp"
 #include "util/color_space.hpp"
 #include "util/logger.hpp"
@@ -168,11 +169,10 @@ namespace {
 // dropped them — which is the whole point of "participating union" vs the
 // pre-345.3 mono-xyz-derived P99 that mixed in unrelated pixels.
 //
-// NOTE (task-345.3 review Minor #1): the (idx * 0.99) partial-sort algorithm
-// here is structurally identical to `gui_ev_auto.hpp::ComputeP99Y`'s fine
-// path — the two live apart because pulling a shared header down to server/
-// or up to gui/ would drag one layer into the other. If you touch one, mirror
-// the change here.
+// The (idx * 0.99) partial-sort step itself has a single owner,
+// `core/ev_anchor.hpp::NthElementP99`, shared with the mono-path anchor
+// (`LUMICE_ComputeP99Y`). What stays here is only the composite-specific part:
+// which values participate.
 float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pixel_count) {
   if (active.empty() || pixel_count == 0) {
     return 0.0f;
@@ -194,12 +194,7 @@ float ComputeParticipatingP99Y(const std::vector<ActiveClass>& active, size_t pi
   if (y_vals.empty()) {
     return 0.0f;
   }
-  auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
-  if (idx >= y_vals.size()) {
-    idx = y_vals.size() - 1;
-  }
-  std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
-  return y_vals[idx];
+  return NthElementP99(y_vals);
 }
 
 }  // namespace
@@ -248,7 +243,21 @@ bool CompositeColorClassesLinear(const RenderConsumer& consumer, const ColorClas
   //   - painter: alpha driven by `A` alone (self-anchor only) so the occluder
   //     structure is EV-independent; `display_exposure_scale` becomes a pure
   //     post-composite brightness multiplier + clamp, applied per-pixel below.
-  const float A = consumer.ParticipatingExposureScale(participating_p99);
+  // Which anchor `A` is depends on the renderer's ev_mode; RenderConsumer::CompositeAnchorScale
+  // owns that choice, so everything below stays one single-scalar path. Under kAbsolute the
+  // participating P99 is not the anchor and is still reported out — it remains a true statistic
+  // about the frame, just no longer the thing the exposure is measured against.
+  //
+  // TIMING, and it differs from the mono preview's: `config_.ev_mode_` is refreshed at
+  // CommitConfig, so flipping the GUI's exposure Mode combo reaches THIS path on the next Run,
+  // not on the next frame. The mono preview re-lights immediately because the GUI recomputes its
+  // own scale client-side (gui/mono_exposure_scale.hpp) from raw XYZ it already holds; the
+  // composite is baked here, server-side, and there is no display-time push channel for the mode
+  // the way there is for the manual EV (LUMICE_SetCompositeExposure). Those two are orthogonal
+  // multipliers — the pushed value is a bare stop count with no mode branch in it, and the mode
+  // chooses only which anchor `A` is — so they cannot contradict each other; the composite simply
+  // reaches the new anchor later. Do not read "mono is same-frame" as a promise about this path.
+  const float A = consumer.CompositeAnchorScale(participating_p99);
   if (A <= 0.0f) {
     // task-347 semantic tightening: `participating_p99` is now known even on
     // this early-return path (it was computed above). Publish it so consumers

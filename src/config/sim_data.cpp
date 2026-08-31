@@ -42,7 +42,10 @@ namespace lumice {
 // bumping 352 → 360. The orientation-sample-count statistic adds its own
 // stochastic/deterministic pair (+2 size_t, 16B) — a separate statistic from the
 // crystal one, not a widening of it — bumping 360 → 376.
-static_assert(sizeof(SimData) == 376, "SimData size changed — update copy/move ctors and operators");
+// The absolute-normalization denominator adds emitted_energy_ (float, 4B) next
+// to root_ray_count_; the 8-byte alignment of the size_t fields around it pads
+// that to 8B, bumping 376 → 384.
+static_assert(sizeof(SimData) == 384, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -399,7 +402,7 @@ SimData::SimData(const SimData& other)
       exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
-      stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
+      emitted_energy_(other.emitted_energy_), stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
       deterministic_crystal_count_(other.deterministic_crystal_count_),
       stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
       deterministic_orientation_count_(other.deterministic_orientation_count_),
@@ -413,7 +416,7 @@ SimData::SimData(SimData&& other) noexcept
       exit_records_(std::move(other.exit_records_)), xyz_pixel_data_(std::move(other.xyz_pixel_data_)),
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(std::move(other.lane_pixel_data_)),
       lane_class_count_(other.lane_class_count_), root_ray_count_(other.root_ray_count_),
-      stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
+      emitted_energy_(other.emitted_energy_), stochastic_crystal_sample_count_(other.stochastic_crystal_sample_count_),
       deterministic_crystal_count_(other.deterministic_crystal_count_),
       stochastic_orientation_sample_count_(other.stochastic_orientation_sample_count_),
       deterministic_orientation_count_(other.deterministic_orientation_count_),
@@ -442,6 +445,7 @@ SimData& SimData::operator=(const SimData& other) {
   lane_pixel_data_ = other.lane_pixel_data_;
   lane_class_count_ = other.lane_class_count_;
   root_ray_count_ = other.root_ray_count_;
+  emitted_energy_ = other.emitted_energy_;
   stochastic_crystal_sample_count_ = other.stochastic_crystal_sample_count_;
   deterministic_crystal_count_ = other.deterministic_crystal_count_;
   stochastic_orientation_sample_count_ = other.stochastic_orientation_sample_count_;
@@ -479,6 +483,7 @@ SimData& SimData::operator=(SimData&& other) noexcept {
   lane_pixel_data_ = std::move(other.lane_pixel_data_);  // task-358.1 Step 4
   lane_class_count_ = other.lane_class_count_;
   root_ray_count_ = other.root_ray_count_;
+  emitted_energy_ = other.emitted_energy_;
   stochastic_crystal_sample_count_ = other.stochastic_crystal_sample_count_;
   deterministic_crystal_count_ = other.deterministic_crystal_count_;
   stochastic_orientation_sample_count_ = other.stochastic_orientation_sample_count_;

@@ -44,7 +44,11 @@ namespace {
 // 72 since the lens-border overlay added show_lens_border_line / lens_border_color /
 // lens_border_alpha, all kView: they are appearance preferences for the preview, the same shape
 // as the four overlay rows already registered beside them, so all three are eligible.
-constexpr std::size_t kExpectedGovernedFieldCount = 72;
+// 73 since absolute exposure mode added snapshot_emitted_energy, a kDerivedFieldsExcludeList
+// readback sitting next to snapshot_intensity: it is a measurement of the snapshot the poller
+// just delivered, not a setting, so it is deliberately ineligible as a personal default for the
+// same reason the stats_* readbacks are.
+constexpr std::size_t kExpectedGovernedFieldCount = 73;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;

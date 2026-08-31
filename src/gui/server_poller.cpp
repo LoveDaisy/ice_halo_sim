@@ -4,7 +4,6 @@
 #include <memory>
 
 #include "gui/gui_constants.hpp"
-#include "gui/gui_ev_auto.hpp"
 #include "gui/gui_logger.hpp"
 #include "util/result_frame.hpp"
 
@@ -482,6 +481,7 @@ void ServerPoller::PollOnce() {
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
       payload->snapshot_intensity = xyz_results[0].snapshot_intensity;
+      payload->emitted_energy = xyz_results[0].emitted_energy;
       payload->intensity_factor = xyz_results[0].intensity_factor;
       payload->effective_pixels = xyz_results[0].effective_pixels;
       payload->texture_ray_count = cached_stats.sim_ray_num;
@@ -510,7 +510,8 @@ void ServerPoller::PollOnce() {
       if (payload->is_composite) {
         payload->p99_y = composite_results[0].composite_p99_y;
       } else {
-        payload->p99_y = ComputeP99Y(payload->xyz_buffer, payload->width, payload->height, kEvAutoDownsampleFactor);
+        payload->p99_y =
+            LUMICE_ComputeP99Y(payload->xyz_buffer, payload->width, payload->height, kEvAutoDownsampleFactor);
       }
       // (payload is default-constructed with rgb_buffer null + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)

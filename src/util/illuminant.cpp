@@ -103,6 +103,34 @@ float GetIlluminantASpd(float wavelength) {
   return 100.0f * ratio5 * (exp_ref - 1.0f) / (exp_lam - 1.0f);
 }
 
+// ============================================================================
+// Band-average SPD (normalization-audit quantity)
+// ============================================================================
+
+// Wavelength band the per-batch illuminant sampler draws from (Simulator::Run
+// samples wl = 380 + U*400). MeanIlluminantWeight is the expectation over this
+// band, so the two must stay in lock-step: widening the sampler's band without
+// widening this one would leave the emitted-energy denominator averaging a
+// different interval than the rays are actually drawn from.
+constexpr float kSampledBandMin = 380.0f;
+constexpr float kSampledBandWidth = 400.0f;
+
+// Fixed-grid uniform average of GetIlluminantSpd over the sampled band. The
+// grid is dense enough (0.1 pm spacing) that the result is stable well past
+// float precision, so the point count is not a tuning knob any caller sees.
+// Accumulated in double: a float running sum over 4M terms would lose ~3
+// decimal digits.
+constexpr int kMeanSpdSamples = 4000001;
+
+float ComputeMeanSpd(IlluminantType type) {
+  double sum = 0.0;
+  for (int i = 0; i < kMeanSpdSamples; ++i) {
+    float wl = kSampledBandMin + kSampledBandWidth * (static_cast<float>(i) / static_cast<float>(kMeanSpdSamples - 1));
+    sum += GetIlluminantSpd(type, wl);
+  }
+  return static_cast<float>(sum / kMeanSpdSamples);
+}
+
 }  // namespace
 
 
@@ -129,6 +157,39 @@ float GetIlluminantSpd(IlluminantType type, float wavelength) {
         return 0.0f;
       }
       return 1.0f;
+  }
+  return 0.0f;
+}
+
+// Each case owns its own function-local static, so the quadrature runs once
+// per illuminant type actually used (not once for all six) and C++11 magic
+// statics make that first call thread-safe.
+float MeanIlluminantWeight(IlluminantType type) {
+  switch (type) {
+    case IlluminantType::kD50: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kD50);
+      return kMean;
+    }
+    case IlluminantType::kD55: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kD55);
+      return kMean;
+    }
+    case IlluminantType::kD65: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kD65);
+      return kMean;
+    }
+    case IlluminantType::kD75: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kD75);
+      return kMean;
+    }
+    case IlluminantType::kA: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kA);
+      return kMean;
+    }
+    case IlluminantType::kE: {
+      static const float kMean = ComputeMeanSpd(IlluminantType::kE);
+      return kMean;
+    }
   }
   return 0.0f;
 }

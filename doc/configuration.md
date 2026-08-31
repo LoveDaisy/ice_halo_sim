@@ -617,6 +617,7 @@ The render configuration defines the renderer parameters.
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
   "intensity_factor": <float>,
+  "ev_mode": "relative" | "absolute",
   "grid": { ... },
   "filter": [<filter ID array>]
 }
@@ -634,7 +635,8 @@ The render configuration defines the renderer parameters.
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
 | `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
-| `intensity_factor` | float | no | 1.0 | Intensity factor |
+| `intensity_factor` | float | no | 1.0 | Intensity factor (`2^EV`) |
+| `ev_mode` | string | no | "relative" | Exposure anchor: `"relative"` self-anchors to the frame's own P99 (the historical behavior — the image keeps its look as `ray_num` grows, but the config alone does not determine output brightness); `"absolute"` anchors to the light source's emitted energy, so two renders at the same `intensity_factor` are directly comparable across configs (only within one lens/FOV/resolution — see [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7). A missing key or an unrecognized string both mean `"relative"`. See [`doc/adaptive-brightness.md`](adaptive-brightness.md) §3. |
 | `grid` | object | no | see below | Grid configuration |
 | `filter` | integer array | no | [] | Multi-scattering filter ID array |
 

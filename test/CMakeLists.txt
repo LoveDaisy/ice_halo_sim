@@ -55,6 +55,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_raypath_segments.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_simulator.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_exit_records.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_ev_anchor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_pcg_ray_base_split.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_wl_stream_decouple.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
@@ -75,6 +76,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_ray_num_semantics.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_component_lanes.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_empty_batch.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
@@ -92,6 +94,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/util/test_threading_pool.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_cpu_info.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/util/test_bit_utils.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/util/test_illuminant.cpp"
   # gui/
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_presets.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_filter_sop_grammar.cpp"
@@ -100,6 +103,9 @@ add_executable(unit_correctness_test
   # (every SimState, every AspectPreset, every LUMICE_SHAPE_SCALAR_* slot) instead of one branch
   # per UI-driven case. Header-only and ImGui-free, hence this target rather than gui_unit_test.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_widget_rules.cpp"
+  # Same reason as the line above: mono_exposure_scale.hpp is header-only and ImGui-free, so its
+  # cases belong to the target that does not link lumice_gui_obj.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_mono_exposure_scale.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the
@@ -348,7 +354,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_user_defaults_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_field_editor_chain.cpp"
     "${PROJ_TEST_DIR}/composition-correctness/gui/test_edit_modal_chain.cpp"
-    "${PROJ_TEST_DIR}/composition-correctness/gui/test_preview_projection_chain.cpp")
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_preview_projection_chain.cpp"
+    "${PROJ_TEST_DIR}/composition-correctness/gui/test_absolute_ev_additivity_chain.cpp")
   target_include_directories(composition_correctness_test
     PRIVATE ${PROJ_TEST_DIR})
   # Same three definitions gui_unit_test carries, for the same reasons (see its block above):

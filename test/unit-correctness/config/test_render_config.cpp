@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <nlohmann/json.hpp>
+
+#include "config/config_compare.hpp"
 #include "config/render_config.hpp"
 
 namespace {
@@ -164,6 +167,14 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     mod.horizon_ = true;
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "horizon";
   }
+
+  // ev_mode: it selects WHICH exposure formula PostSnapshot uses, not the accumulation layout,
+  // so it must NOT force a consumer rebuild (same classification as intensity_factor above).
+  {
+    auto mod = base;
+    mod.ev_mode_ = lumice::RenderConfig::kAbsolute;
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "ev_mode";
+  }
 }
 
 TEST(RenderConfigTest, Symmetry_LayoutChanges) {
@@ -196,6 +207,51 @@ TEST(RenderConfigTest, MixedChanges_LayoutPlusAppearance) {
   mod.background_[0] = 0.9f;
   mod.intensity_factor_ = 0.1f;
   EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "layout change should dominate appearance changes";
+}
+
+// ===== ev_mode: default, JSON round trip, equality =====
+
+TEST(RenderConfigEvModeTest, DefaultIsRelative) {
+  lumice::RenderConfig cfg;
+  EXPECT_EQ(cfg.ev_mode_, lumice::RenderConfig::kRelative);
+}
+
+TEST(RenderConfigEvModeTest, ToJson_EmitsModeString) {
+  auto cfg = MakeBaseline();
+  cfg.ev_mode_ = lumice::RenderConfig::kAbsolute;
+  nlohmann::json j = cfg;
+  EXPECT_EQ(j.at("ev_mode").get<std::string>(), "absolute");
+
+  cfg.ev_mode_ = lumice::RenderConfig::kRelative;
+  nlohmann::json j2 = cfg;
+  EXPECT_EQ(j2.at("ev_mode").get<std::string>(), "relative");
+}
+
+TEST(RenderConfigEvModeTest, FromJson_BothValuesRoundTrip) {
+  for (const auto& [text, expected] : std::vector<std::pair<std::string, lumice::RenderConfig::EvMode>>{
+           { "relative", lumice::RenderConfig::kRelative }, { "absolute", lumice::RenderConfig::kAbsolute } }) {
+    auto mode = lumice::RenderConfig::kAbsolute;  // seed with the non-default so "relative" is a real read
+    nlohmann::json(text).get_to(mode);
+    EXPECT_EQ(mode, expected) << text;
+  }
+}
+
+// An unrecognized string must land on the SAME mode a missing key does. nlohmann maps an unknown
+// value to the first table entry, and kRelative is first on purpose — this pins that ordering.
+TEST(RenderConfigEvModeTest, FromJson_UnknownStringFallsBackToRelative) {
+  auto mode = lumice::RenderConfig::kAbsolute;
+  nlohmann::json("no_such_mode").get_to(mode);
+  EXPECT_EQ(mode, lumice::RenderConfig::kRelative);
+}
+
+// operator== is a full equality predicate (unlike NeedsRebuild, which asks a narrower question),
+// so it MUST see ev_mode.
+TEST(RenderConfigEvModeTest, OperatorEq_ComparesEvMode) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.ev_mode_ = lumice::RenderConfig::kAbsolute;
+  EXPECT_FALSE(a == b);
 }
 
 }  // namespace

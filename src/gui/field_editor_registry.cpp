@@ -476,8 +476,23 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // rather than a second one, which costs nothing: a colour has no domain to disagree about.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));
     map.emplace("renderer.ray_color", ColorField([](GuiState& s) { return s.renderer.ray_color; }));
+    // Domain widened from the historical [-6, +6] because absolute exposure mode removed the
+    // auto half of the budget. Under relative mode the reachable exposure is manual EV stacked on
+    // top of `ev_auto`, so +-6 of manual travel sat on a moving anchor; under absolute mode the
+    // anchor is the emitted energy and the manual slider is the ONLY term, so it has to span the
+    // whole spread of scenes on its own. The spread was measured, not guessed: replaying the
+    // 25-scene gold corpus under the absolute denominator, the manual EV that brings each scene to
+    // the same displayed brightness lands in [-7.75, +5.48], and a sparse 77halo-class scene
+    // folded onto the same calibration wants +14.67. [-8, +16] covers both with a little headroom
+    // on the bright end; anything narrower than [-8, +6] clips corpus scenes outright.
+    //
+    // Unrelated to `ev_anchor.hpp`'s own std::clamp(ev, -6, 6) inside ComputeEvAuto — that bounds
+    // the auto anchor's internal output, this bounds the manual slider's UI domain. The two
+    // sharing the number 6 historically was a coincidence, not a coupling.
     map.emplace("renderer.exposure_offset",
-                FloatField([](GuiState& s) { return &s.renderer.exposure_offset; }, FixedDomain(-6.0f, 6.0f), "%.1f"));
+                FloatField([](GuiState& s) { return &s.renderer.exposure_offset; }, FixedDomain(-8.0f, 16.0f), "%.1f"));
+    map.emplace("renderer.ev_mode",
+                ComboField([](GuiState& s) { return &s.renderer.ev_mode; }, kEvModeNames, kEvModeCount));
 
     // ---- aspect ratio ----
     map.emplace("aspect_ratio", AspectPresetField());

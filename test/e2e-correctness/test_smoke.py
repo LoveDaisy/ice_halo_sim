@@ -60,8 +60,13 @@ PSNR_THRESHOLDS = {
     # does not. The old reference scores 29.9 dB against the new render, i.e. the change is real
     # and this key is no longer structurally blind to the render option in its own name. Same
     # calibration method as the rest of this table: 3 fresh CLI runs, threshold =
-    # min(PSNR_2vs1, PSNR_3vs1) - 3 dB floored to 0.5 dB precision (measured 32.78 / 33.06 dB).
-    "render_opts_01": 29.5,
+    # min(PSNR_2vs1, PSNR_3vs1) - 3 dB floored to 0.5 dB precision.
+    # Re-shot once more when the absolute-exposure branch landed on top of that change: the two
+    # touch the same picture (one draws the horizon, the other sets the scale it is drawn at), so
+    # neither side's reference is right for the merged result and the image had to come from a
+    # binary carrying both. Run-to-run measured 35.92 / 36.02 dB, i.e. tighter than the 32.78 /
+    # 33.06 dB of the previous shoot, so the threshold rises rather than relaxes.
+    "render_opts_01": 32.5,
     "dual_fisheye_ref_01": 25.8,
 }
 

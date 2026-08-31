@@ -48,6 +48,7 @@
   },
   "render": [
     {
+      "ev_mode": "absolute",
       "id": 1,
       "lens": {
         "type": "linear",
@@ -62,6 +63,7 @@
       }
     },
     {
+      "ev_mode": "absolute",
       "id": 2,
       "lens": {
         "type": "fisheye_equal_area",
@@ -76,6 +78,7 @@
       }
     },
     {
+      "ev_mode": "absolute",
       "id": 3,
       "lens": {
         "type": "dual_fisheye_equal_area",

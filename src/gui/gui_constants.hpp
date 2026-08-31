@@ -27,6 +27,29 @@ constexpr float kRightPanelWidth = 300.0f;
 constexpr float kTopBarHeight = 40.0f;
 constexpr float kStatusBarHeight = 28.0f;
 
+// Auto-EV downsample factor for the box-sum coarse-bin metric — the mono path's choice of the
+// coarse branch of LUMICE_ComputeP99Y (the algorithm itself lives in core, behind the C API;
+// this constant is the call-site decision, not part of it).
+// Rationale: coarse bins have f^2 larger expected hit count than fine pixels in sparse scenes,
+// so the P99-over-lit anchor stabilises earlier and 77halo previews brighten faster. Math
+// equivalence:
+//   ev = log2(target_linear * snapshot_fine / (P99_coarse / f^2))
+// Display path remains fine-res. Final f=8 confirmed by the 25-scene gold harness
+// (22/25 in-band, only ms05_prob0.5_EV0.5/EV1.5 dropped vs 23/25 fine).
+constexpr int kEvAutoDownsampleFactor = 8;
+
+// Display brightness baseline, mirroring lumice::kNormScale (core/color_util.hpp). The GUI needs
+// it because absolute exposure mode is computed client-side (mono_exposure_scale.hpp) rather than
+// read back from the server, and reproducing RenderConsumer::ExposureScale's absolute branch
+// requires the same constant it uses.
+//
+// A mirrored constant is a drift risk, so it is not left to a comment: the
+// composition_correctness_test case ExposureScaleMirrorsCore asserts this equals the core value,
+// which turns "remember to change both" into a red test rather than a hope. The same shape as
+// kEvAutoDownsampleFactor above, which mirrors a call-site decision into the GUI for the same
+// no-core-includes reason (src/gui/ may not include core/ — see AGENTS.md).
+constexpr float kNormScale = 0.08f;
+
 // Live-edit timing constants
 // Invariant: kCommitIntervalMs >= kPollIntervalMs (commit should not be faster than poll)
 constexpr int kCommitIntervalMs =

@@ -60,6 +60,7 @@
   },
   "render": [
     {
+      "ev_mode": "absolute",
       "id": 1,
       "lens": {
         "type": "fisheye_equal_area",

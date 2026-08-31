@@ -87,8 +87,20 @@ class Simulator {
     RayBuffer buffer_data[2]{};
     RayBuffer init_data[2]{};
   };
+  // `emitted_weight` is the per-ray spectral weight to CHARGE THE NORMALIZATION
+  // DENOMINATOR with, deliberately separate from `wl_param.weight_`, which is the
+  // weight the rays are physically traced at. The two differ for an illuminant
+  // spectrum, where the traced weight comes from a random wavelength draw and the
+  // charged weight is that draw's expectation, so the denominator does not wobble
+  // with the seed. It is a plain parameter rather than a WlParam field on purpose:
+  // the per-ray-wl-pool call site deliberately passes a ZERO WlParam (so a dropped
+  // per-ray wavelength renders black and loud instead of collapsing onto a flat
+  // spectrum) while still needing a real emitted weight — folding the two into one
+  // struct would make that call site express both meanings with one value. If a
+  // further audit-only quantity ever joins it, group them into a batch-audit
+  // struct rather than growing this parameter list again.
   void SimulateOneWavelength(const SceneConfig& config, const RaypathColorConfig* raypath_color,
-                             const WlParam& wl_param, size_t ray_num, CrystalCache& crystal_cache,
+                             const WlParam& wl_param, float emitted_weight, size_t ray_num, CrystalCache& crystal_cache,
                              SimWorkspace& workspace, uint64_t generation,
                              std::vector<std::vector<double>>& ray_alloc_carry);
 
@@ -98,9 +110,11 @@ class Simulator {
   // backend's world-space exit rays, routed through the legacy consumer
   // projection (same downstream path as Metal-OFF). Only invoked when
   // CanUseBackend() returns true.
+  // `emitted_weight`: see SimulateOneWavelength above — same contract.
   void SimulateOneWavelengthWithBackend(TraceBackend& backend, const SceneConfig& scene, const RenderConfig& render,
                                         std::shared_ptr<const RaypathColorConfig> raypath_color,
-                                        const WlParam& wl_param, size_t ray_num, uint64_t generation);
+                                        const WlParam& wl_param, float emitted_weight, size_t ray_num,
+                                        uint64_t generation);
 
   // scrum-312 (third-clock drain): for SupportsThirdClockDrain() backends the
   // device XYZ accumulator persists across per-batch sessions; this window holds
@@ -110,7 +124,13 @@ class Simulator {
   // not per batch — see Run() and DrainDeviceXyz.
   struct XyzDrainWindow {
     bool pending = false;  // undrained device accumulation present
-    size_t root_rays = 0;  // Σ ray_num over the window (normalization denom)
+    size_t root_rays = 0;  // Σ ray_num over the window
+    // Σ emitted_weight × ray_num over the window — the absolute normalization
+    // denominator's window aggregate. Accumulated at exactly the same site and
+    // under exactly the same condition as root_rays above; the two must never
+    // drift apart or the third-clock (GPU) path would normalize against a
+    // different quantity than the single-batch paths do.
+    float emitted_energy = 0.0f;
     // Stats: Σ stochastic draws over the window (accumulated) alongside the
     // scene's deterministic slot count (OVERWRITTEN — config constant, same
     // discipline as color_degrade_counts_ below). See TraceBackend::

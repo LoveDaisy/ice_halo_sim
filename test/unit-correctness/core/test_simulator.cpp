@@ -6,12 +6,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <set>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "config/filter_config.hpp"
+#include "config/light_config.hpp"
 #include "config/proj_config.hpp"
 #include "config/sim_data.hpp"
 #include "core/crystal.hpp"
@@ -22,6 +25,7 @@
 #include "core/shared/lat_path_selection.hpp"
 #include "core/simulator.hpp"
 #include "core/trace_ops.hpp"
+#include "util/illuminant.hpp"
 #include "util/queue.hpp"
 
 namespace lumice {
@@ -1363,6 +1367,144 @@ TEST(InitRayPolygonSampling, DegenerateSubTriProducesFiniteZeroNotNaN) {
   const float w0 = std::max(-Dot3(d, subtri[0].n) * subtri[0].area, 0.0f);
   ASSERT_TRUE(std::isfinite(w0));
   EXPECT_FLOAT_EQ(w0, 0.0f);
+}
+
+// --- Emitted energy: the absolute-normalization denominator ---------------- //
+//
+// Simulator is the sole producer of SimData::emitted_energy_, and it writes it
+// on four different code paths. The end-to-end oracle downstream can only say
+// the total came out wrong, not which path wrote it — so drive Run() directly
+// and check the total against a weight sum that is known before the simulation
+// starts. It is knowable in advance precisely because emitted energy is an a
+// priori quantity: it depends on the source and the ray budget, never on what
+// the rays go on to do.
+//
+// A discrete two-wavelength spectrum is the case that has teeth: the two
+// WlParams carry different weights, so a path that charged the wrong wavelength
+// (or charged one twice) lands on a different total than the right one, which a
+// single-wavelength scene could not distinguish.
+
+namespace {
+
+SceneConfig MakeTwoWavelengthScene(const std::vector<WlParam>& spectrum) {
+  SceneConfig scene;
+  scene.ray_num_ = 0;
+  scene.max_hits_ = 4;
+  scene.light_source_.param_ = SunParam{ 30.0f, 0.0f, 0.5f };
+  scene.light_source_.spectrum_ = spectrum;
+
+  MsInfo ms;
+  ms.prob_ = 0.0f;
+  ScatteringSetting s;
+  s.crystal_.id_ = 0;
+  PrismCrystalParam prism;
+  prism.h_ = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
+  for (auto& d : prism.d_) {
+    d = Distribution{ DistributionType::kNoRandom, 1.0f, 0.0f };
+  }
+  s.crystal_.param_ = prism;
+  s.crystal_proportion_ = 1.0f;
+  ms.setting_.push_back(std::move(s));
+  scene.ms_.push_back(std::move(ms));
+  return scene;
+}
+
+// Drive Run() over `batches` batches of `ray_num` rays each and return the sum
+// of emitted_energy_ (and of root_ray_count_, its unweighted sibling) over every
+// SimData that came out.
+struct EmittedTotals {
+  double emitted = 0.0;
+  size_t root_rays = 0;
+  size_t sim_data_count = 0;
+};
+
+EmittedTotals RunAndSumEmitted(const SceneConfig& scene, size_t ray_num, size_t batches) {
+  auto config_queue = std::make_shared<Queue<SimBatch>>();
+  auto data_queue = std::make_shared<Queue<SimData>>();
+  Simulator sim(config_queue, data_queue, /*seed=*/1234);
+
+  auto shared_scene = std::make_shared<const SceneConfig>(scene);
+  for (size_t b = 0; b < batches; ++b) {
+    SimBatch batch;
+    batch.ray_num_ = ray_num;
+    batch.scene_ = shared_scene;
+    batch.generation_ = 1;
+    config_queue->Emplace(std::move(batch));
+  }
+  config_queue->Emplace(SimBatch{});  // ray_num_ == 0 → Run() exits
+
+  std::thread runner([&] { sim.Run(); });
+  runner.join();
+
+  // Drain by emptiness, NOT by shutting the queue down first: Queue::Shutdown
+  // discards whatever is still queued, which here is the entire measurement.
+  EmittedTotals totals;
+  while (!data_queue->Empty()) {
+    auto data = data_queue->Get();
+    totals.emitted += data.emitted_energy_;
+    totals.root_rays += data.root_ray_count_;
+    totals.sim_data_count++;
+  }
+  return totals;
+}
+
+}  // namespace
+
+TEST(SimulatorEmittedEnergy, DiscreteSpectrumChargesEachWavelengthItsOwnWeight) {
+  // Run() calls SimulateOneWavelength once per WlParam per batch, so over
+  // `batches` batches of `ray_num` rays the source emitted
+  //     Σ_wavelengths weight · ray_num · batches
+  // and nothing about the crystals, the filter, or the geometry may change it.
+  constexpr size_t kRayNum = 512;
+  constexpr size_t kBatches = 3;
+  const std::vector<WlParam> kSpectrum = { { 450.0f, 0.25f }, { 650.0f, 1.75f } };
+
+  auto totals = RunAndSumEmitted(MakeTwoWavelengthScene(kSpectrum), kRayNum, kBatches);
+
+  double expected = 0.0;
+  for (const auto& wl : kSpectrum) {
+    expected += static_cast<double>(wl.weight_) * static_cast<double>(kRayNum) * static_cast<double>(kBatches);
+  }
+  ASSERT_GT(totals.sim_data_count, 0u) << "no SimData produced — the probe measured nothing";
+  EXPECT_NEAR(totals.emitted, expected, expected * 1e-5);
+
+  // Its unweighted sibling must agree on the ray count, which is what pins the
+  // two to the same aggregation grain. If a future path accumulates one and
+  // overwrites the other, the ratio moves off the weight mean and this fails.
+  EXPECT_EQ(totals.root_rays, kRayNum * kBatches * kSpectrum.size());
+}
+
+TEST(SimulatorEmittedEnergy, EmittedEnergyIsProportionalToTheRayBudget) {
+  // Doubling the rays doubles the energy emitted. Stated as a ratio so it holds
+  // without knowing the absolute weights — the guard against a path that writes
+  // a per-batch constant instead of weight × ray_num.
+  const std::vector<WlParam> kSpectrum = { { 550.0f, 1.0f } };
+  auto small = RunAndSumEmitted(MakeTwoWavelengthScene(kSpectrum), 256, 1);
+  auto large = RunAndSumEmitted(MakeTwoWavelengthScene(kSpectrum), 512, 1);
+
+  ASSERT_GT(small.emitted, 0.0);
+  EXPECT_NEAR(large.emitted / small.emitted, 2.0, 1e-4);
+}
+
+TEST(SimulatorEmittedEnergy, IlluminantChargesTheBandExpectationNotTheSampledWeight) {
+  // An illuminant batch draws its wavelength at random, and the SPD weight of
+  // that draw varies by ~20% batch to batch. The charge must be the band
+  // expectation instead, so that the same config at two different seeds
+  // normalizes identically — otherwise "absolute" would still wobble with the
+  // seed. Assert the exact expectation, which also pins that the sampled weight
+  // is NOT what is being summed (it would land somewhere else with probability
+  // essentially one).
+  constexpr size_t kRayNum = 256;
+  constexpr size_t kBatches = 4;
+  auto scene = MakeTwoWavelengthScene({});
+  scene.light_source_.spectrum_ = IlluminantType::kD65;
+
+  auto totals = RunAndSumEmitted(scene, kRayNum, kBatches);
+
+  const double expected = static_cast<double>(MeanIlluminantWeight(IlluminantType::kD65)) *
+                          static_cast<double>(kRayNum) * static_cast<double>(kBatches);
+  ASSERT_GT(totals.sim_data_count, 0u);
+  EXPECT_NEAR(totals.emitted, expected, expected * 1e-5);
 }
 
 }  // namespace

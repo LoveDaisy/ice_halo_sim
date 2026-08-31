@@ -17,6 +17,7 @@
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
 #include "core/crystal.hpp"
+#include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
 #include "core/trace_ops.hpp"  // ns::MakeCrystal (core single-source crystal sampler)
 #if defined(__APPLE__)
@@ -547,6 +548,17 @@ static ns::RenderConfig::VisibleRange MapVisibleFromCApi(int visible) {
   }
 }
 
+static ns::RenderConfig::EvMode MapEvModeFromCApi(int ev_mode) {
+  switch (ev_mode) {
+    case LUMICE_EV_MODE_RELATIVE:
+      return ns::RenderConfig::kRelative;
+    case LUMICE_EV_MODE_ABSOLUTE:
+      return ns::RenderConfig::kAbsolute;
+    default:
+      throw std::invalid_argument("LUMICE_RenderParam.ev_mode is invalid: " + std::to_string(ev_mode));
+  }
+}
+
 // Copy `count` C grid lines into the core vector form so nlohmann's to_json(GridLineParam) owns
 // the wire shape (single source for the per-field optional/default logic).
 static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lines, int count) {
@@ -592,6 +604,7 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
+  jr["ev_mode"] = MapEvModeFromCApi(r.ev_mode);
   jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
@@ -2158,6 +2171,18 @@ static int MapVisibleToCApi(ns::RenderConfig::VisibleRange visible) {
   throw std::invalid_argument("unmapped core VisibleRange: " + std::to_string(static_cast<int>(visible)));
 }
 
+// Inverse of MapEvModeFromCApi. Total over the core enumeration (no default arm), same fail-loud
+// contract as MapLensTypeToCApi / MapVisibleToCApi.
+static int MapEvModeToCApi(ns::RenderConfig::EvMode ev_mode) {
+  switch (ev_mode) {
+    case ns::RenderConfig::kRelative:
+      return LUMICE_EV_MODE_RELATIVE;
+    case ns::RenderConfig::kAbsolute:
+      return LUMICE_EV_MODE_ABSOLUTE;
+  }
+  throw std::invalid_argument("unmapped core EvMode: " + std::to_string(static_cast<int>(ev_mode)));
+}
+
 // The two enum-valued renderer fields need a string pre-check: NLOHMANN_JSON_SERIALIZE_ENUM maps
 // an unrecognized value to the FIRST table entry ("linear" / "upper"), so a typo'd projection
 // would be silently misread rather than reported. Same deliberate exception to "align with core"
@@ -2170,6 +2195,13 @@ static bool IsKnownLensTypeString(const std::string& s) {
 
 static bool IsKnownVisibleString(const std::string& s) {
   return s == "upper" || s == "lower" || s == "full";
+}
+
+// Same reason as the two above: core's EvMode table maps an unrecognized string to its first
+// entry ("relative"), so without this pre-check a typo'd mode would be silently misread as the
+// default instead of reported.
+static bool IsKnownEvModeString(const std::string& s) {
+  return s == "relative" || s == "absolute";
 }
 
 // Decode one field with core's own from_json (single source for the f->fov trigonometry, the
@@ -2239,6 +2271,20 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     }
     if (rj.contains("overlap")) {
       r.overlap = std::max(0.0f, rj.at("overlap").get<float>());
+    }
+    // Mirrors core RenderConfig::ev_mode_'s member initializer (kRelative); the zeroed struct
+    // already holds it, but stating it keeps this decoder's defaults readable in one place.
+    r.ev_mode = LUMICE_EV_MODE_RELATIVE;
+    if (rj.contains("ev_mode")) {
+      if (!rj.at("ev_mode").is_string() || !IsKnownEvModeString(rj.at("ev_mode").get<std::string>())) {
+        return LUMICE_ERR_INVALID_VALUE;
+      }
+      auto ev_mode = ns::RenderConfig::kRelative;
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("ev_mode"), ev_mode);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.ev_mode = MapEvModeToCApi(ev_mode);
     }
 
     // ---- Fields the struct gained in v4.11 (previously parsed and thrown away) ----
@@ -2686,6 +2732,7 @@ LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_R
     out[i].has_valid_data = results[i].has_valid_data_ ? 1 : 0;
     out[i].snapshot_generation = results[i].snapshot_generation_;
     out[i].effective_pixels = results[i].effective_pixels_;
+    out[i].emitted_energy = results[i].snapshot_emitted_energy_;
     out[i].epoch = results[i].epoch_;
   }
 
@@ -3306,4 +3353,16 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsign
   }
   ns::XyzToSrgbUint8(xyz_in, out, pixel_count, intensity_scale, background_linear);
   return LUMICE_OK;
+}
+
+// =============== EV Auto Anchor ===============
+// Thin forwards to core/ev_anchor.hpp, the single owner of the anchor algorithm. The bare-float,
+// no-NULL-check contract matches LUMICE_MaxFov and the precondition documented on the header
+// declaration; it is the contract the GUI-side implementation these replaced already had.
+float LUMICE_ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor) {
+  return ns::ComputeP99Y(xyz_data, img_width, img_height, downsample_factor);
+}
+
+float LUMICE_ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float target_white) {
+  return ns::ComputeEvAuto(p99_raw_y, snapshot_intensity, target_white);
 }

@@ -44,7 +44,9 @@ import numpy as np
 # Mirrors LUMICE_RawXyzResult in src/include/lumice.h. Anchor fields removed
 # in task-remove-anchor-lane (64 → 56 bytes); the trailing uint64 `epoch` field
 # (backend-lifecycle-epoch, 1.3) grew it back to 64 (48-byte effective_pixels +
-# 4 pad + 8-byte epoch, 8-aligned). Matches the C++ static_assert in
+# 4 pad + 8-byte epoch, 8-aligned). `emitted_energy` then went into that 4-byte
+# pad rather than onto the end, so the size is still 64 and `epoch` still sits
+# at offset 56. Matches the C++ static_assert in
 # test/unit-correctness/server/test_c_api.cpp.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
@@ -57,6 +59,7 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("has_valid_data",             ctypes.c_int),
         ("snapshot_generation",        ctypes.c_uint64),
         ("effective_pixels",           ctypes.c_int),
+        ("emitted_energy",             ctypes.c_float),
         ("epoch",                      ctypes.c_uint64),
     ]
 
@@ -64,6 +67,25 @@ class LUMICE_RawXyzResult(ctypes.Structure):
 assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
     "LUMICE_RawXyzResult size mismatch — verify lumice.h field layout"
 )
+
+# Field OFFSETS, not just the total size. A field inserted at the wrong index
+# keeps the size identical and shifts everything after it, so every later field
+# silently reads a neighbour's bytes — no exception, just wrong numbers. These
+# mirror the offsetof static_asserts in
+# test/unit-correctness/server/test_c_api.cpp; the pair is what makes "the
+# mirror agrees with the header" a checked claim on both sides.
+for _name, _offset in (
+    ("snapshot_intensity", 24),
+    ("snapshot_generation", 40),
+    ("effective_pixels", 48),
+    ("emitted_energy", 52),
+    ("epoch", 56),
+):
+    _actual = getattr(LUMICE_RawXyzResult, _name).offset
+    assert _actual == _offset, (
+        f"LUMICE_RawXyzResult.{_name} at offset {_actual}, expected {_offset} — "
+        "the ctypes mirror and lumice.h disagree on field order"
+    )
 
 
 # Mirrors LUMICE_RenderResult in src/include/lumice.h. task-345.3 grew this
@@ -201,6 +223,11 @@ class SimResult:
     snapshot_intensity: float
     has_valid_data: bool
     effective_pixels: int
+    # Raw total energy the light source emitted into this snapshot — the
+    # denominator the renderer normalizes by. Not a rescaling of
+    # snapshot_intensity above: that one measures what landed on a pixel, this
+    # one what went in, and they differ by everything that removes a ray.
+    emitted_energy: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 
@@ -228,6 +255,8 @@ class BufferedSimResult:
     routed_backend: str = ""
     fell_back: bool = False
     log_lines: List[str] = field(default_factory=list)
+    # See SimResult.emitted_energy — same field, same contract.
+    emitted_energy: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 
@@ -655,6 +684,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
             snapshot_intensity=float(r.snapshot_intensity),
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
+            emitted_energy=float(r.emitted_energy),
             crystal_num=crystal_num,
             orientation_num=orientation_num,
         )
@@ -831,6 +861,7 @@ def run_scene_capi_buffered(
                     r_snap = float(r.snapshot_intensity)
                     r_valid = bool(r.has_valid_data)
                     r_eff = int(r.effective_pixels)
+                    r_emitted = float(r.emitted_energy)
                     if r_xyz_addr is None:
                         raise RuntimeError(
                             f"{config_path}: race — xyz pointer became NULL after IDLE check"
@@ -884,6 +915,7 @@ def run_scene_capi_buffered(
                 snapshot_intensity=r_snap,
                 has_valid_data=r_valid,
                 effective_pixels=r_eff,
+                emitted_energy=r_emitted,
                 img_width=r_w,
                 img_height=r_h,
                 flt_buf=flt_buf,

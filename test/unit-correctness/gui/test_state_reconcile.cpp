@@ -118,6 +118,11 @@ const Row kInertRows[] = {
   // only what shows behind them changes. It stays out of the resim projection while remaining in
   // the Revert baseline through its own ConfigSnapshot slot (gui_state.hpp).
   { "renderer.background", "renderer", [](GuiState& s) { s.renderer.background[0] = 0.7f; }, false, false, false },
+  // Same argument as exposure_offset above, one level up: ev_mode picks WHICH anchor the
+  // client-side conversion divides by, and both anchors are computed from a snapshot the run has
+  // already produced. Flipping it re-lights the picture on the next frame. A finished run that
+  // went kModified over it would be offering to re-simulate its way to the same rays.
+  { "renderer.ev_mode", "renderer", [](GuiState& s) { s.renderer.ev_mode = 1; }, false, false, false },
   // Not part of the committed snapshot at all, so it cannot participate in the diff even in
   // principle — the legacy wrapper owns it.
   { "use_gpu_backend", "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false,

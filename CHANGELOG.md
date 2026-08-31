@@ -45,6 +45,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on screen. The inverse sRGB transfer curve a caller needs to convert a picker colour into that
   `background_linear` argument (or into `LUMICE_RenderParam::background`) stays a C++-only inline
   function, `lumice::SrgbToLinearRgb` in `src/util/color_space.hpp` — no new public C API for it.
+- **`ev_mode`** -- a first-class choice between the two exposure anchors, reaching core
+  `RenderConfig`, the C API, `.lmc` documents and CLI JSON. `"relative"` (the DEFAULT) anchors
+  the image to its own P99, which is what the GUI preview has always displayed: the picture
+  keeps its look as `ray_num` grows, and correspondingly the config alone does not determine
+  output brightness. `"absolute"` anchors to the energy the light source EMITTED, so two renders
+  at the same EV are comparable -- the behavior the entry below introduced unconditionally.
+  A config with no `ev_mode` key, and one with a misspelled value, both render `relative`.
+  **This replaces that entry's default rather than adding to it**: the CLI was unconditionally
+  absolute for one release cycle, so an existing config re-rendered now switches to the P99
+  self-anchor unless it states `"ev_mode": "absolute"`. Which anchor an image was made with is
+  no longer inferable from the tool version; it is in the document.
+  On the composite (raypath-colour) path the same field selects between the participating-pixel
+  self-anchor and the mono path's absolute scale -- the very same scalar, shared rather than
+  re-derived, so mono and composite stay comparable at one EV.
+  **ABI**: `LUMICE_RenderParam` gains a trailing `int ev_mode` (`LUMICE_EV_MODE_RELATIVE` = 0,
+  `LUMICE_EV_MODE_ABSOLUTE` = 1) and `LUMICE_API_VERSION` moves 415 -> 416. The field is
+  APPENDED, so every existing field keeps its offset, but `sizeof` grows: a caller that was not
+  recompiled hands the API a shorter struct. Recompile against the new header. RELATIVE == 0
+  keeps the documented default reachable from a zero-initialized struct.
+- **`LUMICE_RawXyzResult.emitted_energy`** (C API): the total spectral energy the light
+  source emitted into a snapshot -- the quantity the renderer now normalizes by. Raw total,
+  unlike the neighbouring `snapshot_intensity`, which is a per-pixel figure; and a different
+  measurement, not a rescaling of it, since one counts what went in and the other what
+  landed. A consumer reproduces the renderer's own scale as
+  `intensity_factor * kNormScale * total_pixels / emitted_energy`. The field occupies
+  alignment padding that already existed before `epoch`, so `sizeof(LUMICE_RawXyzResult)`
+  stays 64 bytes and every existing field keeps its offset -- a caller compiled against the
+  old header is unaffected, and one recompiled against the new one gains a field without
+  relinking anything else.
 - **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
   offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
   persisted in `.lmc` files and core JSON configs.
@@ -60,6 +89,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way in `doc/configuration.md` (and `_zh`) instead of sitting in the same table as the keys that
   do something, and the shipped `examples/config_example.json` no longer demonstrates a 22 deg
   circle that never appears in the output.
+- **Breaking behavior change (CLI image brightness): display normalization is now absolute.**
+  The renderer divides by the energy the light source EMITTED, where it used to divide by the
+  energy that LANDED on a pixel. The old denominator moved with the scene -- add a filter, or
+  point a narrower lens at the sky, and the image was silently re-brightened by exactly the
+  amount that had been removed, so two renders at the same EV could not be compared. The new
+  one is fixed by the source and the ray budget alone.
+  **Re-running an existing config produces a darker image**, by exactly the fraction of
+  emitted energy that reached the frame: negligible for a full-sphere view (~0.98, under 0.03
+  stop), around 0.4-0.6 for a 90-120 degree lens (~1 stop), and as low as 0.18 for a narrow
+  lens behind a filter (~2.5 stop). Raise EV to taste; the darkening is the change working,
+  not a regression. Cross-lens comparability is a separate matter and is not claimed here:
+  two projections still differ by a per-projection solid-angle constant.
+  The GUI is unaffected -- its display path normalizes through its own auto-EV anchor and
+  never used this scale. `kNormScale` is unchanged at 0.08: it was calibrated on full-sphere
+  views, which is where the two denominators nearly coincide.
+- **Breaking behavior change (CLI image brightness): display normalization now supports an
+  absolute anchor, selected by the `ev_mode` entry above (default remains `relative`, i.e.
+  unchanged pixels for an existing config).** The renderer divides by the energy the light
+  source EMITTED, where it used to divide by the energy that LANDED on a pixel. The old denominator
+  moved with the scene -- add a filter, or point a narrower lens at the sky, and the image
+  was silently re-brightened by exactly the amount that had been removed, so two renders at
+  the same EV could not be compared. The new one is fixed by the source and the ray budget
+  alone.
+  **Re-running an existing config in `"absolute"` mode produces a darker image**, by exactly
+  `landed_fraction` (energy landed / energy emitted) -- a per-scene constant, independent of
+  `ray_num`. The general law: `new_scale / old_scale ≡ landed_fraction`, and a caller can
+  compute their own scene's shift from two `LUMICE_RawXyzResult` fields
+  (`snapshot_intensity`, `emitted_energy`) without re-deriving anything. Measured spans across
+  this feature's calibration corpus, in stops (`log2(landed_fraction)`):
+  full-sphere view, no filter: **-0.038 .. -0.002**; narrow lens (90-120 degree), no filter:
+  **-0.67 .. -1.25**; filter active / high `ms_prob`: **-0.97 .. -10.47**. The darkening is the
+  change working, not a regression -- raise EV to taste. Cross-lens comparability is a
+  separate matter and is not claimed here, by design: two projections still differ by a
+  per-projection solid-angle constant, and fixing that would re-weight every pixel by its own
+  solid angle and change each image's appearance, which is out of scope (see
+  `doc/ev-pipeline-architecture.md` §7.3).
+  The GUI is unaffected in either mode's pixels for an existing document -- see the `ev_mode`
+  entry above for what changed in the GUI (a Mode control, not a pixel default). `kNormScale`
+  is unchanged at 0.08: it was calibrated on full-sphere views, which is where the two
+  denominators nearly coincide (`landed_fraction` median 0.980; re-deriving it would move
+  full-sphere scenes by only +0.029 stop, at the cost of re-shooting every reference image).
+  For an illuminant spectrum the emitted energy is charged at the band expectation of the
+  SPD rather than at the weight of the wavelength each batch happens to draw, so the same
+  config renders at the same brightness at every seed.
+  Separately, an undersampled scene darkens as `ray_num` grows under **either** denominator
+  (measured N-scaling slope: -1.026 landed-weight, -1.027 emitted-energy) -- an honest
+  Monte-Carlo estimator property, not something this change introduces or fixes. See
+  `doc/ev-pipeline-architecture.md` §7.4 before reporting it as a regression.
 - **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
   type): the value is now **how many distinct crystal geometries the run actually sampled**,
   not how many crystal objects it built. A scene with no random shape distributions reports

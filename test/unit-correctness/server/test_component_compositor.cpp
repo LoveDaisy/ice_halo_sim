@@ -42,6 +42,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <vector>
@@ -1402,4 +1403,162 @@ TEST(ComponentCompositor, ReusedOutputBufferMatchesFreshBuffer) {
 }
 
 }  // namespace
+// -----------------------------------------------------------------------------
+// ev_mode: which anchor the composite path measures against.
+//
+// Everything above runs in the default kRelative mode, where the participating pixels anchor
+// themselves. These pin kAbsolute, whose defining property is the opposite: the composite shares
+// the mono path's ExposureScale(), so the participating P99 stops being the anchor entirely.
+// -----------------------------------------------------------------------------
+
+// The batches above declare no emitted energy — irrelevant while the anchor was self-derived,
+// but it IS the absolute denominator, so these cases need a batch that carries one.
+SimData MakeBatchWithEmitted(const std::vector<uint64_t>& masks, const std::vector<float>& weights, float emitted) {
+  SimData data = MakeBatch(masks, weights);
+  data.root_ray_count_ = masks.size();
+  data.emitted_energy_ = emitted;
+  return data;
+}
+
+RenderConfig MakeAbsoluteRenderConfig(int res) {
+  auto cfg = MakeRenderConfig(res);
+  cfg.ev_mode_ = RenderConfig::kAbsolute;
+  return cfg;
+}
+
+TEST(ComponentConsumer, CompositeAnchorScaleForwardsPerEvMode) {
+  // The dispatcher itself, at its own level: under each mode it must return the SAME number the
+  // corresponding named accessor returns. Asserting equality against those accessors (rather
+  // than re-deriving both formulas) is what makes this a wiring test and not a third copy of
+  // the math — the formulas already have their own cross-checks elsewhere in this file.
+  constexpr int kRes = 3;
+  const float kP99 = 0.02f;
+
+  RenderConfig rel = MakeRenderConfig(kRes);
+  auto table = MakeSingletonClassTable(0b11, { kWhite, kWhite });
+  RenderConsumer rc_rel(rel, table);
+  rc_rel.Consume(MakeBatchWithEmitted({ 0b01, 0b10 }, { 0.6f, 0.4f }, 5.0f));
+  rc_rel.PrepareSnapshot();
+  EXPECT_FLOAT_EQ(rc_rel.CompositeAnchorScale(kP99), rc_rel.ParticipatingExposureScale(kP99));
+
+  RenderConfig abs_cfg = MakeAbsoluteRenderConfig(kRes);
+  RenderConsumer rc_abs(abs_cfg, table);
+  rc_abs.Consume(MakeBatchWithEmitted({ 0b01, 0b10 }, { 0.6f, 0.4f }, 5.0f));
+  rc_abs.PrepareSnapshot();
+  EXPECT_FLOAT_EQ(rc_abs.CompositeAnchorScale(kP99), rc_abs.ExposureScale());
+
+  // ...and the argument is genuinely ignored under kAbsolute, rather than happening to cancel:
+  // a p99 two orders of magnitude away must not move the answer.
+  EXPECT_FLOAT_EQ(rc_abs.CompositeAnchorScale(kP99 * 100.0f), rc_abs.ExposureScale());
+
+  // The two modes must also disagree here, or the dispatch could be dead and both EXPECTs above
+  // would still hold on whichever branch survived.
+  EXPECT_NE(rc_rel.CompositeAnchorScale(kP99), rc_abs.CompositeAnchorScale(kP99));
+}
+
+TEST(ComponentCompositor, AbsoluteModeCompositeSharesTheMonoScaleAcrossDIFFERENTScenes) {
+  // AC-4, stated as the property absolute mode exists for. Two frames whose CONTENT differs (one
+  // emits 4x the energy of the other into the same lane) must come out of the compositor in the
+  // ratio their mono ExposureScale()s are in — i.e. the composite carries the same physical
+  // meaning the mono image does, so "these two renders are at the same EV" is a comparison a
+  // reader can actually make.
+  //
+  // Under kRelative both frames would self-anchor to their own P99 and land on the SAME output
+  // (that is the mode's whole point), which is asserted below as the contrast.
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  auto table = MakeSingletonClassTable(0b01, { kWhite });
+
+  auto run = [&](const RenderConfig& cfg, float weight, float emitted, std::vector<float>& out) {
+    auto rc = std::make_unique<RenderConsumer>(cfg, table);
+    rc->Consume(MakeBatchWithEmitted({ 0b01 }, { weight }, emitted));
+    rc->PrepareSnapshot();
+    const bool ok = CompositeColorClassesLinear(*rc, table, CompositeMode::kAdditive, 1.0f, out, nullptr);
+    EXPECT_TRUE(ok);
+    return rc;
+  };
+
+  const auto abs_cfg = MakeAbsoluteRenderConfig(kRes);
+  std::vector<float> dim;
+  std::vector<float> bright;
+  auto rc_dim = run(abs_cfg, 0.1f, 4.0f, dim);
+  auto rc_bright = run(abs_cfg, 0.4f, 1.0f, bright);
+
+  const int lit = FindLitPixel(*rc_dim, total_pix);
+  ASSERT_GE(lit, 0);
+  ASSERT_GT(dim[static_cast<size_t>(lit) * 3], 0.0f);
+  ASSERT_GT(bright[static_cast<size_t>(lit) * 3], 0.0f);
+
+  // Composite ratio == (lane ratio) x (mono scale ratio). The lane ratio is 4 (weights 0.1 vs
+  // 0.4) and the mono scale ratio is 4 as well (emitted 4.0 vs 1.0), so the two frames differ by
+  // 16x — a number neither frame could produce on its own anchor.
+  const float composite_ratio = bright[static_cast<size_t>(lit) * 3] / dim[static_cast<size_t>(lit) * 3];
+  const float expected_ratio = (0.4f / 0.1f) * (rc_bright->ExposureScale() / rc_dim->ExposureScale());
+  EXPECT_NEAR(composite_ratio, expected_ratio, expected_ratio * 1e-4f);
+
+  // The contrast: the same two frames under kRelative collapse onto each other, because each one
+  // renormalizes to its own P99. Without this, the case above would also pass on a compositor
+  // that ignored ev_mode and happened to be handed proportional lanes.
+  const auto rel_cfg = MakeRenderConfig(kRes);
+  std::vector<float> rel_dim;
+  std::vector<float> rel_bright;
+  run(rel_cfg, 0.1f, 4.0f, rel_dim);
+  run(rel_cfg, 0.4f, 1.0f, rel_bright);
+  EXPECT_NEAR(rel_bright[static_cast<size_t>(lit) * 3], rel_dim[static_cast<size_t>(lit) * 3],
+              rel_dim[static_cast<size_t>(lit) * 3] * 1e-4f)
+      << "a self-anchored composite must not be able to tell these two frames apart";
+}
+
+TEST(ComponentCompositor, AbsoluteModeAppliesIntensityFactorExactlyOnce) {
+  // plan risk 2 (the composite double-exposure bug, already fixed once): intensity_factor_ lives
+  // inside ExposureScale(), and display_exposure_scale is applied on top of it. If a future
+  // change folded the EV in on both sides the output would be off by exactly 2^offset — a factor
+  // that looks plausible in an image and would not be caught by "it renders about as bright".
+  // So predict the pixel exactly, from the lane value and ONE factor of each.
+  constexpr int kRes = 3;
+  const int total_pix = kRes * kRes;
+  const float kDisplayEv = 3.0f;
+
+  auto cfg = MakeAbsoluteRenderConfig(kRes);
+  cfg.intensity_factor_ = 2.0f;
+  auto table = MakeSingletonClassTable(0b01, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatchWithEmitted({ 0b01 }, { 0.25f }, 3.0f));
+  rc.PrepareSnapshot();
+
+  std::vector<float> out;
+  ASSERT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kAdditive, kDisplayEv, out, nullptr));
+
+  const int lit = FindLitPixel(rc, total_pix);
+  ASSERT_GE(lit, 0);
+  const float lane_y = rc.GetColorClassLaneY(0)[lit];
+  const float expected = lane_y * rc.ExposureScale() * kDisplayEv;
+  ASSERT_LT(expected, 1.0f) << "fixture must stay below the [0,1] clamp or the assertion is vacuous";
+  EXPECT_NEAR(out[static_cast<size_t>(lit) * 3], expected, expected * 1e-4f);
+}
+
+TEST(ComponentCompositor, AbsoluteModeParticipatingButAllZeroStaysBlack) {
+  // The boundary the two modes disagree about. `A<=0` is the compositor's "no usable scale, draw
+  // black" gate; under kRelative an all-zero participating union trips it (its P99 is 0), but
+  // under kAbsolute A comes from emitted energy and is positive, so the gate does NOT fire and
+  // the pixel loop actually runs. It must still produce black — the lanes are zero and s*0 == 0 —
+  // and, unlike the relative path, it reports success rather than the A<=0 failure.
+  constexpr int kRes = 3;
+  auto cfg = MakeAbsoluteRenderConfig(kRes);
+  // Class 1 is referenced and visible, but no ray carries its bit, so its lane is all zeros.
+  auto table = MakeSingletonClassTable(0b10, { kWhite });
+  RenderConsumer rc(cfg, table);
+  rc.Consume(MakeBatchWithEmitted({ 0b01 }, { 0.5f }, 2.0f));
+  rc.PrepareSnapshot();
+  ASSERT_GT(rc.ExposureScale(), 0.0f) << "fixture must have a positive absolute scale to be the case it claims";
+
+  std::vector<float> out;
+  float p99 = -1.0f;
+  EXPECT_TRUE(CompositeColorClassesLinear(rc, table, CompositeMode::kPainter, 1.0f, out, &p99));
+  EXPECT_FLOAT_EQ(p99, 0.0f);
+  for (float v : out) {
+    EXPECT_FLOAT_EQ(v, 0.0f);
+  }
+}
+
 }  // namespace lumice

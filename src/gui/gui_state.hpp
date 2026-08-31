@@ -347,6 +347,15 @@ constexpr int kVisibleCount = 3;  // must stay in sync with fragment shader u_vi
 static_assert(sizeof(kVisibleNames) / sizeof(*kVisibleNames) == kVisibleCount,
               "kVisibleNames length must match kVisibleCount");
 
+// Display labels for RenderConfig::ev_mode, indexed by the same integer the core enum uses
+// (0 = relative, 1 = absolute). A separate array from file_io.cpp's kEvModeJsonNames on purpose:
+// that one is the wire format and must never move, this one is user-facing text and may. The same
+// split already exists for kVisibleNames vs. the visible field's serialized integer.
+inline const char* const kEvModeNames[] = { "Relative", "Absolute" };
+constexpr int kEvModeCount = 2;
+static_assert(sizeof(kEvModeNames) / sizeof(*kEvModeNames) == kEvModeCount,
+              "kEvModeNames length must match kEvModeCount");
+
 inline const int kSimResolutions[] = { 512, 1024, 2048, 4096 };
 constexpr int kSimResolutionCount = 4;
 // The same four values as the combo shows them. Written once here rather than at each control:
@@ -368,12 +377,24 @@ struct RenderConfig {
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
+  // Which anchor the SERVER measures its exposure scale against, mirroring core
+  // RenderConfig::EvMode (0 = relative / P99 self-anchor, 1 = absolute / emitted energy).
+  // 0 matches core's default, so a document that never mentions it renders the way the GUI
+  // preview always has.
+  //
+  // Held as a plain int and registered in field_editor_registry.cpp as "renderer.ev_mode", which
+  // is what puts it in the Display group's Mode combo and in the defaults panel's field table at
+  // the same time. Deliberately NOT a member of RenderConfigResimFields below: switching modes
+  // only changes which anchor the client-side conversion divides by, never the simulation output
+  // — see the static_assert note further down for the full argument.
+  int ev_mode = 0;
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            front == o.front && std::equal(background, background + 3, o.background) &&
-           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset;
+           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset &&
+           ev_mode == o.ev_mode;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -464,7 +485,21 @@ struct RenderConfigResimFields {
 // it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
 // is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
 // (like background — see ConfigSnapshot::renderer_background).
-static_assert(sizeof(RenderConfig) == 60, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+//
+// ev_mode (v4.16) is EXCLUDED, and it now HAS a control (the Display group's Mode combo, plus the
+// defaults panel's registered editor) — so the exclusion is a decision, not the absence of one.
+// The reason is the same one that excludes exposure_offset a few lines up: switching the mode
+// changes which anchor the GUI divides by when it converts the already-simulated XYZ to pixels
+// (mono_exposure_scale.hpp), and that conversion happens client-side every frame. The simulation
+// output itself is identical under both modes. So a mode switch must NOT flip a finished run into
+// kModified, and Revert must not put the old mode back as if it were a config edit awaiting a
+// re-run — it is a display-time reading of the same data, exactly like EV.
+//
+// The composite path is the one place where the mode does reach the server (RenderConsumer picks
+// its anchor from config_.ev_mode_ at CommitConfig time), and there it deliberately takes effect
+// on the next Run rather than the next frame — see the note at component_compositor.cpp's
+// CompositeAnchorScale. That is a slower path to the same value, not a resim dependency.
+static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
@@ -1112,6 +1147,7 @@ struct GuiState {
   void MarkStructHardDirty() {
     MarkDirty();
     snapshot_intensity = 0;
+    snapshot_emitted_energy = 0;
     p99_raw_y = 0.0f;
     display_epoch_floor = committed_epoch;
   }
@@ -1132,6 +1168,7 @@ struct GuiState {
     display_epoch_floor = 0;
     last_uploaded_texture_serial = 0;
     snapshot_intensity = 0;  // immediate clear; the new backend's first payload fills it back in
+    snapshot_emitted_energy = 0;
     p99_raw_y = 0.0f;
     // task-345.4: the new backend has not uploaded anything yet — clear the ground-truth mode
     // record. show_composite_preview is deliberately NOT reset (it is a user preference; a
@@ -1204,7 +1241,13 @@ struct GuiState {
   // per batch by design); the status-bar tooltip carries that caveat.
   LUMICE_RayCount stats_crystal_num = 0;
   LUMICE_RayCount stats_orientation_num = 0;
-  float snapshot_intensity = 0;                 // Per-pixel landed intensity for XYZ→RGB normalization
+  float snapshot_intensity = 0;  // Per-pixel landed intensity for XYZ→RGB normalization
+  // Total EMITTED spectral energy behind the displayed snapshot (LUMICE_RawXyzResult::emitted_energy).
+  // Not a rescaling of snapshot_intensity above: that one measures what landed on a pixel, this
+  // one measures what the source put in, and they differ by every ray a filter, an absorption or
+  // a miss removed. It is the denominator absolute exposure mode divides by, and dividing by an
+  // input rather than an output is what makes brightness comparable between two documents.
+  float snapshot_emitted_energy = 0;
   int effective_pixels = 0;                     // Non-zero pixel count (for stats display)
   unsigned long long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
@@ -1244,7 +1287,8 @@ struct GuiState {
   //   raypath_color_mode — display state via PushDisplayState, not through MarkDirty),
   //   runtime state (sim_state, run_intent, committed_epoch, display_epoch_floor,
   //   last_uploaded_texture_serial, last_uploaded_as_composite, stats_*, snapshot_intensity,
-  //   texture_upload_count), and file management (current_file_path, dirty, save_texture)
+  //   snapshot_emitted_energy, texture_upload_count), and file management (current_file_path,
+  //   dirty, save_texture)
   //   are intentionally excluded.
   //
   // Protection model (plan.md S1):

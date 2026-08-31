@@ -225,6 +225,12 @@ const std::vector<FieldProbe>& FieldProbes() {
         }
         return out;
       } },
+    { "renderer.ev_mode",
+      // 1 (absolute), not 0: 0 is the default, so a serializer that dropped the key entirely
+      // would round-trip it. Held as an int in the struct but written as a WORD on disk, which
+      // is the half the round trip alone cannot see — the spelling case below covers that.
+      [](GuiState& s) { s.renderer.ev_mode = 1; },
+      [](const GuiState& s) { return std::to_string(s.renderer.ev_mode); } },
     // The two overlay colours below are here because they had NO guard of any kind before this
     // file existed (measured while auditing the suite, not guessed). They are also the cheapest
     // possible demonstration of the key-name half of the contract: a serializer that renames its
@@ -908,4 +914,59 @@ TEST(DocumentRoundtripChain, SchemaVersionIsFour) {
 }
 
 }  // namespace
+
+// The ev_mode spelling on disk, in both directions, and for the same reason the aspect-preset case
+// above is not a round trip: writer and reader share kEvModeJsonNames, so a table edited on both
+// sides agrees with itself while every saved document changes meaning. The expected words here are
+// literals, and they are literally core's — config/render_config.hpp's own enum table spells them
+// "relative"/"absolute", and a .lmc that disagreed would load into a GUI whose exported config then
+// said something else.
+//
+// The unknown-word row is the third direction and the one with a real failure mode behind it: an
+// unrecognised value must land on relative, the SAME place a missing key lands, so a typo cannot
+// silently opt a document into the absolute anchor.
+TEST(DocumentRoundtripChain, EvModeIsSpelledOnDiskTheWayCoreSpellsIt) {
+  struct Row {
+    int value;
+    const char* spelling;
+  };
+  for (const Row& row : { Row{ 0, "relative" }, Row{ 1, "absolute" } }) {
+    GuiState doc = MinimalDocument();
+    doc.renderer.ev_mode = row.value;
+    const auto written = nlohmann::json::parse(SerializeGuiStateJson(doc));
+    EXPECT_EQ(written["renderer"]["ev_mode"].get<std::string>(), row.spelling);
+
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    on_disk["renderer"]["ev_mode"] = row.spelling;
+    GuiState read_back = MinimalDocument();
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      // Non-fatal per row: one unreadable spelling must not take the other spelling's report with
+      // it — which of the two failed is the whole diagnostic here.
+      ADD_FAILURE() << row.spelling << ": the reader rejected a document carrying this spelling";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.ev_mode, row.value) << row.spelling;
+  }
+
+  // A document written before the key existed, and a document written with a typo in it, must
+  // reach the same place: relative.
+  for (const char* variant : { "", "abolute" }) {
+    auto doc = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    doc["renderer"]["ev_mode"] = "absolute";
+    if (variant[0] == '\0') {
+      doc["renderer"].erase("ev_mode");
+    } else {
+      doc["renderer"]["ev_mode"] = variant;
+    }
+    GuiState read_back = MinimalDocument();
+    read_back.renderer.ev_mode = 1;  // seed non-default so a no-op read is visible
+    const char* label = variant[0] == '\0' ? "<absent>" : variant;
+    if (!DeserializeGuiStateJson(doc.dump(), read_back)) {
+      ADD_FAILURE() << label << ": an unrecognised ev_mode must load, not fail the whole document";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.ev_mode, 0) << "variant: " << label;
+  }
+}
+
 }  // namespace lumice::gui

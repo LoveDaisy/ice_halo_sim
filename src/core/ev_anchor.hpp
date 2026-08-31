@@ -1,22 +1,42 @@
-#ifndef LUMICE_GUI_EV_AUTO_HPP
-#define LUMICE_GUI_EV_AUTO_HPP
+#ifndef CORE_EV_ANCHOR_H_
+#define CORE_EV_ANCHOR_H_
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <vector>
 
-namespace lumice::gui {
+namespace lumice {
 
-// Auto-EV downsample factor for the box-sum coarse-bin metric.
-// Rationale (scrum-auto-ev-77halo-followup, explore-infinite-accum-drift-truth):
-// coarse bins have f^2 larger expected hit count than fine pixels in sparse
-// scenes, so the P99-over-lit anchor stabilises earlier and 77halo previews
-// brighten faster.  Math equivalence (E5/F7):
-//   ev = log2(target_linear * snapshot_fine / (P99_coarse / f^2))
-// Display path remains fine-res.  Final f=8 confirmed by e6 gold harness
-// (22/25 in-band, only ms05_prob0.5_EV0.5/EV1.5 dropped vs 23/25 fine).
-constexpr int kEvAutoDownsampleFactor = 8;
+// Single owner of the P99 partial-sort step (idx = floor(size * 0.99), nth_element).
+// This exact code used to be inlined in three places: the coarse and fine paths of ComputeP99Y
+// (which lived in the GUI layer) and component_compositor.cpp's ComputeParticipatingP99Y.
+// Callers own the "which values participate" question — this function only answers "what is the
+// P99 of the values you handed me".
+//
+// `values` is reordered in place (nth_element is a partial sort). Returns 0 for an empty range,
+// the same convention every caller already used for "no positive samples".
+inline float NthElementP99(std::vector<float>& values) {
+  if (values.empty()) {
+    return 0.0f;
+  }
+  auto idx = static_cast<size_t>(static_cast<float>(values.size()) * 0.99f);
+  if (idx >= values.size()) {
+    idx = values.size() - 1;
+  }
+  std::nth_element(values.begin(), values.begin() + static_cast<ptrdiff_t>(idx), values.end());
+  return values[idx];
+}
+
+// Single owner of the sRGB reverse transform used to turn a target_white on the 0-255 scale into
+// its linear equivalent. Shared by ComputeEvAuto (below) and
+// RenderConsumer::ParticipatingExposureScale (server/render.cpp) — the two consumers of the
+// anchor share this level and the P99 level, and NOTHING beyond that: their final expressions
+// differ (the composite one carries no snapshot_intensity in its numerator), see render.cpp.
+inline float TargetWhiteToLinear(float target_white) {
+  float t = target_white / 255.0f;
+  return t <= 0.04045f ? t / 12.92f : std::pow((t + 0.055f) / 1.055f, 2.4f);
+}
 
 // Box-sum downsample of the Y channel from a packed XYZ buffer.
 // Returns a flat coarse buffer of size (img_width/f) * (img_height/f); the
@@ -59,14 +79,6 @@ inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width
 // See doc/ev-pipeline-architecture.md §2.2 (zero-skip semantics), §2.5 (GUI usage)
 // Compute the P99 of the non-zero Y values in a packed XYZ buffer.
 //
-// NOTE (task-345.3 review Minor #1): the fine-path (idx = floor(size * 0.99),
-// nth_element) partial-sort algorithm here is structurally identical to
-// `src/server/component_compositor.cpp`'s ComputeParticipatingP99Y (the
-// server-side composite anchor). They cannot share a header without dragging
-// one layer into the other (server/ ↔ gui/ is the C API boundary). If you
-// touch this algorithm — epsilon, index rounding, non-zero rule — mirror the
-// change in the other file.
-//
 // When `downsample_factor > 1`, the Y channel is first box-summed onto a
 // coarse grid (see DownsampleBoxSumY) and the P99 is taken over non-zero
 // coarse bins, then divided by `downsample_factor^2` so the returned value
@@ -76,6 +88,12 @@ inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width
 // Therefore `TexturePayload.p99_y` no longer represents the true per-pixel Y
 // statistic when downsample is active; downstream consumers must treat it
 // only as the EV anchor and not as a raw Y measurement.
+//
+// The coarse and the fine path are NOT two precisions of one statistic — measured on the 77halo
+// 1e7 fixture they differ by 64x (coarse 3.28e-4 vs fine 2.10e-2) and respond to N with different
+// slopes (+0.329 vs +0.034). Collapsing them into one path would silently shift sparse-scene
+// auto-EV by ~6 stops. The mono path picks coarse (f=8), the composite path picks fine; both
+// choices are the caller's to make.
 //
 // Fallback order (must match for downstream invariants):
 //   1) If `downsample_factor <= 1`           -> use the fine Y path.
@@ -103,12 +121,7 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
       if (y_vals.empty()) {
         return 0.0f;
       }
-      auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
-      if (idx >= y_vals.size()) {
-        idx = y_vals.size() - 1;
-      }
-      std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
-      float p99_coarse = y_vals[idx];
+      float p99_coarse = NthElementP99(y_vals);
       float f2 = static_cast<float>(downsample_factor) * static_cast<float>(downsample_factor);
       return p99_coarse / f2;
     }
@@ -129,13 +142,24 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
   if (y_vals.empty()) {
     return 0.0f;
   }
-  auto idx = static_cast<size_t>(static_cast<float>(y_vals.size()) * 0.99f);
-  if (idx >= y_vals.size()) {
-    idx = y_vals.size() - 1;
-  }
-  std::nth_element(y_vals.begin(), y_vals.begin() + static_cast<ptrdiff_t>(idx), y_vals.end());
-  return y_vals[idx];
+  return NthElementP99(y_vals);
 }
+
+// The two numbers the P99 self-anchor is parameterised by. They have an owner here because the
+// server now anchors too (RenderConsumer::ExposureScale's kRelative branch), and a second
+// hardcoded copy of each would be a third place for them to drift.
+//
+// Both are MIRRORED, not shared, on the GUI side: `src/gui/` may not include `core/`, so
+// gui_constants.hpp::kEvAutoDownsampleFactor and GuiState::target_white hold the same two values
+// independently. That mirroring predates this owner and is not removed by it — the API boundary
+// is what forbids sharing. What changed is only that the core side now has one named owner
+// instead of a literal repeated per call site.
+//
+// f=8 is the MONO path's choice specifically. Coarse and fine are not two precisions of one
+// statistic (see ComputeP99Y's comment: 64x apart on the 77halo fixture), so the composite path
+// deliberately keeps f=1 and must not be "unified" onto this constant.
+constexpr int kMonoAnchorDownsampleFactor = 8;
+constexpr float kAnchorTargetWhite = 135.0f;
 
 // Compute the P99-anchored auto-EV (in stops) such that the P99 normalised Y
 // maps to target_white on the 0-255 sRGB scale.  Clamps to [-6, 6].
@@ -145,8 +169,7 @@ inline float ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float targ
     return 0.0f;
   }
   float p99_norm = p99_raw_y / snapshot_intensity;
-  float t = target_white / 255.0f;
-  float target_linear = t <= 0.04045f ? t / 12.92f : std::pow((t + 0.055f) / 1.055f, 2.4f);
+  float target_linear = TargetWhiteToLinear(target_white);
   if (target_linear <= 0.0f || p99_norm <= 0.0f) {
     return 0.0f;
   }
@@ -154,6 +177,6 @@ inline float ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float targ
   return std::clamp(ev, -6.0f, 6.0f);
 }
 
-}  // namespace lumice::gui
+}  // namespace lumice
 
-#endif  // LUMICE_GUI_EV_AUTO_HPP
+#endif  // CORE_EV_ANCHOR_H_

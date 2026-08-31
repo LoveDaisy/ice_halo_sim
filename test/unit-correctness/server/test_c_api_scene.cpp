@@ -570,6 +570,11 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   negative_elevation.elevation_grid_count = -1;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_elevation, &id), LUMICE_ERR_INVALID_CONFIG);
 
+  // v4.16: ev_mode is the third enum-valued field and gets the same treatment.
+  LUMICE_RenderParam bad_ev_mode = base;
+  bad_ev_mode.ev_mode = 42;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_ev_mode, &id), LUMICE_ERR_INVALID_CONFIG);
+
   EXPECT_TRUE(SceneRoot(g.get()).at("render").empty())
       << "a rejected renderer must not leave a partially-built entry behind";
 

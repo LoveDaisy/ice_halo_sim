@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -68,6 +69,10 @@ RenderConfig MakeSnapshotRenderConfig() {
   cfg.view_.el_ = 90.0f;
   cfg.view_.ro_ = 0.0f;
   cfg.visible_ = RenderConfig::kUpper;
+  // This suite is a byte-level property test over the per-pixel fusion ORDER, which is
+  // orthogonal to which exposure formula produced the scale. Pin the absolute anchor so the
+  // fixed input keeps producing the fixed bytes these cases were calibrated against.
+  cfg.ev_mode_ = RenderConfig::kAbsolute;
   return cfg;
 }
 
@@ -85,6 +90,11 @@ SimData MakeUpwardBatch(const std::vector<float>& weights) {
     data.outgoing_d_.push_back(-1.0f);  // sky-up
   }
   data.outgoing_w_ = weights;
+  // The normalization denominator. In this fixture nothing is filtered and
+  // every ray lands, so the energy emitted equals the energy that arrived — the
+  // batch has to declare it either way, because the renderer divides by what was
+  // emitted and no longer infers it from what landed.
+  data.emitted_energy_ = std::accumulate(weights.begin(), weights.end(), 0.0f);
   return data;
 }
 

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -39,7 +40,15 @@ static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->crystal_num) >= 8, "stats c
 // grew LUMICE_RawXyzResult from 56 → 64 bytes (effective_pixels@48 + 4 pad +
 // epoch@56, 8-aligned). test/e2e/capi_runner.py mirrors this exact size; keep the
 // two in lockstep (measured, not assumed — ctypes.sizeof == 64).
+// The absolute-normalization denominator `emitted_energy` (float) then went into
+// that 4-byte pad at offset 52 rather than onto the end, so the size stays 64 and
+// `epoch` keeps offset 56 — the offset asserts below are what make that a checked
+// claim rather than a hoped-for one.
 static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must be 64 bytes (capi_runner.py mirror)");
+static_assert(offsetof(LUMICE_RawXyzResult, effective_pixels) == 48, "LUMICE_RawXyzResult layout drift");
+static_assert(offsetof(LUMICE_RawXyzResult, emitted_energy) == 52,
+              "emitted_energy must occupy the pre-existing pad, not grow the struct");
+static_assert(offsetof(LUMICE_RawXyzResult, epoch) == 56, "epoch offset must be unchanged by emitted_energy");
 
 // ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
 // task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes
@@ -4493,4 +4502,47 @@ TEST(RaypathColorApi, GetColorClassSignalNullAndZeroCount) {
 
   LUMICE_StopServer(s);
   LUMICE_DestroyServer(s);
+}
+
+// =============== EV Auto Anchor ===============
+// These pin the C API forwarding layer only: that LUMICE_ComputeP99Y / LUMICE_ComputeEvAuto reach
+// the core implementation with arguments in the right order and hand back its value unmodified.
+// The algorithm's own propositions live in test_ev_anchor.cpp; a forward that silently swapped
+// two int parameters or dropped the downsample factor would pass there and fail here.
+TEST(EvAutoAnchorApi, ComputeP99YForwardsCoarsePathAndFallback) {
+  // Same 4x4 / f=2 hand-computed sample as the core test: coarse bin sums {14,22,46,54},
+  // P99 = 54, divided by f^2 = 4 -> 13.5.
+  std::vector<float> y = { 1.0f, 2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
+                           9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f };
+  std::vector<float> xyz(4 * 4 * 3, 0.0f);
+  for (size_t i = 0; i < y.size(); ++i) {
+    xyz[i * 3 + 1] = y[i];
+  }
+  EXPECT_FLOAT_EQ(LUMICE_ComputeP99Y(xyz.data(), 4, 4, 2), 13.5f);
+
+  // downsample_factor <= 1 takes the fine path: P99 over the 16 non-zero per-pixel Y values,
+  // idx = floor(16 * 0.99) = 15 -> the max, 16.
+  EXPECT_FLOAT_EQ(LUMICE_ComputeP99Y(xyz.data(), 4, 4, 1), 16.0f);
+
+  // A non-square buffer would come back wrong if the forward swapped width and height: an 8x2
+  // image at f=2 gives 4x1 coarse bins, while 2x8 gives 1x4 — different bin sums, different P99.
+  std::vector<float> wide(8 * 2 * 3, 0.0f);
+  for (int i = 0; i < 16; ++i) {
+    wide[static_cast<size_t>(i) * 3 + 1] = static_cast<float>(i + 1);
+  }
+  // Rows are 1..8 and 9..16; the four 2x2 bins sum to 1+2+9+10=22, 3+4+11+12=30, 38, 46.
+  // idx = floor(4 * 0.99) = 3 -> 46, / 4 = 11.5.
+  EXPECT_FLOAT_EQ(LUMICE_ComputeP99Y(wide.data(), 8, 2, 2), 11.5f);
+}
+
+TEST(EvAutoAnchorApi, ComputeEvAutoForwardsFormulaAndGuards) {
+  // target_white=135 -> sRGB reverse transform; ev = log2(target_linear / (p99 / snapshot)).
+  const float t = 135.0f / 255.0f;
+  const float target_linear = std::pow((t + 0.055f) / 1.055f, 2.4f);
+  const float expected = std::log2f(target_linear / (2.0e-3f / 4.0f));
+  EXPECT_FLOAT_EQ(LUMICE_ComputeEvAuto(2.0e-3f, 4.0f, 135.0f), std::clamp(expected, -6.0f, 6.0f));
+
+  // Guard branches return a hard 0 (the "no anchor yet" convention), not inf/NaN.
+  EXPECT_FLOAT_EQ(LUMICE_ComputeEvAuto(2.0e-3f, 0.0f, 135.0f), 0.0f);
+  EXPECT_FLOAT_EQ(LUMICE_ComputeEvAuto(0.0f, 4.0f, 135.0f), 0.0f);
 }

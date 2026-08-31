@@ -62,6 +62,15 @@ extern "C" {
 // BREAKING (v4.16): LUMICE_RenderParam loses its `opacity` field; struct layout changed.
 // See the struct's own BREAKING note for why it went rather than gained an implementation.
 // Recompile against this header.
+// BREAKING (v4.16): LUMICE_RenderParam gains a trailing field, `ev_mode`
+// (LUMICE_EV_MODE_RELATIVE / _ABSOLUTE), selecting which anchor the exposure scale is measured
+// against. This is an APPEND, so every existing field keeps its offset; but sizeof() grows, so a
+// caller that was NOT recompiled hands the API a shorter struct and the new field is read past
+// the end of it. Recompile against this header.
+// Note the accompanying DEFAULT change, which is a behavior break independent of the ABI one: a
+// config with no "ev_mode" key now renders RELATIVE (anchored to the frame's own P99, i.e. what
+// the GUI displays), where the v4.15-era CLI was unconditionally absolute. RELATIVE == 0 keeps
+// that default reachable from a zero-initialized struct.
 #define LUMICE_API_VERSION 416
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
@@ -229,7 +238,22 @@ typedef struct LUMICE_RawXyzResult_ {
   int has_valid_data;        // Non-zero once simulation has produced data (reset on CommitConfig/Stop)
   unsigned long long snapshot_generation;  // Increments on each new snapshot; compare to detect data changes
   int effective_pixels;                    // Non-zero pixel count (for stats display)
-  unsigned long long epoch;                // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
+  // Total spectral energy the light source EMITTED into this snapshot: the sum over every
+  // simulated batch of (per-ray emission weight x rays emitted). Raw total, NOT divided by
+  // kNormScale * total_pixels the way snapshot_intensity above is.
+  //
+  // Distinct from snapshot_intensity in what it measures, not just in scaling: this counts
+  // what went IN, that counts what came out and landed on a pixel. They differ by everything
+  // that removes a ray -- filters, absorption, rays that miss the lens. This is the quantity
+  // the renderer normalizes by, which is what makes its output scale absolute; a consumer can
+  // reproduce that scale as
+  //     scale = intensity_factor * kNormScale * total_pixels / emitted_energy
+  // and two scenes normalized this way are directly comparable in brightness.
+  //
+  // Occupies alignment padding that already existed before `epoch`, so sizeof(LUMICE_RawXyzResult)
+  // is unchanged and `epoch` keeps its offset.
+  float emitted_energy;
+  unsigned long long epoch;  // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {
@@ -654,6 +678,15 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_LENS_TYPE_DUAL_FISHEYE_ORTHOGRAPHIC 9
 #define LUMICE_LENS_TYPE_GLOBE 10
 
+// Which anchor the exposure scale is measured against (mirrors core RenderConfig::EvMode).
+//   RELATIVE — anchor to the frame's own P99. The image keeps its look as ray_num grows, but the
+//              config alone does not determine output brightness (ray_num co-determines it).
+//   ABSOLUTE — anchor to the EMITTED energy, so two simulations at the same EV are comparable.
+// RELATIVE == 0 is the default: a zero-initialized LUMICE_RenderParam asks for the mode that
+// reproduces what the GUI displays, which is also what a config with no "ev_mode" key means.
+#define LUMICE_EV_MODE_RELATIVE 0
+#define LUMICE_EV_MODE_ABSOLUTE 1
+
 // Which half of the celestial sphere the renderer draws (mirrors core RenderConfig::VisibleRange).
 #define LUMICE_VISIBLE_UPPER 0
 #define LUMICE_VISIBLE_LOWER 1
@@ -726,6 +759,10 @@ typedef struct LUMICE_RenderParam_ {
   int central_grid_count;
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int elevation_grid_count;
+  // ADDED (v4.16): LUMICE_EV_MODE_*. Appended at the end of the struct, and RELATIVE == 0 so a
+  // zero-initialized param keeps the documented default rather than silently opting into the
+  // absolute anchor.
+  int ev_mode;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============
@@ -1375,6 +1412,31 @@ LUMICE_ErrorCode LUMICE_XyzToSrgbUint8(const float* xyz_in, unsigned char* out, 
 // Returns LUMICE_ERR_NULL_ARG if any pointer argument is NULL; LUMICE_OK otherwise.
 LUMICE_ErrorCode LUMICE_XyzToSrgbUint8WithBackground(const float* xyz_in, unsigned char* out, int pixel_count,
                                                      float intensity_scale, const float* background_linear);
+
+// =============== EV Auto Anchor ===============
+// P99 anchor of the auto-EV pipeline (doc/ev-pipeline-architecture.md §2.2/§2.5).
+// When downsample_factor > 1 the Y channel is box-summed onto a
+// (img_width/f) x (img_height/f) coarse grid, the P99 is taken over the non-zero coarse bins
+// and divided by f^2, so the result is a **fine-equivalent** P99 rather than a true per-pixel Y
+// statistic. Falls back to the fine per-pixel P99 when downsample_factor <= 1 or the coarse grid
+// collapses to zero dimensions.
+//
+// The coarse and fine paths are not two precisions of one statistic: on a sparse scene they were
+// measured 64x apart and respond to sample count with very different slopes, so which one a
+// caller picks changes auto-EV by several stops. Pick deliberately.
+//
+// xyz_data is a borrowed view of at least img_width*img_height*3 floats (3 floats/pixel,
+// Y = channel 1), read only for the duration of the call; a raw pointer carries no length, so the
+// dimensions passed in are the only bound this function has. Returns 0 if no positive Y entries
+// exist.
+float LUMICE_ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor);
+
+// P99-anchored auto-EV in stops: log2(target_linear / (p99_raw_y / snapshot_intensity)), clamped
+// to [-6, 6]. target_linear is the sRGB reverse transform of target_white (0-255 scale). Feed it
+// the value LUMICE_ComputeP99Y returned, with the FINE snapshot_intensity even when that P99 came
+// from the coarse path — the /f^2 above is what makes the two consistent. Returns 0 if
+// snapshot_intensity or p99_raw_y is non-positive.
+float LUMICE_ComputeEvAuto(float p99_raw_y, float snapshot_intensity, float target_white);
 
 // =============== Preferred Trace Backend ===============
 // Stable backend identifiers. Future backends (e.g. CUDA) append new positive
