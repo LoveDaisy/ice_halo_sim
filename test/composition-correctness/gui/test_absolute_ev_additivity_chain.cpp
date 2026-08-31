@@ -46,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/color_util.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/mono_exposure_scale.hpp"
@@ -284,6 +285,13 @@ TEST_F(AbsoluteEvAdditivity, relative_mode_does_not_which_is_what_makes_the_abso
   // and an ABI slot all claim otherwise.
   EXPECT_GT(AdditivityExcess(MonoEvMode::kRelative, splits_, /*region=*/false, kEv), kBreakFloor);
   EXPECT_GT(AdditivityExcess(MonoEvMode::kRelative, splits_, /*region=*/true, kEv), kBreakFloor);
+}
+
+// gui_constants.hpp:kNormScale is a hand-mirrored copy of core's kNormScale (src=/gui/ may not
+// #include core/ — AGENTS.md), kept in sync only because this assertion goes red when it drifts.
+// No fixture: this is a compile-time-cheap equality check, not part of the additivity oracle above.
+TEST(GuiConstants, ExposureScaleMirrorsCore) {
+  EXPECT_EQ(lumice::gui::kNormScale, lumice::kNormScale);
 }
 
 }  // namespace
