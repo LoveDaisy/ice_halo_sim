@@ -31,8 +31,10 @@ cover:
 |------|------------|
 | **internal buffer** | Per-`Consume()` accumulation target (`internal_xyz_`). Written under the consumer mutex; never read by the GUI. |
 | **snapshot buffer** | Point-in-time copy of the internal buffer (`snapshot_xyz_`). Produced by `PrepareSnapshot()`; read by `GetRawXyzResult()` and the poller. |
-| **EV anchor (P99)** | The P99 of the non-zero Y channel of the snapshot, computed in the GUI poller thread via `LUMICE_ComputeP99Y` (algorithm: `core/ev_anchor.hpp`). Drives `ev_auto`. Not a server-side field — the GUI initiates the call, core owns the arithmetic. |
-| **`kNormScale`** | Display brightness baseline constant (0.08). Maps per-pixel radiance to a [0, 1] range at EV = 0 so that the average illuminated pixel is ~5% brightness and bright halo features (~20× average) approach full white. Independent of resolution and FOV. Defined in `render.cpp:30`. |
+| **EV anchor (P99)** | The P99 of the non-zero Y channel of the snapshot, computed via `LUMICE_ComputeP99Y` (algorithm: `core/ev_anchor.hpp`) — GUI-side for the mono preview, server-side (`ComputeParticipatingP99Y`) for the composite path. Drives `ev_auto`. Consumed only by the `kRelative` anchor (§2.6); `kAbsolute` does not read it for the exposure scale itself, though the GUI still computes and displays it (§2.6). |
+| **`kNormScale`** | Display brightness baseline constant (0.08), defined once in `core/color_util.hpp`. Maps per-pixel radiance to a [0, 1] range at EV = 0 so that the average illuminated pixel is ~5% brightness and bright halo features (~20× average) approach full white. Independent of resolution and FOV. Under `ev_mode = kAbsolute` it is a live factor of `ExposureScale()` (§2.3, §2.6); under `kRelative` it only reaches the C API caller inside `snapshot_intensity` and cancels out of the self-anchored formula, exactly as before this pipeline had two modes. |
+| **`ev_mode`** | `RenderConfig::EvMode` (`kRelative` default / `kAbsolute`) — a first-class, appearance-only config field (does not trigger `NeedsRebuild`) selecting which exposure anchor `ExposureScale()`/`CompositeAnchorScale()` use. See §2.6. |
+| **emitted energy** | `SimData::emitted_energy_`, summed into `RenderConsumer::total_/snapshot_emitted_energy_` and exposed as `LUMICE_RawXyzResult::emitted_energy`. The total spectral energy the light source emitted into the snapshot — fixed by the source and the ray budget, unaffected by filters, scene pass rate, or lens clipping. The `kAbsolute` denominator. See §2.6 and §7. |
 
 ---
 
@@ -87,15 +89,31 @@ population. The server snapshot itself is not filtered — it carries the full b
 per_pixel_intensity = snapshot_intensity_ / (kNormScale × total_pixels)
 ```
 
-The `kNormScale` factor (0.08) sets the display brightness baseline: at EV = 0, the
-average illuminated pixel is ~5% brightness. In the GUI's `intensity_scale`
-computation, `kNormScale` algebraically cancels because `ComputeEvAuto()` receives
-the per-pixel `snapshot_intensity` (which already incorporates `kNormScale`) as its
-denominator input — the resulting `ev_auto` absorbs the scale so that
-`2^ev_auto / snapshot_intensity` is independent of the specific `kNormScale` value.
-**C API consumers** receive `snapshot_intensity` values whose absolute magnitude is
-determined by `kNormScale`; this constant is not an arbitrary scale factor and must
-not be changed without re-calibrating the brightness baseline.
+The `kNormScale` factor (0.08, `core/color_util.hpp`) sets the display brightness
+baseline: at EV = 0, the average illuminated pixel is ~5% brightness. It was
+calibrated on full-sphere views (§7), where `landed_fraction ≈ 0.98` — i.e. where
+the `kRelative` and `kAbsolute` denominators nearly coincide — so it stayed at 0.08
+rather than being re-derived when the `kAbsolute` mode was introduced (re-deriving
+it would have moved full-sphere scenes by only +0.029 stop at the cost of
+re-shooting every reference image; §7).
+
+Whether `kNormScale` cancels out depends on `ev_mode` (§2.6):
+
+- **`kRelative`**: it cancels. `ComputeEvAuto()` receives the per-pixel
+  `snapshot_intensity` (which already incorporates `kNormScale`) as its denominator
+  input, so the resulting `ev_auto` absorbs the scale and `2^ev_auto /
+  snapshot_intensity` is independent of the specific `kNormScale` value.
+- **`kAbsolute`**: it does **not** cancel. `ExposureScale()`'s absolute branch is
+  `intensity_factor × kNormScale × total_pix / snapshot_emitted_energy_` — `kNormScale`
+  is a live multiplicative factor of the displayed brightness, not an artifact that
+  disappears algebraically. Changing it moves every `kAbsolute` render.
+
+**C API consumers**: `snapshot_intensity`'s absolute magnitude is always determined
+by `kNormScale`, in both modes; `emitted_energy` (§2.4, §7) is not — it is a raw sum,
+unscaled by `kNormScale`, by construction so that a consumer reproducing
+`ExposureScale()`'s formula supplies the `kNormScale` factor itself. This constant is
+not an arbitrary scale factor and must not be changed without re-calibrating the
+brightness baseline and re-shooting every visual reference.
 
 ### §2.4 C API Surface
 
@@ -109,6 +127,7 @@ not be changed without re-calibrating the brightness baseline.
 | `has_valid_data` | Non-zero once simulation has produced data (reset on commit / `Stop`) |
 | `snapshot_generation` | Increments per snapshot; compare to detect data changes |
 | `effective_pixels` | Non-zero pixel count (stats display) |
+| `emitted_energy` | `snapshot_emitted_energy_` — total spectral energy the light source EMITTED into the snapshot, raw (NOT divided by `kNormScale × total_pixels`, unlike `snapshot_intensity` above). The `kAbsolute` denominator; see §7. |
 
 The EV anchor (P99) is **not** a C API field on the mono / full-spectrum path — it is
 derived GUI-side from `xyz_buffer` (§2.5). C API consumers that need an anchor for the
@@ -199,6 +218,64 @@ g_state.ev_auto            = ComputeEvAuto(p99_raw_y, snapshot_intensity, target
 `log2(target_linear / (p99_raw_y / snapshot_intensity))`, clamped to `[-6, 6]`, or
 `0` if either input is non-positive.
 
+Note: `ev_auto` is computed and displayed in **both** `ev_mode`s (§2.6), but it is
+only ever consumed by the `kRelative` exposure formula. Under `kAbsolute` the GUI
+still shows its value (labelled as not applied — `mono_exposure_scale.hpp`'s
+`FormatMonoEvReadout`), because a value the UI stops updating still occupies a
+label; showing it prevents that label from going stale-looking.
+
+### §2.6 Two Anchors: `ev_mode` (Server-Side)
+
+`RenderConfig::ev_mode_` (`kRelative` default / `kAbsolute`) selects which of two
+independent anchors `ExposureScale()` and `CompositeAnchorScale()`
+(`server/render.{hpp,cpp}`) compute. They are not two tunings of one formula — they
+anchor to different physical quantities:
+
+```
+kRelative (default):
+    ExposureScale() = intensity_factor_ × TargetWhiteToLinear(kAnchorTargetWhite)
+                       / ComputeP99Y(snapshot, kMonoAnchorDownsampleFactor)
+    — self-anchored to THIS frame's own P99. Algebraically identical to what
+      §2.5's GUI two-hop computation produces (the snapshot_intensity factor
+      cancels between ComputeEvAuto's numerator and the shader's
+      intensity_scale = intensity_factor / snapshot_intensity step), so a CLI
+      render in kRelative reproduces what the GUI displays for the same
+      snapshot — see §6.5. Being self-anchored, it carries no energy term: the
+      picture keeps its look as ray_num grows, and the config alone does NOT
+      determine output brightness (ray_num co-determines it).
+
+kAbsolute:
+    ExposureScale() = intensity_factor_ × kNormScale × total_pix
+                       / snapshot_emitted_energy_
+    — anchored to the energy EMITTED (§7), not landed. Fixed by the light source
+      and the ray budget alone, so it does not move when a filter, a low scene
+      pass rate, or lens clipping removes rays — which is what makes two
+      differently-configured scenes comparable at one EV.
+```
+
+`CompositeAnchorScale(participating_p99_y)` is the single call the compositor
+makes; it hides the mode decision from `component_compositor.cpp` entirely:
+
+```
+kRelative: ParticipatingExposureScale(participating_p99_y)  — the participating
+           pixels (the union of visible/solo color-class lanes) self-anchor, so
+           hiding a bright class re-brightens the rest in the same DoSnapshot
+           (§6.6).
+kAbsolute: ExposureScale()  — the SAME scalar the mono path uses, argument
+           ignored. Sharing rather than re-deriving is the point: composite
+           lanes are copies of the same accumulated Y that feeds mono, and any
+           independently-derived absolute composite formula would differ by
+           some coefficient and break the property absolute mode exists for.
+```
+
+Both anchor algorithms (`NthElementP99`, `TargetWhiteToLinear`, `ComputeP99Y`,
+`ComputeEvAuto`) have a single owner, `core/ev_anchor.hpp`, reached through the C
+API (`LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto`) by both the GUI (mono preview,
+§2.5) and the server (composite path, §6.6). `ev_mode` itself is an
+appearance-only field — like `intensity_factor_`, it never triggers
+`NeedsRebuild()` (§6.4) because it selects which formula runs, not the
+accumulation layout.
+
 ---
 
 ## §3 Snapshot and Reset Lifecycle
@@ -230,62 +307,111 @@ triggered when `CommitConfig()` calls `Stop()` → `ResetWith()` → `Reset()`.
 
 ## §4 Three Consumption Paths
 
-Three code paths consume the EV pipeline output and compute `intensity_scale`. All
-three use the same formula with a single normalization denominator:
+Three GUI code paths consume the EV pipeline output and compute an
+`intensity_factor` / `intensity_scale` pair for the **mono** preview. All three call
+the same function, `ComputeMonoExposure()` (`src/gui/mono_exposure_scale.hpp`) —
+before this scrum each site carried its own hand-written copy of the formula; three
+independent mirrors of one formula is exactly the shape of drift a single shared
+function removes.
+
+`ComputeMonoExposure(ev_mode, MonoExposureInput)` branches on `ev_mode` the same way
+§2.6's server-side `ExposureScale()` does, because the two must agree bit-for-bit in
+`kRelative` (§6.5):
 
 ```
-ev_total         = exposure_offset + ev_auto
-intensity_factor = 2^ev_total
-intensity_scale  = intensity_factor / snapshot_intensity   (0 if snapshot_intensity ≤ 0)
+kRelative (default, unchanged from before this scrum — every existing document and
+           every committed reference image depends on this branch bit-for-bit):
+    intensity_factor = 2^(exposure_offset + ev_auto)
+    intensity_scale  = intensity_factor / snapshot_intensity
+                        (0 if snapshot_intensity ≤ 0)
+
+kAbsolute:
+    intensity_factor = 2^exposure_offset          — ev_auto is NOT added (see below)
+    intensity_scale  = intensity_factor × kNormScale × total_pixels / snapshot_emitted_energy
+                        (0 if snapshot_emitted_energy ≤ 0 or total_pixels ≤ 0)
 ```
+
+Two differences in the `kAbsolute` branch are both load-bearing, not incidental:
+
+- **`ev_auto` is not added.** The whole promise of `kAbsolute` is that EV reads as
+  "stops above or below physical"; silently folding in a per-frame auto anchor would
+  put the reading back on a moving baseline, and the number would stop meaning
+  anything across documents. `ev_auto` is still computed and still shown in the UI
+  (§2.5), labelled as not applied.
+- **The denominator is emitted energy, not landed.** Emitted is fixed by the light
+  source and the ray budget (§7), so it does not drift as filters remove rays or as
+  the accumulation runs — which is precisely what makes two differently-configured
+  scenes comparable at one EV.
+
+Both branches keep the guard the inline call sites had before consolidation: a
+non-positive denominator yields a scale of 0 rather than an infinity that would paint
+the frame white.
 
 ### §4.1 Display Path
 
-`app_panels.cpp:820-823` — sets the GPU shader uniform each frame:
-
-```cpp
-float ev_total = rc.exposure_offset + g_state.ev_auto;
-pp.exposure.intensity_factor = std::pow(2.0f, ev_total);
-float norm_intensity = g_state.snapshot_intensity;
-pp.exposure.intensity_scale = norm_intensity > 0 ? pp.exposure.intensity_factor / norm_intensity : 0.0f;
-```
+`app.cpp` / `app_panels.cpp` — sets the GPU shader uniform each frame via
+`ComputeMonoExposure(g_state.ev_mode, {...})`, feeding
+`pp.exposure.intensity_factor` / `intensity_scale` from the result.
 
 ### §4.2 Export Path
 
-`BuildExportParams()` (`app.cpp:284-289`) — constructs `PreviewParams` for PNG export.
-Mirrors the display-path formula exactly (`norm_intensity = g_state.snapshot_intensity`).
+`BuildExportParams()` (`app.cpp`) — constructs `PreviewParams` for PNG export. Calls
+the same `ComputeMonoExposure()`, so an exported PNG matches the on-screen preview in
+both modes.
 
 ### §4.3 Screenshot / .lmc Thumbnail
 
-`RefreshCpuTextureForSave()` (`app.cpp:227-248`) — CPU-side XYZ→sRGB for the `.lmc`
-thumbnail. Recomputes `intensity_scale` from `xyz_results[0].snapshot_intensity` and
-`g_state.ev_auto` via `LUMICE_XyzToSrgbUint8`. This may lag the display path by at most
-one frame, which is acceptable for thumbnails (saved on user action, not streamed).
+`RefreshCpuTextureForSave()` (`app.cpp`) — CPU-side XYZ→sRGB for the `.lmc`
+thumbnail. Calls `ComputeMonoExposure()` and feeds the result to
+`LUMICE_XyzToSrgbUint8`. This may lag the display path by at most one frame, which is
+acceptable for thumbnails (saved on user action, not streamed).
 
 ### §4.4 Consistency Invariant
 
-All three paths share the same formula by construction, and all three use
-`snapshot_intensity` as the single normalization denominator. Because `ev_auto`'s
-numerator (`p99_raw_y`) and this denominator both derive from the **same snapshot**,
-the EV is source-coherent without any cross-source guard.
+All three paths call the same function by construction, so they cannot drift from
+each other. Within `kRelative`, `ev_auto`'s numerator (`p99_raw_y`) and the
+`snapshot_intensity` denominator both derive from the same snapshot, so the EV is
+source-coherent without any cross-source guard. Within `kAbsolute`,
+`snapshot_emitted_energy` and `total_pixels` both come from the same
+`LUMICE_RawXyzResult` read.
+
+There is no ABI or C API involved in this GUI-side sharing — `mono_exposure_scale.hpp`
+is header-only and free of ImGui/GL/server dependencies precisely so it can be unit
+tested (`test/unit-correctness/gui/test_mono_exposure_scale.cpp`) without a window.
+The **server-side** anchor (`ExposureScale()` / `CompositeAnchorScale()`, §2.6) is a
+separate implementation reached by the CLI and by the composite path — not by the
+mono preview, which stays on its own display-time recomputation for the
+same-frame-responsiveness reason given in §6.5. The two must still agree in
+`kRelative`, which is exactly what `GuiConstants.ExposureScaleMirrorsCore`
+(`gui_constants.hpp`'s `kNormScale` mirror) and the cross-check tests cited in §6.5
+pin.
 
 ---
 
 ## §5 Filter Present vs No Filter (Design A)
 
-Under Design A there is no separate filter-independent statistic — the EV always
-anchors on the visible (filtered) framebuffer:
+Under Design A there is no separate filter-independent statistic — filter-fail rays
+are dropped by the simulator before emission, so the consumer only ever sees
+filter-pass emission in `outgoing_*`, in both `ev_mode`s. What differs between the
+two modes is what the resulting brightness *means*:
 
-- **Filter present**: the simulator drops filter-fail rays before emission, so the
-  consumer only ever sees filter-pass emission in `outgoing_*`. The snapshot, its
-  P99 anchor, and `snapshot_intensity` all describe the filtered image.
-- **No filter**: every ray passes the (vacuous) filter, so the same single lane
-  carries the full emission. No code path differs between the two cases.
+- **`kRelative`**: the EV anchor (P99) and `snapshot_intensity` both describe the
+  filtered image, and the self-anchor formula (§2.6) re-normalizes to it — the
+  picture keeps roughly the same look whether or not a filter is active, and
+  switching filters changes the EV anchor because the visible image changed. This is
+  the historical, single-lane behavior this section originally described (no code
+  path differs between filter-present and no-filter), and it is still exactly true
+  of `kRelative`, which is why it is the default.
+- **`kAbsolute`**: the denominator is `snapshot_emitted_energy_` — energy the source
+  emitted, counted *before* the filter runs. A filter that rejects most rays now
+  makes the image dimmer, by design: fewer photons reached the frame, and the
+  absolute scale reports that truthfully instead of re-brightening to compensate.
+  This is the entire point of `kAbsolute` — see §7's `landed_fraction` law for how
+  much dimmer, and why that is a design outcome and not a defect.
 
-This is the substantive change from the removed anchor-lane design: brightness is now
-normalized to *what is shown*, not to a reconstructed filter-independent total. A
-direct consequence is that switching filters changes the EV anchor (the visible image
-changed); this is intentional.
+So the old sentence "brightness is now normalized to what is shown" is only true of
+`kRelative`. Under `kAbsolute`, brightness is normalized to what was emitted, which is
+deliberately **not** the same as what is shown once a filter removes rays.
 
 ---
 
@@ -336,9 +462,9 @@ re-derives from the new filtered image (§5).
 | `view_` | ✓ |
 | `visible_` | ✓ |
 | `overlap_` | ✓ |
-| `background_`, `ray_color_`, `opacity_`, `intensity_factor_`, grids | ✗ (appearance only) |
+| `background_`, `ray_color_`, `opacity_`, `intensity_factor_`, `ev_mode_`, grids | ✗ (appearance only) |
 
-A `static_assert(sizeof(RenderConfig) == 136)` guards against silent field additions
+A `static_assert(sizeof(RenderConfig) == 144)` guards against silent field additions
 (`render_config.cpp:167`).
 
 ### §6.5 GUI Run Path: `intensity_factor` is Neutral (task-346.1)
@@ -354,17 +480,30 @@ Rationale — manual + auto EV in the GUI are entirely display-time:
 - Composite preview: `RenderPreviewPanel` pushes `LUMICE_SetCompositeExposure(ev_total)`
   per frame → `display_ev_total_` → `display_exposure_scale = 2^display_ev_total_` →
   the compositor multiplies it into the single shared exposure scalar
-  `s = ExposureScale() × display_exposure_scale` (§2.4 composite-path exception).
-  `ExposureScale() = config_.intensity_factor_ × kNormScale × total_pix / snapshot_intensity_`
-  (`render.cpp:93`); if `intensity_factor_` also carried `2^exposure_offset`, the manual EV
-  portion would be counted twice in `s`, producing 2× amplification on Re-Run.
+  `s = A × display_exposure_scale`, where `A = RenderConsumer::CompositeAnchorScale(participating_p99)`
+  (§2.6 picks the `kRelative`/`kAbsolute` formula for `A`; §2.4 composite-path exception
+  covers `participating_p99`). If `intensity_factor_` also carried `2^exposure_offset`, the
+  manual EV portion would be counted twice in `s`, producing 2× amplification on Re-Run.
 
 The **CLI/config export path** (`SerializeCoreConfig` in `src/gui/file_io.cpp`) is
 different — it DOES bake `2^exposure_offset` into the exported JSON's
 `render[].intensity_factor`. That is the legal semantic for CLI (which has no
-display-time EV concept): a config exported at GUI EV=E must reproduce the same
-brightness when re-run via CLI. Two paths, two semantics for the same field, both
-intentional. Cross-referenced in the code comments of both call sites.
+display-time EV concept): a config exported at GUI EV=E, run through the CLI in
+`kRelative` (the default), **does** reproduce the same brightness — this used to be a
+promise this document made ahead of the mechanism; it is now a tested fact.
+`ComputeMonoExposure`'s `kRelative` branch (§4) and server-side `ExposureScale()`'s
+`kRelative` branch (§2.6) are two independent implementations of the same formula on
+the same snapshot, and the GUI↔CLI pixel-level comparison in
+`test/e2e-correctness` (101.6 dB PSNR against a live GUI render; the residual traces
+to floating-point last-bit differences, not an algorithmic divergence) is the
+evidence that they agree in practice, not just on paper. `kAbsolute` makes no such
+promise across the GUI/CLI boundary: the CLI's `kRelative` self-anchor has no analog
+of the GUI slider's own clamping behavior (§2.5's `ComputeEvAuto` clamps to
+`[-6, 6]`; the CLI path deliberately does not reproduce that clamp — see
+`ExposureScale()`'s comment in `render.cpp`), so CLI and GUI can diverge at the
+extremes of the manual EV range even within `kRelative`. Two paths, two semantics for
+the same field, both intentional. Cross-referenced in the code comments of both call
+sites.
 
 Regression pins:
 
@@ -458,11 +597,115 @@ Regression pins:
 
 ---
 
-## §7 Source Reference Table
+## §7 Emitted Energy: Definition and Honest Boundary
+
+This section defines the `kAbsolute` denominator precisely and states the one thing
+it deliberately does not fix, so the gap does not get rediscovered as a bug.
+
+### §7.1 Definition
+
+`emitted_energy` is the sum, over every simulated batch consumed since the last
+`Reset()`, of `(per-ray emission weight) × (rays emitted in that batch)` — what the
+light source put into the simulation, before any ray is traced, filtered, or
+clipped by the lens. It is computed on the **emission** side (`Simulator::Run()`'s
+dispatch point, `src/util/illuminant.hpp`'s `MeanIlluminantWeight()` for an
+illuminant spectrum) and threaded through `SimData::emitted_energy_` in parallel
+with — but independent of — `root_ray_count_`, into
+`RenderConsumer::total_/snapshot_emitted_energy_`, and out through
+`LUMICE_RawXyzResult::emitted_energy`.
+
+For a continuous illuminant spectrum, each batch is charged the spectrum's **band
+expectation** `E[w]` (the mean SPD weight over the sampled wavelength range, e.g.
+87.9532682 for D65 over `[380, 780]`nm) rather than the weight of the one wavelength
+that batch happened to draw. This is deliberate: the CPU backend draws one
+wavelength per batch, so charging the actual per-batch weight would make the
+denominator (and therefore the displayed brightness) depend on the random
+wavelength sequence — the same config at a different seed would render at a visibly
+different brightness. The band-expectation charge is deterministic and matches what
+a discrete spectrum already does exactly (its `Σw` is the same value regardless of
+draw order).
+
+### §7.2 The `landed_fraction` Law
+
+`emitted_energy` and the pre-scrum landed-weight denominator differ by a **per-scene
+constant, independent of `ray_num`**:
+
+```
+landed_fraction ≜ (energy that landed on a pixel) / (energy emitted)
+new_scale / old_scale ≡ landed_fraction
+```
+
+Because it is independent of `ray_num`, a caller can compute their own scene's
+displacement from the two fields `LUMICE_RawXyzResult` already exposes
+(`snapshot_intensity` and `emitted_energy`) without re-deriving anything — this is
+more useful than any table of example numbers, though the measured spans below (from
+this scrum's calibration corpus) are worth knowing as orientation:
+
+| Scene shape | `landed_fraction` | Brightness shift (`log2(landed_fraction)`) |
+|---|---|---|
+| Full-sphere view, no filter | ≈ 0.980 (median of 14 gold scenes) | −0.038 … −0.002 stop |
+| `fisheye_equal_area` 120°, no filter | 0.42 – 0.63 | −0.67 … −1.25 stop |
+| `linear` 80°, no filter | ≈ 0.498 | ≈ −1.0 stop |
+| Filter active / high `ms_prob` | 0.00071 – 0.512 | −0.97 … −10.47 stop |
+
+The full-sphere row is why `kNormScale` (0.08, §2.3) did not need re-calibration
+when `kAbsolute` was introduced: `landed_fraction` is already close to 1 there, so
+the constant that was tuned under the old landed-weight denominator is already
+close to what the new emitted-energy denominator wants. Re-deriving it would have
+moved full-sphere scenes by only +0.029 stop, at the cost of re-shooting every
+committed reference image (a04: the burden of proof is on the side that changes
+something, and here the something-to-gain was smaller than the something-to-pay).
+
+A narrow lens or an active filter is not a corner case of this law — it is the part
+of the range this scrum's `kAbsolute` mode exists to expose truthfully instead of
+compensating for. Under `kRelative`, the self-anchor formula (§2.6) absorbs exactly
+this factor, which is why a `kRelative` render's brightness barely moves when you
+add a filter; `kAbsolute` has no compensating term, so it shows the light loss.
+Neither is "wrong" — they answer different questions ("does this look the way it
+always has" vs. "how much light actually got through").
+
+### §7.3 Applicability Boundary: Same-Lens Comparability Only
+
+`kAbsolute` comparability holds **within one lens, one FOV, one resolution**. It does
+**not** extend across lenses — two renders of the same scene at 90° `linear` vs. 180°
+`fisheye_equal_area` will differ by their own `landed_fraction` ratio (§7.2's table
+shows why: `landed_fraction` moves with FOV and projection). This is a **deliberate,
+permanent** design boundary, not a gap to be closed later:
+
+1. **A single constant cannot fix it.** Only an equal-area projection has a spatially
+   constant per-pixel solid angle `Ω_p`. For `fisheye_equidistant` / `linear` /
+   other non-equal-area projections, `Ω_p` varies with pixel position, so a true
+   radiance map would need to divide every pixel by its own `Ω_p` — that re-weights
+   the entire image and changes its appearance, which is a materially different
+   (and much larger) piece of work than a normalization fix.
+2. **The typical use case does not need it.** The motivating request was
+   "reconfigure the scene at a fixed viewport and compare brightness" — same lens,
+   same FOV, same resolution, different crystal/light/filter configuration. That is
+   exactly what `kAbsolute` delivers.
+3. **The boundary is now written down** (here), which is the alternative this scrum
+   chose over a partial fix: a documented limitation costs a paragraph, and a
+   `Ω_tot`-only partial fix would have created a false sense of cross-lens
+   comparability while leaving the position-dependent part of the error in place —
+   worse than not attempting it.
+
+If a future need requires true radiance (per-pixel `Ω_p` division) or cross-lens
+comparability, treat it as new scope with its own AC on image-appearance regression,
+not as a follow-up to this feature.
+
+---
+
+## §8 Source Reference Table
 
 | Invariant / Concept | Source Location |
 |---|---|
-| `kNormScale` definition (0.08) | `render.cpp:30` |
+| `kNormScale` definition (0.08) | `core/color_util.hpp` |
+| `RenderConfig::EvMode` (`kRelative`/`kAbsolute`) | `config/render_config.hpp` |
+| `ExposureScale()` / `ParticipatingExposureScale()` / `CompositeAnchorScale()` | `server/render.{hpp,cpp}` |
+| `SimData::emitted_energy_` | `config/sim_data.hpp` |
+| `MeanIlluminantWeight()` (band-expectation charge) | `util/illuminant.{hpp,cpp}` |
+| `LUMICE_RawXyzResult::emitted_energy` (C API) | `include/lumice.h` |
+| `LUMICE_RenderParam::ev_mode`, `LUMICE_EV_MODE_*` (C API) | `include/lumice.h` |
+| `ComputeMonoExposure()` / `MonoExposureInput` / `MonoEvMode` (GUI mono exposure, single owner) | `gui/mono_exposure_scale.hpp` |
 | `Consume()` — single-lane accumulation | `render.cpp:336` |
 | Overlap dual-write (pass 2) | `render.cpp:452-486` |
 | `PrepareSnapshot()` — snapshot + intensity | `render.cpp:508` |
@@ -477,7 +720,7 @@ Regression pins:
 | `CommitConfig()` — Stop→Reset/Rebuild | `server.cpp:227` |
 | `Stop()` — `has_ever_consumed_` reset | `server.cpp:487,529` |
 | `NeedsRebuild()` — layout field comparison | `render_config.cpp:165-175` |
-| `sizeof(RenderConfig)` static_assert (136) | `render_config.cpp:167` |
+| `sizeof(RenderConfig)` static_assert (144) | `render_config.cpp:167` |
 | `DownsampleBoxSumY()` / `ComputeP99Y()` / `ComputeEvAuto()` / `NthElementP99()` / `TargetWhiteToLinear()` | `core/ev_anchor.hpp` |
 | `LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto` (C API surface) | `include/lumice.h`, `c_api.cpp` |
 | `kEvAutoDownsampleFactor` (8) | `gui_constants.hpp` |

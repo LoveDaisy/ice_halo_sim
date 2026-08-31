@@ -601,6 +601,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
   "intensity_factor": <浮点数>,
+  "ev_mode": "relative" | "absolute",
   "grid": { ... },
   "filter": [<过滤器ID数组>]
 }
@@ -618,7 +619,8 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `visible` | 字符串 | 否 | "upper" | 可见半球："upper"、"lower"、"full" |
 | `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB，**sRGB** 空间（即取色器上显示的那组数） |
 | `ray_color` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
-| `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子 |
+| `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子（`2^EV`） |
+| `ev_mode` | 字符串 | 否 | "relative" | 曝光锚点：`"relative"` 自锚到本帧自身 P99（历史行为——画面外观随 `ray_num` 增长保持不变，但 config 本身不能决定输出亮度）；`"absolute"` 锚到光源发射的能量，使不同 config 在同一 `intensity_factor` 下直接可比（仅限同一 lens/FOV/分辨率——见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7）。缺该键或值无法识别都视为 `"relative"`。另见 [`doc/adaptive-brightness.zh.md`](adaptive-brightness.zh.md) §3。 |
 | `grid` | 对象 | 否 | 见下方 | 网格配置 |
 | `filter` | 整数数组 | 否 | [] | 多散射过滤器ID数组 |
 

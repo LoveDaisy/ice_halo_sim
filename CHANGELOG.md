@@ -104,6 +104,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The GUI is unaffected -- its display path normalizes through its own auto-EV anchor and
   never used this scale. `kNormScale` is unchanged at 0.08: it was calibrated on full-sphere
   views, which is where the two denominators nearly coincide.
+- **Breaking behavior change (CLI image brightness): display normalization now supports an
+  absolute anchor, selected by the `ev_mode` entry above (default remains `relative`, i.e.
+  unchanged pixels for an existing config).** The renderer divides by the energy the light
+  source EMITTED, where it used to divide by the energy that LANDED on a pixel. The old denominator
+  moved with the scene -- add a filter, or point a narrower lens at the sky, and the image
+  was silently re-brightened by exactly the amount that had been removed, so two renders at
+  the same EV could not be compared. The new one is fixed by the source and the ray budget
+  alone.
+  **Re-running an existing config in `"absolute"` mode produces a darker image**, by exactly
+  `landed_fraction` (energy landed / energy emitted) -- a per-scene constant, independent of
+  `ray_num`. The general law: `new_scale / old_scale ≡ landed_fraction`, and a caller can
+  compute their own scene's shift from two `LUMICE_RawXyzResult` fields
+  (`snapshot_intensity`, `emitted_energy`) without re-deriving anything. Measured spans across
+  this feature's calibration corpus, in stops (`log2(landed_fraction)`):
+  full-sphere view, no filter: **-0.038 .. -0.002**; narrow lens (90-120 degree), no filter:
+  **-0.67 .. -1.25**; filter active / high `ms_prob`: **-0.97 .. -10.47**. The darkening is the
+  change working, not a regression -- raise EV to taste. Cross-lens comparability is a
+  separate matter and is not claimed here, by design: two projections still differ by a
+  per-projection solid-angle constant, and fixing that would re-weight every pixel by its own
+  solid angle and change each image's appearance, which is out of scope (see
+  `doc/ev-pipeline-architecture.md` §7.3).
+  The GUI is unaffected in either mode's pixels for an existing document -- see the `ev_mode`
+  entry above for what changed in the GUI (a Mode control, not a pixel default). `kNormScale`
+  is unchanged at 0.08: it was calibrated on full-sphere views, which is where the two
+  denominators nearly coincide (`landed_fraction` median 0.980; re-deriving it would move
+  full-sphere scenes by only +0.029 stop, at the cost of re-shooting every reference image).
   For an illuminant spectrum the emitted energy is charged at the band expectation of the
   SPD rather than at the weight of the wavelength each batch happens to draw, so the same
   config renders at the same brightness at every seed.
