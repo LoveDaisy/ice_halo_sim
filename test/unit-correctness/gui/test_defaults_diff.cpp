@@ -661,7 +661,10 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "renderer.visible", true, Kind::kCombo },
     { "renderer.front", true, Kind::kCheckbox },
     { "renderer.background", true, Kind::kColor },
-    { "renderer.ray_color", true, Kind::kColor },
+    // No editor: the GUI has no tint control anywhere (owner-decided; see
+    // GuiState::RenderConfig::ray_color's own comment). Still serialized, so it still shows up as
+    // a read-only row rather than disappearing.
+    { "renderer.ray_color", false, Kind::kColor },
     { "renderer.exposure_offset", true, Kind::kFloatSlider },
     // v4.16. Registered as of the Display group's Mode combo landing: the field now has a control
     // in the main UI, so the defaults panel offers the same inline editor rather than a read-only

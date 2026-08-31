@@ -405,6 +405,8 @@ struct RenderConfig {
   int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
+  // Serialized only (file_io.cpp) — no editor registers it (field_editor_registry.cpp), so
+  // nothing in the running GUI can change it. See the RenderConfigResimFields comment below.
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
   // Which anchor the SERVER measures its exposure scale against, mirroring core
@@ -469,31 +471,35 @@ struct RenderConfig {
 //                                                the next commit. Do not read this entry as "the push
 //                                                path is built".
 //
-// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus ray_color:
-// the core NeedsRebuild() treats ray_color as appearance-only, but it still reaches the server only
-// through the commit payload, so leaving it in is what keeps Run applying it. It is deliberately
-// not moved alongside background — nothing in this repo pushes it at display time, and it carries
-// an unrelated defect of its own (BuildScene hard-codes ray_color to the "use the material's own
-// spectral colour" sentinel and never reads r.ray_color). That is a separate root cause, to be
-// settled on its own terms rather than folded into this projection's field list. The third member
-// this list used to carry, opacity, is gone: it had no drawing consumer anywhere in the tree, so it
-// was removed rather than left here describing a resim that changed nothing.
+//   ray_color                                 — carries no live control at all: no row in
+//                                                field_editor_registry.cpp, so nothing the running
+//                                                GUI does can ever change it. A loaded document's
+//                                                value round-trips through Revert/Save unedited and
+//                                                can therefore never produce a resim-eligible diff.
+//                                                Formerly INCLUDED here specifically to keep an
+//                                                edit reaching Run — that reasoning is gone along
+//                                                with the control it existed for. Still serialized
+//                                                (file_io.cpp) so a document saved before the
+//                                                control's removal keeps round-tripping its stored
+//                                                value byte-for-byte. BuildScene hard-codes the
+//                                                "use the material's own spectral colour" sentinel
+//                                                and never reads it either way, unrelated to this
+//                                                projection's field list.
+//
+// INCLUDED — sim_resolution_index: changes the sim render grid → genuine re-sim. Two other members
+// this list used to carry are gone: opacity had no drawing consumer anywhere in the tree, and
+// ray_color lost its only reason for inclusion above. Both were removed rather than left here
+// describing a resim that changes nothing.
 //
 // Consumers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline, app.cpp::DoRun expect_rebuild,
 // and GuiState::ConfigSnapshot's Revert baseline (single source of truth — do not fork).
 struct RenderConfigResimFields {
   int sim_resolution_index;
-  float ray_color[3];
 
-  static RenderConfigResimFields From(const RenderConfig& r) {
-    return { r.sim_resolution_index, { r.ray_color[0], r.ray_color[1], r.ray_color[2] } };
-  }
+  static RenderConfigResimFields From(const RenderConfig& r) { return { r.sim_resolution_index }; }
 
   // Write back onto a live RenderConfig, touching nothing outside this projection.
-  void ApplyTo(RenderConfig& r) const {
-    r.sim_resolution_index = sim_resolution_index;
-    std::copy(std::begin(ray_color), std::end(ray_color), r.ray_color);
-  }
+  void ApplyTo(RenderConfig& r) const { r.sim_resolution_index = sim_resolution_index; }
 
   // Does `live` still agree with this captured baseline on the resim-eligible fields?
   bool Matches(const RenderConfig& live) const { return From(live) == *this; }
@@ -502,7 +508,7 @@ struct RenderConfigResimFields {
   // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
   // built on top of it, not the only intended consumer.
   friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
-    return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.ray_color, a.ray_color + 3, b.ray_color);
+    return a.sim_resolution_index == b.sim_resolution_index;
   }
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
@@ -534,7 +540,7 @@ static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check R
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
 // the old subset. Pinning the size is what turns that omission into a compile error.
-static_assert(sizeof(RenderConfigResimFields) == 16,
+static_assert(sizeof(RenderConfigResimFields) == 4,
               "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
 #endif
 
@@ -1483,7 +1489,10 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // (it had no drawing consumer anywhere in the tree). The projection lost only 4 bytes; the
 // snapshot lost 8, because the 4 came out of what had been exactly-fitting padding ahead of
 // `raypath_color`. Read off the compiler, not hand-computed — the arithmetic does not predict it.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
+// Size then shrank 176 → 168 when `ray_color` left RenderConfigResimFields with the field itself:
+// it lost its only editor (field_editor_registry.cpp no longer registers it), so nothing can ever
+// change it again and it stopped being a resim-eligible field to track. Read off the compiler.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 168,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 
