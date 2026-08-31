@@ -367,15 +367,13 @@ struct RenderConfig {
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
-  float opacity = 1.0f;
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
 
   bool operator==(const RenderConfig& o) const {
     return lens_type == o.lens_type && fov == o.fov && elevation == o.elevation && azimuth == o.azimuth &&
            roll == o.roll && sim_resolution_index == o.sim_resolution_index && visible == o.visible &&
            front == o.front && std::equal(background, background + 3, o.background) &&
-           std::equal(ray_color, ray_color + 3, o.ray_color) && opacity == o.opacity &&
-           exposure_offset == o.exposure_offset;
+           std::equal(ray_color, ray_color + 3, o.ray_color) && exposure_offset == o.exposure_offset;
   }
   bool operator!=(const RenderConfig& o) const { return !(*this == o); }
 };
@@ -420,31 +418,30 @@ struct RenderConfig {
 //                                                the next commit. Do not read this entry as "the push
 //                                                path is built".
 //
-// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus ray_color and
-// opacity: the core NeedsRebuild() treats both as appearance-only, but they still reach the server
-// only through the commit payload, so leaving them in is what keeps Run applying them. They are
-// deliberately not moved alongside background — nothing in this repo pushes either of them at
-// display time, and each carries an unrelated defect of its own (BuildScene hard-codes ray_color to
-// the "use the material's own spectral colour" sentinel and never reads r.ray_color; opacity has no
-// drawing consumer anywhere in the tree). Both are separate root causes, to be settled on their own
-// terms rather than folded into this projection's field list.
+// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus ray_color:
+// the core NeedsRebuild() treats ray_color as appearance-only, but it still reaches the server only
+// through the commit payload, so leaving it in is what keeps Run applying it. It is deliberately
+// not moved alongside background — nothing in this repo pushes it at display time, and it carries
+// an unrelated defect of its own (BuildScene hard-codes ray_color to the "use the material's own
+// spectral colour" sentinel and never reads r.ray_color). That is a separate root cause, to be
+// settled on its own terms rather than folded into this projection's field list. The third member
+// this list used to carry, opacity, is gone: it had no drawing consumer anywhere in the tree, so it
+// was removed rather than left here describing a resim that changed nothing.
 //
 // Consumers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline, app.cpp::DoRun expect_rebuild,
 // and GuiState::ConfigSnapshot's Revert baseline (single source of truth — do not fork).
 struct RenderConfigResimFields {
   int sim_resolution_index;
   float ray_color[3];
-  float opacity;
 
   static RenderConfigResimFields From(const RenderConfig& r) {
-    return { r.sim_resolution_index, { r.ray_color[0], r.ray_color[1], r.ray_color[2] }, r.opacity };
+    return { r.sim_resolution_index, { r.ray_color[0], r.ray_color[1], r.ray_color[2] } };
   }
 
   // Write back onto a live RenderConfig, touching nothing outside this projection.
   void ApplyTo(RenderConfig& r) const {
     r.sim_resolution_index = sim_resolution_index;
     std::copy(std::begin(ray_color), std::end(ray_color), r.ray_color);
-    r.opacity = opacity;
   }
 
   // Does `live` still agree with this captured baseline on the resim-eligible fields?
@@ -454,8 +451,7 @@ struct RenderConfigResimFields {
   // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
   // built on top of it, not the only intended consumer.
   friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
-    return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.ray_color, a.ray_color + 3, b.ray_color) &&
-           a.opacity == b.opacity;
+    return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.ray_color, a.ray_color + 3, b.ray_color);
   }
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
@@ -468,12 +464,12 @@ struct RenderConfigResimFields {
 // it is excluded outright, captured by nothing (like exposure_offset and the T-view fields); or it
 // is excluded from resim eligibility but still Revert-tracked through its own ConfigSnapshot slot
 // (like background — see ConfigSnapshot::renderer_background).
-static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check RenderConfigResimFields for new fields");
+static_assert(sizeof(RenderConfig) == 60, "RenderConfig size changed — check RenderConfigResimFields for new fields");
 // RenderConfigResimFields: naming the field list once does NOT by itself keep the three
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
 // the old subset. Pinning the size is what turns that omission into a compile error.
-static_assert(sizeof(RenderConfigResimFields) == 20,
+static_assert(sizeof(RenderConfigResimFields) == 16,
               "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
 #endif
 
@@ -1409,7 +1405,11 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // `renderer_background` slot: the projection lost 12 bytes and the snapshot gained 12 back, so an
 // unchanged size here is the expected outcome of that move, not evidence it was a no-op. Both
 // numbers were read off the compiler rather than hand-computed.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 184,
+// Size then shrank 184 → 176 when `opacity` left RenderConfigResimFields with the field itself
+// (it had no drawing consumer anywhere in the tree). The projection lost only 4 bytes; the
+// snapshot lost 8, because the 4 came out of what had been exactly-fitting padding ahead of
+// `raypath_color`. Read off the compiler, not hand-computed — the arithmetic does not predict it.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 

@@ -662,7 +662,6 @@ TEST_F(DefaultsDiff, registry_covers_every_row) {
     { "renderer.front", true, Kind::kCheckbox },
     { "renderer.background", true, Kind::kColor },
     { "renderer.ray_color", true, Kind::kColor },
-    { "renderer.opacity", true, Kind::kFloatSlider },
     { "renderer.exposure_offset", true, Kind::kFloatSlider },
     { "aspect_ratio", true, Kind::kCombo },
     { "aspect_portrait", true, Kind::kCheckbox },

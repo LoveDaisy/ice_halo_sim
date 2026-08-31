@@ -127,7 +127,6 @@ const MissingKeyCase kGuiNativeCases[] = {
   LUMICE_MISSING_KEY_ROW(kRenderer, s.renderer.sim_resolution_index, RenderConfig{}.sim_resolution_index),
   LUMICE_MISSING_KEY_ROW(kRenderer, s.renderer.visible, RenderConfig{}.visible),
   LUMICE_MISSING_KEY_ROW(kRenderer, s.renderer.front, RenderConfig{}.front),
-  LUMICE_MISSING_KEY_ROW(kRenderer, s.renderer.opacity, RenderConfig{}.opacity),
   LUMICE_MISSING_KEY_ROW(kRenderer, s.renderer.exposure_offset, RenderConfig{}.exposure_offset),
 
   // -- root.layers[] (v2 inline format) --
@@ -220,7 +219,6 @@ const MissingKeyCase kCoreJsonCases[] = {
   LUMICE_MISSING_KEY_ROW(R"({"render":[{"view":{}}]})", s.renderer.azimuth, RenderConfig{}.azimuth),
   LUMICE_MISSING_KEY_ROW(R"({"render":[{"view":{}}]})", s.renderer.roll, RenderConfig{}.roll),
   LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.front, RenderConfig{}.front),
-  LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.opacity, RenderConfig{}.opacity),
   LUMICE_MISSING_KEY_ROW(R"({"render":[{}]})", s.renderer.exposure_offset, RenderConfig{}.exposure_offset),
   LUMICE_MISSING_KEY_ROW(kCoreCrystal, s.crystals.at(0).name, CrystalConfig{}.name),
 

@@ -102,7 +102,10 @@ const LegacyDocCase kGuiNativeCases[] = {
       EXPECT_NEAR(s.renderer.background[2], 0.33f, 1e-5f);
       EXPECT_NEAR(s.renderer.ray_color[0], 0.9f, 1e-5f);
       EXPECT_NEAR(s.renderer.ray_color[2], 0.5f, 1e-5f);
-      EXPECT_NEAR(s.renderer.opacity, 0.8f, 1e-5f);
+      // "opacity" above is a key this format no longer has a field for (removed in API v4.16). It
+      // stays in the fixture on purpose: an old .lmc carrying it must still load, and the only way
+      // to keep asserting that is to keep feeding one in. Nothing is asserted ABOUT it — there is
+      // no longer anything for it to land in.
       EXPECT_FLOAT_EQ(s.renderer.exposure_offset, -1.25f);
     } },
 

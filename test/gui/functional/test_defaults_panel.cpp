@@ -1449,23 +1449,24 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(hits_from_table, gui::g_state.sim.max_hits);
       IM_CHECK_EQ(hits_from_table, 64);
 
-      // ---- renderer.opacity: the same clamp, where nothing else can be doing it ----
+      // ---- overlay_zenith_nadir_radius_px: the same clamp, where nothing else can be doing it ----
       //
       // The three fields above all have a main-UI control that clamps them every frame, so their
-      // final value is evidence about the table's cell only if the table wrote it first. opacity
-      // has no control anywhere else in the app: whatever this cell leaves behind is what the field
-      // holds, indefinitely. It is therefore the one field whose clamp this suite can attribute to
-      // the table with no alternative explanation.
-      gui::g_state.renderer.opacity = 0.5f;
+      // final value is evidence about the table's cell only if the table wrote it first. This
+      // field's only other control lives behind the Zenith/Nadir row's fold, which is a popup that
+      // is closed unless a user opens it — so as long as this test never opens it, whatever this
+      // cell leaves behind is what the field holds, indefinitely. It is therefore the one field
+      // whose clamp this suite can attribute to the table with no alternative explanation.
+      gui::g_state.zenith_nadir_radius_px = 8.0f;
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
-      FilterTo(ctx, "renderer.opacity");
-      ctx->ItemInputValue(ValueInputRef("renderer.opacity").c_str(), 5.0f);
+      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 50.0f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.renderer.opacity, 1.0f);
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
       FilterTo(ctx, "");
       panel.Close();
       ctx->Yield(4);
-      IM_CHECK_EQ(gui::g_state.renderer.opacity, 1.0f);  // and it stays: nothing else touches it
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);  // and it stays: nothing else touches it
     };
   }
 
@@ -1616,7 +1617,8 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // The out-of-range icon's REACHABILITY is the finding this pins, because it inverts the obvious
     // guess: the shared slider control ends with an unconditional clamp and the main UI calls it
     // every frame, so a hand-edited out-of-range alpha is pulled back into its domain before this
-    // panel ever sees it. The reachable fields are the ones with no main-UI control at all. Both
+    // panel ever sees it. The reachable fields are the ones whose only control is not drawn every
+    // frame — here, the one whose control lives behind a row fold that stays a closed popup. Both
     // directions are asserted — the field that keeps the poison and two that cannot — so "this
     // notice can fire" is not confused with "this notice fires for everything".
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "the_two_note_icons_are_independent");
@@ -1625,20 +1627,20 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       // A hand-edited defaults file, out of range on three fields.
       json doc;
-      doc["renderer"]["opacity"] = 3.0f;  // no main-UI control => nothing clamps it
-      doc["overlay_grid_alpha"] = 7.0f;   // its own slider clamps it every frame
-      doc["renderer"]["fov"] = 4000.0f;   // the per-frame renderer invariant clamps it
+      doc["overlay_zenith_nadir_radius_px"] = 90.0f;  // its control is behind a closed fold
+      doc["overlay_grid_alpha"] = 7.0f;               // its own slider clamps it every frame
+      doc["renderer"]["fov"] = 4000.0f;               // the per-frame renderer invariant clamps it
       IM_CHECK(gui::WriteUserDefaultsFile(panel.dir(), doc));
       gui::g_state = gui::MakeNewDocumentState();
-      IM_CHECK_EQ(gui::g_state.renderer.opacity, 3.0f);  // the poison did land
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 90.0f);  // the poison did land
       ctx->Yield(4);  // let the main UI render — this is where the other two get pulled back
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
 
       // Positive: the field nothing clamps still holds its out-of-range value, and says so.
-      FilterTo(ctx, "renderer.opacity");
-      IM_CHECK(ctx->ItemExists("**/###note_range_renderer.opacity"));
-      IM_CHECK(!ctx->ItemExists("**/###note_edited_renderer.opacity"));
+      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+      IM_CHECK(ctx->ItemExists("**/###note_range_overlay_zenith_nadir_radius_px"));
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
 
       // Negative, twice, for the two different mechanisms that pull a value back in range.
       FilterTo(ctx, "overlay_grid_alpha");
@@ -1657,13 +1659,13 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       // Both at once, on one row: the out-of-range field, once edited, carries the pencil AND keeps
       // the warning until the edit takes it back into the domain. Editing it to a value inside
-      // [0,1] clears the warning and leaves the pencil, which is the pair's whole point.
-      FilterTo(ctx, "renderer.opacity");
-      ctx->ItemInputValue(ValueInputRef("renderer.opacity").c_str(), 0.25f);
+      // [2,20] clears the warning and leaves the pencil, which is the pair's whole point.
+      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 12.0f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.renderer.opacity, 0.25f);
-      IM_CHECK(ctx->ItemExists("**/###note_edited_renderer.opacity"));
-      IM_CHECK(!ctx->ItemExists("**/###note_range_renderer.opacity"));
+      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 12.0f);
+      IM_CHECK(ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
+      IM_CHECK(!ctx->ItemExists("**/###note_range_overlay_zenith_nadir_radius_px"));
       FilterTo(ctx, "");
     };
   }

@@ -93,7 +93,12 @@ struct RenderConfig {
 
   std::vector<GridLineParam> central_grid_;
   std::vector<GridLineParam> elevation_grid_;
-  bool celestial_outline_ = true;
+  // Opt-in, not on by default. It was `true` for the four years the field parsed and drew nothing,
+  // which cost nothing; now that it draws, `true` would put a horizon line into every existing
+  // config that never asked for one (13 of the 14 reference renders in test/e2e-correctness/ set
+  // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
+  // nobody has made, so the default states the one thing that is certain: draw it when asked.
+  bool celestial_outline_ = false;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare

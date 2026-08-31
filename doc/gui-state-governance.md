@@ -24,7 +24,7 @@
 | **T-struct·hard** | 拓扑变，清屏 + 抬 epoch floor 栅栏旧世代纹理 | `MarkStructHardDirty()`（gui_state.hpp:782；scrum-353.5 前名 `MarkFilterDirty`，被 S4 正名）= MarkDirty + snapshot_intensity=0 + p99_raw_y=0 + display_epoch_floor=committed_epoch | 编辑谓词/combine/增删类/增删 ref、filter 结构变、staged filter commit |
 | **T-struct·soft** | 配置脏但保留 carry-forward 纹理（不清屏） | `MarkDirty()`（gui_state.hpp:693）只置 dirty | 晶体几何/朝向、光谱、layer/prob、sim_resolution |
 | **T-display** | 纯显示，即时下发 server，**不 dirty / 不 epoch** | `PushDisplayState`→`LUMICE_SetRaypathColors` | color rgb / visible / solo / z_order / composite mode |
-| **T-view** | 纯客户端，仅 preview shader 实时重投影 | 无 server 下发（仿真投影固定全天空 dual-fisheye） | lens / fov / view / exposure / opacity |
+| **T-view** | 纯客户端，仅 preview shader 实时重投影 | 无 server 下发（仿真投影固定全天空 dual-fisheye） | lens / fov / view / exposure |
 | **T-session** | 会话偏好，不持久、不 dirty、不进 ConfigSnapshot | 直接改字段 | show_composite_preview / color_window_open / trackball |
 
 > ⚠️ `renderer.background`（画面背景色，与 `bg_show` / `bg_path` 那组**背景图 overlay** 字段是两回事）**曾**列在 T-view 行的示例里，现已移出：它不是纯客户端重投影参数，编辑它必须能被 Revert 撤销。它今天处在 T-display 的**一半**上——「不 dirty / 不 epoch」已成立（`RenderConfigResimFields` 不再含它，Revert 改由 `ConfigSnapshot::renderer_background` 这个独立槽位追踪），而「即时下发 server」那一半**尚未建立**，所以一次背景色编辑目前不会到达任何地方，要等下一次 commit。故意不写进 T-display 行的示例列：写上去会读成"通道已通"。

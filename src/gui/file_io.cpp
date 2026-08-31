@@ -955,7 +955,6 @@ static json SerializeRendererForGui(const RenderConfig& r) {
   // preview shader's uniform and the .lmc bake each ask for linear (app_panels.cpp, app.cpp).
   jr["background"] = { r.background[0], r.background[1], r.background[2] };
   jr["ray_color"] = { r.ray_color[0], r.ray_color[1], r.ray_color[2] };
-  jr["opacity"] = r.opacity;
   jr["exposure_offset"] = r.exposure_offset;
   return jr;
 }
@@ -992,7 +991,6 @@ static RenderConfig ParseRendererFromGuiJson(const json& jr) {
     for (int i = 0; i < 3; i++)
       r.ray_color[i] = jr["ray_color"][i].get<float>();
   }
-  r.opacity = jr.value("opacity", RenderConfig{}.opacity);
   r.exposure_offset = jr.value("exposure_offset", RenderConfig{}.exposure_offset);
   // Older .lmc payloads carry an "adaptive_brightness_mode" key; nlohmann's value(...) ignores
   // unknown keys, so no migration code is needed — the field becomes a silent no-op.
@@ -1689,7 +1687,6 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     int res = kSimResolutions[r.sim_resolution_index];
     dst.resolution_w = res * 2;
     dst.resolution_h = res;
-    dst.opacity = r.opacity;
     // doc/ev-pipeline-architecture.md §2.4/§4 — the ONE field where the two
     // SceneIntent arms differ, and the reason SceneIntent exists at all:
     //
@@ -2475,7 +2472,6 @@ bool DeserializeFromJson(const std::string& json_str, GuiState& state) {
       for (int i = 0; i < 3; i++)
         r.ray_color[i] = jr["ray_color"][i].get<float>();
     }
-    r.opacity = jr.value("opacity", RenderConfig{}.opacity);
     // The wire carries a linear intensity factor, the struct an EV offset; the fallback is
     // therefore the struct default pushed through the same 2^x the reader inverts below.
     float ifactor = jr.value("intensity_factor", std::exp2(RenderConfig{}.exposure_offset));

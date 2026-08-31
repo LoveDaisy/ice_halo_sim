@@ -2331,7 +2331,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
 
     r.central_grid_count = 0;
     r.elevation_grid_count = 0;
-    r.celestial_outline = 1;  // core RenderConfig::celestial_outline_ defaults to true
+    r.celestial_outline = 0;  // core RenderConfig::celestial_outline_ defaults to false
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {

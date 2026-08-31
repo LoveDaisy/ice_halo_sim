@@ -76,7 +76,6 @@ GuiState MakeModifiedState() {
   s.renderer.ray_color[0] = 0.4f;
   s.renderer.ray_color[1] = 0.5f;
   s.renderer.ray_color[2] = 0.6f;
-  s.renderer.opacity = 0.65f;
 
   // task-349.2 Step 2: raypath_color is a configuration field (structural
   // edits go through MarkStructHardDirty); ConfigSnapshot must round-trip it so
@@ -132,7 +131,7 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
   EXPECT_EQ(snap.renderer_resim.sim_resolution_index, 3);
   EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[0], 0.4f);
   EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[1], 0.5f);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.opacity, 0.65f);
+  EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[2], 0.6f);
 
   // background is the third case, and it is NOT the T-view one above: it is absent from the
   // projection (editing it must not count as a change) but present in the snapshot through its own
@@ -215,7 +214,6 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   // assertion reads the same as the ones around it, but the path behind it is the separate slot.
   EXPECT_FLOAT_EQ(target.renderer.background[1], source.renderer.background[1]);
   EXPECT_FLOAT_EQ(target.renderer.ray_color[2], source.renderer.ray_color[2]);
-  EXPECT_FLOAT_EQ(target.renderer.opacity, source.renderer.opacity);
   // task-349.2 Step 2: raypath_color is CONFIG, ApplyTo replaces it (junk
   // classes seeded above are gone, source content restored 1:1).
   ASSERT_EQ(target.raypath_color.size(), source.raypath_color.size());
@@ -293,7 +291,7 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FLOAT_EQ(restored.sun.altitude, original.sun.altitude);
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);
   EXPECT_EQ(restored.renderer.sim_resolution_index, original.renderer.sim_resolution_index);
-  EXPECT_FLOAT_EQ(restored.renderer.opacity, original.renderer.opacity);
+  EXPECT_FLOAT_EQ(restored.renderer.ray_color[1], original.renderer.ray_color[1]);
   // background makes the round trip too, by the separate slot rather than the resim projection.
   // `restored` started from InitDefaultState (background {0,0,0}), so this fails if either half of
   // the From/ApplyTo pair for renderer_background is missing.
@@ -354,7 +352,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 184,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 

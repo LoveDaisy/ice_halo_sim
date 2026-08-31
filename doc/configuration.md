@@ -701,9 +701,20 @@ The render configuration defines the renderer parameters.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `central` | object array | no | [] | Central grid line configuration |
-| `elevation` | object array | no | [] | Elevation grid line configuration |
-| `outline` | boolean | no | true | Whether to show the celestial sphere outline |
+| `central` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
+| `elevation` | object array | no | [] | **Parsed but not rendered.** Same as `central`. |
+| `outline` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
+
+**Grid lines that are not drawn**
+
+`central` and `elevation` describe per-line appearance (`value` / `width` / `opacity` / `color`),
+and the renderer has no consumer for either list — a config that sets them parses cleanly, compares
+and serializes correctly, and produces exactly the image it would produce without them. They are
+kept in the schema rather than removed because the GUI preview draws its own altitude/azimuth grid
+and its own sun angular-distance circles, and the two descriptions are not the same shape (the GUI
+derives a single FOV-adaptive step and one shared colour, this schema names each line individually).
+Reconciling them is a design question, not an implementation gap, so the keys stay and this note
+says plainly what they do today. `outline` is the one member of this object that does draw.
 
 **Grid line configuration**:
 

@@ -472,15 +472,10 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("renderer.front", BoolField([](GuiState& s) { return &s.renderer.front; }, NotUnderFullSkyOrGlobe));
     // `background` now HAS a main-UI control (Display > Rendering, beside EV), so this row is its
     // second editor — the one the defaults panel needs in order to edit a personal default without
-    // a document open. `ray_color` and `opacity` still have none, and for them the table remains
-    // the first editor rather than a second one. For the two colours a first editor costs nothing
-    // (a colour has no domain to disagree about). `opacity`'s [0,1] IS a new statement, made here
-    // because the value is a multiplier the renderer applies directly; nothing else in the repo
-    // constrains it, so this is the definition rather than a copy of one.
+    // a document open. `ray_color` still has none, and for it the table remains the first editor
+    // rather than a second one, which costs nothing: a colour has no domain to disagree about.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));
     map.emplace("renderer.ray_color", ColorField([](GuiState& s) { return s.renderer.ray_color; }));
-    map.emplace("renderer.opacity",
-                FloatField([](GuiState& s) { return &s.renderer.opacity; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     map.emplace("renderer.exposure_offset",
                 FloatField([](GuiState& s) { return &s.renderer.exposure_offset; }, FixedDomain(-6.0f, 6.0f), "%.1f"));
 

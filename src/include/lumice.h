@@ -710,7 +710,10 @@ typedef struct LUMICE_RenderParam_ {
   // Fixed ray tint in linear RGB, or {-1,-1,-1} (core's default sentinel) for "use the natural
   // spectral color". Zero-init means an all-black tint, NOT the sentinel.
   float ray_color[3];
-  int celestial_outline;  // non-zero = draw the horizon/celestial outline
+  // Non-zero = draw a line along the celestial horizon (altitude 0). Opt-in: core's
+  // RenderConfig::celestial_outline_ defaults to false, so a zero-initialized struct asks for
+  // no annotation, which is what the JSON path also gives a config with no "grid" object.
+  int celestial_outline;
   LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int central_grid_count;
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];

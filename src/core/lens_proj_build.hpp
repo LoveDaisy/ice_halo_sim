@@ -280,6 +280,123 @@ inline bool VisibleByRange(RenderConfig::VisibleRange range, float wz) {
   return true;
 }
 
+// The per-pixel inverse, lens branch and all: pixel (px, py) -> the world direction it images.
+// Extracted so that every mask built from this projection reads the SAME inverse. A second
+// annotation mask (BuildCelestialOutlineMask below) exists today and grid annotations may follow;
+// each one re-deriving the direction is how two masks of the same frame start disagreeing about
+// where the sky is.
+inline MaskDir PixelToWorld(const RenderConfig& cfg, const lm_proj::ProjParams& p, const Rotation& rot, int px,
+                            int py) {
+  const int width = cfg.resolution_[0];
+  const int height = cfg.resolution_[1];
+  switch (cfg.lens_.type_) {
+    case LensParam::kLinear:
+    case LensParam::kFisheyeEqualArea:
+    case LensParam::kFisheyeEquidistant:
+    case LensParam::kFisheyeStereographic:
+    case LensParam::kFisheyeOrthographic: {
+      const float u =
+          (static_cast<float>(px) + 0.5f - static_cast<float>(width) / 2.0f - static_cast<float>(p.lens_shift_x)) /
+          p.scale;
+      const float v =
+          (static_cast<float>(py) + 0.5f - static_cast<float>(height) / 2.0f - static_cast<float>(p.lens_shift_y)) /
+          p.scale;
+      return SingleLensPixelToWorld(cfg.lens_.type_, rot, u, v);
+    }
+    case LensParam::kDualFisheyeEqualArea:
+    case LensParam::kDualFisheyeEquidistant:
+    case LensParam::kDualFisheyeStereographic:
+    case LensParam::kDualFisheyeOrthographic:
+      return DualFisheyePixelToWorld(cfg.lens_.type_, p, px, py);
+    case LensParam::kRectangular:
+      return RectangularPixelToWorld(p, px, py);
+    case LensParam::kGlobe: {
+      const float x =
+          static_cast<float>(px) + 0.5f - static_cast<float>(width) / 2.0f - static_cast<float>(p.lens_shift_x);
+      const float y =
+          static_cast<float>(py) + 0.5f - static_cast<float>(height) / 2.0f - static_cast<float>(p.lens_shift_y);
+      return CameraDirToWorld(rot, projection::GlobeInverse(x, y, p.scale));
+    }
+  }
+  return { 0.0f, 0.0f, 0.0f, false };
+}
+
+// Altitude in DEGREES for a world direction, in the GUI shader's own terms
+// (preview_renderer.cpp overlayAuxLines: `asin(clamp(-world_dir.z, -1, 1)) * DEG`). Degrees
+// rather than the raw z because the line-width rule below is stated in degrees on both sides;
+// converting once here is what lets the two implementations be compared without a unit step in
+// between.
+inline float AltitudeDeg(const MaskDir& dir) {
+  return std::asin(std::clamp(-dir.z, -1.0f, 1.0f)) * 180.0f / math::kPi;
+}
+
+// Marks the horizon line (altitude = 0) over a whole frame's worth of per-pixel altitude, given
+// in degrees. Row-major W*H in, the same W*H out.
+//
+// TWO masks come in, and they are not the same mask. `imaged` says the pixel carries a direction
+// at all, and is what the local gradient is measured across; `drawable` says the annotation is
+// allowed on that pixel, and is `imaged` narrowed by the configured visible hemisphere. Measuring
+// the gradient across `drawable` instead is a defect with a very specific shape: the horizon IS
+// the edge of the visible hemisphere, so under `visible: upper` every pixel on the line has its
+// vertical neighbour excluded, the vertical difference reads as zero, the width collapses to the
+// 1e-4 clamp and the line vanishes exactly where it was asked for. The GPU has no such trap —
+// fwidth reads the quad's fragments, which the `pixel_visible` branch does not remove.
+//
+// The rule is the preview shader's, transposed one primitive at a time
+// (preview_renderer.cpp overlayAuxLines, horizon section):
+//   fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);  t = 1 - smoothstep(0, fw_alt*1.5, |alt|)
+// `t > 0` — the pixels the shader tints at all — is exactly `|alt| < fw_alt * 1.5`, which is what
+// this returns. `fwidth` is |dFdx| + |dFdy|, which off the GPU is a forward difference against the
+// right and lower neighbours (the last row/column differences backwards instead, the only place
+// this can differ from a rasterizer's derivatives and only by which side of the pixel is sampled).
+//
+// A FIXED angular half-width is not an option here, which is why this takes the trouble:
+// degrees-per-pixel spans orders of magnitude across the lens/FOV space this renderer supports, so
+// one constant is either a line invisible at narrow FOV or a band tens of pixels deep at wide FOV.
+// A pixel whose neighbours are both outside the lens's domain gets no line: no local scale can be
+// estimated there, and guessing one is how a horizon appears in a corner that images nothing.
+inline std::vector<uint8_t> HorizonLineFromAltitudeField(const std::vector<float>& alt_deg,
+                                                         const std::vector<uint8_t>& imaged,
+                                                         const std::vector<uint8_t>& drawable, int width, int height) {
+  const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+  std::vector<uint8_t> line(n, 0);
+  if (alt_deg.size() != n || imaged.size() != n || drawable.size() != n) {
+    return line;
+  }
+  for (int py = 0; py < height; py++) {
+    for (int px = 0; px < width; px++) {
+      const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
+      if (drawable[i] == 0) {
+        continue;
+      }
+      float fw = 0.0f;
+      bool any = false;
+      const int nx = (px + 1 < width) ? px + 1 : px - 1;
+      const int ny = (py + 1 < height) ? py + 1 : py - 1;
+      if (nx >= 0 && nx < width) {
+        const size_t j = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(nx);
+        if (imaged[j] != 0) {
+          fw += std::fabs(alt_deg[j] - alt_deg[i]);
+          any = true;
+        }
+      }
+      if (ny >= 0 && ny < height) {
+        const size_t j = static_cast<size_t>(ny) * static_cast<size_t>(width) + static_cast<size_t>(px);
+        if (imaged[j] != 0) {
+          fw += std::fabs(alt_deg[j] - alt_deg[i]);
+          any = true;
+        }
+      }
+      if (!any) {
+        continue;
+      }
+      const float half_width = std::clamp(fw, 1e-4f, 2.0f) * 1.5f;
+      line[i] = (std::fabs(alt_deg[i]) < half_width) ? 1 : 0;
+    }
+  }
+  return line;
+}
+
 }  // namespace mask_detail
 
 // Builds the W*H mask described above: 1 where the lens images a visible piece of sky, 0
@@ -296,49 +413,59 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
   // Reuse the very params the forward path runs on (scale / az0 / r_scale), so the mask cannot
   // drift from the projection it is the inverse of.
   const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
-  const auto type = cfg.lens_.type_;
 
   for (int py = 0; py < height; py++) {
     for (int px = 0; px < width; px++) {
-      mask_detail::MaskDir dir{ 0.0f, 0.0f, 0.0f, false };
-      switch (type) {
-        case LensParam::kLinear:
-        case LensParam::kFisheyeEqualArea:
-        case LensParam::kFisheyeEquidistant:
-        case LensParam::kFisheyeStereographic:
-        case LensParam::kFisheyeOrthographic: {
-          const float u =
-              (static_cast<float>(px) + 0.5f - static_cast<float>(width) / 2.0f - static_cast<float>(p.lens_shift_x)) /
-              p.scale;
-          const float v =
-              (static_cast<float>(py) + 0.5f - static_cast<float>(height) / 2.0f - static_cast<float>(p.lens_shift_y)) /
-              p.scale;
-          dir = mask_detail::SingleLensPixelToWorld(type, rot, u, v);
-          break;
-        }
-        case LensParam::kDualFisheyeEqualArea:
-        case LensParam::kDualFisheyeEquidistant:
-        case LensParam::kDualFisheyeStereographic:
-        case LensParam::kDualFisheyeOrthographic:
-          dir = mask_detail::DualFisheyePixelToWorld(type, p, px, py);
-          break;
-        case LensParam::kRectangular:
-          dir = mask_detail::RectangularPixelToWorld(p, px, py);
-          break;
-        case LensParam::kGlobe: {
-          const float x =
-              static_cast<float>(px) + 0.5f - static_cast<float>(width) / 2.0f - static_cast<float>(p.lens_shift_x);
-          const float y =
-              static_cast<float>(py) + 0.5f - static_cast<float>(height) / 2.0f - static_cast<float>(p.lens_shift_y);
-          dir = mask_detail::CameraDirToWorld(rot, projection::GlobeInverse(x, y, p.scale));
-          break;
-        }
-      }
+      const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
       const bool on = dir.valid && mask_detail::VisibleByRange(cfg.visible_, dir.z);
       mask[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)] = on ? 1 : 0;
     }
   }
   return mask;
+}
+
+// Builds the W*H mask of the CELESTIAL HORIZON annotation: 1 where a line at altitude = 0 should
+// be drawn, 0 elsewhere. Same layout and same indexing as BuildVisibleMask, and a SEPARATE array
+// rather than a second bit of the visibility mask on purpose — "can this pixel show sky" and "does
+// this pixel carry an annotation" are two questions, and future grid annotations are more of the
+// second kind, not more bits of the first.
+//
+// The rule is the preview shader's own (preview_renderer.cpp overlayAuxLines, horizon section):
+// draw where |altitude_deg| falls inside 1.5x the local per-pixel altitude gradient, gated on the
+// pixel being both imageable AND inside the configured visible hemisphere — the shader applies its
+// overlay under exactly that `result.w >= 0.5 && pixel_visible` gate, so a half-sky config shows
+// the horizon ending at the sky's edge on both sides rather than only on one.
+//
+// Returns an empty vector for a degenerate resolution.
+inline std::vector<uint8_t> BuildCelestialOutlineMask(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
+  const int width = cfg.resolution_[0];
+  const int height = cfg.resolution_[1];
+  if (width <= 0 || height <= 0) {
+    return {};
+  }
+  const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+  const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
+
+  // One inverse per pixel, not three: the width rule needs each pixel's neighbours' altitudes, so
+  // the altitudes are materialized once and the differences read out of the field. Same total cost
+  // as BuildVisibleMask, which is what makes it reasonable to build this unconditionally (see the
+  // member's comment in render.hpp for why it cannot be built only when the flag is on).
+  std::vector<float> alt_deg(n, 0.0f);
+  std::vector<uint8_t> imaged(n, 0);
+  std::vector<uint8_t> drawable(n, 0);
+  for (int py = 0; py < height; py++) {
+    for (int px = 0; px < width; px++) {
+      const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
+      if (!dir.valid) {
+        continue;
+      }
+      const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
+      alt_deg[i] = mask_detail::AltitudeDeg(dir);
+      imaged[i] = 1;
+      drawable[i] = mask_detail::VisibleByRange(cfg.visible_, dir.z) ? 1 : 0;
+    }
+  }
+  return mask_detail::HorizonLineFromAltitudeField(alt_deg, imaged, drawable, width, height);
 }
 
 }  // namespace lumice
