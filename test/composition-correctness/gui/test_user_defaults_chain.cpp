@@ -361,5 +361,71 @@ TEST_F(UserDefaultsChain, RevertingEveryDefaultLeavesOnlyTheStampAndStillReadsAs
       << "the panel still shows the reverted key as saved, so the user can never clear it";
 }
 
+// AC5 path 3 — saving a personal default goes through the same serializer the other two paths do,
+// so every lens type has to reach disk under its own name and come back as itself.
+//
+// The round trip is the assertion, not the write: a lens type that lands on a neighbour's spelling
+// writes a perfectly well-formed file and reads back as a DIFFERENT lens, which is the silent half
+// of this defect — the loud half (the writer walking off the end of its name table) only shows up
+// on builds where that read happens to fault.
+TEST_F(UserDefaultsChain, EveryLensTypeSurvivesTheUserDefaultsRoundTrip) {
+  constexpr const char* kLensKey = "renderer.lens_type";
+  // Core's wire vocabulary, as literals. The round trip alone would NOT catch a wrong entry in the
+  // writer's table: write and read walk the same table, so a misspelled name is written, read back,
+  // and lands on its own index again — perfectly self-consistent and perfectly wrong for anyone
+  // else reading the file. Measured, not assumed: with entry 8 deliberately misspelled, the round
+  // trip half of this case stayed green while the two literal-spelling cases went red. The
+  // on-disk assertion below is what makes this path see it.
+  constexpr const char* kSpellings[] = {
+    "linear",
+    "fisheye_equal_area",
+    "fisheye_equidistant",
+    "fisheye_stereographic",
+    "dual_fisheye_equal_area",
+    "dual_fisheye_equidistant",
+    "dual_fisheye_stereographic",
+    "rectangular",
+    "fisheye_orthographic",
+    "dual_fisheye_orthographic",
+    "globe",
+  };
+  static_assert(sizeof(kSpellings) / sizeof(kSpellings[0]) == kLensTypeCount,
+                "this case must probe every lens type, not a prefix of them");
+
+  for (int value = 0; value < kLensTypeCount; ++value) {
+    const std::filesystem::path& dir = UseFreshConfigDir(("lens_type_" + std::to_string(value)).c_str());
+
+    GuiState current;
+    current.renderer.lens_type = value;
+
+    nlohmann::json doc = ReadActiveOverlayDoc();
+    const std::vector<DefaultDiffRow> rows = BuildDefaultDiffRows(current, doc);
+    // Non-fatal per value: a failure on one lens type must not take the other ten readings with it,
+    // and "which values fail" is the diagnostic that separates a short table from a wrong entry.
+    if (FindRow(rows, kLensKey) == nullptr) {
+      ADD_FAILURE() << "value " << value << ": the panel produced no " << kLensKey << " row to adopt";
+      continue;
+    }
+    if (!ApplyCheckedRowsToDoc(doc, rows, { kLensKey }, current) || !WriteActiveOverlayDoc(doc)) {
+      ADD_FAILURE() << "value " << value << ": adopting the lens type never reached disk";
+      continue;
+    }
+
+    std::ifstream in(dir / kUserDefaultsFileName);
+    if (!in.is_open()) {
+      ADD_FAILURE() << "value " << value << ": no personal-defaults file was written";
+      continue;
+    }
+    const nlohmann::json on_disk = nlohmann::json::parse(in);
+    EXPECT_EQ(on_disk["renderer"]["lens_type"].get<std::string>(), kSpellings[value]) << "value " << value;
+
+    ResetUserDefaultsChannels();
+    const GuiState after = MakeNewDocumentState(dir);
+    EXPECT_EQ(after.renderer.lens_type, value)
+        << "a new document started from a personal default that is not the one adopted";
+    EXPECT_EQ(TakeUserDefaultsDowngradeCount(), 0) << "value " << value << ": nothing about this value is wrong";
+  }
+}
+
 }  // namespace
 }  // namespace lumice::gui

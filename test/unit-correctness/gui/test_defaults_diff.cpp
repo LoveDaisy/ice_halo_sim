@@ -283,6 +283,53 @@ TEST_F(DefaultsDiff, ac4_array_edit_produces_exactly_one_row) {
 //     for its "differs from factory" filter: that comparison would report "same as factory" for
 //     the one row the user definitely customised
 // ================================================================================
+// Opening the Settings panel serializes the CURRENT state, so every lens type the combo can reach
+// has to survive that walk — including the three highest enum values, which for a time indexed past
+// the end of the writer's name table and took the process down before any row was built.
+//
+// All eleven are probed rather than only those three: the table is indexed by the enum value, so a
+// wrong entry anywhere lands a lens on its neighbour's name, and this path reports that as a
+// perfectly healthy row.
+TEST_F(DefaultsDiff, ac5_every_lens_type_survives_the_settings_panel_diff_walk) {
+  FreshUserConfig("diff_lens_types");
+
+  struct Row {
+    int value;
+    const char* spelling;
+  };
+  constexpr Row kRows[] = {
+    Row{ gui::kLensTypeLinear, "linear" },
+    Row{ gui::kLensTypeFisheyeEqualArea, "fisheye_equal_area" },
+    Row{ gui::kLensTypeFisheyeEquidist, "fisheye_equidistant" },
+    Row{ gui::kLensTypeFisheyeStereographic, "fisheye_stereographic" },
+    Row{ gui::kLensTypeDualFisheyeEqualArea, "dual_fisheye_equal_area" },
+    Row{ gui::kLensTypeDualFisheyeEquidist, "dual_fisheye_equidistant" },
+    Row{ gui::kLensTypeDualFisheyeStereographic, "dual_fisheye_stereographic" },
+    Row{ gui::kLensTypeRectangular, "rectangular" },
+    Row{ gui::kLensTypeFisheyeOrthographic, "fisheye_orthographic" },
+    Row{ gui::kLensTypeDualFisheyeOrthographic, "dual_fisheye_orthographic" },
+    Row{ gui::kLensTypeGlobe, "globe" },
+  };
+  static_assert(sizeof(kRows) / sizeof(kRows[0]) == gui::kLensTypeCount,
+                "this case must probe every lens type, not a prefix of them");
+
+  for (const Row& row : kRows) {
+    gui::GuiState state = gui::InitDefaultState();
+    state.renderer.lens_type = row.value;
+
+    const auto rows = gui::BuildDefaultDiffRows(state);
+    const gui::DefaultDiffRow* lens = FindRow(rows, "renderer.lens_type");
+    // Non-fatal per row: a missing row on one lens type must not hide the other ten readings, which
+    // together are what says whether the table is short or merely wrong somewhere.
+    if (lens == nullptr) {
+      ADD_FAILURE() << row.spelling << ": the diff walk produced no renderer.lens_type row";
+      continue;
+    }
+    EXPECT_EQ(lens->current_value.get<std::string>(), row.spelling) << "value: " << row.value;
+    EXPECT_EQ(lens->factory_value.get<std::string>(), "linear") << "value: " << row.value;
+  }
+}
+
 TEST_F(DefaultsDiff, ac5_effective_default_layers_the_saved_override_over_an_unmoving_factory_value) {
   const auto& dir = FreshUserConfig("diff_ac5");
 

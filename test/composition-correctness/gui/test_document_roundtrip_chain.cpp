@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
@@ -977,6 +978,89 @@ TEST(DocumentRoundtripChain, EvModeIsSpelledOnDiskTheWayCoreSpellsIt) {
     }
     EXPECT_EQ(read_back.renderer.ev_mode, 0) << "variant: " << label;
   }
+}
+
+// Every lens type must be spelled on disk the way core spells it, and read back to the same value.
+//
+// All eleven, not just the three that were once missing from the writer's name table: the table is
+// indexed by the enum value, so a wrong entry anywhere shifts a lens onto a neighbour's name, and a
+// case that only probed the newest entries would read that as green. The spellings are asserted as
+// literals rather than read out of the writer's own constant — a case that reads the table it is
+// checking cannot see the table being wrong, only being inconsistent with itself. They are core's
+// wire vocabulary (config/render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM for LensParam::LensType),
+// which is the same word list the CLI writes and reads, so the two layers cannot drift apart.
+TEST(DocumentRoundtripChain, LensTypeIsSpelledOnDiskTheWayCoreSpellsIt) {
+  struct Row {
+    int value;
+    const char* spelling;
+  };
+  constexpr Row kRows[] = {
+    Row{ 0, "linear" },
+    Row{ 1, "fisheye_equal_area" },
+    Row{ 2, "fisheye_equidistant" },
+    Row{ 3, "fisheye_stereographic" },
+    Row{ 4, "dual_fisheye_equal_area" },
+    Row{ 5, "dual_fisheye_equidistant" },
+    Row{ 6, "dual_fisheye_stereographic" },
+    Row{ 7, "rectangular" },
+    Row{ 8, "fisheye_orthographic" },
+    Row{ 9, "dual_fisheye_orthographic" },
+    Row{ 10, "globe" },
+  };
+  static_assert(sizeof(kRows) / sizeof(kRows[0]) == kLensTypeCount,
+                "this case must probe every lens type, not a prefix of them");
+
+  for (const Row& row : kRows) {
+    GuiState doc = MinimalDocument();
+    doc.renderer.lens_type = row.value;
+    const auto written = nlohmann::json::parse(SerializeGuiStateJson(doc));
+    EXPECT_EQ(written["renderer"]["lens_type"].get<std::string>(), row.spelling) << "value: " << row.value;
+
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    on_disk["renderer"]["lens_type"] = row.spelling;
+    GuiState read_back = MinimalDocument();
+    // Seed something this row cannot legitimately produce, so a reader that ignores the key is
+    // visible on every row instead of only on the rows whose value is not the default.
+    read_back.renderer.lens_type = (row.value + 1) % kLensTypeCount;
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      // Non-fatal per row: one unreadable spelling must not take the other ten rows' reports with
+      // it — which spellings fail is the whole diagnostic here.
+      ADD_FAILURE() << row.spelling << ": the reader rejected a document carrying this spelling";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.lens_type, row.value) << row.spelling;
+  }
+
+  // A lens_type this build cannot recognise still loads — as linear, and loudly. A document written
+  // by a build whose name table was short carries whatever bytes sat past the array, so the string
+  // itself is unpredictable and no migration can key off it; what the reader owes the user is a
+  // visible degradation rather than a silent one. Missing key keeps the old contract: same
+  // destination, no notice, because nothing was lost.
+  for (const char* variant : { "", "not_a_real_lens" }) {
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    if (variant[0] == '\0') {
+      on_disk["renderer"].erase("lens_type");
+    } else {
+      on_disk["renderer"]["lens_type"] = variant;
+    }
+    GuiState read_back = MinimalDocument();
+    read_back.renderer.lens_type = kLensTypeGlobe;  // seed non-default so a no-op read is visible
+    ClearImportComplexFilterWarning();
+    const char* label = variant[0] == '\0' ? "<absent>" : variant;
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      ADD_FAILURE() << label << ": an unrecognised lens_type must load, not fail the whole document";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.lens_type, 0) << "variant: " << label;
+    const std::string notice = PeekImportComplexFilterWarning();
+    if (variant[0] == '\0') {
+      EXPECT_EQ(notice, "") << "an absent key lost nothing and must not warn";
+    } else {
+      EXPECT_NE(notice.find(variant), std::string::npos)
+          << "the notice must name the value it could not read, got: " << notice;
+    }
+  }
+  ClearImportComplexFilterWarning();
 }
 
 }  // namespace lumice::gui
