@@ -671,11 +671,24 @@ jobs:
           # Phase 1 — parallel (pytest-xdist, -n 3). xdist runs each test in a
           # separate WORKER PROCESS, so capi_runner's process-global os.environ +
           # log callback stay per-process isolated (validated: the full slow suite
-          # passes under -n 3, ~4min vs ~14min serial). The projection-parity
-          # tests (the bulk of the macOS "rest" leg) dominate wall-time; this is
-          # what keeps the leg under the step timeout. Throughput gates are
+          # passes under -n 3, ~4min vs ~14min serial). Throughput gates are
           # EXCLUDED here — they must not measure under concurrent GPU load.
-          pytest ${{ matrix.pytest_args }} --ignore=test/performance -n 3 -v -m slow
+          #
+          # That exclusion is done by dropping the token from the positional list,
+          # NOT by --ignore: pytest applies --ignore only to paths it DISCOVERS by
+          # recursing into a positional argument, never to a positional argument
+          # itself. Legs that list `test/performance` positionally therefore kept
+          # running the gates here under exactly the concurrent GPU load this
+          # comment forbids (measured with --collect-only: 2 perf cases collected
+          # in phase 1). The --ignore= flags already inside pytest_args stay — they
+          # name files reached by recursion, which is the case --ignore does cover.
+          phase1_args=""
+          for arg in ${{ matrix.pytest_args }}; do
+            if [ "$arg" != "test/performance" ]; then
+              phase1_args="$phase1_args $arg"
+            fi
+          done
+          pytest $phase1_args -n 3 -v -m slow
           # Phase 2 — serial + GPU-isolated: the throughput gates run alone so the
           # measured rate is not deflated by concurrent tests. Only legs whose args
           # include test/performance run this (the metal-exit-seam parity leg has
