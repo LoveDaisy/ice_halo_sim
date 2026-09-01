@@ -1,7 +1,6 @@
 #ifndef LUMICE_GUI_EXPORT_FBO_RENDERER_HPP
 #define LUMICE_GUI_EXPORT_FBO_RENDERER_HPP
 
-#include <optional>
 #include <vector>
 
 #include "gui/overlay_labels.hpp"
@@ -27,8 +26,15 @@ namespace lumice::gui {
 //   - dst_w/dst_h must satisfy 0 < dst_{w,h} <= GL_MAX_RENDERBUFFER_SIZE.
 //     (GL_MAX_FRAMEBUFFER_{WIDTH,HEIGHT} would be tighter but requires GL 4.3;
 //      macOS OpenGL 3.3 Core exposes only GL_MAX_RENDERBUFFER_SIZE.)
+//   - `curve_labels` carries every label the export draws: one set per annotation family — the
+//     horizon, the angular-distance circles and the coordinate grid — each with its own colour and
+//     collision group, all of them core's anchors. A LIST rather than a set per family because a
+//     fourth family joining is an entry, not another parameter, and because the collision pass
+//     already reads the group off each set. An EMPTY list is how a caller says "no text": there is
+//     no second, GUI-walked source to gate separately any more, so the list is the whole decision.
+//     Defaulted, so a caller wanting none states nothing.
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
-                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input);
+                                              int dst_h, const std::vector<CurveLabelSet>& curve_labels = {});
 
 // Partial-override helpers for export paths. Both assume `params` already carries the
 // live EV-synced `intensity_factor` / `intensity_scale` from `BuildExportParams()` and

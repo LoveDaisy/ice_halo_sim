@@ -71,7 +71,79 @@ extern "C" {
 // config with no "ev_mode" key now renders RELATIVE (anchored to the frame's own P99, i.e. what
 // the GUI displays), where the v4.15-era CLI was unconditionally absolute. RELATIVE == 0 keeps
 // that default reachable from a zero-initialized struct.
-#define LUMICE_API_VERSION 416
+//
+// BREAKING (v4.17): LUMICE_RenderParam.central_grid / central_grid_count renamed to
+// angular_dist / angular_dist_count, and the JSON key "grid.central" to "grid.angular_dist".
+// The field is the angular distance from the sun, which "central" never said; the rename makes
+// the schema name what the number is. Type, order and offset are unchanged (sizeof() and the
+// binary layout are identical), so this breaks SOURCE compatibility only: a caller naming the
+// field, or using a designated initializer for it, fails to compile until renamed. The JSON
+// decoders read "grid.central" as an alias forever (new key wins when both appear); the encoder
+// only ever writes "grid.angular_dist".
+// Note the accompanying BEHAVIOR change: these lines are now DRAWN by the CLI renderer, where
+// v4.16 parsed and round-tripped them while drawing nothing. A config that already carried
+// grid.central entries renders differently under v4.17. `width` is still not honored (the mask
+// generator has no line-width input); `value`, `opacity` and `color` are.
+//
+// BREAKING (v4.18): LUMICE_RenderParam gains a trailing pair of fields, `longitude_grid` /
+// `longitude_grid_count` — the meridians (lines of constant azimuth), the twin of the parallels
+// `elevation_grid` already described. They are APPENDED after elevation_grid_count and before
+// ev_mode, so every field up to elevation_grid_count keeps its offset while ev_mode moves and
+// sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and has its
+// ev_mode read from the wrong place. Recompile against this header. The JSON key is
+// "grid.longitude" — "longitude" and not "azimuth" because the annotation layer already names
+// this concept that way in public symbols (LUMICE_ANNOTATION_LONGITUDE,
+// LUMICE_AnnotationRequest::longitude_deg).
+// Note the accompanying BEHAVIOR change, which has no ABI half: `elevation_grid` is now DRAWN by
+// the CLI renderer, where every version since it was introduced parsed and round-tripped it while
+// drawing nothing. A config that already carried grid.elevation entries renders differently under
+// v4.18. As with angular_dist, `width` is still not honored; `value`, `opacity` and `color` are.
+//
+// BREAKING (v4.19): LUMICE_RenderParam gains a trailing block of four fields, `zenith_nadir` /
+// `zenith_nadir_radius_px` / `zenith_nadir_opacity` / `zenith_nadir_color` — the pixel-space ring
+// markers at the zenith and the nadir. They are APPENDED after ev_mode, so every existing field
+// keeps its offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter
+// struct and the new fields are read past the end of it. Recompile against this header. The JSON
+// key is "grid.zenith_nadir", an object rather than a list because the two markers are one control
+// (one switch, one colour, one radius) and neither of them is a line with a value.
+// Note the accompanying BEHAVIOR change, which has no ABI half: the CLI renderer now DRAWS these
+// markers, and the GUI preview stops computing their screen position with its own duplicate
+// projection (preview_renderer.cpp ProjectWorldDirToScreen) and reads
+// LUMICE_ComputeAnnotationOverlay's zenith_px/py instead — so both drawers now take their geometry
+// from one place, as angular_dist and the two grid families already do.
+//
+// BREAKING (v4.20): LUMICE_RenderParam gains a trailing `front` field — the front-hemisphere clip,
+// APPENDED after zenith_nadir_color, so every existing field keeps its offset while sizeof() grows;
+// a caller that was NOT recompiled hands the API a shorter struct and the new field is read past
+// the end of it. Recompile against this header. The JSON key is a top-level "front" boolean on the
+// renderer object, deliberately NOT a fourth "visible" enumerator: the two are orthogonal clips
+// that AND together, and core's NLOHMANN_JSON_SERIALIZE_ENUM maps an unregistered "visible" string
+// to the FIRST table entry (upper) without an error, so folding them would fail silently.
+// Note the accompanying BEHAVIOR change, which has no ABI half: the clip was GUI-preview-only (a
+// shader crop), and the GUI refused to export a document that had it on rather than write a config
+// that renders differently. It is now a core field, so the CLI reproduces it — the background sky
+// mask and every annotation (horizon, angular_dist, elevation, longitude, zenith/nadir) are clipped
+// by the same rule the preview shader applies.
+//
+// BREAKING (v4.21): LUMICE_RenderParam gains a trailing block of three fields, `horizon_label` /
+// `grid_label` / `angular_dist_label` — whether the CLI renderer draws the TEXT labels beside each
+// annotation family's lines. They are APPENDED after `front`, so every existing field keeps its
+// offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and
+// the new fields are read past the end of it. Recompile against this header. The JSON keys are
+// "grid.horizon_label", "grid.label" and "grid.angular_dist_label".
+// Note the accompanying BEHAVIOR change, which has no ABI half: the CLI renderer now has a font at
+// all. LUMICE_ComputeAnnotationOverlay has returned label anchors and formatted text since v4.17,
+// but only the GUI could turn them into pixels (ImGui's font needs a GL context); core now embeds
+// a typeface and rasterizes them itself, so an exported config reproduces the preview's text and
+// not merely its lines.
+// Two layers, and the distinction is the contract: these switches decide whether the label
+// GEOMETRY is computed, independently of the family's own line switch (`horizon_label` with
+// `horizon` zero still draws the horizon's numbers). They do NOT give a label its own opacity —
+// the compositor gives it the family's own colour and alpha, so a grid line at opacity 0 takes its
+// labels with it. That mirrors the GUI, where a label has always inherited its family's
+// appearance; a core that diverged here would create the very GUI/CLI mismatch the annotation
+// layer exists to remove.
+#define LUMICE_API_VERSION 421
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -334,9 +406,10 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 // the OR/AND expansion seen in practice.
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
-// Per-renderer grid-line ceiling (central_grid[] / elevation_grid[] inline arrays in
+// Per-renderer grid-line ceiling (angular_dist[] / elevation_grid[] / longitude_grid[] inline arrays in
 // LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
-// order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 central line.
+// order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 angular-distance
+// line.
 #define LUMICE_MAX_CONFIG_GRID_LINES 64
 
 // BREAKING (v4.10): LUMICE_AxisDist renamed+widened to
@@ -692,8 +765,9 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_VISIBLE_LOWER 1
 #define LUMICE_VISIBLE_FULL 2
 
-// One overlay grid line (mirrors core GridLineParam). `value` is the azimuth (central grid) or
-// elevation (elevation grid) in degrees; the rest is appearance.
+// One overlay grid line (mirrors core GridLineParam). `value` is the angular distance from the
+// sun (angular_dist), the elevation (elevation_grid) or the azimuth (longitude_grid) in degrees;
+// the rest is appearance.
 typedef struct LUMICE_GridLine_ {
   float value;
   float width;
@@ -747,22 +821,74 @@ typedef struct LUMICE_RenderParam_ {
   // RenderConfig::horizon_ defaults to false, so a zero-initialized struct asks for
   // no annotation, which is what the JSON path also gives a config with no "grid" object.
   int horizon;
-  // PARSED BUT NOT RENDERED. Both lists are validated, round-tripped through JSON and compared,
-  // and no code draws either — a scene that sets them produces exactly the image it would produce
-  // without them. They are kept because the far target ("a CLI re-render equals what the GUI
-  // showed, annotations included") needs them, and the blocker is not the drawing code but a model
-  // mismatch: this schema names every line individually while the GUI derives one FOV-adaptive
-  // step and one shared colour, plus a separate list of sun angular-distance circles. Reconciling
-  // the two is a design decision, so the fields stay and say so. horizon above is the
-  // one member of this group that does draw.
-  LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
-  int central_grid_count;
+  // Circles of constant angular distance from the sun, in degrees (22 and 46 being the halos
+  // every consumer draws). RENDERED: the CLI renderer builds each entry's mask through
+  // LUMICE_ComputeAnnotationOverlay and composites it with that entry's own `opacity` and
+  // `color`. `width` is read and round-tripped but does NOT affect the image — the mask
+  // generator derives its own local half-width and takes no width input.
+  // RENAMED (v4.17) from central_grid / central_grid_count; see the BREAKING note at
+  // LUMICE_API_VERSION.
+  LUMICE_GridLine angular_dist[LUMICE_MAX_CONFIG_GRID_LINES];
+  int angular_dist_count;
+  // Parallels: lines of constant elevation, in degrees. RENDERED as of v4.18 — the CLI renderer
+  // builds each entry's mask through LUMICE_ComputeAnnotationOverlay and composites it with that
+  // entry's own `opacity` and `color`, exactly as it does for angular_dist. `width` is read and
+  // round-tripped but does NOT affect the image.
+  // The model mismatch that kept this unrendered for years (this schema names every parallel
+  // individually, while the GUI derives ONE FOV-adaptive step and one shared colour) is resolved
+  // in favour of the schema: the explicit list is the model, and the GUI's adaptive step is a
+  // display-side convenience it expands into this list when it exports.
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int elevation_grid_count;
+  // ADDED (v4.18). Meridians: lines of constant azimuth, in degrees, measured the way
+  // LUMICE_AnnotationRequest::longitude_deg measures them. Same rendering and appearance contract
+  // as elevation_grid above (own opacity/color per entry, `width` inert).
+  LUMICE_GridLine longitude_grid[LUMICE_MAX_CONFIG_GRID_LINES];
+  int longitude_grid_count;
   // ADDED (v4.16): LUMICE_EV_MODE_*. Appended at the end of the struct, and RELATIVE == 0 so a
   // zero-initialized param keeps the documented default rather than silently opting into the
   // absolute anchor.
   int ev_mode;
+  // ADDED (v4.19). The zenith / nadir ring markers. Non-zero `zenith_nadir` = draw them; opt-in for
+  // the same reason `horizon` is, so a zero-initialized struct asks for no annotation.
+  //
+  // APPEARANCE ONLY. WHERE the rings land comes from LUMICE_ComputeAnnotationOverlay's
+  // zenith_px/zenith_py/nadir_px/nadir_py, which is also what the GUI preview reads: this struct
+  // carries no position, and there is nothing here for a consumer to project.
+  //
+  // One block for the PAIR, not one per marker: the GUI has a single switch, colour picker and
+  // radius slider for both, and core's ZenithNadirParam mirrors that. `zenith_nadir_color` is
+  // sRGB, the convention LUMICE_GridLine.color uses and `background` does not.
+  //
+  // WARNING: unlike `horizon`, the three appearance fields have NON-ZERO defaults on the JSON side
+  // (radius 8 px, opacity 0.6, colour {0.8, 0.2, 0.2} — core's ZenithNadirParam). A
+  // zero-initialized struct with `zenith_nadir` set and nothing else asks for a zero-radius,
+  // fully transparent, black ring, i.e. no visible marker. Set all four, or go through JSON.
+  int zenith_nadir;
+  float zenith_nadir_radius_px;
+  float zenith_nadir_opacity;
+  float zenith_nadir_color[3];
+  // ADDED (v4.20). Non-zero = clip away the hemisphere BEHIND the camera, keeping only what the
+  // camera faces. A SECOND clip dimension, independent of `visible` and ANDed with it, which is why
+  // it is its own field rather than a `visible` enumerator. Opt-in: core's RenderConfig::front_
+  // defaults to false, so a zero-initialized struct clips nothing.
+  int front;
+  // ADDED (v4.21). Non-zero = draw the TEXT labels for that annotation family — the angle each
+  // line stands for, formatted by core ("22\u00b0"). Opt-in, like every annotation field above.
+  //
+  // INDEPENDENT OF THE LINE SWITCHES, at the geometry layer only: `horizon_label` with `horizon`
+  // zero draws the horizon's numbers without its line. NOT independent at the compositing layer —
+  // a label is painted in its family's own colour and opacity (each LUMICE_GridLine's `opacity` /
+  // `color` for the two grid families and the circles; the horizon's fixed constants for the
+  // horizon), so a line at opacity 0 is invisible together with its labels. See the v4.21 note at
+  // LUMICE_API_VERSION for why that asymmetry is deliberate rather than an oversight.
+  //
+  // `grid_label` covers BOTH grid families, parallels and meridians, matching the single grid
+  // label switch the GUI has. The circles get their own because the GUI has a separate one.
+  // There is no zenith/nadir member: those markers carry no text.
+  int horizon_label;
+  int grid_label;
+  int angular_dist_label;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============
@@ -1239,6 +1365,174 @@ typedef struct LUMICE_CrystalMesh_ {
 // for an unknown crystal->type; LUMICE_ERR_INVALID_CONFIG if the shape cannot be parsed.
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
                                        LUMICE_CrystalMesh* out);
+
+// =============== Annotation Overlay ===============
+// Where a view's auxiliary lines land, in pixels: the celestial horizon, parallels (constant
+// altitude), meridians (constant azimuth), circles of constant angular distance from a direction
+// (the sun, in every use so far), and the zenith / nadir points. GEOMETRY AND LABEL ANCHORS ONLY —
+// colour, line width, glyphs and collision avoidance belong to whoever draws. That split is the
+// point: the GUI preview and the CLI renderer draw the same lines their own way, and neither one
+// re-derives where they are.
+//
+// ⚠ THIS IS NOT A PER-FRAME CALL. Every mask costs a width*height inverse-projection sweep —
+// single-digit milliseconds from 1024x1024 upward even with the internal row-parallel split, which
+// is a whole 60 fps frame budget. Call it once when the view SETTLES and cache the result; a
+// caller driving an interactive control must debounce, or freeze the annotation for the duration
+// of a drag. The contract is stated here because it is a property of the computation, not of any
+// one caller's discipline.
+//
+// Sanity ceilings on the request lists. As with the LUMICE_MAX_CONFIG_* family these guard against
+// malformed input rather than expressing a design limit; a request past one is rejected with
+// LUMICE_ERR_INVALID_VALUE rather than truncated.
+// WIDENED (v4.18) from 360 to 1024, after the GUI's coordinate grid became a caller: at the
+// narrowest field of view it allows (1 deg) the adaptive step is 0.5 deg, which is 720 meridians
+// over the half-open (-180, 180]. 360 was rejecting that as malformed when it is the ordinary
+// grid, and truncating instead would have been worse than rejecting — the surviving half of the
+// list covers only negative azimuth, so a view looking east would have lost every meridian on
+// screen while reporting success. Widening a validation ceiling breaks no caller: nothing sizes an
+// array from it, and code compiled against the old value simply never sends more than it did.
+#define LUMICE_MAX_ANNOTATION_LINES 1024
+#define LUMICE_MAX_ANNOTATION_CIRCLES 64
+
+// Which family a label belongs to. The consumer decides appearance from this; core encodes none.
+#define LUMICE_ANNOTATION_HORIZON 0
+#define LUMICE_ANNOTATION_ELEVATION 1
+#define LUMICE_ANNOTATION_LONGITUDE 2
+#define LUMICE_ANNOTATION_ANGULAR_DIST 3
+
+// Longest label text core produces, including the terminating NUL. Values are at most
+// "-180.0" plus a two-byte UTF-8 degree sign.
+#define LUMICE_ANNOTATION_LABEL_MAX 16
+
+// The view an overlay is computed for. Separate from LUMICE_RenderParam on purpose: this carries
+// `front`, which the renderer has no field for, and it describes a pure computation with no Scene
+// or Server lifetime around it. `width`/`height` are the CANVAS the answer is expressed in, which
+// need not be the render resolution — a GUI panel showing a re-projected all-sky texture passes
+// its own on-screen pixel size and gets anchors in that space.
+typedef struct LUMICE_AnnotationView_ {
+  int width;
+  int height;
+  int lens_type;   // LUMICE_LENS_TYPE_*
+  float lens_fov;  // degrees
+  int lens_shift[2];
+  float overlap;  // dual-fisheye overlap zone |sky.z| threshold (sin value); 0 = none
+  float view_azimuth;
+  float view_elevation;
+  float view_roll;
+  int visible;  // LUMICE_VISIBLE_*
+  // Non-zero clips everything to the camera-facing hemisphere, ON TOP OF `visible`. The two are
+  // independent: `visible` says which half of the sky exists, `front` says the viewer only wants
+  // what is in front of them.
+  int front;
+} LUMICE_AnnotationView;
+
+// What to draw. Angle lists are caller-owned and read only for the duration of the call (the same
+// borrow rule as the Scene family's leaf structs), so a stack array is fine. A NULL list with a
+// zero count means "none of that category".
+typedef struct LUMICE_AnnotationRequest_ {
+  LUMICE_AnnotationView view;
+
+  // The celestial horizon (altitude 0). Its own flag rather than a 0 entry in `elevation_deg`,
+  // because every consumer so far colours it separately.
+  int horizon;
+
+  const float* elevation_deg;  // parallels, degrees
+  int elevation_count;
+  const float* longitude_deg;  // meridians, degrees
+  int longitude_count;
+
+  // Circles of constant angular distance from `reference_dir`. The direction need not be
+  // normalized; a zero vector falls back to the zenith.
+  const float* angular_dist_deg;
+  int angular_dist_count;
+  float reference_dir[3];
+
+  // Report where zenith and nadir land. Points, not curves: they carry no mask and no text,
+  // because a marker's glyph is the consumer's vocabulary, not core's.
+  int zenith_nadir;
+
+  // Zero skips the curve walk. The masks alone are several times cheaper than masks plus anchors,
+  // and a consumer that draws no text has no use for the anchors.
+  int want_labels;
+} LUMICE_AnnotationRequest;
+
+// One label: where to put it, what it says, and which curve it came from.
+typedef struct LUMICE_AnnotationLabel_ {
+  float px;  // canvas pixel, x right
+  float py;  // canvas pixel, y down
+  int kind;  // LUMICE_ANNOTATION_*
+  // Index into the request list this label's curve came from, or -1 for the horizon (which comes
+  // from no list). Lets a consumer map a label back to its line without parsing the text.
+  int index;
+  float value_deg;
+  char text[LUMICE_ANNOTATION_LABEL_MAX];
+} LUMICE_AnnotationLabel;
+
+// The result. The caller allocates this struct (stack is fine); core allocates what the pointers
+// point at, and LUMICE_ReleaseAnnotationOverlay frees it. Every pointer below is owned by core and
+// stays valid until that call — the same acquire/release discipline LUMICE_Scene and
+// LUMICE_ResultFrame use, with the same rule: exactly one Release per successful Compute, and
+// nothing dereferenced afterwards.
+typedef struct LUMICE_AnnotationOverlay_ {
+  int width;
+  int height;
+
+  // 1 where the lens images a piece of sky this request may annotate: imaged, inside `visible`,
+  // and inside the front hemisphere when `front` is set. Row-major width*height, indexed
+  // py * width + px — the same layout LUMICE_RawXyzResult uses. Every mask below is a subset of
+  // this one. NULL only when the view is degenerate.
+  const unsigned char* drawable;
+
+  // One mask per annotation CATEGORY, each the union of that category's lines, NULL when the
+  // category was not requested. Per category rather than per line because that is the granularity
+  // a consumer colours at; a per-line mask set would be tens of megabytes at 4K.
+  const unsigned char* horizon;
+  const unsigned char* elevation;
+  const unsigned char* longitude;
+  const unsigned char* angular_dist;
+
+  // Marker positions, valid only when the request asked for them AND the point is on the canvas
+  // and inside the requested hemisphere.
+  float zenith_px;
+  float zenith_py;
+  int zenith_valid;
+  float nadir_px;
+  float nadir_py;
+  int nadir_valid;
+
+  const LUMICE_AnnotationLabel* labels;
+  int label_count;
+
+  // Opaque handle to the storage the pointers above live in. Do not read, write, copy or free it;
+  // pass this struct to LUMICE_ReleaseAnnotationOverlay exactly once instead. Copying the struct
+  // copies the handle, so only ONE copy may be released — treat it as a move, not a value.
+  void* storage;
+} LUMICE_AnnotationOverlay;
+
+// Compute the overlay for one view. `*out` is fully overwritten on success and left untouched on
+// failure, so a failed call leaves nothing to release.
+//
+// Contract:
+//   - Pure and deterministic: identical `request` => identical output. No Server, no Scene, no
+//     global state, and safe to call from any thread (including concurrently with a running
+//     simulation — it shares nothing with one).
+//   - A degenerate view (width or height <= 0) is not an error: it yields an overlay with
+//     width = height = 0, every pointer NULL and label_count = 0, which still must be Released.
+//   - The masks and the anchors agree by construction: both come from one inverse sweep and one
+//     forward, the same forward the trace backends run.
+//
+// Returns LUMICE_ERR_NULL_ARG if `request` or `out` is NULL, or a list pointer is NULL with a
+// non-zero count; LUMICE_ERR_INVALID_VALUE for an unknown lens_type / visible, a negative count,
+// or a count past LUMICE_MAX_ANNOTATION_LINES / _CIRCLES; LUMICE_ERR_UNKNOWN on allocation
+// failure.
+LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
+                                                 LUMICE_AnnotationOverlay* out);
+
+// Release the storage a successful LUMICE_ComputeAnnotationOverlay allocated, and NULL out the
+// pointers so a double release is a no-op rather than a double free. NULL-safe, and safe on an
+// already-released or zero-initialized struct (same wording as LUMICE_SceneDestroy: calling it on
+// a live overlay exactly once is required; calling it on anything else does nothing).
+void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay);
 
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).

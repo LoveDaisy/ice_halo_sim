@@ -787,6 +787,143 @@ TEST(JsonParserParity, RendererIntensityFactorOmittedDefaultsToOne) {
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, p.core.renderers_.begin()->second.intensity_factor_);
 }
 
+// --- render.grid.longitude: the third grid family (v4.18) ---
+//
+// The corpus is structurally blind to a new key: no shipped config carries "grid.longitude", so
+// a decoder that never reads it round-trips every corpus document perfectly. Only a document that
+// actually sets the key can tell the two parsers apart, and the failure this pins is the one the
+// two-decoder shape produces — one of them growing the branch and the other not.
+
+std::string WrapRenderWithGrid(const std::string& grid_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "grid": )" + grid_json + " } ] }";
+}
+
+TEST(JsonParserParity, GridLongitudeSurvivesBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "longitude": [ { "value": -90.0, "width": 1.5, "opacity": 0.3, "color": [1.0, 0.5, 0.25] },
+                          { "value": 90.0, "opacity": 0.7 } ],
+           "elevation": [ { "value": 30.0, "opacity": 0.5 } ] })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  ASSERT_EQ(renderer.longitude_grid_.size(), 2u);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].value_, -90.0f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].opacity_, 0.3f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].color_[0], 1.0f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[1].value_, 90.0f);
+  // Not the parallels' list, and not merged with it — the two keys are decoded independently.
+  ASSERT_EQ(renderer.elevation_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.elevation_grid_[0].value_, 30.0f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridLongitudeOmittedLeavesBothParsersEmpty) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.longitude_grid_.empty());
+  EXPECT_TRUE(p.core.renderers_.begin()->second.longitude_grid_.empty());
+}
+
+// --- render.grid.zenith_nadir: the marker block (v4.19) ---
+//
+// Structurally blind in the corpus for the same reason grid.longitude is — no shipped config
+// carries the key. What makes this block need MORE than the "present" / "absent" pair those get is
+// that its three appearance fields default to NON-ZERO values, so there are three states to
+// separate rather than two, and only one of them (the object written out in full) is covered by a
+// decoder that merely remembers to read the key.
+
+TEST(JsonParserParity, GridZenithNadirSurvivesBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "zenith_nadir": { "enabled": true, "radius_px": 14.0, "opacity": 0.25,
+                             "color": [0.1, 0.7, 0.9] } })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.zenith_nadir_.enabled_);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.radius_px_, 14.0f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.opacity_, 0.25f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.color_[1], 0.7f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridZenithNadirPartialObjectAgreesOnTheOmittedDefaults) {
+  // The state the "present" / "absent" pair cannot reach: the key exists, switches the marker on,
+  // and says nothing about the appearance. Core's from_json leaves its member defaults (8 px, 0.6,
+  // {0.8, 0.2, 0.2}); a C API decoder that reset the struct first would answer 0 / 0 / black, and
+  // a config would then render differently depending on which parser read it.
+  const std::string text = WrapRenderWithGrid(R"({ "zenith_nadir": { "enabled": true } })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.zenith_nadir_.enabled_);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.radius_px_, 8.0f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.opacity_, 0.6f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.color_[0], 0.8f);
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridZenithNadirOmittedLeavesBothParsersOnTheDefaults) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const lumice::ZenithNadirParam kDefaults;
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.zenith_nadir_ == kDefaults);
+  EXPECT_TRUE(p.core.renderers_.begin()->second.zenith_nadir_ == kDefaults);
+}
+
+// --- render.front: the second clip dimension (v4.20) ---
+//
+// Its own top-level key, deliberately not a fourth "visible" enumerator. The negative half of that
+// decision is pinned by RendererVisibleUnknownStringRejected in test_c_api.cpp (the C API refuses
+// an unregistered visible string rather than letting nlohmann map it to "upper"); what is pinned
+// here is the positive half — both parsers read and write the real key, and agree.
+
+std::string WrapRenderWithFront(const std::string& front_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "visible": "full", "front": )" + front_json + " } ] }";
+}
+
+TEST(JsonParserParity, FrontSurvivesBothParsers) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithFront("true"), &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.front_);
+  // ...and it did not arrive by collapsing into `visible`, which is the failure mode this key
+  // exists to avoid.
+  EXPECT_EQ(renderer.visible_, lumice::RenderConfig::kFull);
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, FrontOmittedLeavesBothParsersUnclipped) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock), &p));
+  EXPECT_FALSE(p.via_capi.renderers_.begin()->second.front_);
+  EXPECT_FALSE(p.core.renderers_.begin()->second.front_);
+}
+
+TEST(JsonParserParity, FrontFalseIsNotConfusedWithFrontMissing) {
+  // Both mean "no clip", so this cannot be caught by comparing the parsed value — what it pins is
+  // that an explicit false is ACCEPTED by both rather than rejected as a type error by one.
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithFront("false"), &p));
+  EXPECT_FALSE(p.via_capi.renderers_.begin()->second.front_);
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second == p.core.renderers_.begin()->second);
+}
+
 // --- render.background: sRGB on the wire, linear in the struct ---
 //
 // The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.

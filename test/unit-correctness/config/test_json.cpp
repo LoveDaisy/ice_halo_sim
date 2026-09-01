@@ -895,4 +895,111 @@ TEST(CrystalSchemaKeyNames, AxisJsonUsesZenithAzimuthRoll) {
   EXPECT_NEAR(back.roll_dist.spread, 1.5f, 1e-5f);
 }
 
+
+// =============== Render grid schema key names ===============
+// Same discipline as the crystal section above: the keys are bare string literals so the
+// expectations do not drift with the code under test. These pin the v4.17 rename of
+// `grid.central` -> `grid.angular_dist` from BOTH sides — the alias the decoder must keep reading
+// forever, and the single spelling the encoder is allowed to write.
+//
+// The renderer whose id is 3 in the fixture is the one carrying a `grid.central` entry
+// (value 22, opacity 0.4, width 1.2). It is read through the fixture rather than a hand-built
+// object precisely because it is a file written before the rename existed: that is the artifact
+// the alias exists for.
+
+TEST_F(V3TestJson, RenderGrid_LegacyCentralKeyStillParses) {
+  auto manager = config_json_.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.angular_dist_grid_.size(), 1u);
+  EXPECT_NEAR(r.angular_dist_grid_[0].value_, 22.0f, 1e-5f);
+  EXPECT_NEAR(r.angular_dist_grid_[0].opacity_, 0.4f, 1e-5f);
+  EXPECT_NEAR(r.angular_dist_grid_[0].width_, 1.2f, 1e-5f);
+}
+
+TEST_F(V3TestJson, RenderGrid_AngularDistKeyParses) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    if (jr.at("id").get<int>() != 3) {
+      continue;
+    }
+    // Move the same array under the new spelling; nothing else about the renderer changes.
+    jr["grid"]["angular_dist"] = jr["grid"]["central"];
+    jr["grid"].erase("central");
+  }
+
+  auto manager = j.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.angular_dist_grid_.size(), 1u);
+  EXPECT_NEAR(r.angular_dist_grid_[0].value_, 22.0f, 1e-5f);
+  EXPECT_NEAR(r.angular_dist_grid_[0].opacity_, 0.4f, 1e-5f);
+}
+
+TEST_F(V3TestJson, RenderGrid_NewKeyWinsOverLegacyAlias) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    if (jr.at("id").get<int>() != 3) {
+      continue;
+    }
+    // Both spellings present, disagreeing. A decoder that read the alias last, or that appended
+    // instead of choosing, would fail one of the assertions below.
+    jr["grid"]["angular_dist"] = nlohmann::json::array({ { { "value", 46.0f }, { "opacity", 0.9f } } });
+  }
+
+  auto manager = j.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.angular_dist_grid_.size(), 1u);
+  EXPECT_NEAR(r.angular_dist_grid_[0].value_, 46.0f, 1e-5f);
+  EXPECT_NEAR(r.angular_dist_grid_[0].opacity_, 0.9f, 1e-5f);
+}
+
+TEST_F(V3TestJson, RenderGrid_ToJsonEmitsOnlyTheNewKey) {
+  auto manager = config_json_.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  nlohmann::json j = r;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("angular_dist"));
+  // The retired spelling must be ABSENT, not merely equal: writing both would keep every reader
+  // working while quietly making the alias permanent in files this version produces.
+  EXPECT_FALSE(j["grid"].contains("central"));
+  ASSERT_EQ(j["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(j["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+}
+
+// The meridian list is a NEW key (v4.18), so unlike `grid.central` it has no alias to honour —
+// what it does need is that a file written before it existed still loads with the field empty
+// rather than defaulted to something.
+TEST_F(V3TestJson, RenderGrid_LongitudeKeyParses) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    if (jr.at("id").get<int>() != 3) {
+      continue;
+    }
+    jr["grid"]["longitude"] = nlohmann::json::array(
+        { { { "value", -90.0f }, { "opacity", 0.3f } }, { { "value", 90.0f }, { "opacity", 0.7f } } });
+  }
+
+  auto manager = j.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.longitude_grid_.size(), 2u);
+  EXPECT_NEAR(r.longitude_grid_[0].value_, -90.0f, 1e-5f);
+  EXPECT_NEAR(r.longitude_grid_[0].opacity_, 0.3f, 1e-5f);
+  EXPECT_NEAR(r.longitude_grid_[1].value_, 90.0f, 1e-5f);
+  // The other two families are read from their own keys and must not pick this list up.
+  EXPECT_TRUE(r.elevation_grid_.empty());
+  EXPECT_EQ(r.angular_dist_grid_.size(), 1u);
+}
+
+TEST_F(V3TestJson, RenderGrid_MissingLongitudeKeyLeavesTheListEmpty) {
+  auto manager = config_json_.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_TRUE(r.longitude_grid_.empty()) << "renderer " << id;
+  }
+}
+
 }  // namespace

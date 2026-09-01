@@ -59,6 +59,11 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_pcg_ray_base_split.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_wl_stream_decouple.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
+  # Annotation overlay: the generalized level-set extraction every auxiliary line shares, the
+  # row-parallel mask build, and ComputeOverlay.
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_annotation_overlay.cpp"
+  # The glyph rasterizer the CLI renderer draws those labels' text with (core has no ImGui).
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_annotation_font.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_crystal_sync_group.cpp"
@@ -79,7 +84,11 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_grid.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_label.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_zenith_nadir.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_composite_background.cpp"
   # Result-frame lifetime guard + the buffer pool underneath it, and the completion/drain
@@ -263,6 +272,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_visible_mask_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_horizon_gui_parity.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_cache.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"

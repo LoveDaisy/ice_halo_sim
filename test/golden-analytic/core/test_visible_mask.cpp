@@ -424,6 +424,172 @@ TEST(VisibleMask, VisibleRangeAppliesToRectangularAndDualFisheyeToo) {
   }
 }
 
+// ==================================================================================================
+// Front-hemisphere half (v4.20). A SECOND clip, ANDed with `visible`, so the oracles below are all
+// statements that hold whatever the world-axis sign convention turns out to be: what the camera
+// faces, where it stops, and that it intersects rather than replaces.
+// ==================================================================================================
+
+TEST(VisibleMask, FrontIsANoOpOnlyWhereTheDomainStopsAtTheEquator) {
+  // This used to assert the no-op for the WHOLE single-lens family, on the premise its own comment
+  // stated: "every single-lens inverse rejects r > 1, and r = 1 is theta = 90 deg". 474.1 removed
+  // that premise for three of the five — equal-area, equidistant and stereographic now invert out
+  // to theta = 180 deg — so the clip has real work to do there and the old assertion became false.
+  // It is narrowed rather than relaxed, and the half it gave up is asserted positively below.
+  //
+  // The two that remain are not leftovers; each stops at the front hemisphere for its own reason:
+  //   * kLinear maps radius through theta = atan(rho / focal), strictly below 90 deg at every
+  //     finite radius. There is no image circle to invert past.
+  //   * kFisheyeOrthographic is capped at 90 deg on purpose (474.1): r = sin(theta) peaks at the
+  //     equator and folds back, so widening it is not invertible.
+  for (LensParam::LensType t : { LensParam::kLinear, LensParam::kFisheyeOrthographic }) {
+    for (float el : { 90.0f, 30.0f, 0.0f }) {
+      RenderConfig off = MakeCfg(t, 170.0f, 128, 128, RenderConfig::kFull, el);
+      RenderConfig on = off;
+      on.front_ = true;
+      const auto m_off = Mask(off);
+      const auto m_on = Mask(on);
+      if (CountOn(m_off) == 0u) {
+        // Non-fatal: a vacuous row must not take the remaining lens types and elevations with it.
+        ADD_FAILURE() << "type " << static_cast<int>(t) << " el " << el << ": the unclipped mask is empty";
+        continue;
+      }
+      EXPECT_EQ(m_on, m_off) << "type " << static_cast<int>(t) << " el " << el
+                             << ": the front clip removed pixels a single lens never imaged behind";
+    }
+  }
+}
+
+TEST(VisibleMask, FrontClipsTheWidenedSingleLensTypes) {
+  // The positive half of the split above, and the reason narrowing it is not a loss of coverage:
+  // for the three types 474.1 widened past the equator, the front clip MUST remove something, or
+  // the widening and the clip are not both reaching the mask. A clip written against the wrong
+  // axis would show up here as "removed nothing" just as surely as it would have shown up in the
+  // old no-op assertion as "removed something".
+  //
+  // Elevation 0 only: the camera on the horizon is where a 170 deg frame reaches furthest behind
+  // it. At the zenith the widened region is the sky near the nadir, which the clip also removes,
+  // but the horizon case is the one that fails first if the clip's axis is wrong.
+  for (LensParam::LensType t :
+       { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant, LensParam::kFisheyeStereographic }) {
+    RenderConfig off = MakeCfg(t, 170.0f, 128, 128, RenderConfig::kFull, 0.0f);
+    RenderConfig on = off;
+    on.front_ = true;
+    const auto m_off = Mask(off);
+    const auto m_on = Mask(on);
+    if (CountOn(m_off) == 0u) {
+      // Non-fatal for the same reason the no-op test above is: one empty row must not take the
+      // remaining lens types with it.
+      ADD_FAILURE() << "type " << static_cast<int>(t) << ": the unclipped mask is empty";
+      continue;
+    }
+    EXPECT_LT(CountOn(m_on), CountOn(m_off))
+        << "type " << static_cast<int>(t)
+        << ": the front clip removed nothing from a lens whose domain now reaches past the equator";
+    // And it must not remove everything either — that is the flipped-comparison failure.
+    EXPECT_GT(CountOn(m_on), 0u) << "type " << static_cast<int>(t) << ": the front clip emptied the mask";
+  }
+}
+
+TEST(VisibleMask, FrontAtTheZenithIsExactlyTheUpperHemisphere) {
+  // The proposition is geometric, not conventional: a camera pointed straight up faces the upper
+  // half of the sky, so ITS front hemisphere and THE upper hemisphere are the same set. Pointed
+  // straight down, the lower one. Checked on a full-sky lens, where the two clips can disagree —
+  // on kLinear and kFisheyeOrthographic both are no-ops and the test would prove nothing. (The
+  // other three single lenses reach past the equator since 474.1, so the clip does bite there;
+  // the full-sky lens is still the clearer probe because its two clips can differ, not merely
+  // both be non-empty.)
+  const int w = 200;
+  const int h = 100;
+  {
+    RenderConfig front_up = MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kFull, 90.0f);
+    front_up.front_ = true;
+    const auto upper = Mask(MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kUpper, 90.0f));
+    ASSERT_GT(CountOn(upper), 0u);
+    EXPECT_EQ(Mask(front_up), upper);
+  }
+  {
+    RenderConfig front_down = MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kFull, -90.0f);
+    front_down.front_ = true;
+    const auto lower = Mask(MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kLower, -90.0f));
+    ASSERT_GT(CountOn(lower), 0u);
+    EXPECT_EQ(Mask(front_down), lower);
+  }
+}
+
+TEST(VisibleMask, FrontHalvesAFullSkyLensAndAndsWithVisible) {
+  // Camera on the horizon: now the two clips cut along PERPENDICULAR planes, which is the only
+  // arrangement in which "AND with base" is distinguishable from "replaces base". front alone must
+  // take half the sky, visible alone the other half, and the two together a quarter — a clip that
+  // overwrote `visible` instead of intersecting it would land on a half.
+  const int w = 200;
+  const int h = 100;
+  auto cfg = [&](RenderConfig::VisibleRange vis, bool front) {
+    RenderConfig c = MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, vis, /*el=*/0.0f);
+    c.front_ = front;
+    return c;
+  };
+  const auto full = Mask(cfg(RenderConfig::kFull, false));
+  const auto front_only = Mask(cfg(RenderConfig::kFull, true));
+  const auto upper_only = Mask(cfg(RenderConfig::kUpper, false));
+  const auto both = Mask(cfg(RenderConfig::kUpper, true));
+
+  const double n = static_cast<double>(CountOn(full));
+  ASSERT_GT(n, 0.0);
+  EXPECT_NEAR(static_cast<double>(CountOn(front_only)), n / 2.0, n * 0.02);
+  EXPECT_NEAR(static_cast<double>(CountOn(upper_only)), n / 2.0, n * 0.02);
+  EXPECT_NEAR(static_cast<double>(CountOn(both)), n / 4.0, n * 0.02);
+
+  // Pixel-exact: the combined mask is the intersection, not an approximation of one.
+  Mismatches mm;
+  for (size_t i = 0; i < full.size(); ++i) {
+    const bool expected = (front_only[i] != 0) && (upper_only[i] != 0);
+    if ((both[i] != 0) != expected) {
+      std::ostringstream at;
+      at << "pixel " << i << ": front=" << (front_only[i] != 0) << " upper=" << (upper_only[i] != 0)
+         << " both=" << (both[i] != 0);
+      mm.Note(at.str());
+    }
+  }
+  EXPECT_EQ(mm.count, 0u) << mm.count << " pixels broke the AND; first: " << mm.first;
+}
+
+TEST(VisibleMask, FrontFollowsTheAzimuthRatherThanAFixedWorldAxis) {
+  // Two cameras on the horizon looking opposite ways partition the same sky: whatever one keeps,
+  // the other drops. This is what pins the clip to the CAMERA's forward — a clip hard-wired to a
+  // world axis would return the same set for both.
+  const int w = 200;
+  const int h = 100;
+  auto looking = [&](float az) {
+    RenderConfig c = MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kFull, /*el=*/0.0f);
+    c.view_.az_ = az;
+    c.front_ = true;
+    return Mask(c);
+  };
+  const auto north = looking(0.0f);
+  const auto south = looking(180.0f);
+  const auto full = Mask(MakeCfg(LensParam::kDualFisheyeEqualArea, 180.0f, w, h, RenderConfig::kFull, /*el=*/0.0f));
+
+  size_t overlap = 0;
+  Mismatches mm;
+  for (size_t i = 0; i < full.size(); ++i) {
+    // The two half-skies are complementary WITHIN the imaged domain; the lens domain itself is
+    // identical for the two, since azimuth only spins the sky the mask reads.
+    if (((north[i] != 0) || (south[i] != 0)) != (full[i] != 0)) {
+      std::ostringstream at;
+      at << "pixel " << i << ": north=" << (north[i] != 0) << " south=" << (south[i] != 0)
+         << " full=" << (full[i] != 0);
+      mm.Note(at.str());
+    }
+    if (north[i] != 0 && south[i] != 0) {
+      ++overlap;
+    }
+  }
+  EXPECT_EQ(mm.count, 0u) << mm.count << " pixels fell outside both half-skies; first: " << mm.first;
+  // Only the seam plane (dot == 0, kept by both) may overlap.
+  EXPECT_LT(overlap, full.size() / 20) << "the two opposite views overlap far beyond their shared seam";
+}
+
 TEST(VisibleMask, DegenerateResolutionYieldsAnEmptyMask) {
   RenderConfig cfg = MakeCfg(LensParam::kLinear, 90.0f, 0, 0);
   EXPECT_TRUE(Mask(cfg).empty());

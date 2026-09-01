@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -325,6 +326,22 @@ TEST(SceneAddRenderer, MatchesConfigToJson) {
   EXPECT_EQ(SceneRoot(g.get()).at("render").at(0), oracle.at("render").at(0));
 }
 
+TEST(SceneAddRenderer, FrontDefaultsOffAndIsStatedRatherThanOmitted) {
+  // A zero-initialized param asks for no clip — the same thing a config predating the field means.
+  // Written out as `false` rather than left absent, matching "visible", so a reader never has to
+  // know the default to know what the config says.
+  LUMICE_RenderParam r{};
+  r.resolution_w = 320;
+  r.resolution_h = 240;
+
+  SceneGuard g;
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("front"));
+  EXPECT_FALSE(jr.at("front").get<bool>());
+}
+
 TEST(SceneAddScatterLayer, MatchesConfigToJson) {
   LUMICE_ScatterLayer layer{};
   layer.probability = 0.3f;
@@ -562,13 +579,23 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   bad_visible.visible = 7;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_visible, &id), LUMICE_ERR_INVALID_CONFIG);
 
-  LUMICE_RenderParam bad_central = base;
-  bad_central.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
-  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_central, &id), LUMICE_ERR_INVALID_CONFIG);
+  LUMICE_RenderParam bad_angular_dist = base;
+  bad_angular_dist.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_angular_dist, &id), LUMICE_ERR_INVALID_CONFIG);
 
   LUMICE_RenderParam negative_elevation = base;
   negative_elevation.elevation_grid_count = -1;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_elevation, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  // v4.18: the meridian list is a third fixed-capacity array and gets the same bounds pass. Both
+  // ends, because a count validated at one end only is the shape of the defect this checks for.
+  LUMICE_RenderParam bad_longitude = base;
+  bad_longitude.longitude_grid_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_longitude, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam negative_longitude = base;
+  negative_longitude.longitude_grid_count = -1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_longitude, &id), LUMICE_ERR_INVALID_CONFIG);
 
   // v4.16: ev_mode is the third enum-valued field and gets the same treatment.
   LUMICE_RenderParam bad_ev_mode = base;
@@ -580,8 +607,9 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
 
   // The exact cap is accepted (the bound is inclusive).
   LUMICE_RenderParam at_cap = base;
-  at_cap.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES;
   at_cap.elevation_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.longitude_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &at_cap, &id), LUMICE_OK);
 }
 
@@ -622,6 +650,32 @@ LUMICE_Distribution Dist(int type, float center, float spread) {
 }
 
 }  // namespace
+
+TEST(SceneAddRenderer, FrontIsItsOwnWireKeyAndRoundTrips) {
+  // v4.20's ABI append. The wire key must be a top-level "front" boolean sitting BESIDE "visible",
+  // because the alternative — folding it into the visible enum — decodes to "upper" without an
+  // error on the far side (NLOHMANN_JSON_SERIALIZE_ENUM's first-entry rule).
+  LUMICE_RenderParam r{};
+  r.resolution_w = 256;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.visible = LUMICE_VISIBLE_FULL;
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  r.front = 1;
+
+  SceneGuard g;
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("front"));
+  EXPECT_TRUE(jr.at("front").is_boolean());
+  EXPECT_TRUE(jr.at("front").get<bool>());
+  EXPECT_EQ(jr.at("visible").get<std::string>(), "full");
+
+  ExpectLosslessRoundTrip(g.get());
+}
 
 TEST(SceneRoundTrip, EmptyScene) {
   SceneGuard g;
@@ -891,11 +945,20 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.ray_color[1] = 0.8f;
   r.ray_color[2] = 0.7f;
   r.horizon = 0;
-  r.central_grid_count = 2;
-  r.central_grid[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
-  r.central_grid[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
+  r.angular_dist_count = 2;
+  r.angular_dist[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
+  r.angular_dist[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
   r.elevation_grid_count = 1;
   r.elevation_grid[0] = LUMICE_GridLine{ 45.0f, 1.0f, 1.0f, { 0.0f, 0.0f, 1.0f } };
+  r.longitude_grid_count = 2;
+  r.longitude_grid[0] = LUMICE_GridLine{ -90.0f, 1.0f, 0.6f, { 0.5f, 0.5f, 0.0f } };
+  r.longitude_grid[1] = LUMICE_GridLine{ 180.0f, 3.0f, 0.1f, { 0.0f, 0.5f, 0.5f } };
+  r.zenith_nadir = 1;
+  r.zenith_nadir_radius_px = 14.0f;
+  r.zenith_nadir_opacity = 0.25f;
+  r.zenith_nadir_color[0] = 0.1f;
+  r.zenith_nadir_color[1] = 0.7f;
+  r.zenith_nadir_color[2] = 0.9f;
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
   LUMICE_ScatterLayer layer{};
@@ -922,6 +985,115 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000000, 20, 8), LUMICE_OK);
 
   ExpectLosslessRoundTrip(g.get());
+}
+
+// =============== zenith / nadir marker block (v4.19) ===============
+//
+// The ABI half of the block is covered by the full-renderer round trip above. What is NOT covered
+// there — and is the thing this block can get wrong that the line families cannot — is that its
+// three appearance fields have NON-ZERO defaults on the JSON side. "Key absent" and
+// "zero-initialized struct" are therefore different states, and a decoder that answers a missing
+// key with zeros disagrees with core's own parser about what a pre-v4.19 document means.
+
+namespace {
+const nlohmann::json& RendererGridOf(const LUMICE_Scene* scene) {
+  return SceneRoot(scene).at("render").at(0).at("grid");
+}
+
+// A committable single-renderer document, built through the API rather than written out by hand so
+// the parts this file is not testing stay valid as the schema moves. `edit` is handed the parsed
+// document to shape the marker block however the case needs.
+std::string SceneJsonWithMarkerBlock(const std::function<void(nlohmann::json&)>& edit) {
+  SceneGuard g;
+  int id = -1;
+  EXPECT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000, 8, 0), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  const LUMICE_CrystalParam c = MakePrismParam(1.5f);
+  EXPECT_EQ(LUMICE_SceneAddCrystal(g.get(), &c, &id), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ id, 1.0f, -1 };
+  EXPECT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  nlohmann::json doc = nlohmann::json::parse(SceneToJsonString(g.get()));
+  edit(doc.at("render").at(0).at("grid"));
+  return doc.dump();
+}
+}  // namespace
+
+TEST(SceneRenderZenithNadir, StructValuesReachTheJsonKey) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.zenith_nadir = 1;
+  r.zenith_nadir_radius_px = 11.5f;
+  r.zenith_nadir_opacity = 0.35f;
+  r.zenith_nadir_color[0] = 0.25f;
+  r.zenith_nadir_color[1] = 0.5f;
+  r.zenith_nadir_color[2] = 0.75f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  const nlohmann::json& grid = RendererGridOf(g.get());
+  ASSERT_TRUE(grid.contains("zenith_nadir"));
+  const auto& z = grid.at("zenith_nadir");
+  EXPECT_TRUE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 11.5f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.35f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(2).get<float>(), 0.75f, 1e-5f);
+}
+
+TEST(SceneRenderZenithNadir, MissingKeyDecodesToCoreDefaultsNotZeros) {
+  // A document written before v4.19 carries no "grid.zenith_nadir". Decoding it must leave the
+  // struct on core's ZenithNadirParam defaults — off, but with radius 8 / opacity 0.6 /
+  // {0.8, 0.2, 0.2} — because that is what core's own parser leaves, and the two decoders are
+  // required to agree. Zeroing instead would be invisible while the marker is off and would
+  // produce an invisible marker the moment anything switched it on.
+  const std::string doc = SceneJsonWithMarkerBlock([](nlohmann::json& grid) { grid.erase("zenith_nadir"); });
+  ASSERT_EQ(doc.find("zenith_nadir"), std::string::npos) << "the fixture must actually omit the key";
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& z = RendererGridOf(scene).at("zenith_nadir");
+  EXPECT_FALSE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 8.0f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.6f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(0).get<float>(), 0.8f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(1).get<float>(), 0.2f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
+}
+
+TEST(SceneRenderZenithNadir, PartialObjectKeepsTheDefaultsItOmits) {
+  // The middle state between the two above: a document that switches the marker on and says
+  // nothing else must get the default appearance, not a zero-radius transparent black ring.
+  const std::string doc = SceneJsonWithMarkerBlock(
+      [](nlohmann::json& grid) { grid["zenith_nadir"] = nlohmann::json{ { "enabled", true } }; });
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& z = RendererGridOf(scene).at("zenith_nadir");
+  EXPECT_TRUE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 8.0f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.6f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(0).get<float>(), 0.8f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
 }
 
 // =============== AC3: serialization negative paths (error code, never crash, *out == NULL) ===============
@@ -1284,4 +1456,110 @@ TEST(SceneCommit, EmptySceneIsRejected) {
   int reused = -1;
   EXPECT_NE(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
   EXPECT_EQ(reused, -1) << "out_reused must be untouched when the commit fails";
+}
+
+// =============== v4.17 grid.angular_dist rename (C API side) ===============
+// The C API carries its own JSON decoder, independent of core's ParseRenderConfig. The rename's
+// alias rule therefore has to be pinned twice; test_json.cpp pins the core half with the same four
+// propositions. Keys are bare string literals for the same reason as there — expressing them via
+// the code under test would let the wire format and its test drift together.
+
+TEST(SceneGridAngularDist, EncoderWritesOnlyTheNewKey) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 128;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.angular_dist_count = 1;
+  r.angular_dist[0] = LUMICE_GridLine{ 22.0f, 1.2f, 0.4f, { 1.0f, 1.0f, 1.0f } };
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("grid"));
+  ASSERT_TRUE(jr["grid"].contains("angular_dist"));
+  // Absent, not merely equal: emitting both spellings would keep every reader working while
+  // making the retired key permanent in files this version writes.
+  EXPECT_FALSE(jr["grid"].contains("central"));
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+}
+
+namespace {
+
+// A minimal but VALID scene document carrying one angular-distance line, produced by the encoder
+// itself rather than hand-written: the alias tests below rewrite one key inside it, so everything
+// except that key is guaranteed to be a document this decoder already accepts.
+std::string SceneJsonWithOneAngularDistLine(float value_deg, float opacity) {
+  SceneGuard g;
+  int id = -1;
+  EXPECT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000, 8, 0), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  const LUMICE_CrystalParam c = MakePrismParam(1.5f);
+  EXPECT_EQ(LUMICE_SceneAddCrystal(g.get(), &c, &id), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ id, 1.0f, -1 };
+  EXPECT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+  LUMICE_RenderParam r{};
+  r.resolution_w = 128;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.angular_dist_count = 1;
+  r.angular_dist[0] = LUMICE_GridLine{ value_deg, 1.2f, opacity, { 1.0f, 1.0f, 1.0f } };
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  return SceneToJsonString(g.get());
+}
+
+// Replace the first occurrence of `from` with `to`. Used to turn the encoder's new spelling back
+// into the retired one, i.e. to manufacture a pre-rename document.
+std::string ReplaceFirst(std::string text, const std::string& from, const std::string& to) {
+  const size_t at = text.find(from);
+  EXPECT_NE(at, std::string::npos) << "expected to find " << from;
+  if (at != std::string::npos) {
+    text.replace(at, from.size(), to);
+  }
+  return text;
+}
+
+}  // namespace
+
+TEST(SceneGridAngularDist, DecoderReadsTheLegacyCentralAlias) {
+  // The same document a pre-rename version of this code would have written.
+  const std::string legacy =
+      ReplaceFirst(SceneJsonWithOneAngularDistLine(22.0f, 0.4f), "\"angular_dist\"", "\"central\"");
+  ASSERT_NE(legacy.find("\"central\""), std::string::npos);
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(legacy.c_str(), &scene), LUMICE_OK) << legacy;
+  ASSERT_NE(scene, nullptr);
+
+  // Re-serializing normalizes the alias away: what went in as "central" comes back out under the
+  // new spelling, with its values intact.
+  const auto& jr = SceneRoot(scene).at("render").at(0);
+  ASSERT_TRUE(jr["grid"].contains("angular_dist"));
+  EXPECT_FALSE(jr["grid"].contains("central"));
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["opacity"].get<float>(), 0.4f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
+}
+
+TEST(SceneGridAngularDist, DecoderPrefersTheNewKeyWhenBothAppear) {
+  // Both spellings present and disagreeing: the new key wins, and the two lists are not merged.
+  const std::string both = ReplaceFirst(SceneJsonWithOneAngularDistLine(46.0f, 0.9f), "\"grid\":{",
+                                        "\"grid\":{\"central\":[{\"value\":22.0,\"width\":1.0,\"opacity\":0.4,"
+                                        "\"color\":[1.0,1.0,1.0]}],");
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(both.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& jr = SceneRoot(scene).at("render").at(0);
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u) << "the two lists must not be concatenated";
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 46.0f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
 }

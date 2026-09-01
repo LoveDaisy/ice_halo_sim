@@ -47,6 +47,22 @@ struct ColorClassOverflowInfo {
   bool class_over_cap = false;  // true = state.raypath_color.size() exceeds _COLOR_CLASSES
 };
 
+// Which grid-line family overflowed LUMICE_MAX_CONFIG_GRID_LINES on the export path, and by how
+// much. Same shape and same contract as the two overflow structs above: only filled when the
+// caller passed a non-null pointer and BuildScene actually failed on this check.
+//
+// Unlike a filter overflow, this one is NOT something the user built: the GUI derives the grid
+// from ONE FOV-adaptive step (ComputeGridStep), so the count is a function of the FOV alone and a
+// narrow enough view overflows the cap with no unusual document at all — 72 meridians at a 20°
+// FOV, against a cap of 64. Refusing the export is the deliberate choice over truncating it: a
+// truncated grid is a picture the CLI would draw differently from the screen while reporting
+// success, which is the class of quiet dishonesty this whole export path is built to avoid.
+struct GridOverflowInfo {
+  enum class Family { kNone, kElevation, kLongitude };
+  Family family = Family::kNone;
+  int count = 0;  // how many lines the current FOV expands to
+};
+
 // Which consumer a BuildScene result is destined for. The two differ in exactly ONE field —
 // renderer intensity_factor — and that divergence is deliberate (doc/ev-pipeline-architecture.md
 // §2.4): the GUI carries manual + auto EV at display time, the CLI has no display-time EV concept
@@ -73,8 +89,10 @@ enum class SceneIntent {
 // receives the identity of the first offending (layer, entry, filter name). Symmetric
 // contract for `color_overflow` on color-class overflow. Only one overflow is reported per
 // call (whichever is hit first, in file order: filter walk before color walk).
+// Symmetric contract for `grid_overflow` when the export arm's grid expansion exceeds
+// LUMICE_MAX_CONFIG_GRID_LINES (kJsonExport only; the commit arm writes no grid).
 ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* filter_overflow = nullptr,
-                    ColorClassOverflowInfo* color_overflow = nullptr);
+                    ColorClassOverflowInfo* color_overflow = nullptr, GridOverflowInfo* grid_overflow = nullptr);
 
 // Format a human-readable locator ("filter \"NAME\", Layer L / Entry E", or just
 // "Layer L / Entry E" when the filter is unnamed) from a FilterOverflowInfo, using 1-based
@@ -111,10 +129,11 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 //   kJsonExport's invariant — the renderer DESCRIBES THE SCREEN: lens/fov/view/visible/background/
 //     horizon/canvas all come from GuiState, and intensity_factor bakes 2^exposure_offset, because
 //     the CLI has no display-time stage at all. Whatever is not in the config is not in the image.
-//     Three documented exceptions, each with a reason and none of them silent:
-//       - the front-hemisphere clip: no core encoding exists, so the export is REFUSED (below);
+//     Two documented exceptions, each with a reason and none of them silent:
 //       - lens_shift: no GUI control exists, so there is no user-visible value to be honest about;
 //       - overlay annotations other than the horizon line: a model mismatch, not an omission.
+//     The front-hemisphere clip was a third until it gained a core field (RenderConfig::front_ /
+//     LUMICE_RenderParam::front, JSON key "front"); it is now written like any other field.
 //
 //   resolution is the one field where both arms may print the same numbers, and it is a
 //   coincidence of the fallback rather than a coupling: kSimCommit's 2:1 is required, while
@@ -124,8 +143,8 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 // Pure — no file dialog / filesystem — so the reject path is directly unit-testable (the
 // file-dialog wrapper DoExportConfigJson only supplies the path). Returns true and fills *out_json
 // (pretty-printed, 2-space indent) on success; returns false and fills *out_warning (a
-// FormatOverflowLocator-bearing message on an ABI clause/term/color overflow, or the front-clip
-// refusal) on rejection, leaving *out_json untouched. Either out-param may be null.
+// FormatOverflowLocator-bearing message on an ABI clause/term/color or grid-line overflow) on
+// rejection, leaving *out_json untouched. Either out-param may be null.
 bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning);
 
 // task-gui-feedback-affordances Step 3 (AC4): summary of how many post-Cartesian

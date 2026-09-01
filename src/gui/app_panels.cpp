@@ -7,6 +7,7 @@
 #include <string>
 
 #include "IconsFontAwesome6.h"
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/app.hpp"
 #include "gui/aspect_ratio_rules.hpp"
 #include "gui/color_window.hpp"
@@ -107,6 +108,112 @@
 // =============================================================================
 
 namespace lumice::gui {
+
+// The GUI's one AnnotationOverlayCache, filled once per frame in RenderPreviewPanel and read by
+// both consumers in the same frame — the preview's mask texture and the on-screen labels. File
+// scope rather than a member because RenderPreviewPanel is a free function and is the only place
+// a live preview view exists; the off-screen export path builds its own request at its own size.
+AnnotationOverlayCache g_annotation_overlay;
+
+AnnotationOverlayCache& PreviewAnnotationOverlay() {
+  return g_annotation_overlay;
+}
+
+AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc) {
+  AnnotationViewInput in;
+  in.lens_type = rc.lens_type;
+  in.fov = rc.fov;
+  in.azimuth = rc.azimuth;
+  in.elevation = rc.elevation;
+  in.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
+  in.visible = rc.visible;
+  // The same constant the export writes into the config the CLI renders (file_io.cpp BuildScene),
+  // so both sides annotate the same projection rather than two that differ by an overlap band.
+  in.overlap = kDualFisheyeOverlap;
+  in.front = rc.front;
+  in.sun_altitude_deg = state.sun.altitude;
+  // Each family's angle list is filled only when that family's line OR label switch is on. The
+  // switches gate here rather than only at the drawing site because an unwanted list is not free:
+  // every angle in it is a level the mask sweep tests per pixel and a curve the label walk walks.
+  // A family whose list is empty is simply not computed (AnnotationOverlayCache::Recompute).
+  if (state.show_sun_circles_line || state.show_sun_circles_label) {
+    in.angular_dist_deg = state.sun_circle_angles;
+  }
+  if (state.show_grid_line || state.show_grid_label) {
+    const float step = ComputeGridStep(rc.fov);
+    in.elevation_deg = ComputeGridElevationAngles(step);
+    in.longitude_deg = ComputeGridLongitudeAngles(step);
+  }
+  // The marker pair has no list to fill and no label switch of its own — it is a bool the request
+  // either carries or does not.
+  in.zenith_nadir = state.show_zenith_nadir_line;
+  // The horizon, gated on EITHER of its switches, exactly like the three families above. It used
+  // to be the label switch alone, because the preview derived the line itself in its fragment
+  // shader and the mask that came back was a cost with no reader. It has one now.
+  in.horizon = state.show_horizon_line || state.show_horizon_label;
+  return in;
+}
+
+namespace {
+
+// The half of a CurveLabelSet that does not depend on which family it is: rescale core's anchors
+// from the canvas the request named into the target draw list's space.
+//
+// The anchors are in CANVAS pixel space — the framebuffer, vp_w/vp_h in device pixels — while a
+// draw list works in logical points. On a HiDPI display those differ by the DPI scale, so the
+// anchors are SCALED rather than merely offset; without this a label sits at twice its distance
+// from the viewport's top-left corner. The export path passes its FBO size and gets the identity,
+// which is what makes one helper serve both.
+void FillCurveLabelSet(const AnnotationOverlayCache& cache, const std::vector<AnnotationOverlayCache::Label>& labels,
+                       float vp_w, float vp_h, CurveLabelSet* set) {
+  if (!cache.HasResult()) {
+    return;
+  }
+  const int mask_w = cache.Width();
+  const int mask_h = cache.Height();
+  const float sx = mask_w > 0 ? vp_w / static_cast<float>(mask_w) : 1.0f;
+  const float sy = mask_h > 0 ? vp_h / static_cast<float>(mask_h) : 1.0f;
+  set->anchors.reserve(labels.size());
+  for (const auto& l : labels) {
+    set->anchors.push_back(CurveLabelAnchor{ l.px * sx, l.py * sy, l.text });
+  }
+}
+
+}  // namespace
+
+CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                      float vp_h) {
+  CurveLabelSet set;
+  std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color), std::begin(set.color));
+  set.alpha = state.sun_circles_alpha;
+  set.group = kGroupSunCircles;
+  FillCurveLabelSet(cache, cache.AngularDistLabels(), vp_w, vp_h, &set);
+  return set;
+}
+
+CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h) {
+  CurveLabelSet set;
+  std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(set.color));
+  set.alpha = state.horizon_alpha;
+  // kGroupGrid, not a group of its own: the horizon is the parallel at altitude 0 and has always
+  // competed with the rest of the grid for space. Same group the walk this replaced used.
+  set.group = kGroupGrid;
+  set.has_bg = false;  // as the walk this replaced drew it: numbers with no plate behind them
+  FillCurveLabelSet(cache, cache.HorizonLabels(), vp_w, vp_h, &set);
+  return set;
+}
+
+CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h) {
+  CurveLabelSet set;
+  std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(set.color));
+  set.alpha = state.grid_alpha;
+  // kGroupGrid, which is also the horizon's group (overlay_labels.cpp): the horizon is the
+  // parallel at altitude 0, and it has always competed with the rest of the grid for space.
+  set.group = kGroupGrid;
+  set.has_bg = false;  // the walk this replaced drew the grid's numbers with no plate behind them
+  FillCurveLabelSet(cache, cache.GridLabels(), vp_w, vp_h, &set);
+  return set;
+}
 
 using SimState = GuiState::SimState;
 
@@ -1366,8 +1473,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.bg.pan_y = g_state.bg_offset_y;
     pp.bg.zoom = g_state.bg_scale;
 
-    // Auxiliary line overlay parameters (line flags only — labels are handled
-    // separately via BuildOverlayLabelInput below).
+    // Auxiliary line overlay parameters (line flags only — the label flags are read below, where
+    // core's anchors are turned into draw-list text).
     pp.overlay.show_horizon = g_state.show_horizon_line;
     pp.overlay.show_grid = g_state.show_grid_line;
     pp.overlay.show_sun_circles = g_state.show_sun_circles_line;
@@ -1378,20 +1485,49 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.horizon_alpha = g_state.horizon_alpha;
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
-    pp.overlay.grid_step = ComputeGridStep(rc.fov);
-    // Precompute sun direction in world space (azimuth fixed at 0, only altitude matters)
-    constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-    float sa = g_state.sun.altitude * kDeg2Rad;
-    pp.overlay.sun_dir[0] = -std::cos(sa);
-    pp.overlay.sun_dir[1] = 0.0f;
-    pp.overlay.sun_dir[2] = -std::sin(sa);
-    pp.overlay.sun_circle_count = std::min(static_cast<int>(g_state.sun_circle_angles.size()), kMaxSunCircles);
-    for (int i = 0; i < pp.overlay.sun_circle_count; i++) {
-      pp.overlay.sun_circle_angles[i] = g_state.sun_circle_angles[i];
+    // Angular-distance circles and the coordinate grid: ask core where they are, once the view has
+    // settled. ONE request covers all three families, so the mask the shader samples and the label
+    // anchors drawn below cannot end up describing different curves.
+    //
+    // Lines and labels have separate switches per family, and the request is made when ANY of them
+    // is on: a user drawing only the labels still needs the anchors, and one drawing only the lines
+    // still needs the mask. Which families the request actually carries is decided inside
+    // AnnotationViewInputFor, off the same switches; each switch then gates its own half below.
+    if (g_state.show_sun_circles_line || g_state.show_sun_circles_label || g_state.show_grid_line ||
+        g_state.show_grid_label || g_state.show_zenith_nadir_line || g_state.show_horizon_line ||
+        g_state.show_horizon_label) {
+      g_annotation_overlay.Update(
+          MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
+    } else {
+      g_annotation_overlay.Update(AnnotationOverlayCache::ViewKey{});
+    }
+    // The non-empty check is not belt-and-braces: one call serves three families, so a result can
+    // hold the grid's mask and not the circles' — the user emptied the circle list, say. An empty
+    // vector's data() with a non-zero width/height would have Render() upload W*H bytes from a
+    // pointer to nothing.
+    if (g_state.show_sun_circles_line && g_annotation_overlay.HasResult() &&
+        !g_annotation_overlay.AngularDistMask().empty()) {
+      // Borrowed for this frame only; PreviewRenderer::Render uploads it during the GL phase.
+      pp.overlay.angular_dist_mask = g_annotation_overlay.AngularDistMask().data();
+      pp.overlay.angular_dist_mask_w = g_annotation_overlay.Width();
+      pp.overlay.angular_dist_mask_h = g_annotation_overlay.Height();
+      pp.overlay.angular_dist_mask_generation = g_annotation_overlay.Generation();
+    }
+    if (g_state.show_grid_line && g_annotation_overlay.HasResult() && !g_annotation_overlay.GridMask().empty()) {
+      pp.overlay.grid_mask = g_annotation_overlay.GridMask().data();
+      pp.overlay.grid_mask_w = g_annotation_overlay.Width();
+      pp.overlay.grid_mask_h = g_annotation_overlay.Height();
+      pp.overlay.grid_mask_generation = g_annotation_overlay.Generation();
+    }
+    if (g_state.show_horizon_line && g_annotation_overlay.HasResult() && !g_annotation_overlay.HorizonMask().empty()) {
+      pp.overlay.horizon_mask = g_annotation_overlay.HorizonMask().data();
+      pp.overlay.horizon_mask_w = g_annotation_overlay.Width();
+      pp.overlay.horizon_mask_h = g_annotation_overlay.Height();
+      pp.overlay.horizon_mask_generation = g_annotation_overlay.Generation();
     }
 
-    // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
-    // (see preview_renderer.cpp:overlayAuxLines altitude convention).
+    // Zenith / Nadir pixel-space marker. The APPEARANCE below is the GUI's own state; the two
+    // POSITIONS come from core (below the lens-border block), not from a GUI-side projection.
     pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
     std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
               std::begin(pp.overlay.zenith_nadir_color));
@@ -1401,22 +1537,22 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(g_state.lens_border_color), std::end(g_state.lens_border_color),
               std::begin(pp.overlay.lens_border_color));
     pp.overlay.lens_border_alpha = g_state.lens_border_alpha;
-    constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-    constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-    auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    auto npos = ProjectWorldDirToScreen(pp.view_proj, kNadirWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    pp.overlay.zenith_screen_pos[0] = zpos[0];
-    pp.overlay.zenith_screen_pos[1] = zpos[1];
-    pp.overlay.nadir_screen_pos[0] = npos[0];
-    pp.overlay.nadir_screen_pos[1] = npos[1];
+    // WHERE the two rings go: core's answer, from the same LUMICE_ComputeAnnotationOverlay call
+    // the circles and the grid already read, converted from its canvas space (top-left origin,
+    // y down) into the shader's (centre origin, y up). This used to be a second, GUI-only forward
+    // projection of the two world directions through ProjectWorldDirToScreen — the same duplicate
+    // implementation the label walk had, and the one this task removes. The ring is still
+    // rasterized by the shader; only the position's source moved.
+    CanvasPointToShaderScreenPos(g_annotation_overlay.ZenithPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
+                                 pp.overlay.zenith_screen_pos);
+    CanvasPointToShaderScreenPos(g_annotation_overlay.NadirPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
+                                 pp.overlay.nadir_screen_pos);
 
-    // Overlay labels at viewport edges (drawn on the preview window's draw list so
-    // modals correctly occlude them). BuildOverlayLabelInput is shared with
-    // DoExportPreviewPng (off-screen FBO path) so both call sites produce
-    // byte-identical OverlayLabelInput for a given state.
+    // Overlay labels at viewport edges (drawn on the preview window's draw list so modals
+    // correctly occlude them). All three families' anchors come from core now, through the one
+    // AnnotationOverlayCache result the masks above already read — the GUI walks no curve of its
+    // own any more, so the preview and the CLI cannot place the same number differently.
     if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label) {
-      OverlayLabelInput label_input = BuildOverlayLabelInput(g_state, rc);
-
       // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
       // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
       // draw list coordinates are absolute screen space, not relative to the host GLFW window.
@@ -1430,8 +1566,26 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       float vp_sw = panel_width;
       float vp_sh = preview_height;
 
+      // Cleared here rather than by the first producer: every family is now an appended set, so
+      // there is no longer a call that owns the vector's reset.
+      //
+      // The anchors are in the CANVAS pixel space the request named — which is the framebuffer,
+      // vp_w/vp_h — while the draw list works in logical screen points. On a HiDPI display those
+      // differ by the DPI scale, so the anchors are scaled by BuildCurveLabelSet's helper rather
+      // than being offset alone; without that a label sits at twice its distance from the
+      // viewport's top-left. All three sets go into ONE vector so they take part in one collision
+      // pass, which is where the per-set group is read.
       static std::vector<OverlayLabel> labels;
-      ComputeOverlayLabels(label_input, vp_sx, vp_sy, vp_sw, vp_sh, labels);
+      labels.clear();
+      if (g_state.show_horizon_label) {
+        AppendCurveLabels(BuildHorizonLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+      }
+      if (g_state.show_sun_circles_label) {
+        AppendCurveLabels(BuildSunCirclesLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+      }
+      if (g_state.show_grid_label) {
+        AppendCurveLabels(BuildGridLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+      }
       DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }
 

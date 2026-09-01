@@ -53,6 +53,34 @@ void from_json(const nlohmann::json& j, GridLineParam& l) {
 }
 
 
+// ========== ZenithNadirParam ==========
+void to_json(nlohmann::json& j, const ZenithNadirParam& z) {
+  j["enabled"] = z.enabled_;
+  j["radius_px"] = z.radius_px_;
+  j["opacity"] = z.opacity_;
+  j["color"] = z.color_;
+}
+
+// Every key optional, including "enabled": a present-but-partial object keeps the member defaults
+// for whatever it leaves out, which is the same rule GridLineParam::from_json follows for
+// everything but its mandatory `value`. There is no mandatory key here — the struct's own defaults
+// describe a complete marker on their own.
+void from_json(const nlohmann::json& j, ZenithNadirParam& z) {
+  if (j.contains("enabled")) {
+    j.at("enabled").get_to(z.enabled_);
+  }
+  if (j.contains("radius_px")) {
+    j.at("radius_px").get_to(z.radius_px_);
+  }
+  if (j.contains("opacity")) {
+    j.at("opacity").get_to(z.opacity_);
+  }
+  if (j.contains("color")) {
+    j.at("color").get_to(z.color_);
+  }
+}
+
+
 // ========== LensParam ==========
 void to_json(nlohmann::json& j, const LensParam& l) {
   j["type"] = l.type_;
@@ -150,6 +178,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["lens_shift"] = r.lens_shift_;
   j["view"] = r.view_;
   j["visible"] = r.visible_;
+  j["front"] = r.front_;
   // background_ is linear; the JSON key is sRGB. Twin of the decode-side conversion in
   // config_manager.cpp::ParseRenderConfig.
   j["background"] = { LinearToSrgb(r.background_[0]), LinearToSrgb(r.background_[1]), LinearToSrgb(r.background_[2]) };
@@ -158,9 +187,14 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["overlap"] = r.overlap_;
   j["ev_mode"] = r.ev_mode_;
 
-  j["grid"].emplace("central", r.central_grid_);
+  j["grid"].emplace("angular_dist", r.angular_dist_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
+  j["grid"].emplace("longitude", r.longitude_grid_);
   j["grid"].emplace("horizon", r.horizon_);
+  j["grid"].emplace("horizon_label", r.horizon_label_);
+  j["grid"].emplace("label", r.grid_label_);
+  j["grid"].emplace("angular_dist_label", r.angular_dist_label_);
+  j["grid"].emplace("zenith_nadir", r.zenith_nadir_);
 }
 
 
@@ -168,7 +202,15 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 // §5.2 (sizeof sentinel).
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
-  static_assert(sizeof(RenderConfig) == 136, "Update NeedsRebuild when RenderConfig fields change");
+  // Still 192 after the three text-label switches were added: they landed in the tail padding
+  // `horizon_` already carried ahead of ZenithNadirParam's 4-byte alignment. The number is a
+  // tripwire for "a field was added", not a size budget, so an unchanged one is only safe to leave
+  // once the new fields have actually been classified — and these three are APPEARANCE, not
+  // layout. They change what is painted on top of the accumulated image and nothing about the
+  // buffer it accumulates into, so a config that flips one reaches an existing consumer through
+  // ResetWith() with no rebuild (which is what RebuildHorizonLabels and the two mask rebuilds are
+  // re-run from there for).
+  static_assert(sizeof(RenderConfig) == 192, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.
 
@@ -176,7 +218,7 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   return !std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) ||
          !(a.lens_ == b.lens_) ||
          !std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) ||
-         !(a.view_ == b.view_) || a.visible_ != b.visible_ || a.overlap_ != b.overlap_;
+         !(a.view_ == b.view_) || a.visible_ != b.visible_ || a.front_ != b.front_ || a.overlap_ != b.overlap_;
 }
 
 }  // namespace lumice

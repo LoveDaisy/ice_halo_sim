@@ -25,6 +25,8 @@
 #include <iterator>
 #include <string>
 
+#include "gui/annotation_overlay_cache.hpp"
+#include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"
@@ -189,12 +191,17 @@ static const LensProjScene kScenes[] = {
   // mean 28.562 σ0.0591 (N=10)
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.5,  5.0f,
    LensSetup::kEquirectExport},
-  // mean 21.333 σ0.0939
+  // mean 20.734 σ0.0989
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
   // been its sole owner.
-  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.375f,
+  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask. The
+  // curves moved: the analytic version derived its own half-width per fragment from fwidth() of
+  // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
+  // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
+  // scene is no noisier than it was; only its operating point moved.
+  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
   // Lens-border scenes. Each reuses the setup of the scene named in its own name and changes ONE
@@ -403,26 +410,68 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           break;
       }
 
-      // 7b. Overlay scenes only (overlay_ea): precompute the zenith/nadir marker positions
-      // and turn the grid on. Mirrors the runtime path in app_panels.cpp — the markers are
-      // positioned on the CPU by ProjectWorldDirToScreen and handed to the shader as
-      // uniforms, so this block is part of what the reference covers, not test scaffolding.
-      // Must run after the switch above: it reads the view_proj the scene just installed.
+      // 7b. Overlay scenes only (overlay_ea): place the zenith/nadir markers and turn the grid on.
+      // Mirrors the runtime path in app_panels.cpp — both families now take their geometry from
+      // core's LUMICE_ComputeAnnotationOverlay and the shader only rasterizes it, so this block is
+      // part of what the reference covers, not test scaffolding. Must run after the switch above:
+      // it reads the view_proj the scene just installed.
       if (scene.enable_overlay) {
         if (scene.overlay_zenith_nadir) {
-          constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-          constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-          auto zpos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kZenithWorldDir, vp.vp_w, vp.vp_h);
-          auto npos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kNadirWorldDir, vp.vp_w, vp.vp_h);
+          // Computed AT THIS CANVAS and converted through the one owner of the canvas -> shader
+          // transform, for the same reasons the grid block below gives. The markers used to be
+          // placed by ProjectWorldDirToScreen, a GUI-only second copy of the forward projection;
+          // that copy is no longer on this path.
+          static gui::AnnotationOverlayCache marker_overlay;
+          gui::AnnotationViewInput in;
+          in.lens_type = vp.params.view_proj.lens_type;
+          in.fov = vp.params.view_proj.fov;
+          in.azimuth = vp.params.view_proj.azimuth;
+          in.elevation = vp.params.view_proj.elevation;
+          in.roll = vp.params.view_proj.roll;
+          in.visible = vp.params.view_proj.visible;
+          in.front = vp.params.view_proj.front;
+          in.overlap = gui::kDualFisheyeOverlap;
+          in.zenith_nadir = true;
+          marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          IM_CHECK(marker_overlay.HasResult());
+          // The scene exists to cover the ring, and a ring is small enough that its ABSENCE would
+          // cost less PSNR than this group's noise — so a marker that stopped being placed would
+          // pass the comparison and quietly leave overlayAuxLines' only committed pixel coverage
+          // testing the grid alone. Zenith only: this view's nadir is behind the camera, which is
+          // the state the sentinel below is for.
+          IM_CHECK(marker_overlay.ZenithPoint().valid);
           vp.params.overlay.show_zenith_nadir = true;
-          vp.params.overlay.zenith_screen_pos[0] = zpos[0];
-          vp.params.overlay.zenith_screen_pos[1] = zpos[1];
-          vp.params.overlay.nadir_screen_pos[0] = npos[0];
-          vp.params.overlay.nadir_screen_pos[1] = npos[1];
+          gui::CanvasPointToShaderScreenPos(marker_overlay.ZenithPoint(), vp.vp_w, vp.vp_h,
+                                            vp.params.overlay.zenith_screen_pos);
+          gui::CanvasPointToShaderScreenPos(marker_overlay.NadirPoint(), vp.vp_w, vp.vp_h,
+                                            vp.params.overlay.nadir_screen_pos);
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;
-          vp.params.overlay.grid_step = 10.f;
+          // The grid's geometry comes from core's annotation overlay now, not from a shader
+          // uniform, so the reference covers the mask path the live preview and the CLI both use.
+          // Computed AT THIS CANVAS for the reason ExportPreviewPng gives for doing the same: a
+          // mask built for another size is an image rescale of the curves.
+          static gui::AnnotationOverlayCache grid_overlay;
+          gui::AnnotationViewInput in;
+          in.lens_type = vp.params.view_proj.lens_type;
+          in.fov = vp.params.view_proj.fov;
+          in.azimuth = vp.params.view_proj.azimuth;
+          in.elevation = vp.params.view_proj.elevation;
+          in.roll = vp.params.view_proj.roll;
+          in.visible = vp.params.view_proj.visible;
+          in.front = vp.params.view_proj.front;
+          in.overlap = gui::kDualFisheyeOverlap;
+          const float step = gui::ComputeGridStep(vp.params.view_proj.fov);
+          in.elevation_deg = gui::ComputeGridElevationAngles(step);
+          in.longitude_deg = gui::ComputeGridLongitudeAngles(step);
+          grid_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          IM_CHECK(grid_overlay.HasResult());
+          IM_CHECK(!grid_overlay.GridMask().empty());
+          vp.params.overlay.grid_mask = grid_overlay.GridMask().data();
+          vp.params.overlay.grid_mask_w = grid_overlay.Width();
+          vp.params.overlay.grid_mask_h = grid_overlay.Height();
+          vp.params.overlay.grid_mask_generation = grid_overlay.Generation();
         }
       }
 

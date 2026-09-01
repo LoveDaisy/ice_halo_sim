@@ -61,6 +61,13 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("visible")) {
     j_render.at("visible").get_to(render.visible_);
   }
+  // Independent of "visible" and ANDed with it — deliberately its own key rather than a fourth
+  // "visible" enumerator, because NLOHMANN_JSON_SERIALIZE_ENUM maps an unregistered string to the
+  // FIRST table entry (kUpper) without an error, so "visible": "front" would silently render the
+  // upper hemisphere instead.
+  if (j_render.contains("front")) {
+    j_render.at("front").get_to(render.front_);
+  }
   // "background_color" is not, and never was, a schema key — but it is a very natural guess next to
   // ray_color / sun_circles_color / zenith_nadir_color, and the repo's own e2e corpus has written it
   // by mistake in a dozen files across several commits. Unknown keys are otherwise ignored in
@@ -97,14 +104,40 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
 
   if (j_render.contains("grid")) {
     const auto& j_grid = j_render.at("grid");
-    if (j_grid.contains("central")) {
-      j_grid.at("central").get_to(render.central_grid_);
+    // "central" is the pre-rename spelling of "angular_dist" (both mean "angular distance from
+    // the sun"). Read unconditionally with the new key winning, NOT behind a schema-version
+    // branch. A version branch is what a rename needs when the same spelling means different
+    // things on either side of it; here the old key's value is exactly the new key's value, so
+    // there is no version at which it has to be read differently and a branch would only add a
+    // way to get it wrong. Only the new key is ever written (to_json in render_config.cpp).
+    if (j_grid.contains("angular_dist")) {
+      j_grid.at("angular_dist").get_to(render.angular_dist_grid_);
+    } else if (j_grid.contains("central")) {
+      j_grid.at("central").get_to(render.angular_dist_grid_);
     }
     if (j_grid.contains("elevation")) {
       j_grid.at("elevation").get_to(render.elevation_grid_);
     }
+    if (j_grid.contains("longitude")) {
+      j_grid.at("longitude").get_to(render.longitude_grid_);
+    }
     if (j_grid.contains("horizon")) {
       j_grid.at("horizon").get_to(render.horizon_);
+    }
+    // The three text-label switches. Read next to the lines they annotate rather than under a
+    // "labels" object of their own: "grid.label" is a property of the grid, and nesting it one
+    // level deeper would give one concept two paths into the same object.
+    if (j_grid.contains("horizon_label")) {
+      j_grid.at("horizon_label").get_to(render.horizon_label_);
+    }
+    if (j_grid.contains("label")) {
+      j_grid.at("label").get_to(render.grid_label_);
+    }
+    if (j_grid.contains("angular_dist_label")) {
+      j_grid.at("angular_dist_label").get_to(render.angular_dist_label_);
+    }
+    if (j_grid.contains("zenith_nadir")) {
+      j_grid.at("zenith_nadir").get_to(render.zenith_nadir_);
     }
   }
 

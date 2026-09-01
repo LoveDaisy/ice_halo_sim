@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "config/light_config.hpp"
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"  // annotation::CanvasPoint (zenith_point_ / nadir_point_)
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
 
@@ -100,7 +102,17 @@ class RenderConsumer : public IConsume {
   // table gets one W*H Y-lane; Consume() runs each class's `any`/`all` predicate
   // over every ray's component mask and accumulates Y into the matching lane.
   // Default (empty table) = pre-336 behavior bit-for-bit (no lane state).
-  explicit RenderConsumer(RenderConfig config, ColorClassTable class_table = ColorClassTable{});
+  // `sun` is the scene's light source, needed for one reason only: the angular-distance
+  // annotations in config.angular_dist_grid_ are circles AROUND THE SUN, so their geometry cannot
+  // be derived from the RenderConfig alone. It is the first piece of non-render config this class
+  // has ever taken, and it stays a separate parameter rather than moving into RenderConfig
+  // because the sun belongs to the scene, not to any one renderer — three renderers in one scene
+  // share it.
+  // `sun` comes LAST, after the older `class_table`, so that every existing two-argument
+  // construction keeps compiling — it is the sun a renderer with no angular_dist_grid_ entries
+  // never consults.
+  explicit RenderConsumer(RenderConfig config, ColorClassTable class_table = ColorClassTable{},
+                          SunParam sun = SunParam{ 0.0f, 0.0f, 0.5f });
 
   void Consume(const SimData& data) override;
   // S1 device-fused (scrum-302): fold a backend-accumulated XYZ pixel buffer
@@ -122,7 +134,11 @@ class RenderConsumer : public IConsume {
   std::shared_ptr<const float[]> SnapshotXyzStorage() const { return snapshot_xyz_; }
   std::shared_ptr<const uint8_t[]> SnapshotImageStorage() const { return snapshot_image_buffer_; }
   void Reset() override;
-  void ResetWith(const RenderConfig& new_config);
+  // The reuse path. `new_sun` is passed for the same reason the constructor takes one, and it is
+  // NOT merely stored: neither the sun nor angular_dist_grid_ takes part in NeedsRebuild (the sun
+  // is not even a RenderConfig field), so this is the ONLY path by which either can change without
+  // a fresh consumer, and the annotation masks are rebuilt here when they do.
+  void ResetWith(const RenderConfig& new_config, const SunParam& new_sun);
   void LogConsumeProfile() const;  // Dump accumulated profiling stats
 
   // task-339.3 read-only accessors. Both read snapshot state, mirroring
@@ -214,6 +230,23 @@ class RenderConsumer : public IConsume {
   // White-box handle on the horizon-annotation mask, for the tests that pin its shape against
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
   const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
+  const std::vector<std::vector<uint8_t>>& AngularDistMasksForTest() const { return angular_dist_masks_; }
+  const std::vector<std::vector<uint8_t>>& ElevationMasksForTest() const { return elevation_masks_; }
+  const std::vector<std::vector<uint8_t>>& LongitudeMasksForTest() const { return longitude_masks_; }
+  // The marker positions, for the tests that pin WHERE a ring lands and WHETHER one is drawn at
+  // all. Same rationale as the mask handles above: the alternative is inferring the point back out
+  // of the image, which is the thing under test.
+  const annotation::CanvasPoint& ZenithPointForTest() const { return zenith_point_; }
+  const annotation::CanvasPoint& NadirPointForTest() const { return nadir_point_; }
+  // The cached label anchors, per family. Same rationale as the mask handles above, plus one of
+  // its own: these say whether the label GEOMETRY was computed, which is the half of the *_label_
+  // contract that is independent of the family's line switch. That half cannot be read off the
+  // image — a label whose family is fully transparent is computed and then composites to nothing,
+  // which is exactly the case worth being able to tell apart from "never computed".
+  const std::vector<annotation::Label>& HorizonLabelsForTest() const { return horizon_labels_; }
+  const std::vector<annotation::Label>& ElevationLabelsForTest() const { return elevation_labels_; }
+  const std::vector<annotation::Label>& LongitudeLabelsForTest() const { return longitude_labels_; }
+  const std::vector<annotation::Label>& AngularDistLabelsForTest() const { return angular_dist_labels_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -241,6 +274,40 @@ class RenderConsumer : public IConsume {
   // has_lanes flag, ConsumeDeviceFused warning) so it lives as a helper.
   bool HasColorClasses() const { return !class_table_.classes_.empty(); }
 
+  // (Re)build angular_dist_masks_ from config_.angular_dist_grid_ and sun_, skipping the work when
+  // neither has changed since the last build. See the member's declaration for why this is not a
+  // constructor-only job.
+  void RebuildAngularDistMasks();
+
+  // The same job for the two sun-INDEPENDENT line families: parallels (config_.elevation_grid_)
+  // and meridians (config_.longitude_grid_). One helper serves both because the two differ in
+  // exactly two expressions — which Request list the angle goes into and which Overlay mask comes
+  // back — while the change detection, the ViewSnapshot fill and the one-call-per-line rule are
+  // identical. `family` selects those two expressions.
+  enum class LineFamily { kElevation, kLongitude };
+  void RebuildLineFamilyMasks(LineFamily family);
+  // Both families at once, for the two call sites (constructor, ResetWith) that always want both.
+  void RebuildGridMasks();
+
+  // The horizon's mask AND its label anchors, out of ONE annotation::ComputeOverlay call — the
+  // same shape the three families above have. It used to be labels only, with the line coming from
+  // a second, independent path (BuildHorizonMask, since deleted): two computations of one curve,
+  // which is what this task removed. Unlike the three families it takes no angle list, so there is
+  // one call rather than one per line.
+  void RebuildHorizonAnnotation();
+
+  // Draw the cached label anchors' text into snapshot_image_buffer_. Called at the END of
+  // PostSnapshot, after the fused per-pixel loop has written its final sRGB bytes — deliberately
+  // NOT inside that loop. The loop is a per-pixel, register-only, byte-exact chain
+  // (test_render_consumer_post_snapshot_fusion.cpp pins it); glyph coverage is sparse and
+  // two-dimensional, and threading it through there would buy a full-canvas coverage buffer and
+  // put a second concern inside the one function that must stay a straight element-wise map.
+  //
+  // Blends in LINEAR RGB, like every other annotation layer: the bytes it reads are decoded back
+  // out of sRGB, mixed, and re-encoded. Only the pixels a glyph actually covers are touched.
+  void PaintLabels();
+
+
   RenderConfig config_;
   Rotation rot_;  // camera pose rotation
   float short_pix_ = 0;
@@ -259,6 +326,67 @@ class RenderConsumer : public IConsume {
   // then be empty exactly when the user has just asked for the line. Gating happens at the
   // point of use in PostSnapshot instead.
   std::vector<uint8_t> horizon_mask_;
+  // Whether horizon_mask_ has been filled at all. Not a change detector like the *_masks_built_
+  // flags below: nothing this mask depends on can move under a reused consumer (the view is a
+  // NeedsRebuild field), so this only stops ResetWith from redoing the sweep.
+  bool horizon_mask_built_ = false;
+  // One W*H mask per entry of config_.angular_dist_grid_, index-aligned with it. Per LINE, not
+  // per category, because each entry carries its own opacity_ / color_ and a category-wide union
+  // could not tell one line's pixels from another's. Building them is a W*H inverse-projection
+  // sweep each, which is why they are built once here and not per snapshot.
+  //
+  // Unlike visible_mask_ / horizon_mask_ these CANNOT be built once and left alone: their shape
+  // depends on the requested angles and on the sun, and neither is a NeedsRebuild field, so both
+  // can change under a reused consumer. RebuildAngularDistMasks() is therefore called from the
+  // constructor AND from ResetWith, and skips the sweep when the inputs it last built from are
+  // unchanged.
+  std::vector<std::vector<uint8_t>> angular_dist_masks_;
+  // What angular_dist_masks_ was last built from — the change detector for the paragraph above.
+  std::vector<float> angular_dist_mask_angles_;
+  float angular_dist_mask_sun_[3]{ 0.0f, 0.0f, 0.0f };
+  bool angular_dist_masks_built_ = false;
+  // Parallels and meridians, index-aligned with config_.elevation_grid_ / config_.longitude_grid_.
+  // Same per-LINE rationale and same rebuild lifetime as angular_dist_masks_ above, with one
+  // difference: these geometries are fixed in the celestial frame, so the sun is NOT an input and
+  // the change detector compares the angle list alone.
+  std::vector<std::vector<uint8_t>> elevation_masks_;
+  std::vector<float> elevation_mask_angles_;
+  bool elevation_masks_built_ = false;
+  std::vector<std::vector<uint8_t>> longitude_masks_;
+  std::vector<float> longitude_mask_angles_;
+  bool longitude_masks_built_ = false;
+  // The label anchors, one vector per family, harvested from the same ComputeOverlay calls that
+  // built the masks beside them (the horizon's from RebuildHorizonAnnotation's single call).
+  // Each Label's `index` is REWRITTEN on the way in to name the config line it annotates: core
+  // answers per request, and every request here carries exactly one angle, so the index it returns
+  // is always 0 and would not survive the merge into one per-family list.
+  //
+  // Rebuilt whenever the masks are, plus whenever the family's own *_label_ switch flips — that
+  // switch is an appearance field, so it can change under a reused consumer with the angle list
+  // untouched, and a change detector that watched only the angles would keep an empty list exactly
+  // when the user has just asked for the text.
+  std::vector<annotation::Label> horizon_labels_;
+  std::vector<annotation::Label> elevation_labels_;
+  std::vector<annotation::Label> longitude_labels_;
+  std::vector<annotation::Label> angular_dist_labels_;
+  // What each label list was last built for, alongside the angle lists above. Only the switch
+  // needs recording: everything else these lists depend on is already in the mask detectors.
+  bool horizon_labels_built_for_ = false;
+  bool elevation_labels_built_for_ = false;
+  bool longitude_labels_built_for_ = false;
+  bool angular_dist_labels_built_for_ = false;
+  // Where the zenith and the nadir land on the canvas, each with its own `valid`. Points, not
+  // masks: the marker is a ring of a radius the config names, so a whole W*H mask would encode
+  // the appearance too and would have to be rebuilt whenever the radius changed. PostSnapshot
+  // tests the two distances directly instead, which is O(1) per pixel.
+  //
+  // Built ONCE in the constructor, like visible_mask_ / horizon_mask_ and unlike the three mask
+  // families above: this geometry depends only on the layout (lens / fov / view / resolution /
+  // visible / overlap), every one of which NeedsRebuild pins for the consumer's whole life. The
+  // appearance fields it does NOT depend on are exactly the ones ResetWith can change.
+  annotation::CanvasPoint zenith_point_;
+  annotation::CanvasPoint nadir_point_;
+  SunParam sun_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   // Σ SimData::emitted_energy_ over every batch consumed since the last Reset(),

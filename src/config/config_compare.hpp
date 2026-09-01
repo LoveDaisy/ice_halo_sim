@@ -93,21 +93,27 @@ inline bool operator==(const GridLineParam& a, const GridLineParam& b) {
          std::equal(std::begin(a.color_), std::end(a.color_), std::begin(b.color_));
 }
 
+inline bool operator==(const ZenithNadirParam& a, const ZenithNadirParam& b) {
+  return a.enabled_ == b.enabled_ && a.radius_px_ == b.radius_px_ && a.opacity_ == b.opacity_ &&
+         std::equal(std::begin(a.color_), std::end(a.color_), std::begin(b.color_));
+}
+
 inline bool operator==(const LensParam& a, const LensParam& b) {
   return a.type_ == b.type_ && a.fov_ == b.fov_;
 }
 
 inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig.
-  static_assert(sizeof(RenderConfig) == 136, "Update operator== when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 192, "Update operator== when RenderConfig fields change");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
-         a.view_ == b.view_ && a.visible_ == b.visible_ &&
+         a.view_ == b.view_ && a.visible_ == b.visible_ && a.front_ == b.front_ &&
          std::equal(std::begin(a.background_), std::end(a.background_), std::begin(b.background_)) &&
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
-         a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ && a.horizon_ == b.horizon_;
+         a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
+         a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ && a.zenith_nadir_ == b.zenith_nadir_;
 }
 
 // ---- Light config ----

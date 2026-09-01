@@ -114,6 +114,14 @@ TEST(RenderConfigTest, EachLayoutField_ReturnsTrue) {
     mod.overlap_ = 0.5f;
     EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "overlap";
   }
+
+  // front — layout, not appearance: it is an input to the same visible_mask_ that visible_ is an
+  // input to, and that mask is built once in the consumer's constructor.
+  {
+    auto mod = base;
+    mod.front_ = true;
+    EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "front";
+  }
 }
 
 TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
@@ -147,11 +155,11 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "intensity_factor";
   }
 
-  // central_grid
+  // angular_dist_grid
   {
     auto mod = base;
-    mod.central_grid_.push_back(lumice::GridLineParam{ 10.0f, 2.0f, 0.5f, { 1, 0, 0 } });
-    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "central_grid";
+    mod.angular_dist_grid_.push_back(lumice::GridLineParam{ 10.0f, 2.0f, 0.5f, { 1, 0, 0 } });
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "angular_dist_grid";
   }
 
   // elevation_grid
@@ -159,6 +167,13 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     auto mod = base;
     mod.elevation_grid_.push_back(lumice::GridLineParam{ 22.0f, 1.0f, 1.0f, { 0, 1, 0 } });
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "elevation_grid";
+  }
+
+  // longitude_grid
+  {
+    auto mod = base;
+    mod.longitude_grid_.push_back(lumice::GridLineParam{ 90.0f, 1.0f, 1.0f, { 0, 0, 1 } });
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "longitude_grid";
   }
 
   // horizon
@@ -252,6 +267,167 @@ TEST(RenderConfigEvModeTest, OperatorEq_ComparesEvMode) {
   EXPECT_TRUE(a == b);
   b.ev_mode_ = lumice::RenderConfig::kAbsolute;
   EXPECT_FALSE(a == b);
+}
+
+// The meridian list added in v4.18, held to the same three properties the parallels already have:
+// it round-trips through JSON under its own key, a missing key leaves it empty (an old config is
+// not silently given lines), and operator== sees it.
+TEST(RenderConfigLongitudeGridTest, ToJson_EmitsUnderTheGridLongitudeKey) {
+  auto cfg = MakeBaseline();
+  cfg.longitude_grid_.push_back(lumice::GridLineParam{ -90.0f, 1.5f, 0.4f, { 0.2f, 0.4f, 0.6f } });
+  cfg.longitude_grid_.push_back(lumice::GridLineParam{ 180.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("longitude"));
+  ASSERT_EQ(j["grid"]["longitude"].size(), 2u);
+  EXPECT_NEAR(j["grid"]["longitude"][0]["value"].get<float>(), -90.0f, 1e-5f);
+  EXPECT_NEAR(j["grid"]["longitude"][1]["value"].get<float>(), 180.0f, 1e-5f);
+  // The parallels keep their own key: the two families are separate lists, not one merged array.
+  ASSERT_TRUE(j["grid"].contains("elevation"));
+  EXPECT_EQ(j["grid"]["elevation"].size(), 0u);
+}
+
+TEST(RenderConfigLongitudeGridTest, OperatorEq_ComparesLongitudeGrid) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.longitude_grid_.push_back(lumice::GridLineParam{ 0.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  EXPECT_FALSE(a == b);
+  // ... and does not confuse it with the parallels, which is the failure a copy-pasted comparison
+  // term would produce.
+  a.elevation_grid_.push_back(lumice::GridLineParam{ 0.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  EXPECT_FALSE(a == b);
+}
+
+// The zenith / nadir marker block (v4.19). Held to the same properties the line families are, plus
+// the one that is only true of THIS field: its appearance defaults are non-zero, so "missing key"
+// and "zero-initialized" are different states and a decoder that conflates them is wrong.
+TEST(RenderConfigZenithNadirTest, ToJson_EmitsUnderTheGridZenithNadirKey) {
+  auto cfg = MakeBaseline();
+  cfg.zenith_nadir_.enabled_ = true;
+  cfg.zenith_nadir_.radius_px_ = 14.0f;
+  cfg.zenith_nadir_.opacity_ = 0.25f;
+  cfg.zenith_nadir_.color_[0] = 0.1f;
+  cfg.zenith_nadir_.color_[1] = 0.7f;
+  cfg.zenith_nadir_.color_[2] = 0.9f;
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("zenith_nadir"));
+  const auto& z = j["grid"]["zenith_nadir"];
+  EXPECT_TRUE(z["enabled"].get<bool>());
+  EXPECT_NEAR(z["radius_px"].get<float>(), 14.0f, 1e-5f);
+  EXPECT_NEAR(z["opacity"].get<float>(), 0.25f, 1e-5f);
+  EXPECT_NEAR(z["color"][1].get<float>(), 0.7f, 1e-5f);
+
+  lumice::ZenithNadirParam back;
+  z.get_to(back);
+  EXPECT_TRUE(back == cfg.zenith_nadir_);
+}
+
+TEST(RenderConfigZenithNadirTest, DefaultIsOffWithTheGuiAppearanceValues) {
+  const lumice::ZenithNadirParam z;
+  // Opt-in, like horizon_: a config that predates the field must not gain a marker.
+  EXPECT_FALSE(z.enabled_);
+  // The three appearance values are the GUI control's own defaults, and they are NOT zero — which
+  // is why the C API decoder seeds them from this struct rather than relying on value-init.
+  EXPECT_NEAR(z.radius_px_, 8.0f, 1e-5f);
+  EXPECT_NEAR(z.opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(z.color_[0], 0.8f, 1e-5f);
+  EXPECT_NEAR(z.color_[1], 0.2f, 1e-5f);
+  EXPECT_NEAR(z.color_[2], 0.2f, 1e-5f);
+}
+
+TEST(RenderConfigZenithNadirTest, FromJson_PartialObjectKeepsTheMemberDefaults) {
+  // The middle case between "no key" and "every key": whatever the object omits keeps the struct's
+  // own default, not a zero. A decoder that resets the struct before reading turns a document that
+  // only says `{"enabled": true}` into an invisible marker (radius 0, alpha 0, black).
+  lumice::ZenithNadirParam z;
+  const nlohmann::json j = nlohmann::json::parse(R"({ "enabled": true })");
+  j.get_to(z);
+  EXPECT_TRUE(z.enabled_);
+  EXPECT_NEAR(z.radius_px_, 8.0f, 1e-5f);
+  EXPECT_NEAR(z.opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(z.color_[0], 0.8f, 1e-5f);
+}
+
+TEST(RenderConfigZenithNadirTest, OperatorEq_ComparesEveryField) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.zenith_nadir_.enabled_ = true;
+  EXPECT_FALSE(a == b);
+  b = MakeBaseline();
+  b.zenith_nadir_.radius_px_ = 3.0f;
+  EXPECT_FALSE(a == b) << "the radius is part of the config's identity, not a display-only extra";
+  b = MakeBaseline();
+  b.zenith_nadir_.opacity_ = 0.1f;
+  EXPECT_FALSE(a == b);
+  b = MakeBaseline();
+  b.zenith_nadir_.color_[2] = 0.5f;
+  EXPECT_FALSE(a == b);
+}
+
+TEST(RenderConfigZenithNadirTest, NeedsRebuild_TreatsTheMarkerAsAppearance) {
+  // Every field of this block is appearance: none of them changes which pixel images which
+  // direction, so a consumer must be REUSED across the change (ResetWith), not rebuilt.
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  b.zenith_nadir_.enabled_ = true;
+  b.zenith_nadir_.radius_px_ = 20.0f;
+  b.zenith_nadir_.opacity_ = 0.9f;
+  b.zenith_nadir_.color_[0] = 0.0f;
+  EXPECT_FALSE(lumice::NeedsRebuild(a, b));
+}
+
+// The front-hemisphere clip (v4.20). The property that matters most here is NEGATIVE: it must be a
+// key of its own and must NOT be expressible through "visible". NLOHMANN_JSON_SERIALIZE_ENUM maps
+// an unregistered string to the FIRST table entry without an error, so a config that tried to say
+// "visible": "front" would decode to kUpper and render the wrong half in silence.
+TEST(RenderConfigFrontTest, ToJson_EmitsATopLevelFrontKeyBesideVisible) {
+  auto cfg = MakeBaseline();
+  cfg.visible_ = lumice::RenderConfig::kFull;
+  cfg.front_ = true;
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("front"));
+  EXPECT_TRUE(j["front"].is_boolean());
+  EXPECT_TRUE(j["front"].get<bool>());
+  // Beside "visible", not inside it and not inside "grid": the two clips are orthogonal, and front
+  // is not an annotation.
+  EXPECT_EQ(j["visible"].get<std::string>(), "full");
+  EXPECT_FALSE(j["grid"].contains("front"));
+
+  // Written unconditionally, like "visible" — an off clip is stated, not omitted.
+  cfg.front_ = false;
+  nlohmann::json j_off = cfg;
+  ASSERT_TRUE(j_off.contains("front"));
+  EXPECT_FALSE(j_off["front"].get<bool>());
+}
+
+TEST(RenderConfigFrontTest, DefaultIsOffAndAnUnregisteredVisibleStringIsNotIt) {
+  EXPECT_FALSE(lumice::RenderConfig{}.front_);
+
+  // The trap this field exists to avoid, pinned as a fact about the enum rather than a warning in
+  // prose: "front" is not a VisibleRange, and asking for it yields kUpper with no error.
+  auto decoded = lumice::RenderConfig::kFull;
+  nlohmann::json("front").get_to(decoded);
+  EXPECT_EQ(decoded, lumice::RenderConfig::kUpper);
+}
+
+TEST(RenderConfigFrontTest, OperatorEq_ComparesFront) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.front_ = true;
+  EXPECT_FALSE(a == b);
+  // Not aliased onto visible_: two configs that differ ONLY in front must still compare unequal
+  // while their visible_ agree.
+  EXPECT_EQ(a.visible_, b.visible_);
 }
 
 }  // namespace

@@ -16,6 +16,7 @@
 #include "config/raypath_color_config.hpp"  // ns::kDefaultCompositeMode (single-source default)
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"  // annotation::ComputeOverlay (LUMICE_ComputeAnnotationOverlay)
 #include "core/crystal.hpp"
 #include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
@@ -582,14 +583,16 @@ static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lin
 // being re-derived here, so there is exactly one implementation of each formula.
 // Throws std::invalid_argument on an invalid lens_type / visible / grid count; callers wrap.
 // The grid-count check lives here (not only in the entry points) because this is the single place
-// that dereferences central_grid[]/elevation_grid[] — ConfigToJson accepts a
+// that dereferences angular_dist[]/elevation_grid[]/longitude_grid[] — ConfigToJson accepts a
 // caller-assembled struct with no bounds pass of its own.
 static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
-  if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
-      r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
+  if (r.angular_dist_count < 0 || r.angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
+      r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.longitude_grid_count < 0 ||
+      r.longitude_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     throw std::invalid_argument(
-        "LUMICE_RenderParam grid count out of range: central=" + std::to_string(r.central_grid_count) +
-        ", elevation=" + std::to_string(r.elevation_grid_count));
+        "LUMICE_RenderParam grid count out of range: angular_dist=" + std::to_string(r.angular_dist_count) +
+        ", elevation=" + std::to_string(r.elevation_grid_count) +
+        ", longitude=" + std::to_string(r.longitude_grid_count));
   }
   nlohmann::json jr;
   jr["id"] = id;
@@ -598,6 +601,9 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["resolution"] = { r.resolution_w, r.resolution_h };
   jr["view"] = ns::ViewParam{ r.view_azimuth, r.view_elevation, r.view_roll };
   jr["visible"] = MapVisibleFromCApi(r.visible);
+  // Its own top-level key, not a "visible" enumerator: the two clips are orthogonal and AND
+  // together. Twin of core's to_json in render_config.cpp.
+  jr["front"] = r.front != 0;
   // Back to sRGB on the way out — the struct field is linear, the JSON key is not.
   jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
                        ns::LinearToSrgb(r.background[2]) };
@@ -605,9 +611,25 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
   jr["ev_mode"] = MapEvModeFromCApi(r.ev_mode);
-  jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
+  jr["grid"]["angular_dist"] = GridLinesToCore(r.angular_dist, r.angular_dist_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
+  jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
+  // The three text-label switches, next to the lines they annotate. Same key names core's own
+  // to_json writes (render_config.cpp), which is what test_json_parser_parity.cpp compares.
+  jr["grid"]["horizon_label"] = r.horizon_label != 0;
+  jr["grid"]["label"] = r.grid_label != 0;
+  jr["grid"]["angular_dist_label"] = r.angular_dist_label != 0;
+  // Through core's own to_json, like every other value here: the key names and the sRGB convention
+  // then have exactly one spelling in the tree.
+  ns::ZenithNadirParam zn;
+  zn.enabled_ = r.zenith_nadir != 0;
+  zn.radius_px_ = r.zenith_nadir_radius_px;
+  zn.opacity_ = r.zenith_nadir_opacity;
+  zn.color_[0] = r.zenith_nadir_color[0];
+  zn.color_[1] = r.zenith_nadir_color[1];
+  zn.color_[2] = r.zenith_nadir_color[2];
+  jr["grid"]["zenith_nadir"] = zn;
   return jr;
 }
 
@@ -951,9 +973,11 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
     return LUMICE_ERR_NULL_ARG;
   }
   // Grid counts index the fixed-capacity inline arrays RendererToJson reads; validate before the
-  // encode so an out-of-range count cannot walk off the end of central_grid[]/elevation_grid[].
-  if (renderer->central_grid_count < 0 || renderer->central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES ||
-      renderer->elevation_grid_count < 0 || renderer->elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
+  // encode so an out-of-range count cannot walk off the end of
+  // angular_dist[]/elevation_grid[]/longitude_grid[].
+  if (renderer->angular_dist_count < 0 || renderer->angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES ||
+      renderer->elevation_grid_count < 0 || renderer->elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES ||
+      renderer->longitude_grid_count < 0 || renderer->longitude_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
   auto& arr = scene->root["render"];
@@ -2220,7 +2244,8 @@ static LUMICE_ErrorCode DecodeCoreField(const nlohmann::json& j, T& dst) {
   return LUMICE_OK;
 }
 
-// Decode one grid-line array ("grid.central" / "grid.elevation") into the fixed-capacity C array.
+// Decode one grid-line array ("grid.angular_dist" / "grid.elevation" / "grid.longitude") into the
+// fixed-capacity C array.
 static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_GridLine* out, int* out_count) {
   if (!arr_j.is_array()) {
     return LUMICE_ERR_INVALID_VALUE;
@@ -2344,6 +2369,18 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       r.visible = MapVisibleToCApi(visible);
     }
 
+    // Absent key = no clip, which is what a config predating the field means. Twin of core's
+    // ParseRenderConfig.
+    r.front = 0;
+    if (rj.contains("front")) {
+      bool front = false;
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("front"), front);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.front = front ? 1 : 0;
+    }
+
     // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.
     if (rj.contains("background_color")) {
       ILOG_WARN(ns::GetGlobalLogger(),
@@ -2375,22 +2412,55 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       }
     }
 
-    r.central_grid_count = 0;
+    r.angular_dist_count = 0;
     r.elevation_grid_count = 0;
+    r.longitude_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
+    // Same default and same reason as `horizon` above: core's three *_label_ fields are opt-in.
+    r.horizon_label = 0;
+    r.grid_label = 0;
+    r.angular_dist_label = 0;
+    // The marker block's defaults come from core's struct rather than being spelled again here,
+    // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
+    // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
+    // between the two decoders, not a harmless one: three of the four defaults are non-zero, and
+    // the parity gate compares whole RenderConfigs.
+    {
+      const ns::ZenithNadirParam kZenithNadirDefaults;
+      r.zenith_nadir = kZenithNadirDefaults.enabled_ ? 1 : 0;
+      r.zenith_nadir_radius_px = kZenithNadirDefaults.radius_px_;
+      r.zenith_nadir_opacity = kZenithNadirDefaults.opacity_;
+      std::copy(std::begin(kZenithNadirDefaults.color_), std::end(kZenithNadirDefaults.color_),
+                std::begin(r.zenith_nadir_color));
+    }
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {
         return LUMICE_ERR_INVALID_VALUE;
       }
-      if (gj.contains("central")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.central_grid, &r.central_grid_count);
+      // "central" is the pre-rename spelling of "angular_dist"; read it as an alias with the new
+      // key winning, exactly as ParseRenderConfig does. The two decoders have to agree — that is
+      // what test_json_parser_parity.cpp checks — so this branch and that one stay identical in
+      // shape. Only the new key is ever written (RendererToJson above).
+      if (gj.contains("angular_dist")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("angular_dist"), r.angular_dist, &r.angular_dist_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      } else if (gj.contains("central")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.angular_dist, &r.angular_dist_count);
         if (err != LUMICE_OK) {
           return err;
         }
       }
       if (gj.contains("elevation")) {
         const LUMICE_ErrorCode err = JsonToGridLines(gj.at("elevation"), r.elevation_grid, &r.elevation_grid_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
+      if (gj.contains("longitude")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("longitude"), r.longitude_grid, &r.longitude_grid_count);
         if (err != LUMICE_OK) {
           return err;
         }
@@ -2402,6 +2472,44 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
         r.horizon = outline ? 1 : 0;
+      }
+      // The three text-label switches. One loop over (key, field) rather than three copies of the
+      // same six lines: they differ only in which key names which int, and a fourth family would
+      // otherwise be a fourth chance to paste the wrong field name in.
+      {
+        const std::pair<const char*, int*> kLabelKeys[] = {
+          { "horizon_label", &r.horizon_label },
+          { "label", &r.grid_label },
+          { "angular_dist_label", &r.angular_dist_label },
+        };
+        for (const auto& [key, field] : kLabelKeys) {
+          if (!gj.contains(key)) {
+            continue;
+          }
+          bool on = false;
+          const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
+          if (err != LUMICE_OK) {
+            return err;
+          }
+          *field = on ? 1 : 0;
+        }
+      }
+      if (gj.contains("zenith_nadir")) {
+        // Seeded with the defaults above so a PARTIAL object keeps them for the keys it omits,
+        // which is what core's from_json does with the same input.
+        ns::ZenithNadirParam zn;
+        zn.enabled_ = r.zenith_nadir != 0;
+        zn.radius_px_ = r.zenith_nadir_radius_px;
+        zn.opacity_ = r.zenith_nadir_opacity;
+        std::copy(std::begin(r.zenith_nadir_color), std::end(r.zenith_nadir_color), std::begin(zn.color_));
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("zenith_nadir"), zn);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+        r.zenith_nadir = zn.enabled_ ? 1 : 0;
+        r.zenith_nadir_radius_px = zn.radius_px_;
+        r.zenith_nadir_opacity = zn.opacity_;
+        std::copy(std::begin(zn.color_), std::end(zn.color_), std::begin(r.zenith_nadir_color));
       }
     }
   }
@@ -3198,6 +3306,152 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
   out->edge_count = edge_cnt;
 
   return LUMICE_OK;
+}
+
+
+// =============== Annotation Overlay ===============
+// Bridge only: the geometry, the level-set extraction and the curve walk all live in
+// core/annotation_overlay.hpp. What is here is the ABI shape — validation, the enum
+// translation, and the one heap allocation the C caller releases.
+
+namespace {
+
+// Everything LUMICE_AnnotationOverlay's pointers point into, kept in one object so a single
+// Release frees the lot. Owned through the struct's opaque `storage` handle rather than through
+// the individual pointers: the caller has one thing to release, and the released state is
+// expressible (all pointers NULL) so a double Release is a no-op instead of a double free.
+struct AnnotationStorage {
+  lumice::annotation::Overlay overlay;
+  std::vector<LUMICE_AnnotationLabel> labels;
+};
+
+const unsigned char* MaskPtr(const std::vector<uint8_t>& m) {
+  return m.empty() ? nullptr : m.data();
+}
+
+// A request angle list, validated and copied. Returns false with `err` set on a malformed list.
+bool ReadAngleList(const float* data, int count, int cap, std::vector<float>* out, LUMICE_ErrorCode* err) {
+  if (count < 0 || count > cap) {
+    *err = LUMICE_ERR_INVALID_VALUE;
+    return false;
+  }
+  if (count > 0 && data == nullptr) {
+    *err = LUMICE_ERR_NULL_ARG;
+    return false;
+  }
+  out->assign(data, data + count);
+  return true;
+}
+
+}  // namespace
+
+
+LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
+                                                 LUMICE_AnnotationOverlay* out) {
+  if (!request || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const LUMICE_AnnotationView& v = request->view;
+  if (v.lens_type < 0 || v.lens_type > LUMICE_LENS_TYPE_GLOBE) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (v.visible != LUMICE_VISIBLE_UPPER && v.visible != LUMICE_VISIBLE_LOWER && v.visible != LUMICE_VISIBLE_FULL) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  lumice::annotation::Request req;
+  req.view.width = v.width;
+  req.view.height = v.height;
+  req.view.lens_type = static_cast<ns::LensParam::LensType>(v.lens_type);
+  req.view.fov_deg = v.lens_fov;
+  req.view.lens_shift[0] = v.lens_shift[0];
+  req.view.lens_shift[1] = v.lens_shift[1];
+  req.view.overlap = v.overlap;
+  req.view.az_deg = v.view_azimuth;
+  req.view.el_deg = v.view_elevation;
+  req.view.roll_deg = v.view_roll;
+  req.view.visible = static_cast<ns::RenderConfig::VisibleRange>(v.visible);
+  req.view.front = v.front != 0;
+  req.horizon = request->horizon != 0;
+  req.zenith_nadir = request->zenith_nadir != 0;
+  req.labels = request->want_labels != 0;
+  req.reference_dir[0] = request->reference_dir[0];
+  req.reference_dir[1] = request->reference_dir[1];
+  req.reference_dir[2] = request->reference_dir[2];
+
+  LUMICE_ErrorCode err = LUMICE_OK;
+  if (!ReadAngleList(request->elevation_deg, request->elevation_count, LUMICE_MAX_ANNOTATION_LINES, &req.elevation_deg,
+                     &err) ||
+      !ReadAngleList(request->longitude_deg, request->longitude_count, LUMICE_MAX_ANNOTATION_LINES, &req.longitude_deg,
+                     &err) ||
+      !ReadAngleList(request->angular_dist_deg, request->angular_dist_count, LUMICE_MAX_ANNOTATION_CIRCLES,
+                     &req.angular_dist_deg, &err)) {
+    return err;
+  }
+
+  std::unique_ptr<AnnotationStorage> storage;
+  try {
+    storage = std::make_unique<AnnotationStorage>();
+    storage->overlay = lumice::annotation::ComputeOverlay(req);
+  } catch (...) {
+    return LUMICE_ERR_UNKNOWN;
+  }
+
+  const lumice::annotation::Overlay& o = storage->overlay;
+  storage->labels.reserve(o.labels.size());
+  for (const lumice::annotation::Label& l : o.labels) {
+    LUMICE_AnnotationLabel dst{};
+    dst.px = l.px;
+    dst.py = l.py;
+    dst.kind = static_cast<int>(l.kind);
+    dst.index = l.index;
+    dst.value_deg = l.value_deg;
+    // Truncation cannot happen for any angle core formats (see LUMICE_ANNOTATION_LABEL_MAX), but
+    // the copy is bounded anyway: a silently over-long text would otherwise be a buffer overrun
+    // rather than a short label.
+    const size_t n = std::min(l.text.size(), sizeof(dst.text) - 1);
+    std::memcpy(dst.text, l.text.data(), n);
+    dst.text[n] = '\0';
+    storage->labels.push_back(dst);
+  }
+
+  out->width = o.width;
+  out->height = o.height;
+  out->drawable = MaskPtr(o.drawable);
+  out->horizon = MaskPtr(o.horizon);
+  out->elevation = MaskPtr(o.elevation);
+  out->longitude = MaskPtr(o.longitude);
+  out->angular_dist = MaskPtr(o.angular_dist);
+  out->zenith_px = o.zenith.px;
+  out->zenith_py = o.zenith.py;
+  out->zenith_valid = o.zenith.valid ? 1 : 0;
+  out->nadir_px = o.nadir.px;
+  out->nadir_py = o.nadir.py;
+  out->nadir_valid = o.nadir.valid ? 1 : 0;
+  out->labels = storage->labels.empty() ? nullptr : storage->labels.data();
+  out->label_count = static_cast<int>(storage->labels.size());
+  out->storage = storage.release();
+  return LUMICE_OK;
+}
+
+
+void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay) {
+  if (!overlay || !overlay->storage) {
+    return;  // NULL-safe, and idempotent on an already-released or zero-initialized struct
+  }
+  const std::unique_ptr<AnnotationStorage> owned(static_cast<AnnotationStorage*>(overlay->storage));
+  overlay->storage = nullptr;
+  // Leave no dangling view of freed memory behind, so a caller that keeps reading the struct after
+  // Release sees "nothing here" rather than a use-after-free.
+  overlay->drawable = nullptr;
+  overlay->horizon = nullptr;
+  overlay->elevation = nullptr;
+  overlay->longitude = nullptr;
+  overlay->angular_dist = nullptr;
+  overlay->labels = nullptr;
+  overlay->label_count = 0;
+  overlay->zenith_valid = 0;
+  overlay->nadir_valid = 0;
 }
 
 

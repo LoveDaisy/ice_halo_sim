@@ -109,43 +109,39 @@ float ComputeGridStep(float fov) {
   return 0.5f;
 }
 
-OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
-  OverlayLabelInput input{};
-  input.lens_type = rc.lens_type;
-  input.fov = rc.fov;
-  input.elevation = rc.elevation;
-  input.azimuth = rc.azimuth;
-  input.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
-  input.visible = rc.visible;
-  input.front = rc.front;
-  input.show_horizon = state.show_horizon_label;
-  input.show_grid = state.show_grid_label;
-  input.show_sun_circles = state.show_sun_circles_label;
-  input.horizon_alpha = state.horizon_alpha;
+namespace {
 
-  // Sun direction in world space (azimuth fixed at 0, only altitude matters).
-  // Formula is byte-identical to RenderPreviewPanel's assignment into
-  // g_preview_vp.params.overlay.sun_dir (see src/gui/app_panels.cpp ~L534-538):
-  //   sa = altitude * deg2rad
-  //   sun_dir = (-cos(sa), 0, -sin(sa))
-  // Both callers share this helper so a future formula change only has to land here.
-  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-  float sa = state.sun.altitude * kDeg2Rad;
-  input.sun_dir[0] = -std::cos(sa);
-  input.sun_dir[1] = 0.0f;
-  input.sun_dir[2] = -std::sin(sa);
+// The shared body of the two expansions below: the angles g*step for g over an index range, with
+// the g == 0 curve optionally left out. Written once because the two families differ only in that
+// range and that flag — a second hand-rolled loop is a second place for the range to drift.
+std::vector<float> GridAnglesOverIndexRange(float step, int index_lo, int index_hi, bool skip_zero) {
+  std::vector<float> out;
+  if (index_hi < index_lo) {
+    return out;
+  }
+  out.reserve(static_cast<size_t>(index_hi - index_lo + 1));
+  for (int g = index_lo; g <= index_hi; ++g) {
+    if (skip_zero && g == 0) {
+      continue;
+    }
+    out.push_back(static_cast<float>(g) * step);
+  }
+  return out;
+}
 
-  input.sun_circle_count = std::min(static_cast<int>(state.sun_circle_angles.size()), kMaxSunCircles);
-  input.sun_circle_angles = state.sun_circle_angles.data();
+}  // namespace
 
-  std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
-  std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(input.grid_color));
-  std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
-            std::begin(input.sun_circles_color));
-  input.grid_alpha = state.grid_alpha;
-  input.sun_circles_alpha = state.sun_circles_alpha;
-  input.grid_step = ComputeGridStep(rc.fov);
-  return input;
+std::vector<float> ComputeGridElevationAngles(float step) {
+  // ±80°, 0° excluded: the horizon owns that curve and carries its own colour.
+  const int g_max = static_cast<int>(std::round(80.0f / step));
+  return GridAnglesOverIndexRange(step, -g_max, g_max, /*skip_zero=*/true);
+}
+
+std::vector<float> ComputeGridLongitudeAngles(float step) {
+  // (-180°, 180°]: starting one index above -g_max is what keeps the anti-meridian from being
+  // emitted twice, once as -180° and once as +180°.
+  const int g_max = static_cast<int>(std::round(180.0f / step));
+  return GridAnglesOverIndexRange(step, -g_max + 1, g_max, /*skip_zero=*/false);
 }
 
 std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
@@ -411,15 +407,28 @@ void DoExportPreviewPng() {
   }
 
   PreviewParams params = BuildExportParams();
-  std::optional<OverlayLabelInput> overlay;
-  if (g_state.screenshot_include_overlay &&
-      (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label)) {
-    overlay = BuildOverlayLabelInput(g_state, g_state.renderer);
-  }
+  const bool want_labels = g_state.screenshot_include_overlay;
 
   int w = g_preview_vp.vp_w;
   int h = g_preview_vp.vp_h;
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay);
+  // Built at the FBO's own size, which for this export is the live viewport's, so the anchors need
+  // no rescaling and the exported PNG puts the numbers where the screen does. An empty list is how
+  // this path says "no text" now that there is no second, walk-driven source to switch off
+  // alongside it.
+  std::vector<CurveLabelSet> curve_labels;
+  if (want_labels && g_state.show_horizon_label) {
+    curve_labels.push_back(
+        BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  }
+  if (want_labels && g_state.show_sun_circles_label) {
+    curve_labels.push_back(
+        BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  }
+  if (want_labels && g_state.show_grid_label) {
+    curve_labels.push_back(
+        BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  }
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, curve_labels);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;
@@ -429,7 +438,7 @@ void DoExportPreviewPng() {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: PNG write error path={}", PathToU8(path));
     return;
   }
-  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", PathToU8(path));
+  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", curve_labels.empty() ? "" : " (overlay)", PathToU8(path));
 }
 
 void DoExportDualFisheyeEqualAreaPng() {
@@ -448,7 +457,7 @@ void DoExportDualFisheyeEqualAreaPng() {
   PreviewParams params = BuildExportParams();
   ConfigureDualFisheyeExportParams(params);
 
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, std::nullopt);
+  auto rgba = RenderExportToRgba(g_preview, params, w, h);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export dual fisheye: RenderExportToRgba empty (size={}x{})", w, h);
     return;
@@ -484,7 +493,7 @@ void DoExportEquirectangularPng() {
   PreviewParams params = BuildExportParams();
   ConfigureEquirectExportParams(params);
 
-  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h, std::nullopt);
+  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export equirect: RenderExportToRgba empty (size={}x{})", dst_w, dst_h);
     return;

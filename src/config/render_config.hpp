@@ -27,6 +27,27 @@ struct GridLineParam {
 void to_json(nlohmann::json& j, const GridLineParam& l);
 void from_json(const nlohmann::json& j, GridLineParam& l);
 
+// The zenith / nadir pair, drawn as a pixel-space ring around wherever those two world directions
+// land on the canvas. Appearance only: WHERE the rings go comes from annotation::ComputeOverlay's
+// zenith / nadir CanvasPoints, which is why this struct carries no angle the way GridLineParam
+// does — the two directions are fixed, so there is nothing per-line to name.
+//
+// One struct for both markers, not two: the GUI has a single switch, a single colour picker and a
+// single radius slider for the pair (gui_state.hpp show_zenith_nadir_line / zenith_nadir_color /
+// zenith_nadir_alpha / zenith_nadir_radius_px), and the defaults below are that control's.
+//
+// `color_` is sRGB, like GridLineParam::color_ and unlike RenderConfig::background_ — the consumer
+// converts once at the blend, which is where the linear domain begins.
+struct ZenithNadirParam {
+  bool enabled_ = false;
+  float radius_px_ = 8.0f;
+  float opacity_ = 0.6f;
+  float color_[3]{ 0.8f, 0.2f, 0.2f };
+};
+
+void to_json(nlohmann::json& j, const ZenithNadirParam& z);
+void from_json(const nlohmann::json& j, ZenithNadirParam& z);
+
 struct LensParam {
   enum LensType {
     kLinear,
@@ -93,6 +114,12 @@ struct RenderConfig {
   int resolution_[2]{};  // width, height
   ViewParam view_{};
   VisibleRange visible_ = kUpper;
+  // A second clip dimension, independent of visible_ and ANDed with it: when set, a pixel is
+  // drawable only if its world direction also lies in the hemisphere the camera faces
+  // (forward . dir >= 0). It is deliberately NOT a VisibleRange enumerator — the two axes are
+  // orthogonal, and folding them into one enum would multiply out its cases. Twin of
+  // LUMICE_RenderParam::front and LUMICE_AnnotationView::front.
+  bool front_ = false;
 
   // Linear RGB. The JSON "background" key is sRGB; to_json / ParseRenderConfig convert.
   float background_[3]{};
@@ -106,14 +133,46 @@ struct RenderConfig {
   // and the compositor use, never the accumulation layout, so a change needs no consumer rebuild.
   EvMode ev_mode_ = kRelative;
 
-  std::vector<GridLineParam> central_grid_;
+  std::vector<GridLineParam> angular_dist_grid_;
   std::vector<GridLineParam> elevation_grid_;
+  // Meridians: lines of constant azimuth. Named "longitude" rather than "azimuth" because that is
+  // the word the annotation layer already uses for this concept everywhere it is public
+  // (annotation::Request::longitude_deg, Overlay::longitude, LUMICE_ANNOTATION_LONGITUDE); a second
+  // spelling in the persisted schema would give one concept two vocabularies.
+  std::vector<GridLineParam> longitude_grid_;
   // Opt-in, not on by default. It was `true` for the four years the field parsed and drew nothing,
   // which cost nothing; now that it draws, `true` would put a horizon line into every existing
   // config that never asked for one (13 of the 14 reference renders in test/e2e-correctness/ set
   // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
   // nobody has made, so the default states the one thing that is certain: draw it when asked.
   bool horizon_ = false;
+  // Draw the TEXT labels — the angle each line stands for, "22\u00b0" and the like — next to the
+  // three line families. One switch per family, mirroring the GUI's three
+  // (show_horizon_label / show_grid_label / show_sun_circles_label, gui_state.hpp), because those
+  // three are independently settable there and a config that could not express the same three
+  // states would be unable to describe what the GUI is showing.
+  //
+  // TWO LAYERS, and they are not the same statement. Whether the label GEOMETRY is computed is
+  // what these fields decide, independently of whether the family's own line is drawn: a
+  // horizon_label_ with horizon_ false still produces the anchors. Whether the label is VISIBLE
+  // once drawn is NOT independent — the compositor gives a label its family's own colour and
+  // opacity (GridLineParam::opacity_ for the grid families, the horizon's fixed constants for the
+  // horizon), so a line at opacity 0 takes its labels with it. That is the GUI's behaviour too
+  // (overlay_labels.cpp gives every label its family's colour and alpha), and matching it is the
+  // point: a core that let a label outlive its line would be a new GUI/CLI divergence.
+  //
+  // Opt-in for the same reason horizon_ is: text nobody asked for must not appear in a config
+  // that predates the field.
+  bool horizon_label_ = false;
+  // The parallels and the meridians share one switch, as they share one appearance in the GUI.
+  bool grid_label_ = false;
+  bool angular_dist_label_ = false;
+  // The zenith / nadir ring markers. Opt-in for the same reason horizon_ is: an annotation nobody
+  // asked for must not appear in a config that predates the field.
+  //
+  // No label switch of its own, and not an omission: a marker carries no text at all
+  // (annotation::Overlay returns the two as POINTS, not labels), so there is nothing to turn on.
+  ZenithNadirParam zenith_nadir_;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare

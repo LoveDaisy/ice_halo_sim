@@ -7,7 +7,9 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -127,16 +129,46 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 // enum: it is a pure function of the preset and file_io.cpp's export path needs it too.
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
-// Build an OverlayLabelInput from GuiState + RenderConfig. Shared between
-// RenderPreviewPanel (live preview) and DoExportPreviewPng (off-screen FBO export)
-// so both paths consume the same field-packing logic.
-OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc);
+// The one AnnotationOverlayCache the live preview drives (app_panels.cpp), and the label set built
+// from whatever it currently holds. Exposed so the off-screen export renders the SAME circles the
+// preview is showing rather than recomputing them at its own moment — an export is a picture of
+// what is on screen, and a second computation could settle on a different view.
+AnnotationOverlayCache& PreviewAnnotationOverlay();
+AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc);
+// `vp_w`/`vp_h` are the target draw list's size; the anchors are scaled from the cache's own canvas
+// into it, so a caller rendering at a size the cache was not built for still gets them in the right
+// place (see the function's own note on the HiDPI case).
+CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                      float vp_h);
+// The coordinate grid's twin of the above: same anchors-to-draw-list conversion, reading the grid
+// half of the same cache result and carrying the grid's own colour, alpha and collision group.
+CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
+// The horizon's. Same conversion again, reading the horizon half of the same result. It joins the
+// GRID's collision group (the horizon is the parallel at altitude 0) while carrying its own colour
+// and alpha, which is why it is a third set rather than a third family folded into the grid's.
+CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
 
-// Pick the coordinate grid step (in degrees) for a given FOV. Single source of
-// truth shared between shader uniform (OverlayDecoration::grid_step) and label
-// CPU loop (OverlayLabelInput::grid_step) so the two never drift.
+// Pick the coordinate grid step (in degrees) for a given FOV. Single source of truth for every
+// consumer that needs to know how dense the grid is: the annotation request the preview and the
+// export both build from it (via the two expansions below), the exported config's grid arrays, and
 // Caller guarantees fov > 0; the function does not validate.
 float ComputeGridStep(float fov);
+
+// Expand a grid step into the explicit angle list the coordinate grid draws — the parallels
+// (constant elevation) and the meridians (constant azimuth), one function each.
+//
+// SINGLE SOURCE, and that is the whole point of them existing as functions. Three consumers need
+// the same list: the live preview's annotation request, the off-screen export's, and the exported
+// config's grid.elevation / grid.longitude arrays. If any two of them re-derived the range, the
+// GUI would show one set of lines and the CLI would render another — precisely the divergence the
+// annotation layer exists to close, and one no parity test would attribute to this decision.
+//
+// The ranges are the ones the GUI has always drawn: parallels over ±80° EXCLUDING 0° (the horizon
+// owns that curve and is coloured separately), meridians over the half-open (-180°, 180°] so the
+// anti-meridian appears once rather than twice.
+// Caller guarantees step > 0; neither function validates.
+std::vector<float> ComputeGridElevationAngles(float step);
+std::vector<float> ComputeGridLongitudeAngles(float step);
 
 // Business operations
 //

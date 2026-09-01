@@ -1092,8 +1092,9 @@ struct GuiState {
   // Auxiliary line overlay (view preference — does not call MarkDirty, not in ConfigSnapshot).
   // Each overlay has independent toggles for line and label visibility, allowing
   // line-only / label-only / both / none combinations. The line flags drive the
-  // shader uniform path (see app_panels.cpp pp.overlay assignment), the label flags
-  // drive the CPU label sampling path (see BuildOverlayLabelInput in app.cpp).
+  // shader uniform path (see app_panels.cpp pp.overlay assignment), the label flags gate the
+  // label anchors core computes (AnnotationViewInputFor -> AnnotationOverlayCache -> the
+  // Build*LabelSet family) and, on the export side, the three grid.*_label keys the CLI reads.
   //
   // Tech-debt note (2026-04-29): now 19 flat
   // overlay-related fields (5×color + 5×alpha + 8×bool + zenith_nadir_radius_px).

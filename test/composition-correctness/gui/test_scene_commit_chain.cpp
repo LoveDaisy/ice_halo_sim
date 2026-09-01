@@ -128,7 +128,38 @@ void SeedNonDefaultView() {
   g_state.aspect_preset = AspectPreset::k16x9;
   g_state.aspect_portrait = false;
   g_state.show_horizon_line = false;
-  g_state.renderer.front = false;  // the export refuses a front clip; asserted separately below
+  // Sun circles ON, with a list and an appearance that are nobody's default: this is the one
+  // annotation whose export carries DATA rather than a flag, so leaving it at its (off) default
+  // would make every assertion about it below vacuous and would hide the intent divergence it
+  // introduces from IntentionalDivergenceFieldsMatchDocumentedSet.
+  g_state.show_sun_circles_line = true;
+  g_state.sun_circle_angles = { 9.0f, 22.0f, 46.0f };
+  g_state.sun_circles_color[0] = 0.25f;
+  g_state.sun_circles_color[1] = 0.50f;
+  g_state.sun_circles_color[2] = 0.75f;
+  g_state.sun_circles_alpha = 0.4f;
+  // The coordinate grid, on for the same reason the circles are: it is the other annotation whose
+  // export carries DATA, and leaving it at its default would make every assertion about it vacuous.
+  // fov 55 picks a 10 deg step (ComputeGridStep), which expands to 16 parallels and 36 meridians —
+  // both well under LUMICE_MAX_CONFIG_GRID_LINES, so this fixture exercises the fill and not the
+  // overflow refusal (which has its own case).
+  g_state.show_grid_line = true;
+  g_state.grid_color[0] = 0.90f;
+  g_state.grid_color[1] = 0.10f;
+  g_state.grid_color[2] = 0.60f;
+  g_state.grid_alpha = 0.7f;
+  // The three TEXT-label switches, ON and each one a different value from its line switch beside
+  // it — show_horizon_line is false above while show_horizon_label is true here. Left at their
+  // (off) defaults, both halves of their divergence would be vacuous, AND the export arm reading
+  // the line switch instead of the label one would go unnoticed, since for two of the three the
+  // two switches would then agree by accident.
+  g_state.show_horizon_label = true;
+  g_state.show_grid_label = true;
+  g_state.show_sun_circles_label = true;
+  // The front-hemisphere clip, ON. It is a view setting like the five above and diverges the same
+  // way (constant on the commit arm, the user's switch on the export arm), so leaving it at its
+  // off default would make both halves of the divergence vacuous for this field.
+  g_state.renderer.front = true;
 }
 
 // Half of the divergence: the run intent must NOT move. Core produces one fixed full-sky texture
@@ -149,10 +180,22 @@ TEST(SceneCommitChain, TheRunIntentIgnoresEveryViewSetting) {
   EXPECT_EQ(r["lens"]["type"].get<std::string>(), "dual_fisheye_equal_area");
   EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 180.0f);
   EXPECT_EQ(r["visible"].get<std::string>(), "full");
+  // The second clip, held off for the same reason `visible` is held at full: this arm asks for an
+  // uncropped texture and the preview shader applies the user's front clip at display time.
+  EXPECT_FALSE(r["front"].get<bool>()) << "the run intent cropped a texture the preview crops again";
   EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 0.0f);
   EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 0.0f);
   EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 0.0f);
   EXPECT_TRUE(r["grid"]["horizon"].get<bool>());
+  // No angular-distance circles either, for the same reason as the fixed lens above rather than
+  // as an oversight: this arm asks core for a texture the preview reprojects and draws its OWN
+  // overlay on top of, so a circle baked in here would appear twice and in the wrong place.
+  EXPECT_TRUE(r["grid"]["angular_dist"].empty())
+      << "the run intent baked an annotation the preview draws again at display time";
+  EXPECT_TRUE(r["grid"]["elevation"].empty())
+      << "the run intent baked an annotation the preview draws again at display time";
+  EXPECT_TRUE(r["grid"]["longitude"].empty())
+      << "the run intent baked an annotation the preview draws again at display time";
   // 2:1 at the chosen simulation resolution, not the 16:9 the document asks the window for.
   EXPECT_EQ(r["resolution"][0].get<int>(), 2048);
   EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
@@ -178,12 +221,60 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   EXPECT_EQ(r["lens"]["type"].get<std::string>(), "linear");
   EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 55.0f);
   EXPECT_EQ(r["visible"].get<std::string>(), "upper");
+  // ...and its own key, never folded into the one above: "visible": "front" would decode to
+  // "upper" on the far side with no diagnostic (nlohmann's unregistered-string rule).
+  EXPECT_TRUE(r["front"].get<bool>()) << "the exported config dropped the user's front-hemisphere clip";
   EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 77.0f);
   EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 23.0f);
   EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 11.0f);
   // The field that was not merely dropped but inverted: the document has the horizon line off, and
   // the export used to assert it on unconditionally.
   EXPECT_FALSE(r["grid"]["horizon"].get<bool>()) << "the exported config draws a horizon line the user switched off";
+  // The three TEXT-label switches, which the CLI now draws too. The horizon pair is the one worth
+  // reading as a pair: its LINE is off in this fixture and its LABEL is on, so an export that read
+  // show_horizon_line for both would come out false here — and, because the other two families
+  // have their lines on, it would come out right for them and this would be the only cell that
+  // says so.
+  EXPECT_TRUE(r["grid"]["horizon_label"].get<bool>())
+      << "the exported config dropped the horizon's numbers — most likely by reading the line switch";
+  EXPECT_TRUE(r["grid"]["label"].get<bool>());
+  EXPECT_TRUE(r["grid"]["angular_dist_label"].get<bool>());
+  // The sun circles, which the CLI now draws. Angles are the user's list; the colour and opacity
+  // are one shared pair repeated per entry, because that is all the GUI has controls for.
+  ASSERT_EQ(r["grid"]["angular_dist"].size(), 3u) << "the exported config lost the user's sun circles";
+  const float expect_deg[3] = { 9.0f, 22.0f, 46.0f };
+  for (int k = 0; k < 3; ++k) {
+    const nlohmann::json& line = r["grid"]["angular_dist"][static_cast<size_t>(k)];
+    EXPECT_FLOAT_EQ(line["value"].get<float>(), expect_deg[k]) << "circle " << k;
+    EXPECT_NEAR(line["opacity"].get<float>(), 0.4f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][0].get<float>(), 0.25f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][1].get<float>(), 0.50f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][2].get<float>(), 0.75f, 1e-4f) << "circle " << k;
+  }
+  // The coordinate grid, which the CLI now draws too. Unlike the circles the angles are NOT a list
+  // the user typed: the GUI derives one FOV-adaptive step and the export expands it, so what is
+  // asserted here is the expansion rule at this fov (10 deg step over +/-80 deg excluding 0 for the
+  // parallels, over the half-open (-180, 180] for the meridians) and the shared appearance.
+  ASSERT_EQ(r["grid"]["elevation"].size(), 16u) << "the parallels at a 10 deg step over +/-80 deg, 0 excluded";
+  ASSERT_EQ(r["grid"]["longitude"].size(), 36u) << "the meridians at a 10 deg step over (-180, 180]";
+  EXPECT_FLOAT_EQ(r["grid"]["elevation"][0]["value"].get<float>(), -80.0f);
+  EXPECT_FLOAT_EQ(r["grid"]["elevation"][15]["value"].get<float>(), 80.0f);
+  // 0 deg is absent: the horizon owns that curve and carries its own colour, so a parallel there
+  // would be a second line of a different colour on the same pixels.
+  for (const auto& line : r["grid"]["elevation"]) {
+    EXPECT_NE(line["value"].get<float>(), 0.0f);
+  }
+  // The anti-meridian appears once, as +180 and not also as -180 — the half-open range's whole
+  // point, and the one thing a copy of the parallels' rule would get wrong.
+  EXPECT_FLOAT_EQ(r["grid"]["longitude"][0]["value"].get<float>(), -170.0f);
+  EXPECT_FLOAT_EQ(r["grid"]["longitude"][35]["value"].get<float>(), 180.0f);
+  for (const char* family : { "elevation", "longitude" }) {
+    const nlohmann::json& line = r["grid"][family][0];
+    EXPECT_NEAR(line["opacity"].get<float>(), 0.7f, 1e-4f) << family;
+    EXPECT_NEAR(line["color"][0].get<float>(), 0.90f, 1e-4f) << family;
+    EXPECT_NEAR(line["color"][1].get<float>(), 0.10f, 1e-4f) << family;
+    EXPECT_NEAR(line["color"][2].get<float>(), 0.60f, 1e-4f) << family;
+  }
   // 16:9 landscape at the 1024 simulation resolution: long edge 1024*16/9, short edge 1024.
   EXPECT_EQ(r["resolution"][0].get<int>(), 1820);
   EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
@@ -194,6 +285,72 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   EXPECT_NEAR(r["background"][0].get<float>(), 0.20f, 1e-4f);
   EXPECT_NEAR(r["background"][1].get<float>(), 0.35f, 1e-4f);
   EXPECT_NEAR(r["background"][2].get<float>(), 0.60f, 1e-4f);
+}
+
+// The off state of the same switch, asserted separately rather than trusted to be the absence of
+// the on state. The horizon has a recorded incident of an export arm that emitted the INVERSE of
+// the user's switch, and a test that only ever seeds the switch on cannot see that: an emitter
+// ignoring the flag entirely, and one reading it correctly, produce the same document when the
+// flag happens to be on.
+TEST(SceneCommitChain, TheExportIntentOmitsCirclesTheUserTurnedOff) {
+  SeedNonDefaultView();
+  // Everything else about the circles stays as the fixture set it — only the switch moves, so a
+  // difference in the output can be attributed to the switch and nothing else.
+  g_state.show_sun_circles_line = false;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& grid = export_doc["render"][0]["grid"];
+
+  ASSERT_TRUE(grid.contains("angular_dist"));
+  EXPECT_TRUE(grid["angular_dist"].empty()) << "the exported config draws sun circles the user switched off";
+}
+
+// The grid's half of the same off-state check, and it is not redundant with the circles': the two
+// families read different switches, and an emitter that gated the grid on show_sun_circles_line —
+// or on nothing at all — passes the case above unchanged.
+TEST(SceneCommitChain, TheExportIntentOmitsTheGridTheUserTurnedOff) {
+  SeedNonDefaultView();
+  g_state.show_grid_line = false;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& grid = export_doc["render"][0]["grid"];
+
+  ASSERT_TRUE(grid.contains("elevation"));
+  ASSERT_TRUE(grid.contains("longitude"));
+  EXPECT_TRUE(grid["elevation"].empty()) << "the exported config draws parallels the user switched off";
+  EXPECT_TRUE(grid["longitude"].empty()) << "the exported config draws meridians the user switched off";
+  // The circles are untouched by that switch, which is what says the two families are gated
+  // separately rather than by one flag serving both.
+  EXPECT_EQ(grid["angular_dist"].size(), 3u);
+}
+
+// The refusal the narrow end of the FOV range makes reachable. ComputeGridStep drops to 5 deg below
+// a 30 deg field of view, which expands to 72 meridians against a cap of 64 — so an ordinary zoom,
+// not an unusual document, puts the export over the ABI limit. Refusing beats truncating: a
+// shortened grid is a CLI render that differs from the screen while reporting success.
+TEST(SceneCommitChain, AGridTooDenseToEncodeRefusesTheExportRatherThanTruncatingIt) {
+  SeedNonDefaultView();
+  g_state.renderer.fov = 20.0f;  // 5 deg step -> 32 parallels (fits) and 72 meridians (does not)
+
+  std::string json;
+  std::string warning;
+  EXPECT_FALSE(BuildExportJsonOrWarn(g_state, &json, &warning));
+  EXPECT_TRUE(json.empty()) << "a refused export must write nothing at all";
+  // The message has to name the resource and the number, or the user cannot tell which control to
+  // reach for. Reusing the filter-overflow wording here would misattribute both.
+  EXPECT_NE(warning.find("72"), std::string::npos) << warning;
+  EXPECT_NE(warning.find("longitude"), std::string::npos) << warning;
+
+  // The positive control: the same document at a wider fov exports. Without it, an export that
+  // refused unconditionally would satisfy everything above.
+  g_state.renderer.fov = 55.0f;
+  warning.clear();
+  EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &json, &warning)) << warning;
+  EXPECT_FALSE(json.empty());
 }
 
 // Roll is the one field that is not a straight copy, and the reason is invisible from the JSON: the
@@ -245,30 +402,42 @@ TEST(SceneCommitChain, TheExportedRollIsTheOneTheLensActuallyRenders) {
       << "EffectiveRollForLens no longer zeroes roll for the Globe lens";
 }
 
-// The front-hemisphere clip has nowhere to go: core's visible range is {upper, lower, full} and the
-// C API struct has no field for it. The export refuses rather than approximating, because both
-// approximations are worse than a refusal — encoding "front" as a visible string would land on
-// core's FIRST enum entry (kUpper) with no diagnostic, and dropping it silently would export a
-// picture wider than the one on screen.
+// The front-hemisphere clip used to have nowhere to go — core's visible range is {upper, lower,
+// full} and the C API struct had no field for it — so the export REFUSED rather than approximating.
+// It now has a field of its own, and this case is the inverse of the one it replaces: the export
+// succeeds and carries the clip.
 //
-// The front=false row is what makes this a statement about front rather than about export: without
-// it, an export path broken for every document would pass.
-TEST(SceneCommitChain, AFrontHemisphereClipRefusesToExportInsteadOfLying) {
+// What survives the reversal is the reason the refusal existed, which is a live trap and not
+// history: the clip must NOT be spelled as `"visible": "front"`. NLOHMANN_JSON_SERIALIZE_ENUM maps
+// an unregistered string to the FIRST table entry, which is kUpper, so that spelling would render
+// the upper hemisphere with no diagnostic anywhere. Hence the explicit assertions about which key
+// carries it and what `visible` still says.
+//
+// Both rows are load-bearing: without the front=false one, an export path that wrote `true`
+// unconditionally would pass.
+TEST(SceneCommitChain, AFrontHemisphereClipExportsAsItsOwnField) {
   SeedOneEntryDocument();
+  g_state.renderer.visible = 2;  // Full — so a collapse into `visible` shows up as a changed value
   g_state.renderer.front = true;
   std::string json;
   std::string warning;
-  EXPECT_FALSE(BuildExportJsonOrWarn(g_state, &json, &warning))
-      << "a front-clipped view exported a config the CLI will render un-clipped";
-  EXPECT_FALSE(warning.empty()) << "the export was refused without telling the user why";
-  EXPECT_TRUE(json.empty()) << "the reject path still produced a document";
+  ASSERT_TRUE(BuildExportJsonOrWarn(g_state, &json, &warning)) << "a front-clipped view is still refused: " << warning;
+  EXPECT_TRUE(warning.empty()) << "the export succeeded and warned anyway: " << warning;
+  nlohmann::json doc;
+  ASSERT_NO_THROW(doc = nlohmann::json::parse(json));
+  ASSERT_EQ(doc["render"].size(), 1u);
+  EXPECT_TRUE(doc["render"][0]["front"].get<bool>()) << "the exported config dropped the front clip";
+  EXPECT_EQ(doc["render"][0]["visible"].get<std::string>(), "full")
+      << "the front clip was folded into `visible`, which decodes to `upper` on the far side";
 
   g_state.renderer.front = false;
-  std::string ok_json;
-  std::string ok_warning;
-  EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &ok_json, &ok_warning));
-  EXPECT_TRUE(ok_warning.empty());
-  EXPECT_FALSE(ok_json.empty());
+  std::string off_json;
+  std::string off_warning;
+  ASSERT_TRUE(BuildExportJsonOrWarn(g_state, &off_json, &off_warning));
+  EXPECT_TRUE(off_warning.empty());
+  nlohmann::json off_doc;
+  ASSERT_NO_THROW(off_doc = nlohmann::json::parse(off_json));
+  EXPECT_FALSE(off_doc["render"][0]["front"].get<bool>());
 }
 
 // A document saved before the export path was taught to read it. Nothing about the SAVED form
@@ -350,13 +519,31 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "lens",              // projection + fov: fixed texture vs. the user's framing
     "view",              // camera angles: none vs. the user's
     "visible",           // hemisphere crop: always full vs. the user's
+    "front",             // the second crop: always off vs. the user's switch, same reason
     "background",        // composited at display time vs. baked by the CLI
     "resolution",        // 2:1 texture vs. the user's canvas shape
-    // "grid" is deliberately NOT here: only its "horizon" sub-field diverges (always on vs. the
-    // user's switch), the remaining grid sub-fields (counts, colors, ...) are documented to stay
-    // identical on both arms. Erasing the whole "grid" object would also stop checking those
-    // other sub-fields for an accidental intent-dependent drift, so "horizon" is exempted below
-    // at the sub-key level instead of listing "grid" here.
+    // "grid" is deliberately NOT here: only some of its sub-fields diverge, and they are exempted
+    // below at the sub-key level so the rest keep being compared. Erasing the whole "grid" object
+    // would stop checking those too. Which sub-fields, and why each:
+    //   horizon       — always on for the commit arm (that arm produces a TEXTURE the preview
+    //                   re-projects and annotates itself) vs. the user's switch on the export arm.
+    //   angular_dist  — empty on the commit arm vs. the user's angle list on the export arm.
+    //   elevation     — the same split, for the parallels. The commit arm writes nothing because
+    //   longitude       an annotation baked into the texture would be drawn a second time by the
+    //                   preview's own overlay; the export arm writes the FOV-adaptive step
+    //                   expanded into an explicit list, because the CLI has no overlay stage and
+    //                   only draws what the config names. See the two intent cases above.
+    //   zenith_nadir  — the same split again, for the marker pair: off with a zeroed appearance on
+    //                   the commit arm vs. the user's switch, colour, radius and alpha on the
+    //                   export arm.
+    //   horizon_label — the text beside each of the three line families, one sub-key each. The
+    //   label           same split once more, and for exactly the same reason: text baked into the
+    //   angular_dist_label
+    //                   commit arm's texture would be re-projected with the sky and then drawn a
+    //                   second time by the preview's own label pass, so that arm asks for none.
+    // All eight are the same divergence with eight spellings, which is why they share this note
+    // rather than each earning a bullet: an annotation belongs to the picture, and only one of the
+    // two arms describes a picture.
   };
 
   for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
@@ -403,13 +590,16 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its "horizon" sub-field is exempted here,
-    // by sub-key rather than by erasing the whole object, so the remaining grid sub-fields (counts,
-    // colors, ...) keep being checked for an accidental intent-dependent drift.
-    EXPECT_TRUE(commit_doc["render"][0]["grid"].contains("horizon"))
-        << "offset " << offset << ": \"grid.horizon\" is no longer emitted";
-    commit_doc["render"][0]["grid"].erase("horizon");
-    export_doc["render"][0]["grid"].erase("horizon");
+    // "grid" itself stays in the comparison below: only its eight diverging sub-fields are exempted
+    // here, by sub-key rather than by erasing the whole object, so any remaining grid sub-field
+    // keeps being checked for an accidental intent-dependent drift.
+    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "zenith_nadir", "horizon_label",
+                             "label", "angular_dist_label" }) {
+      EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
+          << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
+      commit_doc["render"][0]["grid"].erase(sub);
+      export_doc["render"][0]["grid"].erase(sub);
+    }
     EXPECT_EQ(commit_doc, export_doc) << "offset " << offset
                                       << ": the intent reached a field outside the documented set";
   }

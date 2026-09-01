@@ -15,7 +15,7 @@
       }
     },
     "lens_proj": {
-      "generated_at": "2026-09-01T12:04:45",
+      "generated_at": "2026-09-01T18:44:42",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
@@ -55,11 +55,11 @@
           "threshold": 20.5
         },
         "overlay_ea": {
-          "psnr_mean": 21.3333,
-          "psnr_std": 0.0939,
+          "psnr_mean": 20.731,
+          "psnr_std": 0.0989,
           "identical_runs": 0,
-          "n_samples": 30,
-          "threshold": 20.0
+          "n_samples": 10,
+          "threshold": 19.5
         },
         "dual_fisheye_equal_area_full_border": {
           "psnr_mean": 27.071,

@@ -662,7 +662,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
       auto it = config_manager_.renderers_.begin();
       for (auto& c : consumers_) {
         if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
-          rc->ResetWith(it->second);
+          rc->ResetWith(it->second, config_manager_.scene_.light_source_.param_);
           ++it;
         } else {
           c->Reset();  // StatsConsumer
@@ -673,8 +673,10 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
       consumers_.clear();
       for (const auto& [_, r] : config_manager_.renderers_) {
         // task-339.3: pass the color-class table so each consumer allocates one
-        // Y-lane per class (empty table → no lanes, pre-336 behavior).
-        consumers_.emplace_back(std::make_shared<RenderConsumer>(r, active_class_table_));
+        // Y-lane per class (empty table → no lanes, pre-336 behavior). The sun comes from the
+        // scene, not the renderer: it is what the angular-distance annotations are measured from.
+        consumers_.emplace_back(
+            std::make_shared<RenderConsumer>(r, active_class_table_, config_manager_.scene_.light_source_.param_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
     }

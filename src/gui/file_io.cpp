@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/field_editor_registry.hpp"
@@ -1204,42 +1205,42 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // Export and simulation therefore reject an over-limit filter identically by construction, not
   // by two implementations agreeing — the latter previously let export silently write a
   // semantically-opposite match-all stand-in for a filter the simulator refused.
-  // The front-hemisphere clip has no encoding on the far side, so the export is refused rather
-  // than approximated. RenderConfig::front is a GUI-only shader crop (preview_renderer.cpp's
-  // u_front) ANDed on top of visible; core's VisibleRange is {upper, lower, full} and
-  // LUMICE_RenderParam has no field for it. The two ways of not-refusing are both worse:
-  //   - Encoding "visible": "front" would be actively dangerous. NLOHMANN_JSON_SERIALIZE_ENUM maps
-  //     any unregistered string to the FIRST table entry, and that entry is kUpper
-  //     (render_config.hpp) — the CLI would silently render the upper hemisphere, no diagnostic.
-  //   - Dropping it silently would export a picture wider than the one on screen, which is the
-  //     exact class of dishonesty this export path was just fixed to stop committing.
-  // So it takes the same false + *out_warning channel the ABI-overflow rejections below use: no
-  // file is written and DoExportConfigJson shows the reason.
+  // The front-hemisphere clip USED to be refused here: it was a GUI-only shader crop
+  // (preview_renderer.cpp's u_front) with no field on the far side, and both alternatives to
+  // refusing were worse (encoding "visible": "front" hits NLOHMANN_JSON_SERIALIZE_ENUM's
+  // unregistered-string-maps-to-the-first-entry rule and would silently render the UPPER
+  // hemisphere; dropping it would export a picture wider than the one on screen). It is now a real
+  // core field — RenderConfig::front_ / LUMICE_RenderParam::front, its own top-level "front" JSON
+  // key rather than a fourth `visible` enumerator — so BuildScene's export arm writes it and the
+  // CLI reproduces the clip. No rejection remains.
   //
-  // This check runs before the filter/color-class overflow checks below, and the two families
-  // share the single *out_warning string: if a document trips both, only the front warning is
-  // shown (first-match-wins by check order, not by severity). That is fine with two checks, but
-  // if a third export-time rejection is ever added, reconsider collecting every triggered reason
-  // rather than stacking another early-return silently in front of or behind these.
-  if (state.renderer.front) {
-    if (out_warning) {
-      *out_warning =
-          "The Front hemisphere clip has no equivalent in the exported config format, and the CLI "
-          "would render the un-clipped view instead.\nNo config was exported. Turn Front off in the "
-          "Display group and try again.";
-    }
-    return false;
-  }
+  // Every rejection below shares the single *out_warning string: if a document trips more than
+  // one, only the first is shown (first-match-wins by check order, not by severity). That is
+  // still sound because all three remaining rejections are BuildScene's own single-failure funnel
+  // — the first one hit returns immediately and the other two structs are therefore never filled,
+  // so at most one can be set. Reconsider if a rejection is ever added that is decidable OUTSIDE
+  // BuildScene, since that would reintroduce the possibility of two true at once.
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
-  ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow);
+  GridOverflowInfo grid_overflow;
+  ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow, &grid_overflow);
   if (!scene) {
     if (out_warning) {
+      // Each branch names the resource it is about. The three overflow structs are disjoint by
+      // construction — BuildScene fills at most one and returns immediately — so the order here
+      // reports which check actually fired, not which is listed first.
       // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
       // (which runs strictly after the filter walk) rather than a physical-filter overflow —
       // reusing the filter-overflow wording here would misattribute the resource and the
       // limit number (code-review-01 Major 1).
-      if (color_overflow.class_index >= 0) {
+      if (grid_overflow.family != GridOverflowInfo::Family::kNone) {
+        const bool elevation = grid_overflow.family == GridOverflowInfo::Family::kElevation;
+        *out_warning = std::string("The coordinate grid needs ") + std::to_string(grid_overflow.count) + " " +
+                       (elevation ? "elevation" : "longitude") + " lines at this field of view, over the export " +
+                       "limit of " + std::to_string(LUMICE_MAX_CONFIG_GRID_LINES) +
+                       ".\nNo config was exported. Widen the field of view, or turn the Grid lines off in the "
+                       "Display group, and try again.";
+      } else if (color_overflow.class_index >= 0) {
         *out_warning = "This raypath color configuration exceeds its limits (" +
                        FormatColorOverflowLocator(color_overflow) +
                        ").\nNo config was exported. Simplify the color configuration and try again.";
@@ -1646,8 +1647,31 @@ static bool AddColorClasses(const GuiState& state, const std::map<int, int>& cry
   return true;
 }
 
+namespace {
+
+// Copy an angle list into one of LUMICE_RenderParam's fixed-capacity grid arrays, giving every
+// entry the same appearance. The GUI has one colour picker and one alpha slider per family, while
+// core's schema styles each line individually — the GUI is a restricted special case of it, and
+// repeating the shared values is how that restriction is expressed. `width` is left at core's
+// GridLineParam default: nothing reads it (the mask generator derives its own half-width), so
+// writing the GUI's line width there would export a number that changes no pixel.
+// Caller guarantees angles.size() <= LUMICE_MAX_CONFIG_GRID_LINES.
+void FillGridLines(const std::vector<float>& angles, const float color[3], float alpha, LUMICE_GridLine* out,
+                   int* out_count) {
+  const int n = std::min(static_cast<int>(angles.size()), LUMICE_MAX_CONFIG_GRID_LINES);
+  for (int k = 0; k < n; k++) {
+    out[k].value = angles[static_cast<size_t>(k)];
+    out[k].width = 1.0f;  // core GridLineParam::width_ default
+    out[k].opacity = alpha;
+    std::copy(color, color + 3, std::begin(out[k].color));
+  }
+  *out_count = n;
+}
+
+}  // namespace
+
 ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* overflow,
-                    ColorClassOverflowInfo* color_overflow) {
+                    ColorClassOverflowInfo* color_overflow, GridOverflowInfo* grid_overflow) {
   ScenePtr scene(LUMICE_SceneCreate());
   if (!scene) {
     GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneCreate failed");
@@ -1831,8 +1855,9 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     //   kJsonExport — "what would the CLI have to be told to draw the picture on screen?"
     //                 Invariant: every field below reflects GuiState, because the CLI has no
     //                 display-time reprojection stage at all — whatever is not in the config is
-    //                 not in the image. The documented exceptions are lens_shift (no GUI control)
-    //                 and the front-hemisphere clip (rejected in BuildExportJsonOrWarn, which see).
+    //                 not in the image. The one documented exception left is lens_shift (no GUI
+    //                 control); the front-hemisphere clip used to be a second one and is not any
+    //                 more — it has a core field now and is written below like every other.
     if (for_export) {
       // Both index the same enumeration by construction: kLensTypeNames is declared "order must
       // match Core's LensParam::LensType enum" (gui_state.hpp) and LUMICE_LENS_TYPE_* is that enum
@@ -1841,6 +1866,10 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       dst.lens_type = r.lens_type;
       dst.lens_fov = r.fov;
       dst.visible = r.visible;
+      // The second clip, ANDed with `visible` on both sides of the seam. It is a plain bool here
+      // and an int over the ABI, so it is the one Display-group field that needs a conversion
+      // rather than a pass-through.
+      dst.front = r.front ? 1 : 0;
       dst.view_azimuth = r.azimuth;
       dst.view_elevation = r.elevation;
       // NOT the stored r.roll: under the Globe lens the preview renders roll=0 while keeping the
@@ -1856,13 +1885,98 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // outside RenderConfig (GuiState's overlay group). Reading it is what stops the export from
       // asserting a line the user turned off.
       dst.horizon = state.show_horizon_line ? 1 : 0;
+      // The three TEXT-label switches, each read from the GUI control that owns it. Until v4.21
+      // there was nothing on the CLI side to write them into — core had no font — so the preview
+      // could show numbers an exported render never drew. It can now.
+      //
+      // Read from the *_label switch and NOT from the *_line one beside it: they are separately
+      // settable in the GUI, and collapsing them here would export text the user had turned off
+      // (or drop text they had turned on), which is the same class of defect `horizon` itself once
+      // had when the export wrote the inverse of its switch.
+      dst.horizon_label = state.show_horizon_label ? 1 : 0;
+      dst.grid_label = state.show_grid_label ? 1 : 0;
+      dst.angular_dist_label = state.show_sun_circles_label ? 1 : 0;
+      // Angular-distance circles, same story as the horizon and gated the same way: the switch is
+      // an overlay-group field, so an export that ignored it would draw circles the user turned
+      // off. What differs from the horizon is that these carry data, not just a flag — the angles
+      // are the user's own list.
+      //
+      // The LINE switch gates the list, and the label switch above does NOT widen that gate — a
+      // known and accepted limit rather than an oversight. For the two grid families and the
+      // circles, core's "is this family drawn" question IS "is its angle list non-empty": there is
+      // no separate line flag to turn off. So a GUI state of "circles' labels on, circles' lines
+      // off" has no faithful encoding — filling the list to get the numbers would draw the lines
+      // the user switched off, which is strictly worse than dropping the numbers. Only the horizon,
+      // whose line has a flag of its own, can express that combination (`horizon_label` with
+      // `horizon` zero). Giving the other two families the same expressiveness means giving core a
+      // per-family line flag, which is a schema change, not a fill-site change.
+      //
+      // Every entry gets the SAME colour and opacity because the GUI has one colour picker and one
+      // alpha slider for the whole set; core's schema styles each line individually and the GUI is
+      // a restricted special case of it, not the other way round. The width field is left at its
+      // default: nothing reads it (the mask generator derives its own half-width), so writing the
+      // GUI's line width there would export a number that changes no pixel.
+      dst.angular_dist_count = 0;
+      if (state.show_sun_circles_line) {
+        FillGridLines(state.sun_circle_angles, state.sun_circles_color, state.sun_circles_alpha, dst.angular_dist,
+                      &dst.angular_dist_count);
+      }
+      // The coordinate grid — parallels and meridians. Same gating and same shared-appearance
+      // story as the circles above, with one difference that matters: the angles are NOT a list
+      // the user typed. The GUI derives them from ONE FOV-adaptive step (ComputeGridStep), and
+      // this is where that display-side convenience is expanded into the explicit list core's
+      // schema is built on. The expansion functions are shared with the preview's own annotation
+      // request, so the exported list is the same list the screen is showing.
+      dst.elevation_grid_count = 0;
+      dst.longitude_grid_count = 0;
+      if (state.show_grid_line) {
+        const float step = ComputeGridStep(r.fov);
+        const std::vector<float> elevation = ComputeGridElevationAngles(step);
+        const std::vector<float> longitude = ComputeGridLongitudeAngles(step);
+        // Refuse rather than truncate. A narrow FOV picks a fine step and the meridian list
+        // overflows the ABI cap with no unusual document involved (72 lines at a 20 deg FOV), so
+        // this is a reachable state, not a defensive branch — and a silently shortened grid would
+        // be a CLI render that differs from the screen while reporting success.
+        const GridOverflowInfo::Family over = elevation.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
+                                                  GridOverflowInfo::Family::kElevation :
+                                              longitude.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
+                                                  GridOverflowInfo::Family::kLongitude :
+                                                  GridOverflowInfo::Family::kNone;
+        if (over != GridOverflowInfo::Family::kNone) {
+          if (grid_overflow) {
+            grid_overflow->family = over;
+            grid_overflow->count =
+                static_cast<int>(over == GridOverflowInfo::Family::kElevation ? elevation.size() : longitude.size());
+          }
+          GUI_LOG_WARNING("[FileIO] BuildScene: grid line count {} exceeds the export limit {}",
+                          over == GridOverflowInfo::Family::kElevation ? elevation.size() : longitude.size(),
+                          LUMICE_MAX_CONFIG_GRID_LINES);
+          return nullptr;
+        }
+        FillGridLines(elevation, state.grid_color, state.grid_alpha, dst.elevation_grid, &dst.elevation_grid_count);
+        FillGridLines(longitude, state.grid_color, state.grid_alpha, dst.longitude_grid, &dst.longitude_grid_count);
+      }
+      // The zenith / nadir markers. Gated on their own switch like everything above, and unlike
+      // the three line families they carry no angle list — the two directions are fixed, so the
+      // only data is the appearance. The colour needs no conversion: this field is sRGB, the
+      // convention every LUMICE_GridLine.color follows and `background` does not.
+      dst.zenith_nadir = state.show_zenith_nadir_line ? 1 : 0;
+      dst.zenith_nadir_radius_px = state.zenith_nadir_radius_px;
+      dst.zenith_nadir_opacity = state.zenith_nadir_alpha;
+      std::copy(std::begin(state.zenith_nadir_color), std::end(state.zenith_nadir_color),
+                std::begin(dst.zenith_nadir_color));
     } else {
       // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
       // used to hardcode while re-encoding a renderer now have to be stated here.
       dst.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;  // was hardcoded in RendererToJson
       dst.lens_fov = 180.0f;                                     // was hardcoded in RendererToJson
       dst.visible = LUMICE_VISIBLE_FULL;                         // was hardcoded in RendererToJson
-      dst.horizon = 1;                                           // core RenderConfig::horizon_ default (true)
+      // Same invariant as `visible` above, for the same reason: the commit arm asks core for an
+      // UNCROPPED full-sky texture and the preview shader applies the user's front clip at display
+      // time (u_front). Stated rather than left to the zero-init, so the two arms read as one
+      // deliberate divergence instead of an omission.
+      dst.front = 0;
+      dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
       // view / background keep their zero-initialized values, matching both the pre-v4.11
       // hardcoded encoding and core's defaults.
     }
@@ -1878,10 +1992,24 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // control anywhere, so there is no user-visible value for the export arm to be honest about.
     // If one is ever added, this is the line that has to stop being a comment.
     //
-    // grid counts likewise stay zero on both arms. The GUI's screen-space overlay grid
-    // (gui_state.show_grid_line) is a display-time layer with a different model than render[].grid
-    // (one FOV-adaptive step and a shared colour vs. an explicit list of individually-styled
-    // lines); reconciling them is a design decision that has not been made, not an omission here.
+    // All four annotation families — the three line lists and the marker pair — stay zero on the
+    // kSimCommit arm, and deliberately: that arm asks core for a TEXTURE the preview then
+    // re-projects and draws its own overlay on top of, so an annotation baked into it would be
+    // drawn twice. Same reason dst.horizon is unconditionally 1 there. The export arm above fills
+    // all four, which is what makes them the divergence set test_scene_commit_chain.cpp's
+    // kDivergingKeys pins.
+    //
+    // The marker block leaving its three appearance fields at zero on this arm is harmless for the
+    // same reason the empty lists are: with dst.zenith_nadir = 0 nothing reads them. It is NOT the
+    // same statement as the JSON decoders' "a missing key means core's defaults" — that one is
+    // about a document, this one about a struct the commit arm fills itself.
+    //
+    // grid.elevation and grid.longitude used to carry a longer caveat here — that the GUI's one
+    // FOV-adaptive step and core's explicit per-line list were two models nobody had reconciled.
+    // They are reconciled now, in favour of core's: the list is the model, and the adaptive step
+    // is a display-side convenience the export arm expands through ComputeGridElevationAngles /
+    // ComputeGridLongitudeAngles. The shared appearance core's schema styles per line is expressed
+    // by repeating the GUI's single colour and alpha, exactly as grid.angular_dist does.
     int renderer_id = -1;
     if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
       GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");
@@ -3239,7 +3367,57 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   if (vp.vp_w <= 0 || vp.vp_h <= 0 || !renderer.HasTexture()) {
     return false;
   }
-  auto rgba = RenderExportToRgba(renderer, vp.params, vp.vp_w, vp.vp_h, std::nullopt);
+  PreviewParams params = vp.params;
+  // Rebuild the annotation masks AT THIS CANVAS, rather than reusing the one the live preview
+  // computed. Sampling a mask built for another size is a plain image rescale: harmless when the
+  // two sizes share an aspect ratio, and a distortion of the circles when they do not — and a
+  // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
+  // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
+  // debounce over. Its own cache, for the same reason: a different clock from the preview's.
+  if (params.overlay.show_sun_circles || params.overlay.show_grid || params.overlay.show_zenith_nadir ||
+      params.overlay.show_horizon) {
+    static AnnotationOverlayCache export_overlay;
+    export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
+    // Each family is handed over only if it actually produced a mask. HasResult() is not enough on
+    // its own: one call now serves three families, so a result can hold the grid's mask and not the
+    // circles' (the user turned the circles off, or emptied their angle list). Passing an empty
+    // vector's data() alongside a non-zero width/height would have the renderer upload W*H bytes
+    // from a pointer to nothing.
+    params.overlay.angular_dist_mask = nullptr;
+    params.overlay.grid_mask = nullptr;
+    params.overlay.horizon_mask = nullptr;
+    if (export_overlay.HasResult()) {
+      if (!export_overlay.AngularDistMask().empty()) {
+        params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
+        params.overlay.angular_dist_mask_w = export_overlay.Width();
+        params.overlay.angular_dist_mask_h = export_overlay.Height();
+        params.overlay.angular_dist_mask_generation = export_overlay.Generation();
+      }
+      if (!export_overlay.GridMask().empty()) {
+        params.overlay.grid_mask = export_overlay.GridMask().data();
+        params.overlay.grid_mask_w = export_overlay.Width();
+        params.overlay.grid_mask_h = export_overlay.Height();
+        params.overlay.grid_mask_generation = export_overlay.Generation();
+      }
+      if (!export_overlay.HorizonMask().empty()) {
+        params.overlay.horizon_mask = export_overlay.HorizonMask().data();
+        params.overlay.horizon_mask_w = export_overlay.Width();
+        params.overlay.horizon_mask_h = export_overlay.Height();
+        params.overlay.horizon_mask_generation = export_overlay.Generation();
+      }
+      // The marker positions have to be recomputed here for a second reason on top of the mask's:
+      // they are SCREEN COORDINATES, so a position inherited from vp.params was measured against
+      // the live preview's viewport and would put the ring at the wrong place on any export whose
+      // canvas differs — not merely stretch it, as a rescaled mask does.
+      CanvasPointToShaderScreenPos(export_overlay.ZenithPoint(), vp.vp_w, vp.vp_h, params.overlay.zenith_screen_pos);
+      CanvasPointToShaderScreenPos(export_overlay.NadirPoint(), vp.vp_w, vp.vp_h, params.overlay.nadir_screen_pos);
+    } else if (params.overlay.show_zenith_nadir) {
+      // No result to place them from, and the inherited positions are the preview's. Switch the
+      // markers off rather than draw two rings at coordinates this canvas never produced.
+      params.overlay.show_zenith_nadir = false;
+    }
+  }
+  auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h);
   if (rgba.empty()) {
     return false;
   }

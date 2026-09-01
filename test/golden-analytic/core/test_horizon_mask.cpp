@@ -1,5 +1,5 @@
 // Analytic coverage for the celestial-horizon annotation mask
-// (core/lens_proj_build.hpp::BuildHorizonMask).
+// (the `horizon` member of core/annotation_overlay.hpp::ComputeOverlay).
 //
 // The mask answers "does pixel (px, py) sit on the line at altitude 0?". Its two halves fail
 // differently and are pinned separately here:
@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"
 #include "core/lens_proj_build.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
 
@@ -62,9 +63,33 @@ RenderConfig MakeCfg(LensParam::LensType type, float fov, int w, int h,
   return cfg;
 }
 
+// The view snapshot for a RenderConfig, matching server/render.cpp's MakeMaskRequest field for
+// field. There is one horizon mask in the tree and this is how you ask for it: a second path
+// (BuildHorizonMask) used to exist and was deleted, because two computations of one curve are free
+// to drift and this file could only ever pin one of them.
+annotation::ViewSnapshot SnapshotOf(const RenderConfig& cfg) {
+  annotation::ViewSnapshot v;
+  v.width = cfg.resolution_[0];
+  v.height = cfg.resolution_[1];
+  v.lens_type = cfg.lens_.type_;
+  v.fov_deg = cfg.lens_.fov_;
+  v.lens_shift[0] = cfg.lens_shift_[0];
+  v.lens_shift[1] = cfg.lens_shift_[1];
+  v.overlap = cfg.overlap_;
+  v.az_deg = cfg.view_.az_;
+  v.el_deg = cfg.view_.el_;
+  v.roll_deg = cfg.view_.ro_;
+  v.visible = cfg.visible_;
+  v.front = cfg.front_;
+  return v;
+}
+
 std::vector<uint8_t> Outline(const RenderConfig& cfg) {
-  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-  return BuildHorizonMask(cfg, MakeCameraRotation(cfg), short_pix);
+  annotation::Request req;
+  req.view = SnapshotOf(cfg);
+  req.horizon = true;
+  req.labels = false;  // this file is about the LINE; the anchors have their own coverage
+  return annotation::ComputeOverlay(req).horizon;
 }
 
 bool At(const std::vector<uint8_t>& mask, const RenderConfig& cfg, int px, int py) {
@@ -300,6 +325,40 @@ TEST(HorizonMask, VisibleUpperKeepsTheLineAndClipsItsLowerHalf) {
   EXPECT_EQ(wrong.count, 0u) << "first " << wrong.first;
 }
 
+// The same interaction, on the frame a whole-image comparison actually reported it from, and the
+// standing refutation of a conclusion that was drawn there and was wrong.
+//
+// The cross-process CLI<->GUI fixture (test/gui/parity/) recorded that under `visible: upper` core
+// "draws no horizon at all" on its single-lens scene, inferred from the frame's PSNR barely moving
+// when the CLI's horizon switch was flipped. It draws one. What the inference missed is that a
+// horizon on this frame is a few hundred pixels — a fraction of a percent of it — which is below
+// what a whole-frame PSNR can see, exactly as that fixture's own header already says about the
+// zenith/nadir markers. So this case states the count directly instead: clipping to the upper
+// hemisphere takes HALF the band, the sky side, and leaves the other half.
+//
+// The GUI applies the identical clip, which is why "core loses the line and the GUI does not" was
+// never a possible reading: the preview draws its overlay under `result.w >= 0.5 && pixel_visible`
+// (preview_renderer.cpp), and pixel_visible ANDs the same upper/lower test — its `lat < 0` and
+// core's `wz > 0` are the same predicate, since lat = asin(-wz).
+TEST(HorizonMask, VisibleUpperHalvesTheLineOnTheParityFixtureScene) {
+  // The `single_lens_angled` scene of test/gui/parity/test_gui_cli_export_parity.cpp, verbatim.
+  RenderConfig cfg = MakeCfg(LensParam::kFisheyeEqualArea, 96.0f, 512, 683, RenderConfig::kFull, /*el=*/30.0f,
+                             /*ro=*/15.0f);
+  cfg.view_.az_ = 25.0f;
+  const size_t full = CountOn(Outline(cfg));
+  cfg.visible_ = RenderConfig::kUpper;
+  const size_t upper = CountOn(Outline(cfg));
+
+  ASSERT_GT(full, 0u) << "the scene must image the horizon at all for this case to prove anything";
+  EXPECT_GT(upper, 0u) << "the horizon bounds the upper hemisphere; clipping to it must not erase the line";
+  // Half, to a few percent: the band is symmetric about altitude 0, so the clip takes one side of
+  // it. Stated as a band rather than an equality because the two halves need not hold the same
+  // pixel count exactly (the width rule reads a forward difference, so the row the level crosses
+  // is assigned to one side).
+  EXPECT_NEAR(static_cast<double>(upper) / static_cast<double>(full), 0.5, 0.05)
+      << upper << " of " << full << " pixels survived the upper-hemisphere clip";
+}
+
 TEST(HorizonMask, VisibleLowerKeepsTheLineAndClipsItsUpperHalf) {
   const RenderConfig cfg = MakeCfg(LensParam::kLinear, 90.0f, kW, kH, RenderConfig::kLower);
   const std::vector<uint8_t> mask = Outline(cfg);
@@ -354,28 +413,83 @@ TEST(HorizonMask, EveryMarkedPixelIsInsideTheRenderDomain) {
   const LensParam::LensType types[]{ LensParam::kLinear, LensParam::kFisheyeEqualArea, LensParam::kRectangular,
                                      LensParam::kDualFisheyeEqualArea, LensParam::kGlobe };
   const RenderConfig::VisibleRange ranges[]{ RenderConfig::kUpper, RenderConfig::kLower, RenderConfig::kFull };
-  for (LensParam::LensType t : types) {
-    for (RenderConfig::VisibleRange vis : ranges) {
-      const RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
-      const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-      const Rotation rot = MakeCameraRotation(cfg);
-      const std::vector<uint8_t> outline = BuildHorizonMask(cfg, rot, short_pix);
-      const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
-      if (outline.size() != visible.size()) {
-        ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
-                      << visible.size() << ")";
-        continue;
-      }
-      size_t outside = 0;
-      for (size_t i = 0; i < outline.size(); ++i) {
-        if (outline[i] != 0 && visible[i] == 0) {
-          ++outside;
+  // Swept over the front clip as well as `visible`, because the two clips reach this mask by
+  // different routes — `visible` through VisibleByRange, `front` through a camera-forward dot —
+  // and a horizon that honoured only one of them would leave a line floating over a black half.
+  for (bool front : { false, true }) {
+    for (LensParam::LensType t : types) {
+      for (RenderConfig::VisibleRange vis : ranges) {
+        RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
+        cfg.front_ = front;
+        const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+        const Rotation rot = MakeCameraRotation(cfg);
+        const std::vector<uint8_t> outline = Outline(cfg);
+        const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
+        if (outline.size() != visible.size()) {
+          ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
+                        << visible.size() << ")";
+          continue;
         }
+        size_t outside = 0;
+        for (size_t i = 0; i < outline.size(); ++i) {
+          if (outline[i] != 0 && visible[i] == 0) {
+            ++outside;
+          }
+        }
+        EXPECT_EQ(outside, 0u) << TypeName(t) << ", visible " << static_cast<int>(vis) << ", front " << front
+                               << ": horizon marked on " << outside << " pixel(s) the lens does not image";
       }
-      EXPECT_EQ(outside, 0u) << TypeName(t) << ", visible " << static_cast<int>(vis) << ": horizon marked on "
-                             << outside << " pixel(s) the lens does not image";
     }
   }
+}
+
+// The containment check above cannot tell "clipped correctly" from "clipped away entirely", so the
+// clip's effect is stated separately: on a full-sky lens looking at the horizon, the front clip has
+// to take a real bite out of the line and leave a real piece of it.
+TEST(HorizonMask, FrontClipHalvesTheHorizonWithoutErasingIt) {
+  for (LensParam::LensType t : { LensParam::kDualFisheyeEqualArea, LensParam::kRectangular }) {
+    RenderConfig cfg = MakeCfg(t, 180.0f, 192, 96, RenderConfig::kFull, /*el=*/0.0f);
+    const size_t unclipped = CountOn(Outline(cfg));
+    if (unclipped == 0u) {
+      // Non-fatal: the second lens type must still be reported.
+      ADD_FAILURE() << TypeName(t) << ": the unclipped horizon is empty, so this row proves nothing";
+      continue;
+    }
+    cfg.front_ = true;
+    const size_t clipped = CountOn(Outline(cfg));
+    EXPECT_GT(clipped, 0u) << TypeName(t) << ": the front clip erased the whole horizon";
+    EXPECT_LT(clipped, unclipped) << TypeName(t) << ": the front clip left the horizon untouched";
+  }
+}
+
+// The containment sweep above runs at 128x96, and that is too coarse to see the defect this case
+// exists for, which is why it is stated separately rather than folded in as one more row.
+//
+// The front clip has a per-pixel predicate on each side of the seam, and the annotation layer once
+// applied its LABEL tolerance (kFrontEps, ~0.57 degrees) to the MASK as well — its own header says
+// the masks must not get that slack, and the code did anyway. A tolerance measured in DEGREES is
+// invisible wherever a pixel is worth more than 0.57 of them: on a 128-wide equirectangular frame
+// one pixel spans about 0.9 degrees, so the whole band fell inside a single pixel and every sweep
+// at that size read clean. At 2048x1024 the same band is ten pixels deep and the line ran that far
+// past the edge of the rendered sky. Keep the resolution high here; lowering it silences the case
+// without changing what it tests.
+TEST(HorizonMask, FrontClipUsesNoAngularSlackAtHighResolution) {
+  RenderConfig cfg = MakeCfg(LensParam::kRectangular, 180.0f, 2048, 1024, RenderConfig::kFull);
+  cfg.front_ = true;
+  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+  const std::vector<uint8_t> outline = Outline(cfg);
+  const std::vector<uint8_t> visible = BuildVisibleMask(cfg, MakeCameraRotation(cfg), short_pix);
+  ASSERT_EQ(outline.size(), visible.size());
+  ASSERT_GT(CountOn(outline), 0u) << "a full-sky lens looking at the horizon must draw one";
+
+  size_t outside = 0;
+  for (size_t i = 0; i < outline.size(); ++i) {
+    if (outline[i] != 0 && visible[i] == 0) {
+      ++outside;
+    }
+  }
+  EXPECT_EQ(outside, 0u) << outside << " horizon pixel(s) painted past the front clip's edge, over sky "
+                         << "BuildVisibleMask does not render";
 }
 
 TEST(HorizonMask, DegenerateResolutionYieldsAnEmptyMask) {
