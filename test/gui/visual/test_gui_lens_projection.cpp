@@ -434,6 +434,12 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           in.zenith_nadir = true;
           marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
           IM_CHECK(marker_overlay.HasResult());
+          // The scene exists to cover the ring, and a ring is small enough that its ABSENCE would
+          // cost less PSNR than this group's noise — so a marker that stopped being placed would
+          // pass the comparison and quietly leave overlayAuxLines' only committed pixel coverage
+          // testing the grid alone. Zenith only: this view's nadir is behind the camera, which is
+          // the state the sentinel below is for.
+          IM_CHECK(marker_overlay.ZenithPoint().valid);
           vp.params.overlay.show_zenith_nadir = true;
           gui::CanvasPointToShaderScreenPos(marker_overlay.ZenithPoint(), vp.vp_w, vp.vp_h,
                                             vp.params.overlay.zenith_screen_pos);
