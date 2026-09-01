@@ -112,6 +112,7 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   angular_dist_labels_.clear();
   grid_mask_.clear();
   grid_labels_.clear();
+  horizon_mask_.clear();
   horizon_labels_.clear();
   zenith_ = {};
   nadir_ = {};
@@ -177,6 +178,9 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
             (out.elevation != nullptr && out.elevation[i] != 0) || (out.longitude != nullptr && out.longitude[i] != 0);
         grid_mask_[i] = lit ? uint8_t{ 1 } : uint8_t{ 0 };
       }
+    }
+    if (out.horizon != nullptr) {
+      horizon_mask_.assign(out.horizon, out.horizon + n);
     }
     zenith_ = { out.zenith_px, out.zenith_py, out.zenith_valid != 0 };
     nadir_ = { out.nadir_px, out.nadir_py, out.nadir_valid != 0 };

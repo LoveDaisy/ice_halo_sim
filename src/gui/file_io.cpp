@@ -3374,7 +3374,8 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
   // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
   // debounce over. Its own cache, for the same reason: a different clock from the preview's.
-  if (params.overlay.show_sun_circles || params.overlay.show_grid || params.overlay.show_zenith_nadir) {
+  if (params.overlay.show_sun_circles || params.overlay.show_grid || params.overlay.show_zenith_nadir ||
+      params.overlay.show_horizon) {
     static AnnotationOverlayCache export_overlay;
     export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
     // Each family is handed over only if it actually produced a mask. HasResult() is not enough on
@@ -3384,6 +3385,7 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
     // from a pointer to nothing.
     params.overlay.angular_dist_mask = nullptr;
     params.overlay.grid_mask = nullptr;
+    params.overlay.horizon_mask = nullptr;
     if (export_overlay.HasResult()) {
       if (!export_overlay.AngularDistMask().empty()) {
         params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
@@ -3396,6 +3398,12 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
         params.overlay.grid_mask_w = export_overlay.Width();
         params.overlay.grid_mask_h = export_overlay.Height();
         params.overlay.grid_mask_generation = export_overlay.Generation();
+      }
+      if (!export_overlay.HorizonMask().empty()) {
+        params.overlay.horizon_mask = export_overlay.HorizonMask().data();
+        params.overlay.horizon_mask_w = export_overlay.Width();
+        params.overlay.horizon_mask_h = export_overlay.Height();
+        params.overlay.horizon_mask_generation = export_overlay.Generation();
       }
       // The marker positions have to be recomputed here for a second reason on top of the mask's:
       // they are SCREEN COORDINATES, so a position inherited from vp.params was measured against

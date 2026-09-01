@@ -79,6 +79,13 @@ struct OverlayDecoration {
   int grid_mask_w = 0;
   int grid_mask_h = 0;
   unsigned long long grid_mask_generation = 0;
+  // The celestial horizon's mask, on the same borrowed-for-the-call terms as the two above. Its
+  // own channel rather than a third contributor to grid_mask because it carries its own colour and
+  // alpha — the same reason core keeps it a separate Overlay member.
+  const unsigned char* horizon_mask = nullptr;
+  int horizon_mask_w = 0;
+  int horizon_mask_h = 0;
+  unsigned long long horizon_mask_generation = 0;
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };
   float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
@@ -172,6 +179,11 @@ class PreviewRenderer {
   void UploadGridMask(const unsigned char* data, int width, int height);
   void ClearGridMask();
 
+  // The same for the celestial horizon's mask, on texture unit 4. Same contract in every respect;
+  // see UploadAngularDistMask above.
+  void UploadHorizonMask(const unsigned char* data, int width, int height);
+  void ClearHorizonMask();
+
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
@@ -230,6 +242,9 @@ class PreviewRenderer {
   // The coordinate grid's mask, same lifetime and same sentinel rules as the two above.
   unsigned int grid_tex_ = 0;
   unsigned long long grid_tex_generation_ = 0;
+  // The celestial horizon's mask, likewise.
+  unsigned int horizon_tex_ = 0;
+  unsigned long long horizon_tex_generation_ = 0;
   int bg_width_ = 0;
   int bg_height_ = 0;
   float bg_aspect_ = 1.0f;

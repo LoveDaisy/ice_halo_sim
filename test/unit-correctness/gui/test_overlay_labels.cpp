@@ -504,20 +504,21 @@ TEST(OverlayLabels, AFullSkyViewIsLabelledWithSeveralDistinctLatitudes) {
   }
 }
 
-// ---- The line switch and the label switch are separate ----
+// ---- Either of the horizon's two switches puts it in the request ----
 //
-// Each overlay family has one toggle for its curve and one for its numbers, and the horizon's
-// ANCHOR request must follow the label one. Reading the line flag instead would make the numbers
-// appear and disappear with a switch the user thinks controls something else — which is the defect
-// this case has always guarded, now asked of the request builder the anchors actually come from
-// rather than of the struct the deleted walk used to take.
+// Each overlay family has one toggle for its curve and one for its numbers, and both halves now
+// come out of the same annotation request: the curve as a mask the preview shader samples, the
+// numbers as anchors. So the request carries the horizon when EITHER switch is on, exactly as the
+// grid and the circles do (the next case pins theirs), and neither switch alone can starve the
+// other's half.
 //
-// The horizon is the family this can be asked of at THIS layer: its line is drawn by the preview's
-// fragment shader from a uniform, so nothing but the label switch has any reason to put it in the
-// annotation request. The grid and the circles carry data, so their request is filled when EITHER
-// of their two switches is on (the next case pins that); their label switch is read where their
-// anchors are consumed, in RenderPreviewPanel.
-TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherTheHorizonsNumbersAreRequested) {
+// This case used to assert `in.horizon == labels`, because the preview derived the horizon LINE
+// itself in its fragment shader from fwidth(altitude) and had no use for a mask. That was the last
+// annotation the two renderers each computed for themselves, and the two answers were not the same
+// curve; the shader reads core's mask now. What the label switch still decides on its own is
+// whether the TEXT is drawn, and that is read where the anchors are consumed (RenderPreviewPanel),
+// the same place the other two families' label switches are read.
+TEST(OverlayToggle, EitherHorizonSwitchPutsItInTheAnnotationRequest) {
   struct ToggleCase {
     const char* name;
     bool lines;
@@ -535,7 +536,7 @@ TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherTheHorizonsNumbersAreReques
     s.show_horizon_line = s.show_grid_line = s.show_sun_circles_line = c.lines;
     s.show_horizon_label = s.show_grid_label = s.show_sun_circles_label = c.labels;
     const auto in = gui::AnnotationViewInputFor(s, s.renderer);
-    EXPECT_EQ(in.horizon, c.labels) << c.name;
+    EXPECT_EQ(in.horizon, c.lines || c.labels) << c.name;
   }
 }
 

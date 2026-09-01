@@ -62,6 +62,12 @@ uniform int u_has_angular_dist_mask;
 // renderer and this preview, instead of two implementations of it.
 uniform sampler2D u_grid_mask;
 uniform int u_has_grid_mask;
+// 1 where the celestial horizon passes, from the same core computation and on the same terms as
+// the two masks above. The shader used to derive this per fragment from fwidth(altitude_deg) — the
+// last annotation either renderer still computed for itself, and the one whose two answers were
+// measurably different curves rather than one curve read twice.
+uniform sampler2D u_horizon_mask;
+uniform int u_has_horizon_mask;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
@@ -414,18 +420,15 @@ vec4 globeInverse(vec2 pos, float half_fov, out float ri) {
 }
 
 // Overlay auxiliary lines on top of final_color.
-// world_dir must be a valid world-space direction.
+//
+// It takes no world direction any more, and that absence is the statement: every CURVE this draws
+// now comes from a mask core computed for this exact view, so there is nothing left here to derive
+// from the fragment's own direction. What remains direction-free is the zenith / nadir pair, whose
+// two points arrive as pixel-space uniforms.
+//
 // pos_pix: pixel-space position of the current fragment, center-origin (0,0),
 // y-up. Matches the CPU helper ProjectWorldDirToScreen for marker overlays.
-vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
-  float DEG = 180.0 / PI;
-  float altitude_deg = asin(clamp(-world_dir.z, -1.0, 1.0)) * DEG;
-
-  // Adaptive line width via screen-space derivatives, clamped to avoid singularities. Only the
-  // horizon still needs one: the grid and the circles read a mask whose width core already
-  // derived from the same local-gradient rule, on the CPU, so both drawers get one curve.
-  float fw_alt = clamp(fwidth(altitude_deg), 1e-4, 2.0);
-
+vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
   // Coordinate grid — geometry from core's mask, drawn first so the other lines overlay on top.
   // Same sampling rule as the circles below (see the uv note there); the two blocks differ only in
   // which mask and which colour they read.
@@ -453,10 +456,11 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
     color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
   }
 
-  // Horizon line (altitude = 0) — drawn last so it's most visible
-  if (u_show_horizon != 0) {
-    float d = abs(altitude_deg);
-    float t = 1.0 - smoothstep(0.0, fw_alt * 1.5, d);
+  // Horizon line (altitude = 0) — geometry from core's mask, drawn last so it's most visible.
+  // Same sampling rule as the two blocks above; the uv note there applies here unchanged.
+  if (u_show_horizon != 0 && u_has_horizon_mask != 0) {
+    vec2 horizon_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
+    float t = texture(u_horizon_mask, horizon_uv).r > 0.0 ? 1.0 : 0.0;
     color = mix(color, u_horizon_color, t * u_horizon_alpha);
   }
 
@@ -663,7 +667,7 @@ void main() {
 
   // Auxiliary line overlay (on top of everything, only in visible region)
   if (result.w >= 0.5 && pixel_visible) {
-    final_color = overlayAuxLines(world_dir, final_color, pos_ovl);
+    final_color = overlayAuxLines(final_color, pos_ovl);
   }
 
   // Lens border — deliberately OUTSIDE the `result.w >= 0.5 && pixel_visible` gate.
@@ -813,6 +817,11 @@ void PreviewRenderer::Destroy() {
     glDeleteTextures(1, &grid_tex_);
     grid_tex_ = 0;
     grid_tex_generation_ = 0;
+  }
+  if (horizon_tex_) {
+    glDeleteTextures(1, &horizon_tex_);
+    horizon_tex_ = 0;
+    horizon_tex_generation_ = 0;
   }
   if (vbo_) {
     glDeleteBuffers(1, &vbo_);
@@ -1081,6 +1090,43 @@ void PreviewRenderer::ClearGridMask() {
     glDeleteTextures(1, &grid_tex_);
     grid_tex_ = 0;
     grid_tex_generation_ = 0;
+  }
+}
+
+void PreviewRenderer::UploadHorizonMask(const unsigned char* data, int width, int height) {
+  if (data == nullptr || width <= 0 || height <= 0) {
+    ClearHorizonMask();
+    return;
+  }
+  if (horizon_tex_ == 0) {
+    glGenTextures(1, &horizon_tex_);
+    if (horizon_tex_ == 0) {
+      return;
+    }
+  }
+  // UNIT 4 (0 = simulation, 1 = background image, 2 = angular-distance mask, 3 = grid mask), on
+  // exactly the terms UploadAngularDistMask states: switch to this unit so the upload cannot land
+  // over the simulation texture unit 0 leaves bound, restore unit 0 on the way out, and keep the
+  // NEAREST / CLAMP_TO_EDGE / alignment-1 rules — see that function for why none is optional.
+  glActiveTexture(GL_TEXTURE4);
+  glBindTexture(GL_TEXTURE_2D, horizon_tex_);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  GLint prev_alignment = 4;
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
+  glActiveTexture(GL_TEXTURE0);
+}
+
+void PreviewRenderer::ClearHorizonMask() {
+  if (horizon_tex_ != 0) {
+    glDeleteTextures(1, &horizon_tex_);
+    horizon_tex_ = 0;
+    horizon_tex_generation_ = 0;
   }
 }
 
@@ -1575,6 +1621,13 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
     UploadGridMask(ov.grid_mask, ov.grid_mask_w, ov.grid_mask_h);
     grid_tex_generation_ = ov.grid_mask_generation;
   }
+  if (ov.horizon_mask == nullptr) {
+    ClearHorizonMask();
+    horizon_tex_generation_ = 0;
+  } else if (ov.horizon_mask_generation != horizon_tex_generation_) {
+    UploadHorizonMask(ov.horizon_mask, ov.horizon_mask_w, ov.horizon_mask_h);
+    horizon_tex_generation_ = ov.horizon_mask_generation;
+  }
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
@@ -1595,6 +1648,14 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, grid_tex_);
     glUniform1i(glGetUniformLocation(shader_program_, "u_grid_mask"), 3);
+    glActiveTexture(GL_TEXTURE0);
+  }
+  // Unit 4, likewise.
+  glUniform1i(glGetUniformLocation(shader_program_, "u_has_horizon_mask"), horizon_tex_ != 0 ? 1 : 0);
+  if (horizon_tex_ != 0) {
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, horizon_tex_);
+    glUniform1i(glGetUniformLocation(shader_program_, "u_horizon_mask"), 4);
     glActiveTexture(GL_TEXTURE0);
   }
   glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), ov.horizon_color[0], ov.horizon_color[1],

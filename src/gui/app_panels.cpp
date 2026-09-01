@@ -147,11 +147,10 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
   // The marker pair has no list to fill and no label switch of its own — it is a bool the request
   // either carries or does not.
   in.zenith_nadir = state.show_zenith_nadir_line;
-  // The horizon, gated on its LABEL switch alone and not on its line switch beside it. The line is
-  // drawn by the preview's own fragment shader from a uniform (overlayAuxLines), so this request
-  // is only ever about the anchors; asking for it when the user wants no numbers would buy a
-  // width*height sweep nothing reads.
-  in.horizon = state.show_horizon_label;
+  // The horizon, gated on EITHER of its switches, exactly like the three families above. It used
+  // to be the label switch alone, because the preview derived the line itself in its fragment
+  // shader and the mask that came back was a cost with no reader. It has one now.
+  in.horizon = state.show_horizon_line || state.show_horizon_label;
   return in;
 }
 
@@ -1495,7 +1494,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // still needs the mask. Which families the request actually carries is decided inside
     // AnnotationViewInputFor, off the same switches; each switch then gates its own half below.
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label || g_state.show_grid_line ||
-        g_state.show_grid_label || g_state.show_zenith_nadir_line) {
+        g_state.show_grid_label || g_state.show_zenith_nadir_line || g_state.show_horizon_line ||
+        g_state.show_horizon_label) {
       g_annotation_overlay.Update(
           MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
     } else {
@@ -1518,6 +1518,12 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.grid_mask_w = g_annotation_overlay.Width();
       pp.overlay.grid_mask_h = g_annotation_overlay.Height();
       pp.overlay.grid_mask_generation = g_annotation_overlay.Generation();
+    }
+    if (g_state.show_horizon_line && g_annotation_overlay.HasResult() && !g_annotation_overlay.HorizonMask().empty()) {
+      pp.overlay.horizon_mask = g_annotation_overlay.HorizonMask().data();
+      pp.overlay.horizon_mask_w = g_annotation_overlay.Width();
+      pp.overlay.horizon_mask_h = g_annotation_overlay.Height();
+      pp.overlay.horizon_mask_generation = g_annotation_overlay.Generation();
     }
 
     // Zenith / Nadir pixel-space marker. The APPEARANCE below is the GUI's own state; the two

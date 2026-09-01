@@ -57,10 +57,14 @@ class AnnotationOverlayCache {
     // the two directions are fixed, and what varies is only whether the caller wants them.
     bool zenith_nadir = false;
     // The celestial horizon. A bool for the same reason zenith_nadir is — there is one such curve,
-    // at altitude 0 — and asked for by the LABEL switch alone: the preview draws the horizon LINE
-    // in its own fragment shader (overlayAuxLines), so the mask this brings back with the anchors
-    // is a cost, not a use. Requesting the anchors is still cheaper than the alternative it
-    // replaced, a second curve walk living in the GUI.
+    // at altitude 0 — and asked for by EITHER of its two switches, exactly like the three families
+    // above. It used to be the label switch alone, because the preview derived the LINE itself in
+    // its fragment shader from fwidth(altitude) and the mask that came back with the anchors was a
+    // cost rather than a use. That was the last annotation the two renderers each computed for
+    // themselves, and the two answers were not the same line: core paints a hard band at full
+    // alpha, the shader an antialiased smoothstep ramp whose width comes from a rasterizer
+    // derivative rather than core's forward difference. The shader now samples this mask like the
+    // other two.
     bool horizon = false;
 
     bool operator==(const ViewKey& o) const;
@@ -111,6 +115,11 @@ class AnnotationOverlayCache {
   // Anchors for both grid families, merged for the same reason the mask is: core has already
   // formatted each label's text, and the consumer draws them in one style.
   const std::vector<Label>& GridLabels() const { return grid_labels_; }
+  // Row-major width*height, 1 where the celestial horizon passes. Its own mask rather than a
+  // member of the grid's for the same reason HorizonLabels() is its own list: the GUI colours the
+  // horizon separately, so the two cannot share a texture the way parallels and meridians can.
+  // Empty unless HasResult().
+  const std::vector<uint8_t>& HorizonMask() const { return horizon_mask_; }
   // Anchors for the celestial horizon. Its own list rather than merged into the grid's, even
   // though the horizon IS the parallel at altitude 0 and shares the grid's collision group: the
   // GUI colours it separately (a red of its own, against the grid's shared colour), and an
@@ -149,6 +158,7 @@ class AnnotationOverlayCache {
   std::vector<Label> angular_dist_labels_;
   std::vector<uint8_t> grid_mask_;
   std::vector<Label> grid_labels_;
+  std::vector<uint8_t> horizon_mask_;
   std::vector<Label> horizon_labels_;
   Point zenith_;
   Point nadir_;
