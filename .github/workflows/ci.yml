@@ -639,6 +639,14 @@ jobs:
         # parity files (exit-seam, projection) on opposite legs, and keep
         # test_capi_sentinel_overflow off the exit-seam leg.
         #
+        # Because of (a), converging takes more than one CI run: each grouping
+        # has to be measured, and the measurement only describes that grouping.
+        # The three groupings tried here, by job duration (rest / parity):
+        #   sentinel+light | projection+batch_inv+color_mask   584 RED / 397
+        #   light          | +sentinel                         385 / 595  (1.55x)
+        #   +batch_inv     | projection+sentinel+color_mask     <- current
+        # Expect to spend a couple of runs this way rather than one.
+        #
         # Why the legs are expressed differently: the "rest" leg has to keep
         # picking up newly added test files on its own, so it names test ROOTS
         # and subtracts the files moved away (--ignore does apply to those, since
@@ -661,12 +669,12 @@ jobs:
           - name: macOS ARM64 parity
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: "test/parity-cross-backend/backend/test_metal_projection_parity.py test/regression-sentinel/test_capi_sentinel_overflow.py test/parity-cross-backend/backend/test_metal_batch_invariance.py test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
+            pytest_args: "test/parity-cross-backend/backend/test_metal_projection_parity.py test/regression-sentinel/test_capi_sentinel_overflow.py test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
 
           - name: macOS ARM64 rest
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel --ignore=test/parity-cross-backend/backend/test_metal_projection_parity.py --ignore=test/regression-sentinel/test_capi_sentinel_overflow.py --ignore=test/parity-cross-backend/backend/test_metal_batch_invariance.py --ignore=test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
+            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel --ignore=test/parity-cross-backend/backend/test_metal_projection_parity.py --ignore=test/regression-sentinel/test_capi_sentinel_overflow.py --ignore=test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
 
     runs-on: ${{ matrix.os }}
     name: E2E Slow (${{ matrix.name }})
