@@ -53,9 +53,13 @@ void DestroyFbo(ScopedFbo& s) {
 
 // Compose and render the overlay labels onto the currently bound FBO using
 // a self-owned ImDrawList + ImDrawData::AddDrawList. Spike-verified path.
-void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, int dst_w, int dst_h) {
+void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, const AngularDistLabelSet& circles, int dst_w,
+                        int dst_h) {
   std::vector<OverlayLabel> labels;
   ComputeOverlayLabels(overlay_input, 0.0f, 0.0f, static_cast<float>(dst_w), static_cast<float>(dst_h), labels);
+  // After ComputeOverlayLabels, which clears the vector, and before the emptiness check: a scene
+  // with circle labels and nothing else is a scene this used to return from without drawing.
+  AppendAngularDistLabels(circles, 0.0f, 0.0f, labels);
   if (labels.empty()) {
     return;
   }
@@ -81,7 +85,8 @@ void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, int dst_w, int d
 }  // namespace
 
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
-                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input) {
+                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input,
+                                              const AngularDistLabelSet& circles) {
   if (dst_w <= 0 || dst_h <= 0) {
     return {};
   }
@@ -115,7 +120,7 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
   renderer.Render(0, 0, dst_w, dst_h, params);
 
   if (overlay_input.has_value()) {
-    RenderOverlayToFbo(*overlay_input, dst_w, dst_h);
+    RenderOverlayToFbo(*overlay_input, circles, dst_w, dst_h);
   }
 
   std::vector<unsigned char> rgba;

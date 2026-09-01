@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/crystal_preview.hpp"
 #include "gui/crystal_renderer.hpp"
 #include "gui/gui_constants.hpp"
@@ -131,6 +132,13 @@ void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, fl
 // RenderPreviewPanel (live preview) and DoExportPreviewPng (off-screen FBO export)
 // so both paths consume the same field-packing logic.
 OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc);
+
+// The one AnnotationOverlayCache the live preview drives (app_panels.cpp), and the label set built
+// from whatever it currently holds. Exposed so the off-screen export renders the SAME circles the
+// preview is showing rather than recomputing them at its own moment — an export is a picture of
+// what is on screen, and a second computation could settle on a different view.
+AnnotationOverlayCache& PreviewAnnotationOverlay();
+AngularDistLabelSet BuildAngularDistLabelSet(const GuiState& state, float vp_w, float vp_h);
 
 // Pick the coordinate grid step (in degrees) for a given FOV. Single source of
 // truth shared between shader uniform (OverlayDecoration::grid_step) and label

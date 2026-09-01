@@ -45,36 +45,10 @@ gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation,
   in.front = front;
   in.show_horizon = false;
   in.show_grid = true;
-  in.show_sun_circles = false;
-  in.sun_dir[0] = 0.0f;
-  in.sun_dir[1] = 0.0f;
-  in.sun_dir[2] = -1.0f;
-  in.sun_circle_count = 0;
-  in.sun_circle_angles = nullptr;
   in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
   in.grid_color[0] = in.grid_color[1] = in.grid_color[2] = 1.0f;
-  in.sun_circles_color[0] = in.sun_circles_color[1] = in.sun_circles_color[2] = 1.0f;
   in.horizon_alpha = 1.0f;
   in.grid_alpha = 1.0f;
-  in.sun_circles_alpha = 1.0f;
-  return in;
-}
-
-// Sun circles only, on equidistant fisheye at fov=360 so that BACK-facing world directions still
-// land inside the viewport (r_norm = theta/half_fov, and half_fov = pi covers theta in [0, pi]).
-// Any narrower lens pushes them outside the viewport bound, which would then be what suppresses
-// them — making a "back labels are culled" assertion true for the wrong reason.
-gui::OverlayLabelInput MakeSunOnly(int visible, const float sun_dir[3], const float* circle_angles, int count,
-                                   bool front = false) {
-  gui::OverlayLabelInput in = MakeGridOnly(visible, gui::kLensTypeFisheyeEquidist, /*elev=*/0.0f, /*az=*/0.0f, front);
-  in.fov = 360.0f;
-  in.show_grid = false;
-  in.show_sun_circles = true;
-  in.sun_dir[0] = sun_dir[0];
-  in.sun_dir[1] = sun_dir[1];
-  in.sun_dir[2] = sun_dir[2];
-  in.sun_circle_count = count;
-  in.sun_circle_angles = circle_angles;
   return in;
 }
 
@@ -168,53 +142,20 @@ TEST(OverlayLabels, SingleOrthographicReachesTheSameLabellingPathAsFisheye) {
   EXPECT_GT(n_fisheye, 0);
   EXPECT_GE(n_ortho * 2, n_fisheye);
   EXPECT_LE(n_ortho, n_fisheye * 2);
-
-  const float sun_forward[3] = { -1.0f, 0.0f, 0.0f };  // camera forward at elev=0, az=0
-  const float angle = 5.0f;                            // small enough that the circle stays well inside the disc
-  auto sun_ortho = MakeSunOnly(gui::kVisibleFull, sun_forward, &angle, 1);
-  sun_ortho.lens_type = gui::kLensTypeFisheyeOrthographic;
-  sun_ortho.fov = 60.0f;
-  auto sun_fisheye = sun_ortho;
-  sun_fisheye.lens_type = gui::kLensTypeFisheyeEquidist;
-
-  const int n_sun_ortho = CountInGroup(Compute(sun_ortho, 200.0f, 200.0f), kSunGroup);
-  EXPECT_GT(n_sun_ortho, 0);
-  EXPECT_EQ(n_sun_ortho, CountInGroup(Compute(sun_fisheye, 200.0f, 200.0f), kSunGroup));
 }
 
 // ---- Front mode hides what is behind the camera, and only in front mode ----
 //
-// The pairing is the assertion. A cull that ran in every mode would satisfy the "front hides it"
-// half perfectly while deleting labels the user asked to see; a cull that never ran would satisfy
-// the "full keeps it" half. Only the asymmetry between the two rows distinguishes them.
+// The sun-circle half of this rule used to be asserted here, on a circle drawn around a sun placed
+// behind the camera. It moved out of this file with the walk that placed those labels: the GUI no
+// longer decides where a circle's label goes, it reads core's anchors (AnnotationOverlayCache), and
+// core applies the front clip itself from ViewSnapshot::front. The proposition is core's now, and
+// core's own front-clip cases carry it.
 //
-// Upper/Lower are avoided here on purpose: their equator-boundary block emits extra sun-circle
-// labels where the circle meets the equator, which would pollute a count about the interior block.
-TEST(OverlayLabels, TheBackHemisphereIsCulledInFrontModeAndKeptInFull) {
-  const float sun_behind[3] = { 1.0f, 0.0f, 0.0f };  // forward is -x, so this is directly behind
-  const float sun_ahead[3] = { -1.0f, 0.0f, 0.0f };
-  const float angle = 5.0f;
-
-  struct SunCase {
-    const char* name;
-    const float* sun;
-    bool front_mode;
-    bool expect_labels;
-  };
-  const SunCase kCases[] = {
-    // All four interior labels sit within 5 degrees of a sun that is behind the camera.
-    { "front mode, sun behind", sun_behind, true, false },
-    { "front mode, sun ahead", sun_ahead, true, true },
-    // Same scene as the first row but in full mode: the cull must not fire.
-    { "full mode, sun behind", sun_behind, false, true },
-  };
-
-  for (const SunCase& c : kCases) {
-    const int visible = gui::kVisibleFull;
-    const auto labels = Compute(MakeSunOnly(visible, c.sun, &angle, 1, c.front_mode), 800.0f, 600.0f);
-    EXPECT_EQ(CountInGroup(labels, kSunGroup) > 0, c.expect_labels) << c.name;
-  }
-}
+// The grid's half stays below, and with it the pairing that made the assertion mean something: a
+// cull that ran in every mode would satisfy "front hides it" while deleting labels the user asked
+// to see, and a cull that never ran would satisfy "full keeps it". Only the asymmetry between the
+// two tells them apart.
 
 // The grid's half of the same rule, plus what must survive it. Rectangular maps the whole sphere
 // into the viewport rectangle, so it is the cleanest place to see the cull remove labels. A wide
@@ -484,7 +425,9 @@ TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherNumbersAreComputed) {
     const auto in = gui::BuildOverlayLabelInput(s, s.renderer);
     EXPECT_EQ(in.show_horizon, c.labels) << c.name;
     EXPECT_EQ(in.show_grid, c.labels) << c.name;
-    EXPECT_EQ(in.show_sun_circles, c.labels) << c.name;
+    // Sun circles are not checked here any more: OverlayLabelInput no longer carries them. Their
+    // switch is read where their anchors are consumed (RenderPreviewPanel gates on
+    // show_sun_circles_label), which is past this struct.
   }
 }
 

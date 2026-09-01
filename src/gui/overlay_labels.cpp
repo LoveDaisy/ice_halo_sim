@@ -407,7 +407,7 @@ struct CurveSample {
 void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, float vp_screen_y, float vp_screen_w,
                           float vp_screen_h, std::vector<OverlayLabel>& out) {
   out.clear();
-  if (!input.show_horizon && !input.show_grid && !input.show_sun_circles)
+  if (!input.show_horizon && !input.show_grid)
     return;
 
   // View matrix for view-transformed lens types (linear / fisheye / globe);
@@ -426,10 +426,8 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
 
   const int horizon_a = static_cast<int>(input.horizon_alpha * 255);
   const int grid_a = static_cast<int>(input.grid_alpha * 255);
-  const int sun_a = static_cast<int>(input.sun_circles_alpha * 255);
   const ImU32 horizon_col = ColorToImU32(input.horizon_color, horizon_a);
   const ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
-  const ImU32 sun_col = ColorToImU32(input.sun_circles_color, sun_a);
 
   // kFrontEps semantics mirror the boundary-centric implementation's
   // dot >= -kFrontEps cull: kFrontEps ≈ sin(0.57°), the float-noise band at
@@ -591,95 +589,6 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     }
   };
 
-  // Sun-circle ring at angular distance angle_deg from input.sun_dir.
-  // Closed curve sweeping phi 0..2π around an orthonormal frame at sun_dir.
-  // Boundary mode (curve crosses out of visible region) → 1 label per
-  // visible arc; interior mode (entire ring in view) → 4 labels at 90°
-  // intervals (canonical sun-circle anchors per plan §D4).
-  auto process_sun_circle = [&](float angle_deg) {
-    const float sd_rad = angle_deg * kDeg2Rad;
-    const float cos_sd = std::cos(sd_rad);
-    const float sin_sd = std::sin(sd_rad);
-    const float sx = input.sun_dir[0], sy = input.sun_dir[1], sz = input.sun_dir[2];
-
-    // Orthonormal frame at sun_dir: pick a non-parallel basis, cross, renorm.
-    float ux, uy, uz;
-    if (std::abs(sz) < 0.9f) {
-      ux = sy;
-      uy = -sx;
-      uz = 0.0f;
-    } else {
-      ux = 0.0f;
-      uy = sz;
-      uz = -sy;
-    }
-    const float u_len = std::sqrt(ux * ux + uy * uy + uz * uz);
-    if (u_len < 1e-6f)
-      return;
-    ux /= u_len;
-    uy /= u_len;
-    uz /= u_len;
-    const float vx = sy * uz - sz * uy;
-    const float vy = sz * ux - sx * uz;
-    const float vz = sx * uy - sy * ux;
-
-    auto dir_at = [&](float phi, float& wx, float& wy, float& wz) {
-      const float cp = std::cos(phi), sp = std::sin(phi);
-      wx = cos_sd * sx + sin_sd * (cp * ux + sp * vx);
-      wy = cos_sd * sy + sin_sd * (cp * uy + sp * vy);
-      wz = cos_sd * sz + sin_sd * (cp * uz + sp * vz);
-    };
-
-    // Walk samples to check for vis transitions.
-    std::vector<CurveSample> samples;
-    samples.reserve(kCurveAzSteps + 1);
-    for (int i = 0; i <= kCurveAzSteps; ++i) {
-      const float phi = 2.0f * kPi * static_cast<float>(i) / kCurveAzSteps;
-      float wx, wy, wz;
-      dir_at(phi, wx, wy, wz);
-      const float alt_at = std::asin(std::clamp(-wz, -1.0f, 1.0f)) * kRad2Deg;
-      samples.push_back(sample_world_dir(alt_at, wx, wy, wz));
-    }
-
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.0f\xC2\xB0", angle_deg);
-
-    // Boundary pass: 1 label per visible arc (invis→vis entry).
-    int boundary_count = 0;
-    for (size_t i = 1; i < samples.size(); ++i) {
-      const auto& s0 = samples[i - 1];
-      const auto& s1 = samples[i];
-      if (!s0.vis && s1.vis) {
-        out.push_back({ s1.screen_x, s1.screen_y, std::string(buf), sun_col, true, kGroupSunCircles });
-        ++boundary_count;
-      }
-    }
-    if (boundary_count > 0)
-      return;
-
-    // Interior mode: entire ring visible (no transition AND ≥1 vis sample) →
-    // 4 canonical anchors at phi=0/90/180/270° around the sun direction.
-    bool any_vis = false;
-    for (const auto& s : samples) {
-      if (s.vis) {
-        any_vis = true;
-        break;
-      }
-    }
-    if (!any_vis)
-      return;
-    for (int li = 0; li < 4; ++li) {
-      const float phi = li * kPi * 0.5f;
-      float wx, wy, wz;
-      dir_at(phi, wx, wy, wz);
-      const float alt_at = std::asin(std::clamp(-wz, -1.0f, 1.0f)) * kRad2Deg;
-      CurveSample s = sample_world_dir(alt_at, wx, wy, wz);
-      if (!s.vis)
-        continue;
-      out.push_back({ s.screen_x, s.screen_y, std::string(buf), sun_col, true, kGroupSunCircles });
-    }
-  };
-
   // === dispatch ===
   // Horizon: standalone altitude=0 curve (separate from grid so grid's
   // g==0 skip rule below stays consistent with the boundary-centric era).
@@ -701,11 +610,17 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
       process_longitude_curve(g * input.grid_step);
     }
   }
+}
 
-  if (input.show_sun_circles) {
-    for (int ci = 0; ci < input.sun_circle_count; ++ci) {
-      process_sun_circle(input.sun_circle_angles[ci]);
-    }
+void AppendAngularDistLabels(const AngularDistLabelSet& circles, float vp_screen_x, float vp_screen_y,
+                             std::vector<OverlayLabel>& out) {
+  const ImU32 col = ColorToImU32(circles.color, static_cast<int>(circles.alpha * 255));
+  out.reserve(out.size() + circles.anchors.size());
+  for (const auto& a : circles.anchors) {
+    // kGroupSunCircles keeps the collision pass separating these from the grid's labels, exactly
+    // as the walk this replaced did — a 22 deg marker and a 30 deg altitude marker are allowed to
+    // sit close together, two circle markers are not.
+    out.push_back({ vp_screen_x + a.px, vp_screen_y + a.py, a.text, col, true, kGroupSunCircles });
   }
 }
 

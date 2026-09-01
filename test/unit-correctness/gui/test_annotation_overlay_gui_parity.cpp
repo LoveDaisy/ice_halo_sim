@@ -437,8 +437,6 @@ struct LabelCase {
   float grid_step = 10.0f;
   bool horizon = true;
   bool grid = true;
-  std::vector<float> sun_angles;
-  float sun_dir[3] = { 0.0f, -1.0f, 0.0f };
 };
 
 std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
@@ -452,15 +450,8 @@ std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
   in.front = c.view.front;
   in.show_horizon = c.horizon;
   in.show_grid = c.grid;
-  in.show_sun_circles = !c.sun_angles.empty();
-  in.sun_dir[0] = c.sun_dir[0];
-  in.sun_dir[1] = c.sun_dir[1];
-  in.sun_dir[2] = c.sun_dir[2];
-  in.sun_circle_count = static_cast<int>(c.sun_angles.size());
-  in.sun_circle_angles = c.sun_angles.empty() ? nullptr : c.sun_angles.data();
   in.horizon_alpha = 1.0f;
   in.grid_alpha = 1.0f;
-  in.sun_circles_alpha = 1.0f;
   in.grid_step = c.grid_step;
   std::vector<lumice::gui::OverlayLabel> out;
   // A (0, 0) origin with the canvas as the viewport makes the GUI's screen coordinates the same
@@ -478,10 +469,6 @@ std::vector<ann::Label> CoreLabels(const LabelCase& c) {
     req.elevation_deg = GuiParallels(c.grid_step);
     req.longitude_deg = GuiMeridians(c.grid_step);
   }
-  req.angular_dist_deg = c.sun_angles;
-  req.reference_dir[0] = c.sun_dir[0];
-  req.reference_dir[1] = c.sun_dir[1];
-  req.reference_dir[2] = c.sun_dir[2];
   return ann::ComputeOverlay(req).labels;
 }
 
@@ -628,19 +615,19 @@ TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnALinearLens) {
   ExpectLabelsAgree(c, "linear, 5 deg grid");
 }
 
-TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeForAngularDistanceCircles) {
-  LabelCase c;
-  c.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128, RenderConfig::kFull, /*el=*/0.0f);
-  c.horizon = false;
-  c.grid = false;
-  c.sun_angles = { 22.0f, 46.0f };
-  // Sun on the horizon to the north-east, so both rings straddle the disc seam and the boundary
-  // branch is exercised alongside the interior one.
-  c.sun_dir[0] = -0.7071f;
-  c.sun_dir[1] = -0.7071f;
-  c.sun_dir[2] = 0.0f;
-  ExpectLabelsAgree(c, "angular-distance circles");
-}
+// RETIRED, not lost: there used to be a LabelAnchorsAgreeForAngularDistanceCircles here, comparing
+// core's circle anchors against the GUI's own walk of the same rings. That walk no longer exists —
+// the GUI consumes core's anchors now (AnnotationOverlayCache), which is what this whole file was
+// built to make safe. A parity test needs two implementations, and there is deliberately one.
+//
+// The proposition it carried did not go with it. "An anchor for the N-degree circle actually lies
+// N degrees from the sun" is now asserted directly, against the geometry rather than against a
+// second implementation, in test/unit-correctness/core/test_annotation_overlay.cpp
+// (AngularDistLabelsSitOnTheCircleTheyName) — a stronger statement than agreement with a walk that
+// could have been wrong in the same way.
+//
+// The horizon, the parallels and the meridians keep their cases below: those three still have a
+// GUI-side walk, and will until the rest of the annotation layer moves over.
 
 TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderTheFrontHemisphereClip) {
   LabelCase c;

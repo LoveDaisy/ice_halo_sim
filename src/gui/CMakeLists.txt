@@ -59,6 +59,7 @@ add_custom_command(
 # OBJECT library: shared between LumiceGUI and gui_test
 add_library(lumice_gui_obj OBJECT
     ${PROJ_SRC_DIR}/gui/app.cpp
+    ${PROJ_SRC_DIR}/gui/annotation_overlay_cache.cpp
     ${PROJ_SRC_DIR}/gui/app_panels.cpp
     ${PROJ_SRC_DIR}/gui/color_window.cpp
     ${PROJ_SRC_DIR}/gui/crystal_preview.cpp

@@ -50,9 +50,12 @@ uniform vec2 u_bg_uv_offset;
 uniform int u_show_horizon;
 uniform int u_show_grid;
 uniform int u_show_sun_circles;
-uniform vec3 u_sun_dir;
-uniform float u_sun_circle_angles[16];
-uniform int u_sun_circle_count;
+// 1 where an angular-distance circle passes, computed by core (annotation_overlay.cpp) once per
+// settled view and uploaded as an R8 texture. The shader used to derive this per fragment from
+// acos(dot(world_dir, sun_dir)); it no longer does, so that the CLI renderer and this preview draw
+// the SAME curve rather than two implementations of it. Sampled NEAREST, one texel per fragment.
+uniform sampler2D u_angular_dist_mask;
+uniform int u_has_angular_dist_mask;
 uniform vec3 u_horizon_color;
 uniform vec3 u_grid_color;
 uniform vec3 u_sun_circles_color;
@@ -437,15 +440,22 @@ vec3 overlayAuxLines(vec3 world_dir, vec3 color, vec2 pos_pix) {
     color = mix(color, u_grid_color, t * u_grid_alpha);
   }
 
-  // Sun angular distance circles
-  if (u_show_sun_circles != 0) {
-    float ang_dist_deg = acos(clamp(dot(world_dir, u_sun_dir), -1.0, 1.0)) * DEG;
-    float fw_ang = clamp(fwidth(ang_dist_deg), 1e-4, 2.0);
-    for (int i = 0; i < u_sun_circle_count; i++) {
-      float d = abs(ang_dist_deg - u_sun_circle_angles[i]);
-      float t = 1.0 - smoothstep(0.0, fw_ang * 1.5, d);
-      color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
-    }
+  // Sun angular distance circles. Geometry from core's mask; colour and alpha still this
+  // consumer's own, which is the whole shape of the split — core says where, the drawer says how.
+  //
+  // uv.y is flipped because the two coordinate systems disagree about which end is the top: the
+  // mask is row-major from the TOP-left (core's convention, shared with the CLI's image buffer)
+  // while v_ndc.y is +1 at the top. The 0.5 in the x term and the flip together put the sample at
+  // the CENTRE of the texel whose pixel centre core inverse-projected, so there is no half-pixel
+  // shift between where the mask says the line is and where it is drawn.
+  if (u_show_sun_circles != 0 && u_has_angular_dist_mask != 0) {
+    vec2 mask_uv = vec2(v_ndc.x * 0.5 + 0.5, 0.5 - v_ndc.y * 0.5);
+    // The mask stores 1, not 255, for a lit pixel; an R8 texture normalizes that to 1/255, which
+    // as a blend weight is a line you cannot see. It is a BOOLEAN, so read it as one rather than
+    // scaling it — any nonzero texel is on. (Sampled NEAREST, so there are no intermediate values
+    // to lose by thresholding.)
+    float t = texture(u_angular_dist_mask, mask_uv).r > 0.0 ? 1.0 : 0.0;
+    color = mix(color, u_sun_circles_color, t * u_sun_circles_alpha);
   }
 
   // Horizon line (altitude = 0) — drawn last so it's most visible
@@ -799,6 +809,11 @@ void PreviewRenderer::Destroy() {
     glDeleteTextures(1, &bg_texture_);
     bg_texture_ = 0;
   }
+  if (angular_dist_tex_) {
+    glDeleteTextures(1, &angular_dist_tex_);
+    angular_dist_tex_ = 0;
+    angular_dist_tex_generation_ = 0;
+  }
   if (vbo_) {
     glDeleteBuffers(1, &vbo_);
     vbo_ = 0;
@@ -985,6 +1000,42 @@ void PreviewRenderer::UploadBgTexture(const unsigned char* data, int width, int 
 
   bg_aspect_ = static_cast<float>(width) / static_cast<float>(height);
   glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PreviewRenderer::UploadAngularDistMask(const unsigned char* data, int width, int height) {
+  if (data == nullptr || width <= 0 || height <= 0) {
+    ClearAngularDistMask();
+    return;
+  }
+  if (angular_dist_tex_ == 0) {
+    glGenTextures(1, &angular_dist_tex_);
+    if (angular_dist_tex_ == 0) {
+      return;
+    }
+  }
+  glBindTexture(GL_TEXTURE_2D, angular_dist_tex_);
+  // NEAREST, and it has to be: the mask is a per-pixel yes/no, and filtering it would smear the
+  // line across neighbours the mask generator deliberately left out. CLAMP_TO_EDGE for the same
+  // reason a wrap would be wrong — a circle must not reappear on the opposite edge.
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  // One byte per texel with no row padding: the default GL_UNPACK_ALIGNMENT of 4 would misread
+  // every row of a width that is not a multiple of 4, which most viewport widths are not.
+  GLint prev_alignment = 4;
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &prev_alignment);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
+  glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PreviewRenderer::ClearAngularDistMask() {
+  if (angular_dist_tex_ != 0) {
+    glDeleteTextures(1, &angular_dist_tex_);
+    angular_dist_tex_ = 0;
+  }
 }
 
 void PreviewRenderer::ClearBackground() {
@@ -1459,16 +1510,31 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   }
 
   // Auxiliary line overlay uniforms
-  static_assert(kMaxSunCircles == 16, "Update shader u_sun_circle_angles[N] to match kMaxSunCircles");
   const auto& ov = params.overlay;
+  // Take the caller's mask if it is newer than what the texture holds. Gated on the generation
+  // rather than on the pointer: the cache reuses its buffer, so an unchanged pointer says nothing
+  // about whether the contents moved, and re-uploading a W*H texture every frame would give back
+  // most of what computing the mask off the draw loop was for.
+  if (ov.angular_dist_mask == nullptr) {
+    ClearAngularDistMask();
+    angular_dist_tex_generation_ = 0;
+  } else if (ov.angular_dist_mask_generation != angular_dist_tex_generation_) {
+    UploadAngularDistMask(ov.angular_dist_mask, ov.angular_dist_mask_w, ov.angular_dist_mask_h);
+    angular_dist_tex_generation_ = ov.angular_dist_mask_generation;
+  }
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_horizon"), ov.show_horizon ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_grid"), ov.show_grid ? 1 : 0);
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_sun_circles"), ov.show_sun_circles ? 1 : 0);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_sun_dir"), ov.sun_dir[0], ov.sun_dir[1], ov.sun_dir[2]);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_sun_circle_count"), ov.sun_circle_count);
-  if (ov.sun_circle_count > 0) {
-    glUniform1fv(glGetUniformLocation(shader_program_, "u_sun_circle_angles"), ov.sun_circle_count,
-                 ov.sun_circle_angles);
+  // Unit 2 (0 is the sim texture, 1 the background image). The mask is uploaded by
+  // UploadAngularDistMask, which the caller drives off its AnnotationOverlayCache; a frame in
+  // which nothing has been uploaded yet draws no circles rather than drawing them somewhere
+  // guessed at.
+  glUniform1i(glGetUniformLocation(shader_program_, "u_has_angular_dist_mask"), angular_dist_tex_ != 0 ? 1 : 0);
+  if (angular_dist_tex_ != 0) {
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, angular_dist_tex_);
+    glUniform1i(glGetUniformLocation(shader_program_, "u_angular_dist_mask"), 2);
+    glActiveTexture(GL_TEXTURE0);
   }
   glUniform3f(glGetUniformLocation(shader_program_, "u_horizon_color"), ov.horizon_color[0], ov.horizon_color[1],
               ov.horizon_color[2]);

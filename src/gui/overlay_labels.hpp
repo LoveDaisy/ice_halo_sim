@@ -30,17 +30,42 @@ struct OverlayLabelInput {
   float fov, elevation, azimuth, roll;
   int visible;  // 0=upper, 1=lower, 2=full (base hemisphere)
   bool front = false;
-  bool show_horizon, show_grid, show_sun_circles;
-  float sun_dir[3];
-  int sun_circle_count;
-  const float* sun_circle_angles;
-  float horizon_color[3], grid_color[3], sun_circles_color[3];
-  float horizon_alpha, grid_alpha, sun_circles_alpha;
+  // Sun circles are NOT here. Their anchors come from core (AnnotationOverlayCache), so the six
+  // fields that used to describe them — the switch, the sun direction, the angle list and its
+  // count, the colour and the alpha — moved out with the walk that consumed them. Everything left
+  // in this struct is an annotation the GUI still places itself.
+  bool show_horizon, show_grid;
+  float horizon_color[3], grid_color[3];
+  float horizon_alpha, grid_alpha;
 
   // Coordinate grid step in degrees. Default 10° keeps existing callers
   // behaviour unchanged; live preview path overrides via ComputeGridStep(fov).
   float grid_step = 10.0f;
 };
+
+// Turn core's angular-distance label anchors into OverlayLabels the two draw paths already
+// understand. Kept here rather than in either caller because both of them need it and the
+// conversion — canvas pixels to the target draw list's space, plus the colour and group the
+// collision pass reads — is the same both times.
+//
+// `anchors` are in canvas pixel space with a top-left origin, which is what
+// AnnotationOverlayCache returns and what the viewport rect below is offset by. `px`/`py` and
+// `text` are read; the label's kind is not, because the caller only ever hands over one kind.
+struct AngularDistAnchor {
+  float px = 0.0f;
+  float py = 0.0f;
+  std::string text;
+};
+// The anchors plus the appearance the drawer gives them. Bundled because both the live preview and
+// the off-screen export need to carry all three together, and an appearance that travels separately
+// from its anchors is one more thing that can arrive without them.
+struct AngularDistLabelSet {
+  std::vector<AngularDistAnchor> anchors;
+  float color[3] = { 1.0f, 1.0f, 1.0f };
+  float alpha = 1.0f;
+};
+void AppendAngularDistLabels(const AngularDistLabelSet& circles, float vp_screen_x, float vp_screen_y,
+                             std::vector<OverlayLabel>& out);
 
 // Compute labels at viewport edges where overlay lines cross.
 // vp_screen_* are in the same coordinate space as the target ImDrawList:

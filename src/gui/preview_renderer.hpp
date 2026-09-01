@@ -49,7 +49,7 @@ struct Exposure {
 };
 
 // Auxiliary line overlay (horizon, altitude grid, sun circles) drawn on top
-// of the preview. sun_dir is precomputed on CPU from GuiState::sun.altitude.
+// of the preview.
 //
 // The show_* fields here control **line** rendering only (shader uniforms
 // u_show_horizon / u_show_grid / u_show_sun_circles). They are sourced from
@@ -58,10 +58,20 @@ struct Exposure {
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;
+  // The switch only. Where the circles are is no longer described here: it comes from the mask
+  // PreviewRenderer::UploadAngularDistMask was last given, which the caller fills from its
+  // AnnotationOverlayCache. sun_dir / sun_circle_angles / sun_circle_count used to live here and
+  // were the shader's inputs for deriving the curve itself; core derives it now.
   bool show_sun_circles = false;
-  float sun_dir[3] = {};  // precomputed world-space unit vector
-  int sun_circle_count = 0;
-  float sun_circle_angles[kMaxSunCircles] = {};  // degrees
+  // BORROWED for the duration of the Render call: core's angular-distance mask for this view,
+  // row-major mask_w*mask_h with a top-left origin, or null for "none computed". Owned by the
+  // caller's AnnotationOverlayCache. Passed rather than uploaded directly because the upload needs
+  // a GL context and this struct is filled during the ImGui build phase; `generation` is what lets
+  // Render() re-upload only when the mask is actually new instead of once per frame.
+  const unsigned char* angular_dist_mask = nullptr;
+  int angular_dist_mask_w = 0;
+  int angular_dist_mask_h = 0;
+  unsigned long long angular_dist_mask_generation = 0;
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };
   float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
@@ -148,6 +158,13 @@ class PreviewRenderer {
   // Render preview into the given viewport region (in framebuffer pixels)
   void Render(int vp_x, int vp_y, int vp_w, int vp_h, const PreviewParams& params);
 
+  // Hand the renderer core's angular-distance mask for the current view: row-major
+  // width*height bytes, 1 where a circle passes, top-left origin. NOT per frame — the caller
+  // uploads when its AnnotationOverlayCache produces a new result, and the texture persists
+  // until the next one. A null / degenerate argument clears it.
+  void UploadAngularDistMask(const unsigned char* data, int width, int height);
+  void ClearAngularDistMask();
+
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
@@ -196,6 +213,13 @@ class PreviewRenderer {
 
   // Background image texture (no CPU-side copy — loaded from file path)
   unsigned int bg_texture_ = 0;
+  // R8, one texel per viewport pixel: core's angular-distance mask for the last SETTLED view.
+  // Zero when nothing has been uploaded, which the shader reads as "draw no circles" rather than
+  // as an empty mask — the two are the same picture but only one of them is honest about why.
+  unsigned int angular_dist_tex_ = 0;
+  // Which AnnotationOverlayCache generation angular_dist_tex_ holds. 0 means "nothing uploaded",
+  // which is why the cache's counter starts at 1.
+  unsigned long long angular_dist_tex_generation_ = 0;
   int bg_width_ = 0;
   int bg_height_ = 0;
   float bg_aspect_ = 1.0f;

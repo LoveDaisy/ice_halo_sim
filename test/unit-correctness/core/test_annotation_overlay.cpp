@@ -544,3 +544,66 @@ TEST(SunWorldDir, PutsTheCircleCentreWhereTheSunIsImaged) {
   EXPECT_NEAR(sx / count, static_cast<double>(centre.px), 4.0);
   EXPECT_NEAR(sy / count, static_cast<double>(centre.py), 4.0);
 }
+
+TEST(AnnotationOverlay, AngularDistLabelsSitOnTheCircleTheyName) {
+  // Every angular-distance anchor must lie on its own ring: the direction the anchor's pixel
+  // images is `value_deg` away from the reference direction.
+  //
+  // Asserted against the geometry, not against a second implementation. It replaces a parity case
+  // that compared these anchors with the GUI's own ring walk, which no longer exists now that the
+  // GUI consumes these anchors instead of deriving them (see the note at that test's former home,
+  // test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp). Agreement with a walk would
+  // in any case have been the weaker claim — two implementations can be wrong the same way, and a
+  // ring at the wrong radius is a picture that looks entirely plausible.
+  ann::Request req;
+  req.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128);
+  req.view.visible = RenderConfig::kFull;
+  req.angular_dist_deg = { 22.0f, 46.0f };
+  // Sun on the horizon to the north-east, so both rings straddle the disc seam and the boundary
+  // branch is exercised alongside the interior one.
+  const float sun[3] = { -0.7071f, -0.7071f, 0.0f };
+  std::copy(sun, sun + 3, req.reference_dir);
+
+  const ann::Overlay out = ann::ComputeOverlay(req);
+  const RenderConfig cfg = ann::ToRenderConfig(req.view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+  const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, short_pix);
+
+  int checked = 0;
+  int saw_22 = 0;
+  int saw_46 = 0;
+  for (const ann::Label& l : out.labels) {
+    if (l.kind != ann::kLabelAngularDist) {
+      continue;
+    }
+    // Non-fatal, and the index checked before it is used: one bad label must not stop the loop
+    // reporting the rest, and an out-of-range index would read past the request list below.
+    if (l.index < 0 || l.index >= 2) {
+      ADD_FAILURE() << "a circle label carries index " << l.index << ", outside the 2-entry request list";
+      continue;
+    }
+    EXPECT_FLOAT_EQ(l.value_deg, req.angular_dist_deg[static_cast<size_t>(l.index)])
+        << "the label's value and the entry it indexes disagree";
+    l.value_deg > 30.0f ? ++saw_46 : ++saw_22;
+
+    // Invert the anchor pixel back to a world direction and measure its angle to the sun. The
+    // inverse is core's own (the same one the mask is built from), so what this checks is that the
+    // FORWARD the anchor came out of and that inverse describe the same curve.
+    const lumice::mask_detail::MaskDir dir =
+        lumice::mask_detail::PixelToWorld(cfg, p, rot, static_cast<int>(l.px), static_cast<int>(l.py));
+    if (!dir.valid) {
+      continue;  // an anchor half a degree past the rim (kLabelHemisphereToleranceDeg) images nothing
+    }
+    ++checked;
+    const float dot = std::clamp(dir.x * sun[0] + dir.y * sun[1] + dir.z * sun[2], -1.0f, 1.0f);
+    const float deg = std::acos(dot) / lumice::math::kDegreeToRad;
+    // One curve sample is 1 degree and the anchor is placed AT a sample, so a whole degree of
+    // slack is the sampling itself; the pixel quantisation of px/py adds a fraction more.
+    EXPECT_NEAR(deg, l.value_deg, 2.0f) << "an anchor labelled " << l.value_deg << " deg sits " << deg
+                                        << " deg from the reference direction";
+  }
+  EXPECT_GT(checked, 0) << "no circle anchor was imageable — the assertion above never ran";
+  EXPECT_GT(saw_22, 0) << "the 22 deg ring produced no label";
+  EXPECT_GT(saw_46, 0) << "the 46 deg ring produced no label";
+}

@@ -579,6 +579,7 @@ int main(int argc, char** argv) {
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
   RegisterLensBorderTests(engine);
+  RegisterAngularDistCircleTests(engine);
   RegisterPreviewViewportTests(engine);
   RegisterPerfTests(engine);
   RegisterOverlayLabelTests(engine);

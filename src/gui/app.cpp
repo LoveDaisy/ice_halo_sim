@@ -120,30 +120,11 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.front = rc.front;
   input.show_horizon = state.show_horizon_label;
   input.show_grid = state.show_grid_label;
-  input.show_sun_circles = state.show_sun_circles_label;
   input.horizon_alpha = state.horizon_alpha;
-
-  // Sun direction in world space (azimuth fixed at 0, only altitude matters).
-  // Formula is byte-identical to RenderPreviewPanel's assignment into
-  // g_preview_vp.params.overlay.sun_dir (see src/gui/app_panels.cpp ~L534-538):
-  //   sa = altitude * deg2rad
-  //   sun_dir = (-cos(sa), 0, -sin(sa))
-  // Both callers share this helper so a future formula change only has to land here.
-  constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-  float sa = state.sun.altitude * kDeg2Rad;
-  input.sun_dir[0] = -std::cos(sa);
-  input.sun_dir[1] = 0.0f;
-  input.sun_dir[2] = -std::sin(sa);
-
-  input.sun_circle_count = std::min(static_cast<int>(state.sun_circle_angles.size()), kMaxSunCircles);
-  input.sun_circle_angles = state.sun_circle_angles.data();
 
   std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
   std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(input.grid_color));
-  std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
-            std::begin(input.sun_circles_color));
   input.grid_alpha = state.grid_alpha;
-  input.sun_circles_alpha = state.sun_circles_alpha;
   input.grid_step = ComputeGridStep(rc.fov);
   return input;
 }
@@ -419,7 +400,13 @@ void DoExportPreviewPng() {
 
   int w = g_preview_vp.vp_w;
   int h = g_preview_vp.vp_h;
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay);
+  // Built at the FBO's own size, which for this export is the live viewport's, so the anchors need
+  // no rescaling and the exported PNG puts the numbers where the screen does.
+  AngularDistLabelSet circles;
+  if (overlay.has_value() && g_state.show_sun_circles_label) {
+    circles = BuildAngularDistLabelSet(g_state, static_cast<float>(w), static_cast<float>(h));
+  }
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay, circles);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;

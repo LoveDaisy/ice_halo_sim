@@ -27,8 +27,14 @@ namespace lumice::gui {
 //   - dst_w/dst_h must satisfy 0 < dst_{w,h} <= GL_MAX_RENDERBUFFER_SIZE.
 //     (GL_MAX_FRAMEBUFFER_{WIDTH,HEIGHT} would be tighter but requires GL 4.3;
 //      macOS OpenGL 3.3 Core exposes only GL_MAX_RENDERBUFFER_SIZE.)
+//   - `circles` carries the angular-distance label anchors, which come from core rather than from
+//     ComputeOverlayLabels and so travel as their own argument. It is read only when
+//     `overlay_input` has a value: the two are one decision ("draw the annotation text"), and an
+//     export that drew circle numbers while suppressing every other label would be a shape no
+//     caller asks for. Defaulted so a caller wanting no circles states nothing.
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
-                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input);
+                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input,
+                                              const AngularDistLabelSet& circles = AngularDistLabelSet{});
 
 // Partial-override helpers for export paths. Both assume `params` already carries the
 // live EV-synced `intensity_factor` / `intensity_scale` from `BuildExportParams()` and
