@@ -22,23 +22,28 @@
 // inverse, so it is restated here (VisibleInGuiTerms) — three lines, and pinned by
 // VisibleRangeMatchesTheGuiRule below against the same rule spelled out from lat = asin(-wz).
 //
-// ============================ THE KNOWN DIVERGENCE =============================================
-// The two sides do NOT agree everywhere, and this file pins the disagreement instead of hiding
-// it, because it is a real product question rather than a bug in either side:
+// ============================ THE SINGLE-FISHEYE DOMAIN ========================================
+// This file used to pin a DIVERGENCE here: for the single-lens fisheye types core's domain ended
+// at the EQUATOR (theta = 90 deg) while the GUI's ended at its asin guard (theta = 180 deg), so
+// core's mask was a strict subset of the GUI's and the difference was the annulus between the two
+// boundaries. That gap is gone. `ProjectExitToPixel`'s `cz <= 0` cull is now taken per lens type
+// rather than for the fisheye family as a whole, and `projection.cpp`'s `Fisheye*Inverse` domain
+// guards were widened to match it, so core RENDERS the past-equator region the GUI was already
+// re-projecting. The tests below therefore assert set EQUALITY for every lens type in the file.
 //
-//   For the four SINGLE-lens fisheye types, core's domain ends at the EQUATOR (theta = 90 deg)
-//   and the GUI's ends at its asin guard (theta = 180 deg). Core's boundary is not a choice: the
-//   r <= 1 inverse domain coincides exactly with `cz <= 0`, the cull ProjectExitToPixel applies
-//   to those types, so beyond it core RENDERS NOTHING and painting a sky background there would
-//   promise sky that cannot appear. The GUI is re-projecting an all-sky texture and can honestly
-//   show more. For equal-area the GUI's radius bound is sqrt(2)x core's; at fov=180 on a square
-//   canvas that is the difference between an image circle inscribed in the frame and one
-//   1.41x larger.
+// Two members of the family are equal for reasons worth stating, because "equal" does not mean
+// the same thing for both:
 //
-// So: the tests below assert set EQUALITY for linear, rectangular, all four dual-fisheye types
-// and globe, and assert the exact SHAPE of the difference for the single-fisheye family (core is
-// a strict subset, and the difference is precisely the annulus between the two boundaries). Both
-// forms fail if either side changes, which is what makes this a gate.
+//   ORTHOGRAPHIC was never divergent. r = sin(theta) peaks at the equator and aliases past it, so
+//   its cull stays at `cz <= 0` and the GUI's own asin guard rejects at exactly the same circle.
+//
+//   STEREOGRAPHIC is equal in practice rather than by construction. The GUI has no guard at all
+//   (r = tan(theta/2) is monotone, so its inverse accepts every pixel), while core caps theta at
+//   179.5 deg — a NUMERICAL safety bound, not a visibility judgement, aligned with the fov ceiling
+//   `render_config.cpp::MaxFov` already imposes on this lens. That cap sits at r = tan(89.75 deg)
+//   = 229.18 image radii, so no frame at any usable resolution reaches it and the two masks are
+//   identical over any real canvas. The fixture below asserts that off-frame-ness explicitly
+//   rather than leaving it implied.
 
 #include <gtest/gtest.h>
 
@@ -218,12 +223,33 @@ TEST(VisibleMaskGuiParity, GlobeAgreesExactly) {
 }
 
 // =================================================================================================
-// The single-fisheye family: pinned divergence
+// The single-fisheye family: the two domains must now coincide
 // =================================================================================================
 
-// Radius, in pixels from the frame centre, where each side's domain ends. Core's is r = 1 in its
-// normalized coordinates, i.e. `scale` pixels. The GUI's is read off the guard in fisheyeInverse
-// (img_radius * r_boundary), and is unbounded for stereographic, which has no guard at all.
+// Core's normalized-radius domain bound per single-fisheye type, i.e. the largest r that
+// `projection.cpp`'s `Fisheye*Inverse` accepts at r_scale = 1. Each is the value of that type's
+// radius formula at the largest theta core will render:
+//   equal-area     sqrt(2) sin(theta/2)  at theta = 180 deg -> sqrt(2)
+//   equidistant    theta / (pi/2)        at theta = 180 deg -> 2
+//   stereographic  tan(theta/2)          at theta = 179.5 deg -> tan(89.75 deg)  (numerical cap)
+//   orthographic   sin(theta)            at theta = 90 deg  -> 1  (aliases past the equator)
+float CoreRadiusBound(LensParam::LensType t) {
+  if (t == LensParam::kFisheyeEqualArea) {
+    return std::sqrt(2.0f);
+  }
+  if (t == LensParam::kFisheyeEquidistant) {
+    return 2.0f;
+  }
+  if (t == LensParam::kFisheyeStereographic) {
+    return std::tan(0.5f * 179.5f * lumice::math::kDegreeToRad);
+  }
+  return 1.0f;  // kFisheyeOrthographic
+}
+
+// Radius, in pixels from the frame centre, where each side's domain ends. Core's is
+// CoreRadiusBound(t) in its normalized coordinates, i.e. that many `scale` pixels. The GUI's is
+// read off the guard in fisheyeInverse (img_radius * r_boundary), and is infinite for
+// stereographic, which has no guard at all.
 struct Boundaries {
   float core_px;
   float gui_px;  // infinity when the GUI never rejects
@@ -233,7 +259,7 @@ Boundaries BoundariesFor(LensParam::LensType t, float fov_deg, float short_pix) 
   const float fov = fov_deg * lumice::math::kDegreeToRad;
   const float half_fov = fov / 2.0f;
   const float img_radius = short_pix / 2.0f;
-  const float core = lumice::ComputeScaleAz0(t, fov, short_pix, 0, 0, lumice::Rotation{}).scale;
+  const float core = lumice::ComputeScaleAz0(t, fov, short_pix, 0, 0, lumice::Rotation{}).scale * CoreRadiusBound(t);
   float gui = std::numeric_limits<float>::infinity();
   if (t == LensParam::kFisheyeEqualArea) {
     gui = img_radius / std::sin(half_fov / 2.0f);
@@ -245,67 +271,63 @@ Boundaries BoundariesFor(LensParam::LensType t, float fov_deg, float short_pix) 
   return { core, gui };
 }
 
-TEST(VisibleMaskGuiParity, SingleFisheyeCoreIsTheEquatorSubsetOfTheGuiDomain) {
-  // Orthographic is excluded here and covered by the test below instead: r = sin(theta) peaks at
-  // the equator, so ITS asin guard lands on theta = 90 deg too and the two boundaries coincide.
+TEST(VisibleMaskGuiParity, SingleFisheyeCoreDomainMatchesGuiDomain) {
+  // fov = 180 is the regime that used to expose the divergence: core's old equator boundary fell
+  // inside the frame while the GUI's ran past it. It is kept as the fixture for exactly that
+  // reason — if the widening were reverted or applied to the wrong lens, this is where it shows.
   const LensParam::LensType types[] = { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant,
                                         LensParam::kFisheyeStereographic };
   const int w = 160;
   const int h = 120;
   const float short_pix = 120.0f;
+  // Frame half-diagonal for 160x120: the radius past which a boundary cannot be observed at all.
+  const float half_diag = std::sqrt(80.0f * 80.0f + 60.0f * 60.0f);
   for (LensParam::LensType t : types) {
-    // fov = 180 puts core's equator boundary inside the frame, which is the only regime where
-    // the divergence is observable at all (at narrow fov both boundaries sit off-frame and the
-    // two masks are identical — asserted separately below).
-    const RenderConfig cfg = MakeCfg(t, 180.0f, w, h, RenderConfig::kFull, /*el=*/90.0f);
     const Boundaries b = BoundariesFor(t, 180.0f, short_pix);
-    if (!(b.core_px < b.gui_px)) {
-      ADD_FAILURE() << "type " << static_cast<int>(t) << ": the GUI must be the more permissive side (core "
-                    << b.core_px << ", gui " << b.gui_px << ")";
-      continue;
+    if (t == LensParam::kFisheyeStereographic) {
+      // No construction-level equality to assert here: the GUI has no guard and core's is a
+      // numerical cap. What makes the two masks equal is that the cap is unreachable — assert
+      // that, rather than the tautology core_px < gui_px = infinity.
+      EXPECT_GT(b.core_px, half_diag) << "stereographic: core's numerical cap must stay off-frame, or this "
+                                         "fixture is comparing a bound the GUI does not have";
+    } else {
+      EXPECT_NEAR(b.core_px, b.gui_px, 1e-3f)
+          << "type " << static_cast<int>(t) << ": the two domains are supposed to end on the same circle (core "
+          << b.core_px << ", gui " << b.gui_px << ")";
     }
+    // el = 90 (zenith) with `full`: every recovered direction passes the visibility rule, so the
+    // comparison is about the DOMAIN and nothing else.
+    ExpectIdentical(MakeCfg(t, 180.0f, w, h, RenderConfig::kFull, /*el=*/90.0f), "single fisheye fov=180");
+  }
 
-    const auto core = CoreMask(cfg);
-    const auto gui = GuiMask(cfg);
-    size_t core_only = 0;
-    size_t in_annulus_gui_off = 0;
-    size_t annulus = 0;
-    for (size_t i = 0; i < core.size(); ++i) {
-      const auto px = static_cast<float>(i % static_cast<size_t>(w)) + 0.5f - static_cast<float>(w) / 2.0f;
-      const auto py = static_cast<float>(i / static_cast<size_t>(w)) + 0.5f - static_cast<float>(h) / 2.0f;
-      const float r = std::sqrt(px * px + py * py);
-      if (core[i] != 0 && gui[i] == 0) {
-        ++core_only;
-      }
-      // Strictly between the two boundaries (excluding a one-pixel band at each, where a centre
-      // landing within a float ulp of the edge is a coin flip on both sides independently).
-      if (r > b.core_px + 1.0f && r < b.gui_px - 1.0f) {
-        ++annulus;
-        if (core[i] != 0) {
-          ADD_FAILURE() << "type " << static_cast<int>(t) << ": core must stop at the equator, but pixel " << i
-                        << " at r = " << r << " (core edge " << b.core_px << ") is in its mask";
-        }
-        if (gui[i] == 0) {
-          ++in_annulus_gui_off;
-        }
-      }
+  // Non-vacuity: equal-area's shared boundary (sqrt(2) image radii = 84.85 px here) falls between
+  // the frame's inscribed circle and its corners, so the frame really does contain pixels BOTH
+  // sides reject. Without this, "identical" could be satisfied by two masks that are both
+  // everywhere-on.
+  const auto ea = CoreMask(MakeCfg(LensParam::kFisheyeEqualArea, 180.0f, w, h, RenderConfig::kFull, 90.0f));
+  EXPECT_LT(CountOn(ea), ea.size()) << "equal-area at fov=180 must still reject the frame corners";
+}
+
+TEST(VisibleMaskGuiParity, SingleFisheyeAgreesOnTheWidenedRadialMapping) {
+  // Domain equality alone would still pass if one side mapped radius to theta differently past
+  // the old equator. Tilting the camera makes the `visible` cut a curve whose position depends on
+  // theta(r), so comparing `upper` / `lower` over the WIDENED region tests the mapping itself.
+  const LensParam::LensType types[] = { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant,
+                                        LensParam::kFisheyeStereographic };
+  for (LensParam::LensType t : types) {
+    for (RenderConfig::VisibleRange vis : kAllRanges) {
+      ExpectIdentical(MakeCfg(t, 180.0f, 160, 120, vis, /*el=*/20.0f), "single fisheye fov=180, tilted");
     }
-    EXPECT_EQ(core_only, 0u) << "type " << static_cast<int>(t)
-                             << ": core must be a SUBSET of the GUI domain — a pixel core paints but the GUI "
-                                "rejects would be a genuine defect, not the known divergence";
-    EXPECT_GT(annulus, 0u) << "type " << static_cast<int>(t) << ": this fixture no longer covers the divergence";
-    EXPECT_EQ(in_annulus_gui_off, 0u) << "type " << static_cast<int>(t)
-                                      << ": the GUI stopped imaging the annulus between the two boundaries — the "
-                                         "divergence this test pins has changed shape";
   }
 }
 
 TEST(VisibleMaskGuiParity, OrthographicIsTheSingleFisheyeWhoseTwoBoundariesCoincide) {
-  // The divergence is not a property of "being a fisheye": it is the gap between core's equator
-  // and the GUI's asin guard, and for orthographic there is no gap. r = sin(theta) is not
-  // injective past the equator, so the shader's `s = r * sin(half_fov) > 1` guard rejects at
-  // exactly theta = 90 deg — the same place core's r <= 1 domain ends. Equal-area (sqrt(2)x),
-  // equidistant (2x) and stereographic (unbounded) all run further.
+  // Orthographic is the one member of the family whose two boundaries coincided even before the
+  // widening, and the one that must NOT be widened. r = sin(theta) is not injective past the
+  // equator (sin 120 deg == sin 60 deg), so the shader's `s = r * sin(half_fov) > 1` guard rejects
+  // at exactly theta = 90 deg — the same place core's r <= 1 domain ends and the same place its
+  // `cz <= 0` cull still stands. This test is what fails if a future change widens the family as
+  // a whole instead of per type.
   const float short_pix = 120.0f;
   const Boundaries b = BoundariesFor(LensParam::kFisheyeOrthographic, 180.0f, short_pix);
   EXPECT_NEAR(b.core_px, b.gui_px, 1e-3f) << "orthographic's two boundaries are supposed to be the same circle";
