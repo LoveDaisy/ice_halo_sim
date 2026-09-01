@@ -16,7 +16,7 @@ bool AnnotationOverlayCache::ViewKey::operator==(const ViewKey& o) const {
          elevation == o.elevation && roll == o.roll && visible == o.visible && front == o.front &&
          std::equal(std::begin(sun_dir), std::end(sun_dir), std::begin(o.sun_dir)) &&
          angular_dist_deg == o.angular_dist_deg && elevation_deg == o.elevation_deg &&
-         longitude_deg == o.longitude_deg && zenith_nadir == o.zenith_nadir;
+         longitude_deg == o.longitude_deg && zenith_nadir == o.zenith_nadir && horizon == o.horizon;
 }
 
 void AnnotationOverlayCache::Update(const ViewKey& key) {
@@ -85,6 +85,7 @@ AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput&
   const size_t nl = std::min(in.longitude_deg.size(), static_cast<size_t>(LUMICE_MAX_ANNOTATION_LINES));
   key.longitude_deg.assign(in.longitude_deg.begin(), in.longitude_deg.begin() + nl);
   key.zenith_nadir = in.zenith_nadir;
+  key.horizon = in.horizon;
   return key;
 }
 
@@ -111,6 +112,7 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   angular_dist_labels_.clear();
   grid_mask_.clear();
   grid_labels_.clear();
+  horizon_labels_.clear();
   zenith_ = {};
   nadir_ = {};
 
@@ -118,7 +120,8 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   // caller can ask for, and a user who turns the markers on while every angle list is empty is the
   // ordinary case, not a corner one. Left out, the function would return before calling core at
   // all and the markers would silently never appear.
-  if ((key.angular_dist_deg.empty() && key.elevation_deg.empty() && key.longitude_deg.empty() && !key.zenith_nadir) ||
+  if ((key.angular_dist_deg.empty() && key.elevation_deg.empty() && key.longitude_deg.empty() && !key.zenith_nadir &&
+       !key.horizon) ||
       key.width <= 0 || key.height <= 0) {
     return;
   }
@@ -144,6 +147,7 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   req.longitude_deg = key.longitude_deg.data();
   req.longitude_count = static_cast<int>(key.longitude_deg.size());
   req.zenith_nadir = key.zenith_nadir ? 1 : 0;
+  req.horizon = key.horizon ? 1 : 0;
   std::copy(std::begin(key.sun_dir), std::end(key.sun_dir), std::begin(req.reference_dir));
   // Masks AND anchors in one call: they are two readings of the same sweep, and asking twice would
   // pay for it twice and admit the possibility of them disagreeing.
@@ -178,14 +182,16 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
     nadir_ = { out.nadir_px, out.nadir_py, out.nadir_valid != 0 };
     for (int i = 0; i < out.label_count; ++i) {
       const LUMICE_AnnotationLabel& l = out.labels[i];
-      // Core answers for every requested category; the horizon has not moved off the GUI's own
-      // walk yet, so its anchors are dropped here. The zenith/nadir markers appear in no `kind` at
-      // all — core returns them as POINTS (read above), not labels, because a marker carries no
-      // text.
+      // Core answers for every requested category, and every category the GUI draws text for is
+      // now read here — the horizon included, which is what let the GUI's own second curve walk go
+      // away. The zenith/nadir markers appear in no `kind` at all: core returns them as POINTS
+      // (read above), not labels, because a marker carries no text.
       if (l.kind == LUMICE_ANNOTATION_ANGULAR_DIST) {
         angular_dist_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
       } else if (l.kind == LUMICE_ANNOTATION_ELEVATION || l.kind == LUMICE_ANNOTATION_LONGITUDE) {
         grid_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
+      } else if (l.kind == LUMICE_ANNOTATION_HORIZON) {
+        horizon_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
       }
     }
     has_result_ = true;

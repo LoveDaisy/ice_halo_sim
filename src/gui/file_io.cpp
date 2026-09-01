@@ -3409,7 +3409,7 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
       params.overlay.show_zenith_nadir = false;
     }
   }
-  auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h, std::nullopt);
+  auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h);
   if (rgba.empty()) {
     return false;
   }

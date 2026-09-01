@@ -1,8 +1,10 @@
 // The one overlay-label case that needs a real ImGui frame: what it asserts is which DRAW LIST
 // DrawOverlayLabels writes into (window vs foreground), which only exists inside a frame.
 //
-// The other 38 call ComputeOverlayLabels directly and inspect the returned labels, so they moved
-// to test/unit-correctness/gui/test_overlay_labels.cpp.
+// Its siblings inspect the labels a view produces without needing a frame, so they live in
+// test/unit-correctness/gui/test_overlay_labels.cpp — which drives the production chain
+// (AnnotationOverlayCache -> Build*LabelSet -> AppendCurveLabels) now that no GUI-side curve walk
+// is left to call.
 
 #include <vector>
 

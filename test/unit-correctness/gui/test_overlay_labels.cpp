@@ -5,13 +5,15 @@
 // test/gui/functional/test_gui_overlay_labels.cpp is modal_does_not_leak_to_foreground, because what
 // it asserts is which DRAW LIST the labels land in.
 //
-// WHERE THE GRID'S LABELS COME FROM NOW. They used to be walked by ComputeOverlayLabels in this
+// WHERE THESE LABELS COME FROM NOW. They used to be walked by ComputeOverlayLabels in this
 // process; they are walked by core's annotation layer instead, reach the GUI as anchors through
-// AnnotationOverlayCache, and become OverlayLabels via BuildGridLabelSet + AppendCurveLabels. So
-// Compute() below drives that chain rather than one function, and the propositions are unchanged:
-// every one of them is about which numbers a user sees and where, which is a property of the whole
-// chain and was never a property of the walk alone. Pointing them at the new producer is what keeps
-// the move from silently dropping the coverage it was made under.
+// AnnotationOverlayCache, and become OverlayLabels via BuildGridLabelSet / BuildHorizonLabelSet +
+// AppendCurveLabels. The grid moved first; the HORIZON has now followed it, which is what let the
+// GUI-side walk be deleted outright — so Compute() below drives that chain rather than one
+// function, for both families. The propositions are unchanged: every one of them is about which
+// numbers a user sees and where, which is a property of the whole chain and was never a property of
+// the walk alone. Pointing them at the new producer is what keeps the move from silently dropping
+// the coverage it was made under.
 //
 // The last three cases are the regression anchors for the four placement gaps audited in
 // doc/overlay-label-placement.md; their assertion semantics must not be weakened.
@@ -41,11 +43,29 @@ constexpr int kSunGroup = gui::kGroupSunCircles;
 // output without depending on how the compiler handles the source charset.
 constexpr const char* kDeg = "\xC2\xB0";
 
+// The view a case describes, plus which families it wants. A struct of this file's own rather than
+// a production type: the production input the cases used to fill (OverlayLabelInput) went away with
+// the walk it fed, and what these cases were ever really parameterised over is a VIEW — every field
+// below is either a projection parameter or a family switch.
+struct ViewDesc {
+  int lens_type = 0;
+  float fov = 120.0f;
+  float elevation = 0.0f;
+  float azimuth = 0.0f;
+  float roll = 0.0f;
+  int visible = 0;
+  bool front = false;
+  bool show_horizon = false;
+  // The grid's density, expanded into explicit angle lists exactly as the preview does. Default
+  // 10 deg is what the old production default was, so no case's expected counts move.
+  float grid_step = 10.0f;
+};
+
 // An input with the coordinate grid on and everything else off — the baseline every grid case
 // starts from, since the three overlay families are independently gated and a case about one of
 // them must not be reading another's labels.
-gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation, float azimuth, bool front = false) {
-  gui::OverlayLabelInput in{};
+ViewDesc MakeGridOnly(int visible, int lens_type, float elevation, float azimuth, bool front = false) {
+  ViewDesc in;
   in.lens_type = lens_type;
   in.fov = 120.0f;
   in.elevation = elevation;
@@ -54,16 +74,14 @@ gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation,
   in.visible = visible;
   in.front = front;
   in.show_horizon = false;
-  in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
-  in.horizon_alpha = 1.0f;
   return in;
 }
 
-// Ask core for this view's grid anchors and turn them into OverlayLabels exactly as
-// RenderPreviewPanel does — same expansion functions, same cache, same set builder — so what these
-// cases read is what the preview draws.
-void AppendGridLabelsFromCore(const gui::OverlayLabelInput& in, float vp_w, float vp_h, float vp_x, float vp_y,
-                              std::vector<gui::OverlayLabel>& out) {
+// Ask core for this view's anchors and turn them into OverlayLabels exactly as RenderPreviewPanel
+// does — same expansion functions, same cache, same set builders — so what these cases read is what
+// the preview draws.
+std::vector<gui::OverlayLabel> Compute(const ViewDesc& in, float vp_w, float vp_h, float vp_x = 0.0f, float vp_y = 0.0f,
+                                       bool with_grid = true) {
   gui::AnnotationViewInput vin;
   vin.lens_type = in.lens_type;
   vin.fov = in.fov;
@@ -72,26 +90,24 @@ void AppendGridLabelsFromCore(const gui::OverlayLabelInput& in, float vp_w, floa
   vin.roll = in.roll;
   vin.visible = in.visible;
   vin.front = in.front;
-  vin.elevation_deg = gui::ComputeGridElevationAngles(in.grid_step);
-  vin.longitude_deg = gui::ComputeGridLongitudeAngles(in.grid_step);
+  vin.horizon = in.show_horizon;
+  if (with_grid) {
+    vin.elevation_deg = gui::ComputeGridElevationAngles(in.grid_step);
+    vin.longitude_deg = gui::ComputeGridLongitudeAngles(in.grid_step);
+  }
   // Refresh, not Update: one shot, so there is no run of frames to debounce over. A fresh cache
   // per call so no case can inherit another's settled result.
   gui::AnnotationOverlayCache cache;
   cache.Refresh(gui::MakeAnnotationViewKey(vin, static_cast<int>(vp_w), static_cast<int>(vp_h)));
-  // The grid's appearance rides on the set, not on OverlayLabelInput, so a default-constructed
-  // GuiState is the whole of it here — no case in this file asserts a colour.
+  // Each family's appearance rides on its set, so a default-constructed GuiState is the whole of it
+  // here — no case in this file asserts a colour.
   gui::GuiState state;
-  gui::AppendCurveLabels(gui::BuildGridLabelSet(cache, state, vp_w, vp_h), vp_x, vp_y, out);
-}
-
-// The full label set for a view: the horizon, still walked here, plus the grid, from core. Ordered
-// as production orders them (ComputeOverlayLabels clears the vector, so it goes first).
-std::vector<gui::OverlayLabel> Compute(const gui::OverlayLabelInput& in, float vp_w, float vp_h, float vp_x = 0.0f,
-                                       float vp_y = 0.0f, bool with_grid = true) {
   std::vector<gui::OverlayLabel> labels;
-  gui::ComputeOverlayLabels(in, vp_x, vp_y, vp_w, vp_h, labels);
+  if (in.show_horizon) {
+    gui::AppendCurveLabels(gui::BuildHorizonLabelSet(cache, state, vp_w, vp_h), vp_x, vp_y, labels);
+  }
   if (with_grid) {
-    AppendGridLabelsFromCore(in, vp_w, vp_h, vp_x, vp_y, labels);
+    gui::AppendCurveLabels(gui::BuildGridLabelSet(cache, state, vp_w, vp_h), vp_x, vp_y, labels);
   }
   return labels;
 }
@@ -104,7 +120,7 @@ int CountInGroup(const std::vector<gui::OverlayLabel>& labels, int group) {
   return n;
 }
 
-int CountGrid(const gui::OverlayLabelInput& in, float vp_w, float vp_h) {
+int CountGrid(const ViewDesc& in, float vp_w, float vp_h) {
   return CountInGroup(Compute(in, vp_w, vp_h), kGridGroup);
 }
 
@@ -490,10 +506,18 @@ TEST(OverlayLabels, AFullSkyViewIsLabelledWithSeveralDistinctLatitudes) {
 
 // ---- The line switch and the label switch are separate ----
 //
-// Each overlay family has one toggle for its curve and one for its numbers, and
-// BuildOverlayLabelInput must read the label one. Reading the line flag instead would make the
-// numbers appear and disappear with a switch the user thinks controls something else.
-TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherNumbersAreComputed) {
+// Each overlay family has one toggle for its curve and one for its numbers, and the horizon's
+// ANCHOR request must follow the label one. Reading the line flag instead would make the numbers
+// appear and disappear with a switch the user thinks controls something else — which is the defect
+// this case has always guarded, now asked of the request builder the anchors actually come from
+// rather than of the struct the deleted walk used to take.
+//
+// The horizon is the family this can be asked of at THIS layer: its line is drawn by the preview's
+// fragment shader from a uniform, so nothing but the label switch has any reason to put it in the
+// annotation request. The grid and the circles carry data, so their request is filled when EITHER
+// of their two switches is on (the next case pins that); their label switch is read where their
+// anchors are consumed, in RenderPreviewPanel.
+TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherTheHorizonsNumbersAreRequested) {
   struct ToggleCase {
     const char* name;
     bool lines;
@@ -510,13 +534,8 @@ TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherNumbersAreComputed) {
     gui::GuiState s;
     s.show_horizon_line = s.show_grid_line = s.show_sun_circles_line = c.lines;
     s.show_horizon_label = s.show_grid_label = s.show_sun_circles_label = c.labels;
-    const auto in = gui::BuildOverlayLabelInput(s, s.renderer);
-    EXPECT_EQ(in.show_horizon, c.labels) << c.name;
-    // The grid and the sun circles are not checked here: OverlayLabelInput no longer carries
-    // either. Both switches are read where their anchors are consumed (RenderPreviewPanel gates on
-    // show_grid_label / show_sun_circles_label), which is past this struct. What this case still
-    // pins is the one family whose walk is still here — and the asymmetry is the point: a fourth
-    // family arriving must join the anchors path, not this struct.
+    const auto in = gui::AnnotationViewInputFor(s, s.renderer);
+    EXPECT_EQ(in.horizon, c.labels) << c.name;
   }
 }
 

@@ -157,7 +157,7 @@ void RunRenderRequest() {
     gui::ConfigureEquirectExportParams(params);
   }
 
-  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, g_req.canvas_w, g_req.canvas_h, std::nullopt);
+  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, g_req.canvas_w, g_req.canvas_h);
   g_req.done = true;
   g_req.requested = false;
 }

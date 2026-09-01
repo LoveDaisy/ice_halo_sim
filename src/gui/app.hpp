@@ -129,11 +129,6 @@ void WindowSizeCallback(GLFWwindow* window, int width, int height);
 // enum: it is a pure function of the preset and file_io.cpp's export path needs it too.
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
-// Build an OverlayLabelInput from GuiState + RenderConfig. Shared between
-// RenderPreviewPanel (live preview) and DoExportPreviewPng (off-screen FBO export)
-// so both paths consume the same field-packing logic.
-OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc);
-
 // The one AnnotationOverlayCache the live preview drives (app_panels.cpp), and the label set built
 // from whatever it currently holds. Exposed so the off-screen export renders the SAME circles the
 // preview is showing rather than recomputing them at its own moment — an export is a picture of
@@ -148,11 +143,14 @@ CurveLabelSet BuildSunCirclesLabelSet(const AnnotationOverlayCache& cache, const
 // The coordinate grid's twin of the above: same anchors-to-draw-list conversion, reading the grid
 // half of the same cache result and carrying the grid's own colour, alpha and collision group.
 CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
+// The horizon's. Same conversion again, reading the horizon half of the same result. It joins the
+// GRID's collision group (the horizon is the parallel at altitude 0) while carrying its own colour
+// and alpha, which is why it is a third set rather than a third family folded into the grid's.
+CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
 
 // Pick the coordinate grid step (in degrees) for a given FOV. Single source of truth for every
 // consumer that needs to know how dense the grid is: the annotation request the preview and the
 // export both build from it (via the two expansions below), the exported config's grid arrays, and
-// the horizon label's format choice (OverlayLabelInput::grid_step).
 // Caller guarantees fov > 0; the function does not validate.
 float ComputeGridStep(float fov);
 

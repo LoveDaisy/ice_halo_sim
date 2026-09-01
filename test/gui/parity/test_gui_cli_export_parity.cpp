@@ -126,11 +126,21 @@
 //
 // ================================= Deliberately not covered ==================================
 //
-//   * The auxiliary-line overlay other than the horizon, the angular-distance circles, the
-//     coordinate grid and the zenith/nadir markers (the lens border and the text labels). These
-//     remain GUI display-time layers with no encoding in the config format, so there is still
-//     nothing on the CLI side to compare against. Both are off in both scenes, which is also their
-//     default.
+//   * The lens border, which remains a GUI display-time layer with no encoding in the config
+//     format, so there is still nothing on the CLI side to compare against. Off in both scenes,
+//     which is also its default.
+//   * The TEXT LABELS, and this one is now an exclusion with a reason rather than a gap. As of
+//     v4.21 they ARE encoded (grid.horizon_label / grid.label / grid.angular_dist_label) and the
+//     CLI does draw them, from the same core anchors the GUI reads — so the placement half of
+//     "what the GUI shows is what the export renders" is already covered by the curves those
+//     anchors sit on. What is NOT comparable is the GLYPHS: the GUI rasterizes through ImGui's
+//     font atlas and its draw list, core through stb_truetype into the image buffer, and the two
+//     also differ in what they do around a label — the GUI clamps a label inside the viewport and
+//     drops one that collides with another, the CLI draws every anchor where core put it. Both
+//     halves are deliberate (see src/core/annotation_font.hpp and the CLI-side notes in
+//     server/render.cpp), so a pixel comparison here would pin two rasterizers against each other,
+//     which is not this gate's subject. All three switches are off in both scenes, which is also
+//     their default.
 //
 //     The sun circles USED to be on this list, with the note "re-add coverage here the day core
 //     gains an annotation layer". That day came, and the altitude grid followed it: both are now on

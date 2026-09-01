@@ -216,17 +216,25 @@ void RunExportRequest() {
     gui::ConfigureEquirectExportParams(params);
   }
 
-  std::optional<gui::OverlayLabelInput> overlay;
+  // Every label the export draws is now a CurveLabelSet built from core's anchors — the horizon
+  // included, since the GUI's own walk is gone. An empty list is how this path says "no overlay".
+  std::vector<gui::CurveLabelSet> curve_labels;
   if (g_req.with_overlay) {
     // Turn enough of the overlay on that the labelled path really has something to draw.
     gui::g_state.show_horizon_line = true;
     gui::g_state.show_horizon_label = true;
     gui::g_state.show_grid_line = true;
     gui::g_state.show_grid_label = true;
-    overlay = gui::BuildOverlayLabelInput(gui::g_state, gui::g_state.renderer);
+    // Refresh, not Update: this is a one-shot render with no run of frames to settle over, and the
+    // cache is the export's own for the same reason app.cpp's is the preview's.
+    gui::AnnotationOverlayCache& cache = gui::PreviewAnnotationOverlay();
+    cache.Refresh(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer), w, h));
+    curve_labels.push_back(
+        gui::BuildHorizonLabelSet(cache, gui::g_state, static_cast<float>(w), static_cast<float>(h)));
+    curve_labels.push_back(gui::BuildGridLabelSet(cache, gui::g_state, static_cast<float>(w), static_cast<float>(h)));
   }
 
-  auto buf = gui::RenderExportToRgba(gui::g_preview, params, w, h, overlay);
+  auto buf = gui::RenderExportToRgba(gui::g_preview, params, w, h, curve_labels);
   g_req.ok = !buf.empty();
   g_req.rgba = std::move(buf);
   g_req.rgba_w = w;

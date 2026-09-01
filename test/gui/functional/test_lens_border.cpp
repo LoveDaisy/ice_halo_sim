@@ -88,7 +88,7 @@ void RunRenderRequest() {
   params.overlay.lens_border_color[2] = kBorderB;
   params.overlay.lens_border_alpha = 1.0f;  // fully opaque: the pixel test reads a colour, not a blend
 
-  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH, std::nullopt);
+  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH);
   g_req.done = true;
   g_req.requested = false;
 }

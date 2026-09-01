@@ -121,7 +121,7 @@ void RunRenderRequest() {
     params.overlay.angular_dist_mask_generation = probe_cache.Generation();
   }
 
-  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH, std::nullopt);
+  g_req.rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH);
   g_req.done = true;
   g_req.requested = false;
 }

@@ -53,12 +53,8 @@ void DestroyFbo(ScopedFbo& s) {
 
 // Compose and render the overlay labels onto the currently bound FBO using
 // a self-owned ImDrawList + ImDrawData::AddDrawList. Spike-verified path.
-void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, const std::vector<CurveLabelSet>& curve_labels,
-                        int dst_w, int dst_h) {
+void RenderOverlayToFbo(const std::vector<CurveLabelSet>& curve_labels, int dst_w, int dst_h) {
   std::vector<OverlayLabel> labels;
-  ComputeOverlayLabels(overlay_input, 0.0f, 0.0f, static_cast<float>(dst_w), static_cast<float>(dst_h), labels);
-  // After ComputeOverlayLabels, which clears the vector, and before the emptiness check: a scene
-  // with core-supplied labels and nothing else is a scene this used to return from without drawing.
   for (const CurveLabelSet& set : curve_labels) {
     AppendCurveLabels(set, 0.0f, 0.0f, labels);
   }
@@ -87,8 +83,7 @@ void RenderOverlayToFbo(const OverlayLabelInput& overlay_input, const std::vecto
 }  // namespace
 
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
-                                              int dst_h, const std::optional<OverlayLabelInput>& overlay_input,
-                                              const std::vector<CurveLabelSet>& curve_labels) {
+                                              int dst_h, const std::vector<CurveLabelSet>& curve_labels) {
   if (dst_w <= 0 || dst_h <= 0) {
     return {};
   }
@@ -121,9 +116,7 @@ std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const P
 
   renderer.Render(0, 0, dst_w, dst_h, params);
 
-  if (overlay_input.has_value()) {
-    RenderOverlayToFbo(*overlay_input, curve_labels, dst_w, dst_h);
-  }
+  RenderOverlayToFbo(curve_labels, dst_w, dst_h);
 
   std::vector<unsigned char> rgba;
   bool ok = ReadbackGlRegionToRgba(0, 0, dst_w, dst_h, rgba);

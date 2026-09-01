@@ -144,7 +144,7 @@ void GlOpGuiFunc(ImGuiTestContext*) {
     params.bg.alpha = 0.0f;  // shader is bg*(1-alpha) + sim*alpha, so alpha=0 is pure background
     params.bg.aspect = static_cast<float>(kTexW) / static_cast<float>(kTexH);
   }
-  auto rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH, std::nullopt);
+  auto rgba = gui::RenderExportToRgba(gui::g_preview, params, kProbeW, kProbeH);
   g_gl_op.export_ok = !rgba.empty();
   if (g_gl_op.export_ok) {
     const size_t off = (static_cast<size_t>(kProbeH / 2) * kProbeW + kProbeW / 2) * 4;

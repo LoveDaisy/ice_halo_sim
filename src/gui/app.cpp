@@ -144,23 +144,6 @@ std::vector<float> ComputeGridLongitudeAngles(float step) {
   return GridAnglesOverIndexRange(step, -g_max + 1, g_max, /*skip_zero=*/false);
 }
 
-OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
-  OverlayLabelInput input{};
-  input.lens_type = rc.lens_type;
-  input.fov = rc.fov;
-  input.elevation = rc.elevation;
-  input.azimuth = rc.azimuth;
-  input.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
-  input.visible = rc.visible;
-  input.front = rc.front;
-  input.show_horizon = state.show_horizon_label;
-  input.horizon_alpha = state.horizon_alpha;
-
-  std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
-  input.grid_step = ComputeGridStep(rc.fov);
-  return input;
-}
-
 std::shared_ptr<ImGuiLogSink> g_imgui_log_sink;
 std::shared_ptr<spdlog::sinks::basic_file_sink_mt> g_file_log_sink;
 std::string g_log_file_path;
@@ -424,26 +407,28 @@ void DoExportPreviewPng() {
   }
 
   PreviewParams params = BuildExportParams();
-  std::optional<OverlayLabelInput> overlay;
-  if (g_state.screenshot_include_overlay &&
-      (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label)) {
-    overlay = BuildOverlayLabelInput(g_state, g_state.renderer);
-  }
+  const bool want_labels = g_state.screenshot_include_overlay;
 
   int w = g_preview_vp.vp_w;
   int h = g_preview_vp.vp_h;
   // Built at the FBO's own size, which for this export is the live viewport's, so the anchors need
-  // no rescaling and the exported PNG puts the numbers where the screen does.
+  // no rescaling and the exported PNG puts the numbers where the screen does. An empty list is how
+  // this path says "no text" now that there is no second, walk-driven source to switch off
+  // alongside it.
   std::vector<CurveLabelSet> curve_labels;
-  if (overlay.has_value() && g_state.show_sun_circles_label) {
+  if (want_labels && g_state.show_horizon_label) {
+    curve_labels.push_back(
+        BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  }
+  if (want_labels && g_state.show_sun_circles_label) {
     curve_labels.push_back(
         BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
   }
-  if (overlay.has_value() && g_state.show_grid_label) {
+  if (want_labels && g_state.show_grid_label) {
     curve_labels.push_back(
         BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
   }
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay, curve_labels);
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, curve_labels);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;
@@ -453,7 +438,7 @@ void DoExportPreviewPng() {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: PNG write error path={}", PathToU8(path));
     return;
   }
-  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", overlay.has_value() ? " (overlay)" : "", PathToU8(path));
+  GUI_LOG_INFO("[GUI] Export screenshot{}: {}", curve_labels.empty() ? "" : " (overlay)", PathToU8(path));
 }
 
 void DoExportDualFisheyeEqualAreaPng() {
@@ -472,7 +457,7 @@ void DoExportDualFisheyeEqualAreaPng() {
   PreviewParams params = BuildExportParams();
   ConfigureDualFisheyeExportParams(params);
 
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, std::nullopt);
+  auto rgba = RenderExportToRgba(g_preview, params, w, h);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export dual fisheye: RenderExportToRgba empty (size={}x{})", w, h);
     return;
@@ -508,7 +493,7 @@ void DoExportEquirectangularPng() {
   PreviewParams params = BuildExportParams();
   ConfigureEquirectExportParams(params);
 
-  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h, std::nullopt);
+  auto rgba = RenderExportToRgba(g_preview, params, dst_w, dst_h);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export equirect: RenderExportToRgba empty (size={}x{})", dst_w, dst_h);
     return;

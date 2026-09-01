@@ -53,8 +53,8 @@ struct Exposure {
 //
 // The show_* fields here control **line** rendering only (shader uniforms
 // u_show_horizon / u_show_grid / u_show_sun_circles). They are sourced from
-// GuiState::show_<x>_line. The companion fields GuiState::show_<x>_label are
-// consumed by OverlayLabelInput, not this struct.
+// GuiState::show_<x>_line. The companion fields GuiState::show_<x>_label are read where the
+// label anchors are consumed (app_panels.cpp / app.cpp, through AnnotationOverlayCache), not here.
 struct OverlayDecoration {
   bool show_horizon = false;
   bool show_grid = false;

@@ -56,6 +56,12 @@ class AnnotationOverlayCache {
     // The zenith / nadir markers. A bool rather than a list because there is nothing to enumerate:
     // the two directions are fixed, and what varies is only whether the caller wants them.
     bool zenith_nadir = false;
+    // The celestial horizon. A bool for the same reason zenith_nadir is — there is one such curve,
+    // at altitude 0 — and asked for by the LABEL switch alone: the preview draws the horizon LINE
+    // in its own fragment shader (overlayAuxLines), so the mask this brings back with the anchors
+    // is a cost, not a use. Requesting the anchors is still cheaper than the alternative it
+    // replaced, a second curve walk living in the GUI.
+    bool horizon = false;
 
     bool operator==(const ViewKey& o) const;
     bool operator!=(const ViewKey& o) const { return !(*this == o); }
@@ -105,6 +111,11 @@ class AnnotationOverlayCache {
   // Anchors for both grid families, merged for the same reason the mask is: core has already
   // formatted each label's text, and the consumer draws them in one style.
   const std::vector<Label>& GridLabels() const { return grid_labels_; }
+  // Anchors for the celestial horizon. Its own list rather than merged into the grid's, even
+  // though the horizon IS the parallel at altitude 0 and shares the grid's collision group: the
+  // GUI colours it separately (a red of its own, against the grid's shared colour), and an
+  // appearance boundary is exactly what a separate list is for.
+  const std::vector<Label>& HorizonLabels() const { return horizon_labels_; }
   // The zenith / nadir marker positions. Both invalid unless HasResult() and the key asked for
   // them; each carries its own `valid`, because a view images one of them far more often than
   // both.
@@ -138,6 +149,7 @@ class AnnotationOverlayCache {
   std::vector<Label> angular_dist_labels_;
   std::vector<uint8_t> grid_mask_;
   std::vector<Label> grid_labels_;
+  std::vector<Label> horizon_labels_;
   Point zenith_;
   Point nadir_;
   uint64_t generation_ = 0;  // 0 = never computed, which a consumer's "nothing uploaded" sentinel matches
@@ -162,6 +174,7 @@ struct AnnotationViewInput {
   std::vector<float> elevation_deg;
   std::vector<float> longitude_deg;
   bool zenith_nadir = false;
+  bool horizon = false;
 };
 AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
 

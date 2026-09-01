@@ -10,8 +10,8 @@ namespace lumice::gui {
 
 struct OverlayLabel {
   // Draw list screen coordinates. With ImGuiConfigFlags_ViewportsEnable enabled
-  // (gui-polish-v15), these are absolute OS screen coordinates; the caller of
-  // ComputeOverlayLabels owns the conversion from window-local to screen space.
+  // (gui-polish-v15), these are absolute OS screen coordinates; the caller of AppendCurveLabels
+  // owns the conversion from window-local to screen space.
   // For self-owned ImDrawList targets (e.g. export_fbo_renderer rendering to an
   // off-screen FBO), the caller passes a (0, 0) origin and these stay in FBO space.
   float screen_x, screen_y;
@@ -28,43 +28,17 @@ struct OverlayLabel {
 constexpr int kGroupGrid = 0;
 constexpr int kGroupSunCircles = 1;
 
-// The show_* fields here control **label** rendering only (label sampling along
-// viewport edges). They are sourced from GuiState::show_<x>_label. The companion
-// fields GuiState::show_<x>_line are consumed by OverlayDecoration (in
-// preview_renderer.hpp), not this struct.
-struct OverlayLabelInput {
-  int lens_type;
-  float fov, elevation, azimuth, roll;
-  int visible;  // 0=upper, 1=lower, 2=full (base hemisphere)
-  bool front = false;
-  // Sun circles are NOT here. Their anchors come from core (AnnotationOverlayCache), so the six
-  // fields that used to describe them — the switch, the sun direction, the angle list and its
-  // count, the colour and the alpha — moved out with the walk that consumed them. Everything left
-  // in this struct is an annotation the GUI still places itself.
-  // The coordinate grid is gone from this struct with the walk it drove — its switch, its colour
-  // and its alpha alike. Its anchors come from core now, through the same CurveLabelSet path the
-  // circles use, and its appearance travels on that set. What is left here is the horizon, the one
-  // annotation the GUI still places itself.
-  bool show_horizon;
-  float horizon_color[3];
-  float horizon_alpha;
-
-  // Coordinate grid step in degrees, and the one grid field that is NOT dead: the horizon's label
-  // text is formatted to one decimal or none depending on it, which is a property of how fine the
-  // grid around it is rather than of the horizon. Default 10 deg keeps existing callers' behaviour
-  // unchanged; the live preview path overrides via ComputeGridStep(fov).
-  float grid_step = 10.0f;
-};
-
 // Turn core's label anchors into OverlayLabels the two draw paths already understand. Kept here
 // rather than in either caller because both of them need it and the conversion — canvas pixels to
 // the target draw list's space, plus the colour and group the collision pass reads — is the same
 // both times.
 //
-// NOT specific to one annotation family: the angular-distance circles and the coordinate grid both
-// arrive as core anchors and are both drawn this way, differing only in the appearance and the
-// collision group the caller attaches. That is why the type is named for the shape of the data
-// rather than for its first consumer.
+// NOT specific to one annotation family: all three — the horizon, the angular-distance circles and
+// the coordinate grid — arrive as core anchors and are drawn this way, differing only in the
+// appearance and the collision group the caller attaches. That is why the type is named for the
+// shape of the data rather than for its first consumer, and it is now the ONLY way a label reaches
+// this file: the GUI's own curve walk (ComputeOverlayLabels) is gone with the last family that
+// needed it.
 //
 // `anchors` are in canvas pixel space with a top-left origin, which is what
 // AnnotationOverlayCache returns and what the viewport rect below is offset by. `px`/`py` and
@@ -91,30 +65,20 @@ struct CurveLabelSet {
 };
 void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_screen_y, std::vector<OverlayLabel>& out);
 
-// Compute labels at viewport edges where overlay lines cross.
-// vp_screen_* are in the same coordinate space as the target ImDrawList:
-//   - For ImGui::GetWindowDrawList() under ImGuiConfigFlags_ViewportsEnable,
-//     this is absolute OS screen space (caller must add vp->Pos offset).
-//   - For self-owned ImDrawList targets (off-screen FBO), this is FBO-local
-//     space starting at (0, 0).
-// Output OverlayLabel.screen_x/y inherit this same coordinate space.
-void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, float vp_screen_y, float vp_screen_w,
-                          float vp_screen_h, std::vector<OverlayLabel>& out);
-
 // Draw labels using the current ImGui window's draw list (so modals/popups correctly
 // occlude the labels), with collision avoidance. Caller must invoke this inside an
 // active ImGui::Begin/End pair.
 //
-// `vp_screen_*` is the same viewport rect the caller passed to ComputeOverlayLabels
-// (same coordinate space — see ComputeOverlayLabels comment above). Each label's
-// rendered text bounding box is clamped at least 2 px inside each viewport edge
-// (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so labels never straddle
-// the viewport edge.
+// `vp_screen_*` is the viewport rect the anchors were converted into — absolute OS screen space
+// for ImGui::GetWindowDrawList() under ImGuiConfigFlags_ViewportsEnable, FBO-local space starting
+// at (0, 0) for a self-owned draw list. Each label's rendered text bounding box is clamped at
+// least 2 px inside each viewport edge (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so
+// labels never straddle the viewport edge.
 //
-// Coverage asymmetry: this viewport clamp is unconditional (all lens types,
-// all visible modes). The companion hemisphere-boundary inset (~3° push toward
-// the visible side) is applied at compute time inside ComputeOverlayLabels and
-// is gated to lens 0–3 + visible=upper/lower/front (see overlay_labels.cpp).
+// This clamp is unconditional (all lens types, all visible modes) and is the GUI's alone: the CLI
+// renderer draws core's raw anchors with no clamp and no collision pass, so a label near the rim
+// can sit a few pixels differently in the two. Where the two agree is WHICH labels appear and
+// where the curve puts them, which is what moving the walk into core bought.
 void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
                        float vp_screen_h);
 
@@ -127,10 +91,19 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
 
 namespace detail {
 
-// Pure-function inverse projection used by ComputeOverlayLabels. Exposed
-// here so unit tests can pin the per-lens-type dispatch (especially the
-// orthographic branches added in task-orthographic-followup) without the
-// edge-sampling layer in between.
+// Pure-function inverse projection: the C++ mirror of the preview fragment shader's own inverse
+// lens math (preview_renderer.cpp), kept in step with it by hand because GLSL cannot include a C++
+// header.
+//
+// ITS CONSUMER IS THE TEST LAYER, and deliberately so — read this before concluding it is dead.
+// It had one production caller, the GUI's curve walk, and that walk is gone (its labels come from
+// core now). What is left is its role as the GUI-SIDE ORACLE of the cross-implementation parity
+// gates: test_visible_mask_gui_parity.cpp, test_horizon_gui_parity.cpp,
+// test_annotation_overlay_gui_parity.cpp, test_lens_border_geometry.cpp,
+// test_render_handedness_guard.cpp and test_preview_projection_chain.cpp all compare core's
+// projection against THIS function, because the only other copy of the shader's math is in GLSL
+// and cannot be called from a test. Deleting it would not remove a duplicate; it would remove the
+// second implementation those six gates exist to compare against.
 //
 // Inputs:
 //   px, py            pixel offset from viewport center (shader convention)
@@ -148,10 +121,8 @@ namespace detail {
 void PixelToWorldDirForTesting(float px, float py, float res_x, float res_y, int lens_type, float fov,
                                const float view_matrix[9], float* out_x, float* out_y, float* out_z, bool* out_valid);
 
-// Test-only thin wrapper exposing the anonymous-namespace WorldDirToPixel so
-// unit tests can pin per-lens dispatch (especially the full-sky lens forward
-// projectors added in task-label-placement-impl). Mirror of
-// PixelToWorldDirForTesting.
+// The forward direction of the same mirror, and the same standing: no production caller since the
+// curve walk was deleted, and the same parity gates as its inverse above are what it is kept for.
 //
 // Inputs:
 //   wx, wy, wz         world-space unit direction
