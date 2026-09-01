@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -390,4 +391,261 @@ TEST(AnnotationOverlayGuiParity, VisibleRangeIsNotAppliedByTheAnnotationForward)
     ExpectForwardAgrees(MakeView(LensParam::kLinear, 90.0f, 96, 72, vis, /*el=*/20.0f), -80.0f, 80.0f,
                         "linear under a visible restriction");
   }
+}
+
+// =================================================================================================
+// Label anchors: core's migrated curve walk against the GUI's own.
+//
+// This is the assertion the migration is FOR. ComputeOverlayLabels stays in the tree for now (the
+// consumer-side switch is a downstream task), so the two can be run over the same view and
+// compared label by label — which is the evidence required before the GUI's copy is deleted.
+//
+// The two walks sample the same curves at the same density and apply the same boundary/interior
+// dispatch; what differs underneath is the forward projection, which the tests above have already
+// shown to agree on the canvas. So a disagreement here is a disagreement about the ALGORITHM, not
+// about the lens.
+// =================================================================================================
+
+namespace {
+
+// The grid the GUI derives from a single step, restated so core can be handed the same curves.
+// ComputeOverlayLabels walks parallels at g * step for g in [-round(80/step), +round(80/step)]
+// excluding 0 (the horizon owns it), and meridians at g * step for g in
+// [-round(180/step) + 1, +round(180/step)] so that 180 deg appears once rather than twice.
+std::vector<float> GuiParallels(float step) {
+  const int g_max = static_cast<int>(std::round(80.0f / step));
+  std::vector<float> out;
+  for (int g = -g_max; g <= g_max; ++g) {
+    if (g != 0) {
+      out.push_back(static_cast<float>(g) * step);
+    }
+  }
+  return out;
+}
+
+std::vector<float> GuiMeridians(float step) {
+  const int g_max = static_cast<int>(std::round(180.0f / step));
+  std::vector<float> out;
+  for (int g = -g_max + 1; g <= g_max; ++g) {
+    out.push_back(static_cast<float>(g) * step);
+  }
+  return out;
+}
+
+struct LabelCase {
+  ann::ViewSnapshot view;
+  float grid_step = 10.0f;
+  bool horizon = true;
+  bool grid = true;
+  std::vector<float> sun_angles;
+  float sun_dir[3] = { 0.0f, -1.0f, 0.0f };
+};
+
+std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
+  lumice::gui::OverlayLabelInput in{};
+  in.lens_type = static_cast<int>(c.view.lens_type);
+  in.fov = c.view.fov_deg;
+  in.elevation = c.view.el_deg;
+  in.azimuth = c.view.az_deg;
+  in.roll = c.view.roll_deg;
+  in.visible = static_cast<int>(c.view.visible);
+  in.front = c.view.front;
+  in.show_horizon = c.horizon;
+  in.show_grid = c.grid;
+  in.show_sun_circles = !c.sun_angles.empty();
+  in.sun_dir[0] = c.sun_dir[0];
+  in.sun_dir[1] = c.sun_dir[1];
+  in.sun_dir[2] = c.sun_dir[2];
+  in.sun_circle_count = static_cast<int>(c.sun_angles.size());
+  in.sun_circle_angles = c.sun_angles.empty() ? nullptr : c.sun_angles.data();
+  in.horizon_alpha = 1.0f;
+  in.grid_alpha = 1.0f;
+  in.sun_circles_alpha = 1.0f;
+  in.grid_step = c.grid_step;
+  std::vector<lumice::gui::OverlayLabel> out;
+  // A (0, 0) origin with the canvas as the viewport makes the GUI's screen coordinates the same
+  // image-space pixels core reports, so no second convention enters the comparison.
+  lumice::gui::ComputeOverlayLabels(in, 0.0f, 0.0f, static_cast<float>(c.view.width), static_cast<float>(c.view.height),
+                                    out);
+  return out;
+}
+
+std::vector<ann::Label> CoreLabels(const LabelCase& c) {
+  ann::Request req;
+  req.view = c.view;
+  req.horizon = c.horizon;
+  if (c.grid) {
+    req.elevation_deg = GuiParallels(c.grid_step);
+    req.longitude_deg = GuiMeridians(c.grid_step);
+  }
+  req.angular_dist_deg = c.sun_angles;
+  req.reference_dir[0] = c.sun_dir[0];
+  req.reference_dir[1] = c.sun_dir[1];
+  req.reference_dir[2] = c.sun_dir[2];
+  return ann::ComputeOverlay(req).labels;
+}
+
+// One sample step of a walked curve is 1 degree, and both sides emit at a SAMPLE, so a single
+// disagreement about whether the sample at the very edge of the canvas is inside costs one step.
+// Near the rim of a wide-angle projection that is several pixels, which is why the anchor
+// tolerance is stated as a fraction of the canvas rather than in absolute pixels: the quantity
+// being bounded is "the same sample, or its neighbour", not "the same pixel".
+float AnchorTolerance(const ann::ViewSnapshot& view) {
+  return 0.03f * static_cast<float>(std::max(view.width, view.height));
+}
+
+void ExpectLabelsAgree(const LabelCase& c, const char* label) {
+  const std::vector<lumice::gui::OverlayLabel> gui = GuiLabels(c);
+  const std::vector<ann::Label> core = CoreLabels(c);
+  ASSERT_FALSE(gui.empty()) << label << ": the GUI emitted no labels, the comparison is vacuous";
+  ASSERT_EQ(core.size(), gui.size()) << label << ": core emitted " << core.size() << " label(s), the GUI " << gui.size()
+                                     << ". The two walks visit the same curves in the same order, so a count "
+                                        "difference is a difference in the boundary/interior dispatch, not in "
+                                        "placement.";
+  const float tol = AnchorTolerance(c.view);
+  int off = 0;
+  float worst = 0.0f;
+  size_t worst_i = 0;
+  // Non-fatal per label, and the worst offender reported once: a systematic shift would otherwise
+  // print hundreds of identical lines, and a fatal assert would hide whether it is one label or
+  // all of them.
+  for (size_t i = 0; i < core.size(); ++i) {
+    EXPECT_EQ(core[i].text, gui[i].text) << label << ": label " << i << " text";
+    const float d = std::max(std::fabs(core[i].px - gui[i].screen_x), std::fabs(core[i].py - gui[i].screen_y));
+    if (d > worst) {
+      worst = d;
+      worst_i = i;
+    }
+    if (d > tol) {
+      ++off;
+    }
+  }
+  EXPECT_EQ(off, 0) << label << ": " << off << " of " << core.size() << " anchors are more than " << tol
+                    << " px apart; worst " << worst << " px at label " << worst_i << " (\"" << core[worst_i].text
+                    << "\")";
+}
+
+}  // namespace
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnAnAllSkyDualFisheye) {
+  LabelCase c;
+  c.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128, RenderConfig::kFull, /*el=*/0.0f);
+  ExpectLabelsAgree(c, "dual fisheye all-sky");
+}
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderAHemisphereRestriction) {
+  for (RenderConfig::VisibleRange vis : { RenderConfig::kUpper, RenderConfig::kLower }) {
+    LabelCase c;
+    c.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128, vis, /*el=*/0.0f);
+    ExpectLabelsAgree(c, "dual fisheye, half sky");
+  }
+}
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnASingleFisheyeWhoseDomainEdgeIsOffCanvas) {
+  // TWO knife edges have to be kept off this scene, and both are properties of the view rather
+  // than of either implementation:
+  //
+  //  * core's domain boundary (the equator, theta = 90 deg) must project OUTSIDE the canvas
+  //    corners, or core sees arcs the GUI does not — see the pinned case below. For equal-area the
+  //    boundary sits at r_norm = sin(45 deg) / sin(fov/4) and a square canvas reaches r_norm =
+  //    sqrt(2) at its corners, so it clears the frame exactly when fov < 120 deg. 90 deg puts it
+  //    at 1.85 image radii.
+  //  * the zenith must not land ON the image circle. Every meridian passes through it, so if its
+  //    radius is r_norm = 1 to within float noise, each of the 36 meridians independently coin-
+  //    flips on whether its pole sample is inside the viewport — and since the meridian anchor
+  //    search falls back to the pole when nothing else on the curve is visible, the two sides
+  //    disagree about a dozen labels for no reason either of them owns. elevation = fov/2 puts the
+  //    zenith exactly there; 60 deg with a 90 deg fov puts it at 0.68 image radii.
+  LabelCase c;
+  c.view = MakeView(LensParam::kFisheyeEqualArea, 90.0f, 192, 192, RenderConfig::kFull, /*el=*/60.0f, /*az=*/30.0f);
+  ExpectLabelsAgree(c, "single fisheye at 60 deg");
+}
+
+// KNOWN DIVERGENCE (the same one test_visible_mask_gui_parity.cpp pins for the mask, seen here in
+// the label dispatch): at fov >= 120 the single-lens equator projects INSIDE the canvas corners,
+// so the GUI walks a band of sky core culls, and the two label sets stop being the same. This is
+// a difference in DOMAIN, not in placement — the exact comparison above, run at a fov that keeps
+// the equator off the frame, is what shows the placement rule itself agrees.
+//
+// Pinned by its mechanism rather than by a count: every label the GUI emits that core does not
+// must lie OUTSIDE the radius the equator projects to. A disagreement anywhere inside that radius
+// would be a real placement bug wearing this divergence's clothes.
+TEST(AnnotationOverlayGuiParity, SingleFisheyeLabelsDivergeOnlyPastTheEquatorRadius) {
+  constexpr float kFov = 150.0f;
+  constexpr int kRes = 192;
+  LabelCase c;
+  c.view = MakeView(LensParam::kFisheyeEqualArea, kFov, kRes, kRes, RenderConfig::kFull, /*el=*/45.0f, /*az=*/30.0f);
+  const std::vector<lumice::gui::OverlayLabel> gui = GuiLabels(c);
+  const std::vector<ann::Label> core = CoreLabels(c);
+  ASSERT_FALSE(gui.empty());
+  ASSERT_FALSE(core.empty());
+
+  // Equal-area radius of the equator, in pixels: r_norm = sin(45 deg) / sin(fov/4), scaled by the
+  // image radius. Anything beyond this is sky core does not render and therefore does not
+  // annotate.
+  const float image_radius = static_cast<float>(kRes) / 2.0f;
+  const float equator_radius = image_radius * std::sin(45.0f * kDeg2Rad) / std::sin(kFov * 0.25f * kDeg2Rad);
+  ASSERT_LT(equator_radius, image_radius * std::sqrt(2.0f))
+      << "this fov no longer puts the equator inside the canvas corners, so there is nothing to pin";
+
+  const float tol = AnchorTolerance(c.view);
+  auto radius_of = [&](float px, float py) {
+    const float dx = px - image_radius;
+    const float dy = py - image_radius;
+    return std::sqrt(dx * dx + dy * dy);
+  };
+
+  int inside_disagreements = 0;
+  int outside_disagreements = 0;
+  std::string first_inside;
+  for (const auto& g : gui) {
+    const bool matched = std::any_of(core.begin(), core.end(), [&](const ann::Label& a) {
+      return a.text == g.text && std::fabs(a.px - g.screen_x) <= tol && std::fabs(a.py - g.screen_y) <= tol;
+    });
+    if (matched) {
+      continue;
+    }
+    if (radius_of(g.screen_x, g.screen_y) > equator_radius) {
+      ++outside_disagreements;
+    } else if (inside_disagreements++ == 0) {
+      first_inside = g.text;
+    }
+  }
+  EXPECT_GT(outside_disagreements, 0) << "the divergence this test pins has disappeared; if the two domains were "
+                                         "reconciled, fold this case into the exact comparison above";
+  EXPECT_EQ(inside_disagreements, 0) << inside_disagreements
+                                     << " GUI label(s) inside the equator radius have no core counterpart; first \""
+                                     << first_inside
+                                     << "\". Inside that radius both sides render the same sky, so "
+                                        "this is a placement difference, not the known domain one.";
+}
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnALinearLens) {
+  LabelCase c;
+  c.view = MakeView(LensParam::kLinear, 60.0f, 192, 144, RenderConfig::kFull, /*el=*/20.0f, /*az=*/-40.0f,
+                    /*ro=*/8.0f);
+  c.grid_step = 5.0f;
+  ExpectLabelsAgree(c, "linear, 5 deg grid");
+}
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeForAngularDistanceCircles) {
+  LabelCase c;
+  c.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128, RenderConfig::kFull, /*el=*/0.0f);
+  c.horizon = false;
+  c.grid = false;
+  c.sun_angles = { 22.0f, 46.0f };
+  // Sun on the horizon to the north-east, so both rings straddle the disc seam and the boundary
+  // branch is exercised alongside the interior one.
+  c.sun_dir[0] = -0.7071f;
+  c.sun_dir[1] = -0.7071f;
+  c.sun_dir[2] = 0.0f;
+  ExpectLabelsAgree(c, "angular-distance circles");
+}
+
+TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderTheFrontHemisphereClip) {
+  LabelCase c;
+  c.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128, RenderConfig::kFull, /*el=*/15.0f,
+                    /*az=*/70.0f);
+  c.view.front = true;
+  ExpectLabelsAgree(c, "dual fisheye, front clip");
 }

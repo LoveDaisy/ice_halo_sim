@@ -75,17 +75,38 @@ struct WalkContext {
   int height = 0;
 };
 
+// Is the projected point on this canvas, and where exactly?
+//
+// The containment test is CLOSED at the far edge (`<= width`, not `< width`) and the accepted
+// point is then clamped to an addressable pixel. Both halves are needed, and for the same reason:
+// ProjectExitToPixel bins with floor(v + 0.5) about res/2, half a pixel off the symmetric
+// convention the masks and the GUI both use (lens_proj_build.hpp states the offset in its own
+// header comment). A direction the symmetric convention places in the LAST row therefore bins to
+// `res`. Rejecting it would drop the outermost ring of every fisheye — the equator of an all-sky
+// dual fisheye lands exactly there — and, worse, would not merely lose that anchor but move it:
+// the meridian walk below searches outward from the equator, so one rejected sample hands the
+// label to its neighbour, which on a dual fisheye is the OTHER disc, half a canvas away.
+// Accepting and clamping keeps the sample set identical to the GUI's (whose own viewport test is
+// likewise closed) while still reporting a pixel a consumer can address.
+bool ClampToCanvas(int width, int height, CanvasPoint* p) {
+  if (p->px < 0.0f || p->px > static_cast<float>(width) || p->py < 0.0f || p->py > static_cast<float>(height)) {
+    return false;
+  }
+  p->px = std::clamp(p->px, 0.0f, static_cast<float>(width - 1));
+  p->py = std::clamp(p->py, 0.0f, static_cast<float>(height - 1));
+  return true;
+}
+
 CurveSample SampleWorldDir(const WalkContext& ctx, float alt_deg, float wx, float wy, float wz) {
   CurveSample s;
   s.wx = wx;
   s.wy = wy;
   s.wz = wz;
-  const CanvasPoint cp = ProjectWorldDir(ctx.proj, wx, wy, wz);
+  CanvasPoint cp = ProjectWorldDir(ctx.proj, wx, wy, wz);
   if (!cp.valid) {
     return s;
   }
-  if (cp.px < 0.0f || cp.px >= static_cast<float>(ctx.width) || cp.py < 0.0f ||
-      cp.py >= static_cast<float>(ctx.height)) {
+  if (!ClampToCanvas(ctx.width, ctx.height, &cp)) {
     return s;
   }
   if (!VisibleForLabel(ctx.visible, ctx.front, ctx.forward, alt_deg, wx, wy, wz)) {
@@ -331,29 +352,6 @@ Overlay ComputeOverlay(const Request& req) {
                                                           req.angular_dist_deg, false);
   }
 
-  if (req.zenith_nadir) {
-    // Not level sets: two fixed world directions. altitude = asin(-z), so zenith is z = -1.
-    const CanvasPoint z = ProjectWorldDir(forward_params, 0.0f, 0.0f, -1.0f);
-    const CanvasPoint nd = ProjectWorldDir(forward_params, 0.0f, 0.0f, 1.0f);
-    WalkContext ctx;
-    ctx.proj = forward_params;
-    ctx.visible = cfg.visible_;
-    ctx.front = req.view.front;
-    ctx.forward[0] = forward[0];
-    ctx.forward[1] = forward[1];
-    ctx.forward[2] = forward[2];
-    ctx.width = width;
-    ctx.height = height;
-    const CurveSample zs = SampleWorldDir(ctx, 90.0f, 0.0f, 0.0f, -1.0f);
-    const CurveSample ns = SampleWorldDir(ctx, -90.0f, 0.0f, 0.0f, 1.0f);
-    out.zenith = { z.px, z.py, zs.vis };
-    out.nadir = { nd.px, nd.py, ns.vis };
-  }
-
-  if (!req.labels) {
-    return out;
-  }
-
   WalkContext ctx;
   ctx.proj = forward_params;
   ctx.visible = cfg.visible_;
@@ -363,6 +361,20 @@ Overlay ComputeOverlay(const Request& req) {
   ctx.forward[2] = forward[2];
   ctx.width = width;
   ctx.height = height;
+
+  if (req.zenith_nadir) {
+    // Not level sets: two fixed world directions. altitude = asin(-z), so zenith is z = -1. Run
+    // through the same sampler as every curve point, so "the marker is on screen" means exactly
+    // what "this anchor is on screen" means everywhere else.
+    const CurveSample zs = SampleWorldDir(ctx, 90.0f, 0.0f, 0.0f, -1.0f);
+    const CurveSample ns = SampleWorldDir(ctx, -90.0f, 0.0f, 0.0f, 1.0f);
+    out.zenith = { zs.px, zs.py, zs.vis };
+    out.nadir = { ns.px, ns.py, ns.vis };
+  }
+
+  if (!req.labels) {
+    return out;
+  }
 
   if (req.horizon) {
     EmitCurveLabel(WalkAltitudeCurve(ctx, 0.0f), kLabelHorizon, -1, 0.0f, FormatAngleDeg(0.0f), out.labels);
