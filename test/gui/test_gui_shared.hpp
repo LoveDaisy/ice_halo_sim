@@ -628,5 +628,6 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine);
 void RegisterDefaultsPanelLayoutTests(ImGuiTestEngine* engine);
 void RegisterThemeCoverageTests(ImGuiTestEngine* engine);
 void RegisterThemeScanTests(ImGuiTestEngine* engine);
+void RegisterExportParityTests(ImGuiTestEngine* engine);
 
 #endif  // LUMICE_TEST_GUI_SHARED_HPP

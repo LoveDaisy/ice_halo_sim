@@ -53,15 +53,17 @@ struct ColorClassOverflowInfo {
 // at all, so a config exported for the CLI must bake the current exposure to render at the same
 // brightness the user is looking at. Everything else about the two scenes is identical.
 enum class SceneIntent {
-  kSimCommit,   // GUI Run / startup calibration → LUMICE_CommitScene. intensity_factor stays at
-                // the core default (1.0); baking EV here would double-apply it against the
-                // display-time push (app.cpp RefreshPreviewParams / LUMICE_SetCompositeExposure).
-  kJsonExport,  // "Export Config JSON" for the CLI → LUMICE_SceneToJson. intensity_factor bakes
-                // 2^exposure_offset so `Lumice -f exported.json` matches the on-screen brightness.
+  kSimCommit,   // GUI Run / startup calibration → LUMICE_CommitScene. Describes the TEXTURE core
+                // must produce for the preview shader to reproject, not the picture on screen.
+  kJsonExport,  // "Export Config JSON" for the CLI → LUMICE_SceneToJson. Describes the PICTURE on
+                // screen, because the CLI has no reprojection stage to apply afterwards.
 };
 
 // Build a LUMICE_Scene from GuiState: the single GUI→core assembly path, feeding both the
 // simulation commit (LUMICE_CommitScene) and the JSON export (LUMICE_SceneToJson) via `intent`.
+// One emitter, two intents that diverge across most of the renderer block on purpose — the two
+// invariants are stated above BuildExportJsonOrWarn and the divergence set is pinned by
+// test/composition-correctness/gui/test_scene_commit_chain.cpp.
 //
 // Returns a ScenePtr owning a fresh handle on success, nullptr if a filter expansion exceeded
 // the ABI bounds (clause / term / filter capacity) OR a raypath color class/ref exceeded
@@ -92,14 +94,38 @@ std::string FormatOverflowLocator(const FilterOverflowInfo& overflow);
 std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 
 // Build the export Core-JSON for `state` (BuildScene with SceneIntent::kJsonExport, serialized
-// via LUMICE_SceneToJson), OR reject with a user-facing warning when the state exceeds the ABI
-// clause/term/color bounds. The SOLE producer of core-config JSON on the GUI side — export and
-// simulation therefore cannot drift, because both encode the same LUMICE_Scene through the same
-// C API encoders. Pure — no file dialog / filesystem — so the reject path is directly
-// unit-testable (the file-dialog wrapper DoExportConfigJson only supplies the path). Returns
-// true and fills *out_json (pretty-printed, 2-space indent) on success; returns false and fills
-// *out_warning (with a FormatOverflowLocator-bearing message) on overflow, leaving *out_json
-// untouched. Either out-param may be null.
+// via LUMICE_SceneToJson), OR reject with a user-facing warning. The SOLE producer of core-config
+// JSON on the GUI side: there is one encoder, so the two intents cannot drift in the sense of
+// disagreeing by accident. What they DO is diverge, deliberately and across most of the renderer,
+// because they are answering two different questions. An earlier version of this comment claimed
+// the shared encoder made drift impossible; that was true as written and misleading as read — it
+// described the defect (the export transcribed simulation policy) as if it were the guarantee.
+//
+//   kSimCommit's invariant — the renderer is a CONSTANT, independent of every view setting:
+//     dual equal-area / fov 180 / visible=full / view(0,0,0) / black background / horizon on.
+//     Core renders one full-sky texture and the GUI shader reprojects it (preview_renderer.cpp's
+//     u_lens_type / u_visible / u_front uniforms), so a view setting pushed in here would be
+//     applied twice. intensity_factor likewise stays at core's 1.0 default because the GUI applies
+//     EV at display time (LUMICE_SetCompositeExposure).
+//
+//   kJsonExport's invariant — the renderer DESCRIBES THE SCREEN: lens/fov/view/visible/background/
+//     horizon/canvas all come from GuiState, and intensity_factor bakes 2^exposure_offset, because
+//     the CLI has no display-time stage at all. Whatever is not in the config is not in the image.
+//     Three documented exceptions, each with a reason and none of them silent:
+//       - the front-hemisphere clip: no core encoding exists, so the export is REFUSED (below);
+//       - lens_shift: no GUI control exists, so there is no user-visible value to be honest about;
+//       - overlay annotations other than the horizon line: a model mismatch, not an omission.
+//
+//   resolution is the one field where both arms may print the same numbers, and it is a
+//   coincidence of the fallback rather than a coupling: kSimCommit's 2:1 is required, while
+//   kJsonExport lands on 2:1 only for the aspect presets that name no ratio (Free / Match
+//   Background). Do not "unify" them.
+//
+// Pure — no file dialog / filesystem — so the reject path is directly unit-testable (the
+// file-dialog wrapper DoExportConfigJson only supplies the path). Returns true and fills *out_json
+// (pretty-printed, 2-space indent) on success; returns false and fills *out_warning (a
+// FormatOverflowLocator-bearing message on an ABI clause/term/color overflow, or the front-clip
+// refusal) on rejection, leaving *out_json untouched. Either out-param may be null.
 bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning);
 
 // task-gui-feedback-affordances Step 3 (AC4): summary of how many post-Cartesian

@@ -76,6 +76,36 @@ constexpr int kAspectPresetCount = 7;
 static_assert(sizeof(kAspectPresetNames) / sizeof(kAspectPresetNames[0]) == kAspectPresetCount,
               "kAspectPresetNames must match kAspectPresetCount");
 
+// Width / height of a preset, or 0 for the two presets that do not name a ratio at all: kFree is
+// whatever the user dragged the window to, and kMatchBg is whatever the loaded background image
+// happens to be. Callers key off `== 0` to mean "this preset states no ratio" rather than treating
+// it as a degenerate number — ApplyAspectRatio bails out of the window resize on it, and the JSON
+// export falls back to the simulation texture's own shape.
+//
+// Lives here, next to the enum it switches over, rather than in app.cpp where it started: it is a
+// pure function of the enum with no window / GL / preview dependency, and both of its callers
+// (app.cpp's window sizing and file_io.cpp's export) would otherwise have to reach across a layer
+// to get at it. Keeping it single-source matters more than where it sits — a second hand-written
+// ratio table is how the exported picture and the window it was framed in come to disagree.
+inline float GetAspectRatio(AspectPreset preset) {
+  switch (preset) {
+    case AspectPreset::k16x9:
+      return 16.0f / 9.0f;
+    case AspectPreset::k3x2:
+      return 3.0f / 2.0f;
+    case AspectPreset::k4x3:
+      return 4.0f / 3.0f;
+    case AspectPreset::k1x1:
+      return 1.0f;
+    case AspectPreset::k2x1:
+      return 2.0f;
+    case AspectPreset::kFree:
+    case AspectPreset::kMatchBg:
+    default:
+      return 0.0f;
+  }
+}
+
 struct AxisDist {
   AxisDistType type = AxisDistType::kUniform;
   float mean = 0.0f;
@@ -375,6 +405,8 @@ struct RenderConfig {
   int visible = 2;               // Index into kVisibleNames (0=upper, 1=lower, 2=full)
   bool front = false;            // Independent front-hemisphere clip flag (AND with base)
   float background[3] = { 0.0f, 0.0f, 0.0f };
+  // Serialized only (file_io.cpp) — no editor registers it (field_editor_registry.cpp), so
+  // nothing in the running GUI can change it. See the RenderConfigResimFields comment below.
   float ray_color[3] = { 1.0f, 1.0f, 1.0f };
   float exposure_offset = 0.0f;  // EV: intensity_factor = 2^exposure_offset
   // Which anchor the SERVER measures its exposure scale against, mirroring core
@@ -439,31 +471,35 @@ struct RenderConfig {
 //                                                the next commit. Do not read this entry as "the push
 //                                                path is built".
 //
-// INCLUDED — sim_resolution_index (changes the sim render grid → genuine re-sim) plus ray_color:
-// the core NeedsRebuild() treats ray_color as appearance-only, but it still reaches the server only
-// through the commit payload, so leaving it in is what keeps Run applying it. It is deliberately
-// not moved alongside background — nothing in this repo pushes it at display time, and it carries
-// an unrelated defect of its own (BuildScene hard-codes ray_color to the "use the material's own
-// spectral colour" sentinel and never reads r.ray_color). That is a separate root cause, to be
-// settled on its own terms rather than folded into this projection's field list. The third member
-// this list used to carry, opacity, is gone: it had no drawing consumer anywhere in the tree, so it
-// was removed rather than left here describing a resim that changed nothing.
+//   ray_color                                 — carries no live control at all: no row in
+//                                                field_editor_registry.cpp, so nothing the running
+//                                                GUI does can ever change it. A loaded document's
+//                                                value round-trips through Revert/Save unedited and
+//                                                can therefore never produce a resim-eligible diff.
+//                                                Formerly INCLUDED here specifically to keep an
+//                                                edit reaching Run — that reasoning is gone along
+//                                                with the control it existed for. Still serialized
+//                                                (file_io.cpp) so a document saved before the
+//                                                control's removal keeps round-tripping its stored
+//                                                value byte-for-byte. BuildScene hard-codes the
+//                                                "use the material's own spectral colour" sentinel
+//                                                and never reads it either way, unrelated to this
+//                                                projection's field list.
+//
+// INCLUDED — sim_resolution_index: changes the sim render grid → genuine re-sim. Two other members
+// this list used to carry are gone: opacity had no drawing consumer anywhere in the tree, and
+// ray_color lost its only reason for inclusion above. Both were removed rather than left here
+// describing a resim that changes nothing.
 //
 // Consumers: gui_state_reconcile.cpp::DiffAgainstCommitBaseline, app.cpp::DoRun expect_rebuild,
 // and GuiState::ConfigSnapshot's Revert baseline (single source of truth — do not fork).
 struct RenderConfigResimFields {
   int sim_resolution_index;
-  float ray_color[3];
 
-  static RenderConfigResimFields From(const RenderConfig& r) {
-    return { r.sim_resolution_index, { r.ray_color[0], r.ray_color[1], r.ray_color[2] } };
-  }
+  static RenderConfigResimFields From(const RenderConfig& r) { return { r.sim_resolution_index }; }
 
   // Write back onto a live RenderConfig, touching nothing outside this projection.
-  void ApplyTo(RenderConfig& r) const {
-    r.sim_resolution_index = sim_resolution_index;
-    std::copy(std::begin(ray_color), std::end(ray_color), r.ray_color);
-  }
+  void ApplyTo(RenderConfig& r) const { r.sim_resolution_index = sim_resolution_index; }
 
   // Does `live` still agree with this captured baseline on the resim-eligible fields?
   bool Matches(const RenderConfig& live) const { return From(live) == *this; }
@@ -472,7 +508,7 @@ struct RenderConfigResimFields {
   // directly (tests and debugging do this); `Matches` above is the live-vs-baseline shorthand
   // built on top of it, not the only intended consumer.
   friend bool operator==(const RenderConfigResimFields& a, const RenderConfigResimFields& b) {
-    return a.sim_resolution_index == b.sim_resolution_index && std::equal(a.ray_color, a.ray_color + 3, b.ray_color);
+    return a.sim_resolution_index == b.sim_resolution_index;
   }
   friend bool operator!=(const RenderConfigResimFields& a, const RenderConfigResimFields& b) { return !(a == b); }
 };
@@ -504,7 +540,7 @@ static_assert(sizeof(RenderConfig) == 64, "RenderConfig size changed — check R
 // directions in step. From() aggregate-initializes, so a newly added field is silently
 // value-initialized rather than rejected, and ApplyTo()/operator== would quietly keep working on
 // the old subset. Pinning the size is what turns that omission into a compile error.
-static_assert(sizeof(RenderConfigResimFields) == 16,
+static_assert(sizeof(RenderConfigResimFields) == 4,
               "RenderConfigResimFields size changed — update From/ApplyTo/operator== together");
 #endif
 
@@ -1453,7 +1489,10 @@ inline std::string FormatCrystalIdentity(const GuiState& state, int pool_id) {
 // (it had no drawing consumer anywhere in the tree). The projection lost only 4 bytes; the
 // snapshot lost 8, because the 4 came out of what had been exactly-fitting padding ahead of
 // `raypath_color`. Read off the compiler, not hand-computed — the arithmetic does not predict it.
-static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
+// Size then shrank 176 → 168 when `ray_color` left RenderConfigResimFields with the field itself:
+// it lost its only editor (field_editor_registry.cpp no longer registers it), so nothing can ever
+// change it again and it stopped being a resim-eligible field to track. Read off the compiler.
+static_assert(sizeof(GuiState::ConfigSnapshot) == 168,
               "GuiState::ConfigSnapshot size changed; audit From()/ApplyTo() implementations below");
 #endif
 

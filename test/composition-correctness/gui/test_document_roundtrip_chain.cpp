@@ -263,6 +263,16 @@ const std::vector<FieldProbe>& FieldProbes() {
         s.lens_border_color[2] = 0.5f;
       },
       [](const GuiState& s) { return JoinFloats(s.lens_border_color, 3); } },
+    // No editor drives this field anymore (field_editor_registry.cpp registers no row for it), so
+    // this probe is now the ONLY thing exercising its round trip: a document saved while it still
+    // had a control must keep opening, showing, and re-saving the value unchanged.
+    { "renderer.ray_color",
+      [](GuiState& s) {
+        s.renderer.ray_color[0] = 0.2f;
+        s.renderer.ray_color[1] = 0.5f;
+        s.renderer.ray_color[2] = 0.9f;
+      },
+      [](const GuiState& s) { return JoinFloats(s.renderer.ray_color, 3); } },
     { "overlay.sun_circle_angles",
       // NOT {22, 46}: that is already the default, so a serializer that dropped the key entirely
       // would still round-trip it. The EveryProbeWritesSomethingOtherThanTheDefault case below

@@ -123,8 +123,8 @@ extern std::string g_log_file_path;
 void GlfwErrorCallback(int error, const char* description);
 void WindowSizeCallback(GLFWwindow* window, int width, int height);
 
-// Aspect ratio helpers
-float GetAspectRatio(AspectPreset preset);
+// Aspect ratio helpers. GetAspectRatio itself lives in gui_state.hpp, next to the AspectPreset
+// enum: it is a pure function of the preset and file_io.cpp's export path needs it too.
 void ApplyAspectRatio(GLFWwindow* window, AspectPreset preset, bool portrait, float override_ratio = 0.0f);
 
 // Build an OverlayLabelInput from GuiState + RenderConfig. Shared between

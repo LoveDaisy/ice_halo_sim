@@ -225,9 +225,12 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
   llvmpipe (§4.6). Requires a display server unless skipped with `LUMICE_SKIP_GUI_TESTS=1`.
 - **Naming**: `test_<aspect>.cpp` (functional/visual) or `test_gui_<aspect>.cpp` where the
   historical name predates this convention; references under `test/gui/references/`.
-- **Physical location**: `test/gui/<tag>/` (`functional/`, `visual/`, `responsiveness/`) + the
-  pytest-driven `test_metal_gui_acceptance.py`, a gui-layer test that happens to run through
-  the e2e harness — a textbook "layer ≠ directory" case the purpose axis exists to handle.
+- **Physical location**: `test/gui/<tag>/` (`functional/`, `visual/`, `responsiveness/`,
+  `parity/`) + the pytest-driven `test_metal_gui_acceptance.py`, a gui-layer test that happens to
+  run through the e2e harness — a textbook "layer ≠ directory" case the purpose axis exists to
+  handle. `parity/` is a fourth tag rather than more files under `visual/`: its cases compare two
+  renders made in the same run, own no committed reference image, and must never enter
+  `scripts/regen_gui_test_refs.py`'s `GROUPS` registry — see §4.10.
 
 ### §1.8 `regression-sentinel`
 
@@ -921,6 +924,59 @@ lambda's actual parameter name is, never a hardcoded identifier). A checker that
 first of these generalizations is worse than no checker: a clean scan result is read as "this
 defect shape does not occur here," and a rule with a known-wrong negative case manufactures that
 false confidence on exactly the inputs it was supposed to catch.
+
+---
+
+### §4.10 The `parity` tag: comparing two live renders, and starting the CLI from inside `gui_test`
+
+`test/gui/parity/` holds the one shape of GUI test whose oracle is neither a committed image nor a
+widget outcome: **the same document rendered twice, by two different production paths, compared to
+each other**. Today its single member is `test_gui_cli_export_parity.cpp`, which renders a document
+through the GUI's own per-frame `PreviewParams` assembly and, in a child process, through the
+`Lumice` CLI fed by `BuildExportJsonOrWarn`'s output — making "what the GUI shows is what the
+exported config renders" a proposition that can go red.
+
+Three things about it generalize to any future member, and are the reason it is a tag of its own
+rather than more files under `visual/`:
+
+1. **No committed asset, so no regen group.** `visual/` exists to compare against a tracked
+   reference `.jpg`, which is what `scripts/regen_gui_test_refs.py`'s `GROUPS` registry
+   regenerates. A parity case has nothing to regenerate: both of its images are produced by the
+   run that compares them. Registering one there would be meaningless at best. The directory
+   boundary states this without anyone having to read a file header.
+2. **The threshold floor is a different question.** A `visual/` threshold carries a 1.0 dB floor
+   because a committed reference is compared on machines that did not shoot it. A parity case
+   compares two images made minutes apart on one machine, from a ray budget fixed by waiting for
+   the run to COMPLETE rather than by watching a counter — so machine load cannot leak into the
+   noise level, and the measured run-to-run sigma is an order of magnitude smaller (0.026–0.078 dB
+   against the visual suites' ~0.05–0.16 dB on a far coarser mean). The floor that matters instead
+   is **the smallest break the scene must catch**: place the threshold in the gap between the worst
+   honest run and that break, and keep at least 10 sigma on the honest side. Both numbers have to
+   be measured, and the second one is measured by breaking each field on purpose, one at a time.
+3. **A parity comparison inherits every divergence between the two paths, not only the one under
+   test.** The export-parity fixture's scene design is dictated by three that were measured rather
+   than assumed — the CLI bakes a projection's solid-angle Jacobian into its pixels while the GUI
+   resamples an equal-area texture and does not (so only equal-area scenes are comparable); the
+   preview shader keeps inverting past a single fisheye's image circle where core stops; and
+   relative-EV self-anchoring uses a different pixel population on each side. A new parity case
+   should expect to spend most of its design effort here, and to state what it found.
+
+**Starting the CLI from a test binary.** This fixture is the first place in the tree where a test
+starts another of the repo's binaries as a child process. The mechanics, should a second one want
+them: `test/gui/CMakeLists.txt` passes `LUMICE_CLI_BIN_PATH="$<TARGET_FILE:Lumice>"` as a compile
+definition **and** declares `add_dependencies(gui_test Lumice)` — the generator expression is only
+a string, so without the second line the test would happily run a stale binary or none. The call
+itself is `std::system` with every path double-quoted (this repo is routinely checked out under a
+directory containing a space), and the command line is echoed to stderr on failure so a red is
+reproducible by hand. Each scene renders into its own subdirectory of the suite's scratch
+directory, because the CLI names its output after the renderer id in the config
+(`src/main.cpp` `FormatImagePath`) and two scenes would otherwise collide on one filename.
+
+**Cadence.** Same as the rest of `gui_test`: `scripts/build.sh`'s correctness pool selects by a
+NEGATIVE filter, so a new category is included by default and `./scripts/test.sh {quick,full,pr}`
+runs it. CI is the exception and the trap — the one leg that runs `gui_test` passes a hand-picked
+POSITIVE filter naming two reference groups, so no CI job executes this layer today. Do not read a
+green CI as a green here (§4.6 has the wider argument about that leg).
 
 ---
 

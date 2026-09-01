@@ -594,6 +594,7 @@ int main(int argc, char** argv) {
   RegisterModalLayoutTests(engine);
   RegisterThemeCoverageTests(engine);
   RegisterThemeScanTests(engine);
+  RegisterExportParityTests(engine);
   ImGuiTestEngine_QueueTests(engine, ImGuiTestGroup_Tests, test_filter);
 
   // Main loop — runs until all tests complete

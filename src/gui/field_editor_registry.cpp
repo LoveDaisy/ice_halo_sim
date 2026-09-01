@@ -472,10 +472,11 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     map.emplace("renderer.front", BoolField([](GuiState& s) { return &s.renderer.front; }, NotUnderFullSkyOrGlobe));
     // `background` now HAS a main-UI control (Display > Rendering, beside EV), so this row is its
     // second editor — the one the defaults panel needs in order to edit a personal default without
-    // a document open. `ray_color` still has none, and for it the table remains the first editor
-    // rather than a second one, which costs nothing: a colour has no domain to disagree about.
+    // a document open.
     map.emplace("renderer.background", ColorField([](GuiState& s) { return s.renderer.background; }));
-    map.emplace("renderer.ray_color", ColorField([](GuiState& s) { return s.renderer.ray_color; }));
+    // No `renderer.ray_color` row: the GUI has no tint control anywhere (owner-decided — see
+    // GuiState::RenderConfig::ray_color's own comment), so there is nothing here to register an
+    // editor for.
     // Domain widened from the historical [-6, +6] because absolute exposure mode removed the
     // auto half of the budget. Under relative mode the reachable exposure is manual EV stacked on
     // top of `ev_auto`, so +-6 of manual travel sat on a moving anchor; under absolute mode the

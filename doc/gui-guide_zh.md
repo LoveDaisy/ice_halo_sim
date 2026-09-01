@@ -45,7 +45,13 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
   - `Save` / `Save Copy` —— 写入 `.lmc` 文件
   - `Screenshot...` —— 把当前 Render Preview 导出为 PNG
   - `Dual Fisheye Equal Area...` / `Equirectangular...` —— 服务端离屏渲染导出（需要已完成的模拟）
-  - `Config JSON...` —— 把配置导出为 JSON
+  - `Config JSON...` —— 把配置导出为 JSON，供 CLI 重新渲染。导出的 renderer 描述的是 Render
+    Preview 当前显示的那张图：显示投影与 FOV、视角、可见半球、背景色、地平线开关，以及画幅预设
+    对应的画布形状；手动 EV 会烘焙进 `intensity_factor`（CLI 没有显示期曝光）。三处有意的缺口：
+    地平线以外的辅助层不导出（GUI 的屏幕空间网格、标注、太阳圆圈在 config schema 里没有对应
+    表达）；`Free` 与 `Match Background` 两个画幅预设退回仿真纹理自身的 2:1，因为两者都不给出
+    一个换台机器仍能复现的比例；开启 **Front** 半球裁剪时导出会被拒绝并给出提示，而不是导出——
+    config 格式无法表达这个裁剪，否则 CLI 会渲出未裁剪的画面。
   - `Include Texture in .lmc` / `Include Overlay in Screenshot` —— 控制下次保存 / 截图的 toggle
 - **右面板折叠按钮**：`<` / `>` 与左侧对称（也可用快捷键 `]`）。
 

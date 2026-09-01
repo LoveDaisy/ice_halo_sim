@@ -196,3 +196,82 @@
 
 - **`schema_version` 与 `defaults_schema_version` 是两个键，不是一个。** 前者是 `SerializeGuiStateJson` 的输出里本来就有的根键（因此被 `kDiffEngineExcludedRootKeys` 排除在 diff 行之外），后者是覆盖文件自己的。同名复用会让同一份合并文档里一个键承载两种含义，打开文件的人无从区分。另外，`ApplyUserDefaultsOverlay` 的 merge 是 `merge_patch`，磁盘文档里任何与工厂文档同名的根键都会覆盖合并结果里的那个（值为 `null` 时更是直接**删除**该键）——所以 `BuildMergedOverlayDocument` 在 merge 之后无条件把 `schema_version` 回写成当前构建值：喂给反序列化器的那份文档描述的是**它自己**，不是它读过的文件。今天无害（反序列化器不读它），它咬人的那天正是版本号开始被用上的那天。
 - **"只含一个版本戳"必须继续读作"没有个人默认值"。** 用户把所有默认值都改回出厂值后，文件从 `{}` 变成只剩这一个键。任何回答"这个用户有没有个人默认值"的判断都不得因此翻面——今天这样的判断只有 `ApplyUserDefaultsOverlay` 的早退一处，它按键名忽略版本戳。
+
+---
+
+## 9. 同一份 GuiState 的两个 Scene 编码投影（`kSimCommit` vs `kJsonExport`）
+
+§2 的档位表回答「一个字段的改动该走哪条通道」。本节回答一个正交的问题：**同一份 `GuiState`
+被编码成 `LUMICE_Scene` 时，有两个消费者，而它们要的不是同一张图。**
+
+### 9.1 机制
+
+`BuildScene(state, intent)`（`src/gui/file_io.cpp`）是 GUI 侧**唯一**的 core-config 产出点：
+仿真提交与「Export Config JSON」都经它。两个 intent：
+
+| intent | 消费者 | 它在回答的问题 | 不变式 |
+|---|---|---|---|
+| `kSimCommit` | `LUMICE_CommitScene`，喂给仿真 | 「core 要产一张什么样的**纹理**，供预览 shader 重投影？」 | 恒为 dual equal-area / fov 180 / `visible=full` / 黑背景的全天纹理，**独立于每一个视图设置**。用户的 lens/fov/view/visible/background 是显示期的 shader uniform（`RefreshPreviewParams` → `preview_renderer.cpp`），推进仿真会把天空裁剪并重投影两次 |
+| `kJsonExport` | `LUMICE_SceneToJson`，落盘给 CLI | 「要告诉 CLI 什么，它才能画出屏幕上这张**成品图**？」 | 逐字段描述用户当下所见 |
+
+⚠️ **这两条臂必须分叉，这是设计不是缺陷。** 曾经它们共用同一份 `LUMICE_RenderParam`、只有
+`intensity_factor` 按 intent 分叉，于是导出的 config 是「GUI 内部仿真策略」的誊本而不是画面的
+描述：用户看 linear/55° 得到一份 dual equal-area 全天配置，而 `grid.horizon` 不只是被丢弃、
+而是被**写反**（导出的图会画一条用户明确关掉的地平线）。
+
+⭐ 那时 `src/gui/file_io.hpp` 的注释把共用写成优点——「export 与 simulation 因此不可能漂移，
+因为两者经同一个 `LUMICE_Scene` 编码」。**那句话字面为真，而且正是它保证了导出的东西描述的是
+内部策略参数、不是用户所见。** 共用一个 struct 让「`lens_type` 对两条臂是不是同一个意思」这个
+歧义**无法在类型上表达**，于是它静默按其中一个意思固化了四年。⇒ 一般化的判据：
+**任何「两条路共用一个编码器、只在个别字段上分叉」的结构，都要问：不分叉的那些字段，
+对两条路是不是同一个意思？**
+
+（反面对照：`raypath_color_mode` 同样是显示层字段却从不出问题，因为它走独立的
+`LUMICE_SceneSetColorMode` 不经过那份共用 struct。判据指向的是**那个共用结构**，
+不是「显示层」这个属性。）
+
+### 9.2 分叉面清单（权威源在测试里，本表是它的说明）
+
+机械权威是 `test/composition-correctness/gui/test_scene_commit_chain.cpp` 的 `kDivergingKeys`
+与用例 `IntentionalDivergenceFieldsMatchDocumentedSet`：把清单内的键从两份文档里 erase 掉，
+**其余必须逐字段全等**。所以它同时守两个方向——清单内允许不同，**清单外意外分叉会红**。
+
+| 键 | 为何分叉 |
+|---|---|
+| `intensity_factor` | 显示期 EV vs 烤进配置（commit 臂须留 `1.0`，否则重跑时手动 EV 被叠两次；export 臂须烤 `2^exposure_offset`） |
+| `lens` | 投影 + fov：固定纹理 vs 用户的取景 |
+| `view` | 相机角：全零 vs 用户的 |
+| `visible` | 半球裁剪：恒 `full` vs 用户的 |
+| `background` | 显示期合成 vs CLI 烤进图里 |
+| `resolution` | 2:1 纹理 vs 用户的画幅 |
+| `grid.horizon` | 恒开 vs 用户的开关 |
+
+⚠️ **`grid` 是按子键豁免的，不是整键。** 只有 `horizon` 分叉，其余 grid 子字段（counts、colors…）
+在两条臂上应当相同；整键 erase 会连带停止检查它们是否意外漂移。
+
+### 9.3 三处具名例外（有意不分叉，且都不是遗漏）
+
+- **`ray_color`**：两条臂都写 core 的「用真实光谱色」哨兵 `{-1,-1,-1}`。GUI 侧没有 tint 概念
+  （全树只有 `src/server/render.cpp` 的烤图路读它），哨兵**就是** GUI 显示的样子。
+- **`lens_shift`**：两条臂都保持零。GUI 全无对应控件 ⇒ 没有可供 export 臂「诚实描述」的用户值。
+  哪天加了控件，这条注释就该停止是注释。
+- **`front`（前半球裁剪）**：core 侧**无此概念**（`VisibleRange` 只有 upper/lower/full）。
+  当前处置是 `BuildExportJsonOrWarn` 在 `front == true` 时**拒绝导出并告警**，复用它对
+  ABI 超限的既有 `false + *out_warning` 契约。
+  ⛔ **绝不可编码成 `"visible": "front"`**：`NLOHMANN_JSON_SERIALIZE_ENUM` 把任何未登记字符串
+  映射到表中**第一项**，而 `kUpper` 正是第一项（`src/config/render_config.hpp` 那段注释为
+  `EvMode` 写过同一条理由）⇒ 那样写出来的 config **CLI 渲上半球、GUI 渲全天+前半球裁剪，且不报错**。
+
+### 9.4 改动纪律
+
+- 动分叉面（增/删/改一个键）时，**先在本节说明理由再改清单**。⛔ 不得因为那道闸红了就把键加进清单绕开。
+- **辅助线相关的键（`grid.central` / `grid.elevation` 及将来的标注字段）现在不分叉，
+  是因为两条臂都不填它们。** 给 core 补上注解层绘制能力之后，方向取决于届时的机制裁定：
+  若 GUI 继续在 shader 里自己算+画 overlay，则标注属于**成品图**而非那张全天纹理
+  （往纹理里烤线会被重投影一起重采样、线宽与位置都变形）⇒ 这些键会**加入**分叉面；
+  若改为「core 算出注解几何、两侧各画」，commit 臂才会开始携带真实值，分叉面才可能收敛。
+  （附带一条今天就成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
+  `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它。）
+- 两条臂**是否真的只在清单上分叉**由上面那个用例守；两条臂**各自是否正确**由跨进程的
+  CLI↔GUI 出图对照守（`test/gui/parity/`，见 `doc/testing-architecture.md` §4.10）。
+  两道闸问的是不同的问题，缺一不可。

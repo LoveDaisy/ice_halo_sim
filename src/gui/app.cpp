@@ -156,25 +156,6 @@ void GlfwErrorCallback(int error, const char* description) {
   GUI_LOG_ERROR("GLFW Error {}: {}", error, description);
 }
 
-float GetAspectRatio(AspectPreset preset) {
-  switch (preset) {
-    case AspectPreset::k16x9:
-      return 16.0f / 9.0f;
-    case AspectPreset::k3x2:
-      return 3.0f / 2.0f;
-    case AspectPreset::k4x3:
-      return 4.0f / 3.0f;
-    case AspectPreset::k1x1:
-      return 1.0f;
-    case AspectPreset::k2x1:
-      return 2.0f;
-    case AspectPreset::kFree:
-    case AspectPreset::kMatchBg:
-    default:
-      return 0.0f;
-  }
-}
-
 void WindowSizeCallback(GLFWwindow* /*window*/, int /*width*/, int /*height*/) {
   if (g_programmatic_resize > 0) {
     g_programmatic_resize--;

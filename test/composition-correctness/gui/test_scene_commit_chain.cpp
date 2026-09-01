@@ -6,9 +6,11 @@
 // opening it, and it is computed from the same sum-of-products the commit path expands.
 //
 // What the collaboration produces that is observable: the scene handed to the simulator says what
-// the document on screen says. BuildScene is the single emitter — the export file and the committed
-// run are the same scene under two intents — so everything the user configured has to survive one
-// translation, and nothing in the GUI re-checks it afterwards.
+// the document on screen says. BuildScene is the single emitter, under two intents that answer two
+// different questions — the committed run describes the full-sky texture the preview shader will
+// reproject, the export describes the picture on screen for a CLI that has no reprojection stage —
+// so everything the user configured has to survive one translation, and nothing in the GUI
+// re-checks it afterwards.
 //
 // When a field does not survive, the run succeeds. The picture is simply of a different
 // configuration than the one on screen: a randomized crystal simulated as a fixed one, a filter
@@ -80,21 +82,285 @@ FilterConfig SopFilter(const std::vector<std::string>& rows) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The two intents: one document, two readers, exactly one field allowed to differ.
+// The two intents: one document, two readers, and a divergence set that has to be exactly this.
 
-// SceneIntent exists to carry a single divergence, and it is worth spelling out because both arms
-// look wrong from the other's side. The GUI's Run path must NOT bake the exposure into the
-// renderer's intensity_factor — the GUI applies EV at display time, and baking it here multiplies
-// it in a second time, which is how a re-run of a coloured composite once came back at 2x. The
-// config-export path MUST bake it: the CLI has no display-time exposure and the exported file has
-// to reproduce the on-screen brightness on its own.
+// AC0 red-state pin: the exported config must describe the picture on screen, not the fixed
+// full-sky texture the simulator was asked for. Written before the emitter was changed, and it
+// failed then — kJsonExport reused kSimCommit's hardcoded dual_fisheye_equal_area / 180 / view(0,0,0),
+// so "Save Config JSON" handed the CLI a different photograph than the one the user was looking at.
 //
-// The third assertion is the one that keeps this from rotting: the two documents are compared field
-// by field with that one key removed, so a future intent-dependent branch anywhere else in the
-// emitter fails here instead of quietly making the export a different document.
-TEST(SceneCommitChain, OnlyTheExposureDiffersBetweenTheRunAndExportIntents) {
-  for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
+// Three fields rather than one on purpose: a single lens assertion is satisfiable by an emitter
+// that forwards the projection and keeps hardcoding everything the projection is viewed through,
+// which would still render a different image.
+TEST(SceneCommitChain, TheExportedConfigDescribesTheProjectionOnScreen) {
+  SeedOneEntryDocument();
+  g_state.renderer.lens_type = kLensTypeLinear;
+  g_state.renderer.fov = 55.0f;
+  g_state.renderer.azimuth = 77.0f;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+
+  EXPECT_EQ(export_doc["render"][0]["lens"]["type"].get<std::string>(), "linear")
+      << "the exported config renders a projection the user never selected";
+  EXPECT_FLOAT_EQ(export_doc["render"][0]["lens"]["fov"].get<float>(), 55.0f)
+      << "the exported config renders a field of view the user never set";
+  EXPECT_FLOAT_EQ(export_doc["render"][0]["view"]["azimuth"].get<float>(), 77.0f)
+      << "the exported config points the camera somewhere the user never pointed it";
+}
+
+// A document with every renderer field pushed off its default, so a field that reaches neither arm
+// (or reaches the wrong one) shows up as a value nobody set. Shared by the three cases below
+// because they are three readings of the same document, and the interesting property is that the
+// same document produces two different renderers.
+void SeedNonDefaultView() {
+  SeedOneEntryDocument();
+  g_state.renderer.lens_type = kLensTypeLinear;
+  g_state.renderer.fov = 55.0f;
+  g_state.renderer.azimuth = 77.0f;
+  g_state.renderer.elevation = 23.0f;
+  g_state.renderer.roll = 11.0f;
+  g_state.renderer.visible = 0;  // Upper
+  g_state.renderer.background[0] = 0.20f;
+  g_state.renderer.background[1] = 0.35f;
+  g_state.renderer.background[2] = 0.60f;
+  g_state.aspect_preset = AspectPreset::k16x9;
+  g_state.aspect_portrait = false;
+  g_state.show_horizon_line = false;
+  g_state.renderer.front = false;  // the export refuses a front clip; asserted separately below
+}
+
+// Half of the divergence: the run intent must NOT move. Core produces one fixed full-sky texture
+// and the preview shader reprojects it, so a view setting that leaked into the commit would be
+// applied twice — the sky cropped and rotated once by the simulator and once again by the shader.
+//
+// Asserted against a document with every one of those fields set to something else, which is the
+// only form of this claim worth making: "the commit path emits dual_fisheye_equal_area" is also
+// true of a build that reads the document and happens to be looking at the default.
+TEST(SceneCommitChain, TheRunIntentIgnoresEveryViewSetting) {
+  SeedNonDefaultView();
+
+  const nlohmann::json commit_doc = CommitSceneJson(g_state);
+  ASSERT_FALSE(commit_doc.is_null());
+  ASSERT_EQ(commit_doc["render"].size(), 1u);
+  const nlohmann::json& r = commit_doc["render"][0];
+
+  EXPECT_EQ(r["lens"]["type"].get<std::string>(), "dual_fisheye_equal_area");
+  EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 180.0f);
+  EXPECT_EQ(r["visible"].get<std::string>(), "full");
+  EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 0.0f);
+  EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 0.0f);
+  EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 0.0f);
+  EXPECT_TRUE(r["grid"]["horizon"].get<bool>());
+  // 2:1 at the chosen simulation resolution, not the 16:9 the document asks the window for.
+  EXPECT_EQ(r["resolution"][0].get<int>(), 2048);
+  EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
+  // Background is emitted in sRGB. Black here despite the document's blue: the preview composites
+  // its own background at display time.
+  for (int c = 0; c < 3; ++c) {
+    EXPECT_FLOAT_EQ(r["background"][c].get<float>(), 0.0f) << "channel " << c;
+  }
+}
+
+// The other half: the export intent must move, on every one of the same fields. The CLI has no
+// display-time stage, so a field left at the commit arm's constant is a field the re-render will
+// get wrong — and the resulting image is a plausible halo picture of the wrong configuration,
+// which is why none of this is observable without asserting it.
+TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
+  SeedNonDefaultView();
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& r = export_doc["render"][0];
+
+  EXPECT_EQ(r["lens"]["type"].get<std::string>(), "linear");
+  EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 55.0f);
+  EXPECT_EQ(r["visible"].get<std::string>(), "upper");
+  EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 77.0f);
+  EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 23.0f);
+  EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 11.0f);
+  // The field that was not merely dropped but inverted: the document has the horizon line off, and
+  // the export used to assert it on unconditionally.
+  EXPECT_FALSE(r["grid"]["horizon"].get<bool>()) << "the exported config draws a horizon line the user switched off";
+  // 16:9 landscape at the 1024 simulation resolution: long edge 1024*16/9, short edge 1024.
+  EXPECT_EQ(r["resolution"][0].get<int>(), 1820);
+  EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
+  // sRGB on the wire, and the document's values are already sRGB, so they survive unchanged. The
+  // conversion the emitter performs (sRGB -> linear into the struct) and the one the C API performs
+  // on the way out (linear -> sRGB) are inverses; asserting the round trip is what says both
+  // happened rather than neither.
+  EXPECT_NEAR(r["background"][0].get<float>(), 0.20f, 1e-4f);
+  EXPECT_NEAR(r["background"][1].get<float>(), 0.35f, 1e-4f);
+  EXPECT_NEAR(r["background"][2].get<float>(), 0.60f, 1e-4f);
+}
+
+// Roll is the one field that is not a straight copy, and the reason is invisible from the JSON: the
+// Globe lens renders at roll 0 while KEEPING the user's stored roll for when they switch back
+// (EffectiveRollForLens), so the stored value is one the user is not currently looking at. An
+// export that copied it would tilt the CLI image against the preview it claims to reproduce.
+//
+// The non-Globe row is not symmetry — without it the case is also passed by an emitter that hard
+// zeroes roll on every lens, which is a different wrong answer with the same fingerprint on the
+// Globe row alone.
+TEST(SceneCommitChain, TheExportedRollIsTheOneTheLensActuallyRenders) {
+  struct Row {
+    int lens_type;
+    float stored_roll;
+    float expected_roll;
+    const char* what;
+  };
+  for (const Row& row : { Row{ kLensTypeGlobe, 30.0f, 0.0f, "Globe renders upright" },
+                          Row{ kLensTypeLinear, 30.0f, 30.0f, "every other lens honours roll" } }) {
     SeedOneEntryDocument();
+    g_state.renderer.lens_type = row.lens_type;
+    g_state.renderer.roll = row.stored_roll;
+
+    // Non-fatal + continue: one lens failing must not suppress the other's report, and which row
+    // failed is what separates "roll is never converted" from "roll is always zeroed".
+    nlohmann::json export_doc;
+    try {
+      export_doc = nlohmann::json::parse(CoreJson(g_state));
+    } catch (const nlohmann::json::exception& e) {
+      ADD_FAILURE() << row.what << ": the export intent emitted something unparseable: " << e.what();
+      continue;
+    }
+    if (export_doc.is_null() || export_doc["render"].size() != 1u) {
+      ADD_FAILURE() << row.what << ": the export intent produced no single-renderer scene";
+      continue;
+    }
+    // Compared against the row's own literal, not a second call to EffectiveRollForLens: reusing
+    // the production call here would let the two sides drift together if the conversion itself
+    // were ever broken, so this pins "production converts" against an independently-stated value.
+    EXPECT_FLOAT_EQ(export_doc["render"][0]["view"]["roll"].get<float>(), row.expected_roll)
+        << row.what << ": exported roll " << export_doc["render"][0]["view"]["roll"].get<float>()
+        << " is not the roll on screen (" << row.expected_roll << ")";
+  }
+
+  // The row literals above assert "production converts roll correctly"; this pins the conversion
+  // function itself, so a broken EffectiveRollForLens cannot make both sides of the comparison
+  // above wrong in the same way and still read as passing.
+  EXPECT_FLOAT_EQ(EffectiveRollForLens(kLensTypeGlobe, 30.0f), 0.0f)
+      << "EffectiveRollForLens no longer zeroes roll for the Globe lens";
+}
+
+// The front-hemisphere clip has nowhere to go: core's visible range is {upper, lower, full} and the
+// C API struct has no field for it. The export refuses rather than approximating, because both
+// approximations are worse than a refusal — encoding "front" as a visible string would land on
+// core's FIRST enum entry (kUpper) with no diagnostic, and dropping it silently would export a
+// picture wider than the one on screen.
+//
+// The front=false row is what makes this a statement about front rather than about export: without
+// it, an export path broken for every document would pass.
+TEST(SceneCommitChain, AFrontHemisphereClipRefusesToExportInsteadOfLying) {
+  SeedOneEntryDocument();
+  g_state.renderer.front = true;
+  std::string json;
+  std::string warning;
+  EXPECT_FALSE(BuildExportJsonOrWarn(g_state, &json, &warning))
+      << "a front-clipped view exported a config the CLI will render un-clipped";
+  EXPECT_FALSE(warning.empty()) << "the export was refused without telling the user why";
+  EXPECT_TRUE(json.empty()) << "the reject path still produced a document";
+
+  g_state.renderer.front = false;
+  std::string ok_json;
+  std::string ok_warning;
+  EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &ok_json, &ok_warning));
+  EXPECT_TRUE(ok_warning.empty());
+  EXPECT_FALSE(ok_json.empty());
+}
+
+// A document saved before the export path was taught to read it. Nothing about the SAVED form
+// changed — renderer view fields and the horizon-line switch have always been in the .lmc payload,
+// they simply never reached the exported config — so an old document opened by a new build must
+// export correctly with no migration step anywhere. That is the claim, and it is worth asserting
+// rather than reasoning about: "the field was already serialized" is a statement about the writer,
+// and what matters here is that the READER puts it somewhere the export path looks.
+//
+// Reconstructed through DeserializeGuiStateJson rather than from a checked-in file because the
+// tree carries no .lmc sample to point at (the format is binary-headed and none is committed);
+// the payload below is the document body that path parses, which is the part that carries these
+// fields.
+TEST(SceneCommitChain, ADocumentSavedBeforeTheFixExportsItsOwnView) {
+  SeedOneEntryDocument();
+  const std::string saved = R"({
+    "renderer": {
+      "lens_type": "fisheye_equal_area",
+      "fov": 120.0,
+      "elevation": -15.0,
+      "azimuth": 42.0,
+      "roll": 7.0,
+      "sim_resolution": 1024,
+      "visible": "lower",
+      "front": false,
+      "background": [0.1, 0.2, 0.3],
+      "exposure_offset": 0.0
+    },
+    "aspect_ratio": "4:3",
+    "aspect_portrait": true,
+    "overlay_horizon_line": true
+  })";
+  ASSERT_TRUE(DeserializeGuiStateJson(saved, g_state)) << "the pre-change document body no longer loads";
+
+  // The reader put them where the document says, which is the precondition the export depends on.
+  ASSERT_EQ(g_state.renderer.lens_type, kLensTypeFisheyeEqualArea);
+  ASSERT_FLOAT_EQ(g_state.renderer.fov, 120.0f);
+  ASSERT_TRUE(g_state.show_horizon_line);
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& r = export_doc["render"][0];
+
+  EXPECT_EQ(r["lens"]["type"].get<std::string>(), "fisheye_equal_area");
+  EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 120.0f);
+  EXPECT_EQ(r["visible"].get<std::string>(), "lower");
+  EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 42.0f);
+  EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), -15.0f);
+  EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 7.0f);
+  EXPECT_TRUE(r["grid"]["horizon"].get<bool>());
+  EXPECT_NEAR(r["background"][0].get<float>(), 0.1f, 1e-4f);
+  EXPECT_NEAR(r["background"][2].get<float>(), 0.3f, 1e-4f);
+  // 4:3 with the portrait toggle on: the long edge becomes the height. Asserting the portrait
+  // inversion here and the landscape case above is what separates "the preset is read" from "the
+  // preset is read and the toggle is applied to it".
+  EXPECT_EQ(r["resolution"][0].get<int>(), 1024);
+  EXPECT_EQ(r["resolution"][1].get<int>(), 1365);
+}
+
+// The gate that keeps the two arms from drifting APART further than they were meant to.
+//
+// This case used to be named for the opposite claim — that intensity_factor was the only field the
+// intent reached, proved by erasing that one key and comparing the two documents whole. That claim
+// stopped being true the moment the export started describing the screen, and the honest successor
+// is not a weaker assertion but a differently-shaped one: the divergence is enumerated, and
+// everything outside the enumeration is still compared whole. A new intent-dependent branch
+// anywhere in the emitter fails here exactly as the original did.
+//
+// intensity_factor keeps its own value assertions rather than being merely erased: it is the one
+// divergence that predates this set, it is a computed value rather than a copy, and a double-applied
+// EV is the specific regression it was introduced to catch.
+TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
+  // Every field the two intents are allowed to answer differently. Anything not on this list is
+  // compared verbatim below, so adding a divergence means adding a line here — deliberately, not
+  // by watching a comparison quietly stop covering it.
+  static const char* const kDivergingKeys[] = {
+    "intensity_factor",  // display-time EV vs. baked, asserted by value below
+    "lens",              // projection + fov: fixed texture vs. the user's framing
+    "view",              // camera angles: none vs. the user's
+    "visible",           // hemisphere crop: always full vs. the user's
+    "background",        // composited at display time vs. baked by the CLI
+    "resolution",        // 2:1 texture vs. the user's canvas shape
+    // "grid" is deliberately NOT here: only its "horizon" sub-field diverges (always on vs. the
+    // user's switch), the remaining grid sub-fields (counts, colors, ...) are documented to stay
+    // identical on both arms. Erasing the whole "grid" object would also stop checking those
+    // other sub-fields for an accidental intent-dependent drift, so "horizon" is exempted below
+    // at the sub-key level instead of listing "grid" here.
+  };
+
+  for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
+    SeedNonDefaultView();
     g_state.renderer.exposure_offset = offset;
 
     nlohmann::json commit_doc = CommitSceneJson(g_state);
@@ -129,9 +395,23 @@ TEST(SceneCommitChain, OnlyTheExposureDiffersBetweenTheRunAndExportIntents) {
     EXPECT_FLOAT_EQ(export_doc["render"][0]["intensity_factor"].get<float>(), std::pow(2.0f, offset))
         << "offset " << offset << ": the exported config would open darker than the preview it came from";
 
-    commit_doc["render"][0].erase("intensity_factor");
-    export_doc["render"][0].erase("intensity_factor");
-    EXPECT_EQ(commit_doc, export_doc) << "offset " << offset << ": the intent reached a second field";
+    // Sanity on the enumeration itself: a key that has stopped existing would make its erase a
+    // no-op and quietly shrink what the comparison below is being asked to overlook.
+    for (const char* key : kDivergingKeys) {
+      EXPECT_TRUE(commit_doc["render"][0].contains(key))
+          << "offset " << offset << ": the divergence list names \"" << key << "\", which the emitter no longer emits";
+      commit_doc["render"][0].erase(key);
+      export_doc["render"][0].erase(key);
+    }
+    // "grid" itself stays in the comparison below: only its "horizon" sub-field is exempted here,
+    // by sub-key rather than by erasing the whole object, so the remaining grid sub-fields (counts,
+    // colors, ...) keep being checked for an accidental intent-dependent drift.
+    EXPECT_TRUE(commit_doc["render"][0]["grid"].contains("horizon"))
+        << "offset " << offset << ": \"grid.horizon\" is no longer emitted";
+    commit_doc["render"][0]["grid"].erase("horizon");
+    export_doc["render"][0]["grid"].erase("horizon");
+    EXPECT_EQ(commit_doc, export_doc) << "offset " << offset
+                                      << ": the intent reached a field outside the documented set";
   }
 }
 

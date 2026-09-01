@@ -69,13 +69,13 @@ GuiState MakeModifiedState() {
   s.renderer.elevation = 15.0f;
   s.renderer.azimuth = -20.0f;
   s.renderer.exposure_offset = 0.5f;
+  s.renderer.ray_color[0] = 0.4f;  // no editor left to change it; outside the projection too
+  s.renderer.ray_color[1] = 0.5f;
+  s.renderer.ray_color[2] = 0.6f;
   s.renderer.sim_resolution_index = 3;  // resim-eligible: inside the projection
   s.renderer.background[0] = 0.1f;
   s.renderer.background[1] = 0.2f;
   s.renderer.background[2] = 0.3f;
-  s.renderer.ray_color[0] = 0.4f;
-  s.renderer.ray_color[1] = 0.5f;
-  s.renderer.ray_color[2] = 0.6f;
 
   // task-349.2 Step 2: raypath_color is a configuration field (structural
   // edits go through MarkStructHardDirty); ConfigSnapshot must round-trip it so
@@ -126,12 +126,10 @@ TEST(ConfigSnapshot, FromCapturesAllConfigFields) {
 
   // The renderer is captured as a RenderConfigResimFields projection: the resim-eligible fields
   // and nothing else. The T-view fields MakeModifiedState also set (lens_type / fov / elevation /
-  // azimuth / exposure_offset) have no slot here at all — the type does not declare them, so the
-  // omission is structural rather than something From() has to remember to skip.
+  // azimuth / exposure_offset), plus ray_color (no editor left to change it), have no slot here at
+  // all — the type does not declare them, so the omission is structural rather than something
+  // From() has to remember to skip.
   EXPECT_EQ(snap.renderer_resim.sim_resolution_index, 3);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[0], 0.4f);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[1], 0.5f);
-  EXPECT_FLOAT_EQ(snap.renderer_resim.ray_color[2], 0.6f);
 
   // background is the third case, and it is NOT the T-view one above: it is absent from the
   // projection (editing it must not count as a change) but present in the snapshot through its own
@@ -177,11 +175,14 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   // Runtime / view-preference fields: these must NOT be touched by ApplyTo.
   // The renderer's T-view fields belong to this group: changing them never counts as a
   // configuration change (the Revert button does not light up for a view drag), so Revert must
-  // not discard them either.
+  // not discard them either. ray_color joins this group too, for a different reason: it has no
+  // editor left (field_editor_registry.cpp), so nothing in the running GUI can ever produce a
+  // diff on it — it is simply never touched.
   target.renderer.lens_type = 2;
   target.renderer.fov = 77.0f;
   target.renderer.elevation = -8.0f;
   target.renderer.exposure_offset = -1.5f;
+  target.renderer.ray_color[2] = 0.9f;
   target.dirty = true;
   target.sim_state = GuiState::SimState::kSimulating;
   target.stats_ray_seg_num = 123456;
@@ -213,7 +214,6 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   // Restored through ConfigSnapshot::renderer_background, not through renderer_resim — the
   // assertion reads the same as the ones around it, but the path behind it is the separate slot.
   EXPECT_FLOAT_EQ(target.renderer.background[1], source.renderer.background[1]);
-  EXPECT_FLOAT_EQ(target.renderer.ray_color[2], source.renderer.ray_color[2]);
   // task-349.2 Step 2: raypath_color is CONFIG, ApplyTo replaces it (junk
   // classes seeded above are gone, source content restored 1:1).
   ASSERT_EQ(target.raypath_color.size(), source.raypath_color.size());
@@ -229,6 +229,7 @@ TEST(ConfigSnapshot, ApplyToRestoresConfigFieldsAndPreservesRuntimeState) {
   EXPECT_FLOAT_EQ(target.renderer.fov, 77.0f);
   EXPECT_FLOAT_EQ(target.renderer.elevation, -8.0f);
   EXPECT_FLOAT_EQ(target.renderer.exposure_offset, -1.5f);
+  EXPECT_FLOAT_EQ(target.renderer.ray_color[2], 0.9f);
   EXPECT_TRUE(target.dirty);
   EXPECT_EQ(target.sim_state, GuiState::SimState::kSimulating);
   EXPECT_EQ(target.stats_ray_seg_num, 123456u);
@@ -291,7 +292,6 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FLOAT_EQ(restored.sun.altitude, original.sun.altitude);
   EXPECT_EQ(restored.sim.infinite, original.sim.infinite);
   EXPECT_EQ(restored.renderer.sim_resolution_index, original.renderer.sim_resolution_index);
-  EXPECT_FLOAT_EQ(restored.renderer.ray_color[1], original.renderer.ray_color[1]);
   // background makes the round trip too, by the separate slot rather than the resim projection.
   // `restored` started from InitDefaultState (background {0,0,0}), so this fails if either half of
   // the From/ApplyTo pair for renderer_background is missing.
@@ -299,11 +299,15 @@ TEST(ConfigSnapshot, RoundTripFromThenApplyRestoresConfig) {
   EXPECT_FLOAT_EQ(restored.renderer.background[2], original.renderer.background[2]);
   // T-view fields do not make the round trip: `restored` keeps the ones it started with.
   // Compared against a second pristine state rather than literals so this stays true if the
-  // RenderConfig defaults ever move.
+  // RenderConfig defaults ever move. ray_color joins this group: it has no editor left, so it is
+  // outside the projection too, and `restored` keeps its own (default) value rather than
+  // `original`'s.
   const GuiState pristine = InitDefaultState();
   ASSERT_NE(original.renderer.lens_type, pristine.renderer.lens_type);  // premise of the next line
   EXPECT_EQ(restored.renderer.lens_type, pristine.renderer.lens_type);
   EXPECT_FLOAT_EQ(restored.renderer.fov, pristine.renderer.fov);
+  ASSERT_NE(original.renderer.ray_color[1], pristine.renderer.ray_color[1]);  // premise
+  EXPECT_FLOAT_EQ(restored.renderer.ray_color[1], pristine.renderer.ray_color[1]);
   // Nested crystal/axis fields also survive the From → ApplyTo cycle.
   const auto& restored_e0 = restored.layers[0].entries[0];
   EXPECT_FLOAT_EQ(restored.crystals[restored_e0.crystal_id].face_distance[0].center, 1.3f);
@@ -352,7 +356,7 @@ TEST(ConfigSnapshot, RoundTripPoolAndEntries) {
 // Mirror the production sizeof() guard at test scope as an extra reminder on the
 // baseline platform. Platform-gated because std::vector size varies across stdlibs.
 #if defined(__APPLE__) && defined(__aarch64__)
-static_assert(sizeof(GuiState::ConfigSnapshot) == 176,
+static_assert(sizeof(GuiState::ConfigSnapshot) == 168,
               "Test mirror: ConfigSnapshot size changed; update From/ApplyTo in gui_state.hpp");
 #endif
 
