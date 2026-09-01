@@ -227,6 +227,20 @@ void ResetTestState() {
   gui::ResetModalState();
   gui::ResetDefaultsPanelTestState();
 
+  // A widget left ACTIVE by the previous case, which is a leak of the same class as the file-scope
+  // statics above and reaches further than any of them. ImGui keeps a drag's working value inside
+  // the active item, and re-renders it on the next frame the widget is drawn — so the first frame
+  // of THIS case writes that stale value back into whatever the widget is bound to, silently
+  // undoing a field the case had just seeded. Measured instance: the CLI/GUI export-parity scenes
+  // set g_state.grid_alpha and read it back at 0.3 one frame later, but only under the full-suite
+  // invocation, because only there has anything dragged that control. That produced a 2.4 dB PSNR
+  // difference between `--filter` and the full pool with no other symptom.
+  //
+  // Cleared here rather than in any one case: nothing a case does wants the previous case's active
+  // widget, and a per-case clear would have to be added by whoever next gets bitten — which is the
+  // shape of leak this function exists to end.
+  ImGui::ClearActiveID();
+
   // Test state
   g_capture.Reset();
   g_export_test.Reset();

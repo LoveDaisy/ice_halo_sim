@@ -265,14 +265,20 @@
 ### 9.4 改动纪律
 
 - 动分叉面（增/删/改一个键）时，**先在本节说明理由再改清单**。⛔ 不得因为那道闸红了就把键加进清单绕开。
-- **辅助线相关的键：`grid.angular_dist` 已经分叉，`grid.elevation` 仍不分叉。**
-  上一版这里写的是「两条臂都不填它们，所以都不分叉」，那句话对 `angular_dist` 已经过期。
-  裁定结果是上面两个候选里的**第一个**：core 现在算注解几何（`LUMICE_ComputeAnnotationOverlay`），
+- **辅助线相关的键全部已经分叉：`grid.horizon` / `grid.angular_dist` / `grid.elevation` /
+  `grid.longitude` 四个子键在 `kDivergingKeys` 处按子键豁免。**
+  上一版这里写的是「`grid.angular_dist` 已分叉、`grid.elevation` 仍不分叉」，后半句已经过期。
+  裁定结果是上面两个候选里的**第一个**：core 算注解几何（`LUMICE_ComputeAnnotationOverlay`），
   但 GUI 仍然自己画 overlay，因为标注属于**成品图**而不是那张全天纹理——往纹理里烤线会被重投影
-  一起重采样，线宽与位置都变形。所以 export 臂填用户的角度表、commit 臂留空，两者加入分叉面
-  （`grid.horizon` 与 `grid.angular_dist` 两个子键在 `kDivergingKeys` 处按子键豁免）。
-  `grid.elevation` 两条臂仍都不填，仍不分叉：GUI 那份是 FOV 自适应的单一步长 + 共用颜色，
-  与本 schema「逐条命名」的形态还没有对齐方案。
+  一起重采样，线宽与位置都变形。所以 export 臂填数据、commit 臂留空。
+  `grid.elevation` / `grid.longitude` 后来按同一条理由并入分叉面，但它们比角距圈多一步：
+  角距圈本来就是一份显式角度表，等高线/经度线在 GUI 那边只有**一个 FOV 自适应步长 + 共用外观**。
+  对齐方案是**「模型按 core、步长自适应算显示层便利」**——export 臂把当前步长展开成显式列表
+  （`ComputeGridElevationAngles` / `ComputeGridLongitudeAngles`，与实时预览的标注请求共用同一份
+  展开函数，所以屏幕上和导出的是同一批线），共用外观按角距圈的老办法逐条重复写上。
+  ⭐ 由此多出一个角距圈没有的失败模式：展开后的条数是 FOV 的函数，窄 FOV 会超过
+  `LUMICE_MAX_CONFIG_GRID_LINES`（20° FOV 就是 72 条经度线 > 64）。处置**与 `front` 同构**——
+  拒绝导出 + 告警，不静默截断。
   （附带一条仍然成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
   `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它；
   `angular_dist` 在 commit 臂留空是同一个理由的另一面。）

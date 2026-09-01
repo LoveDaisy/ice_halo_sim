@@ -281,7 +281,16 @@
       "background": [0, 0, 0],
       "ray_color": [1, 1, 1],
       "grid": {
-        "horizon": true
+        "horizon": true,
+        "elevation": [
+          { "value": 30, "opacity": 0.3 },
+          { "value": 60, "opacity": 0.3 }
+        ],
+        "longitude": [
+          { "value": 0, "opacity": 0.3 },
+          { "value": 90, "opacity": 0.3 },
+          { "value": -90, "opacity": 0.3 }
+        ]
       }
     },
     {

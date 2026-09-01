@@ -54,13 +54,38 @@
 //   background     | (0.10, 0.16, 0.28)      |  17.21 | (0.28, 0.14, 0.10)        |  18.16
 //   resolution     | 4:3 + portrait -> 512x683 | canvas assert | no ratio -> 1024x512 |  n/a
 //   horizon        | off                     |    n/a | off                       |  25.46
-//   angular_dist   | on, {22, 46} deg        |  23.68 | on, {22, 46} deg          |  25.38
+//   angular_dist   | on, {22, 46} deg        |  25.73 | on, {22, 46} deg          |  26.89
+//   elevation      | on, 10 deg step         |  24.72 | on, 30 deg step           |    n/a
+//   longitude      | on, 10 deg step         |  26.59 | on, 30 deg step           |  24.07
 //
 // The angular_dist row is broken two ways rather than one, because the two shapes it can fail in
 // are independent and the weaker one sets the threshold. Shifting every circle by ONE degree in
 // the CLI arm costs 23.68 / 25.38 dB; making the CLI draw only the FIRST of the two lines costs
-// 25.51 / 26.65 dB. Both are single-sided breaks in the CLI arm, and the second is the smallest
-// break either scene owns, which is what each threshold is placed above.
+// 25.73 / 26.89 dB, and that second, weaker break is the one the columns above report.
+//
+// The two grid rows are broken by dropping ONE line from the CLI arm — the smallest break the
+// family has, since dropping the whole family is what a missing branch would do and costs far
+// more. They are the reason the grid is worth two rows rather than one: a parallel and a meridian
+// are different curves in the export arm (different Request field, different Overlay mask), and
+// each column sees one of them clearly. The "n/a" on elevation / full_sky is measured, not
+// assumed: at a 30 deg step the outermost parallel is the 80 deg one, which on a dual-fisheye
+// frame is a small circle near each disc centre — dropping it moved that scene by 0.01 dB. Its
+// meridians span a whole disc and cost 3.5 dB, which is where that scene's grid sensitivity lives.
+// Symmetrically, single_lens_angled sees a dropped parallel at 2.3 dB and a dropped meridian at
+// 0.47 dB, the latter under its threshold. So each grid break is caught by at least one column,
+// which is the same structure the view-angle rows above already have.
+//
+// GRID OPACITY IS 1.0 IN BOTH SCENES, not the 0.3 a user gets, and this is the one appearance
+// value either scene overrides. The reason is a divergence this gate is not the place to measure:
+// the CLI blends an overlay line into radiance BEFORE the sRGB transfer curve (server/render.cpp
+// PostSnapshot) while the preview shader blends it AFTER (overlayAuxLines runs on the already
+// gamma-encoded colour), so a partially transparent line lands on different bytes even where it
+// covers exactly the same pixels. Measured on full_sky_dual_fisheye at alpha 0.3 over its
+// background: 129 vs 160 per channel on a line pixel, which matches the two formulas to within a
+// count and costs 2.9 dB of whole-frame PSNR. At alpha 1 the background term drops out of both and
+// they agree exactly. The divergence is older than the grid — it applies to the circles and the
+// horizon too — and belongs to whoever unifies the two compositors; pinning it here would only
+// bury this gate's actual subject, which is WHERE the curves land.
 //
 // "n/a" means the break does not move that scene, and in every case for a stated reason rather
 // than a gap: the full-sky lens family ignores fov and zeroes the three view angles, so a break in
@@ -76,19 +101,22 @@
 //
 // ================================= Deliberately not covered ==================================
 //
-//   * The auxiliary-line overlay other than the horizon and the angular-distance circles (altitude
-//     grid, zenith/nadir markers, lens border, text labels). These remain GUI display-time layers
-//     with no encoding in the config format, so there is still nothing on the CLI side to compare
-//     against. All of them are off in both scenes, which is also their default.
+//   * The auxiliary-line overlay other than the horizon, the angular-distance circles and the
+//     coordinate grid (zenith/nadir markers, lens border, text labels). These remain GUI
+//     display-time layers with no encoding in the config format, so there is still nothing on the
+//     CLI side to compare against. All of them are off in both scenes, which is also their default.
 //
 //     The sun circles USED to be on this list, with the note "re-add coverage here the day core
-//     gains an annotation layer". That day is this one. They are now on in both scenes, and they
-//     are the one overlay whose two arms are not two implementations: both build their geometry
-//     from the same core call (LUMICE_ComputeAnnotationOverlay), the CLI once per line in
-//     server/render.cpp and the GUI once per settled view in gui/annotation_overlay_cache.cpp.
-//     That is why turning them ON RAISES both scenes' PSNR rather than lowering it — the circles
+//     gains an annotation layer". That day came, and the altitude grid followed it: both are now on
+//     in both scenes, and both are overlays whose two arms are not two implementations. Each builds
+//     its geometry from the same core call (LUMICE_ComputeAnnotationOverlay), the CLI once per line
+//     in server/render.cpp and the GUI once per settled view in gui/annotation_overlay_cache.cpp.
+//     That is why turning either ON RAISES both scenes' PSNR rather than lowering it — the curves
 //     land on identical pixels, so where the two frames used to differ they now agree. A drop is
-//     therefore the signal, and the thresholds below are set against the two measured breaks.
+//     therefore the signal, and the thresholds below are set against the measured breaks.
+//   * The colour space an overlay line is composited in, which the two arms genuinely disagree
+//     about. Measured, excluded on purpose, and neutralised rather than tolerated — see the
+//     GRID OPACITY note above the field table for the numbers and the mechanism.
 //   * The horizon in its ON state, and this one is a measured exclusion rather than an assumed
 //     one. Both scenes keep the switch OFF, so what this fixture pins is the direction that
 //     actually regressed before: the export must not assert a horizon line the user switched off
@@ -172,6 +200,10 @@ struct ParityScene {
   // not two implementations of the same curve — they are two readings of one. See the exclusion
   // note above for why that makes turning them on raise the PSNR rather than lower it.
   bool show_sun_circles;
+  // The coordinate grid, on in both scenes for the same reason the circles are: since this task
+  // both arms build it from one core call, so it is two readings of one curve rather than two
+  // implementations. See the exclusion note above.
+  bool show_grid;
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
   float ray_num_millions;
@@ -246,33 +278,39 @@ struct ParityScene {
 // honest run and the smallest break that scene must catch, at least 10 sigma below the mean.
 // clang-format off
 const ParityScene kScenes[] = {
-  // mean 26.684 sigma 0.0668 (N=5, range 26.61-26.79). Threshold 26.0: 10.2 sigma below the mean
-  // and 0.49 dB above the smallest break this scene owns — the CLI drawing only the first of two
-  // angular_dist lines, at 25.51 dB. That break is why this row is no longer at mean - 1.0 dB the
-  // way it was before the circles were covered: 25.75 would still catch it, but by 0.24 dB.
+  // mean 27.058 sigma 0.1064 (N=6, range 26.92-27.24). Threshold 26.0: 9.9 sigma below the mean and
+  // 0.27 dB above the smallest break this scene is asked to catch — the CLI drawing only the first
+  // of two angular_dist lines, at 25.73 dB. A dropped MERIDIAN, at 26.59 dB, is deliberately NOT
+  // among them: catching it here would need a threshold within 3 sigma of the mean, and its
+  // neighbour catches the same break at 3.5 dB of margin. See the grid rows in the field table.
   //
-  // RECALIBRATED, and on fewer samples than the N=12 this row used to carry: the mean moved when
-  // the angular-distance circles were switched on (they raise it, see the exclusion note above),
-  // so the old figures describe a scene this is no longer. If this row ever flakes, re-measure it
-  // at N=12 rather than nudging the threshold — 5 samples is enough to place a 10 sigma gate and
-  // not enough to argue about a 2 sigma one.
+  // RECALIBRATED when the coordinate grid was switched on, which raised the mean by 0.37 dB and
+  // very nearly doubled sigma (0.0668 -> 0.1064) — the grid's saturated pixels are a larger share
+  // of the frame than the circles' were, so a given amount of per-run noise moves the whole-frame
+  // figure further. The threshold is unchanged because the mean moved AWAY from it. If this row
+  // ever flakes, re-measure at N=12 rather than nudging the threshold — 6 samples is enough to
+  // place a 10 sigma gate and not enough to argue about a 2 sigma one.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false, /*show_sun_circles=*/true,
+   /*show_grid=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/512, /*expect_h=*/683},
-  // mean 27.356 sigma 0.0150 (N=5, range 27.33-27.37). Threshold 27.0: 24 sigma below the mean and
-  // 0.35 dB above the smallest break this scene owns — the CLI drawing only the first of two
-  // angular_dist lines, at 26.65 dB. The horizon's 25.46 dB, which used to set this row, is now
-  // the second-smallest.
+  // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
+  // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
+  // angular_dist lines, at 26.89 dB. Raised from 27.0 when the grid was switched on: the mean moved
+  // up 0.25 dB and the circle break moved with it, so leaving the threshold where it was would have
+  // left only 0.11 dB between the gate and the break it exists to catch.
   //
-  // Same recalibration caveat as its neighbour: N=5, on a mean that moved when the circles were
-  // switched on. Do not read the small sigma as a licence to run this tighter than 27.0.
+  // Same recalibration caveat as its neighbour: N=6, on a mean that moved. Do not read the small
+  // sigma as a licence to run this tighter than 27.2 — the binding constraint on this row is the
+  // break below it, not the noise above it.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/1024, /*expect_h=*/512},
+   /*show_grid=*/true,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
   // — which is what makes a drop here readable as the Jacobian rather than as some other field.
@@ -294,6 +332,7 @@ const ParityScene kScenes[] = {
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false, /*show_sun_circles=*/false,
+   /*show_grid=*/false,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.5, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
@@ -422,6 +461,17 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::g_state.aspect_portrait = scene.aspect_portrait;
       gui::g_state.show_horizon_line = scene.show_horizon;
       gui::g_state.show_sun_circles_line = scene.show_sun_circles;
+      gui::g_state.show_grid_line = scene.show_grid;
+      // FULL OPACITY, deliberately, and not the 0.3 a user gets. The two arms composite an overlay
+      // line in different colour spaces — the CLI blends it into radiance before the transfer curve
+      // (server/render.cpp PostSnapshot), the preview shader after it (overlayAuxLines runs on the
+      // already-gamma-encoded colour) — so a partially transparent line lands on different bytes on
+      // the two sides even when it covers the same pixels. Measured on this scene at alpha 0.3 over
+      // its background: 129 vs 160 per channel, 2.7 dB off the whole-frame PSNR. At alpha 1 the
+      // background term drops out of both formulas and they agree exactly, which is what lets this
+      // gate measure WHERE the curves land — the thing this task changed — instead of re-measuring
+      // a divergence it did not introduce and does not fix. See the exclusion note in the header.
+      gui::g_state.grid_alpha = 1.0f;
       // The default list, {22, 46}, is what a user gets; keeping it means this scene compares the
       // circles anyone would actually draw.
       gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
@@ -494,6 +544,24 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::PreviewViewport vp = gui::g_preview_vp;
       vp.vp_w = info.width;
       vp.vp_h = info.height;
+      // The fixture checks itself before it compares anything. g_preview_vp is filled by
+      // RenderPreviewPanel on whatever frame it last ran, so everything below is a statement that
+      // the picture about to be captured is being taken in the state this test asked for — not in
+      // an earlier test's, and not with an annotation silently switched off. Without these, a
+      // scene that quietly lost half its setup still produces two images and a plausible PSNR, and
+      // the number moves for a reason no one can attribute. Measured worth: this suite read 2.4 dB
+      // lower under the full-suite invocation than under --filter, and it was these values that
+      // said which of the two arms had drifted.
+      IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
+      IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
+      IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
+      IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
+      if (scene.show_sun_circles) {
+        IM_CHECK(vp.params.overlay.angular_dist_mask != nullptr);
+      }
+      if (scene.show_grid) {
+        IM_CHECK(vp.params.overlay.grid_mask != nullptr);
+      }
       const std::string gui_png = (scratch_dir / "gui.png").string();
       IM_CHECK(RequestAndWaitPreviewExport(ctx, vp, gui_png));
 

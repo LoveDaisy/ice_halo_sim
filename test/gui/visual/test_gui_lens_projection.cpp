@@ -191,12 +191,17 @@ static const LensProjScene kScenes[] = {
   // mean 28.562 σ0.0591 (N=10)
   {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.5,  5.0f,
    LensSetup::kEquirectExport},
-  // mean 21.333 σ0.0939
+  // mean 20.734 σ0.0989
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
   // been its sole owner.
-  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.0,  0.375f,
+  // RE-SHOT when the grid stopped being a shader expression and became a sampled core mask. The
+  // curves moved: the analytic version derived its own half-width per fragment from fwidth() of
+  // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
+  // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
+  // scene is no noisier than it was; only its operating point moved.
+  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
   // Lens-border scenes. Each reuses the setup of the scene named in its own name and changes ONE

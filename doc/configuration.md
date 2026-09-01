@@ -695,6 +695,7 @@ The render configuration defines the renderer parameters.
 {
   "angular_dist": [ ... ],
   "elevation": [ ... ],
+  "longitude": [ ... ],
   "horizon": <boolean>
 }
 ```
@@ -704,7 +705,8 @@ The render configuration defines the renderer parameters.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `angular_dist` | object array | no | [] | Circles of constant angular distance from the sun — 22 and 46 being the halos most configs draw. **Rendered.** `value`, `opacity` and `color` take effect; `width` does not (see below). Read from the legacy key `central` when this one is absent. |
-| `elevation` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
+| `elevation` | object array | no | [] | Parallels — lines of constant elevation, in degrees. **Rendered** (as of v4.18; earlier versions parsed the list and drew nothing). Same rules as `angular_dist`: `value`, `opacity` and `color` take effect, `width` does not. |
+| `longitude` | object array | no | [] | Meridians — lines of constant azimuth, in degrees. **Rendered.** Same rules as `elevation`. Added in v4.18; a file without the key gets an empty list, which draws nothing. |
 | `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
 
 **`central` is the old name for `angular_dist`**
@@ -719,27 +721,38 @@ The C API field was renamed to match (`LUMICE_RenderParam.angular_dist` / `angul
 was `central_grid` / `central_grid_count`). That is a source-compatibility break with no layout
 change; see the BREAKING note at `LUMICE_API_VERSION` in `src/include/lumice.h`.
 
-**What `angular_dist` draws, and what it ignores**
+**What the three line families draw, and what they ignore**
 
-`value`, `opacity` and `color` all take effect: each line is drawn as its own circle, in its own
-colour, blended at its own opacity. `width` is read, validated and round-tripped but changes no
-pixel — the line's thickness comes from the local gradient of the angular-distance field, which
-keeps a curve one line wide wherever it runs across a projection that stretches, and takes no
-width input. A config that sets `width` is not in error; it simply gets the same picture.
+`value`, `opacity` and `color` all take effect on every one of them: each line is drawn as its own
+curve, in its own colour, blended at its own opacity. `width` is read, validated and round-tripped
+but changes no pixel — a line's thickness comes from the local gradient of the field it is a level
+set of, which keeps a curve one line wide wherever it runs across a projection that stretches, and
+takes no width input. A config that sets `width` is not in error; it simply gets the same picture.
 
-**Grid lines that are not drawn**
+**`longitude`, and why not `azimuth`**
 
-`elevation` describes per-line appearance (`value` / `width` / `opacity` / `color`), and the
-renderer has no consumer for the list — a config that sets it parses cleanly, compares and
-serializes correctly, and produces exactly the image it would produce without it. It is kept in
-the schema rather than removed because the GUI preview draws its own altitude/azimuth grid, and
-the two descriptions are not the same shape (the GUI derives a single FOV-adaptive step and one
-shared colour, this schema names each line individually). Reconciling them is a design question,
-not an implementation gap, so the key stays and this note says plainly what it does today.
+The meridians are named for the same word the annotation layer already uses for them everywhere it
+is public (`LUMICE_ANNOTATION_LONGITUDE`, `LUMICE_AnnotationRequest::longitude_deg`). Calling the
+persisted key `azimuth` would have given one concept two vocabularies for no gain.
 
-`angular_dist` was on this list until it gained a renderer; it needed no such reconciling, because
-the GUI's sun circles are already an explicit list of angles — only their appearance is shared,
-which this schema expresses by repeating it per line.
+**How the GUI fills `elevation` and `longitude` when it exports**
+
+The GUI has no per-line grid controls: it derives ONE step from the current field of view (30 deg
+at 120 and wider, down to 0.5 deg below 2) and one shared colour and opacity for the whole grid.
+Exporting expands that step into the explicit list this schema is built on — parallels every step
+over ±80 deg with 0 excluded (the horizon owns that curve and carries its own colour), meridians
+every step over the half-open (-180, 180] so the anti-meridian appears once — and repeats the
+shared colour and opacity on every entry.
+
+The adaptive step is therefore a display-side convenience, not part of the model: the list is the
+model, and a config can name any parallels and meridians it likes, at any spacing, with a different
+colour on each.
+
+One consequence is worth knowing before zooming in: a narrow field of view picks a fine step, and a
+fine step can expand past `LUMICE_MAX_CONFIG_GRID_LINES` (64) — 72 meridians at a 20 deg field of
+view. The GUI REFUSES that export with a message naming the family and the count rather than
+writing a truncated grid, because a shortened grid would be a CLI render that quietly differs from
+what is on screen. Widen the field of view, or turn the grid off, and export again.
 
 **Grid line configuration**:
 

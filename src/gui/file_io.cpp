@@ -3348,18 +3348,26 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   if (params.overlay.show_sun_circles || params.overlay.show_grid) {
     static AnnotationOverlayCache export_overlay;
     export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
+    // Each family is handed over only if it actually produced a mask. HasResult() is not enough on
+    // its own: one call now serves three families, so a result can hold the grid's mask and not the
+    // circles' (the user turned the circles off, or emptied their angle list). Passing an empty
+    // vector's data() alongside a non-zero width/height would have the renderer upload W*H bytes
+    // from a pointer to nothing.
+    params.overlay.angular_dist_mask = nullptr;
+    params.overlay.grid_mask = nullptr;
     if (export_overlay.HasResult()) {
-      params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
-      params.overlay.angular_dist_mask_w = export_overlay.Width();
-      params.overlay.angular_dist_mask_h = export_overlay.Height();
-      params.overlay.angular_dist_mask_generation = export_overlay.Generation();
-      params.overlay.grid_mask = export_overlay.GridMask().empty() ? nullptr : export_overlay.GridMask().data();
-      params.overlay.grid_mask_w = export_overlay.Width();
-      params.overlay.grid_mask_h = export_overlay.Height();
-      params.overlay.grid_mask_generation = export_overlay.Generation();
-    } else {
-      params.overlay.angular_dist_mask = nullptr;
-      params.overlay.grid_mask = nullptr;
+      if (!export_overlay.AngularDistMask().empty()) {
+        params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
+        params.overlay.angular_dist_mask_w = export_overlay.Width();
+        params.overlay.angular_dist_mask_h = export_overlay.Height();
+        params.overlay.angular_dist_mask_generation = export_overlay.Generation();
+      }
+      if (!export_overlay.GridMask().empty()) {
+        params.overlay.grid_mask = export_overlay.GridMask().data();
+        params.overlay.grid_mask_w = export_overlay.Width();
+        params.overlay.grid_mask_h = export_overlay.Height();
+        params.overlay.grid_mask_generation = export_overlay.Generation();
+      }
     }
   }
   auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h, std::nullopt);

@@ -1481,7 +1481,12 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     } else {
       g_annotation_overlay.Update(AnnotationOverlayCache::ViewKey{});
     }
-    if (g_state.show_sun_circles_line && g_annotation_overlay.HasResult()) {
+    // The non-empty check is not belt-and-braces: one call serves three families, so a result can
+    // hold the grid's mask and not the circles' — the user emptied the circle list, say. An empty
+    // vector's data() with a non-zero width/height would have Render() upload W*H bytes from a
+    // pointer to nothing.
+    if (g_state.show_sun_circles_line && g_annotation_overlay.HasResult() &&
+        !g_annotation_overlay.AngularDistMask().empty()) {
       // Borrowed for this frame only; PreviewRenderer::Render uploads it during the GL phase.
       pp.overlay.angular_dist_mask = g_annotation_overlay.AngularDistMask().data();
       pp.overlay.angular_dist_mask_w = g_annotation_overlay.Width();
