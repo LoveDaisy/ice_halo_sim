@@ -148,6 +148,14 @@ void SeedNonDefaultView() {
   g_state.grid_color[1] = 0.10f;
   g_state.grid_color[2] = 0.60f;
   g_state.grid_alpha = 0.7f;
+  // The three TEXT-label switches, ON and each one a different value from its line switch beside
+  // it — show_horizon_line is false above while show_horizon_label is true here. Left at their
+  // (off) defaults, both halves of their divergence would be vacuous, AND the export arm reading
+  // the line switch instead of the label one would go unnoticed, since for two of the three the
+  // two switches would then agree by accident.
+  g_state.show_horizon_label = true;
+  g_state.show_grid_label = true;
+  g_state.show_sun_circles_label = true;
   // The front-hemisphere clip, ON. It is a view setting like the five above and diverges the same
   // way (constant on the commit arm, the user's switch on the export arm), so leaving it at its
   // off default would make both halves of the divergence vacuous for this field.
@@ -222,6 +230,15 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   // The field that was not merely dropped but inverted: the document has the horizon line off, and
   // the export used to assert it on unconditionally.
   EXPECT_FALSE(r["grid"]["horizon"].get<bool>()) << "the exported config draws a horizon line the user switched off";
+  // The three TEXT-label switches, which the CLI now draws too. The horizon pair is the one worth
+  // reading as a pair: its LINE is off in this fixture and its LABEL is on, so an export that read
+  // show_horizon_line for both would come out false here — and, because the other two families
+  // have their lines on, it would come out right for them and this would be the only cell that
+  // says so.
+  EXPECT_TRUE(r["grid"]["horizon_label"].get<bool>())
+      << "the exported config dropped the horizon's numbers — most likely by reading the line switch";
+  EXPECT_TRUE(r["grid"]["label"].get<bool>());
+  EXPECT_TRUE(r["grid"]["angular_dist_label"].get<bool>());
   // The sun circles, which the CLI now draws. Angles are the user's list; the colour and opacity
   // are one shared pair repeated per entry, because that is all the GUI has controls for.
   ASSERT_EQ(r["grid"]["angular_dist"].size(), 3u) << "the exported config lost the user's sun circles";
@@ -519,7 +536,12 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     //   zenith_nadir  — the same split again, for the marker pair: off with a zeroed appearance on
     //                   the commit arm vs. the user's switch, colour, radius and alpha on the
     //                   export arm.
-    // All five are the same divergence with five spellings, which is why they share this note
+    //   horizon_label — the text beside each of the three line families, one sub-key each. The
+    //   label           same split once more, and for exactly the same reason: text baked into the
+    //   angular_dist_label
+    //                   commit arm's texture would be re-projected with the sky and then drawn a
+    //                   second time by the preview's own label pass, so that arm asks for none.
+    // All eight are the same divergence with eight spellings, which is why they share this note
     // rather than each earning a bullet: an annotation belongs to the picture, and only one of the
     // two arms describes a picture.
   };
@@ -568,10 +590,11 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its five diverging sub-fields are exempted
+    // "grid" itself stays in the comparison below: only its eight diverging sub-fields are exempted
     // here, by sub-key rather than by erasing the whole object, so any remaining grid sub-field
     // keeps being checked for an accidental intent-dependent drift.
-    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "zenith_nadir" }) {
+    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "zenith_nadir", "horizon_label",
+                             "label", "angular_dist_label" }) {
       EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
           << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
       commit_doc["render"][0]["grid"].erase(sub);

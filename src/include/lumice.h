@@ -124,7 +124,26 @@ extern "C" {
 // that renders differently. It is now a core field, so the CLI reproduces it — the background sky
 // mask and every annotation (horizon, angular_dist, elevation, longitude, zenith/nadir) are clipped
 // by the same rule the preview shader applies.
-#define LUMICE_API_VERSION 420
+//
+// BREAKING (v4.21): LUMICE_RenderParam gains a trailing block of three fields, `horizon_label` /
+// `grid_label` / `angular_dist_label` — whether the CLI renderer draws the TEXT labels beside each
+// annotation family's lines. They are APPENDED after `front`, so every existing field keeps its
+// offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and
+// the new fields are read past the end of it. Recompile against this header. The JSON keys are
+// "grid.horizon_label", "grid.label" and "grid.angular_dist_label".
+// Note the accompanying BEHAVIOR change, which has no ABI half: the CLI renderer now has a font at
+// all. LUMICE_ComputeAnnotationOverlay has returned label anchors and formatted text since v4.17,
+// but only the GUI could turn them into pixels (ImGui's font needs a GL context); core now embeds
+// a typeface and rasterizes them itself, so an exported config reproduces the preview's text and
+// not merely its lines.
+// Two layers, and the distinction is the contract: these switches decide whether the label
+// GEOMETRY is computed, independently of the family's own line switch (`horizon_label` with
+// `horizon` zero still draws the horizon's numbers). They do NOT give a label its own opacity —
+// the compositor gives it the family's own colour and alpha, so a grid line at opacity 0 takes its
+// labels with it. That mirrors the GUI, where a label has always inherited its family's
+// appearance; a core that diverged here would create the very GUI/CLI mismatch the annotation
+// layer exists to remove.
+#define LUMICE_API_VERSION 421
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -854,6 +873,22 @@ typedef struct LUMICE_RenderParam_ {
   // it is its own field rather than a `visible` enumerator. Opt-in: core's RenderConfig::front_
   // defaults to false, so a zero-initialized struct clips nothing.
   int front;
+  // ADDED (v4.21). Non-zero = draw the TEXT labels for that annotation family — the angle each
+  // line stands for, formatted by core ("22\u00b0"). Opt-in, like every annotation field above.
+  //
+  // INDEPENDENT OF THE LINE SWITCHES, at the geometry layer only: `horizon_label` with `horizon`
+  // zero draws the horizon's numbers without its line. NOT independent at the compositing layer —
+  // a label is painted in its family's own colour and opacity (each LUMICE_GridLine's `opacity` /
+  // `color` for the two grid families and the circles; the horizon's fixed constants for the
+  // horizon), so a line at opacity 0 is invisible together with its labels. See the v4.21 note at
+  // LUMICE_API_VERSION for why that asymmetry is deliberate rather than an oversight.
+  //
+  // `grid_label` covers BOTH grid families, parallels and meridians, matching the single grid
+  // label switch the GUI has. The circles get their own because the GUI has a separate one.
+  // There is no zenith/nadir member: those markers carry no text.
+  int horizon_label;
+  int grid_label;
+  int angular_dist_label;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

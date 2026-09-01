@@ -238,6 +238,15 @@ class RenderConsumer : public IConsume {
   // of the image, which is the thing under test.
   const annotation::CanvasPoint& ZenithPointForTest() const { return zenith_point_; }
   const annotation::CanvasPoint& NadirPointForTest() const { return nadir_point_; }
+  // The cached label anchors, per family. Same rationale as the mask handles above, plus one of
+  // its own: these say whether the label GEOMETRY was computed, which is the half of the *_label_
+  // contract that is independent of the family's line switch. That half cannot be read off the
+  // image — a label whose family is fully transparent is computed and then composites to nothing,
+  // which is exactly the case worth being able to tell apart from "never computed".
+  const std::vector<annotation::Label>& HorizonLabelsForTest() const { return horizon_labels_; }
+  const std::vector<annotation::Label>& ElevationLabelsForTest() const { return elevation_labels_; }
+  const std::vector<annotation::Label>& LongitudeLabelsForTest() const { return longitude_labels_; }
+  const std::vector<annotation::Label>& AngularDistLabelsForTest() const { return angular_dist_labels_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -279,6 +288,24 @@ class RenderConsumer : public IConsume {
   void RebuildLineFamilyMasks(LineFamily family);
   // Both families at once, for the two call sites (constructor, ResetWith) that always want both.
   void RebuildGridMasks();
+
+  // The horizon's label anchors. Its own function, and the only annotation family that needs one,
+  // because the horizon is the only one whose LINE does not come from annotation::ComputeOverlay:
+  // horizon_mask_ is built by BuildHorizonMask (core/lens_proj_build.hpp), which produces no
+  // anchors, so there is no existing per-line call here to read them out of. The three other
+  // families get their anchors from the ComputeOverlay call their mask already costs.
+  void RebuildHorizonLabels();
+
+  // Draw the cached label anchors' text into snapshot_image_buffer_. Called at the END of
+  // PostSnapshot, after the fused per-pixel loop has written its final sRGB bytes — deliberately
+  // NOT inside that loop. The loop is a per-pixel, register-only, byte-exact chain
+  // (test_render_consumer_post_snapshot_fusion.cpp pins it); glyph coverage is sparse and
+  // two-dimensional, and threading it through there would buy a full-canvas coverage buffer and
+  // put a second concern inside the one function that must stay a straight element-wise map.
+  //
+  // Blends in LINEAR RGB, like every other annotation layer: the bytes it reads are decoded back
+  // out of sRGB, mixed, and re-encoded. Only the pixels a glyph actually covers are touched.
+  void PaintLabels();
 
 
   RenderConfig config_;
@@ -324,6 +351,26 @@ class RenderConsumer : public IConsume {
   std::vector<std::vector<uint8_t>> longitude_masks_;
   std::vector<float> longitude_mask_angles_;
   bool longitude_masks_built_ = false;
+  // The label anchors, one vector per family, harvested from the same ComputeOverlay calls that
+  // built the masks beside them (the horizon's from a call of its own — see RebuildHorizonLabels).
+  // Each Label's `index` is REWRITTEN on the way in to name the config line it annotates: core
+  // answers per request, and every request here carries exactly one angle, so the index it returns
+  // is always 0 and would not survive the merge into one per-family list.
+  //
+  // Rebuilt whenever the masks are, plus whenever the family's own *_label_ switch flips — that
+  // switch is an appearance field, so it can change under a reused consumer with the angle list
+  // untouched, and a change detector that watched only the angles would keep an empty list exactly
+  // when the user has just asked for the text.
+  std::vector<annotation::Label> horizon_labels_;
+  std::vector<annotation::Label> elevation_labels_;
+  std::vector<annotation::Label> longitude_labels_;
+  std::vector<annotation::Label> angular_dist_labels_;
+  // What each label list was last built for, alongside the angle lists above. Only the switch
+  // needs recording: everything else these lists depend on is already in the mask detectors.
+  bool horizon_labels_built_for_ = false;
+  bool elevation_labels_built_for_ = false;
+  bool longitude_labels_built_for_ = false;
+  bool angular_dist_labels_built_for_ = false;
   // Where the zenith and the nadir land on the canvas, each with its own `valid`. Points, not
   // masks: the marker is a ring of a radius the config names, so a whole W*H mask would encode
   // the appearance too and would have to be rebuilt whenever the radius changed. PostSnapshot

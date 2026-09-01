@@ -146,8 +146,32 @@ struct RenderConfig {
   // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
   // nobody has made, so the default states the one thing that is certain: draw it when asked.
   bool horizon_ = false;
+  // Draw the TEXT labels — the angle each line stands for, "22\u00b0" and the like — next to the
+  // three line families. One switch per family, mirroring the GUI's three
+  // (show_horizon_label / show_grid_label / show_sun_circles_label, gui_state.hpp), because those
+  // three are independently settable there and a config that could not express the same three
+  // states would be unable to describe what the GUI is showing.
+  //
+  // TWO LAYERS, and they are not the same statement. Whether the label GEOMETRY is computed is
+  // what these fields decide, independently of whether the family's own line is drawn: a
+  // horizon_label_ with horizon_ false still produces the anchors. Whether the label is VISIBLE
+  // once drawn is NOT independent — the compositor gives a label its family's own colour and
+  // opacity (GridLineParam::opacity_ for the grid families, the horizon's fixed constants for the
+  // horizon), so a line at opacity 0 takes its labels with it. That is the GUI's behaviour too
+  // (overlay_labels.cpp gives every label its family's colour and alpha), and matching it is the
+  // point: a core that let a label outlive its line would be a new GUI/CLI divergence.
+  //
+  // Opt-in for the same reason horizon_ is: text nobody asked for must not appear in a config
+  // that predates the field.
+  bool horizon_label_ = false;
+  // The parallels and the meridians share one switch, as they share one appearance in the GUI.
+  bool grid_label_ = false;
+  bool angular_dist_label_ = false;
   // The zenith / nadir ring markers. Opt-in for the same reason horizon_ is: an annotation nobody
   // asked for must not appear in a config that predates the field.
+  //
+  // No label switch of its own, and not an omission: a marker carries no text at all
+  // (annotation::Overlay returns the two as POINTS, not labels), so there is nothing to turn on.
   ZenithNadirParam zenith_nadir_;
 };
 

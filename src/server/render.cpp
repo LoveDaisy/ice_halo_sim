@@ -11,6 +11,7 @@
 
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/annotation_font.hpp"
 #include "core/annotation_overlay.hpp"
 #include "core/color_util.hpp"
 #include "core/def.hpp"
@@ -60,10 +61,42 @@ annotation::Request MakeMaskRequest(const RenderConfig& config) {
   // false: BuildVisibleMask clips the background sky by front_, so an annotation that ignored it
   // would draw its line or marker over the half that was clipped away.
   req.view.front = config.front_;
-  // Masks only. The CLI draws no text, and skipping the curve walk is several times cheaper.
+  // Masks only BY DEFAULT. Whether a given call also wants the label anchors is a per-FAMILY
+  // question — each family has its own *_label_ switch — so it is left to the caller, exactly as
+  // the angle list is, and for the same reason: a request field that varies per family cannot have
+  // a correct value here. The curve walk is several times cheaper than the mask sweep, but it is
+  // not free, and a family whose labels are switched off must not pay for it.
   req.labels = false;
   return req;
 }
+
+// Move one ComputeOverlay call's label anchors into a per-family list, stamping each with the
+// index of the config line it annotates.
+//
+// The rewrite is the point. Core sets Label::index to the position within the REQUEST's angle
+// list, and every request built here carries exactly one angle, so what comes back is always 0.
+// Merging several such answers into one list without restamping would leave every label claiming
+// to belong to the family's first line — and the compositor reads that index to find the colour
+// and the opacity to paint it in.
+void AppendLabels(const std::vector<annotation::Label>& in, int line_index, std::vector<annotation::Label>& out) {
+  out.reserve(out.size() + in.size());
+  for (const annotation::Label& label : in) {
+    annotation::Label copy = label;
+    copy.index = line_index;
+    out.push_back(std::move(copy));
+  }
+}
+
+// The horizon annotation's appearance. Fixed constants, not config: core has no per-annotation
+// appearance fields for it (unlike GridLineParam), and inventing config for one line is a wider
+// decision than drawing it. The value is the GUI overlay's own horizon default, sRGB {0.8, 0.2,
+// 0.2} at alpha 0.6 (gui_state.hpp horizon_color / horizon_alpha).
+//
+// File scope rather than local to PostSnapshot because the horizon's LINE and its LABELS have to
+// be the same colour, and they are painted by two different functions. Two copies of 0.6f would be
+// two things free to drift apart.
+constexpr float kOutlineAlpha = 0.6f;
+constexpr float kOutlineSrgb[3]{ 0.8f, 0.2f, 0.2f };
 
 }  // namespace
 
@@ -107,6 +140,9 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
     zenith_point_ = overlay.zenith;
     nadir_point_ = overlay.nadir;
   }
+  // Same lifetime argument as the three mask families: this depends on an appearance flag that
+  // ResetWith can change, so it is (re)built here AND there rather than once.
+  RebuildHorizonLabels();
 
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
@@ -634,15 +670,14 @@ void RenderConsumer::PostSnapshot() {
   // ever disagree about the pixel count.
   const bool masked_bg = visible_mask_.size() == static_cast<size_t>(total_pix);
   // The celestial-horizon annotation. Gated here rather than at build time — see the member's
-  // declaration. Its colour is a fixed constant: core has no per-annotation appearance fields
-  // (unlike GridLineParam), and inventing config for one line is a wider decision than drawing it.
-  // The value is the GUI overlay's own horizon default, sRGB {0.8, 0.2, 0.2} at alpha 0.6
-  // (gui_state.hpp horizon_color / horizon_alpha), converted here because this blend happens in
-  // LINEAR RGB — same domain and same place in the chain as the background term below it, which is
-  // the repo's standing rule for anything added to radiance before the transfer curve.
+  // declaration. Its colour comes from the file-scope kOutlineSrgb / kOutlineAlpha, converted here
+  // because this blend happens in LINEAR RGB — same domain and same place in the chain as the
+  // background term below it, which is the repo's standing rule for anything added to radiance
+  // before the transfer curve.
+  //
+  // `config_.horizon_` alone, NOT ORed with horizon_label_: whether the LINE is painted is this
+  // flag's own question. The label half is independent of it and is decided in PaintLabels().
   const bool paint_outline_layer = config_.horizon_ && horizon_mask_.size() == static_cast<size_t>(total_pix);
-  constexpr float kOutlineAlpha = 0.6f;
-  constexpr float kOutlineSrgb[3]{ 0.8f, 0.2f, 0.2f };
   float outline_rgb[3];
   SrgbToLinearRgb(kOutlineSrgb, outline_rgb);
 
@@ -815,6 +850,108 @@ void RenderConsumer::PostSnapshot() {
       snapshot_image_buffer_[i * 3 + j] = static_cast<uint8_t>(rgb[j] * 255);
     }
   }
+
+  // The text, last and outside the loop above. See PaintLabels' declaration for why it is not a
+  // stage of that loop.
+  PaintLabels();
+}
+
+// Every cached label anchor's text, blended into the finished sRGB image. Two halves: resolve each
+// label's appearance from the family it belongs to, then rasterize and composite. See the
+// declaration in render.hpp for why this is not a stage of PostSnapshot's fused loop.
+void RenderConsumer::PaintLabels() {
+  const int width_px = config_.resolution_[0];
+  const int height_px = config_.resolution_[1];
+  if (width_px <= 0 || height_px <= 0 || snapshot_image_buffer_ == nullptr) {
+    return;
+  }
+
+  // A label plus the appearance it inherits from the family it annotates. The colour and the
+  // opacity are the FAMILY's own, never a label-specific value: a grid line at opacity 0 is
+  // invisible and so are its numbers, and the GUI has behaved that way since it grew labels at all
+  // (overlay_labels.cpp hands every label its family's colour and alpha). Making core independent
+  // here would put a divergence between the two renderers back exactly where this layer removed
+  // one. See render_config.hpp's *_label_ comment for the full statement.
+  struct LabelDraw {
+    const annotation::Label* label;
+    float rgb[3];
+    float alpha;
+  };
+  std::vector<LabelDraw> draws;
+
+  // Turn one family's (labels, line list) pair into draws, dropping the ones whose line is fully
+  // transparent. Mirrors PostSnapshot's collect_layers, and drops for the same reason: an alpha of
+  // zero composites to a no-op, and skipping it up front also skips the rasterization.
+  const auto collect = [&draws](const std::vector<annotation::Label>& labels, const std::vector<GridLineParam>& lines) {
+    for (const annotation::Label& label : labels) {
+      const auto index = static_cast<size_t>(label.index);
+      if (label.index < 0 || index >= lines.size()) {
+        continue;  // a label whose line has since left the config
+      }
+      const float alpha = std::clamp(lines[index].opacity_, 0.0f, 1.0f);
+      if (alpha <= 0.0f) {
+        continue;
+      }
+      LabelDraw draw{ &label, { 0.0f, 0.0f, 0.0f }, alpha };
+      SrgbToLinearRgb(lines[index].color_, draw.rgb);
+      draws.push_back(draw);
+    }
+  };
+  collect(elevation_labels_, config_.elevation_grid_);
+  collect(longitude_labels_, config_.longitude_grid_);
+  collect(angular_dist_labels_, config_.angular_dist_grid_);
+  // The horizon's, in the line's own fixed colour — it has no GridLineParam to read, and no
+  // user-facing opacity knob either.
+  {
+    float horizon_rgb[3];
+    SrgbToLinearRgb(kOutlineSrgb, horizon_rgb);
+    for (const annotation::Label& label : horizon_labels_) {
+      draws.push_back(LabelDraw{ &label, { horizon_rgb[0], horizon_rgb[1], horizon_rgb[2] }, kOutlineAlpha });
+    }
+  }
+  if (draws.empty()) {
+    return;
+  }
+
+  for (const LabelDraw& draw : draws) {
+    const annotation::TextBitmap ink = annotation::RasterizeLabel(draw.label->text);
+    if (ink.Empty()) {
+      continue;
+    }
+    // The anchor is core's canvas pixel, rounded to the grid the glyphs were rasterized on; the
+    // bitmap's offsets carry the centring (annotation_font.hpp).
+    const int left = static_cast<int>(std::lround(draw.label->px)) + ink.offset_x;
+    const int top = static_cast<int>(std::lround(draw.label->py)) + ink.offset_y;
+    for (int row = 0; row < ink.height; ++row) {
+      const int y = top + row;
+      if (y < 0 || y >= height_px) {
+        continue;
+      }
+      for (int col = 0; col < ink.width; ++col) {
+        const int x = left + col;
+        if (x < 0 || x >= width_px) {
+          continue;
+        }
+        const uint8_t coverage = ink.coverage[static_cast<size_t>(row) * ink.width + col];
+        if (coverage == 0) {
+          continue;
+        }
+        // Coverage AND the family's opacity. A partially covered edge pixel of a half-transparent
+        // line's label is exactly as translucent as the product says.
+        const float a = draw.alpha * static_cast<float>(coverage) * (1.0f / 255.0f);
+        const size_t base = (static_cast<size_t>(y) * static_cast<size_t>(width_px) + static_cast<size_t>(x)) * 3u;
+        for (int j = 0; j < 3; ++j) {
+          // Back to linear, blend, forward again. The main loop left these bytes sRGB-encoded, and
+          // compositing in that domain would darken or lighten the mix depending on the
+          // background — the same reason every other annotation layer blends before the transfer
+          // curve rather than after it.
+          const float dst = SrgbToLinear(static_cast<float>(snapshot_image_buffer_[base + j]) * (1.0f / 255.0f));
+          const float mixed = std::clamp(dst * (1.0f - a) + draw.rgb[j] * a, 0.0f, 1.0f);
+          snapshot_image_buffer_[base + j] = static_cast<uint8_t>(LinearToSrgb(mixed) * 255);
+        }
+      }
+    }
+  }
 }
 
 Result RenderConsumer::GetResult() const {
@@ -874,6 +1011,7 @@ void RenderConsumer::ResetWith(const RenderConfig& new_config, const SunParam& n
   // when nothing moved.
   RebuildAngularDistMasks();
   RebuildGridMasks();
+  RebuildHorizonLabels();
   Reset();
 }
 
@@ -888,14 +1026,22 @@ void RenderConsumer::RebuildAngularDistMasks() {
     angles.push_back(line.value_);
   }
 
+  // The label switch joins the angle list and the sun in the change detector, because it is an
+  // appearance field: it can flip under a reused consumer with the geometry untouched, and a
+  // detector that watched only the geometry would keep the previous (empty) anchor list exactly
+  // when the user has just asked for the text.
+  const bool want_labels = config_.angular_dist_label_;
   if (angular_dist_masks_built_ && angles == angular_dist_mask_angles_ &&
+      want_labels == angular_dist_labels_built_for_ &&
       std::equal(std::begin(sun_dir), std::end(sun_dir), std::begin(angular_dist_mask_sun_))) {
     return;
   }
   angular_dist_mask_angles_ = angles;
   std::copy(std::begin(sun_dir), std::end(sun_dir), std::begin(angular_dist_mask_sun_));
   angular_dist_masks_built_ = true;
+  angular_dist_labels_built_for_ = want_labels;
   angular_dist_masks_.clear();
+  angular_dist_labels_.clear();
   if (angles.empty()) {
     return;
   }
@@ -909,11 +1055,17 @@ void RenderConsumer::RebuildAngularDistMasks() {
   annotation::Request req = MakeMaskRequest(config_);
   std::copy(std::begin(sun_dir), std::end(sun_dir), std::begin(req.reference_dir));
 
+  // Anchors ride along on the SAME per-line call the mask already costs; the curve walk is the
+  // increment, not a second sweep. Off when this family's switch is off, so a caller that draws no
+  // circle text pays nothing for it.
+  req.labels = want_labels;
+
   angular_dist_masks_.reserve(angles.size());
-  for (float angle : angles) {
-    req.angular_dist_deg = { angle };
+  for (size_t k = 0; k < angles.size(); ++k) {
+    req.angular_dist_deg = { angles[k] };
     annotation::Overlay overlay = annotation::ComputeOverlay(req);
     angular_dist_masks_.push_back(std::move(overlay.angular_dist));
+    AppendLabels(overlay.labels, static_cast<int>(k), angular_dist_labels_);
   }
 }
 
@@ -928,6 +1080,11 @@ void RenderConsumer::RebuildLineFamilyMasks(LineFamily family) {
   auto& masks = is_elevation ? elevation_masks_ : longitude_masks_;
   auto& built_from = is_elevation ? elevation_mask_angles_ : longitude_mask_angles_;
   bool& built = is_elevation ? elevation_masks_built_ : longitude_masks_built_;
+  auto& labels = is_elevation ? elevation_labels_ : longitude_labels_;
+  bool& labels_built_for = is_elevation ? elevation_labels_built_for_ : longitude_labels_built_for_;
+  // ONE switch for both families: the GUI has a single grid label control, and core's schema
+  // follows it rather than inventing a distinction no consumer draws.
+  const bool want_labels = config_.grid_label_;
 
   std::vector<float> angles;
   angles.reserve(lines.size());
@@ -937,12 +1094,16 @@ void RenderConsumer::RebuildLineFamilyMasks(LineFamily family) {
 
   // No sun term in this comparison, unlike RebuildAngularDistMasks: a parallel sits at a fixed
   // altitude and a meridian at a fixed azimuth, so neither curve moves when the sun does.
-  if (built && angles == built_from) {
+  // Same reason the angular-distance detector carries its switch: *_label_ is an appearance field
+  // and can change with the angle list untouched.
+  if (built && angles == built_from && want_labels == labels_built_for) {
     return;
   }
   built_from = angles;
   built = true;
+  labels_built_for = want_labels;
   masks.clear();
+  labels.clear();
   if (angles.empty()) {
     return;
   }
@@ -951,16 +1112,44 @@ void RenderConsumer::RebuildLineFamilyMasks(LineFamily family) {
   // each entry carries its own opacity_ / color_, and a category-wide union mask cannot say which
   // line a lit pixel belongs to.
   annotation::Request req = MakeMaskRequest(config_);
+  req.labels = want_labels;
   masks.reserve(angles.size());
-  for (float angle : angles) {
+  for (size_t k = 0; k < angles.size(); ++k) {
     if (is_elevation) {
-      req.elevation_deg = { angle };
+      req.elevation_deg = { angles[k] };
     } else {
-      req.longitude_deg = { angle };
+      req.longitude_deg = { angles[k] };
     }
     annotation::Overlay overlay = annotation::ComputeOverlay(req);
     masks.push_back(std::move(is_elevation ? overlay.elevation : overlay.longitude));
+    AppendLabels(overlay.labels, static_cast<int>(k), labels);
   }
+}
+
+// The horizon's label anchors. The one family that needs a ComputeOverlay call of its own: its
+// LINE comes from BuildHorizonMask (core/lens_proj_build.hpp), a path with no curve walk and no
+// anchors at all, so unlike the three families above there is no existing call here to read them
+// out of. Nothing in this function touches horizon_mask_ or paint_outline_layer — the line and the
+// text are two independent decisions.
+void RenderConsumer::RebuildHorizonLabels() {
+  if (config_.horizon_label_ == horizon_labels_built_for_) {
+    return;  // nothing this depends on has moved (the view is fixed for a consumer's whole life)
+  }
+  horizon_labels_built_for_ = config_.horizon_label_;
+  horizon_labels_.clear();
+  if (!config_.horizon_label_) {
+    return;
+  }
+  annotation::Request req = MakeMaskRequest(config_);
+  // Written out as the disjunction it is: the guard above pins horizon_label_ true, so what this
+  // says is that the label geometry is requested WHETHER OR NOT config_.horizon_ asks for the
+  // line. The line's own gate stays on config_.horizon_ alone (PostSnapshot).
+  req.horizon = config_.horizon_ || config_.horizon_label_;
+  req.labels = true;
+  annotation::Overlay overlay = annotation::ComputeOverlay(req);
+  // -1, not an index: the horizon has no line list to index into, which is also how PaintLabels
+  // tells it apart from the three families that do (it is collected separately there).
+  AppendLabels(overlay.labels, -1, horizon_labels_);
 }
 
 }  // namespace lumice

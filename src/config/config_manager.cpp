@@ -124,6 +124,18 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("horizon")) {
       j_grid.at("horizon").get_to(render.horizon_);
     }
+    // The three text-label switches. Read next to the lines they annotate rather than under a
+    // "labels" object of their own: "grid.label" is a property of the grid, and nesting it one
+    // level deeper would give one concept two paths into the same object.
+    if (j_grid.contains("horizon_label")) {
+      j_grid.at("horizon_label").get_to(render.horizon_label_);
+    }
+    if (j_grid.contains("label")) {
+      j_grid.at("label").get_to(render.grid_label_);
+    }
+    if (j_grid.contains("angular_dist_label")) {
+      j_grid.at("angular_dist_label").get_to(render.angular_dist_label_);
+    }
     if (j_grid.contains("zenith_nadir")) {
       j_grid.at("zenith_nadir").get_to(render.zenith_nadir_);
     }

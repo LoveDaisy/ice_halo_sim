@@ -615,6 +615,11 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
+  // The three text-label switches, next to the lines they annotate. Same key names core's own
+  // to_json writes (render_config.cpp), which is what test_json_parser_parity.cpp compares.
+  jr["grid"]["horizon_label"] = r.horizon_label != 0;
+  jr["grid"]["label"] = r.grid_label != 0;
+  jr["grid"]["angular_dist_label"] = r.angular_dist_label != 0;
   // Through core's own to_json, like every other value here: the key names and the sRGB convention
   // then have exactly one spelling in the tree.
   ns::ZenithNadirParam zn;
@@ -2411,6 +2416,10 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     r.elevation_grid_count = 0;
     r.longitude_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
+    // Same default and same reason as `horizon` above: core's three *_label_ fields are opt-in.
+    r.horizon_label = 0;
+    r.grid_label = 0;
+    r.angular_dist_label = 0;
     // The marker block's defaults come from core's struct rather than being spelled again here,
     // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
     // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
@@ -2463,6 +2472,27 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
         r.horizon = outline ? 1 : 0;
+      }
+      // The three text-label switches. One loop over (key, field) rather than three copies of the
+      // same six lines: they differ only in which key names which int, and a fourth family would
+      // otherwise be a fourth chance to paste the wrong field name in.
+      {
+        const std::pair<const char*, int*> kLabelKeys[] = {
+          { "horizon_label", &r.horizon_label },
+          { "label", &r.grid_label },
+          { "angular_dist_label", &r.angular_dist_label },
+        };
+        for (const auto& [key, field] : kLabelKeys) {
+          if (!gj.contains(key)) {
+            continue;
+          }
+          bool on = false;
+          const LUMICE_ErrorCode err = DecodeCoreField(gj.at(key), on);
+          if (err != LUMICE_OK) {
+            return err;
+          }
+          *field = on ? 1 : 0;
+        }
       }
       if (gj.contains("zenith_nadir")) {
         // Seeded with the defaults above so a PARTIAL object keeps them for the keys it omits,

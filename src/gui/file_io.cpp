@@ -1885,10 +1885,31 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // outside RenderConfig (GuiState's overlay group). Reading it is what stops the export from
       // asserting a line the user turned off.
       dst.horizon = state.show_horizon_line ? 1 : 0;
+      // The three TEXT-label switches, each read from the GUI control that owns it. Until v4.21
+      // there was nothing on the CLI side to write them into — core had no font — so the preview
+      // could show numbers an exported render never drew. It can now.
+      //
+      // Read from the *_label switch and NOT from the *_line one beside it: they are separately
+      // settable in the GUI, and collapsing them here would export text the user had turned off
+      // (or drop text they had turned on), which is the same class of defect `horizon` itself once
+      // had when the export wrote the inverse of its switch.
+      dst.horizon_label = state.show_horizon_label ? 1 : 0;
+      dst.grid_label = state.show_grid_label ? 1 : 0;
+      dst.angular_dist_label = state.show_sun_circles_label ? 1 : 0;
       // Angular-distance circles, same story as the horizon and gated the same way: the switch is
       // an overlay-group field, so an export that ignored it would draw circles the user turned
       // off. What differs from the horizon is that these carry data, not just a flag — the angles
       // are the user's own list.
+      //
+      // The LINE switch gates the list, and the label switch above does NOT widen that gate — a
+      // known and accepted limit rather than an oversight. For the two grid families and the
+      // circles, core's "is this family drawn" question IS "is its angle list non-empty": there is
+      // no separate line flag to turn off. So a GUI state of "circles' labels on, circles' lines
+      // off" has no faithful encoding — filling the list to get the numbers would draw the lines
+      // the user switched off, which is strictly worse than dropping the numbers. Only the horizon,
+      // whose line has a flag of its own, can express that combination (`horizon_label` with
+      // `horizon` zero). Giving the other two families the same expressiveness means giving core a
+      // per-family line flag, which is a schema change, not a fill-site change.
       //
       // Every entry gets the SAME colour and opacity because the GUI has one colour picker and one
       // alpha slider for the whole set; core's schema styles each line individually and the GUI is
