@@ -1856,6 +1856,28 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // outside RenderConfig (GuiState's overlay group). Reading it is what stops the export from
       // asserting a line the user turned off.
       dst.horizon = state.show_horizon_line ? 1 : 0;
+      // Angular-distance circles, same story as the horizon and gated the same way: the switch is
+      // an overlay-group field, so an export that ignored it would draw circles the user turned
+      // off. What differs from the horizon is that these carry data, not just a flag — the angles
+      // are the user's own list.
+      //
+      // Every entry gets the SAME colour and opacity because the GUI has one colour picker and one
+      // alpha slider for the whole set; core's schema styles each line individually and the GUI is
+      // a restricted special case of it, not the other way round. The width field is left at its
+      // default: nothing reads it (the mask generator derives its own half-width), so writing the
+      // GUI's line width there would export a number that changes no pixel.
+      dst.angular_dist_count = 0;
+      if (state.show_sun_circles_line) {
+        const int n = std::min(static_cast<int>(state.sun_circle_angles.size()), LUMICE_MAX_CONFIG_GRID_LINES);
+        for (int k = 0; k < n; k++) {
+          dst.angular_dist[k].value = state.sun_circle_angles[static_cast<size_t>(k)];
+          dst.angular_dist[k].width = 1.0f;  // core GridLineParam::width_ default
+          dst.angular_dist[k].opacity = state.sun_circles_alpha;
+          std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
+                    std::begin(dst.angular_dist[k].color));
+        }
+        dst.angular_dist_count = n;
+      }
     } else {
       // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
       // used to hardcode while re-encoding a renderer now have to be stated here.
@@ -1878,10 +1900,19 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // control anywhere, so there is no user-visible value for the export arm to be honest about.
     // If one is ever added, this is the line that has to stop being a comment.
     //
-    // grid counts likewise stay zero on both arms. The GUI's screen-space overlay grid
-    // (gui_state.show_grid_line) is a display-time layer with a different model than render[].grid
-    // (one FOV-adaptive step and a shared colour vs. an explicit list of individually-styled
-    // lines); reconciling them is a design decision that has not been made, not an omission here.
+    // elevation_grid_count stays zero on both arms. The GUI's screen-space overlay grid
+    // (gui_state.show_grid_line) is a display-time layer with a different model than
+    // render[].grid.elevation (one FOV-adaptive step and a shared colour vs. an explicit list of
+    // individually-styled lines); reconciling them is a design decision that has not been made,
+    // not an omission here.
+    //
+    // grid.angular_dist USED to be in that sentence and no longer is: the export arm above fills
+    // it from state.sun_circle_angles, because the GUI's sun circles ARE an explicit list of
+    // angles and needed no reconciling — only a shared appearance, which core's per-line schema
+    // expresses fine by repeating it. The kSimCommit arm still leaves it zero, and deliberately:
+    // that arm asks core for a TEXTURE the preview then re-projects and draws its own overlay on
+    // top of, so an annotation baked into it would be drawn twice. Same reason dst.horizon is
+    // unconditionally 1 there.
     int renderer_id = -1;
     if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
       GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");

@@ -128,6 +128,16 @@ void SeedNonDefaultView() {
   g_state.aspect_preset = AspectPreset::k16x9;
   g_state.aspect_portrait = false;
   g_state.show_horizon_line = false;
+  // Sun circles ON, with a list and an appearance that are nobody's default: this is the one
+  // annotation whose export carries DATA rather than a flag, so leaving it at its (off) default
+  // would make every assertion about it below vacuous and would hide the intent divergence it
+  // introduces from IntentionalDivergenceFieldsMatchDocumentedSet.
+  g_state.show_sun_circles_line = true;
+  g_state.sun_circle_angles = { 9.0f, 22.0f, 46.0f };
+  g_state.sun_circles_color[0] = 0.25f;
+  g_state.sun_circles_color[1] = 0.50f;
+  g_state.sun_circles_color[2] = 0.75f;
+  g_state.sun_circles_alpha = 0.4f;
   g_state.renderer.front = false;  // the export refuses a front clip; asserted separately below
 }
 
@@ -153,6 +163,11 @@ TEST(SceneCommitChain, TheRunIntentIgnoresEveryViewSetting) {
   EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 0.0f);
   EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 0.0f);
   EXPECT_TRUE(r["grid"]["horizon"].get<bool>());
+  // No angular-distance circles either, for the same reason as the fixed lens above rather than
+  // as an oversight: this arm asks core for a texture the preview reprojects and draws its OWN
+  // overlay on top of, so a circle baked in here would appear twice and in the wrong place.
+  EXPECT_TRUE(r["grid"]["angular_dist"].empty())
+      << "the run intent baked an annotation the preview draws again at display time";
   // 2:1 at the chosen simulation resolution, not the 16:9 the document asks the window for.
   EXPECT_EQ(r["resolution"][0].get<int>(), 2048);
   EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
@@ -184,6 +199,18 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   // The field that was not merely dropped but inverted: the document has the horizon line off, and
   // the export used to assert it on unconditionally.
   EXPECT_FALSE(r["grid"]["horizon"].get<bool>()) << "the exported config draws a horizon line the user switched off";
+  // The sun circles, which the CLI now draws. Angles are the user's list; the colour and opacity
+  // are one shared pair repeated per entry, because that is all the GUI has controls for.
+  ASSERT_EQ(r["grid"]["angular_dist"].size(), 3u) << "the exported config lost the user's sun circles";
+  const float expect_deg[3] = { 9.0f, 22.0f, 46.0f };
+  for (int k = 0; k < 3; ++k) {
+    const nlohmann::json& line = r["grid"]["angular_dist"][static_cast<size_t>(k)];
+    EXPECT_FLOAT_EQ(line["value"].get<float>(), expect_deg[k]) << "circle " << k;
+    EXPECT_NEAR(line["opacity"].get<float>(), 0.4f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][0].get<float>(), 0.25f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][1].get<float>(), 0.50f, 1e-4f) << "circle " << k;
+    EXPECT_NEAR(line["color"][2].get<float>(), 0.75f, 1e-4f) << "circle " << k;
+  }
   // 16:9 landscape at the 1024 simulation resolution: long edge 1024*16/9, short edge 1024.
   EXPECT_EQ(r["resolution"][0].get<int>(), 1820);
   EXPECT_EQ(r["resolution"][1].get<int>(), 1024);
@@ -194,6 +221,26 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   EXPECT_NEAR(r["background"][0].get<float>(), 0.20f, 1e-4f);
   EXPECT_NEAR(r["background"][1].get<float>(), 0.35f, 1e-4f);
   EXPECT_NEAR(r["background"][2].get<float>(), 0.60f, 1e-4f);
+}
+
+// The off state of the same switch, asserted separately rather than trusted to be the absence of
+// the on state. The horizon has a recorded incident of an export arm that emitted the INVERSE of
+// the user's switch, and a test that only ever seeds the switch on cannot see that: an emitter
+// ignoring the flag entirely, and one reading it correctly, produce the same document when the
+// flag happens to be on.
+TEST(SceneCommitChain, TheExportIntentOmitsCirclesTheUserTurnedOff) {
+  SeedNonDefaultView();
+  // Everything else about the circles stays as the fixture set it — only the switch moves, so a
+  // difference in the output can be attributed to the switch and nothing else.
+  g_state.show_sun_circles_line = false;
+
+  nlohmann::json export_doc;
+  ASSERT_NO_THROW(export_doc = nlohmann::json::parse(CoreJson(g_state)));
+  ASSERT_EQ(export_doc["render"].size(), 1u);
+  const nlohmann::json& grid = export_doc["render"][0]["grid"];
+
+  ASSERT_TRUE(grid.contains("angular_dist"));
+  EXPECT_TRUE(grid["angular_dist"].empty()) << "the exported config draws sun circles the user switched off";
 }
 
 // Roll is the one field that is not a straight copy, and the reason is invisible from the JSON: the
@@ -352,11 +399,12 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "visible",           // hemisphere crop: always full vs. the user's
     "background",        // composited at display time vs. baked by the CLI
     "resolution",        // 2:1 texture vs. the user's canvas shape
-    // "grid" is deliberately NOT here: only its "horizon" sub-field diverges (always on vs. the
-    // user's switch), the remaining grid sub-fields (counts, colors, ...) are documented to stay
-    // identical on both arms. Erasing the whole "grid" object would also stop checking those
-    // other sub-fields for an accidental intent-dependent drift, so "horizon" is exempted below
-    // at the sub-key level instead of listing "grid" here.
+    // "grid" is deliberately NOT here: only its "horizon" and "angular_dist" sub-fields diverge
+    // (the horizon always on vs. the user's switch; the circles empty on the commit arm vs. the
+    // user's list on the export arm — see the two intent cases above for why each). The remaining
+    // grid sub-fields are documented to stay identical on both arms. Erasing the whole "grid"
+    // object would also stop checking those, so the two are exempted below at the sub-key level
+    // instead of listing "grid" here.
   };
 
   for (const float offset : { 0.0f, 2.5f, -3.0f, 6.0f }) {
@@ -403,13 +451,15 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its "horizon" sub-field is exempted here,
-    // by sub-key rather than by erasing the whole object, so the remaining grid sub-fields (counts,
-    // colors, ...) keep being checked for an accidental intent-dependent drift.
-    EXPECT_TRUE(commit_doc["render"][0]["grid"].contains("horizon"))
-        << "offset " << offset << ": \"grid.horizon\" is no longer emitted";
-    commit_doc["render"][0]["grid"].erase("horizon");
-    export_doc["render"][0]["grid"].erase("horizon");
+    // "grid" itself stays in the comparison below: only its two diverging sub-fields are exempted
+    // here, by sub-key rather than by erasing the whole object, so the remaining grid sub-fields
+    // keep being checked for an accidental intent-dependent drift.
+    for (const char* sub : { "horizon", "angular_dist" }) {
+      EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
+          << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
+      commit_doc["render"][0]["grid"].erase(sub);
+      export_doc["render"][0]["grid"].erase(sub);
+    }
     EXPECT_EQ(commit_doc, export_doc) << "offset " << offset
                                       << ": the intent reached a field outside the documented set";
   }
