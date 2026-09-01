@@ -617,8 +617,35 @@ jobs:
         #      whichever leg is cheaper so far (longest-processing-time bin
         #      packing). Replace BOTH lists with the result rather than patching
         #      one of them: which grouping is optimal changes wholesale.
-        # Trigger to redo it: the two legs differing by >=1.3x across 2-3 runs.
-        # A single run is not enough — the same leg has been seen to swing 10-30%.
+        # WHEN to redo it. The trigger is NOT how far apart the two legs are.
+        # A run's wall-clock is its longest job and nothing else, so evening the
+        # legs out is only worth CI time while one of them IS that longest job.
+        # Measured on the commit that produced the grouping below, taking the
+        # push run and the pull_request run of the same SHA together (neither
+        # alone carries every job: `build` is push-only, `e2e-slow` is PR/main):
+        #   Windows MSVC x86_64       740s  <- longest, this sets the wall-clock
+        #   shared-gui-test-build     666s
+        #   Ubuntu x86_64             635s
+        #   E2E Slow (macOS parity)   597s
+        #   E2E Slow (macOS rest)     391s
+        # Both macOS legs sit under that ceiling, so packing them closer buys
+        # ZERO wall-clock — the ceiling is somewhere else entirely. Trigger to
+        # redo the packing: either macOS leg becoming the longest job of a run.
+        # The ratio between the legs is a bad proxy for that and is recorded
+        # here only as a fact, not as a target: this grouping measured 1.28x and
+        # 1.53x on two runs of identical code (mean ~1.39x). A single run cannot
+        # judge either number — the same leg has been seen to swing 10-30%.
+        #
+        # A floor sits under the parity leg that no repacking removes:
+        # test_capi_sentinel_overflow is ONE indivisible case that pins a worker
+        # for the whole run (~204s in this grouping), leaving projection-parity's
+        # 12 evenly-sized cases (63-82s each) two workers, i.e. ~430s of
+        # makespan; with build and setup on top the leg lands near 600s. So at
+        # whole-file granularity the ratio cannot go far below ~1.4x no matter
+        # how the files are dealt. Going below it means splitting one file
+        # case-by-case, which costs the "both legs' union is unchanged" check
+        # the mechanical simplicity that makes it worth running — and per the
+        # numbers above, buys no wall-clock in exchange.
         #
         # ⛔ Bin packing alone is NOT sufficient, and getting this wrong turns a
         # leg RED, not merely slow. Two constraints sit on top of it:
@@ -633,8 +660,9 @@ jobs:
         #       passed to run_scene_capi_buffered). Starve one of CPU and it does
         #       not run slower, it raises. Concretely: exit-seam parity and
         #       test_capi_sentinel_overflow must not share a leg — the latter is
-        #       a single indivisible ~376s case that pins one worker for the
-        #       whole run, and pairing them made an exit-seam scene cross 180s.
+        #       a single indivisible case that pins one worker for the whole run
+        #       (376s while starved beside exit-seam, ~204s in the grouping that
+        #       shipped), and pairing them made an exit-seam scene cross 180s.
         # Practical rule when regrouping: keep the two heavyweight capi_runner
         # parity files (exit-seam, projection) on opposite legs, and keep
         # test_capi_sentinel_overflow off the exit-seam leg.
@@ -644,7 +672,8 @@ jobs:
         # The three groupings tried here, by job duration (rest / parity):
         #   sentinel+light | projection+batch_inv+color_mask   584 RED / 397
         #   light          | +sentinel                         385 / 595  (1.55x)
-        #   +batch_inv     | projection+sentinel+color_mask     <- current
+        #   +batch_inv     | projection+sentinel+color_mask     <- current,
+        #                                            479 / 615 then 391 / 597
         # Expect to spend a couple of runs this way rather than one.
         #
         # Why the legs are expressed differently: the "rest" leg has to keep
