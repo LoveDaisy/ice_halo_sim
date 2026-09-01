@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788296268787,
+  "lastUpdate": 1788296271843,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "8aed5ad07364407897caf3720afcc3ce9154de1c",
-          "message": "Merge pull request #193 from LoveDaisy/refactor/filter-grammar-unify\n\nrefactor(gui): 统一 filter 语法 validate/parse 的 flush_ee 遍历骨架",
-          "timestamp": "2026-07-14T17:04:03+08:00",
-          "tree_id": "748625f849c992f0faab416aab89ff37884ed06d",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/8aed5ad07364407897caf3720afcc3ce9154de1c"
-        },
-        "date": 1784020309014,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1149121.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1173915.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 779535.8,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 645804.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "5913d079de3656d3730020f9968d7047cfcdeb3f",
           "message": "Merge pull request #194 from LoveDaisy/fix/gui-test-lifecycle-coroutine-gl\n\nfix(gui-test): guard optimistic_async_stop against no-GL-context coroutine upload",
           "timestamp": "2026-07-14T18:56:18+08:00",
@@ -9552,6 +9504,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 795330.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6034051812988c3e1fb7639296b5d3fbdbf8375",
+          "message": "Merge pull request #292 from LoveDaisy/feat/core-annotation-layer\n\nfeat(core): 注解层补齐——辅助线与文字 label 收敛为 core 单一来源",
+          "timestamp": "2026-09-02T04:45:19+08:00",
+          "tree_id": "fe59f2f65430792483491f011bdddca70953ff32",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a6034051812988c3e1fb7639296b5d3fbdbf8375"
+        },
+        "date": 1788296271431,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 994729.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1166710.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 759458.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 610265.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
