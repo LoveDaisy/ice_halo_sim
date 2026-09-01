@@ -148,7 +148,10 @@ void SeedNonDefaultView() {
   g_state.grid_color[1] = 0.10f;
   g_state.grid_color[2] = 0.60f;
   g_state.grid_alpha = 0.7f;
-  g_state.renderer.front = false;  // the export refuses a front clip; asserted separately below
+  // The front-hemisphere clip, ON. It is a view setting like the five above and diverges the same
+  // way (constant on the commit arm, the user's switch on the export arm), so leaving it at its
+  // off default would make both halves of the divergence vacuous for this field.
+  g_state.renderer.front = true;
 }
 
 // Half of the divergence: the run intent must NOT move. Core produces one fixed full-sky texture
@@ -169,6 +172,9 @@ TEST(SceneCommitChain, TheRunIntentIgnoresEveryViewSetting) {
   EXPECT_EQ(r["lens"]["type"].get<std::string>(), "dual_fisheye_equal_area");
   EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 180.0f);
   EXPECT_EQ(r["visible"].get<std::string>(), "full");
+  // The second clip, held off for the same reason `visible` is held at full: this arm asks for an
+  // uncropped texture and the preview shader applies the user's front clip at display time.
+  EXPECT_FALSE(r["front"].get<bool>()) << "the run intent cropped a texture the preview crops again";
   EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 0.0f);
   EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 0.0f);
   EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 0.0f);
@@ -207,6 +213,9 @@ TEST(SceneCommitChain, TheExportIntentDescribesTheDocumentsView) {
   EXPECT_EQ(r["lens"]["type"].get<std::string>(), "linear");
   EXPECT_FLOAT_EQ(r["lens"]["fov"].get<float>(), 55.0f);
   EXPECT_EQ(r["visible"].get<std::string>(), "upper");
+  // ...and its own key, never folded into the one above: "visible": "front" would decode to
+  // "upper" on the far side with no diagnostic (nlohmann's unregistered-string rule).
+  EXPECT_TRUE(r["front"].get<bool>()) << "the exported config dropped the user's front-hemisphere clip";
   EXPECT_FLOAT_EQ(r["view"]["azimuth"].get<float>(), 77.0f);
   EXPECT_FLOAT_EQ(r["view"]["elevation"].get<float>(), 23.0f);
   EXPECT_FLOAT_EQ(r["view"]["roll"].get<float>(), 11.0f);
@@ -376,30 +385,42 @@ TEST(SceneCommitChain, TheExportedRollIsTheOneTheLensActuallyRenders) {
       << "EffectiveRollForLens no longer zeroes roll for the Globe lens";
 }
 
-// The front-hemisphere clip has nowhere to go: core's visible range is {upper, lower, full} and the
-// C API struct has no field for it. The export refuses rather than approximating, because both
-// approximations are worse than a refusal — encoding "front" as a visible string would land on
-// core's FIRST enum entry (kUpper) with no diagnostic, and dropping it silently would export a
-// picture wider than the one on screen.
+// The front-hemisphere clip used to have nowhere to go — core's visible range is {upper, lower,
+// full} and the C API struct had no field for it — so the export REFUSED rather than approximating.
+// It now has a field of its own, and this case is the inverse of the one it replaces: the export
+// succeeds and carries the clip.
 //
-// The front=false row is what makes this a statement about front rather than about export: without
-// it, an export path broken for every document would pass.
-TEST(SceneCommitChain, AFrontHemisphereClipRefusesToExportInsteadOfLying) {
+// What survives the reversal is the reason the refusal existed, which is a live trap and not
+// history: the clip must NOT be spelled as `"visible": "front"`. NLOHMANN_JSON_SERIALIZE_ENUM maps
+// an unregistered string to the FIRST table entry, which is kUpper, so that spelling would render
+// the upper hemisphere with no diagnostic anywhere. Hence the explicit assertions about which key
+// carries it and what `visible` still says.
+//
+// Both rows are load-bearing: without the front=false one, an export path that wrote `true`
+// unconditionally would pass.
+TEST(SceneCommitChain, AFrontHemisphereClipExportsAsItsOwnField) {
   SeedOneEntryDocument();
+  g_state.renderer.visible = 2;  // Full — so a collapse into `visible` shows up as a changed value
   g_state.renderer.front = true;
   std::string json;
   std::string warning;
-  EXPECT_FALSE(BuildExportJsonOrWarn(g_state, &json, &warning))
-      << "a front-clipped view exported a config the CLI will render un-clipped";
-  EXPECT_FALSE(warning.empty()) << "the export was refused without telling the user why";
-  EXPECT_TRUE(json.empty()) << "the reject path still produced a document";
+  ASSERT_TRUE(BuildExportJsonOrWarn(g_state, &json, &warning)) << "a front-clipped view is still refused: " << warning;
+  EXPECT_TRUE(warning.empty()) << "the export succeeded and warned anyway: " << warning;
+  nlohmann::json doc;
+  ASSERT_NO_THROW(doc = nlohmann::json::parse(json));
+  ASSERT_EQ(doc["render"].size(), 1u);
+  EXPECT_TRUE(doc["render"][0]["front"].get<bool>()) << "the exported config dropped the front clip";
+  EXPECT_EQ(doc["render"][0]["visible"].get<std::string>(), "full")
+      << "the front clip was folded into `visible`, which decodes to `upper` on the far side";
 
   g_state.renderer.front = false;
-  std::string ok_json;
-  std::string ok_warning;
-  EXPECT_TRUE(BuildExportJsonOrWarn(g_state, &ok_json, &ok_warning));
-  EXPECT_TRUE(ok_warning.empty());
-  EXPECT_FALSE(ok_json.empty());
+  std::string off_json;
+  std::string off_warning;
+  ASSERT_TRUE(BuildExportJsonOrWarn(g_state, &off_json, &off_warning));
+  EXPECT_TRUE(off_warning.empty());
+  nlohmann::json off_doc;
+  ASSERT_NO_THROW(off_doc = nlohmann::json::parse(off_json));
+  EXPECT_FALSE(off_doc["render"][0]["front"].get<bool>());
 }
 
 // A document saved before the export path was taught to read it. Nothing about the SAVED form
@@ -481,6 +502,7 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     "lens",              // projection + fov: fixed texture vs. the user's framing
     "view",              // camera angles: none vs. the user's
     "visible",           // hemisphere crop: always full vs. the user's
+    "front",             // the second crop: always off vs. the user's switch, same reason
     "background",        // composited at display time vs. baked by the CLI
     "resolution",        // 2:1 texture vs. the user's canvas shape
     // "grid" is deliberately NOT here: only some of its sub-fields diverge, and they are exempted

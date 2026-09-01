@@ -177,9 +177,14 @@
 //     there is no honest comparison to make. Neither scene loads one.
 //   * RenderConfig::ray_color. The GUI's tint control does not reach the renderer, and the export
 //     writes core's "use the natural spectral colour" sentinel; there is no divergence to detect.
-//   * RenderConfig::front (the front-hemisphere clip). BuildExportJsonOrWarn REFUSES to export a
-//     document with it set, so that path produces no config and therefore no second image. Its
-//     test is the refusal itself, which lives with the export-fidelity assertions.
+//   * RenderConfig::front (the front-hemisphere clip). It IS exported now — core gained the field
+//     and the old refusal is gone — so this is a genuine gap rather than a structural one, and it
+//     is left open deliberately. What the clip needs proved is that core's mask and the shader cut
+//     the same pixels, and that is already pinned exactly, per pixel, by
+//     test_visible_mask_gui_parity.cpp's FrontClipMatchesTheGuiRule, which compares the two
+//     implementations directly instead of comparing two rendered images of them. A scene here would
+//     re-ask the same question through a noisier instrument (a child CLI process and a PSNR floor).
+//     Add one if the clip ever acquires behaviour beyond the mask — a ray-level cull, say.
 //   * lens_shift. The GUI exposes no control for it, so there is no user-visible value the export
 //     could be dishonest about.
 //   * The exposure anchor. See the note above kScenes[]: both scenes pin relative EV, and what is

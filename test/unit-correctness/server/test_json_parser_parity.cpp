@@ -883,6 +883,47 @@ TEST(JsonParserParity, GridZenithNadirOmittedLeavesBothParsersOnTheDefaults) {
   EXPECT_TRUE(p.core.renderers_.begin()->second.zenith_nadir_ == kDefaults);
 }
 
+// --- render.front: the second clip dimension (v4.20) ---
+//
+// Its own top-level key, deliberately not a fourth "visible" enumerator. The negative half of that
+// decision is pinned by RendererVisibleUnknownStringRejected in test_c_api.cpp (the C API refuses
+// an unregistered visible string rather than letting nlohmann map it to "upper"); what is pinned
+// here is the positive half — both parsers read and write the real key, and agree.
+
+std::string WrapRenderWithFront(const std::string& front_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "visible": "full", "front": )" + front_json + " } ] }";
+}
+
+TEST(JsonParserParity, FrontSurvivesBothParsers) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithFront("true"), &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.front_);
+  // ...and it did not arrive by collapsing into `visible`, which is the failure mode this key
+  // exists to avoid.
+  EXPECT_EQ(renderer.visible_, lumice::RenderConfig::kFull);
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, FrontOmittedLeavesBothParsersUnclipped) {
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock), &p));
+  EXPECT_FALSE(p.via_capi.renderers_.begin()->second.front_);
+  EXPECT_FALSE(p.core.renderers_.begin()->second.front_);
+}
+
+TEST(JsonParserParity, FrontFalseIsNotConfusedWithFrontMissing) {
+  // Both mean "no clip", so this cannot be caught by comparing the parsed value — what it pins is
+  // that an explicit false is ACCEPTED by both rather than rejected as a type error by one.
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(WrapRenderWithFront("false"), &p));
+  EXPECT_FALSE(p.via_capi.renderers_.begin()->second.front_);
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second == p.core.renderers_.begin()->second);
+}
+
 // --- render.background: sRGB on the wire, linear in the struct ---
 //
 // The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.

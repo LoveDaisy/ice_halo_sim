@@ -354,27 +354,52 @@ TEST(HorizonMask, EveryMarkedPixelIsInsideTheRenderDomain) {
   const LensParam::LensType types[]{ LensParam::kLinear, LensParam::kFisheyeEqualArea, LensParam::kRectangular,
                                      LensParam::kDualFisheyeEqualArea, LensParam::kGlobe };
   const RenderConfig::VisibleRange ranges[]{ RenderConfig::kUpper, RenderConfig::kLower, RenderConfig::kFull };
-  for (LensParam::LensType t : types) {
-    for (RenderConfig::VisibleRange vis : ranges) {
-      const RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
-      const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-      const Rotation rot = MakeCameraRotation(cfg);
-      const std::vector<uint8_t> outline = BuildHorizonMask(cfg, rot, short_pix);
-      const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
-      if (outline.size() != visible.size()) {
-        ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
-                      << visible.size() << ")";
-        continue;
-      }
-      size_t outside = 0;
-      for (size_t i = 0; i < outline.size(); ++i) {
-        if (outline[i] != 0 && visible[i] == 0) {
-          ++outside;
+  // Swept over the front clip as well as `visible`, because the two clips reach this mask by
+  // different routes — `visible` through VisibleByRange, `front` through a camera-forward dot —
+  // and a horizon that honoured only one of them would leave a line floating over a black half.
+  for (bool front : { false, true }) {
+    for (LensParam::LensType t : types) {
+      for (RenderConfig::VisibleRange vis : ranges) {
+        RenderConfig cfg = MakeCfg(t, t == LensParam::kGlobe ? 30.0f : 120.0f, 128, 96, vis);
+        cfg.front_ = front;
+        const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+        const Rotation rot = MakeCameraRotation(cfg);
+        const std::vector<uint8_t> outline = BuildHorizonMask(cfg, rot, short_pix);
+        const std::vector<uint8_t> visible = BuildVisibleMask(cfg, rot, short_pix);
+        if (outline.size() != visible.size()) {
+          ADD_FAILURE() << TypeName(t) << ": the two masks of one frame differ in size (" << outline.size() << " vs "
+                        << visible.size() << ")";
+          continue;
         }
+        size_t outside = 0;
+        for (size_t i = 0; i < outline.size(); ++i) {
+          if (outline[i] != 0 && visible[i] == 0) {
+            ++outside;
+          }
+        }
+        EXPECT_EQ(outside, 0u) << TypeName(t) << ", visible " << static_cast<int>(vis) << ", front " << front
+                               << ": horizon marked on " << outside << " pixel(s) the lens does not image";
       }
-      EXPECT_EQ(outside, 0u) << TypeName(t) << ", visible " << static_cast<int>(vis) << ": horizon marked on "
-                             << outside << " pixel(s) the lens does not image";
     }
+  }
+}
+
+// The containment check above cannot tell "clipped correctly" from "clipped away entirely", so the
+// clip's effect is stated separately: on a full-sky lens looking at the horizon, the front clip has
+// to take a real bite out of the line and leave a real piece of it.
+TEST(HorizonMask, FrontClipHalvesTheHorizonWithoutErasingIt) {
+  for (LensParam::LensType t : { LensParam::kDualFisheyeEqualArea, LensParam::kRectangular }) {
+    RenderConfig cfg = MakeCfg(t, 180.0f, 192, 96, RenderConfig::kFull, /*el=*/0.0f);
+    const size_t unclipped = CountOn(Outline(cfg));
+    if (unclipped == 0u) {
+      // Non-fatal: the second lens type must still be reported.
+      ADD_FAILURE() << TypeName(t) << ": the unclipped horizon is empty, so this row proves nothing";
+      continue;
+    }
+    cfg.front_ = true;
+    const size_t clipped = CountOn(Outline(cfg));
+    EXPECT_GT(clipped, 0u) << TypeName(t) << ": the front clip erased the whole horizon";
+    EXPECT_LT(clipped, unclipped) << TypeName(t) << ": the front clip left the horizon untouched";
   }
 }
 

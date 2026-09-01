@@ -230,6 +230,34 @@ TEST(RenderConsumerZenithNadir, SingleSidedViewDrawsExactlyOneRing) {
   EXPECT_EQ(elsewhere, 0u) << "the invisible nadir must not draw a ghost ring anywhere on the canvas";
 }
 
+TEST(RenderConsumerZenithNadir, FrontClipRemovesTheMarkerBehindTheCamera) {
+  // The wiring check for RenderConfig::front_ -> annotation::Request::view.front
+  // (render.cpp MakeMaskRequest). It is worth its own case because a miss here is INVISIBLE to the
+  // mask tests: BuildVisibleMask would clip the background correctly while every annotation kept
+  // drawing over the clipped-away half, i.e. rings floating on black. Zenith and nadir are the
+  // clearest probe because they are opposite directions, so the clip has to keep exactly one.
+  for (const float el : { 45.0f, -45.0f }) {
+    RenderConfig cfg = MakeBothVisibleConfig();
+    cfg.view_.el_ = el;
+
+    RenderConsumer unclipped(WithMarker(cfg, 10.0f, 1.0f, 1.0f, 0.0f, 0.0f), ColorClassTable{}, MakeSun());
+    if (!unclipped.ZenithPointForTest().valid || !unclipped.NadirPointForTest().valid) {
+      // Non-fatal: the up-looking row must not swallow the down-looking one.
+      ADD_FAILURE() << "el " << el << ": the fixture must image both poles, or the clip proves nothing";
+      continue;
+    }
+
+    cfg.front_ = true;
+    RenderConsumer clipped(WithMarker(cfg, 10.0f, 1.0f, 1.0f, 0.0f, 0.0f), ColorClassTable{}, MakeSun());
+    // Looking up keeps the zenith and drops the nadir; looking down, the other way round. Stated
+    // as "the pole the camera faces survives" rather than as a fixed pair, so the case cannot pass
+    // by clipping the wrong one.
+    const bool looking_up = el > 0.0f;
+    EXPECT_EQ(clipped.ZenithPointForTest().valid, looking_up) << "el " << el << ": wrong verdict for the zenith";
+    EXPECT_EQ(clipped.NadirPointForTest().valid, !looking_up) << "el " << el << ": wrong verdict for the nadir";
+  }
+}
+
 TEST(RenderConsumerZenithNadir, RadiusIsTheConfiguredOne) {
   // Two consumers differing only in radius must paint two different circles. A hardcoded radius
   // reads as correct on any single-radius fixture.

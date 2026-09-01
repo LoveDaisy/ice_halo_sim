@@ -326,6 +326,22 @@ TEST(SceneAddRenderer, MatchesConfigToJson) {
   EXPECT_EQ(SceneRoot(g.get()).at("render").at(0), oracle.at("render").at(0));
 }
 
+TEST(SceneAddRenderer, FrontDefaultsOffAndIsStatedRatherThanOmitted) {
+  // A zero-initialized param asks for no clip — the same thing a config predating the field means.
+  // Written out as `false` rather than left absent, matching "visible", so a reader never has to
+  // know the default to know what the config says.
+  LUMICE_RenderParam r{};
+  r.resolution_w = 320;
+  r.resolution_h = 240;
+
+  SceneGuard g;
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("front"));
+  EXPECT_FALSE(jr.at("front").get<bool>());
+}
+
 TEST(SceneAddScatterLayer, MatchesConfigToJson) {
   LUMICE_ScatterLayer layer{};
   layer.probability = 0.3f;
@@ -634,6 +650,32 @@ LUMICE_Distribution Dist(int type, float center, float spread) {
 }
 
 }  // namespace
+
+TEST(SceneAddRenderer, FrontIsItsOwnWireKeyAndRoundTrips) {
+  // v4.20's ABI append. The wire key must be a top-level "front" boolean sitting BESIDE "visible",
+  // because the alternative — folding it into the visible enum — decodes to "upper" without an
+  // error on the far side (NLOHMANN_JSON_SERIALIZE_ENUM's first-entry rule).
+  LUMICE_RenderParam r{};
+  r.resolution_w = 256;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.visible = LUMICE_VISIBLE_FULL;
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  r.front = 1;
+
+  SceneGuard g;
+  int id = -1;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("front"));
+  EXPECT_TRUE(jr.at("front").is_boolean());
+  EXPECT_TRUE(jr.at("front").get<bool>());
+  EXPECT_EQ(jr.at("visible").get<std::string>(), "full");
+
+  ExpectLosslessRoundTrip(g.get());
+}
 
 TEST(SceneRoundTrip, EmptyScene) {
   SceneGuard g;

@@ -48,6 +48,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -93,6 +94,20 @@ std::vector<uint8_t> CoreMask(const RenderConfig& cfg) {
 //   lat = asin(clamp(-world_dir.z, -1, 1));
 //   u_visible == 0 (upper) && lat < 0 -> not visible
 //   u_visible == 1 (lower) && lat > 0 -> not visible
+// The shader's front-hemisphere rule, from the same main():
+//   u_front == 1 && dot(world_dir, u_view_matrix[2]) > 0 -> not visible
+// u_view_matrix[2] is the matrix's third COLUMN, which BuildViewMatrix fills with MINUS the
+// camera forward (out[6..8], and its comment says so) — hence "> 0 discards", where core's
+// mask_detail::FrontVisible writes the same cut as ">= 0 keeps" against the forward itself. The
+// two spellings agree on the seam as well as off it: `> 0` discards and `>= 0` keeps both hand
+// dot == 0 to the visible side.
+bool FrontInGuiTerms(bool front, const float view_matrix[9], float wx, float wy, float wz) {
+  if (!front) {
+    return true;
+  }
+  return !(wx * view_matrix[6] + wy * view_matrix[7] + wz * view_matrix[8] > 0.0f);
+}
+
 bool VisibleInGuiTerms(RenderConfig::VisibleRange vis, float wz) {
   const float lat = std::asin(std::clamp(-wz, -1.0f, 1.0f));
   if (vis == RenderConfig::kUpper && lat < 0.0f) {
@@ -133,7 +148,8 @@ std::vector<uint8_t> GuiMask(const RenderConfig& cfg) {
                                                      static_cast<int>(cfg.lens_.type_), cfg.lens_.fov_, view_matrix,
                                                      &dx, &dy, &dz, &valid);
       mask[static_cast<size_t>(py) * static_cast<size_t>(w) + static_cast<size_t>(px)] =
-          (valid && VisibleInGuiTerms(cfg.visible_, dz)) ? 1 : 0;
+          (valid && VisibleInGuiTerms(cfg.visible_, dz) && FrontInGuiTerms(cfg.front_, view_matrix, dx, dy, dz)) ? 1 :
+                                                                                                                   0;
     }
   }
   return mask;
@@ -387,6 +403,146 @@ TEST(VisibleMaskGuiParity, VisibleRangeMatchesTheGuiRule) {
     const size_t on = CountOn(CoreMask(cfg));
     EXPECT_GT(on, 0u);
     EXPECT_LT(on, full_on) << "the horizon must actually cut this frame, or the comparison is vacuous";
+  }
+}
+
+// =================================================================================================
+// The front-hemisphere clip
+// =================================================================================================
+
+TEST(VisibleMaskGuiParity, FrontClipMatchesTheGuiRule) {
+  // The clip has to land on the same pixels on both sides, and the two sides compute it from
+  // DIFFERENT objects: core rotates (0,0,1) through its own Rotation chain and negates, the GUI
+  // reads column 2 of a matrix assembled from az/el/roll in closed form. That the two are the same
+  // vector is exactly what is unproven until compared.
+  //
+  // Only the lens types whose recovered DIRECTIONS already agree (see THE KNOWN DIVERGENCE at the
+  // top, and RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot below): on a single-lens fisheye
+  // the domains differ by an annulus, and on rectangular the two inverses disagree about azimuth.
+  // Either would swamp this comparison with a disagreement that is not about `front`. The globe
+  // agrees but is empty under the clip, so it gets its own test below rather than a vacuous row
+  // here.
+  const LensParam::LensType types[] = { LensParam::kLinear, LensParam::kDualFisheyeEqualArea };
+  // Off-axis on all three angles: a clip derived from the wrong column, or from a matrix that
+  // ignores roll, survives an axis-aligned view and dies here.
+  for (LensParam::LensType t : types) {
+    for (RenderConfig::VisibleRange vis : kAllRanges) {
+      RenderConfig cfg = MakeCfg(t, t == LensParam::kLinear ? 90.0f : 180.0f, 128, 96, vis, /*el=*/25.0f,
+                                 /*az=*/40.0f, /*ro=*/15.0f);
+      cfg.front_ = true;
+      ExpectIdentical(cfg, "front clip");
+
+      // ...and the clip must actually be cutting something on the type that can see behind the
+      // camera, or the agreement above is vacuous. Linear at 90 deg fov sees only forward, so its
+      // no-op is the point of the check above rather than a gap here.
+      if (t != LensParam::kLinear) {
+        RenderConfig unclipped = cfg;
+        unclipped.front_ = false;
+        EXPECT_LT(CountOn(CoreMask(cfg)), CountOn(CoreMask(unclipped)))
+            << "type " << static_cast<int>(t) << ": the front clip removed nothing";
+      }
+    }
+  }
+}
+
+// The globe is the one lens for which `front` is not a crop but a blackout, and BOTH sides do it:
+// globeInverse returns the direction from the sphere's centre to the point on the near side of the
+// silhouette, which by construction points back TOWARD the camera. Every imaged pixel therefore
+// fails a "keep what the camera faces" test. That is a consequence of what the globe lens is — a
+// view of the sky from outside — not a bug in either implementation, and it predates the clip
+// gaining a core field: the preview shader has applied u_front to the globe branch all along.
+// Pinned rather than left implicit so that a future change which makes the globe survive the clip
+// has to say so out loud.
+TEST(VisibleMaskGuiParity, FrontClipEmptiesTheGlobeOnBothSides) {
+  for (RenderConfig::VisibleRange vis : kAllRanges) {
+    RenderConfig cfg = MakeCfg(LensParam::kGlobe, 30.0f, 128, 96, vis, /*el=*/25.0f, /*az=*/40.0f);
+    if (CountOn(CoreMask(cfg)) == 0u || CountOn(GuiMask(cfg)) == 0u) {
+      // Non-fatal: one vacuous visible range must not hide the other two.
+      ADD_FAILURE() << "visible " << static_cast<int>(vis)
+                    << ": the unclipped globe images nothing, so this row proves nothing";
+      continue;
+    }
+    cfg.front_ = true;
+    EXPECT_EQ(CountOn(CoreMask(cfg)), 0u);
+    EXPECT_EQ(CountOn(GuiMask(cfg)), 0u);
+  }
+}
+
+// A SECOND known divergence, found by the front-clip comparison above and pinned here rather than
+// left as a red or quietly worked around. It is not about `front`, and it is not new:
+//
+//   For the RECTANGULAR lens, core's inverse adds p.az0 — the camera azimuth, via
+//   ComputeScaleAz0 — to the longitude it reads out of a pixel, so the equirectangular map is
+//   RECENTRED on where the camera is looking. The GUI's rectangularInverse takes longitude
+//   straight from pixel x with no azimuth term at all (and its caller sets
+//   needs_view_transform = false, so the view matrix never reaches it either). The two therefore
+//   recover directions that differ by a rotation of exactly `az` about the world z axis.
+//
+// Nothing caught this before because every comparison in this file, and the mask itself, read only
+// wz — and a rotation about z leaves wz untouched. The front clip is the first consumer of the
+// direction's HORIZONTAL components, which is why it surfaced here.
+//
+// Which side is right is a product question about what the rectangular projection means (does
+// panning the camera scroll the map, or is the map world-fixed?), not something this test can
+// settle, and answering it changes every rectangular render on one side or the other. So this
+// test states the divergence exactly: same wz, azimuth off by `az`.
+TEST(VisibleMaskGuiParity, RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot) {
+  const int w = 128;
+  const int h = 96;
+  const int px = 8;
+  const int py = 25;
+
+  auto core_dir = [&](float az) {
+    const RenderConfig cfg = MakeCfg(LensParam::kRectangular, 180.0f, w, h, RenderConfig::kFull, /*el=*/0.0f, az);
+    const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+    const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(w, h)));
+    return lumice::mask_detail::PixelToWorld(cfg, p, rot, px, py);
+  };
+  auto gui_dir = [&](float az) {
+    float view_matrix[9];
+    lumice::gui::BuildViewMatrix(0.0f, az, 0.0f, view_matrix);
+    const float sx = static_cast<float>(px) + 0.5f - static_cast<float>(w) / 2.0f;
+    const float sy = -(static_cast<float>(py) + 0.5f - static_cast<float>(h) / 2.0f);
+    float dx = 0.0f;
+    float dy = 0.0f;
+    float dz = 0.0f;
+    bool valid = false;
+    lumice::gui::detail::PixelToWorldDirForTesting(sx, sy, static_cast<float>(w), static_cast<float>(h),
+                                                   static_cast<int>(LensParam::kRectangular), 180.0f, view_matrix, &dx,
+                                                   &dy, &dz, &valid);
+    return std::array<float, 4>{ dx, dy, dz, valid ? 1.0f : 0.0f };
+  };
+  auto azimuth_deg = [](float x, float y) { return std::atan2(y, x) * 180.0f / 3.14159265358979323846f; };
+
+  // At az = 0 the two agree completely — the divergence is the azimuth term and nothing else.
+  {
+    const auto c = core_dir(0.0f);
+    const auto g = gui_dir(0.0f);
+    ASSERT_TRUE(c.valid);
+    ASSERT_EQ(g[3], 1.0f);
+    EXPECT_NEAR(c.x, g[0], 1e-5f);
+    EXPECT_NEAR(c.y, g[1], 1e-5f);
+    EXPECT_NEAR(c.z, g[2], 1e-5f);
+  }
+
+  // Panning the camera moves core's sky and leaves the GUI's where it was, by exactly az.
+  for (float az : { 40.0f, -40.0f, 90.0f }) {
+    const auto c = core_dir(az);
+    const auto g = gui_dir(az);
+    if (!c.valid || g[3] != 1.0f) {
+      // Non-fatal: a pixel that stops being imaged at one azimuth must not hide the other two.
+      ADD_FAILURE() << "az " << az << ": the probe pixel is no longer imaged by both sides";
+      continue;
+    }
+    EXPECT_NEAR(c.z, g[2], 1e-5f) << "az " << az << ": the divergence is a rotation about z, so wz must agree";
+    float delta = azimuth_deg(c.x, c.y) - azimuth_deg(g[0], g[1]);
+    while (delta > 180.0f) {
+      delta -= 360.0f;
+    }
+    while (delta < -180.0f) {
+      delta += 360.0f;
+    }
+    EXPECT_NEAR(delta, az, 1e-2f) << "az " << az << ": core is expected to lead the GUI by exactly the view azimuth";
   }
 }
 

@@ -598,6 +598,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
   "lens_shift": [<x偏移>, <y偏移>],
   "view": { ... },
   "visible": "upper" | "lower" | "full",
+  "front": <bool>,
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
   "intensity_factor": <浮点数>,
@@ -617,6 +618,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `lens_shift` | 整数数组 | 否 | [0, 0] | 镜头偏移 [x, y] |
 | `view` | 对象 | 否 | 见下方 | 视角配置 |
 | `visible` | 字符串 | 否 | "upper" | 可见半球："upper"、"lower"、"full" |
+| `front` | 布尔 | 否 | false | 前半球裁剪：只保留相机朝向的那半边。它是**独立于 `visible` 的第二个裁剪维度**，两者相与，而不是 `visible` 的第四个取值。（写成 `"visible": "front"` 会被静默当作 `"upper"`，务必用这个独立键。） |
 | `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB，**sRGB** 空间（即取色器上显示的那组数） |
 | `ray_color` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
 | `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子（`2^EV`） |

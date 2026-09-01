@@ -614,6 +614,7 @@ The render configuration defines the renderer parameters.
   "lens_shift": [<x offset>, <y offset>],
   "view": { ... },
   "visible": "upper" | "lower" | "full",
+  "front": <bool>,
   "background": [<r>, <g>, <b>],
   "ray_color": [<r>, <g>, <b>],
   "intensity_factor": <float>,
@@ -633,6 +634,7 @@ The render configuration defines the renderer parameters.
 | `lens_shift` | integer array | no | [0, 0] | Lens shift [x, y] |
 | `view` | object | no | see below | View configuration |
 | `visible` | string | no | "upper" | Visible hemisphere: "upper", "lower", or "full" |
+| `front` | boolean | no | false | Front-hemisphere clip: keep only what the camera faces. A SECOND clip dimension, independent of `visible` and ANDed with it — not a fourth `visible` value. (Writing `"visible": "front"` is silently read as `"upper"`, so use this key.) |
 | `background` | float array | no | [0, 0, 0] | Background color RGB, in **sRGB** (the numbers a color picker shows) |
 | `ray_color` | float array | no | [-1, -1, -1] | Ray color RGB; -1 means use true color |
 | `intensity_factor` | float | no | 1.0 | Intensity factor (`2^EV`) |

@@ -114,6 +114,14 @@ TEST(RenderConfigTest, EachLayoutField_ReturnsTrue) {
     mod.overlap_ = 0.5f;
     EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "overlap";
   }
+
+  // front — layout, not appearance: it is an input to the same visible_mask_ that visible_ is an
+  // input to, and that mask is built once in the consumer's constructor.
+  {
+    auto mod = base;
+    mod.front_ = true;
+    EXPECT_TRUE(lumice::NeedsRebuild(base, mod)) << "front";
+  }
 }
 
 TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
@@ -373,6 +381,53 @@ TEST(RenderConfigZenithNadirTest, NeedsRebuild_TreatsTheMarkerAsAppearance) {
   b.zenith_nadir_.opacity_ = 0.9f;
   b.zenith_nadir_.color_[0] = 0.0f;
   EXPECT_FALSE(lumice::NeedsRebuild(a, b));
+}
+
+// The front-hemisphere clip (v4.20). The property that matters most here is NEGATIVE: it must be a
+// key of its own and must NOT be expressible through "visible". NLOHMANN_JSON_SERIALIZE_ENUM maps
+// an unregistered string to the FIRST table entry without an error, so a config that tried to say
+// "visible": "front" would decode to kUpper and render the wrong half in silence.
+TEST(RenderConfigFrontTest, ToJson_EmitsATopLevelFrontKeyBesideVisible) {
+  auto cfg = MakeBaseline();
+  cfg.visible_ = lumice::RenderConfig::kFull;
+  cfg.front_ = true;
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("front"));
+  EXPECT_TRUE(j["front"].is_boolean());
+  EXPECT_TRUE(j["front"].get<bool>());
+  // Beside "visible", not inside it and not inside "grid": the two clips are orthogonal, and front
+  // is not an annotation.
+  EXPECT_EQ(j["visible"].get<std::string>(), "full");
+  EXPECT_FALSE(j["grid"].contains("front"));
+
+  // Written unconditionally, like "visible" — an off clip is stated, not omitted.
+  cfg.front_ = false;
+  nlohmann::json j_off = cfg;
+  ASSERT_TRUE(j_off.contains("front"));
+  EXPECT_FALSE(j_off["front"].get<bool>());
+}
+
+TEST(RenderConfigFrontTest, DefaultIsOffAndAnUnregisteredVisibleStringIsNotIt) {
+  EXPECT_FALSE(lumice::RenderConfig{}.front_);
+
+  // The trap this field exists to avoid, pinned as a fact about the enum rather than a warning in
+  // prose: "front" is not a VisibleRange, and asking for it yields kUpper with no error.
+  auto decoded = lumice::RenderConfig::kFull;
+  nlohmann::json("front").get_to(decoded);
+  EXPECT_EQ(decoded, lumice::RenderConfig::kUpper);
+}
+
+TEST(RenderConfigFrontTest, OperatorEq_ComparesFront) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.front_ = true;
+  EXPECT_FALSE(a == b);
+  // Not aliased onto visible_: two configs that differ ONLY in front must still compare unequal
+  // while their visible_ agree.
+  EXPECT_EQ(a.visible_, b.visible_);
 }
 
 }  // namespace
