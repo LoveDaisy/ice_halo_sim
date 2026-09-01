@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788234598215,
+  "lastUpdate": 1788234600599,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "112183c86595221b64fc96eba2f3b6a5ba90d3b4",
-          "message": "Merge pull request #190 from LoveDaisy/feat/raypath-color-gpu-parity\n\nphase-3c: GPU 染色三后端 parity (Metal+CUDA Design-2 迁移 + Fork-C 退休)",
-          "timestamp": "2026-07-13T18:21:38+08:00",
-          "tree_id": "a18a65f8c2734ab7abbdc729b38636720a51cf7b",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/112183c86595221b64fc96eba2f3b6a5ba90d3b4"
-        },
-        "date": 1783938530433,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 85.6,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 90.3,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "86c3a72400dd77867bcdfc25f39d58157cb37d9e",
           "message": "Merge pull request #191 from LoveDaisy/fix/gpu-color-lane-multibatch-loss\n\nfix(gpu-color): device Y-lane accumulator persist across batches (multi-batch density loss)",
           "timestamp": "2026-07-14T08:28:32+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "93c163fe3b8be8017bff712da303b6afa9ba8c03",
+          "message": "Merge pull request #289 from LoveDaisy/task/lens-json-names-oob\n\nfix(gui): 修 kLensTypeJsonNames 越界读（用户可达崩溃）",
+          "timestamp": "2026-09-01T11:38:10+08:00",
+          "tree_id": "386dbbee06c0b18a0469f3dd58b480cc1f8c7e05",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/93c163fe3b8be8017bff712da303b6afa9ba8c03"
+        },
+        "date": 1788234599814,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 81.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 97.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.7,
             "unit": "%"
           }
         ]
