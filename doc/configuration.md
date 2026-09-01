@@ -693,7 +693,7 @@ The render configuration defines the renderer parameters.
 
 ```json
 {
-  "central": [ ... ],
+  "angular_dist": [ ... ],
   "elevation": [ ... ],
   "horizon": <boolean>
 }
@@ -703,20 +703,43 @@ The render configuration defines the renderer parameters.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `central` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
-| `elevation` | object array | no | [] | **Parsed but not rendered.** Same as `central`. |
+| `angular_dist` | object array | no | [] | Circles of constant angular distance from the sun — 22 and 46 being the halos most configs draw. **Rendered.** `value`, `opacity` and `color` take effect; `width` does not (see below). Read from the legacy key `central` when this one is absent. |
+| `elevation` | object array | no | [] | **Parsed but not rendered.** The lines are read, validated and round-tripped, and nothing draws them. See "Grid lines that are not drawn" below. |
 | `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
+
+**`central` is the old name for `angular_dist`**
+
+The key was renamed because `central` never said what the number is: it is the angular distance
+from the sun. Both decoders read `central` as an alias, with `angular_dist` winning if a file
+somehow carries both; the encoder only ever writes `angular_dist`, so a config loaded and saved
+comes back under the new name. Old files keep working indefinitely — there is no version gate on
+this, because the two spellings never meant different things.
+
+The C API field was renamed to match (`LUMICE_RenderParam.angular_dist` / `angular_dist_count`,
+was `central_grid` / `central_grid_count`). That is a source-compatibility break with no layout
+change; see the BREAKING note at `LUMICE_API_VERSION` in `src/include/lumice.h`.
+
+**What `angular_dist` draws, and what it ignores**
+
+`value`, `opacity` and `color` all take effect: each line is drawn as its own circle, in its own
+colour, blended at its own opacity. `width` is read, validated and round-tripped but changes no
+pixel — the line's thickness comes from the local gradient of the angular-distance field, which
+keeps a curve one line wide wherever it runs across a projection that stretches, and takes no
+width input. A config that sets `width` is not in error; it simply gets the same picture.
 
 **Grid lines that are not drawn**
 
-`central` and `elevation` describe per-line appearance (`value` / `width` / `opacity` / `color`),
-and the renderer has no consumer for either list — a config that sets them parses cleanly, compares
-and serializes correctly, and produces exactly the image it would produce without them. They are
-kept in the schema rather than removed because the GUI preview draws its own altitude/azimuth grid
-and its own sun angular-distance circles, and the two descriptions are not the same shape (the GUI
-derives a single FOV-adaptive step and one shared colour, this schema names each line individually).
-Reconciling them is a design question, not an implementation gap, so the keys stay and this note
-says plainly what they do today. `horizon` is the one member of this object that does draw.
+`elevation` describes per-line appearance (`value` / `width` / `opacity` / `color`), and the
+renderer has no consumer for the list — a config that sets it parses cleanly, compares and
+serializes correctly, and produces exactly the image it would produce without it. It is kept in
+the schema rather than removed because the GUI preview draws its own altitude/azimuth grid, and
+the two descriptions are not the same shape (the GUI derives a single FOV-adaptive step and one
+shared colour, this schema names each line individually). Reconciling them is a design question,
+not an implementation gap, so the key stays and this note says plainly what it does today.
+
+`angular_dist` was on this list until it gained a renderer; it needed no such reconciling, because
+the GUI's sun circles are already an explicit list of angles — only their appearance is shared,
+which this schema expresses by repeating it per line.
 
 **Grid line configuration**:
 

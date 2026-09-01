@@ -265,13 +265,17 @@
 ### 9.4 改动纪律
 
 - 动分叉面（增/删/改一个键）时，**先在本节说明理由再改清单**。⛔ 不得因为那道闸红了就把键加进清单绕开。
-- **辅助线相关的键（`grid.central` / `grid.elevation` 及将来的标注字段）现在不分叉，
-  是因为两条臂都不填它们。** 给 core 补上注解层绘制能力之后，方向取决于届时的机制裁定：
-  若 GUI 继续在 shader 里自己算+画 overlay，则标注属于**成品图**而非那张全天纹理
-  （往纹理里烤线会被重投影一起重采样、线宽与位置都变形）⇒ 这些键会**加入**分叉面；
-  若改为「core 算出注解几何、两侧各画」，commit 臂才会开始携带真实值，分叉面才可能收敛。
-  （附带一条今天就成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
-  `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它。）
+- **辅助线相关的键：`grid.angular_dist` 已经分叉，`grid.elevation` 仍不分叉。**
+  上一版这里写的是「两条臂都不填它们，所以都不分叉」，那句话对 `angular_dist` 已经过期。
+  裁定结果是上面两个候选里的**第一个**：core 现在算注解几何（`LUMICE_ComputeAnnotationOverlay`），
+  但 GUI 仍然自己画 overlay，因为标注属于**成品图**而不是那张全天纹理——往纹理里烤线会被重投影
+  一起重采样，线宽与位置都变形。所以 export 臂填用户的角度表、commit 臂留空，两者加入分叉面
+  （`grid.horizon` 与 `grid.angular_dist` 两个子键在 `kDivergingKeys` 处按子键豁免）。
+  `grid.elevation` 两条臂仍都不填，仍不分叉：GUI 那份是 FOV 自适应的单一步长 + 共用颜色，
+  与本 schema「逐条命名」的形态还没有对齐方案。
+  （附带一条仍然成立的观察：commit 臂的 `horizon` 值是**惰性**的——GUI 消费
+  `LUMICE_FrameGetRawXyz`，而 horizon 画在 `PostSnapshot` 的 mono 烤图里，GUI 从来不读它；
+  `angular_dist` 在 commit 臂留空是同一个理由的另一面。）
 - 两条臂**是否真的只在清单上分叉**由上面那个用例守；两条臂**各自是否正确**由跨进程的
   CLI↔GUI 出图对照守（`test/gui/parity/`，见 `doc/testing-architecture.md` §4.10）。
   两道闸问的是不同的问题，缺一不可。
