@@ -59,6 +59,9 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/core/test_pcg_ray_base_split.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_wl_stream_decouple.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/core/test_proj.cpp"
+  # Annotation overlay: the generalized level-set extraction every auxiliary line shares, the
+  # row-parallel mask build, and ComputeOverlay.
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_annotation_overlay.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_crystal_sync_group.cpp"
@@ -263,6 +266,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_handedness_guard.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_visible_mask_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_horizon_gui_parity.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"

@@ -408,6 +408,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(lumice_core_src
+  "${PROJ_SRC_DIR}/core/annotation_overlay.cpp"
   "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
   "${PROJ_SRC_DIR}/core/device_filter_desc.cpp"
@@ -417,6 +418,7 @@ set(lumice_core_src
   "${PROJ_SRC_DIR}/core/lat_lut.cpp"
   "${PROJ_SRC_DIR}/core/math.cpp"
   "${PROJ_SRC_DIR}/core/optics.cpp"
+  "${PROJ_SRC_DIR}/core/parallel_rows.cpp"
   "${PROJ_SRC_DIR}/core/projection.cpp"
   "${PROJ_SRC_DIR}/core/raypath.cpp"
   "${PROJ_SRC_DIR}/core/simulator.cpp")

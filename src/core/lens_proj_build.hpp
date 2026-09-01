@@ -10,6 +10,7 @@
 #include "config/render_config.hpp"
 #include "core/geo3d.hpp"
 #include "core/math.hpp"
+#include "core/parallel_rows.hpp"
 #include "core/projection.hpp"
 #include "core/shared/projection_shared.h"
 
@@ -332,8 +333,25 @@ inline float AltitudeDeg(const MaskDir& dir) {
   return std::asin(std::clamp(-dir.z, -1.0f, 1.0f)) * 180.0f / math::kPi;
 }
 
-// Marks the horizon line (altitude = 0) over a whole frame's worth of per-pixel altitude, given
-// in degrees. Row-major W*H in, the same W*H out.
+// Wraps an angle difference in DEGREES into (-180, 180]. Used for CIRCULAR fields (azimuth),
+// where a naive subtraction reads the 179 deg -> -179 deg step as 358 deg instead of 2 deg —
+// both when measuring the local gradient and when measuring distance to a level. Non-circular
+// fields (altitude, angular distance from a direction) must NOT go through this: their range is
+// [-90, 90] / [0, 180] and there is no seam to close.
+inline float WrapAngleDiffDeg(float diff) {
+  while (diff <= -180.0f) {
+    diff += 360.0f;
+  }
+  while (diff > 180.0f) {
+    diff -= 360.0f;
+  }
+  return diff;
+}
+
+// Marks the LEVEL SETS of a per-pixel angle field, given in degrees. Row-major W*H in, the same
+// W*H out. `levels` may hold one value (the celestial horizon: altitude = 0) or many (a parallel
+// / meridian grid, a set of angular-distance circles); every level is drawn into the same output
+// mask because the consumer colours a whole annotation CATEGORY at once, not one line at a time.
 //
 // TWO masks come in, and they are not the same mask. `imaged` says the pixel carries a direction
 // at all, and is what the local gradient is measured across; `drawable` says the annotation is
@@ -357,46 +375,70 @@ inline float AltitudeDeg(const MaskDir& dir) {
 // one constant is either a line invisible at narrow FOV or a band tens of pixels deep at wide FOV.
 // A pixel whose neighbours are both outside the lens's domain gets no line: no local scale can be
 // estimated there, and guessing one is how a horizon appears in a corner that images nothing.
+//
+// The local gradient does not depend on the level, so it is measured ONCE per pixel and every
+// level is tested against it. That is also why generalizing this function costs nothing: shifting
+// the whole field by a constant leaves every neighbour difference unchanged, so a non-zero level
+// needs no separate width rule — only the distance term moves.
+inline std::vector<uint8_t> LevelSetMaskFromField(const std::vector<float>& field, const std::vector<uint8_t>& imaged,
+                                                  const std::vector<uint8_t>& drawable, int width, int height,
+                                                  const std::vector<float>& levels, bool circular) {
+  const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+  std::vector<uint8_t> line(n, 0);
+  if (field.size() != n || imaged.size() != n || drawable.size() != n || levels.empty()) {
+    return line;
+  }
+  ParallelRows(height, n, [&](int row_begin, int row_end) {
+    for (int py = row_begin; py < row_end; py++) {
+      for (int px = 0; px < width; px++) {
+        const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
+        if (drawable[i] == 0) {
+          continue;
+        }
+        float fw = 0.0f;
+        bool any = false;
+        const int nx = (px + 1 < width) ? px + 1 : px - 1;
+        const int ny = (py + 1 < height) ? py + 1 : py - 1;
+        if (nx >= 0 && nx < width) {
+          const size_t j = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(nx);
+          if (imaged[j] != 0) {
+            const float d = field[j] - field[i];
+            fw += std::fabs(circular ? WrapAngleDiffDeg(d) : d);
+            any = true;
+          }
+        }
+        if (ny >= 0 && ny < height) {
+          const size_t j = static_cast<size_t>(ny) * static_cast<size_t>(width) + static_cast<size_t>(px);
+          if (imaged[j] != 0) {
+            const float d = field[j] - field[i];
+            fw += std::fabs(circular ? WrapAngleDiffDeg(d) : d);
+            any = true;
+          }
+        }
+        if (!any) {
+          continue;
+        }
+        const float half_width = std::clamp(fw, 1e-4f, 2.0f) * 1.5f;
+        for (float level : levels) {
+          const float d = field[i] - level;
+          if (std::fabs(circular ? WrapAngleDiffDeg(d) : d) < half_width) {
+            line[i] = 1;
+            break;
+          }
+        }
+      }
+    }
+  });
+  return line;
+}
+
+// The celestial horizon: the single level set at altitude = 0 of a per-pixel altitude field.
+// Kept as a named entry point because it is what RenderConsumer asks for and what three layers of
+// existing tests pin; the generalization above is the implementation, not a second rule.
 inline std::vector<uint8_t> HorizonLineFromAltitudeField(const std::vector<float>& alt_deg,
                                                          const std::vector<uint8_t>& imaged,
                                                          const std::vector<uint8_t>& drawable, int width, int height) {
-  const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
-  std::vector<uint8_t> line(n, 0);
-  if (alt_deg.size() != n || imaged.size() != n || drawable.size() != n) {
-    return line;
-  }
-  for (int py = 0; py < height; py++) {
-    for (int px = 0; px < width; px++) {
-      const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
-      if (drawable[i] == 0) {
-        continue;
-      }
-      float fw = 0.0f;
-      bool any = false;
-      const int nx = (px + 1 < width) ? px + 1 : px - 1;
-      const int ny = (py + 1 < height) ? py + 1 : py - 1;
-      if (nx >= 0 && nx < width) {
-        const size_t j = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(nx);
-        if (imaged[j] != 0) {
-          fw += std::fabs(alt_deg[j] - alt_deg[i]);
-          any = true;
-        }
-      }
-      if (ny >= 0 && ny < height) {
-        const size_t j = static_cast<size_t>(ny) * static_cast<size_t>(width) + static_cast<size_t>(px);
-        if (imaged[j] != 0) {
-          fw += std::fabs(alt_deg[j] - alt_deg[i]);
-          any = true;
-        }
-      }
-      if (!any) {
-        continue;
-      }
-      const float half_width = std::clamp(fw, 1e-4f, 2.0f) * 1.5f;
-      line[i] = (std::fabs(alt_deg[i]) < half_width) ? 1 : 0;
-    }
-  }
-  return line;
+  return LevelSetMaskFromField(alt_deg, imaged, drawable, width, height, { 0.0f }, /*circular=*/false);
 }
 
 }  // namespace mask_detail
@@ -416,13 +458,15 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
   // drift from the projection it is the inverse of.
   const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
 
-  for (int py = 0; py < height; py++) {
-    for (int px = 0; px < width; px++) {
-      const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
-      const bool on = dir.valid && mask_detail::VisibleByRange(cfg.visible_, dir.z);
-      mask[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)] = on ? 1 : 0;
+  ParallelRows(height, mask.size(), [&](int row_begin, int row_end) {
+    for (int py = row_begin; py < row_end; py++) {
+      for (int px = 0; px < width; px++) {
+        const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
+        const bool on = dir.valid && mask_detail::VisibleByRange(cfg.visible_, dir.z);
+        mask[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)] = on ? 1 : 0;
+      }
     }
-  }
+  });
   return mask;
 }
 
@@ -455,18 +499,20 @@ inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rota
   std::vector<float> alt_deg(n, 0.0f);
   std::vector<uint8_t> imaged(n, 0);
   std::vector<uint8_t> drawable(n, 0);
-  for (int py = 0; py < height; py++) {
-    for (int px = 0; px < width; px++) {
-      const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
-      if (!dir.valid) {
-        continue;
+  ParallelRows(height, n, [&](int row_begin, int row_end) {
+    for (int py = row_begin; py < row_end; py++) {
+      for (int px = 0; px < width; px++) {
+        const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
+        if (!dir.valid) {
+          continue;
+        }
+        const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
+        alt_deg[i] = mask_detail::AltitudeDeg(dir);
+        imaged[i] = 1;
+        drawable[i] = mask_detail::VisibleByRange(cfg.visible_, dir.z) ? 1 : 0;
       }
-      const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
-      alt_deg[i] = mask_detail::AltitudeDeg(dir);
-      imaged[i] = 1;
-      drawable[i] = mask_detail::VisibleByRange(cfg.visible_, dir.z) ? 1 : 0;
     }
-  }
+  });
   return mask_detail::HorizonLineFromAltitudeField(alt_deg, imaged, drawable, width, height);
 }
 
