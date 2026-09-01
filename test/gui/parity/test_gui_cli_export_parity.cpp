@@ -249,15 +249,18 @@ const ParityScene kScenes[] = {
   // corner-to-centre spread, decisive as a red without pushing the corners so far into the
   // grazing region that the comparison is dominated by resampling the source texture's equator.
   //
-  // PROVISIONAL THRESHOLD — this row is being landed as a red-state baseline, before the shader
-  // gains the factor it measures, so it is EXPECTED TO FAIL at this commit. 30.0 is a placeholder
-  // sitting above the un-patched code's measured operating point and below the fixed code's
-  // predicted one; both numbers are replaced by a calibrated pair in the commit that fixes it.
+  // mean 33.184 sigma 0.1076 (N=12, range 32.94-33.34). Threshold 32.0 = mean - 1.18 dB = 11
+  // sigma, and 0.94 dB below the worst honest run. Placed below mean - 1.0 dB rather than at it
+  // because at 32.18 the row would sit 9.3 sigma from its mean, inside the 10-sigma floor the
+  // note above requires; the gap it has to leave open is enormous either way. The break this
+  // scene exists to catch is the relative-illumination factor being absent from the shader, which
+  // is the state the row was landed in and measured at: 26.44, 26.40 and 26.28 dB over three runs
+  // of the un-patched code, 5.6 dB below this threshold.
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/30.0, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/32.0, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the
