@@ -240,7 +240,7 @@ TEST(PreviewJacobian, EqualAreaIsExactlyOneEverywhere) {
 // set by the preview canvas's angular resolution, which is a display choice rather than physics,
 // and would not have made absolute mode comparable across lenses either (the GUI's absolute
 // denominator counts the source texture's pixels while the CLI's counts its own canvas's). See
-// doc/ev-pipeline-architecture.md 7.6.
+// doc/ev-pipeline-architecture.md 7.5.
 
 TEST(PreviewJacobian, OnAxisIsUnityForEveryLensAndFov) {
   for (double fov_deg : { 20.0, 60.0, 120.0, 179.0 }) {

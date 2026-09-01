@@ -38,7 +38,7 @@
 //     bit-for-bit what they were before this factor existed — which is what lets the committed
 //     equal-area reference images stand without a re-shoot.
 //   * Under ABSOLUTE EV the on-axis brightness does not move with FOV either. That is the same
-//     statement, not a separate decision, and doc/ev-pipeline-architecture.md 7.6 records why it is
+//     statement, not a separate decision, and doc/ev-pipeline-architecture.md 7.5 records why it is
 //     the right one: absolute mode's cross-lens comparability is already outside its stated
 //     contract (the GUI's absolute denominator counts the SOURCE TEXTURE's pixels, app.cpp, while
 //     the CLI's counts its own canvas's, render.cpp), so an absolute Omega_p would not repair it.
