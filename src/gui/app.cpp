@@ -109,6 +109,41 @@ float ComputeGridStep(float fov) {
   return 0.5f;
 }
 
+namespace {
+
+// The shared body of the two expansions below: the angles g*step for g over an index range, with
+// the g == 0 curve optionally left out. Written once because the two families differ only in that
+// range and that flag — a second hand-rolled loop is a second place for the range to drift.
+std::vector<float> GridAnglesOverIndexRange(float step, int index_lo, int index_hi, bool skip_zero) {
+  std::vector<float> out;
+  if (index_hi < index_lo) {
+    return out;
+  }
+  out.reserve(static_cast<size_t>(index_hi - index_lo + 1));
+  for (int g = index_lo; g <= index_hi; ++g) {
+    if (skip_zero && g == 0) {
+      continue;
+    }
+    out.push_back(static_cast<float>(g) * step);
+  }
+  return out;
+}
+
+}  // namespace
+
+std::vector<float> ComputeGridElevationAngles(float step) {
+  // ±80°, 0° excluded: the horizon owns that curve and carries its own colour.
+  const int g_max = static_cast<int>(std::round(80.0f / step));
+  return GridAnglesOverIndexRange(step, -g_max, g_max, /*skip_zero=*/true);
+}
+
+std::vector<float> ComputeGridLongitudeAngles(float step) {
+  // (-180°, 180°]: starting one index above -g_max is what keeps the anti-meridian from being
+  // emitted twice, once as -180° and once as +180°.
+  const int g_max = static_cast<int>(std::round(180.0f / step));
+  return GridAnglesOverIndexRange(step, -g_max + 1, g_max, /*skip_zero=*/false);
+}
+
 OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConfig& rc) {
   OverlayLabelInput input{};
   input.lens_type = rc.lens_type;
@@ -119,7 +154,6 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.visible = rc.visible;
   input.front = rc.front;
   input.show_horizon = state.show_horizon_label;
-  input.show_grid = state.show_grid_label;
   input.horizon_alpha = state.horizon_alpha;
 
   std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
@@ -402,12 +436,16 @@ void DoExportPreviewPng() {
   int h = g_preview_vp.vp_h;
   // Built at the FBO's own size, which for this export is the live viewport's, so the anchors need
   // no rescaling and the exported PNG puts the numbers where the screen does.
-  AngularDistLabelSet circles;
+  std::vector<CurveLabelSet> curve_labels;
   if (overlay.has_value() && g_state.show_sun_circles_label) {
-    circles =
-        BuildAngularDistLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h));
+    curve_labels.push_back(
+        BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
   }
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay, circles);
+  if (overlay.has_value() && g_state.show_grid_label) {
+    curve_labels.push_back(
+        BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  }
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay, curve_labels);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;

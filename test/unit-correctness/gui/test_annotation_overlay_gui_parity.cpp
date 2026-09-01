@@ -396,11 +396,17 @@ TEST(AnnotationOverlayGuiParity, VisibleRangeIsNotAppliedByTheAnnotationForward)
 // =================================================================================================
 // Label anchors: core's migrated curve walk against the GUI's own.
 //
-// This is the assertion the migration is FOR. ComputeOverlayLabels stays in the tree for now (the
-// consumer-side switch is a downstream task), so the two can be run over the same view and
-// compared label by label — which is the evidence required before the GUI's copy is deleted.
+// This is the assertion the migration was FOR: run the two walks over the same view and compare
+// them label by label, which is the evidence required before the GUI's copy is deleted.
 //
-// The two walks sample the same curves at the same density and apply the same boundary/interior
+// WHAT IS LEFT TO COMPARE. The parallels and the meridians have since been deleted from the GUI —
+// the preview and the export read core's anchors now — so those two families have one
+// implementation and nothing to compare against; see the retirement note further down for where
+// their propositions went. The horizon still has a GUI-side walk (process_altitude_curve, at
+// altitude 0) and will until the rest of the annotation layer moves over, so the cases below run
+// on it, over the same six projections they always did.
+//
+// The two walks sample the same curve at the same density and apply the same boundary/interior
 // dispatch; what differs underneath is the forward projection, which the tests above have already
 // shown to agree on the canvas. So a disagreement here is a disagreement about the ALGORITHM, not
 // about the lens.
@@ -408,35 +414,12 @@ TEST(AnnotationOverlayGuiParity, VisibleRangeIsNotAppliedByTheAnnotationForward)
 
 namespace {
 
-// The grid the GUI derives from a single step, restated so core can be handed the same curves.
-// ComputeOverlayLabels walks parallels at g * step for g in [-round(80/step), +round(80/step)]
-// excluding 0 (the horizon owns it), and meridians at g * step for g in
-// [-round(180/step) + 1, +round(180/step)] so that 180 deg appears once rather than twice.
-std::vector<float> GuiParallels(float step) {
-  const int g_max = static_cast<int>(std::round(80.0f / step));
-  std::vector<float> out;
-  for (int g = -g_max; g <= g_max; ++g) {
-    if (g != 0) {
-      out.push_back(static_cast<float>(g) * step);
-    }
-  }
-  return out;
-}
-
-std::vector<float> GuiMeridians(float step) {
-  const int g_max = static_cast<int>(std::round(180.0f / step));
-  std::vector<float> out;
-  for (int g = -g_max + 1; g <= g_max; ++g) {
-    out.push_back(static_cast<float>(g) * step);
-  }
-  return out;
-}
-
 struct LabelCase {
   ann::ViewSnapshot view;
+  // Not a curve to walk any more, but still an input: the horizon's label text is formatted to one
+  // decimal or none depending on how fine the grid around it is, on both sides.
   float grid_step = 10.0f;
   bool horizon = true;
-  bool grid = true;
 };
 
 std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
@@ -449,7 +432,6 @@ std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
   in.visible = static_cast<int>(c.view.visible);
   in.front = c.view.front;
   in.show_horizon = c.horizon;
-  in.show_grid = c.grid;
   in.horizon_alpha = 1.0f;
   in.grid_alpha = 1.0f;
   in.grid_step = c.grid_step;
@@ -465,10 +447,6 @@ std::vector<ann::Label> CoreLabels(const LabelCase& c) {
   ann::Request req;
   req.view = c.view;
   req.horizon = c.horizon;
-  if (c.grid) {
-    req.elevation_deg = GuiParallels(c.grid_step);
-    req.longitude_deg = GuiMeridians(c.grid_step);
-  }
   return ann::ComputeOverlay(req).labels;
 }
 
@@ -528,84 +506,22 @@ TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderAHemisphereRestriction) {
   }
 }
 
-TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnASingleFisheyeWhoseDomainEdgeIsOffCanvas) {
-  // TWO knife edges have to be kept off this scene, and both are properties of the view rather
-  // than of either implementation:
-  //
-  //  * core's domain boundary (the equator, theta = 90 deg) must project OUTSIDE the canvas
-  //    corners, or core sees arcs the GUI does not — see the pinned case below. For equal-area the
-  //    boundary sits at r_norm = sin(45 deg) / sin(fov/4) and a square canvas reaches r_norm =
-  //    sqrt(2) at its corners, so it clears the frame exactly when fov < 120 deg. 90 deg puts it
-  //    at 1.85 image radii.
-  //  * the zenith must not land ON the image circle. Every meridian passes through it, so if its
-  //    radius is r_norm = 1 to within float noise, each of the 36 meridians independently coin-
-  //    flips on whether its pole sample is inside the viewport — and since the meridian anchor
-  //    search falls back to the pole when nothing else on the curve is visible, the two sides
-  //    disagree about a dozen labels for no reason either of them owns. elevation = fov/2 puts the
-  //    zenith exactly there; 60 deg with a 90 deg fov puts it at 0.68 image radii.
-  LabelCase c;
-  c.view = MakeView(LensParam::kFisheyeEqualArea, 90.0f, 192, 192, RenderConfig::kFull, /*el=*/60.0f, /*az=*/30.0f);
-  ExpectLabelsAgree(c, "single fisheye at 60 deg");
-}
-
-// KNOWN DIVERGENCE (the same one test_visible_mask_gui_parity.cpp pins for the mask, seen here in
-// the label dispatch): at fov >= 120 the single-lens equator projects INSIDE the canvas corners,
-// so the GUI walks a band of sky core culls, and the two label sets stop being the same. This is
-// a difference in DOMAIN, not in placement — the exact comparison above, run at a fov that keeps
-// the equator off the frame, is what shows the placement rule itself agrees.
+// RETIRED with the grid half (see the note below LabelAnchorsAgreeOnALinearLens): two cases stood
+// here, LabelAnchorsAgreeOnASingleFisheyeWhoseDomainEdgeIsOffCanvas and
+// SingleFisheyeLabelsDivergeOnlyPastTheEquatorRadius. Both were about the SINGLE-LENS DOMAIN EDGE
+// — core's fisheye branch stops at the equator (theta = 90 deg) where the GUI's runs to 180 —
+// and both could only see it through the parallels and meridians, the curves that actually cross
+// that edge. The first chose a view that keeps the edge off the canvas so the comparison is exact;
+// the second chose one that brings it on, and pinned the resulting disagreement to labels lying
+// OUTSIDE the equator radius. With the grid's GUI walk deleted the horizon is the only curve left
+// to compare, and it never reaches that edge, so neither case has an input any more: the first
+// went vacuous (its view puts the horizon off-canvas, so the GUI emits nothing at all) and the
+// second read zero disagreements, which is its own "the divergence has disappeared" failure rather
+// than evidence of anything.
 //
-// Pinned by its mechanism rather than by a count: every label the GUI emits that core does not
-// must lie OUTSIDE the radius the equator projects to. A disagreement anywhere inside that radius
-// would be a real placement bug wearing this divergence's clothes.
-TEST(AnnotationOverlayGuiParity, SingleFisheyeLabelsDivergeOnlyPastTheEquatorRadius) {
-  constexpr float kFov = 150.0f;
-  constexpr int kRes = 192;
-  LabelCase c;
-  c.view = MakeView(LensParam::kFisheyeEqualArea, kFov, kRes, kRes, RenderConfig::kFull, /*el=*/45.0f, /*az=*/30.0f);
-  const std::vector<lumice::gui::OverlayLabel> gui = GuiLabels(c);
-  const std::vector<ann::Label> core = CoreLabels(c);
-  ASSERT_FALSE(gui.empty());
-  ASSERT_FALSE(core.empty());
-
-  // Equal-area radius of the equator, in pixels: r_norm = sin(45 deg) / sin(fov/4), scaled by the
-  // image radius. Anything beyond this is sky core does not render and therefore does not
-  // annotate.
-  const float image_radius = static_cast<float>(kRes) / 2.0f;
-  const float equator_radius = image_radius * std::sin(45.0f * kDeg2Rad) / std::sin(kFov * 0.25f * kDeg2Rad);
-  ASSERT_LT(equator_radius, image_radius * std::sqrt(2.0f))
-      << "this fov no longer puts the equator inside the canvas corners, so there is nothing to pin";
-
-  const float tol = AnchorTolerance(c.view);
-  auto radius_of = [&](float px, float py) {
-    const float dx = px - image_radius;
-    const float dy = py - image_radius;
-    return std::sqrt(dx * dx + dy * dy);
-  };
-
-  int inside_disagreements = 0;
-  int outside_disagreements = 0;
-  std::string first_inside;
-  for (const auto& g : gui) {
-    const bool matched = std::any_of(core.begin(), core.end(), [&](const ann::Label& a) {
-      return a.text == g.text && std::fabs(a.px - g.screen_x) <= tol && std::fabs(a.py - g.screen_y) <= tol;
-    });
-    if (matched) {
-      continue;
-    }
-    if (radius_of(g.screen_x, g.screen_y) > equator_radius) {
-      ++outside_disagreements;
-    } else if (inside_disagreements++ == 0) {
-      first_inside = g.text;
-    }
-  }
-  EXPECT_GT(outside_disagreements, 0) << "the divergence this test pins has disappeared; if the two domains were "
-                                         "reconciled, fold this case into the exact comparison above";
-  EXPECT_EQ(inside_disagreements, 0) << inside_disagreements
-                                     << " GUI label(s) inside the equator radius have no core counterpart; first \""
-                                     << first_inside
-                                     << "\". Inside that radius both sides render the same sky, so "
-                                        "this is a placement difference, not the known domain one.";
-}
+// The domain divergence itself is NOT retired: OrthographicDivergesOnlyPastTheImageCircle above
+// pins it directly on the projection, which is where it lives, and
+// test_visible_mask_gui_parity.cpp pins the same edge for the mask.
 
 TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnALinearLens) {
   LabelCase c;
@@ -615,19 +531,27 @@ TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeOnALinearLens) {
   ExpectLabelsAgree(c, "linear, 5 deg grid");
 }
 
-// RETIRED, not lost: there used to be a LabelAnchorsAgreeForAngularDistanceCircles here, comparing
-// core's circle anchors against the GUI's own walk of the same rings. That walk no longer exists —
-// the GUI consumes core's anchors now (AnnotationOverlayCache), which is what this whole file was
-// built to make safe. A parity test needs two implementations, and there is deliberately one.
+// RETIRED, not lost — twice over, and for the same reason both times: a parity test needs two
+// implementations, and each of these families is now down to one.
 //
-// The proposition it carried did not go with it. "An anchor for the N-degree circle actually lies
-// N degrees from the sun" is now asserted directly, against the geometry rather than against a
-// second implementation, in test/unit-correctness/core/test_annotation_overlay.cpp
-// (AngularDistLabelsSitOnTheCircleTheyName) — a stronger statement than agreement with a walk that
-// could have been wrong in the same way.
+// (1) There used to be a LabelAnchorsAgreeForAngularDistanceCircles here, comparing core's circle
+// anchors against the GUI's own walk of the same rings. Its proposition — "an anchor for the
+// N-degree circle actually lies N degrees from the sun" — is asserted directly against the
+// geometry in test/unit-correctness/core/test_annotation_overlay.cpp
+// (AngularDistLabelsSitOnTheCircleTheyName), which is a stronger statement than agreement with a
+// walk that could have been wrong in the same way.
 //
-// The horizon, the parallels and the meridians keep their cases below: those three still have a
-// GUI-side walk, and will until the rest of the annotation layer moves over.
+// (2) The cases below used to compare the PARALLELS and MERIDIANS too, not just the horizon; that
+// is what the `grid` field on LabelCase selected. The GUI's walk of those two families has now been
+// deleted — which is precisely the deletion this file was written to license, so its comparison
+// ending here is the migration completing, not coverage quietly going missing. Their propositions
+// stayed where they always were, in test/unit-correctness/gui/test_overlay_labels.cpp, which asks
+// the same questions about which numbers appear and where; those cases were re-pointed at core's
+// walk through the production chain (AnnotationOverlayCache -> BuildGridLabelSet ->
+// AppendCurveLabels) rather than deleted along with the producer they used to call.
+//
+// The horizon keeps its cases below: it still has a GUI-side walk, and will until the rest of the
+// annotation layer moves over.
 
 TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderTheFrontHemisphereClip) {
   LabelCase c;

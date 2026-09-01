@@ -12,8 +12,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDeg2Rad = kPi / 180.0f;
-constexpr float kRad2Deg = 180.0f / kPi;
-constexpr int kSampleStep = 4;  // pixels between edge samples
 constexpr float kLabelPadding = 2.0f;
 
 // --- Inverse projection functions ported from shader (preview_renderer.cpp) ---
@@ -387,9 +385,6 @@ ImU32 ColorToImU32(const float c[3], int alpha) {
   return IM_COL32(static_cast<int>(c[0] * 255), static_cast<int>(c[1] * 255), static_cast<int>(c[2] * 255), alpha);
 }
 
-constexpr int kGroupGrid = 0;
-constexpr int kGroupSunCircles = 1;
-
 // curve-centric sample. Each (alt_deg, az_deg, world_dir) is walked along a
 // level-set curve (altitude=const / azimuth=const / sun_dist=const); after
 // forward projection it is either visible (inside viewport ∩ projection
@@ -407,7 +402,7 @@ struct CurveSample {
 void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, float vp_screen_y, float vp_screen_w,
                           float vp_screen_h, std::vector<OverlayLabel>& out) {
   out.clear();
-  if (!input.show_horizon && !input.show_grid)
+  if (!input.show_horizon)
     return;
 
   // View matrix for view-transformed lens types (linear / fisheye / globe);
@@ -425,9 +420,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   const float hw = res_x * 0.5f, hh = res_y * 0.5f;
 
   const int horizon_a = static_cast<int>(input.horizon_alpha * 255);
-  const int grid_a = static_cast<int>(input.grid_alpha * 255);
   const ImU32 horizon_col = ColorToImU32(input.horizon_color, horizon_a);
-  const ImU32 grid_col = ColorToImU32(input.grid_color, grid_a);
 
   // kFrontEps semantics mirror the boundary-centric implementation's
   // dot >= -kFrontEps cull: kFrontEps ≈ sin(0.57°), the float-noise band at
@@ -450,13 +443,10 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   };
 
   // Closed-curve azimuth / open-curve altitude sampling densities.
-  // 360 steps over 360° = 1°/step (visually accurate at typical FOV); the
-  // explore probe used 720/360 for measurement only — production stays at
-  // 360/180 per plan §3 取舍 (≈58 curves × ~360 samples × <100 ns =
-  // sub-2 ms / frame, 60 fps safe). Adjust if visual walk-through finds
-  // jaggedness at extreme curvature.
+  // 360 steps over 360 deg = 1 deg/step, which is what core's own walk uses for the curves that
+  // moved over — the two have to sample at the same density or their anchors land a step apart.
+  // The altitude counterpart went with the meridian walk it served.
   constexpr int kCurveAzSteps = 360;
-  constexpr int kCurveAltSteps = 180;
 
   // Forward-project a world direction and classify as "visible" = projection
   // domain ∩ viewport rect ∩ hemisphere predicate. Centralises the projection
@@ -513,7 +503,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
   // fixed altitude. Direction convention matches make_sample's inverse:
   //   altitude = asin(-z) → z = -sin(alt)
   //   azimuth  = atan2(-y, -x) → x = -cos(alt)cos(az), y = -cos(alt)sin(az)
-  // Used by horizon (alt=0) and grid latitudes.
+  // The horizon (alt=0) is its only caller now; the grid's parallels used to be the other.
   auto process_altitude_curve = [&](float alt_deg, ImU32 color) {
     const float alt_rad = alt_deg * kDeg2Rad;
     const float cos_a = std::cos(alt_rad);
@@ -532,95 +522,31 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     const char* fmt = (input.grid_step >= 1.0f) ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0";
     char buf[32];
     std::snprintf(buf, sizeof(buf), fmt, alt_deg);
+    // kGroupGrid, not a group of its own: the horizon is the parallel at altitude 0, and it
+    // competed with the rest of the grid for space back when the rest of the grid was walked here.
+    // Core's grid anchors join the same group (BuildGridLabelSet), so that stays true.
     emit_curve_label(samples, buf, color, kGroupGrid);
   };
 
-  // Longitude curve (meridian): open curve sweeping altitude -π/2..+π/2 at
-  // fixed azimuth. az_deg ∈ (-180°, 180°] (we wrap to that range for the
-  // label text).
-  auto process_longitude_curve = [&](float az_deg) {
-    float label_az = az_deg;
-    if (label_az > 180.0f)
-      label_az -= 360.0f;
-    if (label_az <= -180.0f)
-      label_az += 360.0f;
-
-    const float az_rad = az_deg * kDeg2Rad;
-    const float cos_az = std::cos(az_rad);
-    const float sin_az = std::sin(az_rad);
-
-    std::vector<CurveSample> samples;
-    samples.reserve(kCurveAltSteps + 1);
-    for (int i = 0; i <= kCurveAltSteps; ++i) {
-      const float alt_deg = -90.0f + 180.0f * static_cast<float>(i) / kCurveAltSteps;
-      const float alt_rad = alt_deg * kDeg2Rad;
-      const float cos_a = std::cos(alt_rad);
-      const float sin_a = std::sin(alt_rad);
-      const float wx = -cos_a * cos_az;
-      const float wy = -cos_a * sin_az;
-      const float wz = -sin_a;
-      samples.push_back(sample_world_dir(alt_deg, wx, wy, wz));
-    }
-
-    const char* fmt = (input.grid_step >= 1.0f) ? "%.0f\xC2\xB0" : "%.1f\xC2\xB0";
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), fmt, label_az);
-    // Anchor the meridian label at its intersection with the reference parallel
-    // (horizon alt=0 if visible, else the visible sample whose altitude is
-    // closest to the equator). Meridians converge at the poles, so the generic
-    // boundary/first-visible anchor (emit_curve_label) stacks every longitude
-    // label at the pole-convergence point — degenerate on globe / dual-fisheye
-    // where the pole sits on the visible-region boundary. The equator is where
-    // meridians are maximally separated in azimuth, so labels stay distinct.
-    // (task-288.6 follow-up; owner-chosen placement.) Search outward from the
-    // alt=0 sample index for the nearest visible sample.
-    const int mid = kCurveAltSteps / 2;  // sample index at alt = 0
-    for (int off = 0; off <= mid; ++off) {
-      const int lo = mid - off;
-      const int hi = mid + off;
-      if (lo >= 0 && samples[lo].vis) {
-        out.push_back({ samples[lo].screen_x, samples[lo].screen_y, std::string(buf), grid_col, false, kGroupGrid });
-        break;
-      }
-      if (hi <= kCurveAltSteps && samples[hi].vis) {
-        out.push_back({ samples[hi].screen_x, samples[hi].screen_y, std::string(buf), grid_col, false, kGroupGrid });
-        break;
-      }
-    }
-  };
-
   // === dispatch ===
-  // Horizon: standalone altitude=0 curve (separate from grid so grid's
-  // g==0 skip rule below stays consistent with the boundary-centric era).
+  // The horizon is all that is left of this walk. The coordinate grid's parallels and meridians
+  // used to be produced here too, by calling process_altitude_curve once per parallel and a
+  // process_longitude_curve twin once per meridian; their anchors now come from core alongside the
+  // circles', so both the meridian walk and the grid's calls are gone. process_altitude_curve
+  // stays because the horizon is still walked here — it IS an altitude curve, at altitude 0.
   if (input.show_horizon) {
     process_altitude_curve(0.0f, horizon_col);
   }
-
-  if (input.show_grid) {
-    const int g_max_alt = static_cast<int>(std::round(80.0f / input.grid_step));
-    for (int g = -g_max_alt; g <= g_max_alt; ++g) {
-      if (g == 0)
-        continue;  // skip 0° altitude — horizon owns it (see show_horizon above)
-      process_altitude_curve(g * input.grid_step, grid_col);
-    }
-    // Longitude curves: az ∈ (-180°, 180°]. Use step indices [-g_max_az+1, g_max_az]
-    // so az=180° appears once (not duplicated with az=-180°).
-    const int g_max_az = static_cast<int>(std::round(180.0f / input.grid_step));
-    for (int g = -g_max_az + 1; g <= g_max_az; ++g) {
-      process_longitude_curve(g * input.grid_step);
-    }
-  }
 }
 
-void AppendAngularDistLabels(const AngularDistLabelSet& circles, float vp_screen_x, float vp_screen_y,
-                             std::vector<OverlayLabel>& out) {
-  const ImU32 col = ColorToImU32(circles.color, static_cast<int>(circles.alpha * 255));
-  out.reserve(out.size() + circles.anchors.size());
-  for (const auto& a : circles.anchors) {
-    // kGroupSunCircles keeps the collision pass separating these from the grid's labels, exactly
-    // as the walk this replaced did — a 22 deg marker and a 30 deg altitude marker are allowed to
-    // sit close together, two circle markers are not.
-    out.push_back({ vp_screen_x + a.px, vp_screen_y + a.py, a.text, col, true, kGroupSunCircles });
+void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_screen_y, std::vector<OverlayLabel>& out) {
+  const ImU32 col = ColorToImU32(set.color, static_cast<int>(set.alpha * 255));
+  out.reserve(out.size() + set.anchors.size());
+  for (const auto& a : set.anchors) {
+    // The group comes from the set, not from a constant here: the collision pass has to keep
+    // separating the circles from the grid exactly as the walks this replaced did — a 22 deg
+    // marker and a 30 deg parallel marker may sit close together, two circle markers may not.
+    out.push_back({ vp_screen_x + a.px, vp_screen_y + a.py, a.text, col, set.has_bg, set.group });
   }
 }
 

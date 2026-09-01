@@ -47,6 +47,12 @@ class AnnotationOverlayCache {
     bool front = false;
     float sun_dir[3] = { 0.0f, 0.0f, 0.0f };
     std::vector<float> angular_dist_deg;
+    // The coordinate grid: parallels and meridians, expanded from the FOV-adaptive step by
+    // ComputeGridElevationAngles / ComputeGridLongitudeAngles (app.hpp). They ride in the same key
+    // as the circles because they come out of the same call — see ONE CALL SERVES BOTH CONSUMERS
+    // above, which is now one call serving three families.
+    std::vector<float> elevation_deg;
+    std::vector<float> longitude_deg;
 
     bool operator==(const ViewKey& o) const;
     bool operator!=(const ViewKey& o) const { return !(*this == o); }
@@ -77,9 +83,16 @@ class AnnotationOverlayCache {
   int Height() const { return height_; }
   // Row-major width*height, 1 where an angular-distance circle passes. Empty unless HasResult().
   const std::vector<uint8_t>& AngularDistMask() const { return angular_dist_mask_; }
-  // Anchors for the angular-distance circles only; core's other label kinds are dropped because
-  // nothing else has moved off the GUI's own walk yet.
+  // Anchors for the angular-distance circles only.
   const std::vector<Label>& AngularDistLabels() const { return angular_dist_labels_; }
+  // Row-major width*height, 1 where a parallel OR a meridian passes. ONE mask for both families,
+  // not two: the GUI has a single colour picker and a single alpha slider for the whole grid, so
+  // the two are visually indistinguishable and a second texture would cost a unit and an upload
+  // to produce identical pixels. Empty unless HasResult().
+  const std::vector<uint8_t>& GridMask() const { return grid_mask_; }
+  // Anchors for both grid families, merged for the same reason the mask is: core has already
+  // formatted each label's text, and the consumer draws them in one style.
+  const std::vector<Label>& GridLabels() const { return grid_labels_; }
 
   // Bumped on every recompute, from a counter shared by ALL instances. A consumer that caches
   // something derived from a result — PreviewRenderer's GL texture — compares this instead of the
@@ -106,6 +119,8 @@ class AnnotationOverlayCache {
   int height_ = 0;
   std::vector<uint8_t> angular_dist_mask_;
   std::vector<Label> angular_dist_labels_;
+  std::vector<uint8_t> grid_mask_;
+  std::vector<Label> grid_labels_;
   uint64_t generation_ = 0;  // 0 = never computed, which a consumer's "nothing uploaded" sentinel matches
 };
 
@@ -125,6 +140,8 @@ struct AnnotationViewInput {
   bool front = false;
   float sun_altitude_deg = 0.0f;
   std::vector<float> angular_dist_deg;
+  std::vector<float> elevation_deg;
+  std::vector<float> longitude_deg;
 };
 AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
 

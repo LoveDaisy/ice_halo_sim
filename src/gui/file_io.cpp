@@ -1217,11 +1217,17 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // So it takes the same false + *out_warning channel the ABI-overflow rejections below use: no
   // file is written and DoExportConfigJson shows the reason.
   //
-  // This check runs before the filter/color-class overflow checks below, and the two families
-  // share the single *out_warning string: if a document trips both, only the front warning is
-  // shown (first-match-wins by check order, not by severity). That is fine with two checks, but
-  // if a third export-time rejection is ever added, reconsider collecting every triggered reason
-  // rather than stacking another early-return silently in front of or behind these.
+  // This check runs before the overflow checks below, and every rejection shares the single
+  // *out_warning string: if a document trips more than one, only the first is shown (first-match-
+  // wins by check order, not by severity). A third rejection HAS since been added (the grid
+  // overflow), which is what the previous version of this comment asked to reconsider collecting
+  // reasons over — and the answer, on inspecting the shape, is no. There are still exactly two
+  // layers, not four independent checks: `front` is the only rejection that can be decided before
+  // BuildScene runs, and the other three are BuildScene's own single-failure funnel, where the
+  // first one hit returns immediately and the other two structs are therefore never filled. So the
+  // only pair that can be simultaneously true is (front, one BuildScene reason), and front is a
+  // one-toggle fix that costs the user nothing to clear first. Reconsider if a rejection is ever
+  // added that is NOT decidable before BuildScene and NOT inside it.
   if (state.renderer.front) {
     if (out_warning) {
       *out_warning =
@@ -1233,14 +1239,25 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   }
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
-  ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow);
+  GridOverflowInfo grid_overflow;
+  ScenePtr scene = BuildScene(state, SceneIntent::kJsonExport, &overflow, &color_overflow, &grid_overflow);
   if (!scene) {
     if (out_warning) {
+      // Each branch names the resource it is about. The three overflow structs are disjoint by
+      // construction — BuildScene fills at most one and returns immediately — so the order here
+      // reports which check actually fired, not which is listed first.
       // color_overflow.class_index >= 0 iff BuildScene failed on the color-class walk
       // (which runs strictly after the filter walk) rather than a physical-filter overflow —
       // reusing the filter-overflow wording here would misattribute the resource and the
       // limit number (code-review-01 Major 1).
-      if (color_overflow.class_index >= 0) {
+      if (grid_overflow.family != GridOverflowInfo::Family::kNone) {
+        const bool elevation = grid_overflow.family == GridOverflowInfo::Family::kElevation;
+        *out_warning = std::string("The coordinate grid needs ") + std::to_string(grid_overflow.count) + " " +
+                       (elevation ? "elevation" : "longitude") + " lines at this field of view, over the export " +
+                       "limit of " + std::to_string(LUMICE_MAX_CONFIG_GRID_LINES) +
+                       ".\nNo config was exported. Widen the field of view, or turn the Grid lines off in the "
+                       "Display group, and try again.";
+      } else if (color_overflow.class_index >= 0) {
         *out_warning = "This raypath color configuration exceeds its limits (" +
                        FormatColorOverflowLocator(color_overflow) +
                        ").\nNo config was exported. Simplify the color configuration and try again.";
@@ -1647,8 +1664,31 @@ static bool AddColorClasses(const GuiState& state, const std::map<int, int>& cry
   return true;
 }
 
+namespace {
+
+// Copy an angle list into one of LUMICE_RenderParam's fixed-capacity grid arrays, giving every
+// entry the same appearance. The GUI has one colour picker and one alpha slider per family, while
+// core's schema styles each line individually — the GUI is a restricted special case of it, and
+// repeating the shared values is how that restriction is expressed. `width` is left at core's
+// GridLineParam default: nothing reads it (the mask generator derives its own half-width), so
+// writing the GUI's line width there would export a number that changes no pixel.
+// Caller guarantees angles.size() <= LUMICE_MAX_CONFIG_GRID_LINES.
+void FillGridLines(const std::vector<float>& angles, const float color[3], float alpha, LUMICE_GridLine* out,
+                   int* out_count) {
+  const int n = std::min(static_cast<int>(angles.size()), LUMICE_MAX_CONFIG_GRID_LINES);
+  for (int k = 0; k < n; k++) {
+    out[k].value = angles[static_cast<size_t>(k)];
+    out[k].width = 1.0f;  // core GridLineParam::width_ default
+    out[k].opacity = alpha;
+    std::copy(color, color + 3, std::begin(out[k].color));
+  }
+  *out_count = n;
+}
+
+}  // namespace
+
 ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInfo* overflow,
-                    ColorClassOverflowInfo* color_overflow) {
+                    ColorClassOverflowInfo* color_overflow, GridOverflowInfo* grid_overflow) {
   ScenePtr scene(LUMICE_SceneCreate());
   if (!scene) {
     GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneCreate failed");
@@ -1869,15 +1909,43 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       // GUI's line width there would export a number that changes no pixel.
       dst.angular_dist_count = 0;
       if (state.show_sun_circles_line) {
-        const int n = std::min(static_cast<int>(state.sun_circle_angles.size()), LUMICE_MAX_CONFIG_GRID_LINES);
-        for (int k = 0; k < n; k++) {
-          dst.angular_dist[k].value = state.sun_circle_angles[static_cast<size_t>(k)];
-          dst.angular_dist[k].width = 1.0f;  // core GridLineParam::width_ default
-          dst.angular_dist[k].opacity = state.sun_circles_alpha;
-          std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color),
-                    std::begin(dst.angular_dist[k].color));
+        FillGridLines(state.sun_circle_angles, state.sun_circles_color, state.sun_circles_alpha, dst.angular_dist,
+                      &dst.angular_dist_count);
+      }
+      // The coordinate grid — parallels and meridians. Same gating and same shared-appearance
+      // story as the circles above, with one difference that matters: the angles are NOT a list
+      // the user typed. The GUI derives them from ONE FOV-adaptive step (ComputeGridStep), and
+      // this is where that display-side convenience is expanded into the explicit list core's
+      // schema is built on. The expansion functions are shared with the preview's own annotation
+      // request, so the exported list is the same list the screen is showing.
+      dst.elevation_grid_count = 0;
+      dst.longitude_grid_count = 0;
+      if (state.show_grid_line) {
+        const float step = ComputeGridStep(r.fov);
+        const std::vector<float> elevation = ComputeGridElevationAngles(step);
+        const std::vector<float> longitude = ComputeGridLongitudeAngles(step);
+        // Refuse rather than truncate. A narrow FOV picks a fine step and the meridian list
+        // overflows the ABI cap with no unusual document involved (72 lines at a 20 deg FOV), so
+        // this is a reachable state, not a defensive branch — and a silently shortened grid would
+        // be a CLI render that differs from the screen while reporting success.
+        const GridOverflowInfo::Family over = elevation.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
+                                                  GridOverflowInfo::Family::kElevation :
+                                              longitude.size() > static_cast<size_t>(LUMICE_MAX_CONFIG_GRID_LINES) ?
+                                                  GridOverflowInfo::Family::kLongitude :
+                                                  GridOverflowInfo::Family::kNone;
+        if (over != GridOverflowInfo::Family::kNone) {
+          if (grid_overflow) {
+            grid_overflow->family = over;
+            grid_overflow->count =
+                static_cast<int>(over == GridOverflowInfo::Family::kElevation ? elevation.size() : longitude.size());
+          }
+          GUI_LOG_WARNING("[FileIO] BuildScene: grid line count {} exceeds the export limit {}",
+                          over == GridOverflowInfo::Family::kElevation ? elevation.size() : longitude.size(),
+                          LUMICE_MAX_CONFIG_GRID_LINES);
+          return nullptr;
         }
-        dst.angular_dist_count = n;
+        FillGridLines(elevation, state.grid_color, state.grid_alpha, dst.elevation_grid, &dst.elevation_grid_count);
+        FillGridLines(longitude, state.grid_color, state.grid_alpha, dst.longitude_grid, &dst.longitude_grid_count);
       }
     } else {
       // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
@@ -1901,19 +1969,18 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // control anywhere, so there is no user-visible value for the export arm to be honest about.
     // If one is ever added, this is the line that has to stop being a comment.
     //
-    // elevation_grid_count stays zero on both arms. The GUI's screen-space overlay grid
-    // (gui_state.show_grid_line) is a display-time layer with a different model than
-    // render[].grid.elevation (one FOV-adaptive step and a shared colour vs. an explicit list of
-    // individually-styled lines); reconciling them is a design decision that has not been made,
-    // not an omission here.
+    // All three grid families stay zero on the kSimCommit arm, and deliberately: that arm asks
+    // core for a TEXTURE the preview then re-projects and draws its own overlay on top of, so an
+    // annotation baked into it would be drawn twice. Same reason dst.horizon is unconditionally 1
+    // there. The export arm above fills all three, which is what makes them the divergence set
+    // test_scene_commit_chain.cpp's kDivergingKeys pins.
     //
-    // grid.angular_dist USED to be in that sentence and no longer is: the export arm above fills
-    // it from state.sun_circle_angles, because the GUI's sun circles ARE an explicit list of
-    // angles and needed no reconciling — only a shared appearance, which core's per-line schema
-    // expresses fine by repeating it. The kSimCommit arm still leaves it zero, and deliberately:
-    // that arm asks core for a TEXTURE the preview then re-projects and draws its own overlay on
-    // top of, so an annotation baked into it would be drawn twice. Same reason dst.horizon is
-    // unconditionally 1 there.
+    // grid.elevation and grid.longitude used to carry a longer caveat here — that the GUI's one
+    // FOV-adaptive step and core's explicit per-line list were two models nobody had reconciled.
+    // They are reconciled now, in favour of core's: the list is the model, and the adaptive step
+    // is a display-side convenience the export arm expands through ComputeGridElevationAngles /
+    // ComputeGridLongitudeAngles. The shared appearance core's schema styles per line is expressed
+    // by repeating the GUI's single colour and alpha, exactly as grid.angular_dist does.
     int renderer_id = -1;
     if (LUMICE_SceneAddRenderer(scene.get(), &dst, &renderer_id) != LUMICE_OK) {
       GUI_LOG_WARNING("[FileIO] BuildScene: LUMICE_SceneAddRenderer failed");
@@ -3272,13 +3339,13 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
     return false;
   }
   PreviewParams params = vp.params;
-  // Rebuild the angular-distance mask AT THIS CANVAS, rather than reusing the one the live preview
+  // Rebuild the annotation masks AT THIS CANVAS, rather than reusing the one the live preview
   // computed. Sampling a mask built for another size is a plain image rescale: harmless when the
   // two sizes share an aspect ratio, and a distortion of the circles when they do not — and a
   // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
   // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
   // debounce over. Its own cache, for the same reason: a different clock from the preview's.
-  if (params.overlay.show_sun_circles) {
+  if (params.overlay.show_sun_circles || params.overlay.show_grid) {
     static AnnotationOverlayCache export_overlay;
     export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
     if (export_overlay.HasResult()) {
@@ -3286,8 +3353,13 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
       params.overlay.angular_dist_mask_w = export_overlay.Width();
       params.overlay.angular_dist_mask_h = export_overlay.Height();
       params.overlay.angular_dist_mask_generation = export_overlay.Generation();
+      params.overlay.grid_mask = export_overlay.GridMask().empty() ? nullptr : export_overlay.GridMask().data();
+      params.overlay.grid_mask_w = export_overlay.Width();
+      params.overlay.grid_mask_h = export_overlay.Height();
+      params.overlay.grid_mask_generation = export_overlay.Generation();
     } else {
       params.overlay.angular_dist_mask = nullptr;
+      params.overlay.grid_mask = nullptr;
     }
   }
   auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h, std::nullopt);

@@ -72,17 +72,19 @@ struct OverlayDecoration {
   int angular_dist_mask_w = 0;
   int angular_dist_mask_h = 0;
   unsigned long long angular_dist_mask_generation = 0;
+  // The coordinate grid's mask, on the same borrowed-for-the-call terms as the circles' above.
+  // ONE mask for parallels and meridians together: they share this struct's single grid_color /
+  // grid_alpha, so nothing downstream could tell the two apart even if they arrived separately.
+  const unsigned char* grid_mask = nullptr;
+  int grid_mask_w = 0;
+  int grid_mask_h = 0;
+  unsigned long long grid_mask_generation = 0;
   float horizon_color[3] = { 0.8f, 0.2f, 0.2f };
   float grid_color[3] = { 1.0f, 1.0f, 1.0f };
   float sun_circles_color[3] = { 1.0f, 0.9f, 0.3f };
   float horizon_alpha = 0.6f;
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
-
-  // Coordinate grid step in degrees. Default 10° keeps legacy callers (e.g.
-  // OverlayDecoration::Disabled / export_fbo_renderer) behaviour unchanged;
-  // live preview path overrides via ComputeGridStep(fov).
-  float grid_step = 10.0f;
 
   // Zenith / Nadir pixel-space ring marker.
   // *_screen_pos: CPU-precomputed; center-origin pixel coords, y-up
@@ -165,6 +167,11 @@ class PreviewRenderer {
   void UploadAngularDistMask(const unsigned char* data, int width, int height);
   void ClearAngularDistMask();
 
+  // The same for the coordinate grid's mask, on texture unit 3. Same contract in every respect;
+  // see UploadAngularDistMask above.
+  void UploadGridMask(const unsigned char* data, int width, int height);
+  void ClearGridMask();
+
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
@@ -220,6 +227,9 @@ class PreviewRenderer {
   // Which AnnotationOverlayCache generation angular_dist_tex_ holds. 0 means "nothing uploaded",
   // which is why the cache's counter starts at 1.
   unsigned long long angular_dist_tex_generation_ = 0;
+  // The coordinate grid's mask, same lifetime and same sentinel rules as the two above.
+  unsigned int grid_tex_ = 0;
+  unsigned long long grid_tex_generation_ = 0;
   int bg_width_ = 0;
   int bg_height_ = 0;
   float bg_aspect_ = 1.0f;

@@ -1,18 +1,28 @@
 // The numbers written along the preview's coordinate grid: which ones appear, and where.
 //
-// Every case here builds an OverlayLabelInput, calls the pure computation and reads the labels back
-// — no ImGui context, no draw list. The one sibling that stays in
+// Every case here describes a view, runs the production label pipeline and reads the labels back —
+// no ImGui context, no draw list. The one sibling that stays in
 // test/gui/functional/test_gui_overlay_labels.cpp is modal_does_not_leak_to_foreground, because what
 // it asserts is which DRAW LIST the labels land in.
+//
+// WHERE THE GRID'S LABELS COME FROM NOW. They used to be walked by ComputeOverlayLabels in this
+// process; they are walked by core's annotation layer instead, reach the GUI as anchors through
+// AnnotationOverlayCache, and become OverlayLabels via BuildGridLabelSet + AppendCurveLabels. So
+// Compute() below drives that chain rather than one function, and the propositions are unchanged:
+// every one of them is about which numbers a user sees and where, which is a property of the whole
+// chain and was never a property of the walk alone. Pointing them at the new producer is what keeps
+// the move from silently dropping the coverage it was made under.
 //
 // The last three cases are the regression anchors for the four placement gaps audited in
 // doc/overlay-label-placement.md; their assertion semantics must not be weakened.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/gui_state.hpp"
@@ -23,10 +33,10 @@ namespace gui = lumice::gui;
 
 namespace {
 
-// Group ids as overlay_labels.cpp assigns them. Mirrored rather than imported because the constants
-// live in an anonymous namespace there.
-constexpr int kGridGroup = 0;
-constexpr int kSunGroup = 1;
+// Group ids, imported now that overlay_labels.hpp publishes them (they used to live in an anonymous
+// namespace in the .cpp and had to be mirrored here).
+constexpr int kGridGroup = gui::kGroupGrid;
+constexpr int kSunGroup = gui::kGroupSunCircles;
 // UTF-8 for the degree sign, spelled as bytes so the assertions match AddLabel's "%.0f\xC2\xB0"
 // output without depending on how the compiler handles the source charset.
 constexpr const char* kDeg = "\xC2\xB0";
@@ -44,7 +54,6 @@ gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation,
   in.visible = visible;
   in.front = front;
   in.show_horizon = false;
-  in.show_grid = true;
   in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
   in.grid_color[0] = in.grid_color[1] = in.grid_color[2] = 1.0f;
   in.horizon_alpha = 1.0f;
@@ -52,10 +61,40 @@ gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation,
   return in;
 }
 
+// Ask core for this view's grid anchors and turn them into OverlayLabels exactly as
+// RenderPreviewPanel does — same expansion functions, same cache, same set builder — so what these
+// cases read is what the preview draws.
+void AppendGridLabelsFromCore(const gui::OverlayLabelInput& in, float vp_w, float vp_h, float vp_x, float vp_y,
+                              std::vector<gui::OverlayLabel>& out) {
+  gui::AnnotationViewInput vin;
+  vin.lens_type = in.lens_type;
+  vin.fov = in.fov;
+  vin.azimuth = in.azimuth;
+  vin.elevation = in.elevation;
+  vin.roll = in.roll;
+  vin.visible = in.visible;
+  vin.front = in.front;
+  vin.elevation_deg = gui::ComputeGridElevationAngles(in.grid_step);
+  vin.longitude_deg = gui::ComputeGridLongitudeAngles(in.grid_step);
+  // Refresh, not Update: one shot, so there is no run of frames to debounce over. A fresh cache
+  // per call so no case can inherit another's settled result.
+  gui::AnnotationOverlayCache cache;
+  cache.Refresh(gui::MakeAnnotationViewKey(vin, static_cast<int>(vp_w), static_cast<int>(vp_h)));
+  gui::GuiState state;
+  std::copy(std::begin(in.grid_color), std::end(in.grid_color), std::begin(state.grid_color));
+  state.grid_alpha = in.grid_alpha;
+  gui::AppendCurveLabels(gui::BuildGridLabelSet(cache, state, vp_w, vp_h), vp_x, vp_y, out);
+}
+
+// The full label set for a view: the horizon, still walked here, plus the grid, from core. Ordered
+// as production orders them (ComputeOverlayLabels clears the vector, so it goes first).
 std::vector<gui::OverlayLabel> Compute(const gui::OverlayLabelInput& in, float vp_w, float vp_h, float vp_x = 0.0f,
-                                       float vp_y = 0.0f) {
+                                       float vp_y = 0.0f, bool with_grid = true) {
   std::vector<gui::OverlayLabel> labels;
   gui::ComputeOverlayLabels(in, vp_x, vp_y, vp_w, vp_h, labels);
+  if (with_grid) {
+    AppendGridLabelsFromCore(in, vp_w, vp_h, vp_x, vp_y, labels);
+  }
   return labels;
 }
 
@@ -158,18 +197,69 @@ TEST(OverlayLabels, SingleOrthographicReachesTheSameLabellingPathAsFisheye) {
 // two tells them apart.
 
 // The grid's half of the same rule, plus what must survive it. Rectangular maps the whole sphere
-// into the viewport rectangle, so it is the cleanest place to see the cull remove labels. A wide
-// fisheye is where the opposite risk lives: front mode must still label the hemisphere edge itself,
-// or the visible half loses its coordinates entirely. Under the curve-centric placement design that
-// edge yields one label per visible arc rather than a dense cluster, so the count no longer exceeds
-// full mode's — but it must not be zero.
-TEST(OverlayLabels, FrontModeCullsTheBackGridWhileStillLabellingTheHemisphereEdge) {
+// into the viewport rectangle, so it is the cleanest place to see the cull act. A wide fisheye is
+// where the opposite risk lives: front mode must still label the hemisphere edge itself, or the
+// visible half loses its coordinates entirely.
+//
+// MEASURED BY WHERE THE LABELS ARE, NOT HOW MANY. This case used to count them, on the reasoning
+// that culling the back half removes the labels sitting there. That proxy held for the walk this
+// file used to drive and does not hold for the one it drives now: the curve-centric placement puts
+// each curve's number at its first VISIBLE sample, so a parallel that runs behind the camera keeps
+// its label and MOVES it onto the visible arc. Counting therefore reads 52 either way while the
+// anchors of 33 of them have moved — a proxy that agrees with a broken implementation and a
+// correct one alike. What the user actually needs is that no number is printed over sky the front
+// clip removed, which is what is asserted below, by un-projecting each anchor back to the direction
+// it names. At elev=0/az=0 the camera looks along -x, so "in front" is wx < 0.
+TEST(OverlayLabels, FrontModeLabelsOnlyTheHemisphereItDrawsAndStillLabelsItsEdge) {
+  float view[9];
+  gui::BuildViewMatrix(0.0f, 0.0f, 0.0f, view);
+  // The same slack core's own front predicate carries at the boundary (kFrontEps there): a curve
+  // tangent to the hemisphere edge is kept, and it is the edge that must stay labelled.
+  constexpr float kFrontEps = 0.01f;
+
+  // Un-project one anchor. The labels arrive in viewport pixels with a top-left origin; the
+  // un-projection works in centre-origin, y-up coordinates.
+  auto anchor_wx = [&](const gui::OverlayLabel& l, float vp_w, float vp_h, int lens, float fov) {
+    float wx = 0.0f;
+    float wy = 0.0f;
+    float wz = 0.0f;
+    bool valid = false;
+    gui::detail::PixelToWorldDirForTesting(l.screen_x - vp_w * 0.5f, vp_h * 0.5f - l.screen_y, vp_w, vp_h, lens, fov,
+                                           view, &wx, &wy, &wz, &valid);
+    return valid ? wx : 0.0f;
+  };
+
   auto rect_full = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeRectangular, 0.0f, 0.0f);
   auto rect_front = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeRectangular, 0.0f, 0.0f, /*front=*/true);
-  const int n_rect_full = CountGrid(rect_full, 800.0f, 400.0f);
-  EXPECT_GT(n_rect_full, 0);
-  EXPECT_LT(CountGrid(rect_front, 800.0f, 400.0f), n_rect_full);
+  const auto full_labels = Compute(rect_full, 800.0f, 400.0f);
+  const auto front_labels = Compute(rect_front, 800.0f, 400.0f);
+  ASSERT_GT(CountInGroup(full_labels, kGridGroup), 0);
+  ASSERT_GT(CountInGroup(front_labels, kGridGroup), 0) << "front mode must not leave the visible half unlabelled";
 
+  int behind_in_front_mode = 0;
+  for (const auto& l : front_labels) {
+    if (l.group == kGridGroup && anchor_wx(l, 800.0f, 400.0f, gui::kLensTypeRectangular, rect_front.fov) > kFrontEps) {
+      ++behind_in_front_mode;
+    }
+  }
+  EXPECT_EQ(behind_in_front_mode, 0) << "front mode printed " << behind_in_front_mode
+                                     << " grid label(s) over sky it does not draw";
+
+  // The positive control, and the reason the case is a pair: a cull that ran unconditionally would
+  // satisfy the assertion above while deleting labels the user asked to see. Full mode must put
+  // some of them behind the camera.
+  int behind_in_full_mode = 0;
+  for (const auto& l : full_labels) {
+    if (l.group == kGridGroup && anchor_wx(l, 800.0f, 400.0f, gui::kLensTypeRectangular, rect_full.fov) > kFrontEps) {
+      ++behind_in_full_mode;
+    }
+  }
+  EXPECT_GT(behind_in_full_mode, 0) << "without the front clip a rectangular view labels the whole sphere, so some "
+                                       "anchors must land behind the camera; none did, which means the clip is on "
+                                       "in both modes";
+
+  // A 280 deg fisheye reaches well past the front hemisphere, so front mode has something to remove
+  // there too — and must still label what is left.
   auto wide_full = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeFisheyeEquidist, 0.0f, 0.0f);
   auto wide_front = MakeGridOnly(gui::kVisibleFull, gui::kLensTypeFisheyeEquidist, 0.0f, 0.0f, /*front=*/true);
   wide_full.fov = 280.0f;
@@ -424,11 +514,43 @@ TEST(OverlayToggle, TheLabelSwitchAloneDecidesWhetherNumbersAreComputed) {
     s.show_horizon_label = s.show_grid_label = s.show_sun_circles_label = c.labels;
     const auto in = gui::BuildOverlayLabelInput(s, s.renderer);
     EXPECT_EQ(in.show_horizon, c.labels) << c.name;
-    EXPECT_EQ(in.show_grid, c.labels) << c.name;
-    // Sun circles are not checked here any more: OverlayLabelInput no longer carries them. Their
-    // switch is read where their anchors are consumed (RenderPreviewPanel gates on
-    // show_sun_circles_label), which is past this struct.
+    // The grid and the sun circles are not checked here: OverlayLabelInput no longer carries
+    // either. Both switches are read where their anchors are consumed (RenderPreviewPanel gates on
+    // show_grid_label / show_sun_circles_label), which is past this struct. What this case still
+    // pins is the one family whose walk is still here — and the asymmetry is the point: a fourth
+    // family arriving must join the anchors path, not this struct.
   }
+}
+
+// ---- Which family a request carries follows the switches, not the frame ----
+//
+// The two lists AnnotationViewInputFor fills are not free: each angle is a level the mask sweep
+// tests per pixel and a curve the label walk walks. A view input that always carried the grid would
+// make a user who turned the grid off pay for it on every settle, invisibly.
+TEST(OverlayToggle, TheAnnotationRequestCarriesOnlyTheFamiliesWhoseSwitchesAreOn) {
+  gui::GuiState s;
+  s.renderer.fov = 90.0f;  // step 20 deg, so the lists are small but non-empty
+
+  s.show_grid_line = s.show_grid_label = false;
+  s.show_sun_circles_line = s.show_sun_circles_label = false;
+  auto off = gui::AnnotationViewInputFor(s, s.renderer);
+  EXPECT_TRUE(off.elevation_deg.empty());
+  EXPECT_TRUE(off.longitude_deg.empty());
+  EXPECT_TRUE(off.angular_dist_deg.empty());
+
+  // The LINE switch alone is enough: a user drawing curves and no numbers still needs the mask.
+  s.show_grid_line = true;
+  auto lines_only = gui::AnnotationViewInputFor(s, s.renderer);
+  EXPECT_FALSE(lines_only.elevation_deg.empty());
+  EXPECT_FALSE(lines_only.longitude_deg.empty());
+  EXPECT_TRUE(lines_only.angular_dist_deg.empty()) << "the circles' switches are still off";
+
+  // ...and so is the LABEL switch alone, for the mirror-image reason.
+  s.show_grid_line = false;
+  s.show_grid_label = true;
+  auto labels_only = gui::AnnotationViewInputFor(s, s.renderer);
+  EXPECT_FALSE(labels_only.elevation_deg.empty());
+  EXPECT_FALSE(labels_only.longitude_deg.empty());
 }
 
 // ---- The horizon owns the zero, and the grid must not print a second one ----
@@ -443,12 +565,10 @@ TEST(OverlayToggle, TheZeroDegreeLabelBelongsToTheHorizonAndTheGridDoesNotRepeat
 
   auto horizon_only = in;
   horizon_only.show_horizon = true;
-  horizon_only.show_grid = false;
-  EXPECT_GE(CountText(Compute(horizon_only, 200.0f, 200.0f), zero), 1);
+  EXPECT_GE(CountText(Compute(horizon_only, 200.0f, 200.0f, 0.0f, 0.0f, /*with_grid=*/false), zero), 1);
 
   auto grid_only = in;
   grid_only.show_horizon = false;
-  grid_only.show_grid = true;
   EXPECT_LE(CountText(Compute(grid_only, 200.0f, 200.0f), zero), 1);
 }
 

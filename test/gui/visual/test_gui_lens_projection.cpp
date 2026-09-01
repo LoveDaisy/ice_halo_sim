@@ -25,6 +25,8 @@
 #include <iterator>
 #include <string>
 
+#include "gui/annotation_overlay_cache.hpp"
+#include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
 #include "include/lumice.h"
@@ -422,7 +424,30 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;
-          vp.params.overlay.grid_step = 10.f;
+          // The grid's geometry comes from core's annotation overlay now, not from a shader
+          // uniform, so the reference covers the mask path the live preview and the CLI both use.
+          // Computed AT THIS CANVAS for the reason ExportPreviewPng gives for doing the same: a
+          // mask built for another size is an image rescale of the curves.
+          static gui::AnnotationOverlayCache grid_overlay;
+          gui::AnnotationViewInput in;
+          in.lens_type = vp.params.view_proj.lens_type;
+          in.fov = vp.params.view_proj.fov;
+          in.azimuth = vp.params.view_proj.azimuth;
+          in.elevation = vp.params.view_proj.elevation;
+          in.roll = vp.params.view_proj.roll;
+          in.visible = vp.params.view_proj.visible;
+          in.front = vp.params.view_proj.front;
+          in.overlap = gui::kDualFisheyeOverlap;
+          const float step = gui::ComputeGridStep(vp.params.view_proj.fov);
+          in.elevation_deg = gui::ComputeGridElevationAngles(step);
+          in.longitude_deg = gui::ComputeGridLongitudeAngles(step);
+          grid_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          IM_CHECK(grid_overlay.HasResult());
+          IM_CHECK(!grid_overlay.GridMask().empty());
+          vp.params.overlay.grid_mask = grid_overlay.GridMask().data();
+          vp.params.overlay.grid_mask_w = grid_overlay.Width();
+          vp.params.overlay.grid_mask_h = grid_overlay.Height();
+          vp.params.overlay.grid_mask_generation = grid_overlay.Generation();
         }
       }
 

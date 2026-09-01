@@ -18,8 +18,15 @@ struct OverlayLabel {
   std::string text;
   ImU32 color;
   bool has_bg = false;  // draw semi-transparent black background behind text
-  int group = 0;        // collision avoidance only within same group (0=grid, 1=sun circles)
+  int group = 0;        // collision avoidance only within same group; see kGroup* below
 };
+
+// Collision-avoidance groups. The pass compares a label only against others in its own group, so
+// these say which labels are allowed to sit close together: a 22 deg circle marker and a 30 deg
+// parallel marker mean different things and may crowd, two circle markers may not. Public because
+// the sets built in app_panels.cpp choose between them by name rather than by literal.
+constexpr int kGroupGrid = 0;
+constexpr int kGroupSunCircles = 1;
 
 // The show_* fields here control **label** rendering only (label sampling along
 // viewport edges). They are sourced from GuiState::show_<x>_label. The companion
@@ -34,24 +41,34 @@ struct OverlayLabelInput {
   // fields that used to describe them — the switch, the sun direction, the angle list and its
   // count, the colour and the alpha — moved out with the walk that consumed them. Everything left
   // in this struct is an annotation the GUI still places itself.
-  bool show_horizon, show_grid;
+  // show_grid is gone with the walk it drove: the coordinate grid's anchors come from core now,
+  // through the same CurveLabelSet path the circles use. What is left in this struct is the
+  // horizon, the one annotation the GUI still places itself.
+  bool show_horizon;
   float horizon_color[3], grid_color[3];
   float horizon_alpha, grid_alpha;
 
-  // Coordinate grid step in degrees. Default 10° keeps existing callers
-  // behaviour unchanged; live preview path overrides via ComputeGridStep(fov).
+  // Coordinate grid step in degrees. NOT dead despite the grid's walk being gone: the horizon's
+  // label text is formatted to one decimal or none depending on it, which is a property of how
+  // fine the grid around it is. Default 10 deg keeps existing callers' behaviour unchanged; the
+  // live preview path overrides via ComputeGridStep(fov).
   float grid_step = 10.0f;
 };
 
-// Turn core's angular-distance label anchors into OverlayLabels the two draw paths already
-// understand. Kept here rather than in either caller because both of them need it and the
-// conversion — canvas pixels to the target draw list's space, plus the colour and group the
-// collision pass reads — is the same both times.
+// Turn core's label anchors into OverlayLabels the two draw paths already understand. Kept here
+// rather than in either caller because both of them need it and the conversion — canvas pixels to
+// the target draw list's space, plus the colour and group the collision pass reads — is the same
+// both times.
+//
+// NOT specific to one annotation family: the angular-distance circles and the coordinate grid both
+// arrive as core anchors and are both drawn this way, differing only in the appearance and the
+// collision group the caller attaches. That is why the type is named for the shape of the data
+// rather than for its first consumer.
 //
 // `anchors` are in canvas pixel space with a top-left origin, which is what
 // AnnotationOverlayCache returns and what the viewport rect below is offset by. `px`/`py` and
-// `text` are read; the label's kind is not, because the caller only ever hands over one kind.
-struct AngularDistAnchor {
+// `text` are read; the label's kind is not, because a set carries one family's anchors.
+struct CurveLabelAnchor {
   float px = 0.0f;
   float py = 0.0f;
   std::string text;
@@ -59,13 +76,19 @@ struct AngularDistAnchor {
 // The anchors plus the appearance the drawer gives them. Bundled because both the live preview and
 // the off-screen export need to carry all three together, and an appearance that travels separately
 // from its anchors is one more thing that can arrive without them.
-struct AngularDistLabelSet {
-  std::vector<AngularDistAnchor> anchors;
+struct CurveLabelSet {
+  std::vector<CurveLabelAnchor> anchors;
   float color[3] = { 1.0f, 1.0f, 1.0f };
   float alpha = 1.0f;
+  // Which collision group these labels join. Defaulted to the sun circles because they were the
+  // first family through here; every caller sets it explicitly.
+  int group = kGroupSunCircles;
+  // Semi-transparent plate behind the text. On for the circles, off for the grid — which is not a
+  // taste call but the appearance each family already had when it was walked here, kept so moving
+  // the walk into core changes where the numbers come from and nothing about how they look.
+  bool has_bg = true;
 };
-void AppendAngularDistLabels(const AngularDistLabelSet& circles, float vp_screen_x, float vp_screen_y,
-                             std::vector<OverlayLabel>& out);
+void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_screen_y, std::vector<OverlayLabel>& out);
 
 // Compute labels at viewport edges where overlay lines cross.
 // vp_screen_* are in the same coordinate space as the target ImDrawList:

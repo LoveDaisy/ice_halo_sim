@@ -1299,7 +1299,14 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 // Sanity ceilings on the request lists. As with the LUMICE_MAX_CONFIG_* family these guard against
 // malformed input rather than expressing a design limit; a request past one is rejected with
 // LUMICE_ERR_INVALID_VALUE rather than truncated.
-#define LUMICE_MAX_ANNOTATION_LINES 360
+// WIDENED (v4.18) from 360 to 1024, after the GUI's coordinate grid became a caller: at the
+// narrowest field of view it allows (1 deg) the adaptive step is 0.5 deg, which is 720 meridians
+// over the half-open (-180, 180]. 360 was rejecting that as malformed when it is the ordinary
+// grid, and truncating instead would have been worse than rejecting — the surviving half of the
+// list covers only negative azimuth, so a view looking east would have lost every meridian on
+// screen while reporting success. Widening a validation ceiling breaks no caller: nothing sizes an
+// array from it, and code compiled against the old value simply never sends more than it did.
+#define LUMICE_MAX_ANNOTATION_LINES 1024
 #define LUMICE_MAX_ANNOTATION_CIRCLES 64
 
 // Which family a label belongs to. The consumer decides appearance from this; core encodes none.
