@@ -289,12 +289,12 @@ class RenderConsumer : public IConsume {
   // Both families at once, for the two call sites (constructor, ResetWith) that always want both.
   void RebuildGridMasks();
 
-  // The horizon's label anchors. Its own function, and the only annotation family that needs one,
-  // because the horizon is the only one whose LINE does not come from annotation::ComputeOverlay:
-  // horizon_mask_ is built by BuildHorizonMask (core/lens_proj_build.hpp), which produces no
-  // anchors, so there is no existing per-line call here to read them out of. The three other
-  // families get their anchors from the ComputeOverlay call their mask already costs.
-  void RebuildHorizonLabels();
+  // The horizon's mask AND its label anchors, out of ONE annotation::ComputeOverlay call — the
+  // same shape the three families above have. It used to be labels only, with the line coming from
+  // a second, independent path (BuildHorizonMask, since deleted): two computations of one curve,
+  // which is what this task removed. Unlike the three families it takes no angle list, so there is
+  // one call rather than one per line.
+  void RebuildHorizonAnnotation();
 
   // Draw the cached label anchors' text into snapshot_image_buffer_. Called at the END of
   // PostSnapshot, after the fused per-pixel loop has written its final sRGB bytes — deliberately
@@ -326,6 +326,10 @@ class RenderConsumer : public IConsume {
   // then be empty exactly when the user has just asked for the line. Gating happens at the
   // point of use in PostSnapshot instead.
   std::vector<uint8_t> horizon_mask_;
+  // Whether horizon_mask_ has been filled at all. Not a change detector like the *_masks_built_
+  // flags below: nothing this mask depends on can move under a reused consumer (the view is a
+  // NeedsRebuild field), so this only stops ResetWith from redoing the sweep.
+  bool horizon_mask_built_ = false;
   // One W*H mask per entry of config_.angular_dist_grid_, index-aligned with it. Per LINE, not
   // per category, because each entry carries its own opacity_ / color_ and a category-wide union
   // could not tell one line's pixels from another's. Building them is a W*H inverse-projection
@@ -352,7 +356,7 @@ class RenderConsumer : public IConsume {
   std::vector<float> longitude_mask_angles_;
   bool longitude_masks_built_ = false;
   // The label anchors, one vector per family, harvested from the same ComputeOverlay calls that
-  // built the masks beside them (the horizon's from a call of its own — see RebuildHorizonLabels).
+  // built the masks beside them (the horizon's from RebuildHorizonAnnotation's single call).
   // Each Label's `index` is REWRITTEN on the way in to name the config line it annotates: core
   // answers per request, and every request here carries exactly one angle, so the index it returns
   // is always 0 and would not survive the merge into one per-family list.

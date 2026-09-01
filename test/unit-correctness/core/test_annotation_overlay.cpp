@@ -94,10 +94,6 @@ TEST(AnnotationLevelSet, LevelZeroReproducesTheHorizonWidthRule) {
 
   const std::vector<uint8_t> mask = md::LevelSetMaskFromField(field, all, all, kW, kH, { 0.0f }, /*circular=*/false);
   EXPECT_EQ(LitRows(mask, kW, kH), (std::vector<int>{ 7, 8, 9 }));
-
-  // Same input through the named horizon entry point: the generalization is the implementation of
-  // that function, not a parallel rule.
-  EXPECT_EQ(md::HorizonLineFromAltitudeField(field, all, all, kW, kH), mask);
 }
 
 TEST(AnnotationLevelSet, NonZeroLevelShiftsTheBandWithoutChangingItsWidth) {

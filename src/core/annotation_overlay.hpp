@@ -26,7 +26,7 @@ namespace lumice::annotation {
 // caller's discipline.
 //
 // The geometry is expressed as W*H byte masks in the SAME row-major layout as
-// BuildVisibleMask / BuildHorizonMask, and label anchors as pixel coordinates in that same image
+// BuildVisibleMask, and label anchors as pixel coordinates in that same image
 // space (x right, y down, origin at the top-left corner). Rendering — colour, line style, glyphs,
 // collision avoidance — belongs to the consumer; two consumers (the GUI preview and the CLI
 // renderer) draw the same geometry their own way, which is the whole point of returning geometry

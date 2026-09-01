@@ -15,7 +15,7 @@
 // `clamp(fwidth(altitude_deg), 1e-4, 2.0) * 1.5` band). Only the first of those is duplicated in
 // this repo. `fwidth` is a rasterizer primitive with no C++ counterpart, so BOTH sides of this
 // test necessarily run the same CPU restatement of the width rule —
-// mask_detail::HorizonLineFromAltitudeField, which core's BuildHorizonMask itself calls.
+// mask_detail::LevelSetMaskFromField at level 0, which core's own horizon mask is built by.
 // Feeding both altitude fields through the one shared rule is what makes this test about the
 // question that HAS two answers. What it therefore does not cover is a divergence between the
 // shader's own fwidth and this CPU forward difference; that is a line-thickness question, and AC6
@@ -56,6 +56,7 @@
 #include <vector>
 
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"
 #include "core/geo3d.hpp"
 #include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
@@ -84,9 +85,24 @@ RenderConfig MakeCfg(LensParam::LensType type, float fov, int w, int h, RenderCo
   return cfg;
 }
 
+// Core's answer, from the one place that now produces it (annotation::ComputeOverlay). The
+// standalone BuildHorizonMask this used to call was a second computation of the same curve and has
+// been deleted.
 std::vector<uint8_t> CoreOutline(const RenderConfig& cfg) {
-  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
-  return lumice::BuildHorizonMask(cfg, lumice::MakeCameraRotation(cfg), short_pix);
+  lumice::annotation::Request req;
+  req.view.width = cfg.resolution_[0];
+  req.view.height = cfg.resolution_[1];
+  req.view.lens_type = cfg.lens_.type_;
+  req.view.fov_deg = cfg.lens_.fov_;
+  req.view.overlap = cfg.overlap_;
+  req.view.az_deg = cfg.view_.az_;
+  req.view.el_deg = cfg.view_.el_;
+  req.view.roll_deg = cfg.view_.ro_;
+  req.view.visible = cfg.visible_;
+  req.view.front = cfg.front_;
+  req.horizon = true;
+  req.labels = false;
+  return lumice::annotation::ComputeOverlay(req).horizon;
 }
 
 // The shader's visibility rule, restated exactly as the sibling file does (preview_renderer.cpp
@@ -136,7 +152,7 @@ std::vector<uint8_t> GuiOutline(const RenderConfig& cfg) {
       drawable[i] = VisibleInGuiTerms(cfg.visible_, dz) ? 1 : 0;
     }
   }
-  return lumice::mask_detail::HorizonLineFromAltitudeField(alt_deg, imaged, drawable, w, h);
+  return lumice::mask_detail::LevelSetMaskFromField(alt_deg, imaged, drawable, w, h, { 0.0f }, /*circular=*/false);
 }
 
 size_t CountOn(const std::vector<uint8_t>& m) {

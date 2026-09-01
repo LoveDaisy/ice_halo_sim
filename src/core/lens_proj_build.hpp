@@ -308,9 +308,9 @@ inline bool FrontVisible(bool front, const float forward[3], float wx, float wy,
 }
 
 // The per-pixel inverse, lens branch and all: pixel (px, py) -> the world direction it images.
-// Extracted so that every mask built from this projection reads the SAME inverse. A second
-// annotation mask (BuildHorizonMask below) exists today and grid annotations may follow;
-// each one re-deriving the direction is how two masks of the same frame start disagreeing about
+// Extracted so that every mask built from this projection reads the SAME inverse: BuildVisibleMask
+// below and every annotation mask annotation::ComputeOverlay produces go through this one function.
+// Each one re-deriving the direction is how two masks of the same frame start disagreeing about
 // where the sky is.
 inline MaskDir PixelToWorld(const RenderConfig& cfg, const lm_proj::ProjParams& p, const Rotation& rot, int px,
                             int py) {
@@ -456,15 +456,6 @@ inline std::vector<uint8_t> LevelSetMaskFromField(const std::vector<float>& fiel
   return line;
 }
 
-// The celestial horizon: the single level set at altitude = 0 of a per-pixel altitude field.
-// Kept as a named entry point because it is what RenderConsumer asks for and what three layers of
-// existing tests pin; the generalization above is the implementation, not a second rule.
-inline std::vector<uint8_t> HorizonLineFromAltitudeField(const std::vector<float>& alt_deg,
-                                                         const std::vector<uint8_t>& imaged,
-                                                         const std::vector<uint8_t>& drawable, int width, int height) {
-  return LevelSetMaskFromField(alt_deg, imaged, drawable, width, height, { 0.0f }, /*circular=*/false);
-}
-
 }  // namespace mask_detail
 
 // Builds the W*H mask described above: 1 where the lens images a visible piece of sky, 0
@@ -495,59 +486,6 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
     }
   });
   return mask;
-}
-
-// Builds the W*H mask of the CELESTIAL HORIZON annotation: 1 where a line at altitude = 0 should
-// be drawn, 0 elsewhere. Same layout and same indexing as BuildVisibleMask, and a SEPARATE array
-// rather than a second bit of the visibility mask on purpose — "can this pixel show sky" and "does
-// this pixel carry an annotation" are two questions, and future grid annotations are more of the
-// second kind, not more bits of the first.
-//
-// The rule is the preview shader's own (preview_renderer.cpp overlayAuxLines, horizon section):
-// draw where |altitude_deg| falls inside 1.5x the local per-pixel altitude gradient, gated on the
-// pixel being both imageable AND inside the configured visible hemisphere (and, when front_ is
-// set, the front one too — the shader's `pixel_visible` has always ANDed `u_front` in) — the
-// shader applies its overlay under exactly that `result.w >= 0.5 && pixel_visible` gate, so a
-// half-sky config shows the horizon ending at the sky's edge on both sides rather than only on
-// one, and a front-clipped config does not leave the line floating over the clipped-away half.
-//
-// Returns an empty vector for a degenerate resolution.
-inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
-  const int width = cfg.resolution_[0];
-  const int height = cfg.resolution_[1];
-  if (width <= 0 || height <= 0) {
-    return {};
-  }
-  const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
-  const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
-
-  // One inverse per pixel, not three: the width rule needs each pixel's neighbours' altitudes, so
-  // the altitudes are materialized once and the differences read out of the field. Same total cost
-  // as BuildVisibleMask, which is what makes it reasonable to build this unconditionally (see the
-  // member's comment in render.hpp for why it cannot be built only when the flag is on).
-  std::vector<float> alt_deg(n, 0.0f);
-  std::vector<uint8_t> imaged(n, 0);
-  std::vector<uint8_t> drawable(n, 0);
-  float forward[3];
-  mask_detail::CameraForward(rot, forward);
-  ParallelRows(height, n, [&](int row_begin, int row_end) {
-    for (int py = row_begin; py < row_end; py++) {
-      for (int px = 0; px < width; px++) {
-        const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
-        if (!dir.valid) {
-          continue;
-        }
-        const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
-        alt_deg[i] = mask_detail::AltitudeDeg(dir);
-        imaged[i] = 1;
-        drawable[i] = (mask_detail::VisibleByRange(cfg.visible_, dir.z) &&
-                       mask_detail::FrontVisible(cfg.front_, forward, dir.x, dir.y, dir.z)) ?
-                          1 :
-                          0;
-      }
-    }
-  });
-  return mask_detail::HorizonLineFromAltitudeField(alt_deg, imaged, drawable, width, height);
 }
 
 }  // namespace lumice

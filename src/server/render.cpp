@@ -123,7 +123,6 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
   // Once per consumer, right after rot_ is final — see the member's declaration for why a
   // single build covers the whole lifetime.
   visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
-  horizon_mask_ = BuildHorizonMask(config_, rot_, short_pix_);
   RebuildAngularDistMasks();
   RebuildGridMasks();
   // The zenith / nadir marker positions, once. Not gated on config_.zenith_nadir_.enabled_, and
@@ -140,9 +139,10 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
     zenith_point_ = overlay.zenith;
     nadir_point_ = overlay.nadir;
   }
-  // Same lifetime argument as the three mask families: this depends on an appearance flag that
-  // ResetWith can change, so it is (re)built here AND there rather than once.
-  RebuildHorizonLabels();
+  // Same lifetime argument as the three mask families: the label half depends on an appearance
+  // flag that ResetWith can change, so it is (re)built here AND there rather than once. The mask
+  // half rides along on the same call, which is what leaves the horizon with ONE computation.
+  RebuildHorizonAnnotation();
 
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
@@ -1011,7 +1011,7 @@ void RenderConsumer::ResetWith(const RenderConfig& new_config, const SunParam& n
   // when nothing moved.
   RebuildAngularDistMasks();
   RebuildGridMasks();
-  RebuildHorizonLabels();
+  RebuildHorizonAnnotation();
   Reset();
 }
 
@@ -1126,27 +1126,32 @@ void RenderConsumer::RebuildLineFamilyMasks(LineFamily family) {
   }
 }
 
-// The horizon's label anchors. The one family that needs a ComputeOverlay call of its own: its
-// LINE comes from BuildHorizonMask (core/lens_proj_build.hpp), a path with no curve walk and no
-// anchors at all, so unlike the three families above there is no existing call here to read them
-// out of. Nothing in this function touches horizon_mask_ or paint_outline_layer — the line and the
-// text are two independent decisions.
-void RenderConsumer::RebuildHorizonLabels() {
-  if (config_.horizon_label_ == horizon_labels_built_for_) {
+// The horizon's line AND its label anchors, from ONE annotation::ComputeOverlay call — the same
+// shape the three families above have, and the point of this task: the mask used to come from a
+// second, independent path (BuildHorizonMask), so one curve was computed twice and the two
+// computations were free to drift. Nothing else in the renderer decides where the line goes.
+//
+// `req.horizon` is unconditional, NOT gated on config_.horizon_: the mask's member declaration
+// argues why (horizon_ is an appearance field that ResetWith can flip with no rebuild, so a mask
+// built only for its construction-time value would be empty exactly when the user has just asked
+// for the line). The LINE's own gate stays on config_.horizon_ alone, at the point of use in
+// PostSnapshot; the TEXT's on config_.horizon_label_, here.
+void RenderConsumer::RebuildHorizonAnnotation() {
+  if (horizon_mask_built_ && config_.horizon_label_ == horizon_labels_built_for_) {
     return;  // nothing this depends on has moved (the view is fixed for a consumer's whole life)
   }
+  horizon_mask_built_ = true;
   horizon_labels_built_for_ = config_.horizon_label_;
   horizon_labels_.clear();
+  annotation::Request req = MakeMaskRequest(config_);
+  req.horizon = true;
+  // The curve walk is the only part the text switch can save, so it is the only part it gates.
+  req.labels = config_.horizon_label_;
+  annotation::Overlay overlay = annotation::ComputeOverlay(req);
+  horizon_mask_ = std::move(overlay.horizon);
   if (!config_.horizon_label_) {
     return;
   }
-  annotation::Request req = MakeMaskRequest(config_);
-  // Written out as the disjunction it is: the guard above pins horizon_label_ true, so what this
-  // says is that the label geometry is requested WHETHER OR NOT config_.horizon_ asks for the
-  // line. The line's own gate stays on config_.horizon_ alone (PostSnapshot).
-  req.horizon = config_.horizon_ || config_.horizon_label_;
-  req.labels = true;
-  annotation::Overlay overlay = annotation::ComputeOverlay(req);
   // -1, not an index: the horizon has no line list to index into, which is also how PaintLabels
   // tells it apart from the three families that do (it is collected separately there).
   AppendLabels(overlay.labels, -1, horizon_labels_);

@@ -326,10 +326,16 @@ Overlay ComputeOverlay(const Request& req) {
         }
         const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
         imaged[i] = 1;
-        bool drawable = mask_detail::VisibleByRange(cfg.visible_, dir.z);
-        if (drawable && req.view.front) {
-          drawable = forward[0] * dir.x + forward[1] * dir.y + forward[2] * dir.z >= -kFrontEps;
-        }
+        // BOTH clips through the shared predicates, and the front one WITHOUT kFrontEps. That eps
+        // is the curve walk's tolerance (VisibleForLabel above) and belongs to anchors only — the
+        // header states the rule as "The MASKS do not get this slack and must not", and this line
+        // used to break it. What it cost, measured on rectangular 2048x1024 with front on: 29,532
+        // drawable pixels outside the render domain BuildVisibleMask draws, of which 18 horizon
+        // and 20 elevation pixels were actually painted there. Every one of them is a pixel the
+        // preview shader discards outright (`dot(world_dir, u_view_matrix[2]) > 0.0 -> discard`,
+        // an exact test with no slack), so the slack was also a cross-implementation divergence.
+        const bool drawable = mask_detail::VisibleByRange(cfg.visible_, dir.z) &&
+                              mask_detail::FrontVisible(req.view.front, forward, dir.x, dir.y, dir.z);
         out.drawable[i] = drawable ? 1 : 0;
         if (need_alt) {
           alt_field[i] = mask_detail::AltitudeDeg(dir);
