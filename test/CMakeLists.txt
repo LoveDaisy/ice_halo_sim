@@ -62,6 +62,8 @@ add_executable(unit_correctness_test
   # Annotation overlay: the generalized level-set extraction every auxiliary line shares, the
   # row-parallel mask build, and ComputeOverlay.
   "${PROJ_TEST_DIR}/unit-correctness/core/test_annotation_overlay.cpp"
+  # The glyph rasterizer the CLI renderer draws those labels' text with (core has no ImGui).
+  "${PROJ_TEST_DIR}/unit-correctness/core/test_annotation_font.cpp"
   # config/
   "${PROJ_TEST_DIR}/unit-correctness/config/test_json.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/config/test_crystal_sync_group.cpp"

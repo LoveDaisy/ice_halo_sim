@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Embed a binary file as a C++ byte array.
 
-Usage: embed_binary.py <input> <output.cpp> <symbol_prefix>
+Usage: embed_binary.py <input> <output.cpp> <symbol_prefix> [namespace]
 
 Emits a .cpp that defines:
-  namespace lumice::gui {
+  namespace <namespace> {
   const unsigned char <prefix>Data[N] = { ... };
   const std::size_t  <prefix>Size = N;
   }
+
+`namespace` defaults to `lumice::gui`, the only namespace this script served while the
+GUI was its only caller. It is a parameter because core embeds a font too (the label
+font server/render.cpp rasterizes), and core must not define symbols in the GUI's
+namespace — `lumice_obj` is built even when BUILD_GUI is off, where `lumice::gui` has
+no other member at all.
 
 The corresponding header is hand-written (see fa_solid_900_embed.h).
 """
@@ -19,13 +25,14 @@ from pathlib import Path
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <input> <output.cpp> <symbol_name>", file=sys.stderr)
+    if len(sys.argv) not in (4, 5):
+        print(f"Usage: {sys.argv[0]} <input> <output.cpp> <symbol_name> [namespace]", file=sys.stderr)
         return 1
 
     in_path = Path(sys.argv[1])
     out_path = Path(sys.argv[2])
     symbol = sys.argv[3]
+    namespace = sys.argv[4] if len(sys.argv) == 5 else "lumice::gui"
 
     data = in_path.read_bytes()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,7 +42,7 @@ def main() -> int:
     lines.append("// Source: " + in_path.name)
     lines.append("#include <cstddef>")
     lines.append("")
-    lines.append("namespace lumice::gui {")
+    lines.append(f"namespace {namespace} {{")
     lines.append("")
     lines.append("// extern declarations give external linkage to the const definitions below")
     lines.append("// (namespace-scope const has internal linkage by default in C++ — do not remove).")
@@ -52,7 +59,7 @@ def main() -> int:
     lines.append("")
     lines.append(f"const std::size_t {symbol}Size = {len(data)};")
     lines.append("")
-    lines.append("}  // namespace lumice::gui")
+    lines.append(f"}}  // namespace {namespace}")
     lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")

@@ -313,6 +313,21 @@ CPMAddPackage(
   DOWNLOAD_ONLY YES
 )
 
+# Roboto Medium — the font core rasterizes annotation labels with (src/core/annotation_font.cpp,
+# via stb_truetype above). Fetched as a SINGLE FILE rather than through the imgui tree the GUI
+# embeds the identical bytes from, and OUTSIDE the BUILD_GUI block below, because lumice_obj
+# (core + CLI) must compile in a CLI-only build where ${imgui_SOURCE_DIR} does not exist at all.
+# Same tag, same path, same SHA256 as the GUI's copy: both drawers rasterize one typeface, so a
+# future GUI/CLI text comparison has one fewer way to differ. DOWNLOAD_NO_EXTRACT because a .ttf
+# is not an archive.
+CPMAddPackage(
+  NAME roboto_font
+  URL https://raw.githubusercontent.com/ocornut/imgui/v1.91.8-docking/misc/fonts/Roboto-Medium.ttf
+  URL_HASH SHA256=8559132c89ad51d8a2ba5b171887a44a7ba93776e205f553573de228e64b45f8
+  DOWNLOAD_ONLY YES
+  DOWNLOAD_NO_EXTRACT YES
+)
+
 # GUI dependencies (only when BUILD_GUI is ON)
 if(BUILD_GUI)
   # GLFW: windowing and input
@@ -408,6 +423,7 @@ set(lumice_config_src
   "${PROJ_SRC_DIR}/config/sim_data.cpp")
 
 set(lumice_core_src
+  "${PROJ_SRC_DIR}/core/annotation_font.cpp"
   "${PROJ_SRC_DIR}/core/annotation_overlay.cpp"
   "${PROJ_SRC_DIR}/core/backend/cpu_trace_backend.cpp"
   "${PROJ_SRC_DIR}/core/crystal.cpp"
@@ -573,9 +589,34 @@ set(lumice_util_src
   "${PROJ_SRC_DIR}/util/illuminant.cpp"
   "${PROJ_SRC_DIR}/util/threading_pool.cpp")
 
+# --- Build-time TTF -> embedded byte array (core's label font) ----------------------------------
+# The same scripts/embed_binary.py the GUI drives for its two fonts, pointed at core's namespace:
+# lumice_obj is built with BUILD_GUI off too, where lumice::gui has no other member. The bytes end
+# up in the binary, so a CLI render draws text with no font file present on the machine.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(LUMICE_LABEL_FONT_TTF "${roboto_font_SOURCE_DIR}/Roboto-Medium.ttf")
+set(LUMICE_LABEL_FONT_EMBED_CPP "${CMAKE_BINARY_DIR}/generated/label_font_embed.cpp")
+if(NOT EXISTS "${LUMICE_LABEL_FONT_TTF}")
+  message(FATAL_ERROR "[core] Label font not found at ${LUMICE_LABEL_FONT_TTF}. "
+                      "Check the roboto_font CPM dependency above.")
+endif()
+add_custom_command(
+    OUTPUT "${LUMICE_LABEL_FONT_EMBED_CPP}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/generated"
+    COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+            "${LUMICE_LABEL_FONT_TTF}"
+            "${LUMICE_LABEL_FONT_EMBED_CPP}"
+            "kLabelFont"
+            "lumice::annotation"
+    DEPENDS "${LUMICE_LABEL_FONT_TTF}" "${CMAKE_SOURCE_DIR}/scripts/embed_binary.py"
+    COMMENT "[core] Embedding Roboto-Medium.ttf -> label_font_embed.cpp"
+    VERBATIM)
+
 set(lumice_src
   ${lumice_config_src} ${lumice_core_src}
-  ${lumice_server_src} ${lumice_util_src})
+  ${lumice_server_src} ${lumice_util_src}
+  "${LUMICE_LABEL_FONT_EMBED_CPP}")
 
 # ==================================================================================================
 # OBJECT library — compile sources once, reuse .o files across targets (library, test, bench).
@@ -588,6 +629,9 @@ target_include_directories(lumice_obj
     $<INSTALL_INTERFACE:include>
     ${lumice_include})
 target_link_libraries(lumice_obj PUBLIC nlohmann_json::nlohmann_json spdlog::spdlog_header_only tl::expected Threads::Threads)
+# stb_truetype.h, for core/annotation_font.cpp. PRIVATE: the rasterizer is an implementation
+# detail of the label drawing, and no public header names an stb type.
+target_include_directories(lumice_obj PRIVATE "${stb_SOURCE_DIR}")
 if(APPLE)
   target_link_libraries(lumice_obj PUBLIC "-framework Metal" "-framework Foundation")
   # task-metal-build-time-metallib (#283): metal_trace_backend.mm #includes the
