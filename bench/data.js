@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788230000650,
+  "lastUpdate": 1788230002850,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9572,50 +9572,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5e97f32dfff1df95c079d3e6a6dcf1d31ff2b870",
-          "message": "Merge pull request #189 from LoveDaisy/feat/local-cleanup-sweep\n\nchore: local cleanup sweep — popcount gate, sibling-race, filter test, doc fixup (scrum-357)",
-          "timestamp": "2026-07-13T00:20:25+08:00",
-          "tree_id": "c297e4cca53bbc42294ff1e88146c4bcf2c33696",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5e97f32dfff1df95c079d3e6a6dcf1d31ff2b870"
-        },
-        "date": 1783873681451,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 77.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 98.6,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "112183c86595221b64fc96eba2f3b6a5ba90d3b4",
           "message": "Merge pull request #190 from LoveDaisy/feat/raypath-color-gpu-parity\n\nphase-3c: GPU 染色三后端 parity (Metal+CUDA Design-2 迁移 + Fork-C 退休)",
           "timestamp": "2026-07-13T18:21:38+08:00",
@@ -13935,6 +13891,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 94.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5360f028303b6963e69eb26ba999c203a3f3018e",
+          "message": "Merge pull request #288 from LoveDaisy/feat/cli-gui-render-parity\n\n让导出的 config 诚实描述用户所见 + 建 CLI↔GUI 出图对照闸",
+          "timestamp": "2026-09-01T10:20:29+08:00",
+          "tree_id": "1d4a30db33e4386ab9a58ed55adc7521892bc4bb",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5360f028303b6963e69eb26ba999c203a3f3018e"
+        },
+        "date": 1788230002198,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.5,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.6,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94,
             "unit": "%"
           }
         ]
