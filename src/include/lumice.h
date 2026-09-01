@@ -1240,6 +1240,167 @@ typedef struct LUMICE_CrystalMesh_ {
 LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsigned long long sample_seed,
                                        LUMICE_CrystalMesh* out);
 
+// =============== Annotation Overlay ===============
+// Where a view's auxiliary lines land, in pixels: the celestial horizon, parallels (constant
+// altitude), meridians (constant azimuth), circles of constant angular distance from a direction
+// (the sun, in every use so far), and the zenith / nadir points. GEOMETRY AND LABEL ANCHORS ONLY —
+// colour, line width, glyphs and collision avoidance belong to whoever draws. That split is the
+// point: the GUI preview and the CLI renderer draw the same lines their own way, and neither one
+// re-derives where they are.
+//
+// ⚠ THIS IS NOT A PER-FRAME CALL. Every mask costs a width*height inverse-projection sweep —
+// single-digit milliseconds from 1024x1024 upward even with the internal row-parallel split, which
+// is a whole 60 fps frame budget. Call it once when the view SETTLES and cache the result; a
+// caller driving an interactive control must debounce, or freeze the annotation for the duration
+// of a drag. The contract is stated here because it is a property of the computation, not of any
+// one caller's discipline.
+//
+// Sanity ceilings on the request lists. As with the LUMICE_MAX_CONFIG_* family these guard against
+// malformed input rather than expressing a design limit; a request past one is rejected with
+// LUMICE_ERR_INVALID_VALUE rather than truncated.
+#define LUMICE_MAX_ANNOTATION_LINES 360
+#define LUMICE_MAX_ANNOTATION_CIRCLES 64
+
+// Which family a label belongs to. The consumer decides appearance from this; core encodes none.
+#define LUMICE_ANNOTATION_HORIZON 0
+#define LUMICE_ANNOTATION_ELEVATION 1
+#define LUMICE_ANNOTATION_LONGITUDE 2
+#define LUMICE_ANNOTATION_ANGULAR_DIST 3
+
+// Longest label text core produces, including the terminating NUL. Values are at most
+// "-180.0" plus a two-byte UTF-8 degree sign.
+#define LUMICE_ANNOTATION_LABEL_MAX 16
+
+// The view an overlay is computed for. Separate from LUMICE_RenderParam on purpose: this carries
+// `front`, which the renderer has no field for, and it describes a pure computation with no Scene
+// or Server lifetime around it. `width`/`height` are the CANVAS the answer is expressed in, which
+// need not be the render resolution — a GUI panel showing a re-projected all-sky texture passes
+// its own on-screen pixel size and gets anchors in that space.
+typedef struct LUMICE_AnnotationView_ {
+  int width;
+  int height;
+  int lens_type;   // LUMICE_LENS_TYPE_*
+  float lens_fov;  // degrees
+  int lens_shift[2];
+  float overlap;  // dual-fisheye overlap zone |sky.z| threshold (sin value); 0 = none
+  float view_azimuth;
+  float view_elevation;
+  float view_roll;
+  int visible;  // LUMICE_VISIBLE_*
+  // Non-zero clips everything to the camera-facing hemisphere, ON TOP OF `visible`. The two are
+  // independent: `visible` says which half of the sky exists, `front` says the viewer only wants
+  // what is in front of them.
+  int front;
+} LUMICE_AnnotationView;
+
+// What to draw. Angle lists are caller-owned and read only for the duration of the call (the same
+// borrow rule as the Scene family's leaf structs), so a stack array is fine. A NULL list with a
+// zero count means "none of that category".
+typedef struct LUMICE_AnnotationRequest_ {
+  LUMICE_AnnotationView view;
+
+  // The celestial horizon (altitude 0). Its own flag rather than a 0 entry in `elevation_deg`,
+  // because every consumer so far colours it separately.
+  int horizon;
+
+  const float* elevation_deg;  // parallels, degrees
+  int elevation_count;
+  const float* longitude_deg;  // meridians, degrees
+  int longitude_count;
+
+  // Circles of constant angular distance from `reference_dir`. The direction need not be
+  // normalized; a zero vector falls back to the zenith.
+  const float* angular_dist_deg;
+  int angular_dist_count;
+  float reference_dir[3];
+
+  // Report where zenith and nadir land. Points, not curves: they carry no mask and no text,
+  // because a marker's glyph is the consumer's vocabulary, not core's.
+  int zenith_nadir;
+
+  // Zero skips the curve walk. The masks alone are several times cheaper than masks plus anchors,
+  // and a consumer that draws no text has no use for the anchors.
+  int want_labels;
+} LUMICE_AnnotationRequest;
+
+// One label: where to put it, what it says, and which curve it came from.
+typedef struct LUMICE_AnnotationLabel_ {
+  float px;  // canvas pixel, x right
+  float py;  // canvas pixel, y down
+  int kind;  // LUMICE_ANNOTATION_*
+  // Index into the request list this label's curve came from, or -1 for the horizon (which comes
+  // from no list). Lets a consumer map a label back to its line without parsing the text.
+  int index;
+  float value_deg;
+  char text[LUMICE_ANNOTATION_LABEL_MAX];
+} LUMICE_AnnotationLabel;
+
+// The result. The caller allocates this struct (stack is fine); core allocates what the pointers
+// point at, and LUMICE_ReleaseAnnotationOverlay frees it. Every pointer below is owned by core and
+// stays valid until that call — the same acquire/release discipline LUMICE_Scene and
+// LUMICE_ResultFrame use, with the same rule: exactly one Release per successful Compute, and
+// nothing dereferenced afterwards.
+typedef struct LUMICE_AnnotationOverlay_ {
+  int width;
+  int height;
+
+  // 1 where the lens images a piece of sky this request may annotate: imaged, inside `visible`,
+  // and inside the front hemisphere when `front` is set. Row-major width*height, indexed
+  // py * width + px — the same layout LUMICE_RawXyzResult uses. Every mask below is a subset of
+  // this one. NULL only when the view is degenerate.
+  const unsigned char* drawable;
+
+  // One mask per annotation CATEGORY, each the union of that category's lines, NULL when the
+  // category was not requested. Per category rather than per line because that is the granularity
+  // a consumer colours at; a per-line mask set would be tens of megabytes at 4K.
+  const unsigned char* horizon;
+  const unsigned char* elevation;
+  const unsigned char* longitude;
+  const unsigned char* angular_dist;
+
+  // Marker positions, valid only when the request asked for them AND the point is on the canvas
+  // and inside the requested hemisphere.
+  float zenith_px;
+  float zenith_py;
+  int zenith_valid;
+  float nadir_px;
+  float nadir_py;
+  int nadir_valid;
+
+  const LUMICE_AnnotationLabel* labels;
+  int label_count;
+
+  // Opaque handle to the storage the pointers above live in. Do not read, write, copy or free it;
+  // pass this struct to LUMICE_ReleaseAnnotationOverlay exactly once instead. Copying the struct
+  // copies the handle, so only ONE copy may be released — treat it as a move, not a value.
+  void* storage;
+} LUMICE_AnnotationOverlay;
+
+// Compute the overlay for one view. `*out` is fully overwritten on success and left untouched on
+// failure, so a failed call leaves nothing to release.
+//
+// Contract:
+//   - Pure and deterministic: identical `request` => identical output. No Server, no Scene, no
+//     global state, and safe to call from any thread (including concurrently with a running
+//     simulation — it shares nothing with one).
+//   - A degenerate view (width or height <= 0) is not an error: it yields an overlay with
+//     width = height = 0, every pointer NULL and label_count = 0, which still must be Released.
+//   - The masks and the anchors agree by construction: both come from one inverse sweep and one
+//     forward, the same forward the trace backends run.
+//
+// Returns LUMICE_ERR_NULL_ARG if `request` or `out` is NULL, or a list pointer is NULL with a
+// non-zero count; LUMICE_ERR_INVALID_VALUE for an unknown lens_type / visible, a negative count,
+// or a count past LUMICE_MAX_ANNOTATION_LINES / _CIRCLES; LUMICE_ERR_UNKNOWN on allocation
+// failure.
+LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
+                                                 LUMICE_AnnotationOverlay* out);
+
+// Release the storage a successful LUMICE_ComputeAnnotationOverlay allocated, and NULL out the
+// pointers so a double release is a no-op rather than a double free. NULL-safe, and safe on an
+// already-released or zero-initialized struct (same wording as LUMICE_SceneDestroy: calling it on
+// a live overlay exactly once is required; calling it on anything else does nothing).
+void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay);
+
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).
 // GUI code should clamp user-editable IDs to [0, LUMICE_MAX_ID].

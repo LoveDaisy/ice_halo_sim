@@ -17,6 +17,7 @@
 #include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/raypath.hpp"
+#include "core/scatter_accum.hpp"  // MakeCameraRotation (single source of the camera rotation chain)
 #include "core/shared/accum_shared.h"
 #include "core/shared/projection_shared.h"
 #include "util/color_data.hpp"
@@ -49,11 +50,10 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table)
   snapshot_xyz_ = xyz_pool_->Acquire(buf_elems);
   snapshot_image_buffer_ = image_pool_->Acquire(buf_elems);
 
-  float ax_z[3]{ 0, 0, 1 };
-  float ax_y[3]{ 0, 1, 0 };
-  rot_.Chain({ ax_z, (-90.0f + config_.view_.ro_) * math::kDegreeToRad })
-      .Chain({ ax_y, (90.0f - config_.view_.el_) * math::kDegreeToRad })
-      .Chain({ ax_z, config_.view_.az_ * math::kDegreeToRad });
+  // The camera rotation is core's, not this file's: MakeCameraRotation (core/scatter_accum.hpp)
+  // held an exact copy of the chain that used to be spelled out here, and the annotation overlay
+  // needs the same one. Three call sites, one derivation.
+  rot_ = MakeCameraRotation(config_);
 
   // Once per consumer, right after rot_ is final — see the member's declaration for why a
   // single build covers the whole lifetime.

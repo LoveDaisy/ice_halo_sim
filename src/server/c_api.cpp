@@ -16,6 +16,7 @@
 #include "config/raypath_color_config.hpp"  // ns::kDefaultCompositeMode (single-source default)
 #include "config/raypath_validation.hpp"
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"  // annotation::ComputeOverlay (LUMICE_ComputeAnnotationOverlay)
 #include "core/crystal.hpp"
 #include "core/ev_anchor.hpp"
 #include "core/geo3d.hpp"
@@ -3198,6 +3199,152 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
   out->edge_count = edge_cnt;
 
   return LUMICE_OK;
+}
+
+
+// =============== Annotation Overlay ===============
+// Bridge only: the geometry, the level-set extraction and the curve walk all live in
+// core/annotation_overlay.hpp. What is here is the ABI shape — validation, the enum
+// translation, and the one heap allocation the C caller releases.
+
+namespace {
+
+// Everything LUMICE_AnnotationOverlay's pointers point into, kept in one object so a single
+// Release frees the lot. Owned through the struct's opaque `storage` handle rather than through
+// the individual pointers: the caller has one thing to release, and the released state is
+// expressible (all pointers NULL) so a double Release is a no-op instead of a double free.
+struct AnnotationStorage {
+  lumice::annotation::Overlay overlay;
+  std::vector<LUMICE_AnnotationLabel> labels;
+};
+
+const unsigned char* MaskPtr(const std::vector<uint8_t>& m) {
+  return m.empty() ? nullptr : m.data();
+}
+
+// A request angle list, validated and copied. Returns false with `err` set on a malformed list.
+bool ReadAngleList(const float* data, int count, int cap, std::vector<float>* out, LUMICE_ErrorCode* err) {
+  if (count < 0 || count > cap) {
+    *err = LUMICE_ERR_INVALID_VALUE;
+    return false;
+  }
+  if (count > 0 && data == nullptr) {
+    *err = LUMICE_ERR_NULL_ARG;
+    return false;
+  }
+  out->assign(data, data + count);
+  return true;
+}
+
+}  // namespace
+
+
+LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
+                                                 LUMICE_AnnotationOverlay* out) {
+  if (!request || !out) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  const LUMICE_AnnotationView& v = request->view;
+  if (v.lens_type < 0 || v.lens_type > LUMICE_LENS_TYPE_GLOBE) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  if (v.visible != LUMICE_VISIBLE_UPPER && v.visible != LUMICE_VISIBLE_LOWER && v.visible != LUMICE_VISIBLE_FULL) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+
+  lumice::annotation::Request req;
+  req.view.width = v.width;
+  req.view.height = v.height;
+  req.view.lens_type = static_cast<ns::LensParam::LensType>(v.lens_type);
+  req.view.fov_deg = v.lens_fov;
+  req.view.lens_shift[0] = v.lens_shift[0];
+  req.view.lens_shift[1] = v.lens_shift[1];
+  req.view.overlap = v.overlap;
+  req.view.az_deg = v.view_azimuth;
+  req.view.el_deg = v.view_elevation;
+  req.view.roll_deg = v.view_roll;
+  req.view.visible = static_cast<ns::RenderConfig::VisibleRange>(v.visible);
+  req.view.front = v.front != 0;
+  req.horizon = request->horizon != 0;
+  req.zenith_nadir = request->zenith_nadir != 0;
+  req.labels = request->want_labels != 0;
+  req.reference_dir[0] = request->reference_dir[0];
+  req.reference_dir[1] = request->reference_dir[1];
+  req.reference_dir[2] = request->reference_dir[2];
+
+  LUMICE_ErrorCode err = LUMICE_OK;
+  if (!ReadAngleList(request->elevation_deg, request->elevation_count, LUMICE_MAX_ANNOTATION_LINES, &req.elevation_deg,
+                     &err) ||
+      !ReadAngleList(request->longitude_deg, request->longitude_count, LUMICE_MAX_ANNOTATION_LINES, &req.longitude_deg,
+                     &err) ||
+      !ReadAngleList(request->angular_dist_deg, request->angular_dist_count, LUMICE_MAX_ANNOTATION_CIRCLES,
+                     &req.angular_dist_deg, &err)) {
+    return err;
+  }
+
+  std::unique_ptr<AnnotationStorage> storage;
+  try {
+    storage = std::make_unique<AnnotationStorage>();
+    storage->overlay = lumice::annotation::ComputeOverlay(req);
+  } catch (...) {
+    return LUMICE_ERR_UNKNOWN;
+  }
+
+  const lumice::annotation::Overlay& o = storage->overlay;
+  storage->labels.reserve(o.labels.size());
+  for (const lumice::annotation::Label& l : o.labels) {
+    LUMICE_AnnotationLabel dst{};
+    dst.px = l.px;
+    dst.py = l.py;
+    dst.kind = static_cast<int>(l.kind);
+    dst.index = l.index;
+    dst.value_deg = l.value_deg;
+    // Truncation cannot happen for any angle core formats (see LUMICE_ANNOTATION_LABEL_MAX), but
+    // the copy is bounded anyway: a silently over-long text would otherwise be a buffer overrun
+    // rather than a short label.
+    const size_t n = std::min(l.text.size(), sizeof(dst.text) - 1);
+    std::memcpy(dst.text, l.text.data(), n);
+    dst.text[n] = '\0';
+    storage->labels.push_back(dst);
+  }
+
+  out->width = o.width;
+  out->height = o.height;
+  out->drawable = MaskPtr(o.drawable);
+  out->horizon = MaskPtr(o.horizon);
+  out->elevation = MaskPtr(o.elevation);
+  out->longitude = MaskPtr(o.longitude);
+  out->angular_dist = MaskPtr(o.angular_dist);
+  out->zenith_px = o.zenith.px;
+  out->zenith_py = o.zenith.py;
+  out->zenith_valid = o.zenith.valid ? 1 : 0;
+  out->nadir_px = o.nadir.px;
+  out->nadir_py = o.nadir.py;
+  out->nadir_valid = o.nadir.valid ? 1 : 0;
+  out->labels = storage->labels.empty() ? nullptr : storage->labels.data();
+  out->label_count = static_cast<int>(storage->labels.size());
+  out->storage = storage.release();
+  return LUMICE_OK;
+}
+
+
+void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay) {
+  if (!overlay || !overlay->storage) {
+    return;  // NULL-safe, and idempotent on an already-released or zero-initialized struct
+  }
+  const std::unique_ptr<AnnotationStorage> owned(static_cast<AnnotationStorage*>(overlay->storage));
+  overlay->storage = nullptr;
+  // Leave no dangling view of freed memory behind, so a caller that keeps reading the struct after
+  // Release sees "nothing here" rather than a use-after-free.
+  overlay->drawable = nullptr;
+  overlay->horizon = nullptr;
+  overlay->elevation = nullptr;
+  overlay->longitude = nullptr;
+  overlay->angular_dist = nullptr;
+  overlay->labels = nullptr;
+  overlay->label_count = 0;
+  overlay->zenith_valid = 0;
+  overlay->nadir_valid = 0;
 }
 
 

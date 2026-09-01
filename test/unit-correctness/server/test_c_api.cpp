@@ -4546,3 +4546,216 @@ TEST(EvAutoAnchorApi, ComputeEvAutoForwardsFormulaAndGuards) {
   EXPECT_FLOAT_EQ(LUMICE_ComputeEvAuto(2.0e-3f, 0.0f, 135.0f), 0.0f);
   EXPECT_FLOAT_EQ(LUMICE_ComputeEvAuto(0.0f, 4.0f, 135.0f), 0.0f);
 }
+
+// =================================================================================================
+// Annotation overlay (LUMICE_ComputeAnnotationOverlay / _ReleaseAnnotationOverlay)
+//
+// The geometry itself is covered in test/unit-correctness/core/test_annotation_overlay.cpp and the
+// cross-implementation agreement in test/unit-correctness/gui/
+// test_annotation_overlay_gui_parity.cpp. What is asserted here is the ABI shape: argument
+// validation, what a successful call actually fills in, and the acquire/release contract.
+// =================================================================================================
+
+namespace {
+
+LUMICE_AnnotationRequest MakeAnnotationRequest(int w, int h) {
+  LUMICE_AnnotationRequest req{};
+  req.view.width = w;
+  req.view.height = h;
+  req.view.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  req.view.lens_fov = 180.0f;
+  req.view.visible = LUMICE_VISIBLE_FULL;
+  req.reference_dir[0] = 0.0f;
+  req.reference_dir[1] = -1.0f;
+  req.reference_dir[2] = 0.0f;
+  req.horizon = 1;
+  req.want_labels = 1;
+  return req;
+}
+
+}  // namespace
+
+TEST(AnnotationOverlayApi, RejectsNullArguments) {
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(64, 32);
+  LUMICE_AnnotationOverlay out{};
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(nullptr, &out), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&req, nullptr), LUMICE_ERR_NULL_ARG);
+
+  // A non-zero count with a NULL list is the shape a caller gets wrong by forgetting one line, so
+  // it is an error rather than a silent "no lines".
+  req.elevation_count = 3;
+  req.elevation_deg = nullptr;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_ERR_NULL_ARG);
+}
+
+TEST(AnnotationOverlayApi, RejectsOutOfRangeEnumsAndCounts) {
+  const float angles[] = { 10.0f, 20.0f };
+  LUMICE_AnnotationOverlay out{};
+
+  LUMICE_AnnotationRequest bad_lens = MakeAnnotationRequest(64, 32);
+  bad_lens.view.lens_type = LUMICE_LENS_TYPE_GLOBE + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&bad_lens, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest bad_visible = MakeAnnotationRequest(64, 32);
+  bad_visible.view.visible = 7;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&bad_visible, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest negative = MakeAnnotationRequest(64, 32);
+  negative.elevation_deg = angles;
+  negative.elevation_count = -1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&negative, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest too_many = MakeAnnotationRequest(64, 32);
+  too_many.longitude_deg = angles;
+  too_many.longitude_count = LUMICE_MAX_ANNOTATION_LINES + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&too_many, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest too_many_circles = MakeAnnotationRequest(64, 32);
+  too_many_circles.angular_dist_deg = angles;
+  too_many_circles.angular_dist_count = LUMICE_MAX_ANNOTATION_CIRCLES + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&too_many_circles, &out), LUMICE_ERR_INVALID_VALUE);
+
+  // A rejected call must leave nothing to release: `out` is still zero-initialized, so the
+  // NULL-safe Release below is a no-op rather than a free of a wild pointer.
+  EXPECT_EQ(out.storage, nullptr);
+  LUMICE_ReleaseAnnotationOverlay(&out);
+}
+
+TEST(AnnotationOverlayApi, FillsGeometryLabelsAndMarkers) {
+  const float parallels[] = { -30.0f, 30.0f };
+  const float meridians[] = { 0.0f, 90.0f, 180.0f, -90.0f };
+  const float circles[] = { 22.0f };
+
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(128, 64);
+  req.elevation_deg = parallels;
+  req.elevation_count = 2;
+  req.longitude_deg = meridians;
+  req.longitude_count = 4;
+  req.angular_dist_deg = circles;
+  req.angular_dist_count = 1;
+  req.zenith_nadir = 1;
+
+  LUMICE_AnnotationOverlay out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_OK);
+  EXPECT_EQ(out.width, 128);
+  EXPECT_EQ(out.height, 64);
+  ASSERT_NE(out.drawable, nullptr);
+  ASSERT_NE(out.horizon, nullptr);
+  ASSERT_NE(out.elevation, nullptr);
+  ASSERT_NE(out.longitude, nullptr);
+  ASSERT_NE(out.angular_dist, nullptr);
+  EXPECT_TRUE(out.zenith_valid);
+  EXPECT_TRUE(out.nadir_valid);
+  ASSERT_GT(out.label_count, 0);
+  ASSERT_NE(out.labels, nullptr);
+
+  // Every mask pixel must sit inside the drawable region, read through the C pointers rather than
+  // the C++ vectors — the ABI's job is that the pointer and the extent agree.
+  const size_t n = 128u * 64u;
+  const unsigned char* const masks[] = { out.horizon, out.elevation, out.longitude, out.angular_dist };
+  for (const unsigned char* m : masks) {
+    size_t on = 0;
+    size_t stray = 0;
+    for (size_t i = 0; i < n; ++i) {
+      on += (m[i] != 0) ? 1u : 0u;
+      stray += (m[i] != 0 && out.drawable[i] == 0) ? 1u : 0u;
+    }
+    EXPECT_GT(on, 0u) << "a category that draws nothing makes the containment check vacuous";
+    EXPECT_EQ(stray, 0u);
+  }
+
+  bool saw_horizon = false;
+  bool saw_circle = false;
+  for (int i = 0; i < out.label_count; ++i) {
+    const LUMICE_AnnotationLabel& l = out.labels[i];
+    EXPECT_GE(l.px, 0.0f);
+    EXPECT_LT(l.px, 128.0f);
+    EXPECT_GE(l.py, 0.0f);
+    EXPECT_LT(l.py, 64.0f);
+    // NUL-terminated within the fixed buffer, which is what makes the field usable as a C string.
+    EXPECT_LT(std::strlen(l.text), sizeof(l.text));
+    if (l.kind == LUMICE_ANNOTATION_HORIZON) {
+      saw_horizon = true;
+      EXPECT_EQ(l.index, -1);
+    }
+    if (l.kind == LUMICE_ANNOTATION_ANGULAR_DIST) {
+      saw_circle = true;
+      EXPECT_EQ(l.index, 0);
+      EXPECT_FLOAT_EQ(l.value_deg, 22.0f);
+    }
+  }
+  EXPECT_TRUE(saw_horizon);
+  EXPECT_TRUE(saw_circle);
+
+  LUMICE_ReleaseAnnotationOverlay(&out);
+  // Release nulls the whole view, so a caller reading the struct afterwards sees "nothing here"
+  // rather than freed memory, and a second Release is a no-op instead of a double free.
+  EXPECT_EQ(out.storage, nullptr);
+  EXPECT_EQ(out.drawable, nullptr);
+  EXPECT_EQ(out.labels, nullptr);
+  EXPECT_EQ(out.label_count, 0);
+  LUMICE_ReleaseAnnotationOverlay(&out);
+  LUMICE_ReleaseAnnotationOverlay(nullptr);
+}
+
+TEST(AnnotationOverlayApi, OnlyRequestedCategoriesGetABuffer) {
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(64, 32);
+  LUMICE_AnnotationOverlay out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_OK);
+  EXPECT_NE(out.horizon, nullptr);
+  EXPECT_EQ(out.elevation, nullptr);
+  EXPECT_EQ(out.longitude, nullptr);
+  EXPECT_EQ(out.angular_dist, nullptr);
+  EXPECT_FALSE(out.zenith_valid) << "zenith_nadir was not requested";
+  LUMICE_ReleaseAnnotationOverlay(&out);
+}
+
+TEST(AnnotationOverlayApi, DegenerateViewIsAnEmptyOverlayNotAnError) {
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(0, 32);
+  LUMICE_AnnotationOverlay out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_OK);
+  EXPECT_EQ(out.width, 0);
+  EXPECT_EQ(out.height, 0);
+  EXPECT_EQ(out.drawable, nullptr);
+  EXPECT_EQ(out.horizon, nullptr);
+  EXPECT_EQ(out.label_count, 0);
+  // Still holds storage, and still has to be released — "empty" is a result, not a failure.
+  EXPECT_NE(out.storage, nullptr);
+  LUMICE_ReleaseAnnotationOverlay(&out);
+}
+
+TEST(AnnotationOverlayApi, IsDeterministicAndCarriesNoCrossCallState) {
+  const float parallels[] = { 15.0f, 45.0f };
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(96, 48);
+  req.view.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  req.view.lens_fov = 90.0f;
+  req.view.view_elevation = 60.0f;
+  req.elevation_deg = parallels;
+  req.elevation_count = 2;
+
+  LUMICE_AnnotationOverlay a{};
+  LUMICE_AnnotationOverlay b{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &a), LUMICE_OK);
+  // Deliberately overlapping lifetimes: two live overlays must not share storage, which is what
+  // makes the handle a per-call allocation rather than a cache.
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &b), LUMICE_OK);
+  EXPECT_NE(a.storage, b.storage);
+  EXPECT_NE(a.drawable, b.drawable);
+
+  const size_t n = 96u * 48u;
+  EXPECT_EQ(std::memcmp(a.drawable, b.drawable, n), 0);
+  EXPECT_EQ(std::memcmp(a.elevation, b.elevation, n), 0);
+  ASSERT_EQ(a.label_count, b.label_count);
+  ASSERT_GT(a.label_count, 0);
+  for (int i = 0; i < a.label_count; ++i) {
+    EXPECT_FLOAT_EQ(a.labels[i].px, b.labels[i].px);
+    EXPECT_FLOAT_EQ(a.labels[i].py, b.labels[i].py);
+    EXPECT_STREQ(a.labels[i].text, b.labels[i].text);
+  }
+
+  // Releasing one must not disturb the other.
+  LUMICE_ReleaseAnnotationOverlay(&a);
+  EXPECT_NE(b.drawable, nullptr);
+  EXPECT_EQ(std::memcmp(b.drawable, b.drawable, n), 0);
+  LUMICE_ReleaseAnnotationOverlay(&b);
+}
