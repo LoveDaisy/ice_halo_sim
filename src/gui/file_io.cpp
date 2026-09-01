@@ -68,7 +68,17 @@ static float MillerToAlpha(int i1, int i4) {
   return std::atan(kSqrt3_2 * i4 / i1 / kIceCrystalC) * kRadToDeg;
 }
 
-// Lens type JSON names (shared by Core config and GuiState JSON)
+// Lens type JSON names (shared by Core config and GuiState JSON), indexed by the GUI
+// RenderConfig::lens_type value and mirroring core's own wire vocabulary verbatim (see
+// config/render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM for LensParam::LensType) — one word means
+// one lens on both sides of the boundary, so a document this file writes is a document the CLI
+// reads.
+//
+// The static_assert is the load-bearing part, not decoration: this table is indexed by an enum
+// value whose range is kLensTypeCount, so a table shorter than that count is an out-of-bounds read
+// on the writer's hottest path (every .lmc save, every Settings panel open, every personal-defaults
+// save), not a missing feature. It once was, and the three lens types added last reached the combo
+// without reaching this array.
 static const char* kLensTypeJsonNames[] = { "linear",
                                             "fisheye_equal_area",
                                             "fisheye_equidistant",
@@ -76,7 +86,12 @@ static const char* kLensTypeJsonNames[] = { "linear",
                                             "dual_fisheye_equal_area",
                                             "dual_fisheye_equidistant",
                                             "dual_fisheye_stereographic",
-                                            "rectangular" };
+                                            "rectangular",
+                                            "fisheye_orthographic",
+                                            "dual_fisheye_orthographic",
+                                            "globe" };
+static_assert(sizeof(kLensTypeJsonNames) / sizeof(kLensTypeJsonNames[0]) == kLensTypeCount,
+              "kLensTypeJsonNames must match kLensTypeCount");
 
 static const char* kVisibleJsonNames[] = { "upper", "lower", "full" };
 static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisibleCount,
@@ -86,6 +101,8 @@ static_assert(sizeof(kVisibleJsonNames) / sizeof(kVisibleJsonNames[0]) == kVisib
 // rather than the raw int on BOTH the .lmc and the CLI-JSON path, so one word means one thing
 // everywhere and a reader never has to ask which integer this file's 1 was.
 static const char* kEvModeJsonNames[] = { "relative", "absolute" };
+static_assert(sizeof(kEvModeJsonNames) / sizeof(kEvModeJsonNames[0]) == kEvModeCount,
+              "kEvModeJsonNames must match kEvModeCount");
 static const char* kAspectPresetJsonNames[] = { "free", "16:9", "3:2", "4:3", "1:1", "2:1", "match_background" };
 static_assert(sizeof(kAspectPresetJsonNames) / sizeof(kAspectPresetJsonNames[0]) == kAspectPresetCount,
               "kAspectPresetJsonNames must match kAspectPresetCount");
@@ -897,11 +914,25 @@ static void ParseCrystalIntoMap(const json& jc, std::map<int, CrystalConfig>& cr
   }
 }
 
+// kLensTypeCount is the loop bound rather than sizeof(kLensTypeJsonNames)/sizeof(...) on purpose:
+// the static_assert beside that table makes the two the same number at compile time, and spelling
+// the external count keeps this reader in the shape its two sibling tables already use
+// (kVisibleJsonNames / kAspectPresetJsonNames). The count was never the defect — the table was
+// short, and a self-referential bound would have hidden that by silently walking eight entries
+// while the writer walked eleven.
+//
+// Unknown text falls back to linear, which is also the missing-key answer, and says so out loud.
+// The notice is the point: a document written by a build where the short table read out of bounds
+// carries whatever bytes happened to sit past the array, and that string is unpredictable by
+// construction, so no key-driven migration can recognise it. What CAN be done is refuse to lose the
+// setting silently — the fallback stays, the silence does not.
 static int LensTypeFromString(const std::string& s) {
   for (int i = 0; i < kLensTypeCount; i++) {
     if (s == kLensTypeJsonNames[i])
       return i;
   }
+  GUI_LOG_WARNING("[FileIO] Unrecognized renderer.lens_type \"{}\"; loading as linear.", s);
+  SetImportComplexFilterWarning("renderer.lens_type states an unrecognized value \"" + s + "\"; loaded as linear.");
   return 0;  // default: linear
 }
 

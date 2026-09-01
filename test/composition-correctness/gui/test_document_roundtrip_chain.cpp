@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "gui/app.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/raypath_segments.hpp"
@@ -1029,6 +1030,37 @@ TEST(DocumentRoundtripChain, LensTypeIsSpelledOnDiskTheWayCoreSpellsIt) {
     }
     EXPECT_EQ(read_back.renderer.lens_type, row.value) << row.spelling;
   }
+
+  // A lens_type this build cannot recognise still loads — as linear, and loudly. A document written
+  // by a build whose name table was short carries whatever bytes sat past the array, so the string
+  // itself is unpredictable and no migration can key off it; what the reader owes the user is a
+  // visible degradation rather than a silent one. Missing key keeps the old contract: same
+  // destination, no notice, because nothing was lost.
+  for (const char* variant : { "", "not_a_real_lens" }) {
+    auto on_disk = nlohmann::json::parse(SerializeGuiStateJson(MinimalDocument()));
+    if (variant[0] == '\0') {
+      on_disk["renderer"].erase("lens_type");
+    } else {
+      on_disk["renderer"]["lens_type"] = variant;
+    }
+    GuiState read_back = MinimalDocument();
+    read_back.renderer.lens_type = kLensTypeGlobe;  // seed non-default so a no-op read is visible
+    ClearImportComplexFilterWarning();
+    const char* label = variant[0] == '\0' ? "<absent>" : variant;
+    if (!DeserializeGuiStateJson(on_disk.dump(), read_back)) {
+      ADD_FAILURE() << label << ": an unrecognised lens_type must load, not fail the whole document";
+      continue;
+    }
+    EXPECT_EQ(read_back.renderer.lens_type, 0) << "variant: " << label;
+    const std::string notice = PeekImportComplexFilterWarning();
+    if (variant[0] == '\0') {
+      EXPECT_EQ(notice, "") << "an absent key lost nothing and must not warn";
+    } else {
+      EXPECT_NE(notice.find(variant), std::string::npos)
+          << "the notice must name the value it could not read, got: " << notice;
+    }
+  }
+  ClearImportComplexFilterWarning();
 }
 
 }  // namespace lumice::gui
