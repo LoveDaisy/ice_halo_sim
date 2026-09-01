@@ -201,20 +201,82 @@ vec3 sampleDualFisheye(vec3 world_dir) {
   return texture(u_texture, uv).rgb;
 }
 
+// ============================ Relative illumination ==========================================
+//
+// The target lens's per-pixel solid angle, normalized to its on-axis value. The CLI bins rays into
+// the lens it renders, so its pixels carry energy and the projection's Jacobian is baked in; this
+// shader resamples an equal-area all-sky texture, whose texels carry radiance, so without this
+// factor the preview is missing the projection's own natural vignetting. Every equal-area branch
+// returns exactly 1, so equal-area previews are unchanged bit-for-bit.
+//
+// THIS IS THE LIVE COPY. src/gui/preview_jacobian.hpp mirrors it on the CPU and carries the full
+// derivation, the reason the normalization is on-axis rather than against the source texture's
+// texel solid angle, and the sources; test/unit-correctness/gui/test_preview_jacobian.cpp checks
+// the mirror against numerical integration rather than against this file, so a transcription error
+// made in both places still fails. Keep the two in lockstep.
+const float kSingularityGuardPixels = 0.5;
+
+float relIllumRectilinear(float rho, float focal) {
+  float c = focal / sqrt(focal * focal + rho * rho);
+  return c * c * c;  // cos^3(theta)
+}
+
+// type: 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic. r_norm is 1 at the image
+// circle; img_radius is that circle in pixels and is read only by the orthographic clamp.
+float relIllumFisheye(int type, float r_norm, float half_fov, float img_radius) {
+  if (type == 0) {
+    return 1.0;                      // equal area: constant by definition
+  } else if (type == 1) {            // equidistant: sin(theta)/theta
+    float theta = r_norm * half_fov;
+    if (theta < 1e-3) return 1.0 - theta * theta / 6.0;  // series, not a division
+    return sin(theta) / theta;
+  } else if (type == 2) {            // stereographic: cos^4(theta/2)
+    float t = r_norm * tan(half_fov * 0.5);
+    float c = 1.0 / sqrt(1.0 + t * t);
+    float c2 = c * c;
+    return c2 * c2;
+  }
+  // orthographic: 1/cos(theta), held half a pixel inside the rim it diverges at.
+  float r_max = img_radius > kSingularityGuardPixels ? 1.0 - kSingularityGuardPixels / img_radius : 0.0;
+  float s = min(r_norm, r_max) * sin(half_fov);
+  return 1.0 / sqrt(max(1.0 - s * s, 1e-12));
+}
+
+float relIllumEquirect(float lat) {
+  return max(cos(lat), 0.0);
+}
+
+float relIllumGlobe(float rho, float focal) {
+  // kGlobeCameraDist, repeated here for the same reason globeInverse repeats it.
+  const float D = 4.0;
+  float rho_limb = focal / sqrt(D * D - 1.0);
+  float rho_max = max(rho_limb - kSingularityGuardPixels, 0.0);
+  float k = min(rho, rho_max) / focal;
+  float k2 = k * k;
+  float disc = max(1.0 - k2 * (D * D - 1.0), 0.0);
+  float mu = (D * k2 + sqrt(disc)) / (k2 + 1.0);
+  float denom = max(D * mu - 1.0, 1e-12);
+  float num = D - mu;
+  return num * num * num / (denom * (D - 1.0) * (D - 1.0));
+}
+
 // Compute view direction from pixel for linear projection
 // Returns false (via w component) if outside valid range
-vec4 linearInverse(vec2 pos, float half_fov) {
+// `ri` returns the relative illumination at this pixel; see the block above.
+vec4 linearInverse(vec2 pos, float half_fov, out float ri) {
   float short_edge = min(u_resolution.x, u_resolution.y);
   float focal = short_edge * 0.5 / tan(half_fov);
+  ri = relIllumRectilinear(length(pos), focal);
   vec3 d = normalize(vec3(pos, -focal));
   return vec4(d, 1.0);
 }
 
 // Compute view direction for fisheye projections
 // type: 0=equal_area, 1=equidistant, 2=stereographic, 3=orthographic
-vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
+vec4 fisheyeInverse(vec2 pos, float half_fov, int type, out float ri) {
   float img_radius = min(u_resolution.x, u_resolution.y) * 0.5;  // short_edge/2 — matches Core's short_pix_/2
   float r = length(pos) / img_radius;
+  ri = relIllumFisheye(type, r, half_fov, img_radius);
 
   float theta;
   if (type == 0) {        // equal area: r_norm = sin(θ/2) / sin(fov/4)
@@ -239,9 +301,10 @@ vec4 fisheyeInverse(vec2 pos, float half_fov, int type) {
 // Dual fisheye: left circle = upper hemisphere, right circle = lower hemisphere
 // Returns world-space direction (no view matrix needed) — matches Core convention.
 // Core uses az = atan2(-d.y, -d.x) and pixel mapping with PI/2±az offset.
-vec4 dualFisheyeInverse(vec2 pos, int type) {
+vec4 dualFisheyeInverse(vec2 pos, int type, out float ri) {
   float short_res = min(u_resolution.x * 0.5, u_resolution.y);
   float circle_radius = short_res * 0.5;
+  ri = 1.0;  // set for real once the hemisphere, and so the local radius, is known
 
   // Left circle center at (-circle_radius, 0), right at (+circle_radius, 0)
   vec2 left_pos = pos - vec2(-circle_radius, 0.0);
@@ -256,6 +319,9 @@ vec4 dualFisheyeInverse(vec2 pos, int type) {
 
   vec2 use_pos = in_left ? left_pos : right_pos;
   float use_r = in_left ? left_r : right_r;
+  // Each half of a dual fisheye images one hemisphere, so its half-FOV is fixed at pi/2 whatever
+  // u_fov says, and the local radius is measured from that circle's own centre.
+  ri = relIllumFisheye(type, use_r, PI * 0.5, circle_radius);
 
   float theta;
   float half_pi = PI * 0.5;
@@ -295,11 +361,12 @@ vec4 dualFisheyeInverse(vec2 pos, int type) {
 R"glsl(
 // Rectangular (equirectangular): always full-sky, returns world-space direction.
 // Matches Core: scale = min(width/2, height) / PI
-vec4 rectangularInverse(vec2 pos) {
+vec4 rectangularInverse(vec2 pos, out float ri) {
   float short_res = min(u_resolution.x * 0.5, u_resolution.y);
   float scale = short_res / PI;  // pixels per radian
   float lon = pos.x / scale;
   float lat = -pos.y / scale;
+  ri = relIllumEquirect(lat);
   if (abs(lat) > PI * 0.5) return vec4(0.0, 0.0, 0.0, 0.0);
 
   vec3 d = vec3(-cos(lat) * cos(lon), -cos(lat) * sin(lon), -sin(lat));
@@ -316,11 +383,12 @@ vec4 rectangularInverse(vec2 pos) {
 // Treating hit_eye as a direction is valid because the sphere center coincides with
 // the world origin (camera always looks at the sphere center); if that ever changes
 // this function must switch to mat4 + explicit world-space ray-sphere intersection.
-vec4 globeInverse(vec2 pos, float half_fov) {
+vec4 globeInverse(vec2 pos, float half_fov, out float ri) {
   // kGlobeCameraDist must match kGlobeCameraD in src/gui/gui_constants.hpp.
   const float kGlobeCameraDist = 4.0;
   float short_edge = min(u_resolution.x, u_resolution.y);
   float focal = short_edge * 0.5 / tan(half_fov);
+  ri = relIllumGlobe(length(pos), focal);
   vec3 d = normalize(vec3(pos, -focal));  // ray dir in eye space
 
   // Solve |O + t*d|^2 = 1 with O = (0, 0, D):
@@ -482,26 +550,30 @@ void main() {
 
   vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
   bool needs_view_transform = true;
+  // The target lens's relative illumination at this pixel. Every branch below writes it; an
+  // unknown u_lens_type leaves it at the identity, alongside the black result.w = 0 that case
+  // already produces.
+  float rel_illum = 1.0;
   if (u_lens_type == 0) {
-    result = linearInverse(pos, half_fov);
+    result = linearInverse(pos, half_fov, rel_illum);
   } else if (u_lens_type >= 1 && u_lens_type <= 3) {
-    result = fisheyeInverse(pos, half_fov, u_lens_type - 1);
+    result = fisheyeInverse(pos, half_fov, u_lens_type - 1, rel_illum);
   } else if (u_lens_type >= 4 && u_lens_type <= 6) {
     pos_ovl = vec2(pos.x, -pos.y);
-    result = dualFisheyeInverse(pos_ovl, u_lens_type - 4);
+    result = dualFisheyeInverse(pos_ovl, u_lens_type - 4, rel_illum);
     needs_view_transform = false;  // Core dual fisheye works in world space
   } else if (u_lens_type == 7) {
     pos_ovl = vec2(pos.x, -pos.y);
-    result = rectangularInverse(pos_ovl);
+    result = rectangularInverse(pos_ovl, rel_illum);
     needs_view_transform = false;  // Core rectangular works in world space
   } else if (u_lens_type == 8) {   // kLensTypeFisheyeOrthographic
-    result = fisheyeInverse(pos, half_fov, 3);
+    result = fisheyeInverse(pos, half_fov, 3, rel_illum);
   } else if (u_lens_type == 9) {   // kLensTypeDualFisheyeOrthographic
     pos_ovl = vec2(pos.x, -pos.y);
-    result = dualFisheyeInverse(pos_ovl, 3);
+    result = dualFisheyeInverse(pos_ovl, 3, rel_illum);
     needs_view_transform = false;  // Core dual fisheye works in world space
   } else if (u_lens_type == 10) {  // kLensTypeGlobe
-    result = globeInverse(pos, half_fov);
+    result = globeInverse(pos, half_fov, rel_illum);
     needs_view_transform = false;  // globeInverse already returned world-space dir
   }
   // else: unknown u_lens_type → result.w = 0 (black). static_assert in gui_state.hpp
@@ -528,6 +600,20 @@ void main() {
     if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);
       if (u_xyz_mode == 1) {
+        // The projection's own natural vignetting, applied to the energy BEFORE the exposure scale
+        // multiplies it: it states how much of this direction's radiance the target lens's pixel
+        // collects, so it belongs to the quantity being exposed rather than to the exposure. See
+        // the relIllum* block above and src/gui/preview_jacobian.hpp for the derivation.
+        //
+        // Only in XYZ mode, and that is a stated boundary rather than an oversight. u_xyz_mode == 0
+        // is an 8-bit texture baked by LUMICE_XyzToSrgbUint8WithBackground, which has already
+        // composited the sky colour into every texel. Vignetting it would dim the BACKGROUND too,
+        // which neither the CLI nor the branch below does -- the sky joins after the exposure,
+        // undimmed -- and the composite cannot be undone from this side. So a document loaded from
+        // a .lmc shows a non-equal-area projection without its vignetting; equal-area ones are
+        // unaffected either way, their factor being exactly 1.
+        tex_color *= rel_illum;
+
         // The sky colour joins the halo here: inside this gate, and in linear RGB between the two
         // halves of the colour chain. Both placements are load-bearing.
         //
