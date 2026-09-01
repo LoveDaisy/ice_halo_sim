@@ -600,6 +600,39 @@ jobs:
         # core contention) to keep each leg's wall-clock under the step timeout
         # without bumping it high enough to drag overall PR latency. Ubuntu skips
         # all metal tests (Darwin guard) so it stays a single fast leg.
+        #
+        # HOW THE TWO macOS LEGS ARE BALANCED, and how to re-balance them. The
+        # groupings below are the answer to one past measurement, not a constant:
+        # every slow test added or removed shifts the load, so they go stale.
+        #
+        # Deriving them (repeat this when the legs drift apart):
+        #   1. `gh run view <run-id> --log` on the "Run slow E2E tests" step of
+        #      both macOS legs. Under `-v -n 3` every test prints a timestamped
+        #      `[gwN] [ x%] PASSED <test id>` line as it finishes, and an xdist
+        #      worker is serial internally, so the gap between two consecutive
+        #      lines from the SAME worker approximates the later test's duration.
+        #      Sum those per file. Job-level totals (`gh run view --json jobs`)
+        #      are NOT a substitute — they carry no per-file breakdown to pack.
+        #   2. Sort files by that cost descending and greedily place each one on
+        #      whichever leg is cheaper so far (longest-processing-time bin
+        #      packing). Replace BOTH lists with the result rather than patching
+        #      one of them: which grouping is optimal changes wholesale.
+        # Trigger to redo it: the two legs differing by >=1.3x across 2-3 runs.
+        # A single run is not enough — the same leg has been seen to swing 10-30%.
+        #
+        # Why the legs are expressed differently: the "rest" leg has to keep
+        # picking up newly added test files on its own, so it names test ROOTS
+        # and subtracts the files moved away (--ignore does apply to those, since
+        # they are reached by recursing into a root — see the phase-1 comment in
+        # the run step below for the case where --ignore does NOT apply). The
+        # other leg names files explicitly, the only way to say "just these".
+        # Consequence: a new slow test file lands on the "rest" leg by default.
+        #
+        # The `name:` fields are historical labels, not content classifications —
+        # the leg called "parity" carries the three heaviest GPU files and the
+        # "rest" leg carries the exit-seam parity test. They are left alone on
+        # purpose: they are branch-protection required-check names, so renaming
+        # them is a repository-settings change, not a workflow change.
         include:
           - name: Ubuntu x86_64
             os: ubuntu-24.04
@@ -609,12 +642,12 @@ jobs:
           - name: macOS ARM64 parity
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: test/parity-cross-backend/backend/test_metal_exit_seam_parity.py
+            pytest_args: "test/parity-cross-backend/backend/test_metal_projection_parity.py test/parity-cross-backend/backend/test_metal_batch_invariance.py test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
 
           - name: macOS ARM64 rest
             os: macos-15
             cache_key: macos-arm64
-            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel --ignore=test/parity-cross-backend/backend/test_metal_exit_seam_parity.py"
+            pytest_args: "test/e2e-correctness test/parity-cross-backend test/performance test/gui test/regression-sentinel --ignore=test/parity-cross-backend/backend/test_metal_projection_parity.py --ignore=test/parity-cross-backend/backend/test_metal_batch_invariance.py --ignore=test/regression-sentinel/test_gpu_color_mask_batch_leak.py"
 
     runs-on: ${{ matrix.os }}
     name: E2E Slow (${{ matrix.name }})
