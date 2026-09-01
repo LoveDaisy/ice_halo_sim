@@ -160,6 +160,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 
   j["grid"].emplace("angular_dist", r.angular_dist_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
+  j["grid"].emplace("longitude", r.longitude_grid_);
   j["grid"].emplace("horizon", r.horizon_);
 }
 
@@ -168,7 +169,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 // §5.2 (sizeof sentinel).
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
-  static_assert(sizeof(RenderConfig) == 136, "Update NeedsRebuild when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 160, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.
 

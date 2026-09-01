@@ -108,6 +108,11 @@ struct RenderConfig {
 
   std::vector<GridLineParam> angular_dist_grid_;
   std::vector<GridLineParam> elevation_grid_;
+  // Meridians: lines of constant azimuth. Named "longitude" rather than "azimuth" because that is
+  // the word the annotation layer already uses for this concept everywhere it is public
+  // (annotation::Request::longitude_deg, Overlay::longitude, LUMICE_ANNOTATION_LONGITUDE); a second
+  // spelling in the persisted schema would give one concept two vocabularies.
+  std::vector<GridLineParam> longitude_grid_;
   // Opt-in, not on by default. It was `true` for the four years the field parsed and drew nothing,
   // which cost nothing; now that it draws, `true` would put a horizon line into every existing
   // config that never asked for one (13 of the 14 reference renders in test/e2e-correctness/ set

@@ -84,7 +84,21 @@ extern "C" {
 // v4.16 parsed and round-tripped them while drawing nothing. A config that already carried
 // grid.central entries renders differently under v4.17. `width` is still not honored (the mask
 // generator has no line-width input); `value`, `opacity` and `color` are.
-#define LUMICE_API_VERSION 417
+//
+// BREAKING (v4.18): LUMICE_RenderParam gains a trailing pair of fields, `longitude_grid` /
+// `longitude_grid_count` — the meridians (lines of constant azimuth), the twin of the parallels
+// `elevation_grid` already described. They are APPENDED after elevation_grid_count and before
+// ev_mode, so every field up to elevation_grid_count keeps its offset while ev_mode moves and
+// sizeof() grows; a caller that was NOT recompiled hands the API a shorter struct and has its
+// ev_mode read from the wrong place. Recompile against this header. The JSON key is
+// "grid.longitude" — "longitude" and not "azimuth" because the annotation layer already names
+// this concept that way in public symbols (LUMICE_ANNOTATION_LONGITUDE,
+// LUMICE_AnnotationRequest::longitude_deg).
+// Note the accompanying BEHAVIOR change, which has no ABI half: `elevation_grid` is now DRAWN by
+// the CLI renderer, where every version since it was introduced parsed and round-tripped it while
+// drawing nothing. A config that already carried grid.elevation entries renders differently under
+// v4.18. As with angular_dist, `width` is still not honored; `value`, `opacity` and `color` are.
+#define LUMICE_API_VERSION 418
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -347,7 +361,7 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 // the OR/AND expansion seen in practice.
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
-// Per-renderer grid-line ceiling (angular_dist[] / elevation_grid[] inline arrays in
+// Per-renderer grid-line ceiling (angular_dist[] / elevation_grid[] / longitude_grid[] inline arrays in
 // LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
 // order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 angular-distance
 // line.
@@ -707,7 +721,8 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_VISIBLE_FULL 2
 
 // One overlay grid line (mirrors core GridLineParam). `value` is the angular distance from the
-// sun (angular_dist) or the elevation (elevation grid) in degrees; the rest is appearance.
+// sun (angular_dist), the elevation (elevation_grid) or the azimuth (longitude_grid) in degrees;
+// the rest is appearance.
 typedef struct LUMICE_GridLine_ {
   float value;
   float width;
@@ -770,14 +785,21 @@ typedef struct LUMICE_RenderParam_ {
   // LUMICE_API_VERSION.
   LUMICE_GridLine angular_dist[LUMICE_MAX_CONFIG_GRID_LINES];
   int angular_dist_count;
-  // PARSED BUT NOT RENDERED. The list is validated, round-tripped through JSON and compared, and
-  // no code draws it — a scene that sets it produces exactly the image it would produce without
-  // it. It is kept because the far target ("a CLI re-render equals what the GUI showed,
-  // annotations included") needs it, and the blocker is a model mismatch: this schema names every
-  // parallel individually while the GUI derives one FOV-adaptive step and one shared colour.
-  // Reconciling the two is a design decision that has not been made.
+  // Parallels: lines of constant elevation, in degrees. RENDERED as of v4.18 — the CLI renderer
+  // builds each entry's mask through LUMICE_ComputeAnnotationOverlay and composites it with that
+  // entry's own `opacity` and `color`, exactly as it does for angular_dist. `width` is read and
+  // round-tripped but does NOT affect the image.
+  // The model mismatch that kept this unrendered for years (this schema names every parallel
+  // individually, while the GUI derives ONE FOV-adaptive step and one shared colour) is resolved
+  // in favour of the schema: the explicit list is the model, and the GUI's adaptive step is a
+  // display-side convenience it expands into this list when it exports.
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int elevation_grid_count;
+  // ADDED (v4.18). Meridians: lines of constant azimuth, in degrees, measured the way
+  // LUMICE_AnnotationRequest::longitude_deg measures them. Same rendering and appearance contract
+  // as elevation_grid above (own opacity/color per entry, `width` inert).
+  LUMICE_GridLine longitude_grid[LUMICE_MAX_CONFIG_GRID_LINES];
+  int longitude_grid_count;
   // ADDED (v4.16): LUMICE_EV_MODE_*. Appended at the end of the struct, and RELATIVE == 0 so a
   // zero-initialized param keeps the documented default rather than silently opting into the
   // absolute anchor.

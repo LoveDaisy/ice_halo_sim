@@ -36,6 +36,36 @@ namespace lumice {
 // main from overlap.
 
 
+namespace {
+
+// The half of an annotation::Request that is the same for every mask this consumer builds: the
+// view geometry, straight off the config, and masks-only. The caller adds the one angle list (and,
+// for angular_dist, the reference direction) that distinguishes its family. Single-sourced because
+// a view field written into one family's request and forgotten in another's would put that
+// family's lines on a different projection than the image they are drawn onto.
+annotation::Request MakeMaskRequest(const RenderConfig& config) {
+  annotation::Request req;
+  req.view.width = config.resolution_[0];
+  req.view.height = config.resolution_[1];
+  req.view.lens_type = config.lens_.type_;
+  req.view.fov_deg = config.lens_.fov_;
+  req.view.lens_shift[0] = config.lens_shift_[0];
+  req.view.lens_shift[1] = config.lens_shift_[1];
+  req.view.overlap = config.overlap_;
+  req.view.az_deg = config.view_.az_;
+  req.view.el_deg = config.view_.el_;
+  req.view.roll_deg = config.view_.ro_;
+  req.view.visible = config.visible_;
+  // The CLI renders the image itself, so there is no separate "front" clip to apply on top of
+  // `visible` — what the lens images is what exists.
+  req.view.front = false;
+  // Masks only. The CLI draws no text, and skipping the curve walk is several times cheaper.
+  req.labels = false;
+  return req;
+}
+
+}  // namespace
+
 // =============== Renderer ===============
 RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table, SunParam sun)
     : config_(std::move(config)),
@@ -61,6 +91,7 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
   visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
   horizon_mask_ = BuildHorizonMask(config_, rot_, short_pix_);
   RebuildAngularDistMasks();
+  RebuildGridMasks();
 
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
@@ -600,33 +631,49 @@ void RenderConsumer::PostSnapshot() {
   float outline_rgb[3];
   SrgbToLinearRgb(kOutlineSrgb, outline_rgb);
 
-  // The angular-distance circles. Unlike the horizon these carry their own appearance
-  // (GridLineParam::opacity_ / color_), so the pre-pass below converts each line's colour to
-  // linear once instead of per pixel. `width_` is read and round-tripped but has no effect: the
-  // mask generator derives its own half-width from the local gradient and takes no width input.
+  // The angular-distance circles and the coordinate grid (parallels + meridians). Unlike the
+  // horizon these carry their own appearance (GridLineParam::opacity_ / color_), so the pre-pass
+  // below converts each line's colour to linear once instead of per pixel. `width_` is read and
+  // round-tripped but has no effect: the mask generator derives its own half-width from the local
+  // gradient and takes no width input.
   //
   // The colour is per line, so the masks are per line too, and a pixel on two circles is blended
   // twice — which is what the preview shader's loop already does, in this same order.
-  struct AngularDistLayer {
+  struct LineLayer {
     const uint8_t* mask;
     float rgb[3];
     float alpha;
   };
-  std::vector<AngularDistLayer> angular_dist_layers;
+  // Turn one family's (mask, GridLineParam) pairs into blend-ready layers: drop the degenerate and
+  // the fully transparent, convert each line's sRGB colour to linear once. Shared by all three
+  // families — they differ only in which list they read, never in how a line becomes a layer.
+  const auto collect_layers = [total_pix](const std::vector<std::vector<uint8_t>>& masks,
+                                          const std::vector<GridLineParam>& lines, std::vector<LineLayer>& out) {
+    for (size_t k = 0; k < masks.size() && k < lines.size(); ++k) {
+      if (masks[k].size() != static_cast<size_t>(total_pix)) {
+        continue;  // degenerate view: ComputeOverlay returned an empty mask
+      }
+      const float alpha = std::clamp(lines[k].opacity_, 0.0f, 1.0f);
+      if (alpha <= 0.0f) {
+        continue;
+      }
+      LineLayer layer{ masks[k].data(), { 0.0f, 0.0f, 0.0f }, alpha };
+      SrgbToLinearRgb(lines[k].color_, layer.rgb);
+      out.push_back(layer);
+    }
+  };
+
+  // The coordinate grid — parallels then meridians, both under the angular-distance circles.
+  // One list, not two: the blend loop treats every line identically, and the two families' order
+  // relative to each other is unobservable (they share an appearance model and a blend operator).
+  std::vector<LineLayer> grid_layers;
+  grid_layers.reserve(elevation_masks_.size() + longitude_masks_.size());
+  collect_layers(elevation_masks_, config_.elevation_grid_, grid_layers);
+  collect_layers(longitude_masks_, config_.longitude_grid_, grid_layers);
+
+  std::vector<LineLayer> angular_dist_layers;
   angular_dist_layers.reserve(angular_dist_masks_.size());
-  for (size_t k = 0; k < angular_dist_masks_.size() && k < config_.angular_dist_grid_.size(); ++k) {
-    if (angular_dist_masks_[k].size() != static_cast<size_t>(total_pix)) {
-      continue;  // degenerate view: ComputeOverlay returned an empty mask
-    }
-    const auto& line = config_.angular_dist_grid_[k];
-    const float alpha = std::clamp(line.opacity_, 0.0f, 1.0f);
-    if (alpha <= 0.0f) {
-      continue;
-    }
-    AngularDistLayer layer{ angular_dist_masks_[k].data(), { 0.0f, 0.0f, 0.0f }, alpha };
-    SrgbToLinearRgb(line.color_, layer.rgb);
-    angular_dist_layers.push_back(layer);
-  }
+  collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
 
   // One pass per pixel, intermediates kept in registers. This used to be four
   // full-buffer passes (memcpy into a work buffer → scale → color transform →
@@ -687,9 +734,14 @@ void RenderConsumer::PostSnapshot() {
       // After the background (the line is drawn ON the sky, not under it), before the clamp, and
       // in linear — the same three constraints the background term above satisfies.
       //
-      // Angular-distance circles go UNDER the horizon, which is the preview shader's own order
-      // (grid -> sun circles -> horizon -> zenith/nadir, overlayAuxLines in preview_renderer.cpp);
-      // the two paths have to agree about which line wins where they cross.
+      // The layer order is the preview shader's own (grid -> sun circles -> horizon ->
+      // zenith/nadir, overlayAuxLines in preview_renderer.cpp); the two paths have to agree about
+      // which line wins where they cross.
+      for (const auto& layer : grid_layers) {
+        if (layer.mask[i] != 0) {
+          rgb[j] = rgb[j] * (1.0f - layer.alpha) + layer.rgb[j] * layer.alpha;
+        }
+      }
       for (const auto& layer : angular_dist_layers) {
         if (layer.mask[i] != 0) {
           rgb[j] = rgb[j] * (1.0f - layer.alpha) + layer.rgb[j] * layer.alpha;
@@ -757,9 +809,11 @@ void RenderConsumer::ResetWith(const RenderConfig& new_config, const SunParam& n
   // so assigning the full config is safe — layout-derived state (rot_, buffers) stays valid.
   config_ = new_config;
   sun_ = new_sun;
-  // The two inputs this consumer holds that NeedsRebuild does NOT cover, so this is where a change
-  // in either has to be noticed. No-ops when nothing moved.
+  // The annotation inputs this consumer holds that NeedsRebuild does NOT cover (the sun and the
+  // three grid-line lists), so this is where a change in any of them has to be noticed. No-ops
+  // when nothing moved.
   RebuildAngularDistMasks();
+  RebuildGridMasks();
   Reset();
 }
 
@@ -792,23 +846,7 @@ void RenderConsumer::RebuildAngularDistMasks() {
   // correct only for a list whose entries all share an appearance, and adding that special case
   // buys a fast path for a shape nothing produces today. The cost is bounded and paid once per
   // config change, not per frame: at most LUMICE_MAX_CONFIG_GRID_LINES sweeps of W*H.
-  annotation::Request req;
-  req.view.width = config_.resolution_[0];
-  req.view.height = config_.resolution_[1];
-  req.view.lens_type = config_.lens_.type_;
-  req.view.fov_deg = config_.lens_.fov_;
-  req.view.lens_shift[0] = config_.lens_shift_[0];
-  req.view.lens_shift[1] = config_.lens_shift_[1];
-  req.view.overlap = config_.overlap_;
-  req.view.az_deg = config_.view_.az_;
-  req.view.el_deg = config_.view_.el_;
-  req.view.roll_deg = config_.view_.ro_;
-  req.view.visible = config_.visible_;
-  // The CLI renders the image itself, so there is no separate "front" clip to apply on top of
-  // `visible` — what the lens images is what exists.
-  req.view.front = false;
-  // Masks only. The CLI draws no text, and skipping the curve walk is several times cheaper.
-  req.labels = false;
+  annotation::Request req = MakeMaskRequest(config_);
   std::copy(std::begin(sun_dir), std::end(sun_dir), std::begin(req.reference_dir));
 
   angular_dist_masks_.reserve(angles.size());
@@ -816,6 +854,52 @@ void RenderConsumer::RebuildAngularDistMasks() {
     req.angular_dist_deg = { angle };
     annotation::Overlay overlay = annotation::ComputeOverlay(req);
     angular_dist_masks_.push_back(std::move(overlay.angular_dist));
+  }
+}
+
+void RenderConsumer::RebuildGridMasks() {
+  RebuildLineFamilyMasks(LineFamily::kElevation);
+  RebuildLineFamilyMasks(LineFamily::kLongitude);
+}
+
+void RenderConsumer::RebuildLineFamilyMasks(LineFamily family) {
+  const bool is_elevation = family == LineFamily::kElevation;
+  const auto& lines = is_elevation ? config_.elevation_grid_ : config_.longitude_grid_;
+  auto& masks = is_elevation ? elevation_masks_ : longitude_masks_;
+  auto& built_from = is_elevation ? elevation_mask_angles_ : longitude_mask_angles_;
+  bool& built = is_elevation ? elevation_masks_built_ : longitude_masks_built_;
+
+  std::vector<float> angles;
+  angles.reserve(lines.size());
+  for (const auto& line : lines) {
+    angles.push_back(line.value_);
+  }
+
+  // No sun term in this comparison, unlike RebuildAngularDistMasks: a parallel sits at a fixed
+  // altitude and a meridian at a fixed azimuth, so neither curve moves when the sun does.
+  if (built && angles == built_from) {
+    return;
+  }
+  built_from = angles;
+  built = true;
+  masks.clear();
+  if (angles.empty()) {
+    return;
+  }
+
+  // One ComputeOverlay call per line, for the reason spelled out in RebuildAngularDistMasks:
+  // each entry carries its own opacity_ / color_, and a category-wide union mask cannot say which
+  // line a lit pixel belongs to.
+  annotation::Request req = MakeMaskRequest(config_);
+  masks.reserve(angles.size());
+  for (float angle : angles) {
+    if (is_elevation) {
+      req.elevation_deg = { angle };
+    } else {
+      req.longitude_deg = { angle };
+    }
+    annotation::Overlay overlay = annotation::ComputeOverlay(req);
+    masks.push_back(std::move(is_elevation ? overlay.elevation : overlay.longitude));
   }
 }
 

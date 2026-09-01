@@ -111,6 +111,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("elevation")) {
       j_grid.at("elevation").get_to(render.elevation_grid_);
     }
+    if (j_grid.contains("longitude")) {
+      j_grid.at("longitude").get_to(render.longitude_grid_);
+    }
     if (j_grid.contains("horizon")) {
       j_grid.at("horizon").get_to(render.horizon_);
     }

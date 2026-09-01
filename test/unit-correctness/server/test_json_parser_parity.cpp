@@ -787,6 +787,49 @@ TEST(JsonParserParity, RendererIntensityFactorOmittedDefaultsToOne) {
   EXPECT_FLOAT_EQ(renderer.intensity_factor_, p.core.renderers_.begin()->second.intensity_factor_);
 }
 
+// --- render.grid.longitude: the third grid family (v4.18) ---
+//
+// The corpus is structurally blind to a new key: no shipped config carries "grid.longitude", so
+// a decoder that never reads it round-trips every corpus document perfectly. Only a document that
+// actually sets the key can tell the two parsers apart, and the failure this pins is the one the
+// two-decoder shape produces — one of them growing the branch and the other not.
+
+std::string WrapRenderWithGrid(const std::string& grid_json) {
+  return "{ " + kCrystalBlock + ", " + kFilterBlock + ", " + kMinimalSceneBlock +
+         R"(, "render": [ { "id": 1, "resolution": [64, 32], "grid": )" + grid_json + " } ] }";
+}
+
+TEST(JsonParserParity, GridLongitudeSurvivesBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "longitude": [ { "value": -90.0, "width": 1.5, "opacity": 0.3, "color": [1.0, 0.5, 0.25] },
+                          { "value": 90.0, "opacity": 0.7 } ],
+           "elevation": [ { "value": 30.0, "opacity": 0.5 } ] })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  ASSERT_EQ(renderer.longitude_grid_.size(), 2u);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].value_, -90.0f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].opacity_, 0.3f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[0].color_[0], 1.0f);
+  EXPECT_FLOAT_EQ(renderer.longitude_grid_[1].value_, 90.0f);
+  // Not the parallels' list, and not merged with it — the two keys are decoded independently.
+  ASSERT_EQ(renderer.elevation_grid_.size(), 1u);
+  EXPECT_FLOAT_EQ(renderer.elevation_grid_[0].value_, 30.0f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridLongitudeOmittedLeavesBothParsersEmpty) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.longitude_grid_.empty());
+  EXPECT_TRUE(p.core.renderers_.begin()->second.longitude_grid_.empty());
+}
+
 // --- render.background: sRGB on the wire, linear in the struct ---
 //
 // The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.

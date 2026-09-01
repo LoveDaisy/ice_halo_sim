@@ -570,6 +570,16 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   negative_elevation.elevation_grid_count = -1;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_elevation, &id), LUMICE_ERR_INVALID_CONFIG);
 
+  // v4.18: the meridian list is a third fixed-capacity array and gets the same bounds pass. Both
+  // ends, because a count validated at one end only is the shape of the defect this checks for.
+  LUMICE_RenderParam bad_longitude = base;
+  bad_longitude.longitude_grid_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_longitude, &id), LUMICE_ERR_INVALID_CONFIG);
+
+  LUMICE_RenderParam negative_longitude = base;
+  negative_longitude.longitude_grid_count = -1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &negative_longitude, &id), LUMICE_ERR_INVALID_CONFIG);
+
   // v4.16: ev_mode is the third enum-valued field and gets the same treatment.
   LUMICE_RenderParam bad_ev_mode = base;
   bad_ev_mode.ev_mode = 42;
@@ -582,6 +592,7 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   LUMICE_RenderParam at_cap = base;
   at_cap.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES;
   at_cap.elevation_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.longitude_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &at_cap, &id), LUMICE_OK);
 }
 
@@ -896,6 +907,9 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.angular_dist[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
   r.elevation_grid_count = 1;
   r.elevation_grid[0] = LUMICE_GridLine{ 45.0f, 1.0f, 1.0f, { 0.0f, 0.0f, 1.0f } };
+  r.longitude_grid_count = 2;
+  r.longitude_grid[0] = LUMICE_GridLine{ -90.0f, 1.0f, 0.6f, { 0.5f, 0.5f, 0.0f } };
+  r.longitude_grid[1] = LUMICE_GridLine{ 180.0f, 3.0f, 0.1f, { 0.0f, 0.5f, 0.5f } };
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
   LUMICE_ScatterLayer layer{};

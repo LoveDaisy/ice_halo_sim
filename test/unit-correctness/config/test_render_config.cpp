@@ -161,6 +161,13 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "elevation_grid";
   }
 
+  // longitude_grid
+  {
+    auto mod = base;
+    mod.longitude_grid_.push_back(lumice::GridLineParam{ 90.0f, 1.0f, 1.0f, { 0, 0, 1 } });
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "longitude_grid";
+  }
+
   // horizon
   {
     auto mod = base;
@@ -251,6 +258,38 @@ TEST(RenderConfigEvModeTest, OperatorEq_ComparesEvMode) {
   auto b = MakeBaseline();
   EXPECT_TRUE(a == b);
   b.ev_mode_ = lumice::RenderConfig::kAbsolute;
+  EXPECT_FALSE(a == b);
+}
+
+// The meridian list added in v4.18, held to the same three properties the parallels already have:
+// it round-trips through JSON under its own key, a missing key leaves it empty (an old config is
+// not silently given lines), and operator== sees it.
+TEST(RenderConfigLongitudeGridTest, ToJson_EmitsUnderTheGridLongitudeKey) {
+  auto cfg = MakeBaseline();
+  cfg.longitude_grid_.push_back(lumice::GridLineParam{ -90.0f, 1.5f, 0.4f, { 0.2f, 0.4f, 0.6f } });
+  cfg.longitude_grid_.push_back(lumice::GridLineParam{ 180.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("longitude"));
+  ASSERT_EQ(j["grid"]["longitude"].size(), 2u);
+  EXPECT_NEAR(j["grid"]["longitude"][0]["value"].get<float>(), -90.0f, 1e-5f);
+  EXPECT_NEAR(j["grid"]["longitude"][1]["value"].get<float>(), 180.0f, 1e-5f);
+  // The parallels keep their own key: the two families are separate lists, not one merged array.
+  ASSERT_TRUE(j["grid"].contains("elevation"));
+  EXPECT_EQ(j["grid"]["elevation"].size(), 0u);
+}
+
+TEST(RenderConfigLongitudeGridTest, OperatorEq_ComparesLongitudeGrid) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.longitude_grid_.push_back(lumice::GridLineParam{ 0.0f, 1.0f, 1.0f, { 1, 1, 1 } });
+  EXPECT_FALSE(a == b);
+  // ... and does not confuse it with the parallels, which is the failure a copy-pasted comparison
+  // term would produce.
+  a.elevation_grid_.push_back(lumice::GridLineParam{ 0.0f, 1.0f, 1.0f, { 1, 1, 1 } });
   EXPECT_FALSE(a == b);
 }
 

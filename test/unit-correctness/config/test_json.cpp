@@ -970,4 +970,36 @@ TEST_F(V3TestJson, RenderGrid_ToJsonEmitsOnlyTheNewKey) {
   EXPECT_NEAR(j["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
 }
 
+// The meridian list is a NEW key (v4.18), so unlike `grid.central` it has no alias to honour —
+// what it does need is that a file written before it existed still loads with the field empty
+// rather than defaulted to something.
+TEST_F(V3TestJson, RenderGrid_LongitudeKeyParses) {
+  auto j = config_json_;
+  for (auto& jr : j.at("render")) {
+    if (jr.at("id").get<int>() != 3) {
+      continue;
+    }
+    jr["grid"]["longitude"] = nlohmann::json::array(
+        { { { "value", -90.0f }, { "opacity", 0.3f } }, { { "value", 90.0f }, { "opacity", 0.7f } } });
+  }
+
+  auto manager = j.get<ConfigManager>();
+  const auto& r = manager.renderers_.at(3);
+
+  ASSERT_EQ(r.longitude_grid_.size(), 2u);
+  EXPECT_NEAR(r.longitude_grid_[0].value_, -90.0f, 1e-5f);
+  EXPECT_NEAR(r.longitude_grid_[0].opacity_, 0.3f, 1e-5f);
+  EXPECT_NEAR(r.longitude_grid_[1].value_, 90.0f, 1e-5f);
+  // The other two families are read from their own keys and must not pick this list up.
+  EXPECT_TRUE(r.elevation_grid_.empty());
+  EXPECT_EQ(r.angular_dist_grid_.size(), 1u);
+}
+
+TEST_F(V3TestJson, RenderGrid_MissingLongitudeKeyLeavesTheListEmpty) {
+  auto manager = config_json_.get<ConfigManager>();
+  for (const auto& [id, r] : manager.renderers_) {
+    EXPECT_TRUE(r.longitude_grid_.empty()) << "renderer " << id;
+  }
+}
+
 }  // namespace

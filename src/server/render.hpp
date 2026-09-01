@@ -230,6 +230,8 @@ class RenderConsumer : public IConsume {
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
   const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
   const std::vector<std::vector<uint8_t>>& AngularDistMasksForTest() const { return angular_dist_masks_; }
+  const std::vector<std::vector<uint8_t>>& ElevationMasksForTest() const { return elevation_masks_; }
+  const std::vector<std::vector<uint8_t>>& LongitudeMasksForTest() const { return longitude_masks_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -261,6 +263,17 @@ class RenderConsumer : public IConsume {
   // neither has changed since the last build. See the member's declaration for why this is not a
   // constructor-only job.
   void RebuildAngularDistMasks();
+
+  // The same job for the two sun-INDEPENDENT line families: parallels (config_.elevation_grid_)
+  // and meridians (config_.longitude_grid_). One helper serves both because the two differ in
+  // exactly two expressions — which Request list the angle goes into and which Overlay mask comes
+  // back — while the change detection, the ViewSnapshot fill and the one-call-per-line rule are
+  // identical. `family` selects those two expressions.
+  enum class LineFamily { kElevation, kLongitude };
+  void RebuildLineFamilyMasks(LineFamily family);
+  // Both families at once, for the two call sites (constructor, ResetWith) that always want both.
+  void RebuildGridMasks();
+
 
   RenderConfig config_;
   Rotation rot_;  // camera pose rotation
@@ -295,6 +308,16 @@ class RenderConsumer : public IConsume {
   std::vector<float> angular_dist_mask_angles_;
   float angular_dist_mask_sun_[3]{ 0.0f, 0.0f, 0.0f };
   bool angular_dist_masks_built_ = false;
+  // Parallels and meridians, index-aligned with config_.elevation_grid_ / config_.longitude_grid_.
+  // Same per-LINE rationale and same rebuild lifetime as angular_dist_masks_ above, with one
+  // difference: these geometries are fixed in the celestial frame, so the sun is NOT an input and
+  // the change detector compares the angle list alone.
+  std::vector<std::vector<uint8_t>> elevation_masks_;
+  std::vector<float> elevation_mask_angles_;
+  bool elevation_masks_built_ = false;
+  std::vector<std::vector<uint8_t>> longitude_masks_;
+  std::vector<float> longitude_mask_angles_;
+  bool longitude_masks_built_ = false;
   SunParam sun_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
