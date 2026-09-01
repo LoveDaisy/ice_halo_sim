@@ -185,7 +185,7 @@ inline MaskDir CameraDirToWorld(const Rotation& rot, const projection::Dir3& c) 
 //
 // Each fisheye inverse rejects beyond its own rim radius, and that rim is the same theta the
 // forward's per-type cull stops at (projection.cpp's kFisheyeStereographicMaxR and the
-// kFisheyeAntipodeMinCz / kFisheyeStereographicMinCz notes in projection_shared.h). That makes
+// the three kFisheye*MinCz notes in projection_shared.h). That makes
 // this test exactly "could a ray have landed here", which is what the mask is for. It is also the
 // same region the GUI shader's `fisheyeInverse` accepts — equal-area and equidistant now run to
 // theta = 180 deg on both sides, orthographic stops at the equator on both sides, and

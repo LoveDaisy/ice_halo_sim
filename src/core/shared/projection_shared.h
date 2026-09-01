@@ -63,7 +63,7 @@ LM_FN ProjXY FisheyeStereographicForward(float dx, float dy, float dz, float r_s
     // reachable here at the north pole only: the single-lens path culls at kFisheyeStereographicMinCz
     // (rho >= 8.7e-3 past it) and the dual-fisheye path feeds |dz| <= 1 from one hemisphere at a
     // time, so neither can arrive at the antipode. Left as-is deliberately — see the note on
-    // kFisheyeAntipodeMinCz for the type that does need the distinction.
+    // kFisheyeEquidistantMinCz for the type that does need the distinction.
     return { 0.0f, 0.0f, true };
   }
   float theta = LM_ACOS(LM_CLAMP(dz, -1.0f, 1.0f));
@@ -168,33 +168,44 @@ LM_CONSTANT float kGlobeCameraD = 4.0f;
 // visibility judgements — visibility is `p.visible_range`, and bounds culling belongs to the
 // caller. They are the points past which each type's forward formula stops describing the sky it
 // was handed. Before 474.1 the whole family shared one `cz <= 0` cull, i.e. core rendered only
-// theta <= 90 deg while the GUI preview re-projected out to 180 deg; these two constants are what
-// that cull became once it was taken per type.
+// theta <= 90 deg while the GUI preview re-projected out to 180 deg; these three constants are
+// what that one cull became once it was taken per type. (Orthographic is the fourth, and it keeps
+// `cz <= 0` — see its branch.)
 //
-// kFisheyeAntipodeMinCz — equal-area and equidistant stay finite and monotone all the way to
-//   theta = 180 deg, so their RADIUS needs no bound. Their AZIMUTH does: at the exact antipode of
-//   the camera axis rho = 0 and every azimuth is equally correct, so no single pixel is. In float
-//   that breakdown starts before the antipode itself — FisheyeEqualAreaForward clamps dz at
-//   -1 + 1e-6 to keep 1/sqrt(1+dz) finite, and inside that clamp the radius it returns decays
-//   toward 0 instead of converging to its rim value. -1 + 1e-6 is therefore exactly where the
-//   clamp stops being a no-op, and rejecting there states outright what the clamp was quietly
-//   getting wrong. It also keeps this path clear of FisheyeEquidistantForward's own `rho < 1e-10`
-//   guard (rho >= 1.4e-3 at this floor), which is why that guard is left alone: it is shared with
-//   the dual-fisheye path, where the pole is a legitimate input and (0,0) is the right answer.
-//   The floor sits at theta = 179.919 deg. The inverse's rim (theta = 180 deg) is 4e-7 image radii
-//   further out for equal-area and 0.05 px further out for equidistant on a 120 px short edge, so
-//   the region core renders and the region lens_proj_build.hpp's mask accepts still coincide
-//   everywhere a pixel can tell them apart.
+// Each floor is set by ITS type's numerics, and they differ by three orders of magnitude for that
+// reason. What they have in common is the shape of the failure: every type recovers the azimuth by
+// dividing by rho = sin(theta), which collapses at the antipode of the lens axis, where every
+// azimuth is equally correct and no single pixel is.
 //
-// kFisheyeStereographicMinCz — r = tan(theta/2) diverges at theta = 180 deg, so this type needs a
-//   bound on the radius itself and not just on the azimuth. The value is cos(179.5 deg): the half
-//   angle of the 359 deg fov ceiling `render_config.cpp::MaxFov` already imposes on this lens, so
-//   the per-ray floor and the config-level ceiling describe one boundary rather than two. It puts
-//   the rim at r = tan(89.75 deg) = 229.18 image radii — past any frame at any usable resolution,
-//   which is why the GUI preview (whose stereographic inverse has no guard at all) and core still
-//   agree pixel for pixel. projection.cpp::FisheyeStereographicInverse derives its own r bound
-//   from THIS constant rather than restating the angle, so the two cannot drift.
-LM_CONSTANT float kFisheyeAntipodeMinCz = -1.0f + 1e-6f;
+// kFisheyeEqualAreaMinCz — r = rho / sqrt(1 + cz) equals sqrt(1 - cz) analytically, so the RADIUS
+//   is bounded (sqrt(2) at the antipode) and needs no cull of its own. Its accuracy is not: cz
+//   arrives with a few ulps of error and dividing by sqrt(1 + cz) amplifies that by 1/(2(1 + cz)),
+//   so the computed radius drifts ABOVE the analytic rim as the antipode is approached — past the
+//   point where projection.cpp's inverse still accepts it, which is exactly the state that makes
+//   the render-domain mask paint background over a lit pixel. The floor is where that stops: with
+//   1 + cz >= 1e-3 the relative error stays under 1e-4, while sqrt(2 - 1e-3) already sits 2.5e-4
+//   below sqrt(2), so the drift cannot reach the rim. It is also, not coincidentally, well clear of
+//   FisheyeEqualAreaForward's own dz clamp at -1 + 1e-6, inside which the returned radius decays
+//   toward 0 instead of converging to the rim. theta = 177.4 deg; the 2.5e-4 of rim radius given up
+//   is 0.02 px on a 60 px lens scale.
+//
+// kFisheyeEquidistantMinCz — r = acos(cz)/(pi/2) is well conditioned in the radius all the way in
+//   (acos absorbs the error into theta, where 4e-5 rad costs 3e-5 of a rim radius of 2), so this
+//   type can be culled two decades closer to the antipode than equal-area. -1 + 1e-6 is where
+//   FisheyeEquidistantForward's own `rho < 1e-10` guard becomes unreachable (rho >= 1.4e-3 here),
+//   which is why that guard is left alone: it is shared with the dual-fisheye path, where the pole
+//   is a legitimate input and (0,0) is the right answer. theta = 179.92 deg.
+//
+// kFisheyeStereographicMinCz — r = tan(theta/2) DIVERGES at the antipode, so this is the one type
+//   whose radius itself has to be bounded. The value is cos(179.5 deg): the half angle of the
+//   359 deg fov ceiling `render_config.cpp::MaxFov` already imposes on this lens, so the per-ray
+//   floor and the config-level ceiling describe one boundary rather than two. It puts the rim at
+//   r = tan(89.75 deg), about 229 image radii — past any frame at any usable resolution, which is
+//   why the GUI preview (whose stereographic inverse has no guard at all) and core still agree
+//   pixel for pixel. projection.cpp::FisheyeStereographicInverse derives its own r bound from THIS
+//   constant rather than restating the angle, so the two cannot drift.
+LM_CONSTANT float kFisheyeEqualAreaMinCz = -1.0f + 1e-3f;
+LM_CONSTANT float kFisheyeEquidistantMinCz = -1.0f + 1e-6f;
 LM_CONSTANT float kFisheyeStereographicMinCz = -0.99996192f;
 
 // Apply the transpose of a row-major 3x3 matrix (equivalent to Rotation::ApplyInverse
@@ -257,7 +268,7 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     } else if (t == kProjFisheyeOrthographic) {
       // The one member of the family that must keep a hemisphere cull: r = sin(theta) aliases past
       // the equator (sin 120 deg == sin 60 deg), so two distinct rays would land on one pixel.
-      // Structurally not widenable — see kFisheyeAntipodeMinCz above for the ones that were.
+      // Structurally not widenable — see the three MinCz constants above for the ones that were.
       if (cz <= 0.0f) {
         return r;
       }
@@ -267,15 +278,16 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
         return r;
       }
       xy = FisheyeStereographicForward(cx, cy, cz, 1.0f);
-    } else {
-      if (cz < kFisheyeAntipodeMinCz) {
+    } else if (t == kProjFisheyeEqualArea) {
+      if (cz < kFisheyeEqualAreaMinCz) {
         return r;
       }
-      if (t == kProjFisheyeEqualArea) {
-        xy = FisheyeEqualAreaForward(cx, cy, cz, 1.0f);
-      } else {  // kProjFisheyeEquidistant
-        xy = FisheyeEquidistantForward(cx, cy, cz, 1.0f);
+      xy = FisheyeEqualAreaForward(cx, cy, cz, 1.0f);
+    } else {  // kProjFisheyeEquidistant
+      if (cz < kFisheyeEquidistantMinCz) {
+        return r;
       }
+      xy = FisheyeEquidistantForward(cx, cy, cz, 1.0f);
     }
     if (!xy.valid) {
       return r;

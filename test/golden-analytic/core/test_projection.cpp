@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -24,6 +26,32 @@ constexpr float kEpsPolar = 5e-6f;  // Relaxed for polar-path projections (atan2
 void ExpectUnitVector(const Dir3& d) {
   float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
   EXPECT_NEAR(len, 1.0f, kEps);
+}
+
+// The single-lens fisheye render domain runs to theta = 180 deg (474.1), but a round trip through
+// it is not uniformly conditioned: every type recovers the AZIMUTH by dividing by rho = sin(theta),
+// which collapses at the antipode. Equal-area shows it most directly — the inverse recovers
+// z = 1 - r^2 with r^2 -> 2, so the subtraction keeps an absolute error of ~2e-7 while the factor
+// sqrt(1 + z) it feeds shrinks to 1e-3, and the relative error in the recovered x/y grows as
+// 1 / sqrt(1 + z). The round-trip tests below therefore run the well-conditioned bulk of the
+// domain at kEps and hand the last 26 deg to SingleFisheyeRimRoundTrip, which states the looser
+// tolerance the float arithmetic actually allows rather than pretending the whole domain is equal.
+constexpr float kRoundTripMinDz = -0.9f;  // theta <= 154 deg
+
+// Equal-area's past-equator tolerance. Its inverse recovers z as 1 - r^2 with r^2 running to 2, so
+// the absolute error in z stays flat while the factor sqrt(1 + z) it feeds shrinks — a few units in
+// the last place at the equator become a few 1e-6 by theta = 154 deg. The equator-and-up half of
+// the domain, which this test already covered before 474.1, keeps kEps: the half that was added is
+// the half that is less well conditioned, and saying so per-sample is more useful than relaxing the
+// whole test. (Same spirit as kEpsPolar above.) Equidistant and stereographic need no equivalent —
+// they recover z through cos() of a well-conditioned angle.
+constexpr float kEpsPastEquator = 5e-6f;
+
+// Angle between two unit vectors, in radians — the tolerance that means the same thing for every
+// projection type, unlike a per-component epsilon.
+float AngleBetween(const Dir3& a, float bx, float by, float bz) {
+  const float dot = std::max(-1.0f, std::min(1.0f, a.x * bx + a.y * by + a.z * bz));
+  return std::acos(dot);
 }
 
 // =============== Type A: Linear ===============
@@ -83,9 +111,12 @@ TEST(Projection, FisheyeEqualAreaForwardEquator) {
 }
 
 TEST(Projection, FisheyeEqualAreaRoundTrip) {
-  // Full-sphere round-trip: caller flips z for lower hemisphere
+  // Direct round trip over the whole widened domain — no hemisphere flip. Before 474.1 this test
+  // projected |dz| and flipped the sign afterwards, which only ever exercised theta <= 90 deg; the
+  // past-equator half of the domain the render path now writes to went untested here.
   std::mt19937 rng(45);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  size_t past_equator = 0;
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -94,19 +125,27 @@ TEST(Projection, FisheyeEqualAreaRoundTrip) {
     dx /= len;
     dy /= len;
     dz /= len;
+    if (dz < kRoundTripMinDz) {
+      continue;  // see kRoundTripMinDz — the rim is SingleFisheyeRimRoundTrip's job
+    }
+    if (dz < 0.0f) {
+      ++past_equator;
+    }
 
-    bool is_upper = (dz >= 0);
-    float z_hemi = is_upper ? dz : -dz;
-    auto fwd = FisheyeEqualAreaForward(dx, dy, z_hemi);
+    auto fwd = FisheyeEqualAreaForward(dx, dy, dz);
     auto inv = FisheyeEqualAreaInverse(fwd.x, fwd.y);
-    ASSERT_TRUE(inv.valid);
+    if (!inv.valid) {
+      ADD_FAILURE() << "the inverse rejected a direction the render path projects; dz = " << dz;
+      continue;
+    }
     ExpectUnitVector(inv);
-    // inv.z is in z_hemi space; flip back for lower hemisphere
-    float recovered_z = is_upper ? inv.z : -inv.z;
-    EXPECT_NEAR(inv.x, dx, kEps);
-    EXPECT_NEAR(inv.y, dy, kEps);
-    EXPECT_NEAR(recovered_z, dz, kEps);
+    const float tol = (dz >= 0.0f) ? kEps : kEpsPastEquator;
+    EXPECT_NEAR(inv.x, dx, tol) << "dz = " << dz;
+    EXPECT_NEAR(inv.y, dy, tol) << "dz = " << dz;
+    EXPECT_NEAR(inv.z, dz, tol) << "dz = " << dz;
   }
+  EXPECT_GT(past_equator, 100u) << "the sample must actually reach past the equator, or this test "
+                                   "still only covers the pre-474.1 domain";
 }
 
 TEST(Projection, FisheyeEqualAreaEqualAreaProperty) {
@@ -143,9 +182,17 @@ TEST(Projection, FisheyeEqualAreaEqualAreaProperty) {
   EXPECT_LT(chi2, 21.67f) << "Equal-area property violated: chi2=" << chi2;
 }
 
-TEST(Projection, FisheyeEqualAreaInverseBeyondDomain) {
+TEST(Projection, FisheyeEqualAreaInverseInsideTheWidenedDomain) {
+  // r = 1.1 used to be rejected: the domain stopped at r = 1, the equator. It is now inside, and
+  // what it recovers is the point of 474.1 — a direction BELOW the horizon of the lens axis.
+  // r = sqrt(2) sin(theta/2)  =>  theta = 2 asin(1.1 / sqrt(2)) = 101.1 deg.
   auto r = FisheyeEqualAreaInverse(1.1f, 0);
-  EXPECT_FALSE(r.valid);
+  ASSERT_TRUE(r.valid);
+  ExpectUnitVector(r);
+  EXPECT_LT(r.z, 0.0f) << "r > 1 is the past-equator region; a positive z would mean the widening "
+                          "moved the radius mapping instead of extending it";
+  EXPECT_NEAR(std::acos(r.z) * math::kRadToDegree, 2.0f * std::asin(1.1f / std::sqrt(2.0f)) * math::kRadToDegree,
+              1e-3f);
 }
 
 // =============== Fisheye Equidistant ===============
@@ -158,8 +205,11 @@ TEST(Projection, FisheyeEquidistantEquatorNorm) {
 }
 
 TEST(Projection, FisheyeEquidistantRoundTrip) {
+  // Direct round trip over the widened domain — see FisheyeEqualAreaRoundTrip for why the
+  // hemisphere flip is gone.
   std::mt19937 rng(47);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  size_t past_equator = 0;
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -168,18 +218,25 @@ TEST(Projection, FisheyeEquidistantRoundTrip) {
     dx /= len;
     dy /= len;
     dz /= len;
+    if (dz < kRoundTripMinDz) {
+      continue;
+    }
+    if (dz < 0.0f) {
+      ++past_equator;
+    }
 
-    bool is_upper = (dz >= 0);
-    float z_hemi = is_upper ? dz : -dz;
-    auto fwd = FisheyeEquidistantForward(dx, dy, z_hemi);
+    auto fwd = FisheyeEquidistantForward(dx, dy, dz);
     auto inv = FisheyeEquidistantInverse(fwd.x, fwd.y);
-    ASSERT_TRUE(inv.valid);
+    if (!inv.valid) {
+      ADD_FAILURE() << "the inverse rejected a direction the render path projects; dz = " << dz;
+      continue;
+    }
     ExpectUnitVector(inv);
-    float recovered_z = is_upper ? inv.z : -inv.z;
     EXPECT_NEAR(inv.x, dx, kEps);
     EXPECT_NEAR(inv.y, dy, kEps);
-    EXPECT_NEAR(recovered_z, dz, kEps);
+    EXPECT_NEAR(inv.z, dz, kEps);
   }
+  EXPECT_GT(past_equator, 100u) << "the sample must actually reach past the equator";
 }
 
 // =============== Fisheye Stereographic ===============
@@ -191,8 +248,12 @@ TEST(Projection, FisheyeStereographicEquatorNorm) {
 }
 
 TEST(Projection, FisheyeStereographicRoundTrip) {
+  // Direct round trip over the widened domain — see FisheyeEqualAreaRoundTrip. r = tan(theta/2)
+  // is the one type whose radius diverges rather than converging to a rim, so its far end belongs
+  // to SingleFisheyeRimRoundTrip for a second reason on top of the shared azimuth conditioning.
   std::mt19937 rng(48);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  size_t past_equator = 0;
   for (int i = 0; i < 2000; i++) {
     float dx = dist(rng), dy = dist(rng), dz = dist(rng);
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -201,18 +262,25 @@ TEST(Projection, FisheyeStereographicRoundTrip) {
     dx /= len;
     dy /= len;
     dz /= len;
+    if (dz < kRoundTripMinDz) {
+      continue;
+    }
+    if (dz < 0.0f) {
+      ++past_equator;
+    }
 
-    bool is_upper = (dz >= 0);
-    float z_hemi = is_upper ? dz : -dz;
-    auto fwd = FisheyeStereographicForward(dx, dy, z_hemi);
+    auto fwd = FisheyeStereographicForward(dx, dy, dz);
     auto inv = FisheyeStereographicInverse(fwd.x, fwd.y);
-    ASSERT_TRUE(inv.valid);
+    if (!inv.valid) {
+      ADD_FAILURE() << "the inverse rejected a direction the render path projects; dz = " << dz;
+      continue;
+    }
     ExpectUnitVector(inv);
-    float recovered_z = is_upper ? inv.z : -inv.z;
     EXPECT_NEAR(inv.x, dx, kEps);
     EXPECT_NEAR(inv.y, dy, kEps);
-    EXPECT_NEAR(recovered_z, dz, kEps);
+    EXPECT_NEAR(inv.z, dz, kEps);
   }
+  EXPECT_GT(past_equator, 100u) << "the sample must actually reach past the equator";
 }
 
 // =============== Rectangular ===============
@@ -298,23 +366,203 @@ TEST(Projection, DualFisheyeLayoutOutsideCircles) {
 
 // =============== Boundary cases ===============
 
-TEST(Projection, InverseBeyondDomainEA) {
-  auto r = FisheyeEqualAreaInverse(1.5f, 0);
-  EXPECT_FALSE(r.valid);
+// The rim radius of each single-fisheye inverse at r_scale = 1, i.e. the value of that type's
+// radius formula at the largest theta the render path produces. Restated here from the formulas
+// rather than read out of projection.cpp, so a change to either side has to be argued for twice.
+float RimRadius(LensParam::LensType t) {
+  switch (t) {
+    case LensParam::kFisheyeEqualArea:
+      return std::sqrt(2.0f);  // sqrt(2) sin(theta/2) at theta = 180 deg
+    case LensParam::kFisheyeEquidistant:
+      return 2.0f;  // theta / (pi/2) at theta = 180 deg
+    case LensParam::kFisheyeStereographic:
+      // tan(theta/2) at the numerical cull floor, which is the half angle of this lens's fov
+      // ceiling — pinned against MaxFov by StereographicCullFloorIsTheFovCeilingHalfAngle below.
+      return std::tan(0.5f * std::acos(lm_proj::kFisheyeStereographicMinCz));
+    default:  // kFisheyeOrthographic — sin(theta) is not injective past the equator
+      return 1.0f;
+  }
 }
 
-TEST(Projection, InverseBeyondDomainED) {
-  auto r = FisheyeEquidistantInverse(1.5f, 0);
-  EXPECT_FALSE(r.valid);
+Dir3 InverseFor(LensParam::LensType t, float x, float y) {
+  switch (t) {
+    case LensParam::kFisheyeEqualArea:
+      return FisheyeEqualAreaInverse(x, y, 1.0f);
+    case LensParam::kFisheyeEquidistant:
+      return FisheyeEquidistantInverse(x, y, 1.0f);
+    case LensParam::kFisheyeStereographic:
+      return FisheyeStereographicInverse(x, y, 1.0f);
+    default:
+      return FisheyeOrthographicInverse(x, y, 1.0f);
+  }
 }
 
-TEST(Projection, InverseBeyondDomainST) {
-  auto r = FisheyeStereographicInverse(1.5f, 0);
-  EXPECT_FALSE(r.valid);
+ProjXY ForwardFor(LensParam::LensType t, float dx, float dy, float dz) {
+  switch (t) {
+    case LensParam::kFisheyeEqualArea:
+      return FisheyeEqualAreaForward(dx, dy, dz, 1.0f);
+    case LensParam::kFisheyeEquidistant:
+      return FisheyeEquidistantForward(dx, dy, dz, 1.0f);
+    case LensParam::kFisheyeStereographic:
+      return FisheyeStereographicForward(dx, dy, dz, 1.0f);
+    default:
+      return FisheyeOrthographicForward(dx, dy, dz, 1.0f);
+  }
+}
+
+// The cull floor ProjectExitToPixel applies to each single-lens fisheye. Restated from the
+// constants in projection_shared.h; SingleFisheyeCullAndInverseDomainAgree checks this restatement
+// against the real ProjectExitToPixel rather than trusting it.
+float CullFloorCz(LensParam::LensType t) {
+  switch (t) {
+    case LensParam::kFisheyeEqualArea:
+      return lm_proj::kFisheyeEqualAreaMinCz;
+    case LensParam::kFisheyeEquidistant:
+      return lm_proj::kFisheyeEquidistantMinCz;
+    case LensParam::kFisheyeStereographic:
+      return lm_proj::kFisheyeStereographicMinCz;
+    default:
+      return 0.0f;  // orthographic — strict: its branch rejects cz <= 0
+  }
+}
+
+const LensParam::LensType kSingleFisheyeTypes[] = { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant,
+                                                    LensParam::kFisheyeStereographic, LensParam::kFisheyeOrthographic };
+
+TEST(Projection, InverseRejectsBeyondTheRim) {
+  // r = 1.5 used to be the "beyond domain" probe for all three widened types. It is now INSIDE two
+  // of the three domains, so a fixed radius cannot serve them any more — each type is probed
+  // against its own rim.
+  for (LensParam::LensType t : kSingleFisheyeTypes) {
+    const float rim = RimRadius(t);
+    EXPECT_TRUE(InverseFor(t, rim * 0.999f, 0.0f).valid) << "type " << static_cast<int>(t) << ": just inside the rim";
+    EXPECT_FALSE(InverseFor(t, rim * 1.001f, 0.0f).valid) << "type " << static_cast<int>(t) << ": just outside the rim";
+    // And far outside, so a rim that silently grew would still be caught.
+    EXPECT_FALSE(InverseFor(t, rim * 4.0f, 0.0f).valid) << "type " << static_cast<int>(t) << ": far outside the rim";
+  }
+}
+
+TEST(Projection, InverseAtTheRimRecoversTheAntipode) {
+  // The rim is not an arbitrary cut-off: it is where theta reaches its maximum. For the two types
+  // that run to 180 deg the recovered direction there must be the antipode of the lens axis.
+  const Dir3 ea = FisheyeEqualAreaInverse(std::sqrt(2.0f), 0.0f, 1.0f);
+  ASSERT_TRUE(ea.valid);
+  EXPECT_NEAR(ea.z, -1.0f, 1e-5f);
+  const Dir3 ed = FisheyeEquidistantInverse(2.0f, 0.0f, 1.0f);
+  ASSERT_TRUE(ed.valid);
+  EXPECT_NEAR(ed.z, -1.0f, 1e-5f);
+}
+
+TEST(Projection, StereographicCullFloorIsTheFovCeilingHalfAngle) {
+  // AC3's closed-form reason, as a mechanical assertion rather than a comment: the per-ray cull
+  // floor is not an independently chosen number, it is the half angle of the fov ceiling
+  // render_config.cpp already imposes on this lens. If MaxFov changes and the constant does not
+  // (or the other way round), this is what says so.
+  const float theta_max_deg = std::acos(lm_proj::kFisheyeStereographicMinCz) * math::kRadToDegree;
+  EXPECT_NEAR(theta_max_deg, lumice::MaxFov(LensParam::kFisheyeStereographic) / 2.0f, 1e-3f);
+  // ... and the radius that half angle implies is far outside any frame, which is why widening
+  // stereographic needs no product decision about where to stop.
+  EXPECT_GT(RimRadius(LensParam::kFisheyeStereographic), 200.0f);
+}
+
+TEST(Projection, SingleFisheyeCullAndInverseDomainAgree) {
+  // AC2, mechanically: "a ray could have landed on this pixel" and "the inverse accepts this
+  // pixel" must be the same statement, because lens_proj_build.hpp's render-domain mask is built
+  // from the second and describes the first. Driven through the real ProjectExitToPixel (identity
+  // rotation, visible = full, so the only cull left is the per-type cz floor under test) rather
+  // than through a restatement of its branch structure.
+  lm_proj::ProjParams p{};
+  p.img_w = 1024;
+  p.img_h = 1024;
+  p.visible_range = 2;  // kFull
+  p.scale = 1.0f;
+  p.r_scale = 1.0f;
+  const float kIdentity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  std::memcpy(p.rot, kIdentity, sizeof(kIdentity));
+
+  for (LensParam::LensType t : kSingleFisheyeTypes) {
+    p.proj_type = static_cast<int>(t);
+    const float floor_cz = CullFloorCz(t);
+    const float rim = RimRadius(t);
+    size_t rendered = 0;
+    size_t culled = 0;
+    // 20001 steps of theta, plus four azimuths so the check is not confined to one meridian.
+    for (int i = 0; i <= 20000; ++i) {
+      const float theta = static_cast<float>(i) / 20000.0f * math::kPi;
+      for (float az : { 0.0f, 0.7f, 2.4f, 5.1f }) {
+        const float cz = std::cos(theta);
+        const float cx = std::sin(theta) * std::cos(az);
+        const float cy = std::sin(theta) * std::sin(az);
+        // ProjectExitToPixel computes c = R^T * (-w); with R = I that is w = -c.
+        const auto res = lm_proj::ProjectExitToPixel(p, -cx, -cy, -cz);
+        const bool inside_floor = (t == LensParam::kFisheyeOrthographic) ? (cz > floor_cz) : (cz >= floor_cz);
+        if (!inside_floor) {
+          if (res.count != 0) {
+            ADD_FAILURE() << "type " << static_cast<int>(t) << ": theta = " << theta
+                          << " is past the cull floor but produced a hit";
+          }
+          ++culled;
+          continue;
+        }
+        if (res.count != 1) {
+          ADD_FAILURE() << "type " << static_cast<int>(t) << ": theta = " << theta
+                        << " is inside the cull floor but was rejected";
+          continue;
+        }
+        ++rendered;
+        const ProjXY fwd = ForwardFor(t, cx, cy, cz);
+        const float r = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y);
+        EXPECT_TRUE(InverseFor(t, fwd.x, fwd.y).valid)
+            << "type " << static_cast<int>(t) << ": theta = " << theta << " renders at r = " << r
+            << " but the inverse (rim " << rim << ") rejects it — the mask would call this pixel empty";
+      }
+    }
+    EXPECT_GT(rendered, 0u) << "type " << static_cast<int>(t);
+    EXPECT_GT(culled, 0u) << "type " << static_cast<int>(t)
+                          << ": every type must still cull SOMETHING, or the "
+                             "floor under test is not being exercised";
+    // The other direction: the inverse must not accept a meaningfully larger disc than the forward
+    // can reach, or the mask promises sky no ray can paint. Evaluated AT the floor rather than off
+    // the sweep above, whose theta step is coarser than the last decade each floor sits in.
+    // 1e-3 of the rim is well under a pixel at any resolution these lenses are used at.
+    const float rho_floor = std::sqrt(std::max(0.0f, 1.0f - floor_cz * floor_cz));
+    const ProjXY at_floor = ForwardFor(t, rho_floor, 0.0f, floor_cz);
+    const float r_floor = std::sqrt(at_floor.x * at_floor.x + at_floor.y * at_floor.y);
+    EXPECT_NEAR(r_floor, rim, rim * 1e-3f) << "type " << static_cast<int>(t);
+  }
+}
+
+TEST(Projection, SingleFisheyeRimRoundTrip) {
+  // The last 14 deg the *RoundTrip tests hand over (see kRoundTripMinDz). Two separate claims, and
+  // they degrade differently: the RADIUS stays accurate all the way to the floor, while the
+  // AZIMUTH does not, because every inverse recovers it by dividing by rho = sin(theta).
+  for (LensParam::LensType t :
+       { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant, LensParam::kFisheyeStereographic }) {
+    const float floor_cz = CullFloorCz(t);
+    for (int i = 0; i <= 200; ++i) {
+      const float cz = kRoundTripMinDz + (floor_cz - kRoundTripMinDz) * static_cast<float>(i) / 200.0f;
+      const float rho = std::sqrt(std::max(0.0f, 1.0f - cz * cz));
+      const float az = 0.9f;
+      const float cx = rho * std::cos(az);
+      const float cy = rho * std::sin(az);
+      const ProjXY fwd = ForwardFor(t, cx, cy, cz);
+      const Dir3 inv = InverseFor(t, fwd.x, fwd.y);
+      if (!inv.valid) {
+        ADD_FAILURE() << "type " << static_cast<int>(t) << ": the inverse rejected the rim; cz = " << cz;
+        continue;
+      }
+      ExpectUnitVector(inv);
+      // Radius: well conditioned, and the half of the round trip the render domain depends on.
+      EXPECT_NEAR(inv.z, cz, 1e-4f) << "type " << static_cast<int>(t) << " cz = " << cz;
+      // Direction: 1e-3 rad = 0.06 deg. At this distance from the antipode a whole degree of
+      // azimuth spans well under a pixel of arc, so this is tighter than anything observable.
+      EXPECT_LT(AngleBetween(inv, cx, cy, cz), 1e-3f) << "type " << static_cast<int>(t) << " cz = " << cz;
+    }
+  }
 }
 
 TEST(Projection, FisheyeForwardAtPoles) {
-  // All three: pole -> center (0,0)
+  // North pole -> centre (0,0) for all three: theta = 0, and every azimuth agrees there.
   auto ea = FisheyeEqualAreaForward(0, 0, 1);
   EXPECT_NEAR(ea.x, 0, kEps);
   EXPECT_NEAR(ea.y, 0, kEps);
@@ -326,6 +574,36 @@ TEST(Projection, FisheyeForwardAtPoles) {
   auto st = FisheyeStereographicForward(0, 0, 1);
   EXPECT_NEAR(st.x, 0, kEps);
   EXPECT_NEAR(st.y, 0, kEps);
+}
+
+TEST(Projection, ForwardAtTheAntipodeIsCulledRatherThanCollapsedToTheCentre) {
+  // The south pole is the one direction where these *Forward functions still answer wrongly, and
+  // deliberately so: rho = 0 there, every azimuth is equally correct, and both equal-area (via its
+  // dz clamp) and equidistant (via its rho guard) return (0,0) — the CENTRE, which is where
+  // theta = 0 belongs, not theta = 180 deg. Widening the domain is what made that reachable, and
+  // the fix is the cull floor rather than a change to the shared functions, because those same
+  // functions serve the dual-fisheye path where rho = 0 really is the pole and (0,0) really is the
+  // right answer. This test pins both halves: the functions still collapse, and the render path
+  // never lets a ray get there.
+  const auto ea = FisheyeEqualAreaForward(0, 0, -1);
+  EXPECT_NEAR(std::sqrt(ea.x * ea.x + ea.y * ea.y), 0.0f, kEps) << "the collapse is still there";
+  const auto ed = FisheyeEquidistantForward(0, 0, -1);
+  EXPECT_NEAR(std::sqrt(ed.x * ed.x + ed.y * ed.y), 0.0f, kEps) << "the collapse is still there";
+
+  lm_proj::ProjParams p{};
+  p.img_w = 256;
+  p.img_h = 256;
+  p.visible_range = 2;  // kFull
+  p.scale = 1.0f;
+  p.r_scale = 1.0f;
+  const float kIdentity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+  std::memcpy(p.rot, kIdentity, sizeof(kIdentity));
+  for (LensParam::LensType t : kSingleFisheyeTypes) {
+    p.proj_type = static_cast<int>(t);
+    // c = (0,0,-1) is the antipode of the lens axis; w = -c.
+    EXPECT_EQ(lm_proj::ProjectExitToPixel(p, 0.0f, 0.0f, 1.0f).count, 0)
+        << "type " << static_cast<int>(t) << ": the antipode must be culled, not painted at the centre";
+  }
 }
 
 // =============== r_scale round-trip (overlap support) ===============
