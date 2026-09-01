@@ -53,6 +53,34 @@ void from_json(const nlohmann::json& j, GridLineParam& l) {
 }
 
 
+// ========== ZenithNadirParam ==========
+void to_json(nlohmann::json& j, const ZenithNadirParam& z) {
+  j["enabled"] = z.enabled_;
+  j["radius_px"] = z.radius_px_;
+  j["opacity"] = z.opacity_;
+  j["color"] = z.color_;
+}
+
+// Every key optional, including "enabled": a present-but-partial object keeps the member defaults
+// for whatever it leaves out, which is the same rule GridLineParam::from_json follows for
+// everything but its mandatory `value`. There is no mandatory key here — the struct's own defaults
+// describe a complete marker on their own.
+void from_json(const nlohmann::json& j, ZenithNadirParam& z) {
+  if (j.contains("enabled")) {
+    j.at("enabled").get_to(z.enabled_);
+  }
+  if (j.contains("radius_px")) {
+    j.at("radius_px").get_to(z.radius_px_);
+  }
+  if (j.contains("opacity")) {
+    j.at("opacity").get_to(z.opacity_);
+  }
+  if (j.contains("color")) {
+    j.at("color").get_to(z.color_);
+  }
+}
+
+
 // ========== LensParam ==========
 void to_json(nlohmann::json& j, const LensParam& l) {
   j["type"] = l.type_;
@@ -162,6 +190,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("elevation", r.elevation_grid_);
   j["grid"].emplace("longitude", r.longitude_grid_);
   j["grid"].emplace("horizon", r.horizon_);
+  j["grid"].emplace("zenith_nadir", r.zenith_nadir_);
 }
 
 
@@ -169,7 +198,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
 // §5.2 (sizeof sentinel).
 bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig — then classify as layout or appearance.
-  static_assert(sizeof(RenderConfig) == 160, "Update NeedsRebuild when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 184, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.
 

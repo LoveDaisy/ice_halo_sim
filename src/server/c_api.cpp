@@ -612,6 +612,16 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["longitude"] = GridLinesToCore(r.longitude_grid, r.longitude_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
+  // Through core's own to_json, like every other value here: the key names and the sRGB convention
+  // then have exactly one spelling in the tree.
+  ns::ZenithNadirParam zn;
+  zn.enabled_ = r.zenith_nadir != 0;
+  zn.radius_px_ = r.zenith_nadir_radius_px;
+  zn.opacity_ = r.zenith_nadir_opacity;
+  zn.color_[0] = r.zenith_nadir_color[0];
+  zn.color_[1] = r.zenith_nadir_color[1];
+  zn.color_[2] = r.zenith_nadir_color[2];
+  jr["grid"]["zenith_nadir"] = zn;
   return jr;
 }
 
@@ -2386,6 +2396,19 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
     r.elevation_grid_count = 0;
     r.longitude_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
+    // The marker block's defaults come from core's struct rather than being spelled again here,
+    // and they are written BEFORE the "grid" branch so a document with no key at all lands on the
+    // same four values ParseRenderConfig leaves. Zeroing them instead would be a real divergence
+    // between the two decoders, not a harmless one: three of the four defaults are non-zero, and
+    // the parity gate compares whole RenderConfigs.
+    {
+      const ns::ZenithNadirParam kZenithNadirDefaults;
+      r.zenith_nadir = kZenithNadirDefaults.enabled_ ? 1 : 0;
+      r.zenith_nadir_radius_px = kZenithNadirDefaults.radius_px_;
+      r.zenith_nadir_opacity = kZenithNadirDefaults.opacity_;
+      std::copy(std::begin(kZenithNadirDefaults.color_), std::end(kZenithNadirDefaults.color_),
+                std::begin(r.zenith_nadir_color));
+    }
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {
@@ -2425,6 +2448,23 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
           return err;
         }
         r.horizon = outline ? 1 : 0;
+      }
+      if (gj.contains("zenith_nadir")) {
+        // Seeded with the defaults above so a PARTIAL object keeps them for the keys it omits,
+        // which is what core's from_json does with the same input.
+        ns::ZenithNadirParam zn;
+        zn.enabled_ = r.zenith_nadir != 0;
+        zn.radius_px_ = r.zenith_nadir_radius_px;
+        zn.opacity_ = r.zenith_nadir_opacity;
+        std::copy(std::begin(r.zenith_nadir_color), std::end(r.zenith_nadir_color), std::begin(zn.color_));
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("zenith_nadir"), zn);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+        r.zenith_nadir = zn.enabled_ ? 1 : 0;
+        r.zenith_nadir_radius_px = zn.radius_px_;
+        r.zenith_nadir_opacity = zn.opacity_;
+        std::copy(std::begin(zn.color_), std::end(zn.color_), std::begin(r.zenith_nadir_color));
       }
     }
   }

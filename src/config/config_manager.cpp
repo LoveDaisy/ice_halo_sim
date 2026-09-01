@@ -117,6 +117,9 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("horizon")) {
       j_grid.at("horizon").get_to(render.horizon_);
     }
+    if (j_grid.contains("zenith_nadir")) {
+      j_grid.at("zenith_nadir").get_to(render.zenith_nadir_);
+    }
   }
 
   // Design A: renderer-side ms_filter_ was removed (filter is applied

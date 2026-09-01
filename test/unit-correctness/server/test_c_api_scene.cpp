@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -910,6 +911,12 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.longitude_grid_count = 2;
   r.longitude_grid[0] = LUMICE_GridLine{ -90.0f, 1.0f, 0.6f, { 0.5f, 0.5f, 0.0f } };
   r.longitude_grid[1] = LUMICE_GridLine{ 180.0f, 3.0f, 0.1f, { 0.0f, 0.5f, 0.5f } };
+  r.zenith_nadir = 1;
+  r.zenith_nadir_radius_px = 14.0f;
+  r.zenith_nadir_opacity = 0.25f;
+  r.zenith_nadir_color[0] = 0.1f;
+  r.zenith_nadir_color[1] = 0.7f;
+  r.zenith_nadir_color[2] = 0.9f;
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
 
   LUMICE_ScatterLayer layer{};
@@ -936,6 +943,115 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   ASSERT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000000, 20, 8), LUMICE_OK);
 
   ExpectLosslessRoundTrip(g.get());
+}
+
+// =============== zenith / nadir marker block (v4.19) ===============
+//
+// The ABI half of the block is covered by the full-renderer round trip above. What is NOT covered
+// there — and is the thing this block can get wrong that the line families cannot — is that its
+// three appearance fields have NON-ZERO defaults on the JSON side. "Key absent" and
+// "zero-initialized struct" are therefore different states, and a decoder that answers a missing
+// key with zeros disagrees with core's own parser about what a pre-v4.19 document means.
+
+namespace {
+const nlohmann::json& RendererGridOf(const LUMICE_Scene* scene) {
+  return SceneRoot(scene).at("render").at(0).at("grid");
+}
+
+// A committable single-renderer document, built through the API rather than written out by hand so
+// the parts this file is not testing stay valid as the schema moves. `edit` is handed the parsed
+// document to shape the marker block however the case needs.
+std::string SceneJsonWithMarkerBlock(const std::function<void(nlohmann::json&)>& edit) {
+  SceneGuard g;
+  int id = -1;
+  EXPECT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000, 8, 0), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  const LUMICE_CrystalParam c = MakePrismParam(1.5f);
+  EXPECT_EQ(LUMICE_SceneAddCrystal(g.get(), &c, &id), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ id, 1.0f, -1 };
+  EXPECT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.ray_color[0] = r.ray_color[1] = r.ray_color[2] = -1.0f;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  nlohmann::json doc = nlohmann::json::parse(SceneToJsonString(g.get()));
+  edit(doc.at("render").at(0).at("grid"));
+  return doc.dump();
+}
+}  // namespace
+
+TEST(SceneRenderZenithNadir, StructValuesReachTheJsonKey) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 64;
+  r.resolution_h = 64;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.zenith_nadir = 1;
+  r.zenith_nadir_radius_px = 11.5f;
+  r.zenith_nadir_opacity = 0.35f;
+  r.zenith_nadir_color[0] = 0.25f;
+  r.zenith_nadir_color[1] = 0.5f;
+  r.zenith_nadir_color[2] = 0.75f;
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  const nlohmann::json& grid = RendererGridOf(g.get());
+  ASSERT_TRUE(grid.contains("zenith_nadir"));
+  const auto& z = grid.at("zenith_nadir");
+  EXPECT_TRUE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 11.5f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.35f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(2).get<float>(), 0.75f, 1e-5f);
+}
+
+TEST(SceneRenderZenithNadir, MissingKeyDecodesToCoreDefaultsNotZeros) {
+  // A document written before v4.19 carries no "grid.zenith_nadir". Decoding it must leave the
+  // struct on core's ZenithNadirParam defaults — off, but with radius 8 / opacity 0.6 /
+  // {0.8, 0.2, 0.2} — because that is what core's own parser leaves, and the two decoders are
+  // required to agree. Zeroing instead would be invisible while the marker is off and would
+  // produce an invisible marker the moment anything switched it on.
+  const std::string doc = SceneJsonWithMarkerBlock([](nlohmann::json& grid) { grid.erase("zenith_nadir"); });
+  ASSERT_EQ(doc.find("zenith_nadir"), std::string::npos) << "the fixture must actually omit the key";
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& z = RendererGridOf(scene).at("zenith_nadir");
+  EXPECT_FALSE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 8.0f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.6f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(0).get<float>(), 0.8f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(1).get<float>(), 0.2f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
+}
+
+TEST(SceneRenderZenithNadir, PartialObjectKeepsTheDefaultsItOmits) {
+  // The middle state between the two above: a document that switches the marker on and says
+  // nothing else must get the default appearance, not a zero-radius transparent black ring.
+  const std::string doc = SceneJsonWithMarkerBlock(
+      [](nlohmann::json& grid) { grid["zenith_nadir"] = nlohmann::json{ { "enabled", true } }; });
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(doc.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& z = RendererGridOf(scene).at("zenith_nadir");
+  EXPECT_TRUE(z.at("enabled").get<bool>());
+  EXPECT_NEAR(z.at("radius_px").get<float>(), 8.0f, 1e-5f);
+  EXPECT_NEAR(z.at("opacity").get<float>(), 0.6f, 1e-5f);
+  EXPECT_NEAR(z.at("color").at(0).get<float>(), 0.8f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
 }
 
 // =============== AC3: serialization negative paths (error code, never crash, *out == NULL) ===============

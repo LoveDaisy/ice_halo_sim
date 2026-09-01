@@ -11,6 +11,7 @@
 #include "config/color_class_table.hpp"
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
+#include "core/annotation_overlay.hpp"  // annotation::CanvasPoint (zenith_point_ / nadir_point_)
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
 
@@ -232,6 +233,11 @@ class RenderConsumer : public IConsume {
   const std::vector<std::vector<uint8_t>>& AngularDistMasksForTest() const { return angular_dist_masks_; }
   const std::vector<std::vector<uint8_t>>& ElevationMasksForTest() const { return elevation_masks_; }
   const std::vector<std::vector<uint8_t>>& LongitudeMasksForTest() const { return longitude_masks_; }
+  // The marker positions, for the tests that pin WHERE a ring lands and WHETHER one is drawn at
+  // all. Same rationale as the mask handles above: the alternative is inferring the point back out
+  // of the image, which is the thing under test.
+  const annotation::CanvasPoint& ZenithPointForTest() const { return zenith_point_; }
+  const annotation::CanvasPoint& NadirPointForTest() const { return nadir_point_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -318,6 +324,17 @@ class RenderConsumer : public IConsume {
   std::vector<std::vector<uint8_t>> longitude_masks_;
   std::vector<float> longitude_mask_angles_;
   bool longitude_masks_built_ = false;
+  // Where the zenith and the nadir land on the canvas, each with its own `valid`. Points, not
+  // masks: the marker is a ring of a radius the config names, so a whole W*H mask would encode
+  // the appearance too and would have to be rebuilt whenever the radius changed. PostSnapshot
+  // tests the two distances directly instead, which is O(1) per pixel.
+  //
+  // Built ONCE in the constructor, like visible_mask_ / horizon_mask_ and unlike the three mask
+  // families above: this geometry depends only on the layout (lens / fov / view / resolution /
+  // visible / overlap), every one of which NeedsRebuild pins for the consumer's whole life. The
+  // appearance fields it does NOT depend on are exactly the ones ResetWith can change.
+  annotation::CanvasPoint zenith_point_;
+  annotation::CanvasPoint nadir_point_;
   SunParam sun_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;

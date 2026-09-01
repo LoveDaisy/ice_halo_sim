@@ -92,6 +92,20 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
   horizon_mask_ = BuildHorizonMask(config_, rot_, short_pix_);
   RebuildAngularDistMasks();
   RebuildGridMasks();
+  // The zenith / nadir marker positions, once. Not gated on config_.zenith_nadir_.enabled_, and
+  // deliberately so: `enabled_` is an appearance field, so a config that turns the markers on
+  // mid-run arrives through ResetWith with no rebuild, and a position computed only for the flag's
+  // value at construction would be missing exactly when the user has just asked for it. Same
+  // argument the horizon mask's declaration makes, and the cost is far smaller — this request
+  // carries no angle list and no labels, so ComputeOverlay does the drawable sweep and two forward
+  // projections, not a level-set sweep per line.
+  {
+    annotation::Request req = MakeMaskRequest(config_);
+    req.zenith_nadir = true;
+    const annotation::Overlay overlay = annotation::ComputeOverlay(req);
+    zenith_point_ = overlay.zenith;
+    nadir_point_ = overlay.nadir;
+  }
 
   // task-339.3: allocate one W*H Y-lane per color class (compact by z-order).
   // Empty class table → no lane state, pre-336 zero heap allocations.
@@ -675,6 +689,26 @@ void RenderConsumer::PostSnapshot() {
   angular_dist_layers.reserve(angular_dist_masks_.size());
   collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
 
+  // The zenith / nadir ring markers, on top of everything else — the layer order the preview
+  // shader uses (overlayAuxLines draws them last). No mask: the ring is a circle of a
+  // config-named radius around a single point, so the per-pixel test is a distance comparison,
+  // which is cheaper than a W*H buffer that would have to be rebuilt whenever the radius moved.
+  //
+  // The OR is a coarse gate on entering the per-pixel work at all; each point's own `valid` is
+  // still tested individually below, because zenith and nadir are opposite world directions and
+  // any view that is not full-sky has one of them off the canvas.
+  const bool paint_marker = config_.zenith_nadir_.enabled_ && (zenith_point_.valid || nadir_point_.valid);
+  const float marker_alpha = std::clamp(config_.zenith_nadir_.opacity_, 0.0f, 1.0f);
+  const float marker_radius_px = config_.zenith_nadir_.radius_px_;
+  // Half the ring's thickness. The same 1.5 px the level-set mask generator lands on for a field
+  // that changes by one unit per pixel (LevelSetMaskFromField: clamp(|grad|, 1e-4, 2) * 1.5), and
+  // the distance to a fixed point IS such a field — its gradient is a unit vector everywhere. Not
+  // a separately chosen number: the markers are the same thickness as every other annotation.
+  constexpr float kMarkerHalfWidthPx = 1.5f;
+  float marker_rgb[3]{ 0.0f, 0.0f, 0.0f };
+  SrgbToLinearRgb(config_.zenith_nadir_.color_, marker_rgb);
+  const int width_px = config_.resolution_[0];
+
   // One pass per pixel, intermediates kept in registers. This used to be four
   // full-buffer passes (memcpy into a work buffer → scale → color transform →
   // LinearToSrgbBatch → narrow), which existed only because each pass needed a
@@ -727,6 +761,23 @@ void RenderConsumer::PostSnapshot() {
     // masked pixel goes through the identical chain with a zero background.
     const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
     const bool paint_outline = paint_outline_layer && horizon_mask_[i] != 0;
+    // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
+    // pixel's coordinates are recovered inside the guard so the default (markers off) path pays
+    // for neither the division nor the modulo.
+    bool on_zenith_ring = false;
+    bool on_nadir_ring = false;
+    if (paint_marker) {
+      const auto px = static_cast<float>(i % width_px);
+      const auto py = static_cast<float>(i / width_px);
+      const auto on_ring = [&](const annotation::CanvasPoint& p) {
+        // `valid` first, and per point: a default-constructed CanvasPoint sits at (0, 0), so a
+        // point that missed the canvas would otherwise draw a ring in the corner for a direction
+        // the picture does not contain.
+        return p.valid && std::fabs(std::hypot(px - p.px, py - p.py) - marker_radius_px) < kMarkerHalfWidthPx;
+      };
+      on_zenith_ring = on_ring(zenith_point_);
+      on_nadir_ring = on_ring(nadir_point_);
+    }
     for (int j = 0; j < 3; j++) {
       if (paint_bg) {
         rgb[j] += config_.background_[j];
@@ -749,6 +800,14 @@ void RenderConsumer::PostSnapshot() {
       }
       if (paint_outline) {
         rgb[j] = rgb[j] * (1.0f - kOutlineAlpha) + outline_rgb[j] * kOutlineAlpha;
+      }
+      // Two independent blends rather than one on the union, matching the shader: where the two
+      // rings overlap it composites both, and so does this.
+      if (on_zenith_ring) {
+        rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_rgb[j] * marker_alpha;
+      }
+      if (on_nadir_ring) {
+        rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_rgb[j] * marker_alpha;
       }
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       rgb[j] = LinearToSrgb(rgb[j]);

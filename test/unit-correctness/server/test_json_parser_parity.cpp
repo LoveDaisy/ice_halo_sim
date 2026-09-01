@@ -830,6 +830,59 @@ TEST(JsonParserParity, GridLongitudeOmittedLeavesBothParsersEmpty) {
   EXPECT_TRUE(p.core.renderers_.begin()->second.longitude_grid_.empty());
 }
 
+// --- render.grid.zenith_nadir: the marker block (v4.19) ---
+//
+// Structurally blind in the corpus for the same reason grid.longitude is — no shipped config
+// carries the key. What makes this block need MORE than the "present" / "absent" pair those get is
+// that its three appearance fields default to NON-ZERO values, so there are three states to
+// separate rather than two, and only one of them (the object written out in full) is covered by a
+// decoder that merely remembers to read the key.
+
+TEST(JsonParserParity, GridZenithNadirSurvivesBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "zenith_nadir": { "enabled": true, "radius_px": 14.0, "opacity": 0.25,
+                             "color": [0.1, 0.7, 0.9] } })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.zenith_nadir_.enabled_);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.radius_px_, 14.0f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.opacity_, 0.25f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.color_[1], 0.7f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridZenithNadirPartialObjectAgreesOnTheOmittedDefaults) {
+  // The state the "present" / "absent" pair cannot reach: the key exists, switches the marker on,
+  // and says nothing about the appearance. Core's from_json leaves its member defaults (8 px, 0.6,
+  // {0.8, 0.2, 0.2}); a C API decoder that reset the struct first would answer 0 / 0 / black, and
+  // a config would then render differently depending on which parser read it.
+  const std::string text = WrapRenderWithGrid(R"({ "zenith_nadir": { "enabled": true } })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  EXPECT_TRUE(renderer.zenith_nadir_.enabled_);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.radius_px_, 8.0f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.opacity_, 0.6f);
+  EXPECT_FLOAT_EQ(renderer.zenith_nadir_.color_[0], 0.8f);
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridZenithNadirOmittedLeavesBothParsersOnTheDefaults) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const lumice::ZenithNadirParam kDefaults;
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.zenith_nadir_ == kDefaults);
+  EXPECT_TRUE(p.core.renderers_.begin()->second.zenith_nadir_ == kDefaults);
+}
+
 // --- render.background: sRGB on the wire, linear in the struct ---
 //
 // The JSON key is authored in sRGB; both parsers convert to linear on decode and back on encode.

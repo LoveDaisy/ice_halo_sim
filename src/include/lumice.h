@@ -98,7 +98,20 @@ extern "C" {
 // the CLI renderer, where every version since it was introduced parsed and round-tripped it while
 // drawing nothing. A config that already carried grid.elevation entries renders differently under
 // v4.18. As with angular_dist, `width` is still not honored; `value`, `opacity` and `color` are.
-#define LUMICE_API_VERSION 418
+//
+// BREAKING (v4.19): LUMICE_RenderParam gains a trailing block of four fields, `zenith_nadir` /
+// `zenith_nadir_radius_px` / `zenith_nadir_opacity` / `zenith_nadir_color` — the pixel-space ring
+// markers at the zenith and the nadir. They are APPENDED after ev_mode, so every existing field
+// keeps its offset while sizeof() grows; a caller that was NOT recompiled hands the API a shorter
+// struct and the new fields are read past the end of it. Recompile against this header. The JSON
+// key is "grid.zenith_nadir", an object rather than a list because the two markers are one control
+// (one switch, one colour, one radius) and neither of them is a line with a value.
+// Note the accompanying BEHAVIOR change, which has no ABI half: the CLI renderer now DRAWS these
+// markers, and the GUI preview stops computing their screen position with its own duplicate
+// projection (preview_renderer.cpp ProjectWorldDirToScreen) and reads
+// LUMICE_ComputeAnnotationOverlay's zenith_px/py instead — so both drawers now take their geometry
+// from one place, as angular_dist and the two grid families already do.
+#define LUMICE_API_VERSION 419
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -804,6 +817,25 @@ typedef struct LUMICE_RenderParam_ {
   // zero-initialized param keeps the documented default rather than silently opting into the
   // absolute anchor.
   int ev_mode;
+  // ADDED (v4.19). The zenith / nadir ring markers. Non-zero `zenith_nadir` = draw them; opt-in for
+  // the same reason `horizon` is, so a zero-initialized struct asks for no annotation.
+  //
+  // APPEARANCE ONLY. WHERE the rings land comes from LUMICE_ComputeAnnotationOverlay's
+  // zenith_px/zenith_py/nadir_px/nadir_py, which is also what the GUI preview reads: this struct
+  // carries no position, and there is nothing here for a consumer to project.
+  //
+  // One block for the PAIR, not one per marker: the GUI has a single switch, colour picker and
+  // radius slider for both, and core's ZenithNadirParam mirrors that. `zenith_nadir_color` is
+  // sRGB, the convention LUMICE_GridLine.color uses and `background` does not.
+  //
+  // WARNING: unlike `horizon`, the three appearance fields have NON-ZERO defaults on the JSON side
+  // (radius 8 px, opacity 0.6, colour {0.8, 0.2, 0.2} — core's ZenithNadirParam). A
+  // zero-initialized struct with `zenith_nadir` set and nothing else asks for a zero-radius,
+  // fully transparent, black ring, i.e. no visible marker. Set all four, or go through JSON.
+  int zenith_nadir;
+  float zenith_nadir_radius_px;
+  float zenith_nadir_opacity;
+  float zenith_nadir_color[3];
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

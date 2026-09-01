@@ -293,4 +293,86 @@ TEST(RenderConfigLongitudeGridTest, OperatorEq_ComparesLongitudeGrid) {
   EXPECT_FALSE(a == b);
 }
 
+// The zenith / nadir marker block (v4.19). Held to the same properties the line families are, plus
+// the one that is only true of THIS field: its appearance defaults are non-zero, so "missing key"
+// and "zero-initialized" are different states and a decoder that conflates them is wrong.
+TEST(RenderConfigZenithNadirTest, ToJson_EmitsUnderTheGridZenithNadirKey) {
+  auto cfg = MakeBaseline();
+  cfg.zenith_nadir_.enabled_ = true;
+  cfg.zenith_nadir_.radius_px_ = 14.0f;
+  cfg.zenith_nadir_.opacity_ = 0.25f;
+  cfg.zenith_nadir_.color_[0] = 0.1f;
+  cfg.zenith_nadir_.color_[1] = 0.7f;
+  cfg.zenith_nadir_.color_[2] = 0.9f;
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("zenith_nadir"));
+  const auto& z = j["grid"]["zenith_nadir"];
+  EXPECT_TRUE(z["enabled"].get<bool>());
+  EXPECT_NEAR(z["radius_px"].get<float>(), 14.0f, 1e-5f);
+  EXPECT_NEAR(z["opacity"].get<float>(), 0.25f, 1e-5f);
+  EXPECT_NEAR(z["color"][1].get<float>(), 0.7f, 1e-5f);
+
+  lumice::ZenithNadirParam back;
+  z.get_to(back);
+  EXPECT_TRUE(back == cfg.zenith_nadir_);
+}
+
+TEST(RenderConfigZenithNadirTest, DefaultIsOffWithTheGuiAppearanceValues) {
+  const lumice::ZenithNadirParam z;
+  // Opt-in, like horizon_: a config that predates the field must not gain a marker.
+  EXPECT_FALSE(z.enabled_);
+  // The three appearance values are the GUI control's own defaults, and they are NOT zero — which
+  // is why the C API decoder seeds them from this struct rather than relying on value-init.
+  EXPECT_NEAR(z.radius_px_, 8.0f, 1e-5f);
+  EXPECT_NEAR(z.opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(z.color_[0], 0.8f, 1e-5f);
+  EXPECT_NEAR(z.color_[1], 0.2f, 1e-5f);
+  EXPECT_NEAR(z.color_[2], 0.2f, 1e-5f);
+}
+
+TEST(RenderConfigZenithNadirTest, FromJson_PartialObjectKeepsTheMemberDefaults) {
+  // The middle case between "no key" and "every key": whatever the object omits keeps the struct's
+  // own default, not a zero. A decoder that resets the struct before reading turns a document that
+  // only says `{"enabled": true}` into an invisible marker (radius 0, alpha 0, black).
+  lumice::ZenithNadirParam z;
+  const nlohmann::json j = nlohmann::json::parse(R"({ "enabled": true })");
+  j.get_to(z);
+  EXPECT_TRUE(z.enabled_);
+  EXPECT_NEAR(z.radius_px_, 8.0f, 1e-5f);
+  EXPECT_NEAR(z.opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(z.color_[0], 0.8f, 1e-5f);
+}
+
+TEST(RenderConfigZenithNadirTest, OperatorEq_ComparesEveryField) {
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  EXPECT_TRUE(a == b);
+  b.zenith_nadir_.enabled_ = true;
+  EXPECT_FALSE(a == b);
+  b = MakeBaseline();
+  b.zenith_nadir_.radius_px_ = 3.0f;
+  EXPECT_FALSE(a == b) << "the radius is part of the config's identity, not a display-only extra";
+  b = MakeBaseline();
+  b.zenith_nadir_.opacity_ = 0.1f;
+  EXPECT_FALSE(a == b);
+  b = MakeBaseline();
+  b.zenith_nadir_.color_[2] = 0.5f;
+  EXPECT_FALSE(a == b);
+}
+
+TEST(RenderConfigZenithNadirTest, NeedsRebuild_TreatsTheMarkerAsAppearance) {
+  // Every field of this block is appearance: none of them changes which pixel images which
+  // direction, so a consumer must be REUSED across the change (ResetWith), not rebuilt.
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  b.zenith_nadir_.enabled_ = true;
+  b.zenith_nadir_.radius_px_ = 20.0f;
+  b.zenith_nadir_.opacity_ = 0.9f;
+  b.zenith_nadir_.color_[0] = 0.0f;
+  EXPECT_FALSE(lumice::NeedsRebuild(a, b));
+}
+
 }  // namespace

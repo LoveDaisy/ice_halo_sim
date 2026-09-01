@@ -27,6 +27,27 @@ struct GridLineParam {
 void to_json(nlohmann::json& j, const GridLineParam& l);
 void from_json(const nlohmann::json& j, GridLineParam& l);
 
+// The zenith / nadir pair, drawn as a pixel-space ring around wherever those two world directions
+// land on the canvas. Appearance only: WHERE the rings go comes from annotation::ComputeOverlay's
+// zenith / nadir CanvasPoints, which is why this struct carries no angle the way GridLineParam
+// does — the two directions are fixed, so there is nothing per-line to name.
+//
+// One struct for both markers, not two: the GUI has a single switch, a single colour picker and a
+// single radius slider for the pair (gui_state.hpp show_zenith_nadir_line / zenith_nadir_color /
+// zenith_nadir_alpha / zenith_nadir_radius_px), and the defaults below are that control's.
+//
+// `color_` is sRGB, like GridLineParam::color_ and unlike RenderConfig::background_ — the consumer
+// converts once at the blend, which is where the linear domain begins.
+struct ZenithNadirParam {
+  bool enabled_ = false;
+  float radius_px_ = 8.0f;
+  float opacity_ = 0.6f;
+  float color_[3]{ 0.8f, 0.2f, 0.2f };
+};
+
+void to_json(nlohmann::json& j, const ZenithNadirParam& z);
+void from_json(const nlohmann::json& j, ZenithNadirParam& z);
+
 struct LensParam {
   enum LensType {
     kLinear,
@@ -119,6 +140,9 @@ struct RenderConfig {
   // no `grid.outline` key at all). Turning an annotation on for every render is a product decision
   // nobody has made, so the default states the one thing that is certain: draw it when asked.
   bool horizon_ = false;
+  // The zenith / nadir ring markers. Opt-in for the same reason horizon_ is: an annotation nobody
+  // asked for must not appear in a config that predates the field.
+  ZenithNadirParam zenith_nadir_;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare
