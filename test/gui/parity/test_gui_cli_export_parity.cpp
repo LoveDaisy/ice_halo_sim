@@ -38,6 +38,11 @@
 // scene lands at when that one field is broken single-sided in the export arm (and only there),
 // against a threshold of 25.5 / 26.0 dB. They are what says this gate can actually see the field.
 //
+// Two of the three scenes appear here. The third, `single_lens_rectilinear`, is not a field-
+// coverage column: it holds the same view fields as `single_lens_angled` on purpose, and what it
+// adds is the PROJECTION FAMILY axis described further down — it is the scene that can see the
+// preview shader's relative-illumination factor, which neither equal-area column can.
+//
 //   field          | single_lens_angled       | broken | full_sky_dual_fisheye     | broken
 //   ---------------|-------------------------|--------|---------------------------|--------
 //   lens_type      | fisheye_equal_area      |  13.31 | dual_fisheye_equal_area   |   n/a
@@ -181,20 +186,32 @@ struct ParityScene {
 // nothing else: it is stable run to run (sigma below), so it lowers the operating point without
 // touching the gate's ability to see a field break, which the table above measures directly.
 //
-// PROJECTION FAMILY. Both scenes use an EQUAL-AREA projection, and that is load-bearing. The CLI
-// renders its lens directly, so each pixel accumulates energy over its own solid angle and the
-// projection's Jacobian is baked into the image; the GUI resamples an equal-area texture, where
-// every texel subtends the same solid angle, and applies no Jacobian. For an equal-area lens the
-// two agree up to a constant. For anything else they do not: a rectilinear scene measured a
-// GUI/CLI brightness ratio of 0.79 at frame centre against 1.35 at the edges — the cos^3 natural
-// vignetting of that projection, present on one side only. A non-equal-area scene added here would
-// be measuring that, not the fields above.
+// PROJECTION FAMILY. Two of the three scenes use an EQUAL-AREA projection and the third does not,
+// and the split is load-bearing in both directions. The CLI renders its lens directly, so each
+// pixel accumulates energy over its own solid angle and the projection's Jacobian is baked into
+// the image; the GUI resamples an equal-area texture, where every texel subtends the same solid
+// angle. For an equal-area lens the target Jacobian is spatially constant and the two agree up to
+// a constant whatever the shader does. For anything else they do not agree unless the shader
+// applies the target lens's RELATIVE ILLUMINATION — its per-pixel solid angle normalized to the
+// on-axis one. Before that factor existed, a rectilinear scene measured a GUI/CLI brightness ratio
+// of 0.79 at frame centre against 1.35 at the edges — the cos^3 natural vignetting of that
+// projection, present on one side only. `single_lens_rectilinear` below is the scene that turns
+// that into a red, and it
+// is why the two equal-area scenes are no longer the whole story: they cannot see the factor at all
+// (their relative illumination is identically 1), so on their own they would let it be deleted.
 //
-// SINGLE-LENS FOV BOUND. The single-lens scene's fov is bounded by the frame's corner: the shader
-// keeps inverting past the image circle while core stops, so the corner direction must stay inside
-// the domain both agree on. For an equal-area lens on a 4:3 frame the corner sits at 1.665 image
-// radii, i.e. sin(theta_c/2) = 1.665 * sin(fov/4), and theta_c <= 90 degrees needs fov <= 100.
-// At 96 the measured disagreement is zero pixels either way; at 150 it is 25% of the frame.
+// SINGLE-LENS FOV BOUND. The single-lens EQUAL-AREA scene's fov is bounded by the frame's corner:
+// the shader keeps inverting past the image circle while core stops, so the corner direction must
+// stay inside the domain both agree on. For an equal-area lens on a 4:3 frame the corner sits at
+// 1.665 image radii, i.e. sin(theta_c/2) = 1.665 * sin(fov/4), and theta_c <= 90 degrees needs
+// fov <= 100. At 96 the measured disagreement is zero pixels either way; at 150 it is 25% of the
+// frame.
+//
+// The bound does not bind on the RECTILINEAR scene, and for a structural reason rather than a
+// lucky number: that projection maps the image radius through theta = atan(rho / focal), which is
+// strictly below 90 degrees at every finite radius. There is no image circle to invert past, so no
+// fov below 180 can put the corner outside the shared domain. Re-derive this if the lens is ever
+// changed; do not carry the sentence over.
 //
 // THRESHOLDS. Calibrated, not chosen: N=12 full runs of this category on an otherwise idle
 // machine, per-scene mean and population sigma recorded on each row. Sigma is an order of
@@ -222,6 +239,28 @@ const ParityScene kScenes[] = {
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/1024, /*expect_h=*/512},
+  // The projection-family scene. Every field except lens_type and fov is copied verbatim from
+  // single_lens_angled, so the difference between the two rows is the projection and nothing else
+  // — which is what makes a drop here readable as the Jacobian rather than as some other field.
+  //
+  // fov 120 rather than the 160 the original measurement used. Both are inside the shared domain
+  // (see the note above), and both show the effect; 120 was chosen because it puts the frame
+  // corner at theta = 70.9 degrees, where the cos^3 relative illumination is 0.035 — a 28x
+  // corner-to-centre spread, decisive as a red without pushing the corners so far into the
+  // grazing region that the comparison is dominated by resampling the source texture's equator.
+  //
+  // mean 33.157 sigma 0.1400 (N=13, range 32.83-33.34). Threshold 31.5 = mean - 1.66 dB = 12
+  // sigma, and 1.33 dB below the worst honest run. Placed well below mean - 1.0 dB, and not by
+  // preference: this scene's sigma is the largest of the three, and the note above requires at
+  // least 10 sigma, which 32.0 (9.3 sigma once the thirteenth sample widened the spread) did not
+  // reach. It costs nothing to give it, because the break this row exists to catch is enormous:
+  // with the relative-illumination factor absent from the shader — the state the row was landed
+  // in and measured at — it reads 26.44, 26.40 and 26.28 dB, 5.2 dB below this threshold.
+  {"single_lens_rectilinear",
+   lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
+   /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
+   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.5, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the

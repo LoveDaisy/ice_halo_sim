@@ -140,30 +140,54 @@ struct LensProjScene {
 // in test_gui_shared.hpp before changing any of them.
 //
 // References are pixel-averaged means of N=10 runs; thresholds come from
-// scripts/regen_gui_test_refs.py --group lens_proj (Phase B over 30 full-suite runs), with the
-// sampled mean/σ recorded per scene in test/gui/references/_thresholds.json and repeated inline
-// below. The driver's rule is mean − max(4σ, 1.0 dB) floored to 0.5 dB, and on every scene here
+// scripts/regen_gui_test_refs.py --group lens_proj (Phase B over 30 full-suite runs, except the
+// three noted below), with the sampled mean/σ recorded per scene in
+// test/gui/references/_thresholds.json and repeated inline below. The driver's rule is mean − max(4σ, 1.0 dB) floored to 0.5 dB, and on every scene here
 // the 1.0 dB floor is what binds: the largest σ measured is ~0.11 dB, so 4σ never reaches it and
 // each threshold sits 10σ or more below its mean. Read a red result accordingly — at that
 // distance it is not run-to-run noise.
+// THREE ROWS CARRY (N=10) AND A DIFFERENT REFERENCE VINTAGE: linear, fisheye_orthographic_180
+// and rectangular. Those are exactly the group's NON-EQUAL-AREA projections, and they were
+// re-shot when the preview shader gained the target lens's relative illumination — its per-pixel
+// solid angle normalized on axis, which the CLI has always had baked in and the GUI had not (see
+// doc/ev-pipeline-architecture.md §7.5, src/gui/preview_jacobian.hpp). Their pixels changed by
+// construction: measured against the previous references, the new captures fall off toward the
+// frame edge on linear (ratio 0.973 at the centre against 0.422 at 1.3 image radii), brighten
+// toward the rim on orthographic (1.05 to 1.74), and darken toward the poles on rectangular
+// (0.999 to 0.62) — the natural vignetting of cos^3, 1/cos and cos(lat) respectively.
+//
+// The other six rows were NOT re-shot, and that is a claim with evidence rather than an omission.
+// Every equal-area branch's relative illumination is exactly 1, so those frames are unchanged
+// bit-for-bit; the same measurement over fisheye_equal_area_120 finds 0.991 to 1.013 with no
+// spatial trend at all, which is the run-to-run noise of a single capture against a 10-run mean.
+// Re-shooting them would have replaced a 30-sample calibration with a 10-sample one and swapped
+// one noise realization for another, for no change in what is being pinned. So their references,
+// their thresholds and their (N=30) provenance stand.
+//
+// The three that did move were calibrated at N=10 rather than 30, deliberately. The driver's rule
+// is mean − max(4σ, 1.0 dB), and on this group the 1.0 dB floor binds for every scene, so the
+// sample size reaches the threshold only through the mean — determined here to ±0.03 dB, well
+// inside the rule's own 0.5 dB quantization. The invariant that matters is unaffected either way:
+// a floored mean − 1.0 dB always leaves at least 1.0 dB of margin, which on these sigmas is 10σ
+// or more. Twenty more full-suite runs could have moved a threshold by at most one 0.5 dB step.
 static const LensProjScene kScenes[] = {
   // mean 20.030 σ0.1040
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 20.841 σ0.0765
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.4f,
+  // mean 19.033 σ0.0799 (N=10)
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean 19.473 σ0.1138
+  // mean 21.749 σ0.1033 (N=10)
   // fov=90 matches the Linear entry in kSingleLens[] (test_render_handedness_guard.cpp), so a
   // suspected linearInverse regression can be cross-read against that deterministic sign pin
   // at the same focal length.
-  {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.0,  0.4f,
+  {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeLinear,              90.0f, 20.0f},
   // mean 27.666 σ0.0827
   {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
    LensSetup::kDualFisheyeExport},
-  // mean 26.540 σ0.0487
-  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5,  5.0f,
+  // mean 28.562 σ0.0591 (N=10)
+  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.5,  5.0f,
    LensSetup::kEquirectExport},
   // mean 21.333 σ0.0939
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the

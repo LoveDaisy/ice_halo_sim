@@ -699,6 +699,11 @@ If a future need requires true radiance (per-pixel `Ω_p` division) or cross-len
 comparability, treat it as new scope with its own AC on image-appearance regression,
 not as a follow-up to this feature.
 
+Do not read point 1 as "per-pixel `Ω_p` has been ruled out everywhere". It rules out
+*dividing core's pixels by it*. The GUI preview had the opposite defect — it carried no
+`Ω_p` at all — and now multiplies one in, which reaches the same camera semantics from
+the other side. See §7.5.
+
 ### §7.4 Undersampling Darkens Regardless of Denominator — This Is Not a Defect
 
 §7.2 and §7.3 are about a **spatial** dimension: `landed_fraction` differs by lens,
@@ -734,6 +739,83 @@ exposes a fact that was always there and that `kRelative` happens to compensate 
 — it is not a defect introduced by `kAbsolute`.** Do not "fix" it by adding an
 N-dependent term to `kAbsolute`'s formula; that would just rebuild `kRelative`'s
 self-anchor under a different name and defeat the reason `kAbsolute` exists.
+
+### §7.5 The GUI Preview's Relative Illumination — the Same Ω_p, Multiplied Rather Than Divided
+
+§7.3 rules out dividing core's pixels by their own `Ω_p`. This section is about the GUI preview
+multiplying by it, which sounds like the same subject and is its exact opposite, so the relationship
+is stated here rather than left to be re-derived.
+
+**The two sides were producing different quantities.** The CLI bins each ray into the pixel it lands
+on, so a pixel accumulates the energy arriving over its own solid angle: `∫_{Ω_p} L dω ≈ L · Ω_p`.
+That is camera semantics, it is what a camera pixel actually collects, and §7.3 keeps it that way.
+The GUI preview does not image a scene at all — it resamples the dual equal-area all-sky texture
+core produced, where every texel subtends the same solid angle, so a screen pixel carried `L` with
+no `Ω_p` in it. For an equal-area target lens `Ω_p` is spatially constant and the two agreed up to a
+constant nobody could see; for anything else they did not. Measured on a rectilinear lens at fov
+160 on a 512×683 canvas: a GUI/CLI block-brightness ratio of 0.79 at the frame centre against 1.35
+at the edges — the `cos³θ` natural vignetting of that projection, present on one side only.
+
+**So the fix is on the GUI side, and it is a multiplication.** `src/gui/preview_renderer.cpp`'s
+fragment shader now multiplies each sampled texel by the target lens's
+**relative illumination** before the exposure scale reaches it; `src/gui/preview_jacobian.hpp` is
+the CPU mirror, carrying the closed form and the derivation for every branch, and
+`test/unit-correctness/gui/test_preview_jacobian.cpp` holds those closed forms to a numerically
+rebuilt Jacobian rather than to the GLSL twin.
+
+**This does not reopen §7.3, and the direction is why.** §7.3 refuses to *divide* core's pixels by
+`Ω_p`, because that would strip the camera semantics out of the CLI's output and leave a radiance
+map. This change *multiplies* the GUI's pixels by it, so that the GUI arrives at the camera
+semantics the CLI already has. Both statements say the same thing — an image of this scene should
+carry `Ω_p` — and neither weakens the `landed_fraction` boundary §7.2 and §7.3 draw. A GUI preview
+and a CLI render remain comparable only within one document and one run; nothing here promises
+comparability across lenses or across documents.
+
+**What is multiplied is normalized on axis, and that is the load-bearing choice.** The factor is
+
+```
+m(pos) = Ω_p(pos) / Ω_p(on axis)
+```
+
+— the projection's relative illumination, dimensionless and 1 at the frame centre — and NOT the
+absolute ratio `Ω_p / Ω_texel_source`. The reason is mechanical. Both sides self-anchor their
+exposure, and on different images: the GUI's relative-EV denominator is a P99 over the **source
+texture** (`src/gui/server_poller.cpp`'s `LUMICE_ComputeP99Y`, taken before any reprojection), the
+CLI's is a P99 over its **own already-Jacobian-baked render** (`RenderConsumer::ExposureScale`,
+`src/server/render.cpp`). Writing both chains out, the GUI displays `L / P99_sky(L)` and the CLI
+displays `L · Ω_p / P99_frame(L · Ω_p)`: the *scale* of `Ω_p` cancels on the CLI side against its
+own anchor, and only its *shape* was ever missing. Multiplying by the absolute ratio would therefore
+not restore agreement — it would add a second, uncorrelated global gain whose physical content is
+the preview canvas's angular resolution, which is a display choice. Measured: that gain is 0.331 for
+an equal-area fisheye at fov 96 on 512×683 (the GUI would go three times too dark) and 16 for a
+rectilinear lens at fov 160 on the same canvas (sixteen times too bright, i.e. clipped). It would
+have turned two green parity scenes red to fix a third.
+
+**What this means for `kAbsolute`.** `kAbsolute` does not re-derive its anchor per frame, so
+whatever the shader multiplies in lands directly in absolute brightness. Normalizing on axis decides
+the answer: **the centre of the frame is unchanged at every FOV and for every lens, and what appears
+is the vignetting shape alone.** Narrowing the FOV therefore does not darken the picture.
+
+That is deliberate, and it is the second place §7.3's boundary does the work. One might expect the
+opposite — a narrower field collects less light, so absolute brightness should fall — but the GUI's
+`kAbsolute` denominator normalizes by the **source texture's** pixel count
+(`g_preview.GetTextureWidth() * GetTextureHeight()`, `src/gui/app.cpp`) while the CLI's normalizes
+by its **own canvas's** (`total_pix`, §2.3). Absolute brightness is therefore already not a per-lens
+physical quantity on the GUI side, which is precisely the cross-lens boundary §7.3 declares
+permanent. An absolute `Ω_p` would not have repaired that; it would have replaced one lens-dependent
+gain with another and broken relative mode — the default, and the mode every committed reference
+image is captured in — on the way. `test/unit-correctness/gui/test_preview_jacobian.cpp` asserts
+both halves of this: unity on axis for every lens and FOV, and a corner that darkens monotonically
+as the FOV widens.
+
+**Known boundary, stated rather than left to be discovered.** The factor is applied only in XYZ
+mode. A document loaded from a `.lmc` renders from an 8-bit texture that
+`LUMICE_XyzToSrgbUint8WithBackground` has already composited the sky colour into, and vignetting
+that would dim the **background** too — which neither the CLI nor the live path does, the sky
+joining after the exposure. The composite cannot be undone from the shader, so a loaded `.lmc` shows
+a non-equal-area projection without its vignetting. Equal-area projections are unaffected either
+way: their factor is exactly 1.
+
 
 ---
 

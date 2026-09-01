@@ -106,6 +106,10 @@ add_executable(unit_correctness_test
   # Same reason as the line above: mono_exposure_scale.hpp is header-only and ImGui-free, so its
   # cases belong to the target that does not link lumice_gui_obj.
   "${PROJ_TEST_DIR}/unit-correctness/gui/test_mono_exposure_scale.cpp"
+  # Same reason again: preview_jacobian.hpp is header-only and ImGui-free. Its subject is the
+  # preview shader's relative-illumination factor, and the oracle it is held to is a numerical
+  # Jacobian rather than the GLSL twin, so the case needs no GL context of any kind.
+  "${PROJ_TEST_DIR}/unit-correctness/gui/test_preview_jacobian.cpp"
   # User-defaults eligibility resolver + platform config-dir helpers. Both are header-only, so
   # they link against lumice_obj alone. The half that calls file_io.cpp needs lumice_gui_obj and
   # therefore lives in a different target of this same layer — gui_unit_test, defined at the

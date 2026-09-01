@@ -35,6 +35,7 @@
 
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/gui_constants.hpp"
+#include "gui/preview_jacobian.hpp"
 #include "test_gui_shared.hpp"
 #include "util/color_space.hpp"
 
@@ -462,6 +463,17 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
   // against a bake that converts and then interpolates — a real difference in texture filtering,
   // not in the colour chain, which is what this case is about. The mapping from screen to texel is
   // covered by the gate cases above and by test_gui_lens_projection.cpp.
+  //
+  // The lens is EQUAL-AREA, and that is now load-bearing rather than incidental. The XYZ branch
+  // multiplies each sample by the target lens's relative illumination — its per-pixel solid angle
+  // normalized on axis, so that the preview carries the projection's natural vignetting the way a
+  // CLI render does (src/gui/preview_jacobian.hpp, doc/ev-pipeline-architecture.md §7.5). The 8-bit
+  // branch cannot: its texels were already clipped to [0,1] and already have the sky composited
+  // into them, so neither the halo term nor the sky term can be recovered to scale one and not the
+  // other. On an equal-area projection that factor is exactly 1 on both sides and this case
+  // measures the colour chain alone, which is what it owns. On any other it would measure the
+  // projection instead — and the case below pins that divergence directly, so moving this one here
+  // hides nothing.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_background", "the_baked_document_matches_the_shader");
     t->GuiFunc = PreviewBackgroundGuiFunc;
@@ -484,8 +496,9 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
         { { 0.40f, 0.42f, 0.45f }, 4.0f, "clipped white" },
       };
 
-      // Same geometry for both halves of every pair: a linear lens at fov=90 images the whole
-      // frame, so the probes below are inside the gate and the only thing differing between the
+      // Same geometry for both halves of every pair: an equal-area fisheye at fov=180 on a 256px
+      // frame has an image radius of 128 px and a domain that reaches sqrt(2) of it, so all three
+      // probes (r = 0, 89 and 114 px) are inside the gate and the only thing differing between the
       // two renders is which implementation produced the colour.
       const float kProbes[][2] = { { 0.0f, 0.0f }, { -80.0f, 40.0f }, { 90.0f, -70.0f } };
 
@@ -494,8 +507,8 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
           g_req.Reset();
           g_req.canvas_w = 256;
           g_req.canvas_h = 256;
-          g_req.lens_type = gui::kLensTypeLinear;
-          g_req.fov = 90.0f;
+          g_req.lens_type = gui::kLensTypeFisheyeEqualArea;
+          g_req.fov = 180.0f;
           std::copy(std::begin(field.xyz), std::end(field.xyz), std::begin(g_req.uniform_xyz));
           g_req.intensity_scale = field.intensity_scale;
           g_req.bake_on_cpu = bake;
@@ -529,6 +542,107 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
           }
         }
       }
+    };
+  }
+
+  // The second declared, deliberate disagreement in this file, and the one that only exists on a
+  // NON-equal-area projection: a document reloaded from a .lmc does not carry the projection's
+  // natural vignetting, and the live view of the same document does.
+  //
+  // The mechanism. The XYZ branch multiplies each sample by the target lens's relative illumination
+  // before the exposure scale reaches it, so the preview collects energy per pixel the way a CLI
+  // render does. The 8-bit branch — a document loaded from disk, whose texels came out of
+  // LUMICE_XyzToSrgbUint8WithBackground — cannot do the same, and the reason is not effort. Those
+  // texels are the sum of the halo and the sky, clamped to [0, 1] and quantized. Scaling them
+  // scales the sky too, which neither the CLI nor the live path does; and adding the sky back at
+  // (1 - m) would be exact only where the bake did not clip, which is precisely where a halo image
+  // is brightest. A frozen 8-bit snapshot cannot be re-exposed after the fact.
+  //
+  // So the divergence is a property of the .lmc format, not a defect to be fixed here, and NEITHER
+  // SIDE may be quietly changed to match the other. What this case does is state the relationship
+  // exactly rather than approximately, so that any change to either branch lands as a red:
+  //
+  //     shader_linear = (bake_linear - sky) * m + sky
+  //
+  // which is an identity as long as the gamut clip is inactive — hence the single dim, in-gamut
+  // field. m comes from src/gui/preview_jacobian.hpp, the CPU mirror of the GLSL the shader runs,
+  // so this is also the one place the two mirrors are compared against each other. (What says the
+  // formula itself is right is test/unit-correctness/gui/test_preview_jacobian.cpp, which holds it
+  // to a numerically rebuilt Jacobian instead.)
+  //
+  // Three probes on a linear lens at fov=90, 256x256, focal = 128 px: r = 0 (m = 1, a positive
+  // control that says the two branches still agree where the factor is the identity), r = 89 px
+  // (m = 0.61) and r = 114 px (m = 0.42). Without the first, "the two disagree" would also pass on
+  // a shader that had simply gone dark.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_background", "the_baked_document_lacks_the_projection_vignetting");
+    t->GuiFunc = PreviewBackgroundGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Dim and in gamut on purpose: the identity above holds only where the bake did not clip.
+      const float kField[3] = { 0.09f, 0.08f, 0.11f };
+      auto render = [&](bool bake) {
+        g_req.Reset();
+        g_req.canvas_w = 256;
+        g_req.canvas_h = 256;
+        g_req.lens_type = gui::kLensTypeLinear;
+        g_req.fov = 90.0f;
+        std::copy(std::begin(kField), std::end(kField), std::begin(g_req.uniform_xyz));
+        g_req.bake_on_cpu = bake;
+        RenderFrame(ctx);
+        return g_req.rgba;
+      };
+      const std::vector<unsigned char> shader_frame = render(false);
+      const std::vector<unsigned char> baked_frame = render(true);
+      IM_CHECK(!shader_frame.empty());
+      IM_CHECK(!baked_frame.empty());
+
+      const float sky_srgb[3] = { kSkyR, kSkyG, kSkyB };
+      float sky_linear[3];
+      lumice::SrgbToLinearRgb(sky_srgb, sky_linear);
+
+      // focal for a linear lens on a square 256px frame at fov=90: short_edge/2 / tan(45 deg).
+      const float kFocal = 128.0f;
+      const float kProbes[][2] = { { 0.0f, 0.0f }, { -80.0f, 40.0f }, { 90.0f, -70.0f } };
+      // Two 8-bit round trips (the bake's quantization, then the render's) and a float multiply
+      // between them. Measured across these probes and channels the residual is at most 1 LSB;
+      // 2 is the headroom, and it is far below the 15-to-60 LSB the vignetting itself moves.
+      constexpr int kVignetteToleranceLsb = 2;
+
+      for (const auto& p : kProbes) {
+        unsigned char shader_px[3] = {};
+        unsigned char baked_px[3] = {};
+        if (!ReadPixel(shader_frame, 256, 256, p[0], p[1], shader_px) ||
+            !ReadPixel(baked_frame, 256, 256, p[0], p[1], baked_px)) {
+          IM_ERRORF("probe (%.1f, %.1f) is outside the frame", static_cast<double>(p[0]), static_cast<double>(p[1]));
+          continue;
+        }
+        const float rho = std::sqrt(p[0] * p[0] + p[1] * p[1]);
+        const float m = lumice::gui::RelIllumRectilinear(rho, kFocal);
+        for (int j = 0; j < 3; ++j) {
+          const float baked_linear = lumice::SrgbToLinear(static_cast<float>(baked_px[j]) / 255.0f);
+          const float predicted = lumice::LinearToSrgb((baked_linear - sky_linear[j]) * m + sky_linear[j]) * 255.0f;
+          if (std::abs(static_cast<int>(shader_px[j]) - static_cast<int>(predicted)) > kVignetteToleranceLsb) {
+            IM_ERRORF(
+                "at (%.1f, %.1f) channel %d: the live XYZ branch renders %d, and rescaling the bake by the "
+                "relative illumination m=%.4f predicts %.1f. The two branches have stopped standing in the "
+                "declared relationship. Shader (%d, %d, %d) vs bake (%d, %d, %d).",
+                static_cast<double>(p[0]), static_cast<double>(p[1]), j, (int)shader_px[j], (double)m,
+                (double)predicted, (int)shader_px[0], (int)shader_px[1], (int)shader_px[2], (int)baked_px[0],
+                (int)baked_px[1], (int)baked_px[2]);
+          }
+        }
+      }
+      // And the divergence really is visible, not a rounding difference: off axis the live branch
+      // must be materially darker than the reloaded one. Without this, the identity above would
+      // still pass if m collapsed to 1 everywhere and the vignetting silently disappeared.
+      unsigned char shader_far[3] = {};
+      unsigned char baked_far[3] = {};
+      IM_CHECK(ReadPixel(shader_frame, 256, 256, 90.0f, -70.0f, shader_far));
+      IM_CHECK(ReadPixel(baked_frame, 256, 256, 90.0f, -70.0f, baked_far));
+      IM_CHECK_LT((int)shader_far[1] + 10, (int)baked_far[1]);
     };
   }
 
