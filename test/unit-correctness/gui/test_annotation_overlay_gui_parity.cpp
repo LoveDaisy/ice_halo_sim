@@ -42,6 +42,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
@@ -54,6 +55,7 @@
 #include "core/lens_proj_build.hpp"
 #include "core/math.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/overlay_labels.hpp"
 #include "gui/preview_renderer.hpp"
@@ -558,4 +560,143 @@ TEST(AnnotationOverlayGuiParity, LabelAnchorsAgreeUnderTheFrontHemisphereClip) {
                     /*az=*/70.0f);
   c.view.front = true;
   ExpectLabelsAgree(c, "dual fisheye, front clip");
+}
+
+// =================================================================================================
+// The zenith / nadir markers: the placement the GUI used to compute against the one it now reads.
+//
+// These two are not curves and carry no text, so they are the one annotation that never went
+// through WorldDirToPixel above. Their GUI-side implementation was ProjectWorldDirToScreen — a
+// THIRD copy of the forward projection, this one mirroring the fragment shader's inverse rather
+// than the label walk — called on the two fixed world directions and handed to the shader as
+// uniforms. app_panels.cpp now reads core's answer instead, so the same "the replacement is an
+// equivalent, not a second approximation" argument this file exists to make has to be made for it.
+//
+// The comparison is made in the SHADER's space (centre origin, y up), because that is what both
+// paths ultimately produce and therefore the only place a sign error in the canvas -> shader
+// conversion is observable. Reading it in core's canvas space would test the projections while
+// leaving the conversion — the part that is new — unexamined.
+//
+// Two conventions differ by construction and are covered by kPixelTol rather than corrected for:
+// core answers an integer pixel INDEX (ProjectExitToPixel's binning) while the GUI answers a
+// continuous offset, so the two sit up to about half a pixel apart even in perfect agreement.
+//
+// Every case holds `visible` at kFull with no front clip, deliberately: core's marker sampler
+// applies the hemisphere policy (VisibleForLabel) and ProjectWorldDirToScreen does not — the
+// shader discards those pixels in a later stage instead. Under a restriction the two would
+// disagree about a marker in the excluded half for a reason that has nothing to do with the
+// projection, which is the question these cases ask.
+// =================================================================================================
+
+namespace {
+
+struct MarkerPos {
+  float x = 0.0f;  // shader space: centre origin, x right, y UP
+  float y = 0.0f;
+  bool drawn = false;
+};
+
+MarkerPos FromShaderPair(const float p[2]) {
+  if (p[0] == lumice::gui::kOverlaySentinel || p[1] == lumice::gui::kOverlaySentinel) {
+    return {};
+  }
+  return { p[0], p[1], true };
+}
+
+// The path this task removed, kept here as an independent oracle: it is still compiled, still
+// tested elsewhere, and shares no code with the replacement.
+MarkerPos GuiMarker(const lumice::gui::ViewProjection& vp, const float dir[3], int w, int h) {
+  const std::array<float, 2> p = lumice::gui::ProjectWorldDirToScreen(vp, dir, w, h);
+  const float pair[2] = { p[0], p[1] };
+  return FromShaderPair(pair);
+}
+
+// The path production takes now: core's overlay call, then the one canvas -> shader conversion.
+void CoreMarkers(const lumice::gui::ViewProjection& vp, int w, int h, MarkerPos* zenith, MarkerPos* nadir) {
+  lumice::gui::AnnotationViewInput in;
+  in.lens_type = vp.lens_type;
+  in.fov = vp.fov;
+  in.azimuth = vp.azimuth;
+  in.elevation = vp.elevation;
+  in.roll = vp.roll;
+  in.visible = vp.visible;
+  in.front = vp.front;
+  in.overlap = 0.0f;  // held at zero for the reason divergence 3 in this file's header gives
+  in.zenith_nadir = true;
+  lumice::gui::AnnotationOverlayCache cache;
+  cache.Refresh(lumice::gui::MakeAnnotationViewKey(in, w, h));
+  ASSERT_TRUE(cache.HasResult()) << "core produced no overlay for this view";
+  float zp[2];
+  float np[2];
+  lumice::gui::CanvasPointToShaderScreenPos(cache.ZenithPoint(), w, h, zp);
+  lumice::gui::CanvasPointToShaderScreenPos(cache.NadirPoint(), w, h, np);
+  *zenith = FromShaderPair(zp);
+  *nadir = FromShaderPair(np);
+}
+
+void ExpectMarkerAgrees(const MarkerPos& gui, const MarkerPos& core, const char* label) {
+  ASSERT_EQ(gui.drawn, core.drawn) << label << ": the two paths disagree about whether the marker is on screen at all"
+                                   << " (gui " << gui.drawn << ", core " << core.drawn << ")";
+  if (!gui.drawn) {
+    return;
+  }
+  EXPECT_NEAR(gui.x, core.x, kPixelTol) << label << ": x";
+  EXPECT_NEAR(gui.y, core.y, kPixelTol) << label << ": y";
+}
+
+constexpr float kZenithWorldDir[3] = { 0.0f, 0.0f, -1.0f };
+constexpr float kNadirWorldDir[3] = { 0.0f, 0.0f, 1.0f };
+
+// Both markers of one view, both paths. `expect_zenith`/`expect_nadir` state which of the two this
+// view images, so a case cannot pass by having both paths agree that nothing is drawn.
+void ExpectMarkersAgree(const lumice::gui::ViewProjection& vp, int w, int h, bool expect_zenith, bool expect_nadir,
+                        const char* label) {
+  MarkerPos core_z;
+  MarkerPos core_n;
+  ASSERT_NO_FATAL_FAILURE(CoreMarkers(vp, w, h, &core_z, &core_n));
+  EXPECT_EQ(core_z.drawn, expect_zenith) << label << ": the fixture does not image the zenith it claims to";
+  EXPECT_EQ(core_n.drawn, expect_nadir) << label << ": the fixture does not image the nadir it claims to";
+  ExpectMarkerAgrees(GuiMarker(vp, kZenithWorldDir, w, h), core_z, (std::string(label) + " zenith").c_str());
+  ExpectMarkerAgrees(GuiMarker(vp, kNadirWorldDir, w, h), core_n, (std::string(label) + " nadir").c_str());
+}
+
+}  // namespace
+
+TEST(AnnotationOverlayGuiParity, MarkerPlacementAgreesOnALinearLens) {
+  lumice::gui::ViewProjection vp;
+  vp.lens_type = lumice::gui::kLensTypeLinear;
+  vp.fov = 90.0f;
+  vp.elevation = 60.0f;
+  ExpectMarkersAgree(vp, 96, 96, /*expect_zenith=*/true, /*expect_nadir=*/false, "linear at el 60");
+
+  // Off-axis and rolled: the case that separates a correct conversion from one that happens to be
+  // right on a centred, upright marker. A y-flip error is invisible at the canvas centre.
+  vp.fov = 60.0f;
+  vp.elevation = 70.0f;
+  vp.azimuth = 30.0f;
+  vp.roll = 15.0f;
+  ExpectMarkersAgree(vp, 128, 96, /*expect_zenith=*/true, /*expect_nadir=*/false, "linear rolled at el 70");
+}
+
+TEST(AnnotationOverlayGuiParity, MarkerPlacementAgreesOnASingleFisheye) {
+  lumice::gui::ViewProjection vp;
+  vp.lens_type = lumice::gui::kLensTypeFisheyeEqualArea;
+  vp.fov = 120.0f;
+  vp.elevation = 45.0f;
+  ExpectMarkersAgree(vp, 96, 96, /*expect_zenith=*/true, /*expect_nadir=*/false, "equal-area 120 at el 45");
+
+  vp.lens_type = lumice::gui::kLensTypeFisheyeEquidist;
+  vp.fov = 160.0f;
+  vp.elevation = 30.0f;
+  vp.roll = 20.0f;
+  ExpectMarkersAgree(vp, 128, 128, /*expect_zenith=*/true, /*expect_nadir=*/false, "equidistant 160 rolled");
+}
+
+TEST(AnnotationOverlayGuiParity, MarkerPlacementAgreesOnAnAllSkyDualFisheye) {
+  // The only lens family that images BOTH markers at once, so it is the only case where a
+  // conversion that swapped the two would still pass everything above.
+  lumice::gui::ViewProjection vp;
+  vp.lens_type = lumice::gui::kLensTypeDualFisheyeEqualArea;
+  vp.fov = 180.0f;
+  ExpectMarkersAgree(vp, 192, 96, /*expect_zenith=*/true, /*expect_nadir=*/true, "dual fisheye all-sky");
 }
