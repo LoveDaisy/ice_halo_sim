@@ -583,13 +583,13 @@ static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lin
 // being re-derived here, so there is exactly one implementation of each formula.
 // Throws std::invalid_argument on an invalid lens_type / visible / grid count; callers wrap.
 // The grid-count check lives here (not only in the entry points) because this is the single place
-// that dereferences central_grid[]/elevation_grid[] — ConfigToJson accepts a
+// that dereferences angular_dist[]/elevation_grid[] — ConfigToJson accepts a
 // caller-assembled struct with no bounds pass of its own.
 static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
-  if (r.central_grid_count < 0 || r.central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
+  if (r.angular_dist_count < 0 || r.angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES || r.elevation_grid_count < 0 ||
       r.elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     throw std::invalid_argument(
-        "LUMICE_RenderParam grid count out of range: central=" + std::to_string(r.central_grid_count) +
+        "LUMICE_RenderParam grid count out of range: angular_dist=" + std::to_string(r.angular_dist_count) +
         ", elevation=" + std::to_string(r.elevation_grid_count));
   }
   nlohmann::json jr;
@@ -606,7 +606,7 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["intensity_factor"] = r.intensity_factor;
   jr["overlap"] = r.overlap;
   jr["ev_mode"] = MapEvModeFromCApi(r.ev_mode);
-  jr["grid"]["central"] = GridLinesToCore(r.central_grid, r.central_grid_count);
+  jr["grid"]["angular_dist"] = GridLinesToCore(r.angular_dist, r.angular_dist_count);
   jr["grid"]["elevation"] = GridLinesToCore(r.elevation_grid, r.elevation_grid_count);
   jr["grid"]["horizon"] = r.horizon != 0;
   return jr;
@@ -952,8 +952,8 @@ LUMICE_ErrorCode LUMICE_SceneAddRenderer(LUMICE_Scene* scene, const LUMICE_Rende
     return LUMICE_ERR_NULL_ARG;
   }
   // Grid counts index the fixed-capacity inline arrays RendererToJson reads; validate before the
-  // encode so an out-of-range count cannot walk off the end of central_grid[]/elevation_grid[].
-  if (renderer->central_grid_count < 0 || renderer->central_grid_count > LUMICE_MAX_CONFIG_GRID_LINES ||
+  // encode so an out-of-range count cannot walk off the end of angular_dist[]/elevation_grid[].
+  if (renderer->angular_dist_count < 0 || renderer->angular_dist_count > LUMICE_MAX_CONFIG_GRID_LINES ||
       renderer->elevation_grid_count < 0 || renderer->elevation_grid_count > LUMICE_MAX_CONFIG_GRID_LINES) {
     return LUMICE_ERR_INVALID_CONFIG;
   }
@@ -2221,7 +2221,7 @@ static LUMICE_ErrorCode DecodeCoreField(const nlohmann::json& j, T& dst) {
   return LUMICE_OK;
 }
 
-// Decode one grid-line array ("grid.central" / "grid.elevation") into the fixed-capacity C array.
+// Decode one grid-line array ("grid.angular_dist" / "grid.elevation") into the fixed-capacity C array.
 static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_GridLine* out, int* out_count) {
   if (!arr_j.is_array()) {
     return LUMICE_ERR_INVALID_VALUE;
@@ -2376,7 +2376,7 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       }
     }
 
-    r.central_grid_count = 0;
+    r.angular_dist_count = 0;
     r.elevation_grid_count = 0;
     r.horizon = 0;  // core RenderConfig::horizon_ defaults to false
     if (rj.contains("grid")) {
@@ -2384,8 +2384,17 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       if (!gj.is_object()) {
         return LUMICE_ERR_INVALID_VALUE;
       }
-      if (gj.contains("central")) {
-        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.central_grid, &r.central_grid_count);
+      // "central" is the pre-rename spelling of "angular_dist"; read it as an alias with the new
+      // key winning, exactly as ParseRenderConfig does. The two decoders have to agree — that is
+      // what test_json_parser_parity.cpp checks — so this branch and that one stay identical in
+      // shape. Only the new key is ever written (RendererToJson above).
+      if (gj.contains("angular_dist")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("angular_dist"), r.angular_dist, &r.angular_dist_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      } else if (gj.contains("central")) {
+        const LUMICE_ErrorCode err = JsonToGridLines(gj.at("central"), r.angular_dist, &r.angular_dist_count);
         if (err != LUMICE_OK) {
           return err;
         }

@@ -97,8 +97,16 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
 
   if (j_render.contains("grid")) {
     const auto& j_grid = j_render.at("grid");
-    if (j_grid.contains("central")) {
-      j_grid.at("central").get_to(render.central_grid_);
+    // "central" is the pre-rename spelling of "angular_dist" (both mean "angular distance from
+    // the sun"). Read unconditionally with the new key winning, NOT behind a schema-version
+    // branch. A version branch is what a rename needs when the same spelling means different
+    // things on either side of it; here the old key's value is exactly the new key's value, so
+    // there is no version at which it has to be read differently and a branch would only add a
+    // way to get it wrong. Only the new key is ever written (to_json in render_config.cpp).
+    if (j_grid.contains("angular_dist")) {
+      j_grid.at("angular_dist").get_to(render.angular_dist_grid_);
+    } else if (j_grid.contains("central")) {
+      j_grid.at("central").get_to(render.angular_dist_grid_);
     }
     if (j_grid.contains("elevation")) {
       j_grid.at("elevation").get_to(render.elevation_grid_);

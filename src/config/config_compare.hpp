@@ -107,7 +107,8 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
          std::equal(std::begin(a.background_), std::end(a.background_), std::begin(b.background_)) &&
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
-         a.central_grid_ == b.central_grid_ && a.elevation_grid_ == b.elevation_grid_ && a.horizon_ == b.horizon_;
+         a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
+         a.horizon_ == b.horizon_;
 }
 
 // ---- Light config ----

@@ -158,7 +158,7 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["overlap"] = r.overlap_;
   j["ev_mode"] = r.ev_mode_;
 
-  j["grid"].emplace("central", r.central_grid_);
+  j["grid"].emplace("angular_dist", r.angular_dist_grid_);
   j["grid"].emplace("elevation", r.elevation_grid_);
   j["grid"].emplace("horizon", r.horizon_);
 }

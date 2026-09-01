@@ -562,9 +562,9 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
   bad_visible.visible = 7;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_visible, &id), LUMICE_ERR_INVALID_CONFIG);
 
-  LUMICE_RenderParam bad_central = base;
-  bad_central.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
-  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_central, &id), LUMICE_ERR_INVALID_CONFIG);
+  LUMICE_RenderParam bad_angular_dist = base;
+  bad_angular_dist.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES + 1;
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &bad_angular_dist, &id), LUMICE_ERR_INVALID_CONFIG);
 
   LUMICE_RenderParam negative_elevation = base;
   negative_elevation.elevation_grid_count = -1;
@@ -580,7 +580,7 @@ TEST(SceneNegative, RendererInvalidEnumOrGridCountRejected) {
 
   // The exact cap is accepted (the bound is inclusive).
   LUMICE_RenderParam at_cap = base;
-  at_cap.central_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
+  at_cap.angular_dist_count = LUMICE_MAX_CONFIG_GRID_LINES;
   at_cap.elevation_grid_count = LUMICE_MAX_CONFIG_GRID_LINES;
   EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &at_cap, &id), LUMICE_OK);
 }
@@ -891,9 +891,9 @@ TEST(SceneRoundTrip, RichSceneAllSubsystems) {
   r.ray_color[1] = 0.8f;
   r.ray_color[2] = 0.7f;
   r.horizon = 0;
-  r.central_grid_count = 2;
-  r.central_grid[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
-  r.central_grid[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
+  r.angular_dist_count = 2;
+  r.angular_dist[0] = LUMICE_GridLine{ 0.0f, 1.5f, 0.5f, { 1.0f, 0.0f, 0.0f } };
+  r.angular_dist[1] = LUMICE_GridLine{ 90.0f, 2.0f, 0.25f, { 0.0f, 1.0f, 0.0f } };
   r.elevation_grid_count = 1;
   r.elevation_grid[0] = LUMICE_GridLine{ 45.0f, 1.0f, 1.0f, { 0.0f, 0.0f, 1.0f } };
   ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
@@ -1284,4 +1284,110 @@ TEST(SceneCommit, EmptySceneIsRejected) {
   int reused = -1;
   EXPECT_NE(LUMICE_CommitScene(s.get(), g.get(), &reused), LUMICE_OK);
   EXPECT_EQ(reused, -1) << "out_reused must be untouched when the commit fails";
+}
+
+// =============== v4.17 grid.angular_dist rename (C API side) ===============
+// The C API carries its own JSON decoder, independent of core's ParseRenderConfig. The rename's
+// alias rule therefore has to be pinned twice; test_json.cpp pins the core half with the same four
+// propositions. Keys are bare string literals for the same reason as there — expressing them via
+// the code under test would let the wire format and its test drift together.
+
+TEST(SceneGridAngularDist, EncoderWritesOnlyTheNewKey) {
+  SceneGuard g;
+  int id = -1;
+  LUMICE_RenderParam r{};
+  r.resolution_w = 128;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.angular_dist_count = 1;
+  r.angular_dist[0] = LUMICE_GridLine{ 22.0f, 1.2f, 0.4f, { 1.0f, 1.0f, 1.0f } };
+  ASSERT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+
+  const auto& jr = SceneRoot(g.get()).at("render").at(0);
+  ASSERT_TRUE(jr.contains("grid"));
+  ASSERT_TRUE(jr["grid"].contains("angular_dist"));
+  // Absent, not merely equal: emitting both spellings would keep every reader working while
+  // making the retired key permanent in files this version writes.
+  EXPECT_FALSE(jr["grid"].contains("central"));
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+}
+
+namespace {
+
+// A minimal but VALID scene document carrying one angular-distance line, produced by the encoder
+// itself rather than hand-written: the alias tests below rewrite one key inside it, so everything
+// except that key is guaranteed to be a document this decoder already accepts.
+std::string SceneJsonWithOneAngularDistLine(float value_deg, float opacity) {
+  SceneGuard g;
+  int id = -1;
+  EXPECT_EQ(LUMICE_SceneSetSimParams(g.get(), 0, 1000, 8, 0), LUMICE_OK);
+  EXPECT_EQ(LUMICE_SceneSetLightSource(g.get(), 20.0f, 0.0f, 0.5f, "D65"), LUMICE_OK);
+  const LUMICE_CrystalParam c = MakePrismParam(1.5f);
+  EXPECT_EQ(LUMICE_SceneAddCrystal(g.get(), &c, &id), LUMICE_OK);
+  LUMICE_ScatterLayer layer{};
+  layer.probability = 0.0f;
+  layer.entry_count = 1;
+  layer.entries[0] = LUMICE_ScatterEntry{ id, 1.0f, -1 };
+  EXPECT_EQ(LUMICE_SceneAddScatterLayer(g.get(), &layer, &id), LUMICE_OK);
+  LUMICE_RenderParam r{};
+  r.resolution_w = 128;
+  r.resolution_h = 128;
+  r.intensity_factor = 1.0f;
+  r.lens_type = LUMICE_LENS_TYPE_FISHEYE_EQUAL_AREA;
+  r.lens_fov = 180.0f;
+  r.angular_dist_count = 1;
+  r.angular_dist[0] = LUMICE_GridLine{ value_deg, 1.2f, opacity, { 1.0f, 1.0f, 1.0f } };
+  EXPECT_EQ(LUMICE_SceneAddRenderer(g.get(), &r, &id), LUMICE_OK);
+  return SceneToJsonString(g.get());
+}
+
+// Replace the first occurrence of `from` with `to`. Used to turn the encoder's new spelling back
+// into the retired one, i.e. to manufacture a pre-rename document.
+std::string ReplaceFirst(std::string text, const std::string& from, const std::string& to) {
+  const size_t at = text.find(from);
+  EXPECT_NE(at, std::string::npos) << "expected to find " << from;
+  if (at != std::string::npos) {
+    text.replace(at, from.size(), to);
+  }
+  return text;
+}
+
+}  // namespace
+
+TEST(SceneGridAngularDist, DecoderReadsTheLegacyCentralAlias) {
+  // The same document a pre-rename version of this code would have written.
+  const std::string legacy =
+      ReplaceFirst(SceneJsonWithOneAngularDistLine(22.0f, 0.4f), "\"angular_dist\"", "\"central\"");
+  ASSERT_NE(legacy.find("\"central\""), std::string::npos);
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(legacy.c_str(), &scene), LUMICE_OK) << legacy;
+  ASSERT_NE(scene, nullptr);
+
+  // Re-serializing normalizes the alias away: what went in as "central" comes back out under the
+  // new spelling, with its values intact.
+  const auto& jr = SceneRoot(scene).at("render").at(0);
+  ASSERT_TRUE(jr["grid"].contains("angular_dist"));
+  EXPECT_FALSE(jr["grid"].contains("central"));
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 22.0f, 1e-5f);
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["opacity"].get<float>(), 0.4f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
+}
+
+TEST(SceneGridAngularDist, DecoderPrefersTheNewKeyWhenBothAppear) {
+  // Both spellings present and disagreeing: the new key wins, and the two lists are not merged.
+  const std::string both = ReplaceFirst(SceneJsonWithOneAngularDistLine(46.0f, 0.9f), "\"grid\":{",
+                                        "\"grid\":{\"central\":[{\"value\":22.0,\"width\":1.0,\"opacity\":0.4,"
+                                        "\"color\":[1.0,1.0,1.0]}],");
+
+  LUMICE_Scene* scene = nullptr;
+  ASSERT_EQ(LUMICE_SceneFromJson(both.c_str(), &scene), LUMICE_OK);
+  ASSERT_NE(scene, nullptr);
+
+  const auto& jr = SceneRoot(scene).at("render").at(0);
+  ASSERT_EQ(jr["grid"]["angular_dist"].size(), 1u) << "the two lists must not be concatenated";
+  EXPECT_NEAR(jr["grid"]["angular_dist"][0]["value"].get<float>(), 46.0f, 1e-5f);
+  LUMICE_SceneDestroy(scene);
 }

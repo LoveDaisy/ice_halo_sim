@@ -147,11 +147,11 @@ TEST(RenderConfigTest, EachAppearanceField_ReturnsFalse) {
     EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "intensity_factor";
   }
 
-  // central_grid
+  // angular_dist_grid
   {
     auto mod = base;
-    mod.central_grid_.push_back(lumice::GridLineParam{ 10.0f, 2.0f, 0.5f, { 1, 0, 0 } });
-    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "central_grid";
+    mod.angular_dist_grid_.push_back(lumice::GridLineParam{ 10.0f, 2.0f, 0.5f, { 1, 0, 0 } });
+    EXPECT_FALSE(lumice::NeedsRebuild(base, mod)) << "angular_dist_grid";
   }
 
   // elevation_grid

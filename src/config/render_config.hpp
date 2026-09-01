@@ -106,7 +106,7 @@ struct RenderConfig {
   // and the compositor use, never the accumulation layout, so a change needs no consumer rebuild.
   EvMode ev_mode_ = kRelative;
 
-  std::vector<GridLineParam> central_grid_;
+  std::vector<GridLineParam> angular_dist_grid_;
   std::vector<GridLineParam> elevation_grid_;
   // Opt-in, not on by default. It was `true` for the four years the field parsed and drew nothing,
   // which cost nothing; now that it draws, `true` would put a horizon line into every existing

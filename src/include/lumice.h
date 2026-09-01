@@ -71,7 +71,20 @@ extern "C" {
 // config with no "ev_mode" key now renders RELATIVE (anchored to the frame's own P99, i.e. what
 // the GUI displays), where the v4.15-era CLI was unconditionally absolute. RELATIVE == 0 keeps
 // that default reachable from a zero-initialized struct.
-#define LUMICE_API_VERSION 416
+//
+// BREAKING (v4.17): LUMICE_RenderParam.central_grid / central_grid_count renamed to
+// angular_dist / angular_dist_count, and the JSON key "grid.central" to "grid.angular_dist".
+// The field is the angular distance from the sun, which "central" never said; the rename makes
+// the schema name what the number is. Type, order and offset are unchanged (sizeof() and the
+// binary layout are identical), so this breaks SOURCE compatibility only: a caller naming the
+// field, or using a designated initializer for it, fails to compile until renamed. The JSON
+// decoders read "grid.central" as an alias forever (new key wins when both appear); the encoder
+// only ever writes "grid.angular_dist".
+// Note the accompanying BEHAVIOR change: these lines are now DRAWN by the CLI renderer, where
+// v4.16 parsed and round-tripped them while drawing nothing. A config that already carried
+// grid.central entries renders differently under v4.17. `width` is still not honored (the mask
+// generator has no line-width input); `value`, `opacity` and `color` are.
+#define LUMICE_API_VERSION 417
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -334,9 +347,10 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 // the OR/AND expansion seen in practice.
 #define LUMICE_MAX_CONFIG_COLOR_CLASSES 64
 #define LUMICE_MAX_CONFIG_COLOR_REFS 32
-// Per-renderer grid-line ceiling (central_grid[] / elevation_grid[] inline arrays in
+// Per-renderer grid-line ceiling (angular_dist[] / elevation_grid[] inline arrays in
 // LUMICE_RenderParam). Same "widen (breaking bump)" rule as the constants above. 64 matches the
-// order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 central line.
+// order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 angular-distance
+// line.
 #define LUMICE_MAX_CONFIG_GRID_LINES 64
 
 // BREAKING (v4.10): LUMICE_AxisDist renamed+widened to
@@ -692,8 +706,8 @@ typedef struct LUMICE_ColorClass_ {
 #define LUMICE_VISIBLE_LOWER 1
 #define LUMICE_VISIBLE_FULL 2
 
-// One overlay grid line (mirrors core GridLineParam). `value` is the azimuth (central grid) or
-// elevation (elevation grid) in degrees; the rest is appearance.
+// One overlay grid line (mirrors core GridLineParam). `value` is the angular distance from the
+// sun (angular_dist) or the elevation (elevation grid) in degrees; the rest is appearance.
 typedef struct LUMICE_GridLine_ {
   float value;
   float width;
@@ -747,16 +761,21 @@ typedef struct LUMICE_RenderParam_ {
   // RenderConfig::horizon_ defaults to false, so a zero-initialized struct asks for
   // no annotation, which is what the JSON path also gives a config with no "grid" object.
   int horizon;
-  // PARSED BUT NOT RENDERED. Both lists are validated, round-tripped through JSON and compared,
-  // and no code draws either — a scene that sets them produces exactly the image it would produce
-  // without them. They are kept because the far target ("a CLI re-render equals what the GUI
-  // showed, annotations included") needs them, and the blocker is not the drawing code but a model
-  // mismatch: this schema names every line individually while the GUI derives one FOV-adaptive
-  // step and one shared colour, plus a separate list of sun angular-distance circles. Reconciling
-  // the two is a design decision, so the fields stay and say so. horizon above is the
-  // one member of this group that does draw.
-  LUMICE_GridLine central_grid[LUMICE_MAX_CONFIG_GRID_LINES];
-  int central_grid_count;
+  // Circles of constant angular distance from the sun, in degrees (22 and 46 being the halos
+  // every consumer draws). RENDERED: the CLI renderer builds each entry's mask through
+  // LUMICE_ComputeAnnotationOverlay and composites it with that entry's own `opacity` and
+  // `color`. `width` is read and round-tripped but does NOT affect the image — the mask
+  // generator derives its own local half-width and takes no width input.
+  // RENAMED (v4.17) from central_grid / central_grid_count; see the BREAKING note at
+  // LUMICE_API_VERSION.
+  LUMICE_GridLine angular_dist[LUMICE_MAX_CONFIG_GRID_LINES];
+  int angular_dist_count;
+  // PARSED BUT NOT RENDERED. The list is validated, round-tripped through JSON and compared, and
+  // no code draws it — a scene that sets it produces exactly the image it would produce without
+  // it. It is kept because the far target ("a CLI re-render equals what the GUI showed,
+  // annotations included") needs it, and the blocker is a model mismatch: this schema names every
+  // parallel individually while the GUI derives one FOV-adaptive step and one shared colour.
+  // Reconciling the two is a design decision that has not been made.
   LUMICE_GridLine elevation_grid[LUMICE_MAX_CONFIG_GRID_LINES];
   int elevation_grid_count;
   // ADDED (v4.16): LUMICE_EV_MODE_*. Appended at the end of the struct, and RELATIVE == 0 so a
