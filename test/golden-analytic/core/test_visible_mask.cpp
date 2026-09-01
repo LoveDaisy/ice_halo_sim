@@ -230,26 +230,35 @@ TEST(VisibleMask, RectangularLeavesPolarCapsOnATallerCanvas) {
 }
 
 TEST(VisibleMask, SingleFisheyeMasksOutsideTheImageCircle) {
-  // For each single-lens fisheye the mask's domain edge is the EQUATOR (theta = 90 deg), which is
-  // where the r <= 1 inverse domain sits and equally where the forward's `cz <= 0` cull sits. Its
-  // pixel radius follows from each type's `scale` in ComputeScaleAz0 and the r = 1 boundary.
+  // Each single-lens fisheye's mask edge is its RIM — the radius its inverse stops accepting,
+  // which is that type's radius formula at the largest theta the forward's per-type cull leaves
+  // renderable (the three kFisheye*MinCz constants in projection_shared.h). Before
+  // 474.1 all four shared one edge, the equator at r = 1; three of them now run further, and only
+  // orthographic still stops there because sin(theta) aliases past it.
+  //
+  // `fov` is chosen per type so the rim lands INSIDE the frame — otherwise the case would assert
+  // nothing (`off` would be 0). It is the rim that moved, so the fov that exposes it moved too:
+  // at fov = 180 equidistant's rim is at 2 * scale = 150 px, past this frame's 125 px half
+  // diagonal, and stereographic's is three orders of magnitude further out.
   struct Case {
     LensParam::LensType type;
     float fov;
+    float rim_r;  // rim radius in normalized (r_scale = 1) coordinates
     const char* name;
   };
   const Case cases[] = {
-    { LensParam::kFisheyeEqualArea, 180.0f, "equal_area" },
-    { LensParam::kFisheyeEquidistant, 180.0f, "equidistant" },
-    { LensParam::kFisheyeStereographic, 180.0f, "stereographic" },
-    { LensParam::kFisheyeOrthographic, 180.0f, "orthographic" },
+    { LensParam::kFisheyeEqualArea, 180.0f, std::sqrt(2.0f), "equal_area" },
+    { LensParam::kFisheyeEquidistant, 240.0f, 2.0f, "equidistant" },
+    { LensParam::kFisheyeStereographic, 359.0f, std::tan(0.5f * std::acos(lm_proj::kFisheyeStereographicMinCz)),
+      "stereographic" },
+    { LensParam::kFisheyeOrthographic, 180.0f, 1.0f, "orthographic" },
   };
   for (const Case& c : cases) {
     const RenderConfig cfg = MakeCfg(c.type, c.fov, 200, 150);
     const float short_pix = 150.0f;
     const float fov_rad = c.fov * math::kDegreeToRad;
     const float scale = ComputeScaleAz0(c.type, fov_rad, short_pix, 200, 150, MakeCameraRotation(cfg)).scale;
-    const float edge_px = scale;  // r = 1 in normalized coords is `scale` pixels out
+    const float edge_px = scale * c.rim_r;
     const auto mask = Mask(cfg);
 
     size_t off = 0;

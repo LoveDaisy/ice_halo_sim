@@ -8,12 +8,18 @@ so they must stay black rather than being painted the sky background — otherwi
 fisheye render is a solid rectangle of background with an invisible circle inside it, and
 the lens boundary the GUI draws has no counterpart in the CLI image.
 
-The config renders a 180 deg equal-area fisheye at 400x300 pointing at the zenith, so the
-image circle has radius `min(400, 300) / 2 = 150` px centred on the frame; the frame
-corners sit at ~246 px from the centre, i.e. well outside it (r = 1.64 in image-circle
-units, not a boundary coin flip). Pointing at the zenith with `visible: upper` makes the
-image circle and the visible hemisphere the same set, so this pin isolates the *domain*
-half of the mask from the *visibility* half.
+The config renders a 180 deg equal-area fisheye at 400x300 pointing at the zenith. Radius
+normalises by `min(400, 300) / 2 = 150` px, and the lens images out to its rim at
+r = sqrt(2), so the imaged disc has radius 212.1 px centred on the frame; the frame corners
+sit at ~246 px from the centre, i.e. outside it (r = 1.64 against a rim of 1.414, not a
+boundary coin flip). Pointing at the zenith with `visible: upper` makes the imaged disc and
+the visible hemisphere the same set, so this pin isolates the *domain* half of the mask from
+the *visibility* half.
+
+The 150 px in that first sentence used to be the whole story: before 474.1 core stopped at
+the equator (r = 1) for every single-lens fisheye. Widening the cull per lens type moved the
+disc out to r = sqrt(2) without moving this fixture's verdict, because its corner probes were
+already outside the wider disc too.
 
 Both halves are asserted, and the second is what keeps the first honest: the corners must
 be black AND the pixels inside the circle must still carry the authored background, so a
@@ -36,9 +42,10 @@ CONFIG = (
 )
 
 WIDTH, HEIGHT = 400, 300
-# Image-circle radius in pixels: an equal-area fisheye at fov=180 maps theta=90 deg onto
-# r = short_edge / 2 (see ComputeScaleAz0's kFisheyeEqualArea branch).
-IMAGE_RADIUS = min(WIDTH, HEIGHT) / 2.0
+# Imaged-disc radius in pixels: an equal-area fisheye at fov=180 maps theta=90 deg onto
+# r = short_edge / 2 (see ComputeScaleAz0's kFisheyeEqualArea branch) and reaches its rim,
+# theta=180 deg, at sqrt(2) times that.
+IMAGE_RADIUS = min(WIDTH, HEIGHT) / 2.0 * 2 ** 0.5  # 212.13 px
 
 # Pixels sampled well outside the image circle (distance from centre, in units of
 # IMAGE_RADIUS, in parentheses).
