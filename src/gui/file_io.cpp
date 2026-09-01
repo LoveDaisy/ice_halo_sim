@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "gui/annotation_overlay_cache.hpp"
 #include "gui/app.hpp"
 #include "gui/export_fbo_renderer.hpp"
 #include "gui/field_editor_registry.hpp"
@@ -3270,7 +3271,26 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   if (vp.vp_w <= 0 || vp.vp_h <= 0 || !renderer.HasTexture()) {
     return false;
   }
-  auto rgba = RenderExportToRgba(renderer, vp.params, vp.vp_w, vp.vp_h, std::nullopt);
+  PreviewParams params = vp.params;
+  // Rebuild the angular-distance mask AT THIS CANVAS, rather than reusing the one the live preview
+  // computed. Sampling a mask built for another size is a plain image rescale: harmless when the
+  // two sizes share an aspect ratio, and a distortion of the circles when they do not — and a
+  // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
+  // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
+  // debounce over. Its own cache, for the same reason: a different clock from the preview's.
+  if (params.overlay.show_sun_circles) {
+    static AnnotationOverlayCache export_overlay;
+    export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
+    if (export_overlay.HasResult()) {
+      params.overlay.angular_dist_mask = export_overlay.AngularDistMask().data();
+      params.overlay.angular_dist_mask_w = export_overlay.Width();
+      params.overlay.angular_dist_mask_h = export_overlay.Height();
+      params.overlay.angular_dist_mask_generation = export_overlay.Generation();
+    } else {
+      params.overlay.angular_dist_mask = nullptr;
+    }
+  }
+  auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h, std::nullopt);
   if (rgba.empty()) {
     return false;
   }

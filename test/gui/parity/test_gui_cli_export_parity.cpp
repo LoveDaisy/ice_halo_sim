@@ -54,6 +54,13 @@
 //   background     | (0.10, 0.16, 0.28)      |  17.21 | (0.28, 0.14, 0.10)        |  18.16
 //   resolution     | 4:3 + portrait -> 512x683 | canvas assert | no ratio -> 1024x512 |  n/a
 //   horizon        | off                     |    n/a | off                       |  25.46
+//   angular_dist   | on, {22, 46} deg        |  23.68 | on, {22, 46} deg          |  25.38
+//
+// The angular_dist row is broken two ways rather than one, because the two shapes it can fail in
+// are independent and the weaker one sets the threshold. Shifting every circle by ONE degree in
+// the CLI arm costs 23.68 / 25.38 dB; making the CLI draw only the FIRST of the two lines costs
+// 25.51 / 26.65 dB. Both are single-sided breaks in the CLI arm, and the second is the smallest
+// break either scene owns, which is what each threshold is placed above.
 //
 // "n/a" means the break does not move that scene, and in every case for a stated reason rather
 // than a gap: the full-sky lens family ignores fov and zeroes the three view angles, so a break in
@@ -69,13 +76,19 @@
 //
 // ================================= Deliberately not covered ==================================
 //
-//   * The auxiliary-line overlay other than the horizon (altitude grid, sun circles, zenith/nadir
-//     markers, lens border, text labels). These are GUI display-time layers with no encoding in
-//     the config format at all; giving core an annotation layer is a separate, actively planned
-//     design effort — a known gap this fixture is deliberately leaving alone, not one it missed —
-//     and until core's export format gains that layer there is nothing on the CLI side to compare
-//     against. All of them are off in both scenes, which is also their default. Re-add coverage
-//     here the day that layer exists.
+//   * The auxiliary-line overlay other than the horizon and the angular-distance circles (altitude
+//     grid, zenith/nadir markers, lens border, text labels). These remain GUI display-time layers
+//     with no encoding in the config format, so there is still nothing on the CLI side to compare
+//     against. All of them are off in both scenes, which is also their default.
+//
+//     The sun circles USED to be on this list, with the note "re-add coverage here the day core
+//     gains an annotation layer". That day is this one. They are now on in both scenes, and they
+//     are the one overlay whose two arms are not two implementations: both build their geometry
+//     from the same core call (LUMICE_ComputeAnnotationOverlay), the CLI once per line in
+//     server/render.cpp and the GUI once per settled view in gui/annotation_overlay_cache.cpp.
+//     That is why turning them ON RAISES both scenes' PSNR rather than lowering it — the circles
+//     land on identical pixels, so where the two frames used to differ they now agree. A drop is
+//     therefore the signal, and the thresholds below are set against the two measured breaks.
 //   * The horizon in its ON state, and this one is a measured exclusion rather than an assumed
 //     one. Both scenes keep the switch OFF, so what this fixture pins is the direction that
 //     actually regressed before: the export must not assert a horizon line the user switched off
@@ -155,6 +168,10 @@ struct ParityScene {
   bool aspect_portrait;
   // The one overlay core can also draw. Off in both scenes; see the header's exclusion note.
   bool show_horizon;
+  // Angular-distance circles. ON in both scenes, unlike the horizon, because these two arms are
+  // not two implementations of the same curve — they are two readings of one. See the exclusion
+  // note above for why that makes turning them on raise the PSNR rather than lower it.
+  bool show_sun_circles;
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
   float ray_num_millions;
@@ -229,23 +246,33 @@ struct ParityScene {
 // honest run and the smallest break that scene must catch, at least 10 sigma below the mean.
 // clang-format off
 const ParityScene kScenes[] = {
-  // mean 26.512 sigma 0.0777 (N=12, range 26.37-26.63). Threshold 25.5 = mean - 1.0 dB = 13 sigma.
-  // The smallest break this scene owns lands at 21.32 dB (lens_fov), so there is no reason to run
-  // this one tight.
+  // mean 26.684 sigma 0.0668 (N=5, range 26.61-26.79). Threshold 26.0: 10.2 sigma below the mean
+  // and 0.49 dB above the smallest break this scene owns — the CLI drawing only the first of two
+  // angular_dist lines, at 25.51 dB. That break is why this row is no longer at mean - 1.0 dB the
+  // way it was before the circles were covered: 25.75 would still catch it, but by 0.24 dB.
+  //
+  // RECALIBRATED, and on fewer samples than the N=12 this row used to carry: the mean moved when
+  // the angular-distance circles were switched on (they raise it, see the exclusion note above),
+  // so the old figures describe a scene this is no longer. If this row ever flakes, re-measure it
+  // at N=12 rather than nudging the threshold — 5 samples is enough to place a 10 sigma gate and
+  // not enough to argue about a 2 sigma one.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
-   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/25.5, /*expect_w=*/512, /*expect_h=*/683},
-  // mean 26.893 sigma 0.0259 (N=12, range 26.84-26.93). Threshold 26.0, which is 34 sigma below
-  // the mean and 0.54 dB above the smallest break this scene owns — the horizon at 25.46 dB. That
-  // break is why this row does not simply take mean - 1.0 dB like its neighbour: at 25.9 the gate
-  // would clear the defect by 0.04 dB, which is not a gate.
+   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false, /*show_sun_circles=*/true,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/512, /*expect_h=*/683},
+  // mean 27.356 sigma 0.0150 (N=5, range 27.33-27.37). Threshold 27.0: 24 sigma below the mean and
+  // 0.35 dB above the smallest break this scene owns — the CLI drawing only the first of two
+  // angular_dist lines, at 26.65 dB. The horizon's 25.46 dB, which used to set this row, is now
+  // the second-smallest.
+  //
+  // Same recalibration caveat as its neighbour: N=5, on a mean that moved when the circles were
+  // switched on. Do not read the small sigma as a licence to run this tighter than 27.0.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
-   gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/1024, /*expect_h=*/512},
+   gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/false, /*show_sun_circles=*/true,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
   // — which is what makes a drop here readable as the Jacobian rather than as some other field.
@@ -266,7 +293,7 @@ const ParityScene kScenes[] = {
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
-   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false,
+   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false, /*show_sun_circles=*/false,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.5, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
@@ -394,6 +421,10 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::g_state.aspect_preset = scene.aspect_preset;
       gui::g_state.aspect_portrait = scene.aspect_portrait;
       gui::g_state.show_horizon_line = scene.show_horizon;
+      gui::g_state.show_sun_circles_line = scene.show_sun_circles;
+      // The default list, {22, 46}, is what a user gets; keeping it means this scene compares the
+      // circles anyone would actually draw.
+      gui::g_state.sun_circle_angles = { 22.0f, 46.0f };
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = scene.ray_num_millions;
 

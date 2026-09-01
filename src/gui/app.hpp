@@ -138,7 +138,12 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
 // preview is showing rather than recomputing them at its own moment — an export is a picture of
 // what is on screen, and a second computation could settle on a different view.
 AnnotationOverlayCache& PreviewAnnotationOverlay();
-AngularDistLabelSet BuildAngularDistLabelSet(const GuiState& state, float vp_w, float vp_h);
+AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc);
+// `vp_w`/`vp_h` are the target draw list's size; the anchors are scaled from the cache's own canvas
+// into it, so a caller rendering at a size the cache was not built for still gets them in the right
+// place (see the function's own note on the HiDPI case).
+AngularDistLabelSet BuildAngularDistLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                             float vp_h);
 
 // Pick the coordinate grid step (in degrees) for a given FOV. Single source of
 // truth shared between shader uniform (OverlayDecoration::grid_step) and label

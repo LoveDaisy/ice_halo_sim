@@ -119,11 +119,29 @@ AnnotationOverlayCache& PreviewAnnotationOverlay() {
   return g_annotation_overlay;
 }
 
-AngularDistLabelSet BuildAngularDistLabelSet(const GuiState& state, float vp_w, float vp_h) {
+AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderConfig& rc) {
+  AnnotationViewInput in;
+  in.lens_type = rc.lens_type;
+  in.fov = rc.fov;
+  in.azimuth = rc.azimuth;
+  in.elevation = rc.elevation;
+  in.roll = EffectiveRollForLens(rc.lens_type, rc.roll);
+  in.visible = rc.visible;
+  // The same constant the export writes into the config the CLI renders (file_io.cpp BuildScene),
+  // so both sides annotate the same projection rather than two that differ by an overlap band.
+  in.overlap = kDualFisheyeOverlap;
+  in.front = rc.front;
+  in.sun_altitude_deg = state.sun.altitude;
+  in.angular_dist_deg = state.sun_circle_angles;
+  return in;
+}
+
+AngularDistLabelSet BuildAngularDistLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                             float vp_h) {
   AngularDistLabelSet set;
   std::copy(std::begin(state.sun_circles_color), std::end(state.sun_circles_color), std::begin(set.color));
   set.alpha = state.sun_circles_alpha;
-  if (!g_annotation_overlay.HasResult()) {
+  if (!cache.HasResult()) {
     return set;
   }
   // The anchors are in the CANVAS pixel space the request named — the framebuffer, vp_w/vp_h in
@@ -131,11 +149,11 @@ AngularDistLabelSet BuildAngularDistLabelSet(const GuiState& state, float vp_w, 
   // the DPI scale, so the anchors are SCALED rather than merely offset; without this a label sits
   // at twice its distance from the viewport's top-left corner. The export path passes its FBO size
   // and gets the identity, which is what makes one helper serve both.
-  const int mask_w = g_annotation_overlay.Width();
-  const int mask_h = g_annotation_overlay.Height();
+  const int mask_w = cache.Width();
+  const int mask_h = cache.Height();
   const float sx = mask_w > 0 ? vp_w / static_cast<float>(mask_w) : 1.0f;
   const float sy = mask_h > 0 ? vp_h / static_cast<float>(mask_h) : 1.0f;
-  for (const auto& l : g_annotation_overlay.AngularDistLabels()) {
+  for (const auto& l : cache.AngularDistLabels()) {
     set.anchors.push_back(AngularDistAnchor{ l.px * sx, l.py * sy, l.text });
   }
   return set;
@@ -1420,27 +1438,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // a user drawing only the labels still needs the anchors, and one drawing only the lines still
     // needs the mask. The two switches then each gate their own half.
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label) {
-      AnnotationOverlayCache::ViewKey key;
-      key.width = g_preview_vp.vp_w;
-      key.height = g_preview_vp.vp_h;
-      key.lens_type = rc.lens_type;
-      key.fov = rc.fov;
-      key.visible = rc.visible;
-      key.front = rc.front;
-      // Zeroed for the full-sky lenses, matching the shader: those branches skip the view matrix
-      // entirely (LensIsFullSky, and `needs_view_transform` in preview_renderer.cpp), so their
-      // canvas is pinned to world azimuth. Core honours the camera angles unconditionally, so
-      // handing them over would put the circles somewhere the preview is not looking. This is the
-      // GUI-side half of the divergence pinned in test_annotation_overlay_gui_parity.cpp.
-      const bool needs_view = !LensIsFullSky(rc.lens_type);
-      key.azimuth = needs_view ? rc.azimuth : 0.0f;
-      key.elevation = needs_view ? rc.elevation : 0.0f;
-      key.roll = needs_view ? EffectiveRollForLens(rc.lens_type, rc.roll) : 0.0f;
-      GuiSunWorldDir(g_state.sun.altitude, key.sun_dir);
-      key.angular_dist_deg.assign(g_state.sun_circle_angles.begin(),
-                                  g_state.sun_circle_angles.begin() +
-                                      std::min(g_state.sun_circle_angles.size(), static_cast<size_t>(kMaxSunCircles)));
-      g_annotation_overlay.Update(key);
+      g_annotation_overlay.Update(
+          MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
     } else {
       g_annotation_overlay.Update(AnnotationOverlayCache::ViewKey{});
     }
@@ -1503,7 +1502,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // differ by the DPI scale, so the anchors are divided by it here rather than being offset
       // alone; without that a label sits at twice its distance from the viewport's top-left.
       if (g_state.show_sun_circles_label) {
-        AppendAngularDistLabels(BuildAngularDistLabelSet(g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+        AppendAngularDistLabels(BuildAngularDistLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy,
+                                labels);
       }
       DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }

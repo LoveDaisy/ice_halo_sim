@@ -40,6 +40,10 @@ class AnnotationOverlayCache {
     float elevation = 0.0f;
     float roll = 0.0f;
     int visible = 0;
+    // Dual-fisheye overlap band. Not merely another view field: it changes where the two discs
+    // meet, so a request that leaves it at zero annotates a slightly different projection than the
+    // one the picture was drawn with — worth a couple of dB of a cross-process comparison.
+    float overlap = 0.0f;
     bool front = false;
     float sun_dir[3] = { 0.0f, 0.0f, 0.0f };
     std::vector<float> angular_dist_deg;
@@ -60,6 +64,12 @@ class AnnotationOverlayCache {
   // from; otherwise keeps the previous result, stale or not. An empty angle list clears it.
   void Update(const ViewKey& key);
 
+  // Compute NOW, skipping the debounce, unless the held result was already built for this key.
+  // For one-shot callers — an off-screen export renders a single frame at a size of its own, so it
+  // has no run of frames to settle over and no draw loop to protect. Update() is for the ones that
+  // do.
+  void Refresh(const ViewKey& key);
+
   // True when a result is held. False before the first settle, and after a key whose computation
   // failed or asked for no circles.
   bool HasResult() const { return has_result_; }
@@ -71,9 +81,12 @@ class AnnotationOverlayCache {
   // nothing else has moved off the GUI's own walk yet.
   const std::vector<Label>& AngularDistLabels() const { return angular_dist_labels_; }
 
-  // Bumped on every recompute. A consumer that caches something derived from the result (the
-  // preview's GL texture) compares this instead of the buffer contents to decide whether to
-  // redo that work.
+  // Bumped on every recompute, from a counter shared by ALL instances. A consumer that caches
+  // something derived from a result — PreviewRenderer's GL texture — compares this instead of the
+  // buffer contents to decide whether to redo that work, and there is more than one cache feeding
+  // it: the live preview's and the off-screen export's. Per-instance counters would both start at
+  // one and the renderer could not tell a fresh export mask from the preview mask it already
+  // holds, so it would keep showing the preview's — at the preview's size.
   uint64_t Generation() const { return generation_; }
 
   // Number of consecutive identical keys before a recompute. 3 at 60 fps is ~50 ms of stillness:
@@ -93,8 +106,27 @@ class AnnotationOverlayCache {
   int height_ = 0;
   std::vector<uint8_t> angular_dist_mask_;
   std::vector<Label> angular_dist_labels_;
-  uint64_t generation_ = 0;  // starts at 0 so a consumer's "nothing uploaded" sentinel of 0 never matches
+  uint64_t generation_ = 0;  // 0 = never computed, which a consumer's "nothing uploaded" sentinel matches
 };
+
+// Build the request key for a view. One owner, because the live preview and the off-screen export
+// must not describe the same view differently — including the full-sky rule, where the shader
+// applies no view transform and core would, so the angles are zeroed here for that lens family.
+// `width`/`height` are the CANVAS the answer is wanted in, which is the export's own size rather
+// than the viewport's whenever the two differ.
+struct AnnotationViewInput {
+  int lens_type = 0;
+  float fov = 0.0f;
+  float azimuth = 0.0f;
+  float elevation = 0.0f;
+  float roll = 0.0f;
+  int visible = 0;
+  float overlap = 0.0f;
+  bool front = false;
+  float sun_altitude_deg = 0.0f;
+  std::vector<float> angular_dist_deg;
+};
+AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
 
 // The world direction of the sun as the GUI means it, matching core's annotation::SunWorldDir at
 // azimuth 0 — which is every case the GUI has, since it exposes no sun azimuth control. Shared so

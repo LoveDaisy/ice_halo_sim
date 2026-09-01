@@ -404,7 +404,8 @@ void DoExportPreviewPng() {
   // no rescaling and the exported PNG puts the numbers where the screen does.
   AngularDistLabelSet circles;
   if (overlay.has_value() && g_state.show_sun_circles_label) {
-    circles = BuildAngularDistLabelSet(g_state, static_cast<float>(w), static_cast<float>(h));
+    circles =
+        BuildAngularDistLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h));
   }
   auto rgba = RenderExportToRgba(g_preview, params, w, h, overlay, circles);
   if (rgba.empty()) {

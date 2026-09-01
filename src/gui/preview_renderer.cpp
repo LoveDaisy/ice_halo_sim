@@ -1013,6 +1013,12 @@ void PreviewRenderer::UploadAngularDistMask(const unsigned char* data, int width
       return;
     }
   }
+  // UNIT 2, and switching to it is not tidiness. Render() binds the simulation texture on unit 0
+  // and leaves that unit active; uploading here without switching would bind this mask over it and
+  // then unbind on the way out, leaving unit 0 empty for the draw that follows — a frame with no
+  // sky in it, which is exactly what the CLI/GUI parity gate caught. Unit 2 is also where Render()
+  // samples the mask from, so leaving it bound is what that expects.
+  glActiveTexture(GL_TEXTURE2);
   glBindTexture(GL_TEXTURE_2D, angular_dist_tex_);
   // NEAREST, and it has to be: the mask is a per-pixel yes/no, and filtering it would smear the
   // line across neighbours the mask generator deliberately left out. CLAMP_TO_EDGE for the same
@@ -1028,13 +1034,15 @@ void PreviewRenderer::UploadAngularDistMask(const unsigned char* data, int width
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data);
   glPixelStorei(GL_UNPACK_ALIGNMENT, prev_alignment);
-  glBindTexture(GL_TEXTURE_2D, 0);
+  // Back to unit 0, the unit every other binding in this class assumes is current.
+  glActiveTexture(GL_TEXTURE0);
 }
 
 void PreviewRenderer::ClearAngularDistMask() {
   if (angular_dist_tex_ != 0) {
     glDeleteTextures(1, &angular_dist_tex_);
     angular_dist_tex_ = 0;
+    angular_dist_tex_generation_ = 0;
   }
 }
 

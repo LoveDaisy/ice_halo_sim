@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
 #include "lumice.h"
 
@@ -42,8 +43,44 @@ void GuiSunWorldDir(float altitude_deg, float out[3]) {
   out[2] = -std::sin(sa);
 }
 
+void AnnotationOverlayCache::Refresh(const ViewKey& key) {
+  // Keep the debounce state consistent with the result, so a later Update with this same key does
+  // not immediately recompute what was just built.
+  pending_ = key;
+  stable_frames_ = kSettleFrames;
+  if (has_built_ && built_from_ == key) {
+    return;
+  }
+  Recompute(key);
+}
+
+AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height) {
+  AnnotationOverlayCache::ViewKey key;
+  key.width = width;
+  key.height = height;
+  key.lens_type = in.lens_type;
+  key.fov = in.fov;
+  key.visible = in.visible;
+  key.overlap = in.overlap;
+  key.front = in.front;
+  // Zeroed for the full-sky lenses, matching the preview shader: those branches skip the view
+  // matrix entirely (LensIsFullSky, and `needs_view_transform` in preview_renderer.cpp), so their
+  // canvas is pinned to world azimuth. Core honours the camera angles unconditionally, so handing
+  // them over would put the circles somewhere the picture is not looking.
+  const bool needs_view = !LensIsFullSky(in.lens_type);
+  key.azimuth = needs_view ? in.azimuth : 0.0f;
+  key.elevation = needs_view ? in.elevation : 0.0f;
+  key.roll = needs_view ? in.roll : 0.0f;
+  GuiSunWorldDir(in.sun_altitude_deg, key.sun_dir);
+  const size_t n = std::min(in.angular_dist_deg.size(), static_cast<size_t>(kMaxSunCircles));
+  key.angular_dist_deg.assign(in.angular_dist_deg.begin(), in.angular_dist_deg.begin() + n);
+  return key;
+}
+
 void AnnotationOverlayCache::Recompute(const ViewKey& key) {
-  ++generation_;
+  // Process-wide, so two caches' results are never confused for each other. See Generation().
+  static uint64_t next_generation = 0;
+  generation_ = ++next_generation;
   built_from_ = key;
   has_built_ = true;
   has_result_ = false;
@@ -68,6 +105,7 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   req.view.view_elevation = key.elevation;
   req.view.view_roll = key.roll;
   req.view.visible = key.visible;
+  req.view.overlap = key.overlap;
   req.view.front = key.front ? 1 : 0;
   req.angular_dist_deg = key.angular_dist_deg.data();
   req.angular_dist_count = count;
