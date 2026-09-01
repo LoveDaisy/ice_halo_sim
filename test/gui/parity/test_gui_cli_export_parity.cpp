@@ -87,13 +87,16 @@
 //     (preview_renderer.cpp overlayAuxLines), core's a mask built at a fixed pixel width
 //     (server/render.cpp BuildHorizonMask); on a dual-fisheye frame those two widths part company
 //     near the circle rim. Making them agree is the annotation layer's business, not this gate's.
-//   * The single-lens fisheye domain past theta = 90 degrees, where the preview shader keeps
-//     inverting toward the frame corners and core stops. It is real and large — a 4:3 frame at
-//     fov 150 measured 25% of its pixels lit by the GUI and black in the CLI — and it is the
-//     subject of a separate, actively planned widening effort, not an abandoned one; pinning it
-//     here would freeze a shape that is about to change on purpose. The single-lens scene's fov is
-//     bounded so the frame stays inside the agreed domain; see the note on its row. Re-check that
-//     bound once the domain widens.
+//   * The single-lens fisheye domain past theta = 90 degrees. This USED to be a real and large
+//     exclusion — the preview shader kept inverting toward the frame corners while core stopped at
+//     the equator, and a 4:3 frame at fov 150 measured 25% of its pixels lit by the GUI and black
+//     in the CLI. That gap was closed in 474.1 (core's cull is now per lens type and runs to
+//     theta = 180 deg for equal-area and equidistant), and the pixel-for-pixel comparison of the
+//     two domains lives where it can be made cheaply and exhaustively: the unit-level mask gate
+//     test/unit-correctness/gui/test_visible_mask_gui_parity.cpp. It stays off this fixture's list
+//     not because it diverges but because this fixture compares RENDERED energy on a scene whose
+//     fov keeps the whole frame well inside both domains; widening its fov to exercise the rim
+//     would buy a duplicate of that unit gate at the cost of a much noisier oracle.
 //   * A loaded background IMAGE (GuiState::bg_*). Owner-decided GUI-only: it is never exported, so
 //     there is no honest comparison to make. Neither scene loads one.
 //   * RenderConfig::ray_color. The GUI's tint control does not reach the renderer, and the export
@@ -200,15 +203,19 @@ struct ParityScene {
 // is why the two equal-area scenes are no longer the whole story: they cannot see the factor at all
 // (their relative illumination is identically 1), so on their own they would let it be deleted.
 //
-// SINGLE-LENS FOV BOUND. The single-lens EQUAL-AREA scene's fov is bounded by the frame's corner:
-// the shader keeps inverting past the image circle while core stops, so the corner direction must
-// stay inside the domain both agree on. For an equal-area lens on a 4:3 frame the corner sits at
-// 1.665 image radii, i.e. sin(theta_c/2) = 1.665 * sin(fov/4), and theta_c <= 90 degrees needs
-// fov <= 100. At 96 the measured disagreement is zero pixels either way; at 150 it is 25% of the
-// frame.
+// SINGLE-LENS FOV BOUND. The single-lens EQUAL-AREA scene sits at fov 96, and the reason has
+// changed even though the number has not. It was originally the largest fov whose frame corner
+// stayed inside core's old theta <= 90 deg domain: on a 4:3 frame the corner sits at 1.665 image
+// radii, so sin(theta_c/2) = 1.665 * sin(fov/4) and theta_c <= 90 deg needs fov <= 100. Core's
+// domain now reaches theta = 180 deg for this lens (474.1), so that ceiling is gone — the same
+// corner stays inside the domain out to fov = 360. What keeps the scene at 96 now is that this is
+// a PSNR fixture, not a domain fixture: at 96 the two sides agreed to zero pixels before the
+// widening and still do, which is the quiet baseline the field-by-field breaks below are measured
+// against. Raising the fov would move this scene onto the rim, where the two paths' sampling
+// differs for reasons that have nothing to do with the fields under test.
 //
-// The bound does not bind on the RECTILINEAR scene, and for a structural reason rather than a
-// lucky number: that projection maps the image radius through theta = atan(rho / focal), which is
+// That ceiling never bound the RECTILINEAR scene, and for a structural reason rather than a lucky
+// number: that projection maps the image radius through theta = atan(rho / focal), which is
 // strictly below 90 degrees at every finite radius. There is no image circle to invert past, so no
 // fov below 180 can put the corner outside the shared domain. Re-derive this if the lens is ever
 // changed; do not carry the sentence over.

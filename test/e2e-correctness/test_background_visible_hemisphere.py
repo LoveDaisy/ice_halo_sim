@@ -18,13 +18,16 @@ frame into three regions that are all present in one image:
 
 Geometry, all of it derived rather than observed. `ComputeScaleAz0`'s equal-area branch gives
 scale = (short_edge / 2) / (sqrt(2) * sin(fov/4)), which at fov=180 on a 400x300 canvas is exactly
-150 -- so the core mask's own domain guard (`FisheyeEqualAreaInverse` rejects normalised r > 1)
-puts the image circle at 150 px, and the frame corners at 250 px are outside it. Region A is
-sampled beyond 170 px and region B/C inside 140 px, both with margin, so no probe sits on the
-boundary. The 150..212 px annulus where the GUI shader's own guard disagrees with the core mask
-(the domain divergence pinned in test_preview_background.cpp) is likewise never sampled -- this
-file compares the CLI against arithmetic, not against the GUI, but staying clear of that band
-keeps the numbers here readable next to the ones there.
+150. The core mask's domain guard (`FisheyeEqualAreaInverse`) rejects normalised r beyond the
+lens's rim, and for equal-area that rim is sqrt(2) -- theta = 180 deg -- so the imaged disc reaches
+212.1 px and the frame corners at 250 px are outside it. Region A is sampled beyond 230 px and
+region B/C inside 140 px, both with margin, so no probe sits on the boundary.
+
+That rim used to be 150 px, not 212.1: core stopped at the equator for every single-lens fisheye
+while the GUI preview kept inverting out to theta = 180 deg, and the 150..212 px annulus was a
+pinned CLI/GUI divergence. 474.1 closed it by taking the cull per lens type, which moved region A's
+inner bound from 170 px to 230 px -- the numbers here are the visible consequence of that change,
+not a relaxation of the assertion.
 
 Two renders come out of ONE run, differing only in `visible`, so region B has a paired positive
 control from the same rays: it must be background under `full` and black under `upper`. Without
@@ -60,13 +63,16 @@ CONFIG = (
 
 WIDTH, HEIGHT = 400, 300
 CX, CY = WIDTH / 2.0, HEIGHT / 2.0
-# Equal-area fisheye at fov=180: the core mask's inverse rejects normalised r > 1, and the scale
-# that normalises it is short_edge / 2 (see the module docstring's derivation).
-IMAGE_RADIUS = min(WIDTH, HEIGHT) / 2.0
+# Equal-area fisheye at fov=180: the scale that normalises radius is short_edge / 2, and the core
+# mask's inverse accepts out to the lens's rim, r = sqrt(2) (theta = 180 deg). See the module
+# docstring's derivation, including what this number was before 474.1 and why it moved.
+IMAGE_RADIUS = min(WIDTH, HEIGHT) / 2.0 * 2 ** 0.5  # 212.13 px
 
-# Region bounds, in pixels. The two radii straddle IMAGE_RADIUS with ~20 px of margin either way,
-# and the horizon rows are 15 px clear of CY, so nothing here is a boundary coin flip.
-OUTSIDE_RADIUS = 170.0
+# Region bounds, in pixels. The two radii straddle IMAGE_RADIUS with margin either way (18 px
+# outside, 72 px inside; the outer one is bounded by the 250 px frame corner, and region A still
+# holds 1740 pixels), and the horizon rows are 15 px clear of CY, so nothing here is a boundary
+# coin flip.
+OUTSIDE_RADIUS = 230.0
 INSIDE_RADIUS = 140.0
 BELOW_FIRST_ROW = 165
 ABOVE_LAST_ROW = 135

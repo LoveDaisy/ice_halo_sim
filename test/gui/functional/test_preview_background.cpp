@@ -646,33 +646,30 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // A declared, deliberate disagreement between this renderer and the CLI's, pinned so that
-  // settling it cannot happen silently.
+  // How far past the equator this renderer's single-lens domain reaches, pinned at three radii.
   //
-  // The mechanism. For a SINGLE-lens fisheye the CLI's projection is a forward one: it maps world
-  // directions to pixels, and a single lens images one hemisphere, so its image stops at the
-  // equator (theta = 90 deg) whatever the configured FOV. This renderer works backwards from a
-  // pixel through the same projection law, and its only stopping condition is that law's own
-  // domain — for equal area, `r * sin(fov/4) <= 1`, which at fov=180 reaches theta = 180 deg, a
-  // radius of sqrt(2) image radii. (It can do that because it is re-projecting an all-sky
-  // dual-fisheye source texture, not imaging a scene through one lens.)
+  // The mechanism. This renderer works backwards from a pixel through the projection law, and its
+  // only stopping condition is that law's own domain — for equal area, `r * sin(fov/4) <= 1`,
+  // which at fov=180 reaches theta = 180 deg, a radius of sqrt(2) image radii. So a wide-FOV
+  // single-lens preview shows sky well past the equator, out to the antipode of the lens axis.
   //
-  // So between r = img_radius and r = sqrt(2) * img_radius there is an annulus that this renderer
-  // paints with the sky colour and the CLI leaves black. NEITHER SIDE IS A BUG, and neither side
-  // may be quietly changed to match the other: narrowing this shader's domain to the equator is a
-  // product-semantics decision about what a wide-FOV single-lens preview shows, not a defect fix.
-  // This case exists so that whenever that decision is made, it lands here as a red rather than as
-  // a silent change in what users see.
+  // This case used to be a pinned CLI/GUI DIVERGENCE. The CLI's projection is a forward one, and
+  // it culled every single-lens fisheye at the equator whatever the configured FOV, so the
+  // annulus between r = img_radius and r = sqrt(2) * img_radius was sky here and black there. That
+  // was a product-semantics question rather than a defect on either side, and it was settled in
+  // 474.1 the way this renderer already had it: core's cull is now taken per lens type and runs to
+  // theta = 180 deg for equal-area. The annulus is sky on both sides now. The pixel-for-pixel
+  // comparison of the two domains lives in test/unit-correctness/gui/test_visible_mask_gui_parity.cpp,
+  // which asserts equality; what stays here is this renderer's own half of it, in real frames.
   //
   // Three probes, not one, at fov=180 equal-area on a 512x256 frame (img_radius = 128 px):
-  //   r = 100 px  theta = 67.1 deg   inside both domains          -> sky (positive control)
-  //   r = 150 px  theta = 111.9 deg  the divergence annulus       -> sky HERE, black in the CLI
-  //   r = 220 px  beyond 181.0 px    outside both domains         -> black (negative control)
-  // Without the outer two, "the annulus is sky" would also pass on a shader that painted the
+  //   r = 100 px  theta = 67.1 deg   inside the equator            -> sky (positive control)
+  //   r = 150 px  theta = 111.9 deg  past it, inside the domain    -> sky
+  //   r = 220 px  beyond 181.0 px    outside the domain            -> black (negative control)
+  // Without the outer two, "past the equator is sky" would also pass on a shader that painted the
   // entire frame, and without the inner one it would pass on a shader that painted nothing.
   {
-    ImGuiTest* t =
-        IM_REGISTER_TEST(engine, "preview_background", "the_single_lens_domain_divergence_is_visible_in_the_sky");
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "preview_background", "the_single_lens_domain_reaches_past_the_equator");
     t->GuiFunc = PreviewBackgroundGuiFunc;
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
@@ -688,8 +685,7 @@ void RegisterPreviewBackgroundTests(ImGuiTestEngine* engine) {
       IM_CHECK(!g_req.rgba.empty());
 
       ExpectSkyAt("inside the CLI's equator (r = 100 px)", g_req.rgba, 512, 256, 100.0f, 0.0f);
-      ExpectSkyAt("the divergence annulus (r = 150 px, past the CLI's equator at 128 px)", g_req.rgba, 512, 256, 150.0f,
-                  0.0f);
+      ExpectSkyAt("past the equator at 128 px (r = 150 px)", g_req.rgba, 512, 256, 150.0f, 0.0f);
       ExpectBlackAt("beyond this renderer's own domain (r = 220 px, past 181 px)", g_req.rgba, 512, 256, 220.0f, 0.0f);
     };
   }
