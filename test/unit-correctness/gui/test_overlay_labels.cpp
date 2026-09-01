@@ -55,9 +55,7 @@ gui::OverlayLabelInput MakeGridOnly(int visible, int lens_type, float elevation,
   in.front = front;
   in.show_horizon = false;
   in.horizon_color[0] = in.horizon_color[1] = in.horizon_color[2] = 1.0f;
-  in.grid_color[0] = in.grid_color[1] = in.grid_color[2] = 1.0f;
   in.horizon_alpha = 1.0f;
-  in.grid_alpha = 1.0f;
   return in;
 }
 
@@ -80,9 +78,9 @@ void AppendGridLabelsFromCore(const gui::OverlayLabelInput& in, float vp_w, floa
   // per call so no case can inherit another's settled result.
   gui::AnnotationOverlayCache cache;
   cache.Refresh(gui::MakeAnnotationViewKey(vin, static_cast<int>(vp_w), static_cast<int>(vp_h)));
+  // The grid's appearance rides on the set, not on OverlayLabelInput, so a default-constructed
+  // GuiState is the whole of it here — no case in this file asserts a colour.
   gui::GuiState state;
-  std::copy(std::begin(in.grid_color), std::end(in.grid_color), std::begin(state.grid_color));
-  state.grid_alpha = in.grid_alpha;
   gui::AppendCurveLabels(gui::BuildGridLabelSet(cache, state, vp_w, vp_h), vp_x, vp_y, out);
 }
 

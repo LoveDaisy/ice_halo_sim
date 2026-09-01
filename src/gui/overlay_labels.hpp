@@ -41,17 +41,18 @@ struct OverlayLabelInput {
   // fields that used to describe them — the switch, the sun direction, the angle list and its
   // count, the colour and the alpha — moved out with the walk that consumed them. Everything left
   // in this struct is an annotation the GUI still places itself.
-  // show_grid is gone with the walk it drove: the coordinate grid's anchors come from core now,
-  // through the same CurveLabelSet path the circles use. What is left in this struct is the
-  // horizon, the one annotation the GUI still places itself.
+  // The coordinate grid is gone from this struct with the walk it drove — its switch, its colour
+  // and its alpha alike. Its anchors come from core now, through the same CurveLabelSet path the
+  // circles use, and its appearance travels on that set. What is left here is the horizon, the one
+  // annotation the GUI still places itself.
   bool show_horizon;
-  float horizon_color[3], grid_color[3];
-  float horizon_alpha, grid_alpha;
+  float horizon_color[3];
+  float horizon_alpha;
 
-  // Coordinate grid step in degrees. NOT dead despite the grid's walk being gone: the horizon's
-  // label text is formatted to one decimal or none depending on it, which is a property of how
-  // fine the grid around it is. Default 10 deg keeps existing callers' behaviour unchanged; the
-  // live preview path overrides via ComputeGridStep(fov).
+  // Coordinate grid step in degrees, and the one grid field that is NOT dead: the horizon's label
+  // text is formatted to one decimal or none depending on it, which is a property of how fine the
+  // grid around it is rather than of the horizon. Default 10 deg keeps existing callers' behaviour
+  // unchanged; the live preview path overrides via ComputeGridStep(fov).
   float grid_step = 10.0f;
 };
 

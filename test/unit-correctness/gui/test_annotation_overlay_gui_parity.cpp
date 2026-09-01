@@ -433,7 +433,6 @@ std::vector<lumice::gui::OverlayLabel> GuiLabels(const LabelCase& c) {
   in.front = c.view.front;
   in.show_horizon = c.horizon;
   in.horizon_alpha = 1.0f;
-  in.grid_alpha = 1.0f;
   in.grid_step = c.grid_step;
   std::vector<lumice::gui::OverlayLabel> out;
   // A (0, 0) origin with the canvas as the viewport makes the GUI's screen coordinates the same

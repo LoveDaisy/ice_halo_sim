@@ -157,8 +157,6 @@ OverlayLabelInput BuildOverlayLabelInput(const GuiState& state, const RenderConf
   input.horizon_alpha = state.horizon_alpha;
 
   std::copy(std::begin(state.horizon_color), std::end(state.horizon_color), std::begin(input.horizon_color));
-  std::copy(std::begin(state.grid_color), std::end(state.grid_color), std::begin(input.grid_color));
-  input.grid_alpha = state.grid_alpha;
   input.grid_step = ComputeGridStep(rc.fov);
   return input;
 }

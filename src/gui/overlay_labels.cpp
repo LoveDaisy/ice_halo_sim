@@ -442,7 +442,7 @@ void ComputeOverlayLabels(const OverlayLabelInput& input, float vp_screen_x, flo
     return true;
   };
 
-  // Closed-curve azimuth / open-curve altitude sampling densities.
+  // Closed-curve azimuth sampling density.
   // 360 steps over 360 deg = 1 deg/step, which is what core's own walk uses for the curves that
   // moved over — the two have to sample at the same density or their anchors land a step apart.
   // The altitude counterpart went with the meridian walk it served.
