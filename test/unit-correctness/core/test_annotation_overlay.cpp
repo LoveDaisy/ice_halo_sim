@@ -138,7 +138,9 @@ TEST(AnnotationLevelSet, ACircularFieldMeasuresDistanceAcrossItsSeam) {
   }
   const std::vector<uint8_t> all(static_cast<size_t>(kW) * kH, 1);
 
-  auto lit_columns = [](const std::vector<uint8_t>& m) {
+  // kW is captured explicitly rather than left to the "constexpr needs no capture" rule: MSVC
+  // rejects the implicit form (C3493) where clang and gcc accept it.
+  auto lit_columns = [kW](const std::vector<uint8_t>& m) {
     std::vector<int> cols;
     for (int px = 0; px < kW; ++px) {
       if (m[static_cast<size_t>(px)] != 0) {
