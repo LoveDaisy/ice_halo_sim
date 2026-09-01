@@ -430,13 +430,19 @@ TEST(VisibleMask, VisibleRangeAppliesToRectangularAndDualFisheyeToo) {
 // faces, where it stops, and that it intersects rather than replaces.
 // ==================================================================================================
 
-TEST(VisibleMask, FrontIsANoOpForTheSingleLensFamily) {
-  // Their domain is already the front hemisphere: every single-lens inverse rejects r > 1, and
-  // r = 1 is theta = 90 deg (the equator of the camera frame). So there is nothing behind the
-  // camera for the clip to remove, and turning it on must not remove anything else either — which
-  // is the failure a clip written against the wrong axis, or with a flipped comparison, produces.
-  for (LensParam::LensType t : { LensParam::kLinear, LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant,
-                                 LensParam::kFisheyeStereographic, LensParam::kFisheyeOrthographic }) {
+TEST(VisibleMask, FrontIsANoOpOnlyWhereTheDomainStopsAtTheEquator) {
+  // This used to assert the no-op for the WHOLE single-lens family, on the premise its own comment
+  // stated: "every single-lens inverse rejects r > 1, and r = 1 is theta = 90 deg". 474.1 removed
+  // that premise for three of the five — equal-area, equidistant and stereographic now invert out
+  // to theta = 180 deg — so the clip has real work to do there and the old assertion became false.
+  // It is narrowed rather than relaxed, and the half it gave up is asserted positively below.
+  //
+  // The two that remain are not leftovers; each stops at the front hemisphere for its own reason:
+  //   * kLinear maps radius through theta = atan(rho / focal), strictly below 90 deg at every
+  //     finite radius. There is no image circle to invert past.
+  //   * kFisheyeOrthographic is capped at 90 deg on purpose (474.1): r = sin(theta) peaks at the
+  //     equator and folds back, so widening it is not invertible.
+  for (LensParam::LensType t : { LensParam::kLinear, LensParam::kFisheyeOrthographic }) {
     for (float el : { 90.0f, 30.0f, 0.0f }) {
       RenderConfig off = MakeCfg(t, 170.0f, 128, 128, RenderConfig::kFull, el);
       RenderConfig on = off;
@@ -454,11 +460,45 @@ TEST(VisibleMask, FrontIsANoOpForTheSingleLensFamily) {
   }
 }
 
+TEST(VisibleMask, FrontClipsTheWidenedSingleLensTypes) {
+  // The positive half of the split above, and the reason narrowing it is not a loss of coverage:
+  // for the three types 474.1 widened past the equator, the front clip MUST remove something, or
+  // the widening and the clip are not both reaching the mask. A clip written against the wrong
+  // axis would show up here as "removed nothing" just as surely as it would have shown up in the
+  // old no-op assertion as "removed something".
+  //
+  // Elevation 0 only: the camera on the horizon is where a 170 deg frame reaches furthest behind
+  // it. At the zenith the widened region is the sky near the nadir, which the clip also removes,
+  // but the horizon case is the one that fails first if the clip's axis is wrong.
+  for (LensParam::LensType t :
+       { LensParam::kFisheyeEqualArea, LensParam::kFisheyeEquidistant, LensParam::kFisheyeStereographic }) {
+    RenderConfig off = MakeCfg(t, 170.0f, 128, 128, RenderConfig::kFull, 0.0f);
+    RenderConfig on = off;
+    on.front_ = true;
+    const auto m_off = Mask(off);
+    const auto m_on = Mask(on);
+    if (CountOn(m_off) == 0u) {
+      // Non-fatal for the same reason the no-op test above is: one empty row must not take the
+      // remaining lens types with it.
+      ADD_FAILURE() << "type " << static_cast<int>(t) << ": the unclipped mask is empty";
+      continue;
+    }
+    EXPECT_LT(CountOn(m_on), CountOn(m_off))
+        << "type " << static_cast<int>(t)
+        << ": the front clip removed nothing from a lens whose domain now reaches past the equator";
+    // And it must not remove everything either — that is the flipped-comparison failure.
+    EXPECT_GT(CountOn(m_on), 0u) << "type " << static_cast<int>(t) << ": the front clip emptied the mask";
+  }
+}
+
 TEST(VisibleMask, FrontAtTheZenithIsExactlyTheUpperHemisphere) {
   // The proposition is geometric, not conventional: a camera pointed straight up faces the upper
   // half of the sky, so ITS front hemisphere and THE upper hemisphere are the same set. Pointed
   // straight down, the lower one. Checked on a full-sky lens, where the two clips can disagree —
-  // on a single lens both are no-ops and the test would prove nothing.
+  // on kLinear and kFisheyeOrthographic both are no-ops and the test would prove nothing. (The
+  // other three single lenses reach past the equator since 474.1, so the clip does bite there;
+  // the full-sky lens is still the clearer probe because its two clips can differ, not merely
+  // both be non-empty.)
   const int w = 200;
   const int h = 100;
   {

@@ -423,18 +423,24 @@ const ParityScene kScenes[] = {
   // corner-to-centre spread, decisive as a red without pushing the corners so far into the
   // grazing region that the comparison is dominated by resampling the source texture's equator.
   //
-  // mean 33.157 sigma 0.1400 (N=13, range 32.83-33.34). Threshold 31.5 = mean - 1.66 dB = 12
-  // sigma, and 1.33 dB below the worst honest run. Placed well below mean - 1.0 dB, and not by
-  // preference: this scene's sigma is the largest of the three, and the note above requires at
-  // least 10 sigma, which 32.0 (9.3 sigma once the thirteenth sample widened the spread) did not
-  // reach. It costs nothing to give it, because the break this row exists to catch is enormous:
-  // with the relative-illumination factor absent from the shader — the state the row was landed
-  // in and measured at — it reads 26.44, 26.40 and 26.28 dB, 5.2 dB below this threshold.
+  // mean 32.79 sigma 0.100 (N=4, range 32.64-32.90). Threshold 31.5 = mean - 1.29 dB = 12.8
+  // sigma, and 1.14 dB below the worst honest run. Placed well below mean - 1.0 dB, and not by
+  // preference: the note above requires at least 10 sigma, which a tighter figure would not reach.
+  // It costs nothing to give it, because the break this row exists to catch is enormous: with the
+  // relative-illumination factor absent from the shader — the state the row was landed in and
+  // measured at — it reads 26.44, 26.40 and 26.28 dB, more than 5 dB below this threshold.
+  //
+  // RECALIBRATION CAVEAT, same shape as the two rows above. The row was first measured with the
+  // annotation families OFF, at mean 33.157 sigma 0.1400 (N=13): they did not exist yet. Switching
+  // all four ON — which this row's own "copied verbatim from single_lens_angled" rule requires,
+  // since that scene carries them — cost about 0.37 dB and is what moved the mean to the figure
+  // above. The threshold did not have to move with it. N=4 on the new mean, so do not read the
+  // small sigma as a licence to run this tighter than 31.5.
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
-   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/false, /*show_sun_circles=*/false,
-   /*show_grid=*/false,
+   gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
+   /*show_grid=*/true, /*show_zenith_nadir=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.5, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
