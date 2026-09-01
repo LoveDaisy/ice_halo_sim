@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "config/color_class_table.hpp"
+#include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
@@ -100,7 +101,17 @@ class RenderConsumer : public IConsume {
   // table gets one W*H Y-lane; Consume() runs each class's `any`/`all` predicate
   // over every ray's component mask and accumulates Y into the matching lane.
   // Default (empty table) = pre-336 behavior bit-for-bit (no lane state).
-  explicit RenderConsumer(RenderConfig config, ColorClassTable class_table = ColorClassTable{});
+  // `sun` is the scene's light source, needed for one reason only: the angular-distance
+  // annotations in config.angular_dist_grid_ are circles AROUND THE SUN, so their geometry cannot
+  // be derived from the RenderConfig alone. It is the first piece of non-render config this class
+  // has ever taken, and it stays a separate parameter rather than moving into RenderConfig
+  // because the sun belongs to the scene, not to any one renderer — three renderers in one scene
+  // share it.
+  // `sun` comes LAST, after the older `class_table`, so that every existing two-argument
+  // construction keeps compiling — it is the sun a renderer with no angular_dist_grid_ entries
+  // never consults.
+  explicit RenderConsumer(RenderConfig config, ColorClassTable class_table = ColorClassTable{},
+                          SunParam sun = SunParam{ 0.0f, 0.0f, 0.5f });
 
   void Consume(const SimData& data) override;
   // S1 device-fused (scrum-302): fold a backend-accumulated XYZ pixel buffer
@@ -122,7 +133,11 @@ class RenderConsumer : public IConsume {
   std::shared_ptr<const float[]> SnapshotXyzStorage() const { return snapshot_xyz_; }
   std::shared_ptr<const uint8_t[]> SnapshotImageStorage() const { return snapshot_image_buffer_; }
   void Reset() override;
-  void ResetWith(const RenderConfig& new_config);
+  // The reuse path. `new_sun` is passed for the same reason the constructor takes one, and it is
+  // NOT merely stored: neither the sun nor angular_dist_grid_ takes part in NeedsRebuild (the sun
+  // is not even a RenderConfig field), so this is the ONLY path by which either can change without
+  // a fresh consumer, and the annotation masks are rebuilt here when they do.
+  void ResetWith(const RenderConfig& new_config, const SunParam& new_sun);
   void LogConsumeProfile() const;  // Dump accumulated profiling stats
 
   // task-339.3 read-only accessors. Both read snapshot state, mirroring
@@ -214,6 +229,7 @@ class RenderConsumer : public IConsume {
   // White-box handle on the horizon-annotation mask, for the tests that pin its shape against
   // the projection it is derived from. Same rationale as VisibleMaskForTest above.
   const std::vector<uint8_t>& HorizonMaskForTest() const { return horizon_mask_; }
+  const std::vector<std::vector<uint8_t>>& AngularDistMasksForTest() const { return angular_dist_masks_; }
 
   // The composite path's anchor, chosen by `config_.ev_mode_`. This exists so the compositor has
   // ONE call to make and the mode decision has ONE owner — the compositor keeps its single-scalar
@@ -241,6 +257,11 @@ class RenderConsumer : public IConsume {
   // has_lanes flag, ConsumeDeviceFused warning) so it lives as a helper.
   bool HasColorClasses() const { return !class_table_.classes_.empty(); }
 
+  // (Re)build angular_dist_masks_ from config_.angular_dist_grid_ and sun_, skipping the work when
+  // neither has changed since the last build. See the member's declaration for why this is not a
+  // constructor-only job.
+  void RebuildAngularDistMasks();
+
   RenderConfig config_;
   Rotation rot_;  // camera pose rotation
   float short_pix_ = 0;
@@ -259,6 +280,22 @@ class RenderConsumer : public IConsume {
   // then be empty exactly when the user has just asked for the line. Gating happens at the
   // point of use in PostSnapshot instead.
   std::vector<uint8_t> horizon_mask_;
+  // One W*H mask per entry of config_.angular_dist_grid_, index-aligned with it. Per LINE, not
+  // per category, because each entry carries its own opacity_ / color_ and a category-wide union
+  // could not tell one line's pixels from another's. Building them is a W*H inverse-projection
+  // sweep each, which is why they are built once here and not per snapshot.
+  //
+  // Unlike visible_mask_ / horizon_mask_ these CANNOT be built once and left alone: their shape
+  // depends on the requested angles and on the sun, and neither is a NeedsRebuild field, so both
+  // can change under a reused consumer. RebuildAngularDistMasks() is therefore called from the
+  // constructor AND from ResetWith, and skips the sweep when the inputs it last built from are
+  // unchanged.
+  std::vector<std::vector<uint8_t>> angular_dist_masks_;
+  // What angular_dist_masks_ was last built from — the change detector for the paragraph above.
+  std::vector<float> angular_dist_mask_angles_;
+  float angular_dist_mask_sun_[3]{ 0.0f, 0.0f, 0.0f };
+  bool angular_dist_masks_built_ = false;
+  SunParam sun_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;
   // Σ SimData::emitted_energy_ over every batch consumed since the last Reset(),

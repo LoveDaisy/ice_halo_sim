@@ -82,6 +82,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_exposure_scale.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_post_snapshot_fusion.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_visible_mask.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_angular_dist.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_composite_background.cpp"

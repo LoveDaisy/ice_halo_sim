@@ -154,7 +154,7 @@ TEST(RenderConsumerHorizon, TheFlagGatesThePaintingNotTheMask) {
   EXPECT_EQ(tinted_off, 0u) << "grid.outline is off, so nothing may be drawn";
 
   // Same consumer, flag flipped through the appearance-only path.
-  rc.ResetWith(MakeOutlineConfig(true));
+  rc.ResetWith(MakeOutlineConfig(true), SunParam{ 0.0f, 0.0f, 0.5f });
   const std::vector<uint8_t> img_on = SnapshotOnce(&rc);
   ASSERT_EQ(img_on.size(), static_cast<size_t>(kTotalPix) * 3);
   size_t tinted_on = 0;
