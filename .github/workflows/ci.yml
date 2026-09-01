@@ -751,8 +751,9 @@ jobs:
           pytest $phase1_args -n 3 -v -m slow
           # Phase 2 — serial + GPU-isolated: the throughput gates run alone so the
           # measured rate is not deflated by concurrent tests. Only legs whose args
-          # include test/performance run this (the metal-exit-seam parity leg has
-          # no perf tests → skipped). Cheap (~2 gates); no -n on purpose.
+          # include test/performance run this (the leg named "parity" lists files
+          # explicitly and has no perf tests → skipped). Cheap (~2 gates); no -n
+          # on purpose.
           case "${{ matrix.pytest_args }}" in
             *test/performance*) pytest test/performance -v -m slow ;;
           esac
