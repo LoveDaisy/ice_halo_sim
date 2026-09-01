@@ -183,12 +183,14 @@ inline MaskDir CameraDirToWorld(const Rotation& rot, const projection::Dir3& c) 
 // after projecting (screen handedness: right = +az), so the projected coordinates that produced
 // the pixel are (-u, v) and the inverse consumes them in that order.
 //
-// The fisheye inverses reject r > 1, and r = 1 is the EQUATOR for r_scale = 1 — the same
-// theta <= 90 deg region the forward's `cz <= 0` cull leaves renderable. That makes this test
-// exactly "could a ray have landed here", which is what the mask is for. Note it is NOT the
-// same region the GUI shader's `fisheyeInverse` accepts: its guard is the asin domain
-// (theta <= 180 deg), a radius sqrt(2)x larger for equal-area. See
-// test_visible_mask_gui_parity.cpp, which pins that difference rather than papering over it.
+// Each fisheye inverse rejects beyond its own rim radius, and that rim is the same theta the
+// forward's per-type cull stops at (projection.cpp's kFisheyeStereographicMaxR and the
+// kFisheyeAntipodeMinCz / kFisheyeStereographicMinCz notes in projection_shared.h). That makes
+// this test exactly "could a ray have landed here", which is what the mask is for. It is also the
+// same region the GUI shader's `fisheyeInverse` accepts — equal-area and equidistant now run to
+// theta = 180 deg on both sides, orthographic stops at the equator on both sides, and
+// stereographic's core-only numerical cap sits far off any real frame. test_visible_mask_gui_parity.cpp
+// asserts that agreement pixel by pixel; before 474.1 it pinned a divergence there instead.
 inline MaskDir SingleLensPixelToWorld(LensParam::LensType type, const Rotation& rot, float u, float v) {
   projection::Dir3 c{ 0, 0, 0, false };
   switch (type) {
