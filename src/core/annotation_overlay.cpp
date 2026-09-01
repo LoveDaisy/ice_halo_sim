@@ -228,6 +228,15 @@ float AngularDistDegOfDir(const float ref[3], float wx, float wy, float wz) {
 
 }  // namespace
 
+void SunWorldDir(const SunParam& sun, float* out) {
+  const float az = sun.azimuth_ * math::kDegreeToRad;
+  const float alt = sun.altitude_ * math::kDegreeToRad;
+  const float c_alt = std::cos(alt);
+  out[0] = -std::cos(az) * c_alt;
+  out[1] = -std::sin(az) * c_alt;
+  out[2] = -std::sin(alt);
+}
+
 RenderConfig ToRenderConfig(const ViewSnapshot& view) {
   RenderConfig cfg;
   cfg.resolution_[0] = view.width;

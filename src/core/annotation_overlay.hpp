@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/lens_proj_build.hpp"
 
@@ -149,6 +150,22 @@ inline constexpr float kLabelHemisphereToleranceDeg = 0.5f;
 // through; ~sin(0.57 deg). Ported from the GUI's kFrontEps for the same reason as the tolerance
 // above — the two implementations have to agree about which samples are in.
 inline constexpr float kFrontEps = 0.01f;
+
+// The world direction of the sun, in the same convention every other direction in this file uses:
+// the direction light TRAVELS, not the direction a viewer points to look at it. `out` gets a unit
+// vector suitable for Request::reference_dir.
+//
+// The convention is not a choice made here — three places already agree on it and this function is
+// a fourth parameterization of the same transform, not a new one:
+//   - the ray generator, SampleRayDir in simulator.cpp, emits SampleSphCapPoint(azimuth + 180,
+//     -altitude, ...), whose cap centre is exactly the vector below;
+//   - the preview shader recovers (altitude, azimuth) from a world direction as
+//     asin(-z) / atan2(-y, -x), which inverts the same mapping;
+//   - the GUI's own sun_dir, (-cos(alt), 0, -sin(alt)), is this vector at azimuth 0 — the special
+//     case it can afford because the GUI has no azimuth field at all.
+// Getting the sign wrong would not be subtle: an angular-distance circle of radius r around -v is
+// a circle of radius 180-r around v, so a 22-degree halo would come out as a 158-degree ring.
+void SunWorldDir(const SunParam& sun, float* out);
 
 // The view snapshot as the RenderConfig the projection helpers take. `front` has no RenderConfig
 // home yet and is applied by this layer instead.

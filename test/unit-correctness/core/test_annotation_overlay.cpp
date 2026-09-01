@@ -22,10 +22,12 @@
 #include <numeric>
 #include <vector>
 
+#include "config/light_config.hpp"
 #include "config/render_config.hpp"
 #include "core/annotation_overlay.hpp"
 #include "core/geo3d.hpp"
 #include "core/lens_proj_build.hpp"
+#include "core/math.hpp"
 #include "core/scatter_accum.hpp"  // MakeCameraRotation
 
 namespace {
@@ -427,6 +429,110 @@ TEST(AnnotationOverlay, AngularDistanceCirclesAreCentredOnTheReferenceDirection)
   p.visible_range = static_cast<int>(RenderConfig::kFull);
   const ann::CanvasPoint centre =
       ann::ProjectWorldDir(p, req.reference_dir[0], req.reference_dir[1], req.reference_dir[2]);
+  ASSERT_TRUE(centre.valid);
+  EXPECT_NEAR(sx / count, static_cast<double>(centre.px), 4.0);
+  EXPECT_NEAR(sy / count, static_cast<double>(centre.py), 4.0);
+}
+
+// =============== SunWorldDir: which vector is "the sun" ===============
+// The sign of this vector is the one thing in the CLI's angular-distance path that fails
+// invisibly-but-totally: a circle of radius r around -v is a circle of radius 180-r around v, so
+// an inverted sun direction turns the 22 deg halo into a 158 deg ring that is still a perfectly
+// well-formed circle. It is pinned three ways below, against the three places that already answer
+// the same question, rather than against a fourth hand-derived formula.
+
+TEST(SunWorldDir, MatchesTheGuiFormulaAtAzimuthZero) {
+  // The GUI has no sun azimuth field at all; its preview passes (-cos(alt), 0, -sin(alt)), which
+  // is this function's azimuth-0 slice. That formula is what the shipped preview draws its sun
+  // circles from, so agreeing with it is agreeing with a value users have already validated.
+  for (float alt : { -90.0f, -30.0f, 0.0f, 12.5f, 45.0f, 90.0f }) {
+    const lumice::SunParam sun{ alt, 0.0f, 0.5f };
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::SunWorldDir(sun, d);
+    const float rad = alt * lumice::math::kDegreeToRad;
+    EXPECT_NEAR(d[0], -std::cos(rad), 1e-5f) << "altitude=" << alt;
+    EXPECT_NEAR(d[1], 0.0f, 1e-5f) << "altitude=" << alt;
+    EXPECT_NEAR(d[2], -std::sin(rad), 1e-5f) << "altitude=" << alt;
+  }
+}
+
+TEST(SunWorldDir, MatchesTheRayGeneratorsCapCentre) {
+  // SampleRayDir (simulator.cpp) emits SampleSphCapPoint(azimuth + 180, -altitude, diameter/2).
+  // With a zero-radius cap that sampler returns its centre exactly, so this compares against the
+  // direction the simulator actually launches sunlight along — the transform whose "+180 and
+  // negate" this function had to reproduce rather than guess at.
+  const float azimuths[] = { 0.0f, 37.0f, 90.0f, 180.0f, 271.0f };
+  const float altitudes[] = { -20.0f, 0.0f, 23.5f, 60.0f };
+  for (float az : azimuths) {
+    for (float alt : altitudes) {
+      float cap_centre[3] = { 0.0f, 0.0f, 0.0f };
+      lumice::SampleSphCapPoint(az + 180.0f, -alt, 0.0f, cap_centre);
+      const lumice::SunParam sun{ alt, az, 0.5f };
+      float d[3] = { 0.0f, 0.0f, 0.0f };
+      ann::SunWorldDir(sun, d);
+      for (int k = 0; k < 3; ++k) {
+        EXPECT_NEAR(d[k], cap_centre[k], 1e-5f) << "az=" << az << " alt=" << alt << " k=" << k;
+      }
+    }
+  }
+}
+
+TEST(SunWorldDir, InvertsThePreviewShadersAngleRecovery) {
+  // The preview fragment shader reads a world direction back as altitude = asin(-z) and
+  // azimuth = atan2(-y, -x). Round-tripping through it is what makes the vector the SAME
+  // (altitude, azimuth) the rest of the GUI means, not merely a unit vector of the right length.
+  const float azimuths[] = { 0.0f, 37.0f, 90.0f, 180.0f, 271.0f };
+  const float altitudes[] = { -20.0f, 0.0f, 23.5f, 60.0f };
+  for (float az : azimuths) {
+    for (float alt : altitudes) {
+      const lumice::SunParam sun{ alt, az, 0.5f };
+      float d[3] = { 0.0f, 0.0f, 0.0f };
+      ann::SunWorldDir(sun, d);
+
+      EXPECT_NEAR(std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 1.0f, 1e-5f);
+      const float alt_back = std::asin(std::clamp(-d[2], -1.0f, 1.0f)) / lumice::math::kDegreeToRad;
+      EXPECT_NEAR(alt_back, alt, 1e-3f) << "az=" << az << " alt=" << alt;
+      // atan2 returns (-180, 180]; compare on the circle so 271 and -89 agree.
+      float az_back = std::atan2(-d[1], -d[0]) / lumice::math::kDegreeToRad;
+      float delta = std::fmod(az_back - az + 540.0f, 360.0f) - 180.0f;
+      EXPECT_NEAR(delta, 0.0f, 1e-3f) << "az=" << az << " alt=" << alt;
+    }
+  }
+}
+
+TEST(SunWorldDir, PutsTheCircleCentreWhereTheSunIsImaged) {
+  // End to end: feed the vector to ComputeOverlay as reference_dir and check the ring it produces
+  // is centred on the pixel the sun's own direction projects to. This is the assertion that would
+  // fail loudly on an inverted sign — the centroid would land at the antipode instead.
+  const lumice::SunParam sun{ 25.0f, 40.0f, 0.5f };
+  float d[3] = { 0.0f, 0.0f, 0.0f };
+  ann::SunWorldDir(sun, d);
+
+  ann::Request req;
+  req.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128);
+  req.view.visible = RenderConfig::kFull;
+  req.labels = false;
+  req.angular_dist_deg = { 22.0f };
+  std::copy(d, d + 3, req.reference_dir);
+  const ann::Overlay ring = ann::ComputeOverlay(req);
+  ASSERT_GT(CountOn(ring.angular_dist), 0u);
+
+  double sx = 0.0;
+  double sy = 0.0;
+  double count = 0.0;
+  for (size_t i = 0; i < ring.angular_dist.size(); ++i) {
+    if (ring.angular_dist[i] != 0) {
+      sx += static_cast<double>(i % 256u);
+      sy += static_cast<double>(i / 256u);
+      count += 1.0;
+    }
+  }
+
+  const RenderConfig cfg = ann::ToRenderConfig(req.view);
+  const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
+  lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
+  p.visible_range = static_cast<int>(RenderConfig::kFull);
+  const ann::CanvasPoint centre = ann::ProjectWorldDir(p, d[0], d[1], d[2]);
   ASSERT_TRUE(centre.valid);
   EXPECT_NEAR(sx / count, static_cast<double>(centre.px), 4.0);
   EXPECT_NEAR(sy / count, static_cast<double>(centre.py), 4.0);
