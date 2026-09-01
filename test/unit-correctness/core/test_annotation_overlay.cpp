@@ -502,11 +502,18 @@ TEST(SunWorldDir, InvertsThePreviewShadersAngleRecovery) {
 
 TEST(SunWorldDir, PutsTheCircleCentreWhereTheSunIsImaged) {
   // End to end: feed the vector to ComputeOverlay as reference_dir and check the ring it produces
-  // is centred on the pixel the sun's own direction projects to. This is the assertion that would
-  // fail loudly on an inverted sign — the centroid would land at the antipode instead.
+  // is centred on the pixel SUNLIGHT lands at.
+  //
+  // The expected centre is projected from the ray generator's own cap centre, NOT from `d`. Using
+  // `d` on both sides was the first shape of this test and it is a tautology: reference_dir and
+  // the expected pixel would move together under any sign convention, so a fully inverted
+  // SunWorldDir passed it while the other three cases in this suite went red. The independent
+  // source is what makes this case add anything.
   const lumice::SunParam sun{ 25.0f, 40.0f, 0.5f };
   float d[3] = { 0.0f, 0.0f, 0.0f };
   ann::SunWorldDir(sun, d);
+  float sun_ray[3] = { 0.0f, 0.0f, 0.0f };
+  lumice::SampleSphCapPoint(sun.azimuth_ + 180.0f, -sun.altitude_, 0.0f, sun_ray);
 
   ann::Request req;
   req.view = MakeView(LensParam::kDualFisheyeEqualArea, 180.0f, 256, 128);
@@ -532,7 +539,7 @@ TEST(SunWorldDir, PutsTheCircleCentreWhereTheSunIsImaged) {
   const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
   lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
   p.visible_range = static_cast<int>(RenderConfig::kFull);
-  const ann::CanvasPoint centre = ann::ProjectWorldDir(p, d[0], d[1], d[2]);
+  const ann::CanvasPoint centre = ann::ProjectWorldDir(p, sun_ray[0], sun_ray[1], sun_ray[2]);
   ASSERT_TRUE(centre.valid);
   EXPECT_NEAR(sx / count, static_cast<double>(centre.px), 4.0);
   EXPECT_NEAR(sy / count, static_cast<double>(centre.py), 4.0);
