@@ -1947,6 +1947,15 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
         FillGridLines(elevation, state.grid_color, state.grid_alpha, dst.elevation_grid, &dst.elevation_grid_count);
         FillGridLines(longitude, state.grid_color, state.grid_alpha, dst.longitude_grid, &dst.longitude_grid_count);
       }
+      // The zenith / nadir markers. Gated on their own switch like everything above, and unlike
+      // the three line families they carry no angle list — the two directions are fixed, so the
+      // only data is the appearance. The colour needs no conversion: this field is sRGB, the
+      // convention every LUMICE_GridLine.color follows and `background` does not.
+      dst.zenith_nadir = state.show_zenith_nadir_line ? 1 : 0;
+      dst.zenith_nadir_radius_px = state.zenith_nadir_radius_px;
+      dst.zenith_nadir_opacity = state.zenith_nadir_alpha;
+      std::copy(std::begin(state.zenith_nadir_color), std::end(state.zenith_nadir_color),
+                std::begin(dst.zenith_nadir_color));
     } else {
       // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
       // used to hardcode while re-encoding a renderer now have to be stated here.
@@ -1969,11 +1978,17 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // control anywhere, so there is no user-visible value for the export arm to be honest about.
     // If one is ever added, this is the line that has to stop being a comment.
     //
-    // All three grid families stay zero on the kSimCommit arm, and deliberately: that arm asks
-    // core for a TEXTURE the preview then re-projects and draws its own overlay on top of, so an
-    // annotation baked into it would be drawn twice. Same reason dst.horizon is unconditionally 1
-    // there. The export arm above fills all three, which is what makes them the divergence set
-    // test_scene_commit_chain.cpp's kDivergingKeys pins.
+    // All four annotation families — the three line lists and the marker pair — stay zero on the
+    // kSimCommit arm, and deliberately: that arm asks core for a TEXTURE the preview then
+    // re-projects and draws its own overlay on top of, so an annotation baked into it would be
+    // drawn twice. Same reason dst.horizon is unconditionally 1 there. The export arm above fills
+    // all four, which is what makes them the divergence set test_scene_commit_chain.cpp's
+    // kDivergingKeys pins.
+    //
+    // The marker block leaving its three appearance fields at zero on this arm is harmless for the
+    // same reason the empty lists are: with dst.zenith_nadir = 0 nothing reads them. It is NOT the
+    // same statement as the JSON decoders' "a missing key means core's defaults" — that one is
+    // about a document, this one about a struct the commit arm fills itself.
     //
     // grid.elevation and grid.longitude used to carry a longer caveat here — that the GUI's one
     // FOV-adaptive step and core's explicit per-line list were two models nobody had reconciled.
@@ -3345,7 +3360,7 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
   // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
   // debounce over. Its own cache, for the same reason: a different clock from the preview's.
-  if (params.overlay.show_sun_circles || params.overlay.show_grid) {
+  if (params.overlay.show_sun_circles || params.overlay.show_grid || params.overlay.show_zenith_nadir) {
     static AnnotationOverlayCache export_overlay;
     export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
     // Each family is handed over only if it actually produced a mask. HasResult() is not enough on
@@ -3368,6 +3383,16 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
         params.overlay.grid_mask_h = export_overlay.Height();
         params.overlay.grid_mask_generation = export_overlay.Generation();
       }
+      // The marker positions have to be recomputed here for a second reason on top of the mask's:
+      // they are SCREEN COORDINATES, so a position inherited from vp.params was measured against
+      // the live preview's viewport and would put the ring at the wrong place on any export whose
+      // canvas differs — not merely stretch it, as a rescaled mask does.
+      CanvasPointToShaderScreenPos(export_overlay.ZenithPoint(), vp.vp_w, vp.vp_h, params.overlay.zenith_screen_pos);
+      CanvasPointToShaderScreenPos(export_overlay.NadirPoint(), vp.vp_w, vp.vp_h, params.overlay.nadir_screen_pos);
+    } else if (params.overlay.show_zenith_nadir) {
+      // No result to place them from, and the inherited positions are the preview's. Switch the
+      // markers off rather than draw two rings at coordinates this canvas never produced.
+      params.overlay.show_zenith_nadir = false;
     }
   }
   auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h, std::nullopt);

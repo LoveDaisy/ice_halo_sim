@@ -410,22 +410,35 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           break;
       }
 
-      // 7b. Overlay scenes only (overlay_ea): precompute the zenith/nadir marker positions
-      // and turn the grid on. Mirrors the runtime path in app_panels.cpp — the markers are
-      // positioned on the CPU by ProjectWorldDirToScreen and handed to the shader as
-      // uniforms, so this block is part of what the reference covers, not test scaffolding.
-      // Must run after the switch above: it reads the view_proj the scene just installed.
+      // 7b. Overlay scenes only (overlay_ea): place the zenith/nadir markers and turn the grid on.
+      // Mirrors the runtime path in app_panels.cpp — both families now take their geometry from
+      // core's LUMICE_ComputeAnnotationOverlay and the shader only rasterizes it, so this block is
+      // part of what the reference covers, not test scaffolding. Must run after the switch above:
+      // it reads the view_proj the scene just installed.
       if (scene.enable_overlay) {
         if (scene.overlay_zenith_nadir) {
-          constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-          constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-          auto zpos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kZenithWorldDir, vp.vp_w, vp.vp_h);
-          auto npos = gui::ProjectWorldDirToScreen(vp.params.view_proj, kNadirWorldDir, vp.vp_w, vp.vp_h);
+          // Computed AT THIS CANVAS and converted through the one owner of the canvas -> shader
+          // transform, for the same reasons the grid block below gives. The markers used to be
+          // placed by ProjectWorldDirToScreen, a GUI-only second copy of the forward projection;
+          // that copy is no longer on this path.
+          static gui::AnnotationOverlayCache marker_overlay;
+          gui::AnnotationViewInput in;
+          in.lens_type = vp.params.view_proj.lens_type;
+          in.fov = vp.params.view_proj.fov;
+          in.azimuth = vp.params.view_proj.azimuth;
+          in.elevation = vp.params.view_proj.elevation;
+          in.roll = vp.params.view_proj.roll;
+          in.visible = vp.params.view_proj.visible;
+          in.front = vp.params.view_proj.front;
+          in.overlap = gui::kDualFisheyeOverlap;
+          in.zenith_nadir = true;
+          marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
+          IM_CHECK(marker_overlay.HasResult());
           vp.params.overlay.show_zenith_nadir = true;
-          vp.params.overlay.zenith_screen_pos[0] = zpos[0];
-          vp.params.overlay.zenith_screen_pos[1] = zpos[1];
-          vp.params.overlay.nadir_screen_pos[0] = npos[0];
-          vp.params.overlay.nadir_screen_pos[1] = npos[1];
+          gui::CanvasPointToShaderScreenPos(marker_overlay.ZenithPoint(), vp.vp_w, vp.vp_h,
+                                            vp.params.overlay.zenith_screen_pos);
+          gui::CanvasPointToShaderScreenPos(marker_overlay.NadirPoint(), vp.vp_w, vp.vp_h,
+                                            vp.params.overlay.nadir_screen_pos);
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;

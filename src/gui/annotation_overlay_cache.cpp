@@ -6,6 +6,7 @@
 
 #include "gui/gui_constants.hpp"
 #include "gui/gui_logger.hpp"
+#include "gui/preview_renderer.hpp"  // kOverlaySentinel (the shader's "no marker here" position)
 #include "lumice.h"
 
 namespace lumice::gui {
@@ -14,7 +15,8 @@ bool AnnotationOverlayCache::ViewKey::operator==(const ViewKey& o) const {
   return width == o.width && height == o.height && lens_type == o.lens_type && fov == o.fov && azimuth == o.azimuth &&
          elevation == o.elevation && roll == o.roll && visible == o.visible && front == o.front &&
          std::equal(std::begin(sun_dir), std::end(sun_dir), std::begin(o.sun_dir)) &&
-         angular_dist_deg == o.angular_dist_deg && elevation_deg == o.elevation_deg && longitude_deg == o.longitude_deg;
+         angular_dist_deg == o.angular_dist_deg && elevation_deg == o.elevation_deg &&
+         longitude_deg == o.longitude_deg && zenith_nadir == o.zenith_nadir;
 }
 
 void AnnotationOverlayCache::Update(const ViewKey& key) {
@@ -82,7 +84,18 @@ AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput&
   key.elevation_deg.assign(in.elevation_deg.begin(), in.elevation_deg.begin() + ne);
   const size_t nl = std::min(in.longitude_deg.size(), static_cast<size_t>(LUMICE_MAX_ANNOTATION_LINES));
   key.longitude_deg.assign(in.longitude_deg.begin(), in.longitude_deg.begin() + nl);
+  key.zenith_nadir = in.zenith_nadir;
   return key;
+}
+
+void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int canvas_w, int canvas_h, float out[2]) {
+  if (!p.valid || canvas_w <= 0 || canvas_h <= 0) {
+    out[0] = kOverlaySentinel;
+    out[1] = kOverlaySentinel;
+    return;
+  }
+  out[0] = p.px - static_cast<float>(canvas_w) * 0.5f;
+  out[1] = static_cast<float>(canvas_h) * 0.5f - p.py;
 }
 
 void AnnotationOverlayCache::Recompute(const ViewKey& key) {
@@ -98,9 +111,15 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   angular_dist_labels_.clear();
   grid_mask_.clear();
   grid_labels_.clear();
+  zenith_ = {};
+  nadir_ = {};
 
-  if ((key.angular_dist_deg.empty() && key.elevation_deg.empty() && key.longitude_deg.empty()) || key.width <= 0 ||
-      key.height <= 0) {
+  // `zenith_nadir` belongs in this guard, not only in the request below: it is a fourth thing the
+  // caller can ask for, and a user who turns the markers on while every angle list is empty is the
+  // ordinary case, not a corner one. Left out, the function would return before calling core at
+  // all and the markers would silently never appear.
+  if ((key.angular_dist_deg.empty() && key.elevation_deg.empty() && key.longitude_deg.empty() && !key.zenith_nadir) ||
+      key.width <= 0 || key.height <= 0) {
     return;
   }
   // The ceiling is a rejection, not a truncation, on core's side; clamp here so a user with an
@@ -124,6 +143,7 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
   req.elevation_count = static_cast<int>(key.elevation_deg.size());
   req.longitude_deg = key.longitude_deg.data();
   req.longitude_count = static_cast<int>(key.longitude_deg.size());
+  req.zenith_nadir = key.zenith_nadir ? 1 : 0;
   std::copy(std::begin(key.sun_dir), std::end(key.sun_dir), std::begin(req.reference_dir));
   // Masks AND anchors in one call: they are two readings of the same sweep, and asking twice would
   // pay for it twice and admit the possibility of them disagreeing.
@@ -154,10 +174,14 @@ void AnnotationOverlayCache::Recompute(const ViewKey& key) {
         grid_mask_[i] = lit ? uint8_t{ 1 } : uint8_t{ 0 };
       }
     }
+    zenith_ = { out.zenith_px, out.zenith_py, out.zenith_valid != 0 };
+    nadir_ = { out.nadir_px, out.nadir_py, out.nadir_valid != 0 };
     for (int i = 0; i < out.label_count; ++i) {
       const LUMICE_AnnotationLabel& l = out.labels[i];
-      // Core answers for every requested category; the horizon and the zenith/nadir markers have
-      // not moved off the GUI's own walk yet, so their anchors are dropped here.
+      // Core answers for every requested category; the horizon has not moved off the GUI's own
+      // walk yet, so its anchors are dropped here. The zenith/nadir markers appear in no `kind` at
+      // all — core returns them as POINTS (read above), not labels, because a marker carries no
+      // text.
       if (l.kind == LUMICE_ANNOTATION_ANGULAR_DIST) {
         angular_dist_labels_.push_back(Label{ l.px, l.py, l.value_deg, std::string(l.text) });
       } else if (l.kind == LUMICE_ANNOTATION_ELEVATION || l.kind == LUMICE_ANNOTATION_LONGITUDE) {

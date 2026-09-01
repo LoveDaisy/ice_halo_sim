@@ -53,6 +53,9 @@ class AnnotationOverlayCache {
     // above, which is now one call serving three families.
     std::vector<float> elevation_deg;
     std::vector<float> longitude_deg;
+    // The zenith / nadir markers. A bool rather than a list because there is nothing to enumerate:
+    // the two directions are fixed, and what varies is only whether the caller wants them.
+    bool zenith_nadir = false;
 
     bool operator==(const ViewKey& o) const;
     bool operator!=(const ViewKey& o) const { return !(*this == o); }
@@ -63,6 +66,15 @@ class AnnotationOverlayCache {
     float py = 0.0f;
     float value_deg = 0.0f;
     std::string text;
+  };
+
+  // Where one marker landed, in the same canvas pixel space Label uses. `valid` false means the
+  // view does not image that direction at all — which is the ordinary case for a single lens, not
+  // an error, since zenith and nadir are opposite directions.
+  struct Point {
+    float px = 0.0f;
+    float py = 0.0f;
+    bool valid = false;
   };
 
   // Call once per frame with the view as it stands. Recomputes only when the key has been
@@ -93,6 +105,11 @@ class AnnotationOverlayCache {
   // Anchors for both grid families, merged for the same reason the mask is: core has already
   // formatted each label's text, and the consumer draws them in one style.
   const std::vector<Label>& GridLabels() const { return grid_labels_; }
+  // The zenith / nadir marker positions. Both invalid unless HasResult() and the key asked for
+  // them; each carries its own `valid`, because a view images one of them far more often than
+  // both.
+  const Point& ZenithPoint() const { return zenith_; }
+  const Point& NadirPoint() const { return nadir_; }
 
   // Bumped on every recompute, from a counter shared by ALL instances. A consumer that caches
   // something derived from a result — PreviewRenderer's GL texture — compares this instead of the
@@ -121,6 +138,8 @@ class AnnotationOverlayCache {
   std::vector<Label> angular_dist_labels_;
   std::vector<uint8_t> grid_mask_;
   std::vector<Label> grid_labels_;
+  Point zenith_;
+  Point nadir_;
   uint64_t generation_ = 0;  // 0 = never computed, which a consumer's "nothing uploaded" sentinel matches
 };
 
@@ -142,8 +161,22 @@ struct AnnotationViewInput {
   std::vector<float> angular_dist_deg;
   std::vector<float> elevation_deg;
   std::vector<float> longitude_deg;
+  bool zenith_nadir = false;
 };
 AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
+
+// A core canvas point as the preview shader's marker uniforms want it. The two spaces are not the
+// same and differ in two ways at once: core's origin is the top-left corner with y DOWN
+// (annotation_overlay.hpp), the shader's is the canvas centre with y UP (`pos = v_ndc *
+// u_resolution * 0.5`, preview_renderer.cpp). So a translation AND a y flip, not just one.
+//
+// A point that missed becomes the sentinel the shader's distance test already rejects, which is
+// what stops an unimaged marker from drawing a ring at the canvas corner.
+//
+// One owner because there are two callers — the live preview and the off-screen export — and they
+// pass DIFFERENT canvas sizes. A second copy of a formula that is only correct relative to the
+// size it was given is exactly the kind of duplicate this task exists to remove.
+void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int canvas_w, int canvas_h, float out[2]);
 
 // The world direction of the sun as the GUI means it, matching core's annotation::SunWorldDir at
 // azimuth 0 — which is every case the GUI has, since it exposes no sun azimuth control. Shared so

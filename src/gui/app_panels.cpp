@@ -144,6 +144,9 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
     in.elevation_deg = ComputeGridElevationAngles(step);
     in.longitude_deg = ComputeGridLongitudeAngles(step);
   }
+  // The marker pair has no list to fill and no label switch of its own — it is a bool the request
+  // either carries or does not.
+  in.zenith_nadir = state.show_zenith_nadir_line;
   return in;
 }
 
@@ -1475,7 +1478,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // still needs the mask. Which families the request actually carries is decided inside
     // AnnotationViewInputFor, off the same switches; each switch then gates its own half below.
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label || g_state.show_grid_line ||
-        g_state.show_grid_label) {
+        g_state.show_grid_label || g_state.show_zenith_nadir_line) {
       g_annotation_overlay.Update(
           MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
     } else {
@@ -1500,8 +1503,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.grid_mask_generation = g_annotation_overlay.Generation();
     }
 
-    // Zenith / Nadir pixel-space marker. zenith world dir = (0,0,-1), nadir = (0,0,+1)
-    // (see preview_renderer.cpp:overlayAuxLines altitude convention).
+    // Zenith / Nadir pixel-space marker. The APPEARANCE below is the GUI's own state; the two
+    // POSITIONS come from core (below the lens-border block), not from a GUI-side projection.
     pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
     std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
               std::begin(pp.overlay.zenith_nadir_color));
@@ -1511,14 +1514,16 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     std::copy(std::begin(g_state.lens_border_color), std::end(g_state.lens_border_color),
               std::begin(pp.overlay.lens_border_color));
     pp.overlay.lens_border_alpha = g_state.lens_border_alpha;
-    constexpr float kZenithWorldDir[3] = { 0.f, 0.f, -1.f };
-    constexpr float kNadirWorldDir[3] = { 0.f, 0.f, 1.f };
-    auto zpos = ProjectWorldDirToScreen(pp.view_proj, kZenithWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    auto npos = ProjectWorldDirToScreen(pp.view_proj, kNadirWorldDir, g_preview_vp.vp_w, g_preview_vp.vp_h);
-    pp.overlay.zenith_screen_pos[0] = zpos[0];
-    pp.overlay.zenith_screen_pos[1] = zpos[1];
-    pp.overlay.nadir_screen_pos[0] = npos[0];
-    pp.overlay.nadir_screen_pos[1] = npos[1];
+    // WHERE the two rings go: core's answer, from the same LUMICE_ComputeAnnotationOverlay call
+    // the circles and the grid already read, converted from its canvas space (top-left origin,
+    // y down) into the shader's (centre origin, y up). This used to be a second, GUI-only forward
+    // projection of the two world directions through ProjectWorldDirToScreen — the same duplicate
+    // implementation the label walk had, and the one this task removes. The ring is still
+    // rasterized by the shader; only the position's source moved.
+    CanvasPointToShaderScreenPos(g_annotation_overlay.ZenithPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
+                                 pp.overlay.zenith_screen_pos);
+    CanvasPointToShaderScreenPos(g_annotation_overlay.NadirPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
+                                 pp.overlay.nadir_screen_pos);
 
     // Overlay labels at viewport edges (drawn on the preview window's draw list so
     // modals correctly occlude them). BuildOverlayLabelInput is shared with
