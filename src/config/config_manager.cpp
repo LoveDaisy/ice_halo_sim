@@ -61,6 +61,13 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
   if (j_render.contains("visible")) {
     j_render.at("visible").get_to(render.visible_);
   }
+  // Independent of "visible" and ANDed with it — deliberately its own key rather than a fourth
+  // "visible" enumerator, because NLOHMANN_JSON_SERIALIZE_ENUM maps an unregistered string to the
+  // FIRST table entry (kUpper) without an error, so "visible": "front" would silently render the
+  // upper hemisphere instead.
+  if (j_render.contains("front")) {
+    j_render.at("front").get_to(render.front_);
+  }
   // "background_color" is not, and never was, a schema key — but it is a very natural guess next to
   // ray_color / sun_circles_color / zenith_nadir_color, and the repo's own e2e corpus has written it
   // by mistake in a dozen files across several commits. Unknown keys are otherwise ignored in

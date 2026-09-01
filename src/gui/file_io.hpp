@@ -129,10 +129,11 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 //   kJsonExport's invariant — the renderer DESCRIBES THE SCREEN: lens/fov/view/visible/background/
 //     horizon/canvas all come from GuiState, and intensity_factor bakes 2^exposure_offset, because
 //     the CLI has no display-time stage at all. Whatever is not in the config is not in the image.
-//     Three documented exceptions, each with a reason and none of them silent:
-//       - the front-hemisphere clip: no core encoding exists, so the export is REFUSED (below);
+//     Two documented exceptions, each with a reason and none of them silent:
 //       - lens_shift: no GUI control exists, so there is no user-visible value to be honest about;
 //       - overlay annotations other than the horizon line: a model mismatch, not an omission.
+//     The front-hemisphere clip was a third until it gained a core field (RenderConfig::front_ /
+//     LUMICE_RenderParam::front, JSON key "front"); it is now written like any other field.
 //
 //   resolution is the one field where both arms may print the same numbers, and it is a
 //   coincidence of the fallback rather than a coupling: kSimCommit's 2:1 is required, while
@@ -142,8 +143,8 @@ std::string FormatColorOverflowLocator(const ColorClassOverflowInfo& overflow);
 // Pure — no file dialog / filesystem — so the reject path is directly unit-testable (the
 // file-dialog wrapper DoExportConfigJson only supplies the path). Returns true and fills *out_json
 // (pretty-printed, 2-space indent) on success; returns false and fills *out_warning (a
-// FormatOverflowLocator-bearing message on an ABI clause/term/color overflow, or the front-clip
-// refusal) on rejection, leaving *out_json untouched. Either out-param may be null.
+// FormatOverflowLocator-bearing message on an ABI clause/term/color or grid-line overflow) on
+// rejection, leaving *out_json untouched. Either out-param may be null.
 bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::string* out_warning);
 
 // task-gui-feedback-affordances Step 3 (AC4): summary of how many post-Cartesian

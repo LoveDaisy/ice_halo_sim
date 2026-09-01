@@ -56,9 +56,10 @@ annotation::Request MakeMaskRequest(const RenderConfig& config) {
   req.view.el_deg = config.view_.el_;
   req.view.roll_deg = config.view_.ro_;
   req.view.visible = config.visible_;
-  // The CLI renders the image itself, so there is no separate "front" clip to apply on top of
-  // `visible` — what the lens images is what exists.
-  req.view.front = false;
+  // The second clip dimension, ANDed with `visible`. It has to be forwarded here and not left at
+  // false: BuildVisibleMask clips the background sky by front_, so an annotation that ignored it
+  // would draw its line or marker over the half that was clipped away.
+  req.view.front = config.front_;
   // Masks only. The CLI draws no text, and skipping the curve walk is several times cheaper.
   req.labels = false;
   return req;

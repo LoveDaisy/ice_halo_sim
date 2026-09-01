@@ -180,6 +180,18 @@ inline MaskDir CameraDirToWorld(const Rotation& rot, const projection::Dir3& c) 
   return { -d[0], -d[1], -d[2], true };
 }
 
+// The direction the camera looks along, in world space. The dual of CameraDirToWorld above: the
+// forward keeps camera-frame c.z > 0, so the optical axis c = (0, 0, 1) maps to w = -R * (0, 0, 1).
+inline void CameraForward(const Rotation& rot, float out[3]) {
+  out[0] = 0.0f;
+  out[1] = 0.0f;
+  out[2] = 1.0f;
+  rot.Apply(out);
+  out[0] = -out[0];
+  out[1] = -out[1];
+  out[2] = -out[2];
+}
+
 // Single-lens family (linear + 4 single fisheye). The forward negates the horizontal component
 // after projecting (screen handedness: right = +az), so the projected coordinates that produced
 // the pixel are (-u, v) and the inverse consumes them in that order.
@@ -281,6 +293,18 @@ inline bool VisibleByRange(RenderConfig::VisibleRange range, float wz) {
     return false;
   }
   return true;
+}
+
+// The second, orthogonal clip: RenderConfig::front_ keeps only the hemisphere the camera faces.
+// ANDed with VisibleByRange, never folded into it. No epsilon, matching both VisibleByRange's own
+// exact comparisons and the GUI shader's `dot(world_dir, u_view_matrix[2]) > 0.0 -> discard`
+// (annotation_overlay.cpp's kFrontEps is a label-anchor tolerance for a different question:
+// how far past the seam a curve's anchor may sit, not where the sky ends).
+inline bool FrontVisible(bool front, const float forward[3], float wx, float wy, float wz) {
+  if (!front) {
+    return true;
+  }
+  return forward[0] * wx + forward[1] * wy + forward[2] * wz >= 0.0f;
 }
 
 // The per-pixel inverse, lens branch and all: pixel (px, py) -> the world direction it images.
@@ -457,12 +481,15 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
   // Reuse the very params the forward path runs on (scale / az0 / r_scale), so the mask cannot
   // drift from the projection it is the inverse of.
   const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
+  float forward[3];
+  mask_detail::CameraForward(rot, forward);
 
   ParallelRows(height, mask.size(), [&](int row_begin, int row_end) {
     for (int py = row_begin; py < row_end; py++) {
       for (int px = 0; px < width; px++) {
         const mask_detail::MaskDir dir = mask_detail::PixelToWorld(cfg, p, rot, px, py);
-        const bool on = dir.valid && mask_detail::VisibleByRange(cfg.visible_, dir.z);
+        const bool on = dir.valid && mask_detail::VisibleByRange(cfg.visible_, dir.z) &&
+                        mask_detail::FrontVisible(cfg.front_, forward, dir.x, dir.y, dir.z);
         mask[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)] = on ? 1 : 0;
       }
     }
@@ -478,9 +505,11 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
 //
 // The rule is the preview shader's own (preview_renderer.cpp overlayAuxLines, horizon section):
 // draw where |altitude_deg| falls inside 1.5x the local per-pixel altitude gradient, gated on the
-// pixel being both imageable AND inside the configured visible hemisphere — the shader applies its
-// overlay under exactly that `result.w >= 0.5 && pixel_visible` gate, so a half-sky config shows
-// the horizon ending at the sky's edge on both sides rather than only on one.
+// pixel being both imageable AND inside the configured visible hemisphere (and, when front_ is
+// set, the front one too — the shader's `pixel_visible` has always ANDed `u_front` in) — the
+// shader applies its overlay under exactly that `result.w >= 0.5 && pixel_visible` gate, so a
+// half-sky config shows the horizon ending at the sky's edge on both sides rather than only on
+// one, and a front-clipped config does not leave the line floating over the clipped-away half.
 //
 // Returns an empty vector for a degenerate resolution.
 inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
@@ -499,6 +528,8 @@ inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rota
   std::vector<float> alt_deg(n, 0.0f);
   std::vector<uint8_t> imaged(n, 0);
   std::vector<uint8_t> drawable(n, 0);
+  float forward[3];
+  mask_detail::CameraForward(rot, forward);
   ParallelRows(height, n, [&](int row_begin, int row_end) {
     for (int py = row_begin; py < row_end; py++) {
       for (int px = 0; px < width; px++) {
@@ -509,7 +540,10 @@ inline std::vector<uint8_t> BuildHorizonMask(const RenderConfig& cfg, const Rota
         const size_t i = static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px);
         alt_deg[i] = mask_detail::AltitudeDeg(dir);
         imaged[i] = 1;
-        drawable[i] = mask_detail::VisibleByRange(cfg.visible_, dir.z) ? 1 : 0;
+        drawable[i] = (mask_detail::VisibleByRange(cfg.visible_, dir.z) &&
+                       mask_detail::FrontVisible(cfg.front_, forward, dir.x, dir.y, dir.z)) ?
+                          1 :
+                          0;
       }
     }
   });

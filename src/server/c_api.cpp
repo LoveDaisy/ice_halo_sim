@@ -601,6 +601,9 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   jr["resolution"] = { r.resolution_w, r.resolution_h };
   jr["view"] = ns::ViewParam{ r.view_azimuth, r.view_elevation, r.view_roll };
   jr["visible"] = MapVisibleFromCApi(r.visible);
+  // Its own top-level key, not a "visible" enumerator: the two clips are orthogonal and AND
+  // together. Twin of core's to_json in render_config.cpp.
+  jr["front"] = r.front != 0;
   // Back to sRGB on the way out — the struct field is linear, the JSON key is not.
   jr["background"] = { ns::LinearToSrgb(r.background[0]), ns::LinearToSrgb(r.background[1]),
                        ns::LinearToSrgb(r.background[2]) };
@@ -2359,6 +2362,18 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
         return err;
       }
       r.visible = MapVisibleToCApi(visible);
+    }
+
+    // Absent key = no clip, which is what a config predating the field means. Twin of core's
+    // ParseRenderConfig.
+    r.front = 0;
+    if (rj.contains("front")) {
+      bool front = false;
+      const LUMICE_ErrorCode err = DecodeCoreField(rj.at("front"), front);
+      if (err != LUMICE_OK) {
+        return err;
+      }
+      r.front = front ? 1 : 0;
     }
 
     // Twin of core's warning in config_manager.cpp::ParseRenderConfig; see the rationale there.

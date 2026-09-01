@@ -114,6 +114,12 @@ struct RenderConfig {
   int resolution_[2]{};  // width, height
   ViewParam view_{};
   VisibleRange visible_ = kUpper;
+  // A second clip dimension, independent of visible_ and ANDed with it: when set, a pixel is
+  // drawable only if its world direction also lies in the hemisphere the camera faces
+  // (forward . dir >= 0). It is deliberately NOT a VisibleRange enumerator — the two axes are
+  // orthogonal, and folding them into one enum would multiply out its cases. Twin of
+  // LUMICE_RenderParam::front and LUMICE_AnnotationView::front.
+  bool front_ = false;
 
   // Linear RGB. The JSON "background" key is sRGB; to_json / ParseRenderConfig convert.
   float background_[3]{};

@@ -111,7 +111,20 @@ extern "C" {
 // projection (preview_renderer.cpp ProjectWorldDirToScreen) and reads
 // LUMICE_ComputeAnnotationOverlay's zenith_px/py instead — so both drawers now take their geometry
 // from one place, as angular_dist and the two grid families already do.
-#define LUMICE_API_VERSION 419
+//
+// BREAKING (v4.20): LUMICE_RenderParam gains a trailing `front` field — the front-hemisphere clip,
+// APPENDED after zenith_nadir_color, so every existing field keeps its offset while sizeof() grows;
+// a caller that was NOT recompiled hands the API a shorter struct and the new field is read past
+// the end of it. Recompile against this header. The JSON key is a top-level "front" boolean on the
+// renderer object, deliberately NOT a fourth "visible" enumerator: the two are orthogonal clips
+// that AND together, and core's NLOHMANN_JSON_SERIALIZE_ENUM maps an unregistered "visible" string
+// to the FIRST table entry (upper) without an error, so folding them would fail silently.
+// Note the accompanying BEHAVIOR change, which has no ABI half: the clip was GUI-preview-only (a
+// shader crop), and the GUI refused to export a document that had it on rather than write a config
+// that renders differently. It is now a core field, so the CLI reproduces it — the background sky
+// mask and every annotation (horizon, angular_dist, elevation, longitude, zenith/nadir) are clipped
+// by the same rule the preview shader applies.
+#define LUMICE_API_VERSION 420
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -836,6 +849,11 @@ typedef struct LUMICE_RenderParam_ {
   float zenith_nadir_radius_px;
   float zenith_nadir_opacity;
   float zenith_nadir_color[3];
+  // ADDED (v4.20). Non-zero = clip away the hemisphere BEHIND the camera, keeping only what the
+  // camera faces. A SECOND clip dimension, independent of `visible` and ANDed with it, which is why
+  // it is its own field rather than a `visible` enumerator. Opt-in: core's RenderConfig::front_
+  // defaults to false, so a zero-initialized struct clips nothing.
+  int front;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============

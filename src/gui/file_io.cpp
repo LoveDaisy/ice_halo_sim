@@ -1205,38 +1205,21 @@ bool BuildExportJsonOrWarn(const GuiState& state, std::string* out_json, std::st
   // Export and simulation therefore reject an over-limit filter identically by construction, not
   // by two implementations agreeing — the latter previously let export silently write a
   // semantically-opposite match-all stand-in for a filter the simulator refused.
-  // The front-hemisphere clip has no encoding on the far side, so the export is refused rather
-  // than approximated. RenderConfig::front is a GUI-only shader crop (preview_renderer.cpp's
-  // u_front) ANDed on top of visible; core's VisibleRange is {upper, lower, full} and
-  // LUMICE_RenderParam has no field for it. The two ways of not-refusing are both worse:
-  //   - Encoding "visible": "front" would be actively dangerous. NLOHMANN_JSON_SERIALIZE_ENUM maps
-  //     any unregistered string to the FIRST table entry, and that entry is kUpper
-  //     (render_config.hpp) — the CLI would silently render the upper hemisphere, no diagnostic.
-  //   - Dropping it silently would export a picture wider than the one on screen, which is the
-  //     exact class of dishonesty this export path was just fixed to stop committing.
-  // So it takes the same false + *out_warning channel the ABI-overflow rejections below use: no
-  // file is written and DoExportConfigJson shows the reason.
+  // The front-hemisphere clip USED to be refused here: it was a GUI-only shader crop
+  // (preview_renderer.cpp's u_front) with no field on the far side, and both alternatives to
+  // refusing were worse (encoding "visible": "front" hits NLOHMANN_JSON_SERIALIZE_ENUM's
+  // unregistered-string-maps-to-the-first-entry rule and would silently render the UPPER
+  // hemisphere; dropping it would export a picture wider than the one on screen). It is now a real
+  // core field — RenderConfig::front_ / LUMICE_RenderParam::front, its own top-level "front" JSON
+  // key rather than a fourth `visible` enumerator — so BuildScene's export arm writes it and the
+  // CLI reproduces the clip. No rejection remains.
   //
-  // This check runs before the overflow checks below, and every rejection shares the single
-  // *out_warning string: if a document trips more than one, only the first is shown (first-match-
-  // wins by check order, not by severity). A third rejection HAS since been added (the grid
-  // overflow), which is what the previous version of this comment asked to reconsider collecting
-  // reasons over — and the answer, on inspecting the shape, is no. There are still exactly two
-  // layers, not four independent checks: `front` is the only rejection that can be decided before
-  // BuildScene runs, and the other three are BuildScene's own single-failure funnel, where the
-  // first one hit returns immediately and the other two structs are therefore never filled. So the
-  // only pair that can be simultaneously true is (front, one BuildScene reason), and front is a
-  // one-toggle fix that costs the user nothing to clear first. Reconsider if a rejection is ever
-  // added that is NOT decidable before BuildScene and NOT inside it.
-  if (state.renderer.front) {
-    if (out_warning) {
-      *out_warning =
-          "The Front hemisphere clip has no equivalent in the exported config format, and the CLI "
-          "would render the un-clipped view instead.\nNo config was exported. Turn Front off in the "
-          "Display group and try again.";
-    }
-    return false;
-  }
+  // Every rejection below shares the single *out_warning string: if a document trips more than
+  // one, only the first is shown (first-match-wins by check order, not by severity). That is
+  // still sound because all three remaining rejections are BuildScene's own single-failure funnel
+  // — the first one hit returns immediately and the other two structs are therefore never filled,
+  // so at most one can be set. Reconsider if a rejection is ever added that is decidable OUTSIDE
+  // BuildScene, since that would reintroduce the possibility of two true at once.
   FilterOverflowInfo overflow;
   ColorClassOverflowInfo color_overflow;
   GridOverflowInfo grid_overflow;
@@ -1872,8 +1855,9 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     //   kJsonExport — "what would the CLI have to be told to draw the picture on screen?"
     //                 Invariant: every field below reflects GuiState, because the CLI has no
     //                 display-time reprojection stage at all — whatever is not in the config is
-    //                 not in the image. The documented exceptions are lens_shift (no GUI control)
-    //                 and the front-hemisphere clip (rejected in BuildExportJsonOrWarn, which see).
+    //                 not in the image. The one documented exception left is lens_shift (no GUI
+    //                 control); the front-hemisphere clip used to be a second one and is not any
+    //                 more — it has a core field now and is written below like every other.
     if (for_export) {
       // Both index the same enumeration by construction: kLensTypeNames is declared "order must
       // match Core's LensParam::LensType enum" (gui_state.hpp) and LUMICE_LENS_TYPE_* is that enum
@@ -1882,6 +1866,10 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       dst.lens_type = r.lens_type;
       dst.lens_fov = r.fov;
       dst.visible = r.visible;
+      // The second clip, ANDed with `visible` on both sides of the seam. It is a plain bool here
+      // and an int over the ABI, so it is the one Display-group field that needs a conversion
+      // rather than a pass-through.
+      dst.front = r.front ? 1 : 0;
       dst.view_azimuth = r.azimuth;
       dst.view_elevation = r.elevation;
       // NOT the stored r.roll: under the Globe lens the preview renders roll=0 while keeping the
@@ -1962,7 +1950,12 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
       dst.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;  // was hardcoded in RendererToJson
       dst.lens_fov = 180.0f;                                     // was hardcoded in RendererToJson
       dst.visible = LUMICE_VISIBLE_FULL;                         // was hardcoded in RendererToJson
-      dst.horizon = 1;                                           // core RenderConfig::horizon_ default (true)
+      // Same invariant as `visible` above, for the same reason: the commit arm asks core for an
+      // UNCROPPED full-sky texture and the preview shader applies the user's front clip at display
+      // time (u_front). Stated rather than left to the zero-init, so the two arms read as one
+      // deliberate divergence instead of an omission.
+      dst.front = 0;
+      dst.horizon = 1;  // core RenderConfig::horizon_ default (true)
       // view / background keep their zero-initialized values, matching both the pre-v4.11
       // hardcoded encoding and core's defaults.
     }

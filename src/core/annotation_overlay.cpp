@@ -250,6 +250,7 @@ RenderConfig ToRenderConfig(const ViewSnapshot& view) {
   cfg.view_.el_ = view.el_deg;
   cfg.view_.ro_ = view.roll_deg;
   cfg.visible_ = view.visible;
+  cfg.front_ = view.front;
   return cfg;
 }
 

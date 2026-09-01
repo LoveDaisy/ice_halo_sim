@@ -42,8 +42,8 @@ namespace lumice::annotation {
 // =================================================================================================
 
 // The view the annotation is computed for. Deliberately its own struct rather than a RenderConfig:
-// it carries `front`, which RenderConfig does not have yet, and it is consumed by a pure function
-// with no Scene / Server lifetime around it.
+// it is the projection-relevant subset only, consumed by a pure function with no Scene / Server
+// lifetime around it.
 struct ViewSnapshot {
   int width = 0;
   int height = 0;
@@ -167,8 +167,9 @@ inline constexpr float kFrontEps = 0.01f;
 // a circle of radius 180-r around v, so a 22-degree halo would come out as a 158-degree ring.
 void SunWorldDir(const SunParam& sun, float* out);
 
-// The view snapshot as the RenderConfig the projection helpers take. `front` has no RenderConfig
-// home yet and is applied by this layer instead.
+// The view snapshot as the RenderConfig the projection helpers take. `front` is carried across
+// too, so the conversion stays total, but this layer applies it itself (VisibleForLabel and the
+// per-pixel gates below) — none of the projection helpers reads RenderConfig::front_.
 RenderConfig ToRenderConfig(const ViewSnapshot& view);
 
 // Forward-project a world direction onto the canvas. Thin wrapper over lm_proj::ProjectExitToPixel
