@@ -698,7 +698,10 @@ The render configuration defines the renderer parameters.
   "angular_dist": [ ... ],
   "elevation": [ ... ],
   "longitude": [ ... ],
-  "horizon": <boolean>
+  "horizon": <boolean>,
+  "horizon_label": <boolean>,
+  "label": <boolean>,
+  "angular_dist_label": <boolean>
 }
 ```
 
@@ -710,6 +713,31 @@ The render configuration defines the renderer parameters.
 | `elevation` | object array | no | [] | Parallels — lines of constant elevation, in degrees. **Rendered** (as of v4.18; earlier versions parsed the list and drew nothing). Same rules as `angular_dist`: `value`, `opacity` and `color` take effect, `width` does not. |
 | `longitude` | object array | no | [] | Meridians — lines of constant azimuth, in degrees. **Rendered.** Same rules as `elevation`. Added in v4.18; a file without the key gets an empty list, which draws nothing. |
 | `horizon` | boolean | no | false | Draw a line along the celestial horizon (altitude 0), in the visible hemisphere only. Opt-in: set it to `true` to get the line. |
+| `horizon_label` | boolean | no | false | Draw the horizon's TEXT label (`0°`). Added in v4.21. Independent of `horizon`: the label appears with the line switched off. |
+| `label` | boolean | no | false | Draw the TEXT labels for `elevation` and `longitude` — the angle each line stands for. One switch for both families, matching the GUI's single grid label control. Added in v4.21. |
+| `angular_dist_label` | boolean | no | false | Draw the TEXT labels for `angular_dist` (`22°`, `46°`). Added in v4.21. |
+
+**The three `*_label` switches, and the one thing they do NOT control**
+
+They decide whether the label GEOMETRY is computed, which is independent of whether the family's
+own line is drawn. For the horizon that independence is directly usable — `horizon_label: true`
+with `horizon: false` renders the numbers and no line. For the other two families it is not, and
+the reason is the schema rather than the switch: "is this family drawn" IS "is its angle list
+non-empty", so there is no way to ask for `elevation` labels without also asking for the parallels
+themselves.
+
+What they do NOT control is the label's OPACITY. A label is painted in its family's own colour and
+opacity — each `angular_dist` / `elevation` / `longitude` entry's own `opacity` and `color`, and a
+fixed constant for the horizon — so a line at `"opacity": 0` is invisible together with its labels.
+This mirrors the GUI, where a label has always taken its family's appearance; a renderer that let a
+label outlive its line would show something the preview cannot.
+
+Rendering is core's own: the CLI has no ImGui, so it embeds a typeface and rasterizes the labels
+itself, from the same anchors the GUI preview reads. The two agree about WHICH labels appear and
+where the curve puts them. They differ in two ways that are deliberate and will not be reconciled
+by a threshold: the glyphs come out of two different rasterizers, and the GUI additionally clamps a
+label inside the viewport and drops one that collides with another, while the CLI draws every
+anchor where it lands.
 
 **`central` is the old name for `angular_dist`**
 
