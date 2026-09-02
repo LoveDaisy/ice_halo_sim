@@ -30,6 +30,7 @@
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
+#include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
 #include "util/cpu_info.hpp"
@@ -1614,8 +1615,8 @@ void ServerImpl::GenerateScene() {
   size_t committed_num = 0;
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
-    sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
+    AccountThenPublishBatch(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch), *scene_queue_,
+                            SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());
