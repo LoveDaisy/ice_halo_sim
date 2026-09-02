@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788362668281,
+  "lastUpdate": 1788362670932,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9560,50 +9560,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e19100c3ddb56b6fd6824dc6ef55ec580d076639",
-          "message": "Merge pull request #198 from LoveDaisy/fix/gpu-color-mask-batch-leak\n\nfix(gpu): layer-0 color-class mask cross-batch leak (Metal + CUDA)",
-          "timestamp": "2026-07-15T13:17:01+08:00",
-          "tree_id": "c9be5f895a1ea8318033db8cb4029ccd31fb54f1",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e19100c3ddb56b6fd6824dc6ef55ec580d076639"
-        },
-        "date": 1784093081204,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 75,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "2cbcffd86aaaf5817d43b9b2504d063d705d802c",
           "message": "Merge pull request #199 from LoveDaisy/feat/painter-alpha-over\n\nfeat(painter-composite): painter 改亮度即 alpha 的 Porter-Duff over 合成 + 设默认",
           "timestamp": "2026-07-15T15:15:11+08:00",
@@ -13918,6 +13874,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.6,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08aa283330101f2ed499cab2ab657abe4bcbb2b2",
+          "message": "Merge pull request #297 from LoveDaisy/feat/lens-projection-semantics\n\nfeat(core): 收口 ProjectExitToPixel 遗留的三条 core↔GUI 分歧（参考图只重拍一次）",
+          "timestamp": "2026-09-02T23:11:02+08:00",
+          "tree_id": "db3c8f71967ab4435d5b915e7c9047561643c424",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/08aa283330101f2ed499cab2ab657abe4bcbb2b2"
+        },
+        "date": 1788362670038,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 98.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.9,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 92.8,
             "unit": "%"
           }
         ]
