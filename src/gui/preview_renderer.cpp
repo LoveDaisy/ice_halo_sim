@@ -716,6 +716,19 @@ void main() {
 )glsl";
 // clang-format on
 
+// The kTexMode* block inside the fragment shader above and PreviewRenderer::TextureMode are one
+// contract across a language boundary GL gives us no way to check: Render() sends the C++ value
+// and the shader compares it against its own literals. These assertions pin the C++ half to the
+// numbers written up there, so a change made only here is a build error. The other direction —
+// editing the GLSL literals alone — the compiler cannot see, so ADDING A FOURTH MODE means
+// touching all four places: the enum (preview_renderer.hpp), the const block in the shader
+// string, the branch in the shader body that reads u_tex_mode, and this assertion list.
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kSrgbComposited) == 0,
+              "kTexModeSrgbComposited in the fragment shader is 0");
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kXyz) == 1, "kTexModeXyz in the fragment shader is 1");
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kSrgbRadiance) == 2,
+              "kTexModeSrgbRadiance in the fragment shader is 2");
+
 static unsigned int CompileShader(unsigned int type, const char* source) {
   unsigned int shader = glCreateShader(type);
   glShaderSource(shader, 1, &source, nullptr);
