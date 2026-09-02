@@ -95,7 +95,14 @@ constexpr unsigned char kFreshCyan[3] = { 0x00, 0xFF, 0xFF };
 constexpr unsigned char kBgGreen[3] = { 0x00, 0xFF, 0x00 };
 
 constexpr int kProbeW = 32;
-constexpr int kProbeH = 16;
+// ODD on purpose, so that row kProbeH/2 is the exact middle row and its pixel centre lands on
+// ndc.y = 0 — the equator. The probe reads that one pixel and every case below states its expected
+// byte EXACTLY, and the equirect projection's relative illumination is cos(lat): at an even height
+// the "centre" row sits half a pixel off the equator, which on a frame this short is 5.6 deg of
+// latitude and costs a whole byte (measured: 254 where the source authored 255). Landing on the
+// equator makes the factor exactly 1 and keeps the assertions exact instead of buying a tolerance
+// that would also absorb the failures they exist to catch.
+constexpr int kProbeH = 17;
 
 void FillSolid(std::vector<unsigned char>& buf, int w, int h, const unsigned char rgb[3]) {
   buf.resize(static_cast<size_t>(w) * h * 3);
