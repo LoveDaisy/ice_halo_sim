@@ -274,11 +274,20 @@ inline MaskDir RectangularPixelToWorld(const lm_proj::ProjParams& p, const Rotat
 }
 
 // Whether a world direction survives the configured visible-hemisphere restriction. Applied to
-// EVERY lens type, deliberately: the GUI shader tests `u_visible` after computing world_dir and
-// independently of the lens branch, whereas ProjectExitToPixel's ray cull sits inside the
-// single-lens branch only. This is the mask's decision about where the SKY is, so it follows the
-// GUI's uniform rule; the ray-cull asymmetry is a separate, pre-existing gap in the shared
-// backend header and is not touched here.
+// EVERY lens type, and it is now the whole of where `visible` takes effect on this side: 478.2
+// removed ProjectExitToPixel's single-lens ray cull, so no ray is dropped for `visible` any more
+// and the setting is purely a display clip. This function decides where the sky is; the two
+// places that ACT on that decision are tagged SYNC:visible-mask-zero (render.cpp,
+// component_compositor.cpp).
+//
+// SYNC:visible-hemisphere-predicate — the GUI preview states the same rule a second time, in
+// GLSL, because the language boundary makes sharing a function body impossible: preview_renderer.cpp's
+// fragment shader computes `lat = asin(-world_dir.z)` and discards on `u_visible == 0 && lat < 0`
+// / `u_visible == 1 && lat > 0`. The two are equivalent rather than merely similar
+// (lat < 0 <=> -z < 0 <=> z > 0, which is this function's `kUpper && wz > 0`), and the
+// equivalence is not left to that derivation: test_visible_mask_gui_parity.cpp compares the two
+// masks PIXEL BY PIXEL over every lens type and all three `visible` values. Change either side
+// and that test is what fails; this tag is how you find the other side afterwards.
 inline bool VisibleByRange(RenderConfig::VisibleRange range, float wz) {
   if (range == RenderConfig::kUpper && wz > 0.0f) {
     return false;

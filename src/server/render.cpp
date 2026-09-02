@@ -790,11 +790,16 @@ void RenderConsumer::PostSnapshot() {
     //
     // The background is added only where the lens actually images visible sky
     // (visible_mask_, built once at construction). Outside that region — beyond the image
-    // circle, or in the hemisphere `visible` excludes — nothing was ever projected, so
-    // painting it the sky colour would turn e.g. a 180 deg fisheye render into a solid
-    // rectangle of background with an invisible circle inside it. Only the background term
-    // is skipped: clamp, gamma and the narrowing write still run for every pixel, so a
-    // masked pixel goes through the identical chain with a zero background.
+    // circle, or in the hemisphere `visible` excludes — painting it the sky colour would turn
+    // e.g. a 180 deg fisheye render into a solid rectangle of background with an invisible
+    // circle inside it. Clamp, gamma and the narrowing write still run for every pixel, so a
+    // masked pixel goes through the identical chain.
+    //
+    // A masked pixel is also CLEARED of ray energy, below (478.2). Withholding the background
+    // is not on its own enough to make `visible` a display clip: beyond the image circle no ray
+    // can land, but inside it the excluded hemisphere is imaged normally and its rays deposit
+    // energy like any other — measured at 89% (rectangular) to 99.8% (globe) of that region
+    // carrying energy. Left alone they show up as lit pixels scattered through a black field.
     const bool paint_bg = masked_bg ? visible_mask_[i] != 0 : true;
     const bool paint_outline = paint_outline_layer && horizon_mask_[i] != 0;
     // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
@@ -817,6 +822,19 @@ void RenderConsumer::PostSnapshot() {
     for (int j = 0; j < 3; j++) {
       if (paint_bg) {
         rgb[j] += config_.background_[j];
+      } else if (masked_bg) {
+        // SYNC:visible-mask-zero — the display clip. component_compositor.cpp's
+        // ApplyCompositeBackground carries the twin of this line for the raypath-colour path;
+        // both read the SAME visible_mask_ buffer, so the predicate is single-sourced and only
+        // the two applications of it need to stay in step. Guarded by masked_bg so a mask that
+        // disagrees with the pixel count still falls back to "paint everything", which is the
+        // fallback paint_bg above already takes.
+        //
+        // Placed before the annotation layers on purpose: a grid line or the horizon is drawn ON
+        // the clipped region, over black, exactly as it is drawn over the background elsewhere.
+        // The annotations run their own hemisphere policy (annotation_overlay.cpp's
+        // VisibleForLabel), so what reaches here has already been admitted.
+        rgb[j] = 0.0f;
       }
       // After the background (the line is drawn ON the sky, not under it), before the clamp, and
       // in linear — the same three constraints the background term above satisfies.

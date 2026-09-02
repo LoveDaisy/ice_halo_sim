@@ -109,12 +109,16 @@ TEST(RenderConsumerVisibleMask, PostSnapshotConsumesTheStoredMaskAndNeverRebuild
   // very first of them.
   for (int round = 0; round < 3; ++round) {
     const size_t black = CountBlackPixels(SnapshotOnce(&rc), kTotalPix);
-    // Every pixel but the single lit one must now be black.
-    EXPECT_EQ(black, static_cast<size_t>(kTotalPix) - 1)
+    // EVERY pixel must now be black, the ray-lit one included. This count was kTotalPix - 1 until
+    // 478.2, when a zero mask stopped meaning only "withhold the background" and started meaning
+    // "this pixel is clipped" — the display clip zeroes the ray energy too. The corruption's
+    // signature got stronger rather than weaker: a per-frame rebuild would restore both the
+    // background AND the lit pixel, so it is still the smaller count that indicts.
+    EXPECT_EQ(black, static_cast<size_t>(kTotalPix))
         << "round " << round
-        << ": the mask was zeroed after construction, so only the one ray-lit pixel may be non-black. A smaller count "
-           "means PostSnapshot did not read the stored mask — either it rebuilt one per frame (an O(W*H) cost per "
-           "snapshot) or it recomputes the predicate inline.";
+        << ": the mask was zeroed after construction, so every pixel is outside the display clip and none may be "
+           "non-black. A smaller count means PostSnapshot did not read the stored mask — either it rebuilt one per "
+           "frame (an O(W*H) cost per snapshot) or it recomputes the predicate inline.";
   }
 
   // Restore it and confirm the signal comes back — otherwise "everything black" above could
