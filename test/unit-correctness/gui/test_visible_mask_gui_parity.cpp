@@ -275,7 +275,7 @@ Boundaries BoundariesFor(LensParam::LensType t, float fov_deg, float short_pix) 
   const float fov = fov_deg * lumice::math::kDegreeToRad;
   const float half_fov = fov / 2.0f;
   const float img_radius = short_pix / 2.0f;
-  const float core = lumice::ComputeScaleAz0(t, fov, short_pix, 0, 0, lumice::Rotation{}).scale * CoreRadiusBound(t);
+  const float core = lumice::ComputeLensScale(t, fov, short_pix, 0, 0) * CoreRadiusBound(t);
   float gui = std::numeric_limits<float>::infinity();
   if (t == LensParam::kFisheyeEqualArea) {
     gui = img_radius / std::sin(half_fov / 2.0f);
@@ -468,39 +468,46 @@ TEST(VisibleMaskGuiParity, FrontClipEmptiesTheGlobeOnBothSides) {
   }
 }
 
-// A SECOND known divergence, found by the front-clip comparison above and pinned here rather than
-// left as a red or quietly worked around. It is not about `front`, and it is not new:
+// A DELIBERATE division of labour between the two sides, stated here so nobody reads it as a
+// divergence waiting to be fixed. Owner decision, 2026-09-02:
 //
-//   For the RECTANGULAR lens, core's inverse adds p.az0 — the camera azimuth, via
-//   ComputeScaleAz0 — to the longitude it reads out of a pixel, so the equirectangular map is
-//   RECENTRED on where the camera is looking. The GUI's rectangularInverse takes longitude
-//   straight from pixel x with no azimuth term at all (and its caller sets
-//   needs_view_transform = false, so the view matrix never reaches it either). The two therefore
-//   recover directions that differ by a rotation of exactly `az` about the world z axis.
+//   core keeps maximum flexibility — the equirectangular map follows the camera's FULL pose
+//   (azimuth AND elevation AND roll), the same rotation every other lens consumes. GUI keeps a
+//   FIXED all-sky texture, because every pose transform on that side is the front end's job (the
+//   preview shader resamples the texture; `needs_view_transform = false` for this lens, and
+//   RenderPreviewPanel pins the pose of every full-sky lens to zero every frame — asserted in
+//   test/gui/functional/test_view_display_controls.cpp).
 //
-// Nothing caught this before because every comparison in this file, and the mask itself, read only
-// wz — and a rotation about z leaves wz untouched. The front clip is the first consumer of the
-// direction's HORIZONTAL components, which is why it surfaced here.
+// Which is why they can differ without either being wrong: the GUI never renders this lens at a
+// non-zero pose at all, so the configurations where the two answers differ are configurations the
+// GUI does not produce. What makes that safe rather than lucky is the FIRST block below — at a zero
+// pose the two agree exactly, so on every document the GUI can actually build, core's answer IS the
+// GUI's answer.
 //
-// Which side is right is a product question about what the rectangular projection means (does
-// panning the camera scroll the map, or is the map world-fixed?), not something this test can
-// settle, and answering it changes every rectangular render on one side or the other. So this
-// test states the divergence exactly: same wz, azimuth off by `az`.
-TEST(VisibleMaskGuiParity, RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot) {
+// This test used to read the other way round: it recorded "core recentres on the view azimuth and
+// the GUI does not" as an unsettled difference nobody had adjudicated, and said so ("which side is
+// right is a product question... this test states the divergence exactly"). The product question
+// has been answered; what is left is to state the answer and to check that core really does follow
+// all three angles, not just the one it used to fold into a scalar.
+//
+// Historical note worth keeping: nothing caught the azimuth half before the front clip arrived,
+// because every comparison in this file read only wz — and a rotation about z leaves wz untouched.
+// Elevation and roll do NOT leave it untouched, which is what the third block leans on.
+TEST(VisibleMaskGuiParity, RectangularFollowsTheFullCameraPoseAndTheGuiIsAFixedTexture) {
   const int w = 128;
   const int h = 96;
   const int px = 8;
   const int py = 25;
 
-  auto core_dir = [&](float az) {
-    const RenderConfig cfg = MakeCfg(LensParam::kRectangular, 180.0f, w, h, RenderConfig::kFull, /*el=*/0.0f, az);
+  auto core_dir = [&](float az, float el, float ro) {
+    const RenderConfig cfg = MakeCfg(LensParam::kRectangular, 180.0f, w, h, RenderConfig::kFull, el, az, ro);
     const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
     const lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(w, h)));
     return lumice::mask_detail::PixelToWorld(cfg, p, rot, px, py);
   };
-  auto gui_dir = [&](float az) {
+  auto gui_dir = [&](float az, float el, float ro) {
     float view_matrix[9];
-    lumice::gui::BuildViewMatrix(0.0f, az, 0.0f, view_matrix);
+    lumice::gui::BuildViewMatrix(el, az, ro, view_matrix);
     const float sx = static_cast<float>(px) + 0.5f - static_cast<float>(w) / 2.0f;
     const float sy = -(static_cast<float>(py) + 0.5f - static_cast<float>(h) / 2.0f);
     float dx = 0.0f;
@@ -514,10 +521,11 @@ TEST(VisibleMaskGuiParity, RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot)
   };
   auto azimuth_deg = [](float x, float y) { return std::atan2(y, x) * 180.0f / 3.14159265358979323846f; };
 
-  // At az = 0 the two agree completely — the divergence is the azimuth term and nothing else.
+  // 1. At the pose the GUI pins this lens to, the two agree completely. This is the load-bearing
+  //    block: it is what makes the divergences below harmless rather than a bug the GUI hides.
   {
-    const auto c = core_dir(0.0f);
-    const auto g = gui_dir(0.0f);
+    const auto c = core_dir(0.0f, 0.0f, 0.0f);
+    const auto g = gui_dir(0.0f, 0.0f, 0.0f);
     ASSERT_TRUE(c.valid);
     ASSERT_EQ(g[3], 1.0f);
     EXPECT_NEAR(c.x, g[0], 1e-5f);
@@ -525,16 +533,17 @@ TEST(VisibleMaskGuiParity, RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot)
     EXPECT_NEAR(c.z, g[2], 1e-5f);
   }
 
-  // Panning the camera moves core's sky and leaves the GUI's where it was, by exactly az.
+  // 2. Panning the camera turns core's sky and leaves the GUI's where it was, by exactly az. Still
+  //    a pure rotation about world z, so wz agrees — the reason this went unnoticed for so long.
   for (float az : { 40.0f, -40.0f, 90.0f }) {
-    const auto c = core_dir(az);
-    const auto g = gui_dir(az);
+    const auto c = core_dir(az, 0.0f, 0.0f);
+    const auto g = gui_dir(az, 0.0f, 0.0f);
     if (!c.valid || g[3] != 1.0f) {
       // Non-fatal: a pixel that stops being imaged at one azimuth must not hide the other two.
       ADD_FAILURE() << "az " << az << ": the probe pixel is no longer imaged by both sides";
       continue;
     }
-    EXPECT_NEAR(c.z, g[2], 1e-5f) << "az " << az << ": the divergence is a rotation about z, so wz must agree";
+    EXPECT_NEAR(c.z, g[2], 1e-5f) << "az " << az << ": an azimuth-only pose turns the sky about z, so wz must agree";
     float delta = azimuth_deg(c.x, c.y) - azimuth_deg(g[0], g[1]);
     while (delta > 180.0f) {
       delta -= 360.0f;
@@ -543,6 +552,37 @@ TEST(VisibleMaskGuiParity, RectangularRecentresOnTheViewAzimuthAndTheGuiDoesNot)
       delta += 360.0f;
     }
     EXPECT_NEAR(delta, az, 1e-2f) << "az " << az << ": core is expected to lead the GUI by exactly the view azimuth";
+  }
+
+  // 3. Elevation and roll move core's sky too — this is the half that did not exist before
+  //    2026-09-02, when core reduced the camera rotation to an azimuth scalar and a tilted or
+  //    rolled camera produced a bit-identical frame. The GUI's texture stays put under all of them.
+  const auto gui_at_zero = gui_dir(0.0f, 0.0f, 0.0f);
+  ASSERT_EQ(gui_at_zero[3], 1.0f);
+  const struct {
+    float el;
+    float ro;
+    const char* what;
+  } kTilts[] = { { 25.0f, 0.0f, "elevation" },
+                 { -40.0f, 0.0f, "elevation" },
+                 { 0.0f, 35.0f, "roll" },
+                 { 0.0f, -70.0f, "roll" },
+                 { 25.0f, 35.0f, "elevation and roll" } };
+  for (const auto& t : kTilts) {
+    const auto c = core_dir(0.0f, t.el, t.ro);
+    const auto g = gui_dir(0.0f, t.el, t.ro);
+    if (!c.valid || g[3] != 1.0f) {
+      ADD_FAILURE() << t.what << " (el=" << t.el << " ro=" << t.ro << "): the probe pixel is no longer imaged";
+      continue;
+    }
+    // The GUI is the fixed texture: same pixel, same world direction, whatever the pose says.
+    EXPECT_NEAR(g[0], gui_at_zero[0], 1e-6f) << t.what << ": the GUI's all-sky texture must not move";
+    EXPECT_NEAR(g[1], gui_at_zero[1], 1e-6f) << t.what << ": the GUI's all-sky texture must not move";
+    EXPECT_NEAR(g[2], gui_at_zero[2], 1e-6f) << t.what << ": the GUI's all-sky texture must not move";
+    // Core moved, and not by a rotation about z: wz itself changes, which an azimuth-only
+    // projection could never produce.
+    EXPECT_GT(std::fabs(c.z - g[2]), 1e-3f)
+        << t.what << " (el=" << t.el << " ro=" << t.ro << "): core did not follow the camera out of the horizon plane";
   }
 }
 

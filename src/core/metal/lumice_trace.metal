@@ -481,10 +481,10 @@ struct KernelParams {
   uint  filter_desc_max_ci;
   uint  crystal_config_id;
   // Unified render projection (315.3): host predigests all trig-heavy setup
-  // (per-type scale, dual-fisheye r_scale/overlap, rectangular az0, camera rot)
+  // (per-type scale, dual-fisheye r_scale/overlap, camera rot)
   // into this POD, filled by BeginSession via BuildProjParams. The exit tail
   // calls lm_proj::ProjectExitToPixel(proj, world_exit...) — single source with
-  // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose az0 /
+  // host CPU (scatter_accum.hpp) and CUDA. Replaces the former loose
   // proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
   // task-358.3 (renamed from capture_component after Fork-C retirement): when

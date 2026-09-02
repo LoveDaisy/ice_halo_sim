@@ -350,7 +350,7 @@ TEST(MetalTraceParity, SingleLayerExitStatsAndXyz) {
 
   // Project oracle exit rays via the canonical CPU projection (matches the
   // path CpuTraceBackend takes in Test E, which agrees with Metal at
-  // rel ≤ 5e-4 even though Metal inlines its own az0-projection).
+  // rel ≤ 5e-4 even though Metal inlines its own copy of the projection).
   std::vector<float> xyz_oracle(render.resolution_[0] * render.resolution_[1] * 3, 0.0f);
   Rotation camera_rot = MakeCameraRotation(render);
   ScatterOutgoingToXyz(oracle.exit_d.data(), oracle.exit_w.data(), oracle.exit_w.size(), render, camera_rot,

@@ -122,7 +122,7 @@ TEST(GlobeInverse, OutsideTheSilhouetteMissesTheSphere) {
 }
 
 TEST(GlobeInverse, DegenerateFocalImagesNothing) {
-  // fov -> 180 deg drives ComputeScaleAz0's globe branch (focal = r / tan(fov/2)) to zero.
+  // fov -> 180 deg drives ComputeLensScale's globe branch (focal = r / tan(fov/2)) to zero.
   EXPECT_FALSE(projection::GlobeInverse(1.0f, 1.0f, 0.0f).valid);
   EXPECT_FALSE(projection::GlobeInverse(0.0f, 0.0f, -1.0f).valid);
 }
@@ -158,10 +158,11 @@ TEST(GlobeInverse, RoundTripsAgainstTheForwardGlobeBranch) {
         mm.Note(at.str() + " recovered a direction the forward culls");
         continue;
       }
-      // Exact pixel equality is not demandable: the forward bins on floor(v + 0.5) about res/2
-      // while the mask samples pixel centres at (px + 0.5 - res/2), half a pixel apart, so a
-      // round trip lands in the sampled pixel or its immediate neighbour.
-      if (std::abs(r.hits[0].px - px) > 1 || std::abs(r.hits[0].py - py) > 1) {
+      // Exact pixel equality, demanded: the forward bins on floor(v) about res/2 and the mask
+      // samples pixel centres at (px + 0.5 - res/2), which are the two halves of one convention
+      // — floor(px + 0.5 - res/2 + res/2) == px for every integer px. A round trip therefore
+      // lands back in the pixel it started from, with no slack to hide a systematic offset in.
+      if (r.hits[0].px != px || r.hits[0].py != py) {
         std::ostringstream got;
         got << at.str() << " round-tripped to (" << r.hits[0].px << "," << r.hits[0].py << ")";
         mm.Note(got.str());
@@ -170,6 +171,52 @@ TEST(GlobeInverse, RoundTripsAgainstTheForwardGlobeBranch) {
   }
   EXPECT_EQ(mm.count, 0u) << mm.count << " round trips diverged; first: " << mm.first;
   EXPECT_GT(checked, 100u) << "too few in-domain samples for this to mean anything";
+}
+
+// AC2: the equirectangular inverse must invert the equirectangular forward, pose and all. Same
+// shape as the globe round trip above, and for the same reason — it is the strongest available
+// statement that mask_detail's inverse is the inverse of the projection it claims to invert,
+// rather than a second reading of the same pixel that happens to agree at the default view. The
+// fixture deliberately uses a pose with all three Euler angles non-zero: the azimuth-only
+// projection this replaced would round-trip a pure-azimuth pose just as well.
+TEST(RectangularInverse, RoundTripsAgainstTheForwardRectangularBranch) {
+  RenderConfig cfg = MakeCfg(LensParam::kRectangular, 180.0f, 256, 128, RenderConfig::kFull, 35.0f);
+  cfg.view_.az_ = -50.0f;
+  cfg.view_.ro_ = 20.0f;
+  const Rotation rot = MakeCameraRotation(cfg);
+  const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
+  const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
+
+  size_t checked = 0;
+  Mismatches mm;
+  for (int py = 0; py < cfg.resolution_[1]; py += 3) {
+    for (int px = 0; px < cfg.resolution_[0]; px += 3) {
+      const mask_detail::MaskDir w = mask_detail::PixelToWorld(cfg, p, rot, px, py);
+      if (!w.valid) {
+        continue;
+      }
+      const lm_proj::ProjResult r = lm_proj::ProjectExitToPixel(p, w.x, w.y, w.z);
+      ++checked;
+      std::ostringstream at;
+      at << "pixel (" << px << "," << py << ")";
+      if (r.count != 1) {
+        mm.Note(at.str() + " recovered a direction the forward culls");
+        continue;
+      }
+      // Same exact-equality demand as the globe case, and for the same reason: forward binning
+      // and mask sampling share one pixel-centre convention, so the round trip is exact. The
+      // column distance is circular because the map wraps.
+      int col_dist = std::abs(r.hits[0].px - px);
+      col_dist = std::min(col_dist, cfg.resolution_[0] - col_dist);
+      if (col_dist != 0 || r.hits[0].py != py) {
+        std::ostringstream got;
+        got << at.str() << " round-tripped to (" << r.hits[0].px << "," << r.hits[0].py << ")";
+        mm.Note(got.str());
+      }
+    }
+  }
+  EXPECT_EQ(mm.count, 0u) << mm.count << " round trips diverged; first: " << mm.first;
+  EXPECT_GT(checked, 1000u) << "too few in-domain samples for this to mean anything";
 }
 
 // ==================================================================================================
@@ -257,7 +304,7 @@ TEST(VisibleMask, SingleFisheyeMasksOutsideTheImageCircle) {
     const RenderConfig cfg = MakeCfg(c.type, c.fov, 200, 150);
     const float short_pix = 150.0f;
     const float fov_rad = c.fov * math::kDegreeToRad;
-    const float scale = ComputeScaleAz0(c.type, fov_rad, short_pix, 200, 150, MakeCameraRotation(cfg)).scale;
+    const float scale = ComputeLensScale(c.type, fov_rad, short_pix, 200, 150);
     const float edge_px = scale * c.rim_r;
     const auto mask = Mask(cfg);
 
@@ -335,9 +382,7 @@ TEST(VisibleMask, GlobeMasksOutsideTheSphereSilhouette) {
   // region is the whole frame outside the sphere — not an edge case.
   const RenderConfig cfg = MakeCfg(LensParam::kGlobe, 30.0f, 200, 150);
   const float short_pix = 150.0f;
-  const float scale =
-      ComputeScaleAz0(LensParam::kGlobe, 30.0f * math::kDegreeToRad, short_pix, 200, 150, MakeCameraRotation(cfg))
-          .scale;
+  const float scale = ComputeLensScale(LensParam::kGlobe, 30.0f * math::kDegreeToRad, short_pix, 200, 150);
   const float edge_px = GlobeSilhouettePx(scale);
   ASSERT_LT(edge_px, short_pix / 2.0f) << "fixture must leave frame outside the sphere";
 
@@ -407,11 +452,11 @@ TEST(VisibleMask, VisibleRangePartitionsTheFrameAndFullIsTheUnion) {
 }
 
 TEST(VisibleMask, VisibleRangeAppliesToRectangularAndDualFisheyeToo) {
-  // ProjectExitToPixel's own `visible_range` cull lives inside the single-lens branch only, so
-  // for these types the mask is the FIRST place the setting takes effect. It follows the GUI
+  // The mask is the ONLY place `visible` takes effect for every lens type: no branch of
+  // ProjectExitToPixel culls a ray for it (478.2 removed the single-lens one that did, which is
+  // what used to make these two types differ from the single-lens family). It follows the GUI
   // preview shader, which tests `u_visible` after computing the world direction, independently
-  // of the lens branch. (Ray energy is still not culled for them — a separate, pre-existing gap
-  // in the shared backend header.)
+  // of the lens branch.
   for (LensParam::LensType t : { LensParam::kRectangular, LensParam::kDualFisheyeEqualArea }) {
     const auto full = Mask(MakeCfg(t, 180.0f, 256, 128, RenderConfig::kFull));
     const auto upper = Mask(MakeCfg(t, 180.0f, 256, 128, RenderConfig::kUpper));

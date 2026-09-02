@@ -436,12 +436,59 @@ const ParityScene kScenes[] = {
   // since that scene carries them — cost about 0.37 dB and is what moved the mean to the figure
   // above. The threshold did not have to move with it. N=4 on the new mean, so do not read the
   // small sigma as a licence to run this tighter than 31.5.
+  //
+  // RECALIBRATED 31.5 -> 29.9, and the cause is NAMED rather than filed as legitimate drift,
+  // because "the mean moved" is exactly what a real defect also looks like from here.
+  //
+  // The cause is the change that made `visible` a DISPLAY-TIME clip. Before it, a single-lens
+  // scene with `visible: upper` had the excluded hemisphere's rays dropped inside
+  // ProjectExitToPixel, so they never landed in the buffer the CLI's relative-EV anchor is
+  // measured over. After it they land and are blanked at bake time instead — and the anchor is
+  // taken BEFORE that blanking, over the whole buffer. doc/ev-pipeline-architecture.md 2.7 names
+  // this exact combination (CLI + single lens + `visible` != full + relative) as the one whose
+  // brightness moves, and states that the move has no closed form. This scene is that
+  // combination; its two neighbours are not — one is `visible: full`, the other is a full-sky
+  // lens family. The GUI arm's anchor did not move at all: it is P99 over the whole simulation
+  // texture, which BuildScene's kSimCommit arm pins to `visible` = FULL either way. So one arm's
+  // brightness changed, the other's did not, and the constant-gain offset this pair has always
+  // carried (see the EXPOSURE ANCHOR note above) widened.
+  //
+  // Measured rather than argued from the timeline, on the two images this row itself compares:
+  //   * the error is DIFFUSE and multiplicative, not geometric. The two arms agree pixel for
+  //     pixel on which 129_617 pixels the clip blanks (set XOR = 0) and those pixels carry 0.00%
+  //     of the squared error; 57% of the lit pixels differ by more than one level; the top 1% of
+  //     squared error sits a median 105 px from the clip boundary, and only 1.1% of it within
+  //     1.5 px. A per-pixel disagreement AT the clip boundary — the shape a broken mask would
+  //     have — measures zero here.
+  //   * one scalar gain of 1.164 (+0.22 stop), applied to the GUI arm in linear light, recovers
+  //     1.25 dB of a 30.80 dB reading and 25% of the squared error. What survives it is the
+  //     radial cos^3 residual this scene exists to see, centre 0.75 to edge 1.02.
+  //   * only this row moved. Re-measured in the same 12 runs: single_lens_angled 26.854 (sigma
+  //     0.0384) and full_sky_dual_fisheye 27.924 (sigma 0.0266), i.e. -0.17 and +0.25 dB against
+  //     their calibrated means and still 22 / 27 sigma above their own thresholds, against
+  //     -1.75 dB here.
+  //
+  // The new figure by this file's own two rules: mean 31.037 sigma 0.1098 (N=12 category runs on
+  // an idle machine, the same N the THRESHOLDS note above calibrates at). 29.9 is mean - 1.14 dB
+  // = 10.4 sigma, 1.02 dB below the worst honest run, and 3.46 dB above the largest reading of
+  // the break this row exists to catch (26.44 / 26.40 / 26.28, the relative-illumination factor
+  // absent from the shader). 30.0 was the figure this recalibration was authorized at, computed
+  // against an N=4 sigma of 0.096; at the sigma re-measured here it lands at 9.5 sigma, just
+  // under this file's stated 10 sigma bar, so the number followed the rule rather than the
+  // rounding. Do not read the small sigma as a licence to run this tighter — same caveat as
+  // every other row here, and N=12 on a mean that has just moved.
+  //
+  // Why a re-shoot was not the disposition, which is what every other red in the same batch got:
+  // this row owns no committed asset (see the top of this file — this suite must never enter
+  // regen_gui_test_refs.py's GROUPS), so "the reference is stale" has no meaning for it. The
+  // threshold IS the calibration, which is the one thing a legitimate move of the mean can make
+  // it correct to re-measure rather than a way to turn a red green.
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_zenith_nadir=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/31.5, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/29.9, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the

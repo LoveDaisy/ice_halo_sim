@@ -76,7 +76,7 @@ Dir3 FisheyeOrthographicInverse(float x, float y, float r_scale = 1.0f);
 // Input: sky-space unit direction (NO camera rotation).
 // Output: (lon, lat) where lon in [-pi, pi], lat in [-pi/2, pi/2].
 //   Always valid (full-globe coverage).
-//   The caller handles: az0 subtraction, scaling, lon wrapping, pixel offset.
+//   The caller handles: the camera-frame axis assignment, scaling and pixel offset.
 
 ProjXY RectangularForward(float dx, float dy, float dz);
 
@@ -96,7 +96,7 @@ Dir3 RectangularInverse(float lon, float lat);
 // coordinates already normalized so that r = 1 is the coverage boundary, because their
 // domain test IS a radius bound. Globe's domain test is a ray-sphere discriminant, which
 // is not a radius bound, so it takes the RAW screen offsets (x, y) in pixels together
-// with `focal` — numerically the same `scale` ComputeScaleAz0 produces for kGlobe, so a
+// with `focal` — numerically the same `scale` ComputeLensScale produces for kGlobe, so a
 // caller passes that value straight through rather than recomputing it.
 //
 // Invalid when the ray misses the sphere (discriminant < 0 — the whole region outside the
@@ -117,7 +117,9 @@ Dir3 GlobeInverse(float x, float y, float focal);
 // NOTE: These are NOT pure projection math — they encode pixel layout conventions.
 
 // Normalized disc coords → continuous pixel coordinates.
-// Caller uses floor(fx + 0.5), floor(fy + 0.5) for integer scatter indices.
+// Caller uses floor(fx), floor(fy) for integer scatter indices: fx/fy already carry the
+// half-pixel of a pixel centre through cx/cy, so a bare floor is the inverse of the
+// (px + 0.5) gather below. See the PIXEL CENTRE CONVENTION note in lens_proj_build.hpp.
 void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height, float* fx, float* fy);
 
 // Continuous pixel coordinates → normalized disc coords + hemisphere.

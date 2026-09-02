@@ -310,6 +310,15 @@ void ApplyCompositeBackground(const std::vector<uint8_t>& visible_mask, const fl
   const bool masked = visible_mask.size() == total_pix;
   for (size_t i = 0; i < total_pix; ++i) {
     if (masked && visible_mask[i] == 0) {
+      // SYNC:visible-mask-zero — the display clip, twin of the `else if (masked_bg)` branch in
+      // render.cpp's PostSnapshot. Both read the SAME visible_mask buffer (this one is handed
+      // RenderConsumer::VisibleMask()), so the predicate has one source; these are its two
+      // applications. Clearing rather than skipping is the point: `visible` excludes a region the
+      // lens images normally, so composited raypath colour DOES land there and would otherwise
+      // stay lit in a field that carries no background.
+      for (size_t j = 0; j < 3; ++j) {
+        linear_rgb[i * 3 + j] = 0.0f;
+      }
       continue;
     }
     for (size_t j = 0; j < 3; ++j) {

@@ -104,7 +104,6 @@ LM_FN ProjXY LinearForward(float dx, float dy, float dz) {
 // POD projection parameters — host predigests all trig-heavy setup so the
 // per-ray function stays branch/mul only. `proj_type` uses LensParam::LensType
 // integer values (0..10; 10 = globe, reserved for 315.4).
-// `visible_range` uses RenderConfig::VisibleRange (0=upper, 1=lower, 2=full).
 // `rot[9]` is a row-major camera rotation matrix; read only by single-lens
 // types (kLinear + 4 single-fisheye); other types treat it as unused (host
 // should still fill identity for POD determinism).
@@ -112,11 +111,9 @@ struct ProjParams {
   int proj_type;
   int img_w;
   int img_h;
-  int visible_range;
   int lens_shift_x;
   int lens_shift_y;
   float scale;
-  float az0;
   float r_scale;
   float max_abs_dz;
   float rot[9];
@@ -132,10 +129,6 @@ struct ProjResult {
   PixelHit hits[2];
   int count;
 };
-
-// Match RenderConfig::VisibleRange: 0=kUpper, 1=kLower, 2=kFull.
-LM_CONSTANT int kVisibleUpper = 0;
-LM_CONSTANT int kVisibleLower = 1;
 
 // Match LensParam::LensType integer values.
 LM_CONSTANT int kProjLinear = 0;
@@ -165,9 +158,10 @@ LM_CONSTANT int kProjGlobe = 10;
 LM_CONSTANT float kGlobeCameraD = 4.0f;
 
 // Per-type numerical floors on `cz` for the SINGLE-lens fisheye cull below. These are not
-// visibility judgements — visibility is `p.visible_range`, and bounds culling belongs to the
-// caller. They are the points past which each type's forward formula stops describing the sky it
-// was handed. Before 474.1 the whole family shared one `cz <= 0` cull, i.e. core rendered only
+// visibility judgements — the configured visible hemisphere is a DISPLAY clip applied by the
+// render-domain mask (lens_proj_build.hpp::VisibleByRange) and never by this function, and bounds
+// culling belongs to the caller. They are the points past which each type's forward formula stops
+// describing the sky it was handed. Before 474.1 the whole family shared one `cz <= 0` cull, i.e. core rendered only
 // theta <= 90 deg while the GUI preview re-projected out to 180 deg; these three constants are
 // what that one cull became once it was taken per type. (Orthographic is the fourth, and it keeps
 // `cz <= 0` — see its branch.)
@@ -254,9 +248,15 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
   if (t == kProjLinear || t == kProjFisheyeEqualArea || t == kProjFisheyeEquidistant ||
       t == kProjFisheyeStereographic || t == kProjFisheyeOrthographic) {
     // Single-lens family — camera-frame cull + rot-inverse + forward.
-    if ((p.visible_range == kVisibleUpper && wz > 0.0f) || (p.visible_range == kVisibleLower && wz < 0.0f)) {
-      return r;
-    }
+    //
+    // 478.2: this branch used to open with a `visible_range` cull, dropping any ray in the
+    // hemisphere `visible` excludes before it could reach a pixel. `visible` is a DISPLAY clip,
+    // not an energy cull, and it is applied uniformly to all four lens families by the
+    // render-domain mask (lens_proj_build.hpp::VisibleByRange) and the GUI shader's `u_visible`.
+    // Culling here made this one family disagree with the other three about where energy is
+    // allowed to land — see the `visible` section of doc/configuration.md. Every remaining
+    // `return r;` below is a DIFFERENT question (the forward formula stops describing the sky it
+    // was handed) and must stay.
     float cx = 0.0f;
     float cy = 0.0f;
     float cz = 0.0f;
@@ -298,9 +298,9 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // negation into the *Forward pure functions — they are shared with dual/globe.
     xy.x = -xy.x;
     int px = static_cast<int>(
-        LM_FLOOR(xy.x * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f + static_cast<float>(p.lens_shift_x)));
+        LM_FLOOR(xy.x * p.scale + static_cast<float>(p.img_w) / 2.0f + static_cast<float>(p.lens_shift_x)));
     int py = static_cast<int>(
-        LM_FLOOR(xy.y * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f + static_cast<float>(p.lens_shift_y)));
+        LM_FLOOR(xy.y * p.scale + static_cast<float>(p.img_h) / 2.0f + static_cast<float>(p.lens_shift_y)));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;
@@ -309,21 +309,34 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
   }
 
   if (t == kProjRectangular) {
-    // Rectangular: no per-ray rotation; camera azimuth pre-computed into az0.
-    ProjXY proj = RectangularForward(-wx, -wy, -wz);
-    float lon = proj.x - p.az0;
-    // Use CPU's canonical while-loop wrap for bit-exact parity with legacy
-    // (Metal side uses floor-based single-expression wrap; that path is 315.3's
-    // parity concern, not this task's — see plan.md risk 1).
-    while (lon < -LM_PI_F) {
-      lon += 2.0f * LM_PI_F;
-    }
-    while (lon > LM_PI_F) {
-      lon -= 2.0f * LM_PI_F;
-    }
-    int raw_x = static_cast<int>(LM_FLOOR(lon * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f));
+    // Rectangular follows the FULL camera pose (azimuth AND elevation AND roll), not just the
+    // azimuth it used to fold into a scalar `az0`. It consumes the same camera-frame vector the
+    // single-lens family does, c = R^T * (-w), and reads the map's two axes off it:
+    //   lon_ref  = +c.z — the optical axis, so the boresight sits at the centre of the map;
+    //   polar    = -c.y — the camera's local +y points at the world nadir under the
+    //                     (-90 + roll) / (90 - el) chain, so negating it puts the zenith on top;
+    //   lon_quad = -c.x — the quadrature axis, whose sign is what makes this construction
+    //                     POINTWISE identical to the azimuth-only form it replaces whenever
+    //                     el = roll = 0 (the pose every full-sky lens is pinned to on the GUI
+    //                     side). doc/coordinate-convention.md carries the derivation;
+    //                     LmProj.RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm
+    //                     is the assertion. Other permutations satisfy "follows the pose" but
+    //                     break that degeneracy, so this is not a free choice.
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    ApplyRotTranspose(p.rot, -wx, -wy, -wz, &cx, &cy, &cz);
+    float lon_ref = cz;
+    float lon_quad = -cx;
+    float polar = -cy;
+    ProjXY proj = RectangularForward(lon_ref, lon_quad, polar);
+    // proj.x is atan2(lon_quad, lon_ref) and so already lies in [-pi, pi]. The legacy while-loop
+    // wrap that used to follow the `- az0` subtraction is therefore unreachable and is gone; the
+    // modulo below is a separate, still-live concern (lon = +pi bins one column past the canvas).
+    float lon = proj.x;
+    int raw_x = static_cast<int>(LM_FLOOR(lon * p.scale + static_cast<float>(p.img_w) / 2.0f));
     int px = ((raw_x % p.img_w) + p.img_w) % p.img_w;
-    int py = static_cast<int>(LM_FLOOR(-proj.y * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f));
+    int py = static_cast<int>(LM_FLOOR(-proj.y * p.scale + static_cast<float>(p.img_h) / 2.0f));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;
@@ -355,8 +368,8 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     float fx = 0.0f;
     float fy = 0.0f;
     DualFisheyeToPixelXY(xy.x, xy.y, is_upper, p.img_w, p.img_h, &fx, &fy);
-    r.hits[0].px = static_cast<int>(LM_FLOOR(fx + 0.5f));
-    r.hits[0].py = static_cast<int>(LM_FLOOR(fy + 0.5f));
+    r.hits[0].px = static_cast<int>(LM_FLOOR(fx));
+    r.hits[0].py = static_cast<int>(LM_FLOOR(fy));
     r.hits[0].bump_landed = true;
     r.count = 1;
 
@@ -376,8 +389,8 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
       float fx2 = 0.0f;
       float fy2 = 0.0f;
       DualFisheyeToPixelXY(xy2.x, xy2.y, !is_upper, p.img_w, p.img_h, &fx2, &fy2);
-      r.hits[1].px = static_cast<int>(LM_FLOOR(fx2 + 0.5f));
-      r.hits[1].py = static_cast<int>(LM_FLOOR(fy2 + 0.5f));
+      r.hits[1].px = static_cast<int>(LM_FLOOR(fx2));
+      r.hits[1].py = static_cast<int>(LM_FLOOR(fy2));
       r.hits[1].bump_landed = false;
       r.count = 2;
     }
@@ -404,7 +417,7 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // Because linear matches the GUI and globe differs from linear by exactly
     // the same delta on both sides, globe matches the GUI by transitivity
     // (including the x/y/row pixel convention — no extra flip is introduced).
-    // `p.scale` = focal = img_radius/tan(fov/2), host-computed in ComputeScaleAz0
+    // `p.scale` = focal = img_radius/tan(fov/2), host-computed in ComputeLensScale
     // (identical to the linear scale formula, matching GUI focal).
     float cx = 0.0f;
     float cy = 0.0f;
@@ -421,10 +434,10 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // — globe deliberately diverges from linear's x convention here. See scrum
     // gui-lens-math-cli-alignment (owner: globe=outside-in per GUI tooltip; GUI is
     // the source of truth for globe orientation).
-    int px = static_cast<int>(LM_FLOOR(-cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f +
-                                       static_cast<float>(p.lens_shift_x)));
-    int py = static_cast<int>(LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f +
-                                       static_cast<float>(p.lens_shift_y)));
+    int px = static_cast<int>(
+        LM_FLOOR(-cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + static_cast<float>(p.lens_shift_x)));
+    int py = static_cast<int>(
+        LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + static_cast<float>(p.lens_shift_y)));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;

@@ -128,7 +128,6 @@ annotation::CanvasPoint SunPixel(const RenderConfig& cfg, const SunParam& sun) {
   const Rotation rot = MakeCameraRotation(cfg);
   const float short_pix = static_cast<float>(std::min(cfg.resolution_[0], cfg.resolution_[1]));
   lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
-  p.visible_range = static_cast<int>(cfg.visible_);
   return annotation::ProjectWorldDir(p, dir[0], dir[1], dir[2]);
 }
 

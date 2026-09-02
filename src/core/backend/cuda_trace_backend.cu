@@ -661,7 +661,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        float* __restrict__ d_xyz_buf,
                                        float* __restrict__ d_landed_weight,
                                        // 315.3: single POD carries all projection routing
-                                       // (proj_type / az0 / r_scale / max_abs_dz / scale / rot / ...).
+                                       // (proj_type / r_scale / max_abs_dz / scale / rot / ...).
                                        lm_proj::ProjParams proj,
                                        float last_ms_prob,
                                        uint32_t gate_seed_final,
@@ -2124,7 +2124,7 @@ struct CudaTraceBackend::Impl {
   // 315.3: unified render projection — populated by BeginSession via
   // BuildProjParams(render, camera_rot, short_pix). Passed by value to
   // trace_single_ms_kernel; consumed by lm_proj::ProjectExitToPixel. Replaced
-  // the former loose proj_type_ / az0_ / r_scale_ / max_abs_dz_ scalars.
+  // the former loose proj_type_ / r_scale_ / max_abs_dz_ scalars.
   lm_proj::ProjParams proj_params_{};
   uint32_t img_w_           = 0u;
   uint32_t img_h_           = 0u;
@@ -3779,7 +3779,7 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     }
     // Projection routing (315.3): single-source ProjParams via BuildProjParams
     // (predigests per-type scale, dual-fisheye r_scale/overlap, rectangular
-    // az0, camera rotation) — mirrors Metal BeginSession. trace_single_ms_kernel
+    // camera rotation) — mirrors Metal BeginSession. trace_single_ms_kernel
     // reads this via lm_proj::ProjectExitToPixel, identical to the CPU parity
     // oracle ScatterOutgoingToXyz. The camera rotation is inlined here (mirrors
     // MakeCameraRotation in scatter_accum.hpp) to keep the .cu host-include

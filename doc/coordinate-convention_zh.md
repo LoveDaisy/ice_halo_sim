@@ -171,6 +171,84 @@ view 方位与光源方位采用**同一**方位角约定但相互独立。`ligh
 
 §6 chain 重构不影响 `view.*` 字段的取值与语义。已有 config / `.lmc` 文件中 `view.*` 字段保持渲染同样的相机取景。
 
+### 9.6 等距柱状（`rectangular`）镜头：core 跟随姿态，GUI 刻意不跟随
+
+owner 裁定，2026-09-02。两侧回答的是**两个不同的问题**，因此**都是对的**；本节存在的目的是让
+下一位读者不必重推，也不要把其中一侧「修」成另一侧。
+
+**core 侧**：等距柱状图跟随**完整**相机姿态——方位角**和**俯仰**和**滚转——走的是其余每种镜头
+共用的同一个旋转。`BuildProjParams` 对**所有**镜头类型都用 `MakeCameraRotation(cfg)` 填
+`ProjParams::rot`，`ProjectExitToPixel` 的 `kProjRectangular` 分支从单镜头族同一个相机系向量出发：
+
+```
+c = R^T · (−w)              // ApplyRotTranspose，与 linear/fisheye/globe 逐字相同
+lon = atan2(−c.x, +c.z)     // RectangularForward(c.z, −c.x, −c.y)
+lat = asin(−c.y)
+```
+
+**轴的分配值得单写一句**，因为「跟随姿态」有多个置换都满足，只有这一个保住了下面那条退化：
+`+c.z` 是视轴，于是视轴落在图的正中；`−c.y` 是极轴——在 `Rz(−90°+roll)·Ry(90°−el)` 这半条链下，
+相机局部 `+y` 指向世界天底，取负才把天顶放到图的上方；`−c.x` 是剩下的正交轴，**它的符号正是让
+退化精确成立的那一位**。
+
+2026-09-02 之前 core 把相机旋转压成一个标量 `az0 = atan2((R·ẑ)_y, (R·ẑ)_x)` 再从经度里减掉。
+由于 `R·ẑ = (cos el·cos az, cos el·sin az, sin el)`，该标量恒等于 `az`——所以**改变俯仰或滚转
+会得到逐比特相同的一帧**，这正是本次改动要修的。`az0` 字段已从 `ProjParams` 移除，无人读取。
+
+**`el = roll = 0` 处的退化（为什么已发布的东西一张都没动）**：把 `el = 0, roll = 0` 代入
+`R = Rz(az)·Ry(90°−el)·Rz(−90°+roll)`：
+
+```
+R = [[ sin az, 0, cos az],
+     [−cos az, 0, sin az],
+     [      0, −1,     0]]
+```
+
+于是取 `g = −w`：
+
+```
+c.x =  sin az·g_x − cos az·g_y
+c.y = −g_z
+c.z =  cos az·g_x + sin az·g_y
+```
+
+记 `g_x = ρ·cos φ`，`g_y = ρ·sin φ`：
+
+```
+lon = atan2(−c.x, c.z) = atan2(ρ·sin(φ−az), ρ·cos(φ−az)) = φ − az
+lat = asin(−c.y)       = asin(g_z)
+```
+
+这与旧式**完全一致**（旧式 `RectangularForward(−w)` 给出 `lon₀ = atan2(g_y, g_x) = φ`、
+`lat₀ = asin(g_z)`，再 `lon = lon₀ − az0`，而 `az0 = az`）。逐点相等由
+`LmProj.RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm`
+（`test/golden-analytic/core/test_projection.cpp`）断言——它把旧公式**逐字抄进测试**，
+使这条等式在字段被删之后仍然可检验。
+
+**唯一的例外是两个极点** `g = ±ẑ`：那里两侧 `atan2` 的两个参数同时为零，经度按等距柱状图的
+本性就是任意的。旧式把极点放在 `−az` 列，新式放在视轴列；**行**（携带语义的那一半）不变。
+
+由这条退化直接得到两个推论，无需额外论证：所有已发布的 `rectangular` config 渲染结果不变
+（它们全都在 `el = roll = 0`）；GUI↔CLI 的导出对照也不需要新论证，因为 GUI 只会在零姿态下
+导出这个镜头（见下）。
+
+**GUI 侧**：预览保持一张**固定的全天纹理**，对它不做任何视图变换：`LensIsFullSky` 把
+`rectangular` 与四种 dual-fisheye 归为同一类，`preview_renderer.cpp` 对该类设
+`needs_view_transform = false`，而 `RenderPreviewPanel` **每一帧**都把该类的
+`elevation / azimuth / roll` 钉为零。这是**职责划分而非遗漏**——GUI 侧所有相机姿态变换都是前端
+的工作，在显示期通过重采样纹理完成；把姿态推进投影里等于做两遍。
+
+由于那条每帧规则是**唯一的执行点**（`.lmc` 加载器、CLI JSON 导入器、个人默认值覆盖三者都是纯
+转写，且四个 `renderer.*` 键全部是可作默认值的字段），它被从两个方向钉住：
+`view_display_controls/an_arriving_document_cannot_smuggle_a_full_sky_pose` 覆盖三条到达路径
+以及它们产出的导出 config，`view_display_controls/which_view_sliders_apply_depends_on_the_lens`
+覆盖控件路径。
+
+两侧的相互对照见
+`VisibleMaskGuiParity.RectangularFollowsTheFullCameraPoseAndTheGuiIsAFixedTexture` 与
+`AnnotationOverlayGuiParity.RectangularFollowsTheCameraPoseAndTheGuiDeliberatelyDoesNot`：
+零姿态下精确一致，方位角下差一个纯水平位移，俯仰/滚转下差异出现纵向分量。
+
 ## 10. 持久化兼容
 
 ### 10.1 语义变化字段（破坏性）
@@ -252,3 +330,21 @@ Preset 与 Case 的对应关系：
 **实现**：屏幕 x 手性落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`，legacy CPU / Metal / CUDA 三端共享的单一真源）的单镜头分支，故所有后端继承同一约定。GUI 的独立 forward 实现（`preview_renderer.cpp::ProjectWorldDirToScreen`、`overlay_labels.cpp::WorldDirToPixel`）本就产出相同的 `右 = +az`。
 
 **回归守卫**：手性翻转对 forward/inverse 往返测试不可见（任何自洽约定下往返都恒闭合），故用**绝对屏幕左右符号**断言钉死：`test/golden-analytic/core/test_projection.cpp`（backend 绝对列 pin）+ `test/unit-correctness/gui/test_render_handedness_guard.cpp`（backend + 两条 GUI forward + 交互读回的跨实现对拍）。
+## 14. 像素中心约定（前向分箱 ↔ 掩码 ↔ shader）
+
+§13 固定的是「方向落在屏幕哪一侧」。本节固定它下面那个亚像素问题：**给定一个连续图像坐标，它是哪个像素？该像素的中心又在哪？** 这两半此前的答案相差恰好半个像素。
+
+**约定：像素 `px` 覆盖连续区间 `[px - res/2, px + 1 - res/2)`，其中心在 `px + 0.5 - res/2`。** 图像关于画面中心对称，可寻址区间为 `[-res/2, res/2)`。
+
+映射的两个方向都由这一句话推出，且各自只有一个 owner：
+
+- **正向**（天空方向 → 像素索引）：`px = floor(v + res/2)`，落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`）每个分支末尾的分箱处。`LM_FLOOR` / `LM_FN` 使该头文件被三后端共同编译，故 legacy CPU / Metal / CUDA 不可能在这件事上分歧。
+- **反向**（像素索引 → 天空方向）：在 `px + 0.5 - res/2` 处取样，由渲染域掩码（`src/core/lens_proj_build.hpp` 的 `mask_detail::PixelToWorld` 及各族 helper）与 GUI 预览 shader 各自独立实现——后者的 `pos = v_ndc * u_resolution * 0.5` 就是同一条对称约定在 NDC 下的写法。
+
+两者精确复合：把像素中心代入正向得 `floor(px + 0.5) == px`（对任意整数 `px` 恒成立），⇒ 往返回到出发的那个像素，不留任何余量。
+
+**它取代了什么**：前向分箱此前是 `floor(v + res/2 + 0.5)`，可寻址区间成了 `[-res/2 - 0.5, res/2 - 0.5)`——不以画面中心对称，且与掩码 / shader 所设的约定差半个像素。它造成的后果全部是亚像素级、单独看没有一条像是错的，这正是它长期存活的原因：往返会滑一格；恰好落在成像圆边缘的方向可能一侧判进、另一侧判出；dual-fisheye 圆盘最外圈会被压成宽度只有正常像素千分之几的薄片。
+
+**消费这条约定时**：core 给出的是**像素索引**，不是连续坐标。任何要拿 core 的答案与连续位置比较的地方——GUI 的 forward、反投影、overlay 锚点——必须先换算，取该像素的**中心**（图像空间的 `index + 0.5`）。拿裸索引去比连续坐标，量到的是截断而不是投影；在旧的 `+0.5` 分箱下这个类别错误被藏住了，因为那时索引恰好是连续坐标的 *round*，残差是对称的半像素。
+
+**回归守卫**：`test/golden-analytic/core/test_visible_mask.cpp` 里两条对前向与掩码自带反向做**精确相等**往返的用例（`GlobeInverse.RoundTripsAgainstTheForwardGlobeBranch`、`RectangularInverse.RoundTripsAgainstTheForwardRectangularBranch`）。它们要求原样拿回出发像素、零容差——这正是半像素偏心一旦重现就会变红、而不会被某条容差静默吸收的原因。

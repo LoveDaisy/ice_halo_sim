@@ -625,6 +625,14 @@ void main() {
 
     // Visible hemisphere check
     // In equirect convention: lat = asin(-dz), lat > 0 means upper sky
+    //
+    // SYNC:visible-hemisphere-predicate — core states the same rule in C++, as
+    // lens_proj_build.hpp's VisibleByRange (`kUpper && wz > 0` -> not visible). GLSL cannot call
+    // into it, so the rule is written twice on purpose; the two are kept honest by
+    // test_visible_mask_gui_parity.cpp, which compares the resulting masks pixel by pixel across
+    // every lens type and all three values. Both sides are a DISPLAY clip and neither may become
+    // an energy cull -- the branch below never samples the texture for an excluded pixel, and
+    // core's twin (SYNC:visible-mask-zero) zeroes one that already accumulated.
     float lat = asin(clamp(-world_dir.z, -1.0, 1.0));
     pixel_visible = true;
     if (u_visible == 0 && lat < 0.0) pixel_visible = false;   // upper: discard lower hemisphere

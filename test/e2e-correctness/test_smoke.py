@@ -18,6 +18,26 @@ REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 # PSNR thresholds per reference image (dB).
 # Calibrated by running each config 3 times and taking min_psnr - 3dB.
 # Set to None to skip PSNR check for that output.
+#
+# Six of these (color_01, cza_01, multi_lens_01/02/03, parhelion_01) were re-shot on 2026-09-02,
+# when forward binning stopped carrying an extra half pixel and started agreeing with the pixel
+# centre the render-domain mask and the GUI shader had always used (doc/coordinate-convention.md
+# "Pixel Centre Convention"). Every pixel of every render moved by up to one pixel, so every
+# reference in this table drifted; these six are the ones whose drift was worth acting on, and
+# each is re-shot rather than absorbed:
+#   * multi_lens_03  - already red before this change (19.3 dB), for a different reason: it is a
+#                      dual_fisheye + `visible: upper` scene, and `visible` had just become a
+#                      display-layer clip. This is the reshoot window that pays for that too.
+#   * color_01, cza_01, parhelion_01 - crossed their thresholds on the binning shift alone
+#                      (42.1 -> 32.4, 48.8 -> 34.6, 40.1 -> 33.2 against the old references,
+#                      measured with the old binning restored as the control arm, so the shift is
+#                      attributable rather than assumed).
+#   * multi_lens_01/02 - did NOT cross, but drifted about 4 dB below their own run-to-run floor,
+#                      i.e. the old references had stopped describing the current render and the
+#                      gates' margin was quietly eroding. They come from the same config as
+#                      multi_lens_03 and the same render run.
+# Every threshold above ROSE. That is the direction a reshoot is allowed to move them: a reshoot
+# that lowers a threshold is absorbing a difference rather than recording one.
 PSNR_THRESHOLDS = {
     # Thresholds for the 11 single-lens-family references (linear + 4 single-
     # fisheye) below were recalibrated by scrum-azimuth-handedness-alignment /
@@ -28,8 +48,8 @@ PSNR_THRESHOLDS = {
     # 0.5 dB precision. The 3 control-set thresholds (multi_lens_03,
     # ms_multi_crystal_01, dual_fisheye_ref_01 — dual-fisheye family, unaffected
     # by the flip) are preserved from their prior calibration.
-    "color_01": 35.0,
-    "cza_01": 41.0,
+    "color_01": 39.5,
+    "cza_01": 45.5,
     "filters_01": 29.0,
     "halo_22_01": 26.5,
     # ms_multi_crystal: MS multi-crystal-per-layer + dual_fisheye + D65 + 2M rays
@@ -39,9 +59,9 @@ PSNR_THRESHOLDS = {
     # A structural regression (e.g. the frame band-vs-ring bug) drops PSNR far
     # below 20, so the gate still catches gross regressions.
     "ms_multi_crystal_01": 20.0,
-    "multi_lens_01": 33.5,
-    "multi_lens_02": 34.5,
-    "multi_lens_03": 40.3,
+    "multi_lens_01": 37.5,
+    "multi_lens_02": 37.5,
+    "multi_lens_03": 42.5,
     "multi_scatter_01": 26.5,
     # orthographic_180: D65 + uniform full-random orientation + 1M rays. Per-run
     # PSNR (measured on macOS): run-to-run 22.74/22.76 dB (3 runs). Threshold
@@ -52,7 +72,7 @@ PSNR_THRESHOLDS = {
     # (task-270.7 / explore-269 P0). A structural regression (frame bug,
     # wrong projection) drops PSNR far below this floor.
     "orthographic_180_01": 19.5,
-    "parhelion_01": 34.5,
+    "parhelion_01": 37.5,
     "pyramid_01": 28.5,
     # render_opts: re-shot for 469.7, when `grid.outline` stopped being a no-op and started
     # drawing the celestial horizon — this config sets it, so the reference now carries a two-pixel

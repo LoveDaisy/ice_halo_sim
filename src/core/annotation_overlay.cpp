@@ -22,11 +22,10 @@ constexpr int kCurveAltSteps = 180;
 
 constexpr float kRad2Deg = 180.0f / math::kPi;
 
-// Whether a sample survives the hemisphere / front policy this layer owns. Deliberately NOT
-// delegated to ProjectExitToPixel's own visible_range cull: that cull lives inside the single-lens
-// branch only, so relying on it would apply the rule to five lens types and skip the other six.
-// ComputeOverlay hands the projection kFull and asks this predicate for every type instead — the
-// same uniform-rule choice BuildVisibleMask's VisibleByRange comment argues for.
+// Whether a sample survives the hemisphere / front policy this layer owns. The projection knows
+// nothing about it: `visible` is a DISPLAY clip and ProjectExitToPixel culls no ray for it (478.2
+// removed the one branch that did), so every layer that needs the rule states it for itself. This
+// is that statement for annotations, as BuildVisibleMask's VisibleByRange is for the sky.
 bool VisibleForLabel(RenderConfig::VisibleRange visible, bool front, const float forward[3], float alt_deg, float wx,
                      float wy, float wz) {
   if (visible == RenderConfig::kUpper && alt_deg < -kLabelHemisphereToleranceDeg) {
@@ -281,7 +280,6 @@ Overlay ComputeOverlay(const Request& req) {
   // The forward used for anchors asks the lens "do you image this direction", nothing else: the
   // hemisphere policy is applied uniformly by VisibleForLabel afterwards (see its comment).
   lm_proj::ProjParams forward_params = inverse_params;
-  forward_params.visible_range = static_cast<int>(RenderConfig::kFull);
 
   // Camera forward in world space. ProjectExitToPixel's single-lens branch computes
   // c = R^T * (-w) and keeps c.z > 0, so the camera looks along -R * (0,0,1).

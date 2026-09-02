@@ -172,7 +172,7 @@ struct KernelParams {
   // Unified render projection (315.3) — mirrors the MSL KernelParams::proj.
   // Filled by BeginSession via BuildProjParams; consumed by
   // lm_proj::ProjectExitToPixel in the kernel exit tail. Replaced the former
-  // loose az0 / proj_type / r_scale / max_abs_dz fields.
+  // loose proj_type / r_scale / max_abs_dz fields.
   lm_proj::ProjParams proj;
   // task-358.3 (renamed from capture_component after Fork-C retirement): 0 in
   // production (emit gate skips capture-ring append), 1 in the CPU-parity test
@@ -225,18 +225,20 @@ struct KernelParams {
   // the same name in `KernelParams`.
   uint32_t and_term_counts_base_offset;
 };
-// sizeof(ProjParams) == 76 (6 ints + 4 floats + float[9]). K-shape pool step:
-// per-batch `poly_cnt` removed — now per-ray via `r_pool_shape[tid]`. The
-// 14 leading 4-byte scalars = 56 → proj at offset 56 (16-block aligned) →
-// ends at 132. Five 4-byte fields (capture_ray_mask + 4 color-region knobs) +
-// color_class_count = 24 → offset 156, which is NOT 8-aligned; the compiler
-// inserts a 4-byte pad so color_class_bits[16] (uint64) lands at offset 160.
-// bits (128) at 160-288, combine[16] (16) at 288-304, and_term_counts_base_
-// offset (4) at 304-308, trailing pad to alignment 8 → 312.
-// Net: dropping poly_cnt moved the compiler pad from "trailing 4B" to
-// "internal 4B before color_class_bits" — total sizeof stays 312 exactly.
-static_assert(sizeof(lm_proj::ProjParams) == 76u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 312u,
+// sizeof(ProjParams) == 68 (5 ints + 3 floats + float[9]). Two fields have left it in the 478
+// series: rectangular's `az0` (the lens now consumes the full camera pose out of `rot` like every
+// other pose-following type) and `visible_range` (478.2 — `visible` is a display clip, so no
+// branch of ProjectExitToPixel reads it any more).
+// The 14 leading 4-byte scalars = 56 → proj at offset 56 → ends at 124. Five 4-byte fields
+// (capture_ray_mask + 4 color-region knobs) + color_class_count = 24 → offset 148, which is NOT
+// 8-aligned, so 4 bytes of pad land ahead of color_class_bits[16] (uint64) at 152: bits (128) at
+// 152-280, combine[16] (16) at 280-296, and_term_counts_base_offset (4) at 296-300, trailing pad
+// to alignment 8 → 304.
+// KernelParams therefore stays 304 across this change: the 4 bytes `visible_range` gave back are
+// absorbed by the internal pad its removal opened ahead of color_class_bits. That the two numbers
+// move independently is the whole reason both are asserted rather than one derived from the other.
+static_assert(sizeof(lm_proj::ProjParams) == 68u, "ProjParams layout drift — check projection_shared.h");
+static_assert(sizeof(KernelParams) == 304u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -2586,7 +2588,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   params.img_h    = static_cast<uint32_t>(height);
   params.ms_mode  = ms_mode;
   params.out_cap  = static_cast<uint32_t>(out_cap);
-  // 315.3: single POD carries all projection routing (proj_type / az0 /
+  // 315.3: single POD carries all projection routing (proj_type /
   // r_scale / max_abs_dz / scale / rot / etc.) into the kernel exit tail.
   params.proj     = proj_params_;
   // task-358.3 (renamed from capture_component): gate the test-only capture
@@ -2968,7 +2970,7 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   impl_->per_batch_weight_ = spec.wl.weight_;
 
   // Projection routing (315.3): single-source ProjParams via BuildProjParams —
-  // predigests per-type scale, dual-fisheye r_scale/overlap, rectangular az0,
+  // predigests per-type scale, dual-fisheye r_scale/overlap,
   // and the camera rotation. DispatchLayer copies this into KernelParams::proj;
   // the kernel exit tail calls lm_proj::ProjectExitToPixel(proj, world_exit...),
   // identical to the CPU parity oracle ScatterOutgoingToXyz.

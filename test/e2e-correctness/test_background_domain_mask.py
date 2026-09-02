@@ -43,7 +43,7 @@ CONFIG = (
 
 WIDTH, HEIGHT = 400, 300
 # Imaged-disc radius in pixels: an equal-area fisheye at fov=180 maps theta=90 deg onto
-# r = short_edge / 2 (see ComputeScaleAz0's kFisheyeEqualArea branch) and reaches its rim,
+# r = short_edge / 2 (see ComputeLensScale's kFisheyeEqualArea branch) and reaches its rim,
 # theta=180 deg, at sqrt(2) times that.
 IMAGE_RADIUS = min(WIDTH, HEIGHT) / 2.0 * 2 ** 0.5  # 212.13 px
 
