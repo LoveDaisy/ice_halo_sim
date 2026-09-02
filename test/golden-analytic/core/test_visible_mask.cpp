@@ -158,10 +158,11 @@ TEST(GlobeInverse, RoundTripsAgainstTheForwardGlobeBranch) {
         mm.Note(at.str() + " recovered a direction the forward culls");
         continue;
       }
-      // Exact pixel equality is not demandable: the forward bins on floor(v + 0.5) about res/2
-      // while the mask samples pixel centres at (px + 0.5 - res/2), half a pixel apart, so a
-      // round trip lands in the sampled pixel or its immediate neighbour.
-      if (std::abs(r.hits[0].px - px) > 1 || std::abs(r.hits[0].py - py) > 1) {
+      // Exact pixel equality, demanded: the forward bins on floor(v) about res/2 and the mask
+      // samples pixel centres at (px + 0.5 - res/2), which are the two halves of one convention
+      // — floor(px + 0.5 - res/2 + res/2) == px for every integer px. A round trip therefore
+      // lands back in the pixel it started from, with no slack to hide a systematic offset in.
+      if (r.hits[0].px != px || r.hits[0].py != py) {
         std::ostringstream got;
         got << at.str() << " round-tripped to (" << r.hits[0].px << "," << r.hits[0].py << ")";
         mm.Note(got.str());
@@ -202,12 +203,12 @@ TEST(RectangularInverse, RoundTripsAgainstTheForwardRectangularBranch) {
         mm.Note(at.str() + " recovered a direction the forward culls");
         continue;
       }
-      // Same half-pixel slack as the globe case: the forward bins on floor(v + 0.5) about res/2
-      // while the mask samples pixel centres at (px + 0.5 - res/2). The column distance is
-      // circular because the map wraps.
+      // Same exact-equality demand as the globe case, and for the same reason: forward binning
+      // and mask sampling share one pixel-centre convention, so the round trip is exact. The
+      // column distance is circular because the map wraps.
       int col_dist = std::abs(r.hits[0].px - px);
       col_dist = std::min(col_dist, cfg.resolution_[0] - col_dist);
-      if (col_dist > 1 || std::abs(r.hits[0].py - py) > 1) {
+      if (col_dist != 0 || r.hits[0].py != py) {
         std::ostringstream got;
         got << at.str() << " round-tripped to (" << r.hits[0].px << "," << r.hits[0].py << ")";
         mm.Note(got.str());
