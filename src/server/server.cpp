@@ -25,6 +25,7 @@
 #if defined(LUMICE_CUDA_ENABLED)
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
+#include "server/anchor_consumer.hpp"
 #include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
@@ -665,7 +666,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
           rc->ResetWith(it->second, config_manager_.scene_.light_source_.param_);
           ++it;
         } else {
-          c->Reset();  // StatsConsumer
+          c->Reset();  // StatsConsumer / AnchorConsumer
         }
       }
     } else {
@@ -679,6 +680,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
             std::make_shared<RenderConsumer>(r, active_class_table_, config_manager_.scene_.light_source_.param_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
+      // One per SESSION, not one per renderer. See AnchorConsumer's own docs for why that
+      // is the contract rather than an economy: every element of consumers_ receives the
+      // same batch, so a second instance would double-count the same physical rays into a
+      // scalar that is supposed to describe the sky.
+      //
+      // It needs no ResetWith counterpart on the reuse branch above: its buffer's shape is
+      // a compile-time constant and depends on no user field, so there is nothing a config
+      // change could invalidate — the plain Reset() the branch already calls is complete.
+      consumers_.emplace_back(std::make_shared<AnchorConsumer>());
     }
   }
   auto rebuild_end = std::chrono::steady_clock::now();
@@ -791,6 +801,16 @@ bool ServerImpl::DoSnapshot() {
   frame->snapshot_generation_ = generation;
   frame->epoch_ = committed_epoch_.load(std::memory_order_acquire);
   frame->has_valid_data_ = valid_data;
+  // The exposure anchor, read once per snapshot from the session's single AnchorConsumer.
+  // PrepareSnapshot (Phase 1, under consumer_mutex_) already froze it, so this reads a
+  // value no concurrent Consume can move. Frames built before an AnchorConsumer exists —
+  // there is none until the first CommitConfig — keep the 0 default.
+  for (const auto& c : snapshot_consumers) {
+    if (auto* ac = dynamic_cast<AnchorConsumer*>(c.get())) {
+      frame->anchor_l99_sky_ = ac->SnapshotL99Sky();
+      break;
+    }
+  }
   {
     for (const auto& c : snapshot_consumers) {
       c->PostSnapshot();
@@ -820,6 +840,8 @@ bool ServerImpl::DoSnapshot() {
       r.has_valid_data_ = valid_data;
       r.snapshot_generation_ = generation;
       r.epoch_ = frame->epoch_;
+      // Broadcast, not recompute: the anchor was measured ONCE for this snapshot, above.
+      r.anchor_l99_sky_ = frame->anchor_l99_sky_;
       frame->xyz_results_.push_back(r);
       frame->xyz_storage_.push_back(rc->SnapshotXyzStorage());
     }

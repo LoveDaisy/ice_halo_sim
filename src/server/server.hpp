@@ -156,6 +156,11 @@ struct RawXyzResult {
   // the denominator the renderer normalizes by; a consumer wanting to reproduce
   // that normalization itself needs the raw total, not a per-pixel figure.
   float snapshot_emitted_energy_ = 0.0f;
+  // The session's exposure anchor: P99 sky radiance per steradian, measured on the fixed
+  // full-sky anchor buffer (core/anchor_buffer.hpp) rather than on this renderer's own
+  // output. IDENTICAL on every row of a frame by construction — it describes the scene, not
+  // the renderer — and carried per row only because that is where a caller already looks.
+  float anchor_l99_sky_ = 0.0f;
   // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped when the frame is
   // acquired; consumed by the GUI display-keying in 1.5. See
   // doc/gui-preview-lifecycle-architecture.md §4/§5.
@@ -244,6 +249,13 @@ struct ResultFrame {
   uint64_t snapshot_generation_ = 0;  ///< snapshot_generation_ this frame was built under
   uint64_t epoch_ = 0;                ///< committed_epoch_ as seen by the reader (see AcquireResultFrame)
   bool has_valid_data_ = false;       ///< has_ever_consumed_ as seen by the reader
+
+  /// The session's exposure anchor for this snapshot: the P99 sky radiance, per steradian
+  /// (core/anchor_buffer.hpp). A FRAME-level scalar, held once here and broadcast into every
+  /// row of xyz_results_ on the way out — the AnchorConsumer computes it exactly once per
+  /// snapshot and this is the only place it is read from, so no consumer of the API can end
+  /// up anchoring to a second, almost-identical number.
+  float anchor_l99_sky_ = 0.0f;
 };
 
 

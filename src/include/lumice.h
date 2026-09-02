@@ -143,7 +143,16 @@ extern "C" {
 // labels with it. That mirrors the GUI, where a label has always inherited its family's
 // appearance; a core that diverged here would create the very GUI/CLI mismatch the annotation
 // layer exists to remove.
-#define LUMICE_API_VERSION 421
+//
+// BREAKING (v4.22): LUMICE_RawXyzResult gains a trailing `anchor_l99_sky` field — the
+// session's exposure anchor, measured on a fixed full-sky buffer instead of on the
+// renderer's own output. It is APPENDED after `epoch`, and unlike `emitted_energy` (which
+// fitted into pre-existing alignment padding) there is no spare room left, so this one
+// GROWS the struct: 64 -> 72 bytes. A caller that was NOT recompiled hands the API a
+// shorter buffer and LUMICE_FrameGetRawXyz writes past the end of it. Recompile against
+// this header, and update any mirrored struct definition (ctypes, FFI) in lockstep.
+// No behavior change accompanies it: nothing in the renderer reads the new field yet.
+#define LUMICE_API_VERSION 422
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -326,6 +335,23 @@ typedef struct LUMICE_RawXyzResult_ {
   // is unchanged and `epoch` keeps its offset.
   float emitted_energy;
   unsigned long long epoch;  // Lifecycle epoch at snapshot time (committed_epoch_); 1.5 display keying
+  // The session's EXPOSURE ANCHOR: the P99 of the sky's radiance, in Y per steradian.
+  //
+  // Measured on a fixed, full-sky, equal-area buffer that this renderer's lens, fov, view
+  // pose, `visible` clip and output resolution do not touch. It therefore describes the
+  // SCENE, not this view of it — which is the point: a P99 taken over a renderer's own
+  // output buffer moves by up to a couple of stops when you merely change the lens looking
+  // at the same sky, and two consumers that each take their own such P99 disagree by a
+  // constant gain that no one can see in either one alone.
+  //
+  // IDENTICAL ON EVERY ROW of one LUMICE_FrameGetRawXyz call, by construction. It is a
+  // frame-level scalar computed exactly once per snapshot and broadcast into each row
+  // because that is where a caller is already looking; it is NOT a per-renderer quantity,
+  // and reading it as one (e.g. comparing rows to detect a difference) is meaningless.
+  //
+  // 0 means the sky carried no positive Y this snapshot (nothing simulated yet, or every
+  // ray filtered away) — the same "no samples" convention every other P99 in this API uses.
+  float anchor_l99_sky;
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {

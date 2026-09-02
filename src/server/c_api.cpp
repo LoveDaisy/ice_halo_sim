@@ -2845,6 +2845,10 @@ LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_R
     out[i].effective_pixels = results[i].effective_pixels_;
     out[i].emitted_energy = results[i].snapshot_emitted_energy_;
     out[i].epoch = results[i].epoch_;
+    // Same value on every row — see the field's own contract in lumice.h. The one place it
+    // is computed is AnchorConsumer::PrepareSnapshot; everything from there to here is a
+    // copy, which is what keeps CLI and GUI on literally the same number.
+    out[i].anchor_l99_sky = results[i].anchor_l99_sky_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).
