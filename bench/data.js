@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788332018933,
+  "lastUpdate": 1788344051512,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "6a2fa9ca79842740355bd10165ea2eb02cd8f279",
-          "message": "Merge pull request #197 from LoveDaisy/feat/metal-gui-commit-backpressure\n\nfix(gui): Metal GUI commit backpressure — O2 PSO 进程级缓存 + 自适应背压门",
-          "timestamp": "2026-07-15T10:32:02+08:00",
-          "tree_id": "44dfcceb98f7237b697f2a21d2028562645450e3",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6a2fa9ca79842740355bd10165ea2eb02cd8f279"
-        },
-        "date": 1784083189709,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 318808.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 590748.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 400145.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 329726.9,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4770,6 +4722,54 @@ window.BENCHMARK_DATA = {
             "value": 449713.2,
             "unit": "rays/sec",
             "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1ac3ab63b1d72eb8034782f0b8b8f09e100b4636",
+          "message": "Merge pull request #296 from LoveDaisy/task/save-open-visual-consistency-red\n\nfix(gui): .lmc 与 composite 纹理改存纯辐亮度，渐晕由显示端统一补上",
+          "timestamp": "2026-09-02T18:00:52+08:00",
+          "tree_id": "b7bbed427787b088d61b2fa2e14ac122e1150a1d",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1ac3ab63b1d72eb8034782f0b8b8f09e100b4636"
+        },
+        "date": 1788344049697,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 364593.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 583581.7,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 437245,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 345181.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
