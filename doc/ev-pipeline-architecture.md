@@ -276,6 +276,78 @@ appearance-only field — like `intensity_factor_`, it never triggers
 `NeedsRebuild()` (§6.4) because it selects which formula runs, not the
 accumulation layout.
 
+### §2.7 The Metering Rule: `kRelative` Anchors to the Whole Buffer, Not to What `visible` Leaves on Screen
+
+`ComputeP99Y` in §2.6's `kRelative` formula is handed the **whole** snapshot buffer
+(`render.cpp`, `ExposureScale()`'s `kRelative` branch): every pixel that received energy,
+including the pixels the `visible` hemisphere clip will drop on the way to the image. The
+visibility mask (`BuildVisibleMask`, applied in `PostSnapshot` and `ApplyCompositeBackground`)
+is a **display** clip, applied after metering — it decides what you see, never what the meter
+measured. `ParticipatingExposureScale` is filtered by color-class participation (§6.6) and by
+nothing else; it is not filtered by `visible` either.
+
+This is one rule shared with the GUI rather than a CLI-side choice. The GUI's own auto-EV
+(`ComputeEvAuto`, §2.5) anchors to a full-sky texture, because the commit arm that produces
+that texture pins `visible` to FULL regardless of the user's setting (`gui/file_io.cpp`'s
+`kSimCommit` branch; the divergence is declared in `test_scene_commit_chain.cpp`'s
+`kDivergingKeys`). Filtering the server's P99 by the visibility mask would therefore give the
+two paths two different metering rules — the class of core/GUI divergence this work exists to
+remove. Pinned by
+`RenderConsumerMeteringRule.RelativeExposureAnchorsToTheWholeBufferNotTheVisibleSubset`
+(`test/unit-correctness/server/test_render_consumer_visible_mask.cpp`), which meters one ray
+batch under `visible: upper` and `visible: full` and demands one scale.
+
+#### The brightness migration this rule charges for
+
+`visible` became a pure display clip for all four lens families: no lens type culls ray energy
+any more (previously the single-lens branch of `ProjectExitToPixel` dropped rays outside the
+selected hemisphere, while `rectangular` / dual-fisheye / `globe` never did). The excluded
+hemisphere therefore reaches the buffer for the first time on single-lens renders — and, by the
+rule above, it reaches the P99 sample with it. **Existing CLI renders that combine a single-lens
+projection (`linear` or any single `fisheye_*`) with `visible: upper`/`lower` and the default
+`ev_mode: relative` change brightness.** Nothing else does: the other three families already
+metered the full sky, `visible: full` is unaffected by construction, `kAbsolute` anchors to
+emitted energy and is structurally immune, and the GUI does not move a pixel (its core renders
+are always `visible: full`).
+
+The direction is **not** fixed — it depends on whether the newly admitted region is brighter or
+dimmer than the old anchor:
+
+- Excluded region is mostly dark sky → the added pixels pull the 99th percentile **down** → the
+  divisor shrinks → the visible part gets **brighter**.
+- Excluded region holds the bulk of the halo (a high sun with `visible: lower`, say) → the added
+  pixels push the percentile **up** → the visible part gets **darker**. This is the larger
+  effect of the two, and it is where the worst case sits.
+
+Measured on `fisheye_equal_area` 180° with the camera on the horizon, 4×10⁵ rays, black
+background, comparing the same config before and after the cull removal (paired within one
+simulation, so no run-to-run noise enters the ratio):
+
+| Sun altitude | `visible: upper` | `visible: lower` |
+|---|---|---|
+| 5° | −0.09 stop | −0.16 stop |
+| 20° | −0.06 stop | −0.13 stop |
+| 60° | **+0.15 stop** | **−1.68 stop** (3.2× darker) |
+
+Negative = darker after. The 60°/`lower` row is the worst case in this corpus and the reason the
+spread is asymmetric: at a high sun almost all the halo energy is above the horizon, i.e. inside
+the region `lower` excludes; the old behavior kept that energy out of the denominator and so
+metered the remaining sky as if it were the whole picture. These are measurements, not a law —
+unlike §7.2's `landed_fraction`, the shift here has no closed form a caller can evaluate, because
+it depends on the energy distribution across the clip boundary. Do not extrapolate past the rows
+above; re-measure for a scene that matters.
+
+Restoring a previous look, if a specific render needs it:
+
+- `intensity_factor` (`2^EV`, §2.6) applied per render entry cancels it exactly — the migration is
+  a single global scalar per frame, not a re-weighting of the picture.
+- `ev_mode: "absolute"` is unaffected outright: it anchors to `emitted_energy` (§7), which no
+  hemisphere clip touches.
+
+No compensating scale is applied anywhere in the pipeline. Compensating would mean making the
+meter a function of `visible` again by a different route, which is the thing this section rules
+out.
+
 ---
 
 ## §3 Snapshot and Reset Lifecycle
