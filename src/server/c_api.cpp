@@ -2271,10 +2271,13 @@ static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_Grid
 }
 
 static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, ConfigScratch* out) {
-  if (static_cast<int>(render_arr.size()) > LUMICE_MAX_CONFIG_RENDERERS) {
+  const int render_count = static_cast<int>(render_arr.size());
+  if (render_count > LUMICE_MAX_CONFIG_RENDERERS) {
+    ILOG_ERROR(ns::GetGlobalLogger(), "config has {} \"render\" entries, exceeding the limit of {}", render_count,
+               LUMICE_MAX_CONFIG_RENDERERS);
     return LUMICE_ERR_INVALID_CONFIG;
   }
-  out->renderer_count = static_cast<int>(render_arr.size());
+  out->renderer_count = render_count;
   for (int i = 0; i < out->renderer_count; i++) {
     const auto& rj = render_arr[i];
     auto& r = out->renderers[i];
