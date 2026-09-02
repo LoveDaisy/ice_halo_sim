@@ -1102,11 +1102,18 @@ cost distribution and states the tail it did not look at:
   cheapest leg of the build matrix. Both proportions are recomputable from that table.
 - **Not enumerated at all**: the individual cases inside a scope. `gui_test` runs 344 cases across
   38 categories (338 in its correctness pool, 6 in the real-timing pool, per the binary's own run
-  summary); the fast e2e set collects 92; neither was gone through case by case. One
+  summary); the fast e2e set collects 105; neither was gone through case by case. One
   measured statement about that distribution is worth carrying, because it bounds what scheduling
-  can achieve: in the fast e2e set, a single case (`test_smoke.py::test_all_configs_run_successfully`,
-  87.3s) accounts for 92% of the whole set's 94.8s parallel wall clock. Below that one test, no
-  amount of parallelism makes the set faster.
+  can achieve — and the shape of that bound is itself worth knowing. It used to be a single case:
+  `test_smoke.py` ran every showcase config inside one `test_all_configs_run_successfully` item,
+  which at 87.3s accounted for 92% of the whole set's 94.8s parallel wall clock. `subTest` made
+  that look like 14 cases in the report, but xdist distributes by *collected item*, so all 14
+  configs were pinned to one worker no matter how many were free. Splitting it into one item per
+  config (`test_config_<stem>`) removed the pin without touching a single assertion — measured
+  wall clock fell while total `user` CPU stayed flat, which is the evidence that nothing was
+  dropped, only repacked. The general form is worth carrying past this one case: **a loop inside
+  a test item is invisible to the scheduler, and a report that shows N sub-cases does not mean
+  the runner sees N items.**
 
 ### §7.1 What each scope costs
 
