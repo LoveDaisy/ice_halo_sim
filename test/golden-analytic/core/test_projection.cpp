@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <random>
 #include <vector>
@@ -1077,6 +1079,113 @@ TEST(LmProj, RectangularWrapWhileVsFloorEquivalence) {
   // If this ever fires, Step 2 chose the safer path (CPU while-loop) — the
   // shared function stays parity-neutral. Metal/CUDA side is 315.3's concern.
   EXPECT_EQ(mismatches, 0);
+}
+
+// =============== Rectangular follows the full camera pose ===============
+// The equirectangular map is oriented by the camera, and by the WHOLE camera: azimuth, elevation
+// and roll all move it. It used to consume only the azimuth (ComputeScaleAz0 reduced the camera
+// rotation to a single `az0` scalar and the forward subtracted it from the longitude), so a
+// config could tilt or roll the camera and get a bit-identical frame back. Owner decision
+// 2026-09-02: core keeps maximum flexibility and follows the full pose; the GUI deliberately does
+// NOT (it wants a fixed all-sky texture and does every pose transform on the front end) — see
+// doc/coordinate-convention.md and test_visible_mask_gui_parity.cpp for that half.
+
+// The frame a rectangular ray lands in, for one camera pose.
+std::array<int, 2> RectangularPixel(float az, float el, float ro, const float d[3]) {
+  const int w = 1024;
+  const int h = 512;
+  const auto cfg = MakeRC(LensParam::kRectangular, 90.0f, w, h, az, el, ro);
+  const Rotation rot = lumice::MakeCameraRotation(cfg);
+  const auto pp = lumice::BuildProjParams(cfg, rot, static_cast<float>(std::min(w, h)));
+  const auto r = lm_proj::ProjectExitToPixel(pp, d[0], d[1], d[2]);
+  if (r.count == 0) {
+    return { -1, -1 };
+  }
+  return { r.hits[0].px, r.hits[0].py };
+}
+
+TEST(LmProj, RectangularFollowsCameraElevationAndRoll) {
+  // Probe directions chosen off every symmetry plane of the fixture, so that a pose change moving
+  // the map cannot leave a probe on its own image by coincidence.
+  const float dirs[][3] = {
+    { 0.371391f, -0.557086f, -0.742781f },
+    { -0.640184f, 0.256074f, -0.724209f },
+    { 0.267261f, 0.534522f, 0.801784f },
+    { -0.301511f, -0.904534f, 0.301511f },
+  };
+  const float kAz = 30.0f;
+  for (const auto& d : dirs) {
+    const auto base = RectangularPixel(kAz, 0.0f, 0.0f, d);
+    char lbl[80];
+    std::snprintf(lbl, sizeof(lbl), "dir=(%g,%g,%g)", d[0], d[1], d[2]);
+    if (base[0] == -1) {
+      // Non-fatal: rectangular culls nothing, so this cannot happen — but one unimaged probe
+      // must not swallow the remaining rows.
+      ADD_FAILURE() << lbl << ": the baseline pose does not image the probe direction";
+      continue;
+    }
+
+    for (float el : { 25.0f, -40.0f }) {
+      const auto moved = RectangularPixel(kAz, el, 0.0f, d);
+      EXPECT_NE(base, moved) << lbl << " el=" << el << ": elevation must move the equirectangular map";
+    }
+    for (float ro : { 35.0f, -70.0f }) {
+      const auto moved = RectangularPixel(kAz, 0.0f, ro, d);
+      EXPECT_NE(base, moved) << lbl << " ro=" << ro << ": roll must move the equirectangular map";
+    }
+  }
+}
+
+TEST(LmProj, RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm) {
+  // The regression anchor for the change above, and the reason the GUI needs no counterpart: at
+  // el = ro = 0 — the pose every full-sky lens is pinned to on the GUI side, and the pose every
+  // shipped rectangular config uses — the pose-following form must be POINTWISE identical to the
+  // azimuth-only form it replaced (`RectangularForward(-w)` with `az` subtracted from the
+  // longitude). Written out here rather than referenced, so the equality survives the deletion of
+  // ProjParams::az0.
+  const int w = 1024;
+  const int h = 512;
+  const float scale = static_cast<float>(std::min(w / 2, h)) / math::kPi;
+  const float dirs[][3] = {
+    { 0.371391f, -0.557086f, -0.742781f },
+    { -0.640184f, 0.256074f, -0.724209f },
+    { 0.267261f, 0.534522f, 0.801784f },
+    { -0.301511f, -0.904534f, 0.301511f },
+    { 0.0f, 0.0f, -1.0f },
+    { 0.0f, 0.0f, 1.0f },
+    { 1.0f, 0.0f, 0.0f },
+    { 0.0f, -1.0f, 0.0f },
+  };
+  for (float az : { 0.0f, 30.0f, -75.0f, 179.0f, 200.0f }) {
+    for (const auto& d : dirs) {
+      // The pre-2026-09-02 formula, verbatim.
+      const auto proj = lm_proj::RectangularForward(-d[0], -d[1], -d[2]);
+      float lon = proj.x - az * math::kDegreeToRad;
+      while (lon < -math::kPi) {
+        lon += 2.0f * math::kPi;
+      }
+      while (lon > math::kPi) {
+        lon -= 2.0f * math::kPi;
+      }
+      const int raw_x = static_cast<int>(std::floor(lon * scale + static_cast<float>(w) / 2.0f + 0.5f));
+      const std::array<int, 2> legacy{
+        ((raw_x % w) + w) % w,
+        static_cast<int>(std::floor(-proj.y * scale + static_cast<float>(h) / 2.0f + 0.5f)),
+      };
+
+      const auto got = RectangularPixel(az, 0.0f, 0.0f, d);
+      char lbl[96];
+      std::snprintf(lbl, sizeof(lbl), "az=%g dir=(%g,%g,%g)", az, d[0], d[1], d[2]);
+      // One pixel of slack: the two forms reach the same longitude through different float
+      // arithmetic (atan2 of rotated components vs a subtraction), so a sample sitting on a bin
+      // edge may round either way. Anything larger is a real divergence. The column distance is
+      // circular — the map wraps, so column 0 and column w-1 are neighbours.
+      int col_dist = std::abs(got[0] - legacy[0]);
+      col_dist = std::min(col_dist, w - col_dist);
+      EXPECT_LE(col_dist, 1) << lbl;
+      EXPECT_LE(std::abs(got[1] - legacy[1]), 1) << lbl;
+    }
+  }
 }
 
 // =============== Globe projection (315.4) ===============
