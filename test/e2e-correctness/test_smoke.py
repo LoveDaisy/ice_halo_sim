@@ -93,59 +93,50 @@ def _discover_configs():
 class TestSmoke(LumiceTestCase):
     """Smoke tests: run every config and verify basic outputs."""
 
-    def test_all_configs_run_successfully(self):
-        """Every config should exit 0, produce non-empty images of correct size and PSNR."""
-        configs = _discover_configs()
-        self.assertTrue(len(configs) > 0, "No configs found in test/e2e/configs/")
+    def _check_one_config(self, cfg_path):
+        """Run one config and verify exit code, outputs and PSNR."""
+        config_name = cfg_path.stem
+        result = self.run_lumice(
+            ["-f", str(cfg_path), "-o", self.output_dir]
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"{config_name} failed:\n{result.stderr}",
+        )
 
-        for cfg_path in configs:
-            config_name = cfg_path.stem
-            with self.subTest(config=config_name):
-                result = self.run_lumice(
-                    ["-f", str(cfg_path), "-o", self.output_dir]
-                )
-                self.assertEqual(
-                    result.returncode,
-                    0,
-                    f"{config_name} failed:\n{result.stderr}",
-                )
+        # Check output files exist and are non-empty
+        output_imgs = sorted(
+            glob.glob(os.path.join(self.output_dir, "img_*.jpg"))
+        )
+        self.assertTrue(
+            len(output_imgs) > 0,
+            f"{config_name}: no output images in {self.output_dir}",
+        )
 
-                # Check output files exist and are non-empty
-                output_imgs = sorted(
-                    glob.glob(os.path.join(self.output_dir, "img_*.jpg"))
-                )
-                self.assertTrue(
-                    len(output_imgs) > 0,
-                    f"{config_name}: no output images in {self.output_dir}",
-                )
+        for img_path in output_imgs:
+            size = os.path.getsize(img_path)
+            self.assertGreater(
+                size, 0, f"{img_path} is empty"
+            )
 
-                for img_path in output_imgs:
-                    size = os.path.getsize(img_path)
-                    self.assertGreater(
-                        size, 0, f"{img_path} is empty"
-                    )
+            if HAS_PILLOW:
+                # Check PSNR against reference image
+                renderer_id = Path(img_path).stem.split("_")[-1]
+                ref_name = f"{config_name}_{renderer_id}.jpg"
+                ref_path = REFERENCES_DIR / ref_name
+                threshold_key = f"{config_name}_{renderer_id}"
 
-                    if HAS_PILLOW:
-                        # Check PSNR against reference image
-                        renderer_id = Path(img_path).stem.split("_")[-1]
-                        ref_name = f"{config_name}_{renderer_id}.jpg"
-                        ref_path = REFERENCES_DIR / ref_name
-                        threshold_key = f"{config_name}_{renderer_id}"
-
-                        if ref_path.exists() and threshold_key in PSNR_THRESHOLDS:
-                            threshold = PSNR_THRESHOLDS[threshold_key]
-                            if threshold is not None:
-                                mse = compute_mse(img_path, str(ref_path))
-                                psnr = compute_psnr(mse)
-                                self.assertGreaterEqual(
-                                    psnr,
-                                    threshold,
-                                    f"{ref_name}: PSNR {psnr:.1f} dB < threshold {threshold} dB",
-                                )
-
-                # Clean output_dir for next config
-                for f in glob.glob(os.path.join(self.output_dir, "*")):
-                    os.remove(f)
+                if ref_path.exists() and threshold_key in PSNR_THRESHOLDS:
+                    threshold = PSNR_THRESHOLDS[threshold_key]
+                    if threshold is not None:
+                        mse = compute_mse(img_path, str(ref_path))
+                        psnr = compute_psnr(mse)
+                        self.assertGreaterEqual(
+                            psnr,
+                            threshold,
+                            f"{ref_name}: PSNR {psnr:.1f} dB < threshold {threshold} dB",
+                        )
 
     def test_stdout_contains_stats(self):
         """Lumice stdout should contain Stats: and Saved: lines."""
@@ -159,3 +150,24 @@ class TestSmoke(LumiceTestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("Stats:", result.stdout)
         self.assertIn("Saved:", result.stdout)
+
+
+def _make_config_test(cfg_path):
+    def _test(self):
+        self._check_one_config(cfg_path)
+
+    _test.__name__ = f"test_config_{cfg_path.stem}"
+    _test.__doc__ = f"{cfg_path.stem}: exits 0, produces non-empty images, PSNR >= threshold."
+    return _test
+
+
+# One pytest item per config, rather than one item looping over all of them: xdist
+# distributes by item, so a single looping item pins every config to one worker and
+# becomes the whole set's wall clock. `unittest.TestCase` methods cannot be driven by
+# @pytest.mark.parametrize (pytest does not support it there), hence the setattr
+# generation below. The assert makes "discovered nothing" an import-time hard failure
+# instead of a silent collection of zero cases.
+_CONFIGS = _discover_configs()
+assert _CONFIGS, "No configs with reference images found in test/e2e/configs/"
+for _cfg in _CONFIGS:
+    setattr(TestSmoke, f"test_config_{_cfg.stem}", _make_config_test(_cfg))
