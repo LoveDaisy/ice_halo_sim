@@ -385,7 +385,8 @@ void RegisterFilterEditorTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> tex_data;
       int tex_w = 0;
       int tex_h = 0;
-      IM_CHECK(gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h));
+      bool tex_radiance_only = false;
+      IM_CHECK(gui::LoadLmcFile(tmp_path, gui::g_state, tex_data, tex_w, tex_h, tex_radiance_only));
 
       const auto* reloaded = CommittedFilter();
       IM_CHECK(reloaded != nullptr);

@@ -275,7 +275,7 @@ void CheckUnsavedAndDo(PendingAction action);
 // Subset per reason (逐条对照 as-built 精确复刻，see plan §3):
 //   kNewDocument  : ClearTexture + ClearBackground + InvalidateStagedTexture +
 //                   crystal_mesh_hash=0 + trackball reset + OnLayerStructureChanged
-//   kOpenBaked    : UploadTexture(baked) + ClearBackground + InvalidateStagedTexture +
+//   kOpenBaked    : Upload{Radiance,}Texture(baked) + ClearBackground + InvalidateStagedTexture +
 //                   trackball reset + OnLayerStructureChanged
 //   kOpenLmcBlank : ClearTexture + ClearBackground + InvalidateStagedTexture +
 //                   trackball reset + OnLayerStructureChanged
@@ -302,6 +302,10 @@ struct FrontendTexturePayload {
   const unsigned char* data;
   int width;
   int height;
+  // True when `data` holds the halo's radiance alone (a v>=4 .lmc), false when the sky colour is
+  // already summed into it (pre-v4). Selects the PreviewRenderer upload entry point; getting it
+  // wrong paints the sky twice or not at all. See PreviewRenderer::TextureMode.
+  bool radiance_only;
 };
 
 void ResetFrontendState(GuiState& state, FrontendResetReason reason, const FrontendTexturePayload* baked = nullptr);

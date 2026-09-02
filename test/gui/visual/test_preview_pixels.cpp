@@ -212,7 +212,12 @@ void RegisterPreviewPixelTests(ImGuiTestEngine* engine) {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "visual", "save_open_visual_consistency");
     t->GuiFunc = [](ImGuiTestContext* /*ctx*/) {
       if (g_capture.capture_requested && !g_capture.capture_done) {
-        gui::g_preview.UploadTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
+        // The radiance entry point, because that is the one DoOpen's kOpenBaked branch takes for
+        // the file Phase 3 just wrote: its texels carry the halo alone, and the shader still owes
+        // them the lens's relative illumination and the sky. Uploading them through the
+        // composited entry point instead would show the same picture the live view showed minus
+        // both, which is the divergence this case exists to catch.
+        gui::g_preview.UploadRadianceTexture(g_capture.pixels.data(), g_capture.width, g_capture.height);
         g_capture.capture_done = true;
       }
       if (g_export_test.export_requested && !g_export_test.export_done) {
@@ -325,9 +330,14 @@ void RegisterPreviewPixelTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> tex_data;
       int tex_w = 0;
       int tex_h = 0;
-      bool load_ok = gui::LoadLmcFile(lmc_path, gui::g_state, tex_data, tex_w, tex_h);
+      bool tex_radiance_only = false;
+      bool load_ok = gui::LoadLmcFile(lmc_path, gui::g_state, tex_data, tex_w, tex_h, tex_radiance_only);
       IM_CHECK(load_ok);
       IM_CHECK(!tex_data.empty());
+      // The document this run saved must declare radiance-only pixels: the upload below picks its
+      // entry point on that, and a Save that quietly went back to baking the sky in would
+      // otherwise be read as a plain PSNR miss rather than as the format regression it is.
+      IM_CHECK(tex_radiance_only);
 
       // Upload loaded texture (GuiFunc will handle GL)
       g_capture.Reset();

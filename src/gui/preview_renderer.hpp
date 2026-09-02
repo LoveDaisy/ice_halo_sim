@@ -155,11 +155,35 @@ struct PreviewParams {
 
 class PreviewRenderer {
  public:
+  // What the source texture's samples MEAN, and therefore how much of the display chain the
+  // shader still owes them. Mirrored by the kTexMode* constants in the GLSL (preview_renderer.cpp)
+  // — the two enumerations are one contract and their values must stay in step.
+  enum class TextureMode : int {
+    // 8-bit sRGB texels that already carry the sky colour, drawn as they are. Two producers, and
+    // neither can be corrected at display time: ClearTexture()'s 1x1 black pixel, and a .lmc
+    // written before the format carried radiance-only textures (v <= 3), whose sky is summed into
+    // every texel and cannot be un-summed where the bake clipped.
+    kSrgbComposited = 0,
+    // Float XYZ radiance from the live simulation.
+    kXyz = 1,
+    // 8-bit sRGB texels carrying the halo's radiance ALONE — exposure already applied, no sky.
+    // The shader applies the target lens's relative illumination and then the sky, by the same
+    // lines and in the same order as the XYZ branch, so a picture reopened from disk renders the
+    // way the live view rendered it.
+    kSrgbRadiance = 2,
+  };
+
   bool Init();
   void Destroy();
 
-  // Upload equirectangular image (RGB, uint8, row-major) — for .lmc load
+  // Upload equirectangular image (RGB, uint8, row-major) whose texels ALREADY carry the sky
+  // colour — see TextureMode::kSrgbComposited. The only remaining producer is a legacy .lmc.
   void UploadTexture(const unsigned char* data, int width, int height);
+
+  // The same bytes, but carrying the halo's radiance alone — see TextureMode::kSrgbRadiance.
+  // This is the entry point every current producer uses: the .lmc bake and the composite
+  // (raypath-colour) preview both hand over radiance-only pixels.
+  void UploadRadianceTexture(const unsigned char* data, int width, int height);
 
   // Upload equirectangular XYZ float data — for live simulation preview
   void UploadXyzTexture(const float* data, int width, int height);
@@ -187,7 +211,7 @@ class PreviewRenderer {
   bool HasTexture() const { return tex_width_ > 0 && tex_height_ > 0; }
   void ClearTexture();
 
-  // Update CPU-side texture data only (no GL upload, no xyz_mode_ change).
+  // Update CPU-side texture data only (no GL upload, no tex_mode_ change).
   // Used by Save to refresh tex_data_ without disturbing the GPU texture.
   void UpdateCpuTextureData(const unsigned char* data, int width, int height);
 
@@ -209,8 +233,8 @@ class PreviewRenderer {
   unsigned int texture_ = 0;
   int tex_width_ = 0;
   int tex_height_ = 0;
-  std::vector<unsigned char> tex_data_;  // CPU-side copy of texture (RGB uint8, for .lmc save)
-  bool xyz_mode_ = false;                // true when texture contains XYZ float data
+  std::vector<unsigned char> tex_data_;                  // CPU-side copy of texture (RGB uint8, for .lmc save)
+  TextureMode tex_mode_ = TextureMode::kSrgbComposited;  // what texture_ currently holds
 
   // Deferred GL blank request. ClearTexture() sets this from any thread
   // (callable from coroutine workers without a GL context); Render() (main
@@ -222,6 +246,9 @@ class PreviewRenderer {
   bool needs_gl_blank_ = false;
 
   void UploadBlankSimTexture();
+
+  // GL body shared by UploadTexture / UploadRadianceTexture; see the definition.
+  void UploadUint8Texture(const unsigned char* data, int width, int height, TextureMode mode);
 
   // PBO double-buffer for async XYZ texture upload (GLsync stored as void* to
   // avoid including GL headers in this header; cast to GLsync in the .cpp).

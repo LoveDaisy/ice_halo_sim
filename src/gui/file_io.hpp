@@ -198,10 +198,16 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
 // section is even read, and the deserializer clears the document it is given, so deserializing in
 // place would let a failed load leave the caller showing the file it just refused to open.
 //
-// `tex_data`/`tex_w`/`tex_h` carry NO such guarantee: they are cleared on entry and are only
-// meaningful when this returns true. Read them only then.
+// `tex_data`/`tex_w`/`tex_h`/`tex_radiance_only` carry NO such guarantee: they are cleared on entry
+// and are only meaningful when this returns true. Read them only then.
+//
+// `tex_radiance_only` says which of the two texture semantics the file's pixels carry, and it is
+// NOT optional for a caller that displays them: true means the halo's radiance alone (the shader
+// still owes it the lens's relative illumination and the sky), false means a pre-v4 bake with the
+// sky already summed in, which can only be shown as it is. Getting it wrong paints the sky twice
+// or not at all. See PreviewRenderer::TextureMode.
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
-                 int& tex_h);
+                 int& tex_h, bool& tex_radiance_only);
 
 // Returns the number of crystal shape distributions downgraded to uniform since the last call, and
 // resets the counter. The GUI edits uniform distributions only; non-uniform families loaded from

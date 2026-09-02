@@ -3169,9 +3169,22 @@ static constexpr uint32_t kLmcMagic = 0x00434D4C;  // "LMC\0" as little-endian u
 // (gate=2) would pass a v=3 file's header and then silently load empty filters
 // (the summands array carries no legacy `type`/`raypath_text`). .lmc is a
 // GUI-internal git-ignored format with no external release contract.
-static constexpr uint32_t kLmcVersion = 3;
+//
+// v=3 → v=4 bump: the texture section stopped carrying the sky colour. Up to v=3 it was baked
+// with the background summed into every texel, which left the reopened document unable to receive
+// the target lens's relative illumination at display time — scaling a composited texel dims the
+// sky too. From v=4 the texture is the halo's radiance alone and the shader adds both, so a
+// reopened document renders the picture that was on screen when it was saved. The flag below says
+// which of the two a given file holds; the version bump is what stops an older binary from
+// displaying a v=4 texture with no sky at all.
+static constexpr uint32_t kLmcVersion = 4;
 static constexpr uint32_t kLmcHeaderSize = 44;
 static constexpr uint32_t kLmcFlagHasTexture = 0x1;
+// Set iff the texture section holds radiance-only pixels (v >= 4). Read rather than inferred from
+// the version: the version answers "what did the writer know", this answers the one question the
+// display path actually asks. Absent on every v <= 3 file, which is exactly the right answer for
+// them.
+static constexpr uint32_t kLmcFlagTextureRadianceOnly = 0x2;
 
 static void WriteU32(std::ofstream& out, uint32_t val) {
   out.write(reinterpret_cast<const char*>(&val), sizeof(val));
@@ -3224,7 +3237,7 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
   auto tex_size = static_cast<uint64_t>(png_data.size());
 
   // Write header
-  uint32_t flags = has_texture ? kLmcFlagHasTexture : 0;
+  uint32_t flags = has_texture ? (kLmcFlagHasTexture | kLmcFlagTextureRadianceOnly) : 0;
   WriteU32(out, kLmcMagic);
   WriteU32(out, kLmcVersion);
   WriteU32(out, flags);
@@ -3245,8 +3258,9 @@ bool SaveLmcFile(const std::filesystem::path& path, const GuiState& state, const
 }
 
 bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector<unsigned char>& tex_data, int& tex_w,
-                 int& tex_h) {
+                 int& tex_h, bool& tex_radiance_only) {
   tex_data.clear();
+  tex_radiance_only = false;
   tex_w = 0;
   tex_h = 0;
 
@@ -3311,6 +3325,7 @@ bool LoadLmcFile(const std::filesystem::path& path, GuiState& state, std::vector
 
   // Read texture if present
   bool flag_has_tex = (flags & kLmcFlagHasTexture) != 0;
+  tex_radiance_only = (flags & kLmcFlagTextureRadianceOnly) != 0;
   if (flag_has_tex) {
     if (tex_size == 0) {
       GUI_LOG_ERROR("[LMC] Texture flag set but size is 0");
