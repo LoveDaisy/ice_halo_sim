@@ -298,9 +298,9 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // negation into the *Forward pure functions — they are shared with dual/globe.
     xy.x = -xy.x;
     int px = static_cast<int>(
-        LM_FLOOR(xy.x * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f + static_cast<float>(p.lens_shift_x)));
+        LM_FLOOR(xy.x * p.scale + static_cast<float>(p.img_w) / 2.0f + static_cast<float>(p.lens_shift_x)));
     int py = static_cast<int>(
-        LM_FLOOR(xy.y * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f + static_cast<float>(p.lens_shift_y)));
+        LM_FLOOR(xy.y * p.scale + static_cast<float>(p.img_h) / 2.0f + static_cast<float>(p.lens_shift_y)));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;
@@ -334,9 +334,9 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // wrap that used to follow the `- az0` subtraction is therefore unreachable and is gone; the
     // modulo below is a separate, still-live concern (lon = +pi bins one column past the canvas).
     float lon = proj.x;
-    int raw_x = static_cast<int>(LM_FLOOR(lon * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f));
+    int raw_x = static_cast<int>(LM_FLOOR(lon * p.scale + static_cast<float>(p.img_w) / 2.0f));
     int px = ((raw_x % p.img_w) + p.img_w) % p.img_w;
-    int py = static_cast<int>(LM_FLOOR(-proj.y * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f));
+    int py = static_cast<int>(LM_FLOOR(-proj.y * p.scale + static_cast<float>(p.img_h) / 2.0f));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;
@@ -368,8 +368,8 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     float fx = 0.0f;
     float fy = 0.0f;
     DualFisheyeToPixelXY(xy.x, xy.y, is_upper, p.img_w, p.img_h, &fx, &fy);
-    r.hits[0].px = static_cast<int>(LM_FLOOR(fx + 0.5f));
-    r.hits[0].py = static_cast<int>(LM_FLOOR(fy + 0.5f));
+    r.hits[0].px = static_cast<int>(LM_FLOOR(fx));
+    r.hits[0].py = static_cast<int>(LM_FLOOR(fy));
     r.hits[0].bump_landed = true;
     r.count = 1;
 
@@ -389,8 +389,8 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
       float fx2 = 0.0f;
       float fy2 = 0.0f;
       DualFisheyeToPixelXY(xy2.x, xy2.y, !is_upper, p.img_w, p.img_h, &fx2, &fy2);
-      r.hits[1].px = static_cast<int>(LM_FLOOR(fx2 + 0.5f));
-      r.hits[1].py = static_cast<int>(LM_FLOOR(fy2 + 0.5f));
+      r.hits[1].px = static_cast<int>(LM_FLOOR(fx2));
+      r.hits[1].py = static_cast<int>(LM_FLOOR(fy2));
       r.hits[1].bump_landed = false;
       r.count = 2;
     }
@@ -434,10 +434,10 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // — globe deliberately diverges from linear's x convention here. See scrum
     // gui-lens-math-cli-alignment (owner: globe=outside-in per GUI tooltip; GUI is
     // the source of truth for globe orientation).
-    int px = static_cast<int>(LM_FLOOR(-cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f +
-                                       static_cast<float>(p.lens_shift_x)));
-    int py = static_cast<int>(LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f +
-                                       static_cast<float>(p.lens_shift_y)));
+    int px = static_cast<int>(
+        LM_FLOOR(-cx / denom * p.scale + static_cast<float>(p.img_w) / 2.0f + static_cast<float>(p.lens_shift_x)));
+    int py = static_cast<int>(
+        LM_FLOOR(cy / denom * p.scale + static_cast<float>(p.img_h) / 2.0f + static_cast<float>(p.lens_shift_y)));
     r.hits[0].px = px;
     r.hits[0].py = py;
     r.hits[0].bump_landed = true;

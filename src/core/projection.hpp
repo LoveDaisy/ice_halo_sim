@@ -117,7 +117,9 @@ Dir3 GlobeInverse(float x, float y, float focal);
 // NOTE: These are NOT pure projection math — they encode pixel layout conventions.
 
 // Normalized disc coords → continuous pixel coordinates.
-// Caller uses floor(fx + 0.5), floor(fy + 0.5) for integer scatter indices.
+// Caller uses floor(fx), floor(fy) for integer scatter indices: fx/fy already carry the
+// half-pixel of a pixel centre through cx/cy, so a bare floor is the inverse of the
+// (px + 0.5) gather below. See the PIXEL CENTRE CONVENTION note in lens_proj_build.hpp.
 void DualFisheyeToPixel(float x_norm, float y_norm, bool is_upper, int width, int height, float* fx, float* fy);
 
 // Continuous pixel coordinates → normalized disc coords + hemisphere.

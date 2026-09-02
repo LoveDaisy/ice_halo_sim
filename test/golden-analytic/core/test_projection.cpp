@@ -1177,7 +1177,14 @@ TEST(LmProj, RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm) {
   };
   for (float az : { 0.0f, 30.0f, -75.0f, 179.0f, 200.0f }) {
     for (const auto& d : dirs) {
-      // The pre-2026-09-02 formula, verbatim.
+      // The pre-2026-09-02 longitude form, verbatim: atan2 of the world direction with `az`
+      // subtracted, wrapped by the while-loop pair. Binning deliberately tracks the CURRENT
+      // production convention (bare floor about res/2, no `+ 0.5`) rather than the one this
+      // legacy form shipped with — what this test asserts is that the two LONGITUDE formulas
+      // agree, and holding the binning constant across both sides is what lets that show. Bin
+      // the legacy side the old way and the `+ 0.5` removal would appear here as a uniform
+      // one-column offset, quietly absorbed by the +-1 slack below and weakening the very
+      // equality this case exists to state.
       const auto proj = lm_proj::RectangularForward(-d[0], -d[1], -d[2]);
       float lon = proj.x - az * math::kDegreeToRad;
       while (lon < -math::kPi) {
@@ -1186,10 +1193,10 @@ TEST(LmProj, RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm) {
       while (lon > math::kPi) {
         lon -= 2.0f * math::kPi;
       }
-      const int raw_x = static_cast<int>(std::floor(lon * scale + static_cast<float>(w) / 2.0f + 0.5f));
+      const int raw_x = static_cast<int>(std::floor(lon * scale + static_cast<float>(w) / 2.0f));
       const std::array<int, 2> legacy{
         ((raw_x % w) + w) % w,
-        static_cast<int>(std::floor(-proj.y * scale + static_cast<float>(h) / 2.0f + 0.5f)),
+        static_cast<int>(std::floor(-proj.y * scale + static_cast<float>(h) / 2.0f)),
       };
 
       const auto got = RectangularPixel(az, 0.0f, 0.0f, d);
@@ -1412,8 +1419,8 @@ TEST(LmProj, GlobeRenderPathMatchesDocumentedFormula) {
       ++visible_seen;
       float denom = kD + cz;
       // -cx: globe is outside-in, horizontally mirrored vs the single-lens family.
-      int expect_px = static_cast<int>(std::floor(-cx / denom * scale + w / 2.0f + 0.5f));
-      int expect_py = static_cast<int>(std::floor(cy / denom * scale + h / 2.0f + 0.5f));
+      int expect_px = static_cast<int>(std::floor(-cx / denom * scale + w / 2.0f));
+      int expect_py = static_cast<int>(std::floor(cy / denom * scale + h / 2.0f));
       ASSERT_EQ(res.count, 1);
       EXPECT_EQ(res.hits[0].px, expect_px);
       EXPECT_EQ(res.hits[0].py, expect_py);

@@ -144,10 +144,13 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
 //
 // PIXEL CENTRE CONVENTION: pixel (px, py) samples at (px + 0.5 - res/2), i.e. an image
 // symmetric about the frame centre, matching the GUI shader's `pos = v_ndc * u_resolution *
-// 0.5`. `ProjectExitToPixel`'s own binning is `floor(v + 0.5)` about `res/2`, which puts its
-// addressable span at [-res/2 - 0.5, res/2 - 0.5) — half a pixel off centre. The mask keeps the
-// symmetric convention: it is the one that agrees with the GUI, and the half-pixel bias belongs
-// to the forward binning, not here.
+// 0.5`. `ProjectExitToPixel`'s own binning is `floor(v)` about `res/2`, the exact inverse of
+// that sampling: substituting a pixel centre gives floor(px + 0.5) == px for every integer px,
+// so the two are one convention read in two directions and the addressable span is the
+// symmetric [-res/2, res/2). Forward binning used to carry an extra `+ 0.5`, which put its span
+// at [-res/2 - 0.5, res/2 - 0.5) and slid a round trip by a pixel; the two round-trip tests in
+// test/golden-analytic/core/test_visible_mask.cpp demand exact equality and are what keeps the
+// two halves from drifting apart again.
 namespace mask_detail {
 
 // A world-space direction plus whether the pixel images anything at all.

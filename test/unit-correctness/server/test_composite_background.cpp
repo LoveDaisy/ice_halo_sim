@@ -40,6 +40,18 @@ namespace {
 // The single colour class makes ColoredMask() non-zero, which is what makes DoSnapshot produce a
 // composite at all. `background` stays [0,0,0] here: the mono path's background is set per-case
 // (via a config string rewrite) only where the cross-path comparison needs it.
+//
+// `ray_num` is deliberately LOW, and that is a load-bearing property of this fixture rather than a
+// speed choice: half these cases read pixels INSIDE the lens domain that no ray reached, and a
+// densely sampled 1624-pixel domain has none of them. Measured on this scene: 20000 rays leave 0
+// such pixels, 5000 leave 0, 2000 leave ~50, and 1000 leave ~250 across repeat runs — so 1000 sits
+// an order of magnitude clear of the cliff while still lighting ~85% of the domain, which is what
+// the lit-side comparisons need. The value used to be 20000, which worked only because forward
+// binning was then half a pixel off the mask and squeezed a handful of rim pixels down to a
+// thousandth of a pixel of solid angle; those slivers, not sparse sampling, were supplying the
+// zero-energy pixels. Aligning the two conventions removed them and took the fixture's premise with
+// it. If a case here ever fails on "the background reached no zero-energy pixel at all", this
+// number is the first thing to look at.
 std::string ColorConfig(const char* mode, const char* background_srgb) {
   return std::string(R"({
   "crystal": [{
@@ -53,7 +65,7 @@ std::string ColorConfig(const char* mode, const char* background_srgb) {
   "scene": {
     "light_source": {"type": "sun", "altitude": 20.0, "azimuth": 0.0,
                      "diameter": 0.5, "spectrum": "D65"},
-    "ray_num": 20000,
+    "ray_num": 1000,
     "max_hits": 8,
     "scattering": [{"prob": 0.0, "entries": [{"crystal": 1, "proportion": 1.0}]}]
   },
