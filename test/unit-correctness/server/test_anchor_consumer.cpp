@@ -130,11 +130,17 @@ TEST(AnchorConsumer, InvariantToLensWhileLegacyAnchorMoves) {
 }
 
 TEST(AnchorConsumer, InvariantToFovAndResolutionWhileLegacyAnchorMoves) {
-  SimData data = MakeSkyBatch(60000);
+  // Denser than the lens case above, and on a lens that images a whole hemisphere, because
+  // the CONTROL here is what needs the sampling: at ~1 ray per coarse bin the P99 collapses
+  // onto "one ray's weight" at every resolution, so a sparse scene makes the legacy anchor
+  // look resolution-independent — which would silently disarm the control rather than fail
+  // it. Measured on a narrow 20-degree linear lens at 60k rays the two resolutions agreed to
+  // the bit for exactly that reason.
+  SimData data = MakeSkyBatch(200000);
 
-  auto small = MakeRenderConfig(LensParam::kLinear, 20.0f, 512, 512);
-  auto big = MakeRenderConfig(LensParam::kLinear, 20.0f, 1024, 1024);
-  auto wide = MakeRenderConfig(LensParam::kLinear, 60.0f, 512, 512);
+  auto small = MakeRenderConfig(LensParam::kFisheyeEqualArea, 180.0f, 512, 512);
+  auto big = MakeRenderConfig(LensParam::kFisheyeEqualArea, 180.0f, 1024, 1024);
+  auto wide = MakeRenderConfig(LensParam::kFisheyeEqualArea, 60.0f, 512, 512);
 
   float legacy_small = LegacyAnchorScaleFor(data, small);
   float legacy_big = LegacyAnchorScaleFor(data, big);
