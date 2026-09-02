@@ -772,13 +772,19 @@ TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
   // budget below, seconds rather than milliseconds, AND returns as soon as the property holds --
   // the case gets both more robust and faster.
   const auto wait_start = std::chrono::steady_clock::now();
-  const bool got_two_ticks =
-      WaitFor([&local, ticks_before] { return local->HeartbeatTickCountForTest() - ticks_before >= 2; }, 5000);
+  // The predicate latches the delta it decided on, so the failure message reports the count that
+  // actually produced the verdict rather than a fresh read taken after the wait returned.
+  uint64_t ticks_gained = 0;
+  const bool got_two_ticks = WaitFor(
+      [&local, &ticks_gained, ticks_before] {
+        ticks_gained = local->HeartbeatTickCountForTest() - ticks_before;
+        return ticks_gained >= 2;
+      },
+      5000);
   const auto waited_ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_start).count();
-  EXPECT_TRUE(got_two_ticks) << "the heartbeat stopped after its first tick (saw "
-                             << (local->HeartbeatTickCountForTest() - ticks_before) << " further ticks in " << waited_ms
-                             << "ms)";
+  EXPECT_TRUE(got_two_ticks) << "the heartbeat stopped after its first tick (saw " << ticks_gained
+                             << " further ticks in " << waited_ms << "ms)";
 
   // The lower bound the wait-until form would otherwise drop: that the heartbeat is THROTTLED, not
   // just alive. Without it a heartbeat degenerating to the full-speed cadence (kPollIntervalMs, 20ms)
@@ -792,14 +798,15 @@ TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
   // rewrite exists to stop being sensitive to. One interval already separates a throttled heartbeat
   // (>=475ms) from an un-throttled one (~40ms) by an order of magnitude.
   //
-  // The 25ms tolerance covers a timed wait firing marginally early: the measured tick spacing on
-  // this machine spans 496-503ms, i.e. up to 4ms under the nominal interval.
+  // The tolerance covers a timed wait firing marginally early: the measured tick spacing on this
+  // machine spans 496-503ms, i.e. up to 4ms under the nominal interval, so 25ms is ~6x that.
   //
   // Note what is deliberately NOT asserted: an upper bound on how long the ticks took. Any such
   // bound is a wall-clock margin of the kind that made the old form fragile, and the WaitFor budget
   // above is the only ceiling this case keeps.
   if (got_two_ticks) {
-    EXPECT_GE(waited_ms, gui::kIdleHeartbeatIntervalMs - 25)
+    constexpr int kEarlyWakeToleranceMs = 25;
+    EXPECT_GE(waited_ms, gui::kIdleHeartbeatIntervalMs - kEarlyWakeToleranceMs)
         << "two heartbeat ticks arrived in " << waited_ms << "ms; the heartbeat is not throttled";
   }
 
