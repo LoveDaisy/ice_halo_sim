@@ -746,7 +746,9 @@ TEST_F(ServerPoller, AnUnboundedRunNeverSelfPauses) {
 // terminal edge was the ONLY chance to get the terminal truth on screen. The heartbeat is what makes
 // that observation retryable, which is the whole difference between a level-triggered reconciler and
 // an edge-triggered one. It also asserts what a tick must NOT do: republish a texture. Each tick is
-// a safe no-op or the preview re-uploads twice a second forever.
+// a safe no-op or the preview re-uploads twice a second forever. Both cadence facts it pins — the
+// heartbeat keeps firing, and it stays throttled while doing so — are asserted by waiting for ticks
+// rather than by sleeping a window and counting; see the comment at that wait for why.
 TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
   ASSERT_TRUE(srv.get() != nullptr);
   ASSERT_EQ(CommitSceneJson(srv, kFiniteSceneJson), LUMICE_OK);
@@ -762,8 +764,51 @@ TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
   ASSERT_TRUE(before != nullptr);
   const uint64_t ticks_before = local->HeartbeatTickCountForTest();
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(5 * gui::kIdleHeartbeatIntervalMs / 2));
-  EXPECT_GE(local->HeartbeatTickCountForTest() - ticks_before, 2u) << "the heartbeat stopped after its first tick";
+  // Wait UNTIL two further ticks arrive rather than sleeping a fixed window and counting what
+  // landed. The fixed form slept 2.5 intervals and the second tick lands at 2 intervals, so the
+  // whole margin against scheduler jitter was the last 20% of the window: measured on this machine
+  // the ticks arrive at +503ms and +1007ms, i.e. 243-250ms of slack, and CI has spent it (PR #291
+  // saw one tick in that window on the macOS ARM64 leg). Waiting instead makes the margin the
+  // budget below, seconds rather than milliseconds, AND returns as soon as the property holds --
+  // the case gets both more robust and faster.
+  const auto wait_start = std::chrono::steady_clock::now();
+  // The predicate latches the delta it decided on, so the failure message reports the count that
+  // actually produced the verdict rather than a fresh read taken after the wait returned.
+  uint64_t ticks_gained = 0;
+  const bool got_two_ticks = WaitFor(
+      [&local, &ticks_gained, ticks_before] {
+        ticks_gained = local->HeartbeatTickCountForTest() - ticks_before;
+        return ticks_gained >= 2;
+      },
+      5000);
+  const auto waited_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_start).count();
+  EXPECT_TRUE(got_two_ticks) << "the heartbeat stopped after its first tick (saw " << ticks_gained
+                             << " further ticks in " << waited_ms << "ms)";
+
+  // The lower bound the wait-until form would otherwise drop: that the heartbeat is THROTTLED, not
+  // just alive. Without it a heartbeat degenerating to the full-speed cadence (kPollIntervalMs, 20ms)
+  // would satisfy the assertion above in 40ms and stay green forever.
+  //
+  // The floor is ONE interval, not two, and that is a deliberate weakening of what this case could
+  // assert in the abstract. The counter is read at some point T0 within the interval that follows a
+  // tick, so the next two ticks land at (2 - phase) intervals from T0 with phase in [0, 1) — the
+  // only bound that holds for every phase is one interval. Asserting two would subtract however
+  // long the main thread took to observe the FIRST tick, which is exactly the scheduling delay this
+  // rewrite exists to stop being sensitive to. One interval already separates a throttled heartbeat
+  // (>=475ms) from an un-throttled one (~40ms) by an order of magnitude.
+  //
+  // The tolerance covers a timed wait firing marginally early: the measured tick spacing on this
+  // machine spans 496-503ms, i.e. up to 4ms under the nominal interval, so 25ms is ~6x that.
+  //
+  // Note what is deliberately NOT asserted: an upper bound on how long the ticks took. Any such
+  // bound is a wall-clock margin of the kind that made the old form fragile, and the WaitFor budget
+  // above is the only ceiling this case keeps.
+  if (got_two_ticks) {
+    constexpr int kEarlyWakeToleranceMs = 25;
+    EXPECT_GE(waited_ms, gui::kIdleHeartbeatIntervalMs - kEarlyWakeToleranceMs)
+        << "two heartbeat ticks arrived in " << waited_ms << "ms; the heartbeat is not throttled";
+  }
 
   Snapshot after = local->LoadSnapshot();
   ASSERT_TRUE(after != nullptr);
