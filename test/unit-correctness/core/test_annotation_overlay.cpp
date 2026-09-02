@@ -424,7 +424,6 @@ TEST(AnnotationOverlay, AngularDistanceCirclesAreCentredOnTheReferenceDirection)
   const RenderConfig cfg = ann::ToRenderConfig(req.view);
   const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
   lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
-  p.visible_range = static_cast<int>(RenderConfig::kFull);
   const ann::CanvasPoint centre =
       ann::ProjectWorldDir(p, req.reference_dir[0], req.reference_dir[1], req.reference_dir[2]);
   ASSERT_TRUE(centre.valid);
@@ -536,7 +535,6 @@ TEST(SunWorldDir, PutsTheCircleCentreWhereTheSunIsImaged) {
   const RenderConfig cfg = ann::ToRenderConfig(req.view);
   const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
   lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, 128.0f);
-  p.visible_range = static_cast<int>(RenderConfig::kFull);
   const ann::CanvasPoint centre = ann::ProjectWorldDir(p, sun_ray[0], sun_ray[1], sun_ray[2]);
   ASSERT_TRUE(centre.valid);
   EXPECT_NEAR(sx / count, static_cast<double>(centre.px), 4.0);

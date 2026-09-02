@@ -71,7 +71,6 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
   p.proj_type = static_cast<int>(cfg.lens_.type_);
   p.img_w = cfg.resolution_[0];
   p.img_h = cfg.resolution_[1];
-  p.visible_range = static_cast<int>(cfg.visible_);
   p.lens_shift_x = cfg.lens_shift_[0];
   p.lens_shift_y = cfg.lens_shift_[1];
   p.r_scale = 1.0f;

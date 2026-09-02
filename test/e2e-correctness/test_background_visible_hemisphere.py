@@ -6,8 +6,8 @@ admits. That gate has two independent halves, and the sibling fixture next door
 the zenith, which makes the image circle and the visible hemisphere the SAME set, so it isolates
 the *domain* half — "outside the lens's image circle" — and says nothing about the *visibility*
 half. Nothing at this layer covered the other one; the per-lens comparison of the two predicates is
-a unit-level test (test/unit-correctness/gui/test_visible_mask_gui_parity.cpp), and every other
-config in the e2e tree renders `"visible": "full"`.
+a unit-level test (test/unit-correctness/gui/test_visible_mask_gui_parity.cpp), and this is the one
+config in the e2e tree that renders anything other than `"visible": "full"`.
 
 This fixture puts the camera ON the horizon instead. A 180 deg equal-area fisheye then splits the
 frame into three regions that are all present in one image:
@@ -33,13 +33,17 @@ Two renders come out of ONE run, differing only in `visible`, so region B has a 
 control from the same rays: it must be background under `full` and black under `upper`. Without
 that pair, a render that had simply stopped painting a background anywhere would pass.
 
-The proposition is asserted as "was the constant added", not as "is every pixel black". Halo
-energy is NOT gated by `visible` -- the ray cull lives inside ProjectExitToPixel's single-lens
-branch while this mask is applied in RenderConsumer::PostSnapshot, an asymmetry the mask's own
-comment in core/lens_proj_build.hpp calls pre-existing and out of its scope. So a below-horizon
-pixel may legitimately carry energy. What it may not carry is the background, and since the
-background is one constant added to every masked pixel, the region MINIMUM is the sharp test:
-energy only ever raises individual pixels, never the floor.
+Region B is read twice, and the two readings answer different questions. The MINIMUM says the
+background constant was never added there: since the background is one constant added to every
+masked pixel, and energy only ever raises individual pixels, a floor at the authored triple is
+the unambiguous signature of a painted background. The MAXIMUM says the display clip actually
+discarded the halo energy that landed there. That second reading is new with 478.2: `visible` is a
+display clip for all four lens families now, so the excluded region is dropped on the way to
+pixels rather than never accumulated -- energy DOES land below the horizon (the raw XYZ buffer is
+identical under `upper` and `full`, which is what test_render_consumer_visible_mask.cpp asserts at
+the unit layer), and this fixture is where the two halves are seen composing end to end. Before
+478.2 the maximum would have read 0 here for the wrong reason: this config's lens is a single
+fisheye, the one family whose rays were culled outright.
 """
 
 import json
@@ -185,6 +189,19 @@ class TestBackgroundVisibleHemisphere(LumiceTestCase):
             f"the region is {len(self.below)} px, all of it at least "
             f"{BELOW_FIRST_ROW - CY:.0f} px below the horizon and inside the image circle.",
         )
+        # The other half of the same proposition, and the one 478.2 made assertable: the energy
+        # that DOES land below the horizon must be discarded on the way to pixels, not merely left
+        # unlit. `_floor` cannot see this -- a single leaked pixel never moves a minimum.
+        below_upper_peak = max(max(upper[p]) for p in self.below)
+        self.assertEqual(
+            below_upper_peak,
+            0,
+            f"visible=upper: the brightest channel below the horizon is {below_upper_peak}, not 0. "
+            f"`visible` is a display clip: the rays still land there (the raw XYZ buffer is the "
+            f"same under `upper` and `full`), so every one of those {len(self.below)} px must be "
+            f"discarded when the image is composed.",
+        )
+
         below_full = self._floor(full, self.below)
         for c in range(3):
             self.assertLessEqual(

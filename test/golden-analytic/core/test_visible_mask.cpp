@@ -451,11 +451,11 @@ TEST(VisibleMask, VisibleRangePartitionsTheFrameAndFullIsTheUnion) {
 }
 
 TEST(VisibleMask, VisibleRangeAppliesToRectangularAndDualFisheyeToo) {
-  // ProjectExitToPixel's own `visible_range` cull lives inside the single-lens branch only, so
-  // for these types the mask is the FIRST place the setting takes effect. It follows the GUI
+  // The mask is the ONLY place `visible` takes effect for every lens type: no branch of
+  // ProjectExitToPixel culls a ray for it (478.2 removed the single-lens one that did, which is
+  // what used to make these two types differ from the single-lens family). It follows the GUI
   // preview shader, which tests `u_visible` after computing the world direction, independently
-  // of the lens branch. (Ray energy is still not culled for them — a separate, pre-existing gap
-  // in the shared backend header.)
+  // of the lens branch.
   for (LensParam::LensType t : { LensParam::kRectangular, LensParam::kDualFisheyeEqualArea }) {
     const auto full = Mask(MakeCfg(t, 180.0f, 256, 128, RenderConfig::kFull));
     const auto upper = Mask(MakeCfg(t, 180.0f, 256, 128, RenderConfig::kUpper));

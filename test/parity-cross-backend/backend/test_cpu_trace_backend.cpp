@@ -338,7 +338,6 @@ TEST(CpuTraceBackend, ScatterOutgoingMatchesReferenceScatter) {
     LensProjParam proj_param{ cfg.lens_.fov_,
                               short_pix,
                               rot,
-                              cfg.visible_,
                               { cfg.resolution_[0], cfg.resolution_[1] },
                               { cfg.lens_shift_[0], cfg.lens_shift_[1] },
                               0.0f,

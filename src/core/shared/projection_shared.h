@@ -104,7 +104,6 @@ LM_FN ProjXY LinearForward(float dx, float dy, float dz) {
 // POD projection parameters — host predigests all trig-heavy setup so the
 // per-ray function stays branch/mul only. `proj_type` uses LensParam::LensType
 // integer values (0..10; 10 = globe, reserved for 315.4).
-// `visible_range` uses RenderConfig::VisibleRange (0=upper, 1=lower, 2=full).
 // `rot[9]` is a row-major camera rotation matrix; read only by single-lens
 // types (kLinear + 4 single-fisheye); other types treat it as unused (host
 // should still fill identity for POD determinism).
@@ -112,7 +111,6 @@ struct ProjParams {
   int proj_type;
   int img_w;
   int img_h;
-  int visible_range;
   int lens_shift_x;
   int lens_shift_y;
   float scale;
@@ -131,10 +129,6 @@ struct ProjResult {
   PixelHit hits[2];
   int count;
 };
-
-// Match RenderConfig::VisibleRange: 0=kUpper, 1=kLower, 2=kFull.
-LM_CONSTANT int kVisibleUpper = 0;
-LM_CONSTANT int kVisibleLower = 1;
 
 // Match LensParam::LensType integer values.
 LM_CONSTANT int kProjLinear = 0;
@@ -164,9 +158,10 @@ LM_CONSTANT int kProjGlobe = 10;
 LM_CONSTANT float kGlobeCameraD = 4.0f;
 
 // Per-type numerical floors on `cz` for the SINGLE-lens fisheye cull below. These are not
-// visibility judgements — visibility is `p.visible_range`, and bounds culling belongs to the
-// caller. They are the points past which each type's forward formula stops describing the sky it
-// was handed. Before 474.1 the whole family shared one `cz <= 0` cull, i.e. core rendered only
+// visibility judgements — the configured visible hemisphere is a DISPLAY clip applied by the
+// render-domain mask (lens_proj_build.hpp::VisibleByRange) and never by this function, and bounds
+// culling belongs to the caller. They are the points past which each type's forward formula stops
+// describing the sky it was handed. Before 474.1 the whole family shared one `cz <= 0` cull, i.e. core rendered only
 // theta <= 90 deg while the GUI preview re-projected out to 180 deg; these three constants are
 // what that one cull became once it was taken per type. (Orthographic is the fourth, and it keeps
 // `cz <= 0` — see its branch.)
@@ -253,9 +248,15 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
   if (t == kProjLinear || t == kProjFisheyeEqualArea || t == kProjFisheyeEquidistant ||
       t == kProjFisheyeStereographic || t == kProjFisheyeOrthographic) {
     // Single-lens family — camera-frame cull + rot-inverse + forward.
-    if ((p.visible_range == kVisibleUpper && wz > 0.0f) || (p.visible_range == kVisibleLower && wz < 0.0f)) {
-      return r;
-    }
+    //
+    // 478.2: this branch used to open with a `visible_range` cull, dropping any ray in the
+    // hemisphere `visible` excludes before it could reach a pixel. `visible` is a DISPLAY clip,
+    // not an energy cull, and it is applied uniformly to all four lens families by the
+    // render-domain mask (lens_proj_build.hpp::VisibleByRange) and the GUI shader's `u_visible`.
+    // Culling here made this one family disagree with the other three about where energy is
+    // allowed to land — see the `visible` section of doc/configuration.md. Every remaining
+    // `return r;` below is a DIFFERENT question (the forward formula stops describing the sky it
+    // was handed) and must stay.
     float cx = 0.0f;
     float cy = 0.0f;
     float cz = 0.0f;

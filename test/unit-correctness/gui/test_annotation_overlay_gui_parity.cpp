@@ -93,7 +93,6 @@ lm_proj::ProjParams CoreForwardParams(const ann::ViewSnapshot& view) {
   const lumice::Rotation rot = lumice::MakeCameraRotation(cfg);
   const float short_pix = static_cast<float>(std::min(view.width, view.height));
   lm_proj::ProjParams p = lumice::BuildProjParams(cfg, rot, short_pix);
-  p.visible_range = static_cast<int>(RenderConfig::kFull);
   return p;
 }
 

@@ -476,7 +476,6 @@ TEST(Projection, SingleFisheyeCullAndInverseDomainAgree) {
   lm_proj::ProjParams p{};
   p.img_w = 1024;
   p.img_h = 1024;
-  p.visible_range = 2;  // kFull
   p.scale = 1.0f;
   p.r_scale = 1.0f;
   const float kIdentity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
@@ -595,7 +594,6 @@ TEST(Projection, ForwardAtTheAntipodeIsCulledRatherThanCollapsedToTheCentre) {
   lm_proj::ProjParams p{};
   p.img_w = 256;
   p.img_h = 256;
-  p.visible_range = 2;  // kFull
   p.scale = 1.0f;
   p.r_scale = 1.0f;
   const float kIdentity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
@@ -894,7 +892,6 @@ void ExpectMainHitEqualsLegacy(LensParam::LensType t, const RenderConfig& cfg, f
   LensProjParam lp{ cfg.lens_.fov_,
                     short_pix,
                     rot,
-                    cfg.visible_,
                     { cfg.resolution_[0], cfg.resolution_[1] },
                     { cfg.lens_shift_[0], cfg.lens_shift_[1] },
                     0.0f,
@@ -926,7 +923,7 @@ void ExpectMainHitEqualsLegacy(LensParam::LensType t, const RenderConfig& cfg, f
   const int expect_py = xy[1];
 
   if (expect_px == -1 && expect_py == -1) {
-    // Legacy miss (visible_range / cz<=0 cull) → shared count must be 0.
+    // Legacy miss (cz<=0 / per-type MinCz cull) → shared count must be 0.
     EXPECT_EQ(res.count, 0) << label;
   } else {
     EXPECT_GE(res.count, 1) << label;
@@ -1012,14 +1009,35 @@ TEST(LmProj, ProjectExitPerTypeRotatedView) {
   }
 }
 
-TEST(LmProj, ProjectExitVisibleRangeCull) {
-  // kLower should cull d[2]<0 (down-going) for single-lens types.
-  auto cfg = MakeRC(LensParam::kLinear, 90.0f, 512, 512, 0.0f, 90.0f, 0.0f,
-                    /*overlap=*/0.0f, RenderConfig::kLower);
-  Rotation rot = lumice::MakeCameraRotation(cfg);
-  auto pp = lumice::BuildProjParams(cfg, rot, 512.0f);
-  auto r = lm_proj::ProjectExitToPixel(pp, 0.1f, 0.1f, -0.99f);
-  EXPECT_EQ(r.count, 0) << "kLower should reject dz<0";
+TEST(LmProj, ProjectExitIgnoresVisibleRangeEntirely) {
+  // The inverse of what this used to assert. Until 478.2 the single-lens branch opened with a
+  // `visible_range` cull, and this test pinned it: kLower rejected an up-facing camera's
+  // down-going ray, count == 0. `visible` is a DISPLAY clip — it decides which pixels reach the
+  // screen, never which rays reach the buffer — and it was applied by this one branch and by no
+  // other lens family, which is the asymmetry 478.2 removed. So the statement is now that the
+  // projection is INDIFFERENT to the setting: the same ray must land on the same pixel under all
+  // three values.
+  //
+  // Asserted as an equality across the three settings rather than as `count == 1` alone: a
+  // reinstated cull that happened to keep this particular ray would still pass the weaker form.
+  const float wx = 0.1f;
+  const float wy = 0.1f;
+  const float wz = -0.99f;
+  lm_proj::ProjResult results[3];
+  const RenderConfig::VisibleRange ranges[3]{ RenderConfig::kUpper, RenderConfig::kLower, RenderConfig::kFull };
+  for (int i = 0; i < 3; i++) {
+    auto cfg = MakeRC(LensParam::kLinear, 90.0f, 512, 512, 0.0f, 90.0f, 0.0f, /*overlap=*/0.0f, ranges[i]);
+    Rotation rot = lumice::MakeCameraRotation(cfg);
+    auto pp = lumice::BuildProjParams(cfg, rot, 512.0f);
+    results[i] = lm_proj::ProjectExitToPixel(pp, wx, wy, wz);
+  }
+  ASSERT_EQ(results[2].count, 1) << "the ray must land under kFull, or the comparisons below are vacuous";
+  for (int i = 0; i < 2; i++) {
+    EXPECT_EQ(results[i].count, results[2].count)
+        << "visible=" << static_cast<int>(ranges[i]) << ": the projection culled a ray the display clip owns";
+    EXPECT_EQ(results[i].hits[0].px, results[2].hits[0].px) << "visible=" << static_cast<int>(ranges[i]);
+    EXPECT_EQ(results[i].hits[0].py, results[2].hits[0].py) << "visible=" << static_cast<int>(ranges[i]);
+  }
 }
 
 TEST(LmProj, ProjectExitDualFisheyeOverlapDualWrite) {

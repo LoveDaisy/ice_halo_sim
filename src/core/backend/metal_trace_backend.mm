@@ -225,18 +225,19 @@ struct KernelParams {
   // the same name in `KernelParams`.
   uint32_t and_term_counts_base_offset;
 };
-// sizeof(ProjParams) == 72 (6 ints + 3 floats + float[9]). Rectangular's `az0`
-// removed — the lens now consumes the full camera pose out of `rot` like every
-// other pose-following type, so the pre-digested azimuth scalar has no reader.
-// The 14 leading 4-byte scalars = 56 → proj at offset 56 (16-block aligned) →
-// ends at 128. Five 4-byte fields (capture_ray_mask + 4 color-region knobs) +
-// color_class_count = 24 → offset 152, which IS 8-aligned, so color_class_bits[16]
-// (uint64) lands there with no pad: bits (128) at 152-280, combine[16] (16) at
-// 280-296, and_term_counts_base_offset (4) at 296-300, trailing pad to
-// alignment 8 → 304.
-// Net vs the 312 this asserted before az0 went: 4 bytes off ProjParams itself
-// plus the 4-byte internal pad it used to force ahead of color_class_bits.
-static_assert(sizeof(lm_proj::ProjParams) == 72u, "ProjParams layout drift — check projection_shared.h");
+// sizeof(ProjParams) == 68 (5 ints + 3 floats + float[9]). Two fields have left it in the 478
+// series: rectangular's `az0` (the lens now consumes the full camera pose out of `rot` like every
+// other pose-following type) and `visible_range` (478.2 — `visible` is a display clip, so no
+// branch of ProjectExitToPixel reads it any more).
+// The 14 leading 4-byte scalars = 56 → proj at offset 56 → ends at 124. Five 4-byte fields
+// (capture_ray_mask + 4 color-region knobs) + color_class_count = 24 → offset 148, which is NOT
+// 8-aligned, so 4 bytes of pad land ahead of color_class_bits[16] (uint64) at 152: bits (128) at
+// 152-280, combine[16] (16) at 280-296, and_term_counts_base_offset (4) at 296-300, trailing pad
+// to alignment 8 → 304.
+// KernelParams therefore stays 304 across this change: the 4 bytes `visible_range` gave back are
+// absorbed by the internal pad its removal opened ahead of color_class_bits. That the two numbers
+// move independently is the whole reason both are asserted rather than one derived from the other.
+static_assert(sizeof(lm_proj::ProjParams) == 68u, "ProjParams layout drift — check projection_shared.h");
 static_assert(sizeof(KernelParams) == 304u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 

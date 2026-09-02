@@ -27,7 +27,6 @@ struct LensProjParam {
   float fov_;
   float short_pix_;
   Rotation rot_;
-  RenderConfig::VisibleRange visible_range_;
   int resolution_[2];        // x, y
   int lens_shift_[2];        // dx, dy
   float max_abs_dz_ = 0.0f;  // overlap zone |sky.z| threshold (0 = no overlap)
@@ -52,7 +51,6 @@ inline lm_proj::ProjParams ToShared(const LensProjParam& p, LensParam::LensType 
   s.proj_type = static_cast<int>(type);
   s.img_w = p.resolution_[0];
   s.img_h = p.resolution_[1];
-  s.visible_range = static_cast<int>(p.visible_range_);
   s.lens_shift_x = p.lens_shift_[0];
   s.lens_shift_y = p.lens_shift_[1];
   s.max_abs_dz = p.max_abs_dz_;
