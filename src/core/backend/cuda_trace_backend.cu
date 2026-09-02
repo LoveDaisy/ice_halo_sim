@@ -80,6 +80,7 @@
 #include "core/raypath.hpp"
 #include "core/geo3d.hpp"  // Rotation (camera rotation for BuildProjParams)
 #include "core/lat_lut.hpp"          // BuildLatLut / LatLut (330.2 unified LUT sampler)
+#include "core/anchor_buffer.hpp"    // BuildAnchorProjParams / kAnchorWidth (exposure anchor)
 #include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"  // math::kDegreeToRad
 #include "core/projection.hpp"  // ComputeEARScale (dual-fisheye r_scale derivation)
@@ -445,7 +446,15 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
                                        // whenever color_class_count == 0.
                                        float* d_class_lane_buf,
                                        const ColorGateParams& color_params,
-                                       unsigned long long this_mask) {
+                                       unsigned long long this_mask,
+                                       // The EXPOSURE ANCHOR (core/anchor_buffer.hpp): a
+                                       // fixed full-sky dual equal-area plane of Y that the
+                                       // user's lens/fov/view/resolution cannot move. Y
+                                       // alone, not packed XYZ — the plane's only consumer
+                                       // is a P99 over its Y channel. Mirrors the Metal
+                                       // MSL AccumAnchorY helper.
+                                       float* __restrict__ d_anchor_buf,
+                                       const lm_proj::ProjParams& anchor_proj) {
   // 315.3: single-source projection via lm_proj::ProjectExitToPixel (shared
   // with host CPU scatter_accum.hpp + Metal). Pass the WORLD exit dir — the
   // function negates internally to the sky direction, matching
@@ -453,6 +462,23 @@ __device__ inline void EmitToDeviceXyz(float* __restrict__ d_xyz_buf,
   // hit (primary + optional dual-fisheye overlap) is atomically added;
   // d_landed_weight only bumps on bump_landed (primary, not overlap — parity
   // with ScatterOutgoingToXyz Pass 2 / Metal exit tail).
+  // The exposure anchor sees EVERY emitted ray, including the ones the user's lens does not
+  // image at all — that is what makes it a property of the sky rather than of the frame.
+  // Hence before, and outside, the render hit loop below (which only runs for in-bounds
+  // hits). Structurally identical to the MSL AccumAnchorY call in both exit tails.
+  {
+    lm_proj::ProjResult ar =
+        lm_proj::ProjectExitToPixel(anchor_proj, exit_world[0], exit_world[1], exit_world[2]);
+    for (int hi = 0; hi < ar.count; ++hi) {
+      const int apx = ar.hits[hi].px;
+      const int apy = ar.hits[hi].py;
+      if (apx >= 0 && apx < anchor_proj.img_w && apy >= 0 && apy < anchor_proj.img_h) {
+        atomicAdd(&d_anchor_buf[static_cast<size_t>(apy) * static_cast<size_t>(anchor_proj.img_w) +
+                                static_cast<size_t>(apx)],
+                  cmf_y * w_emit);
+      }
+    }
+  }
   lm_proj::ProjResult r =
       lm_proj::ProjectExitToPixel(proj, exit_world[0], exit_world[1], exit_world[2]);
   const int iw_i = proj.img_w;
@@ -725,7 +751,13 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
                                        // inside EmitToDeviceXyz from
                                        // proj.img_w / proj.img_h so no
                                        // separate size params are needed here.
-                                       float* __restrict__ d_class_lane_buf) {
+                                       float* __restrict__ d_class_lane_buf,
+                                       // Exposure-anchor plane + its fixed projection.
+                                       // Unlike d_class_lane_buf there is no dummy case:
+                                       // the plane's size is a build constant, so the host
+                                       // always has a real one to bind.
+                                       float* __restrict__ d_anchor_buf,
+                                       lm_proj::ProjParams anchor_proj) {
   const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_roots) {
     return;
@@ -938,7 +970,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             // this_mask now carries only Design-2 colour bits (Fork-C retired).
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj, d_class_lane_buf, color_params, this_mask);
+                            proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj);
             // task-358.3 (renamed from capture_component): capture the mid-exit
             // ray's (this_mask, weight) for the CPU parity harness.
             if (capture_ray_mask != 0u) {
@@ -985,7 +1017,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
             }
             EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                             cmf_x, cmf_y, cmf_z, w_refl_e,
-                            proj, d_class_lane_buf, color_params, this_mask);
+                            proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj);
             // task-358.3 (renamed from capture_component): final-layer capture
             // (mirror of the ms_mode==1 branch).
             if (capture_ray_mask != 0u) {
@@ -1139,7 +1171,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               const float cmf_z = d_wl_pool[wl_idx].cmf_z;
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj, d_class_lane_buf, color_params, this_mask);
+                              proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj);
               // task-358.3 (renamed from capture_component): per-bounce mid-
               // exit capture.
               if (capture_ray_mask != 0u) {
@@ -1180,7 +1212,7 @@ __global__ void trace_single_ms_kernel(const float* __restrict__ d_dirs,        
               }
               EmitToDeviceXyz(d_xyz_buf, d_landed_weight, exit_world,
                               cmf_x, cmf_y, cmf_z, w_refr,
-                              proj, d_class_lane_buf, color_params, this_mask);
+                              proj, d_class_lane_buf, color_params, this_mask, d_anchor_buf, anchor_proj);
               // task-358.3 (renamed from capture_component): final-layer capture
               // on the per-bounce refracted exit (gated by capture_ray_mask).
               if (capture_ray_mask != 0u) {
@@ -2085,6 +2117,20 @@ struct CudaTraceBackend::Impl {
   //   `class_lane_buf_` (metal_trace_backend.mm:779).
   float*  d_class_lane_buf_        = nullptr;
   size_t  class_lane_pix_capacity_ = 0;  // element count d_class_lane_buf_ was allocated for
+  // The EXPOSURE ANCHOR plane and its fixed projection (core/anchor_buffer.hpp).
+  //   d_anchor_buf_       : kAnchorWidth * kAnchorHeight floats of Y, written by atomicAdd
+  //                         in EmitToDeviceXyz. Allocated ONCE — its size is a build
+  //                         constant, so unlike d_xyz_buf_ / d_class_lane_buf_ no render
+  //                         resolution change can invalidate it. Same PERSISTENT third-clock
+  //                         lifecycle as its two siblings: zeroed on allocation, reset per
+  //                         drain window by ReadbackAnchorBuffer, NEVER per BeginSession
+  //                         (which runs per BATCH — zeroing there would discard every batch
+  //                         of the window but the last, which is exactly the bug the same
+  //                         comment on EnsureClassLaneBuf below describes).
+  //   anchor_proj_params_ : BuildAnchorProjParams(), a constant of the build, held as a
+  //                         member only so the kernel launch stays a copy.
+  float*  d_anchor_buf_            = nullptr;
+  lm_proj::ProjParams anchor_proj_params_{};
   // [TEST-ONLY] per-session capture ring for emitted (mid-exit + final) rays,
   // drained per layer into captured_masks_/captured_ws_ when capture_ray_mask_
   // is on. Only allocated under capture (production never touches it — the
@@ -2189,6 +2235,9 @@ struct CudaTraceBackend::Impl {
   // Post-drain (ReadbackClassLanes) zeroing lives in the readback itself.
   // Mirrors Metal EnsureClassLaneBuf (metal_trace_backend.mm:1075-1090).
   void EnsureClassLaneBuf(int w, int h);
+  // Allocate the exposure-anchor plane once and zero it. Idempotent, and takes no
+  // dimensions: the plane's shape is a build constant, not a function of the render config.
+  void EnsureAnchorBuf();
 
   // Per-CI geometry (multi-CI, mirrors Metal UploadCrystal/Ensure*Buffers).
   // EnsureGeomCapacity grows d_poly_*/d_tri_* (grow-only) to hold a crystal of
@@ -2343,6 +2392,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
     // per-batch drain-and-zero.
     cudaFree(d_class_lane_buf_); d_class_lane_buf_ = nullptr;
     class_lane_pix_capacity_ = 0;
+    cudaFree(d_anchor_buf_); d_anchor_buf_ = nullptr;
 
     cudaFreeHost(pinned_dirs_);        pinned_dirs_ = nullptr;
     cudaFreeHost(pinned_pos_);         pinned_pos_ = nullptr;
@@ -2395,6 +2445,7 @@ void CudaTraceBackend::Impl::Reset(bool keep_persistent_buffers) {
   // (keep=false block above), not here, or the idempotent-skip path reads zeros.
   // 315.3: unified projection params reset to POD default.
   proj_params_ = lm_proj::ProjParams{};
+  anchor_proj_params_ = lm_proj::ProjParams{};
   img_w_ = 0u;
   img_h_ = 0u;
   in_session_ = false;
@@ -3082,6 +3133,24 @@ void CudaTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
     class_lane_pix_capacity_ = needed_elems;
     ck(cudaMemset(d_class_lane_buf_, 0, needed_elems * sizeof(float)), "cudaMemset d_class_lane_buf");
   }
+}
+
+// EnsureAnchorBuf — mirror of Metal `EnsureAnchorBuf`. See d_anchor_buf_'s declaration for
+// why this allocates once and why the zeroing must NOT move into BeginSession.
+void CudaTraceBackend::Impl::EnsureAnchorBuf() {
+  if (d_anchor_buf_ != nullptr) {
+    return;
+  }
+  auto ck = [this](cudaError_t e, const char* ctx) {
+    if (e != cudaSuccess) {
+      Reset();
+      throw BackendUnavailableError(std::string{ "CudaTraceBackend::EnsureAnchorBuf: " } + ctx + ": " +
+                                    cudaGetErrorString(e));
+    }
+  };
+  const size_t elems = static_cast<size_t>(kAnchorWidth) * static_cast<size_t>(kAnchorHeight);
+  ck(cudaMalloc(&d_anchor_buf_, elems * sizeof(float)), "cudaMalloc d_anchor_buf");
+  ck(cudaMemset(d_anchor_buf_, 0, elems * sizeof(float)), "cudaMemset d_anchor_buf");
 }
 
 // EnsureFilterBuffers — mirror of Metal `EnsureFilterBuffers`
@@ -3841,6 +3910,10 @@ void CudaTraceBackend::BeginSession(const SessionSpec& spec) {
     // this allocates a 4B dummy (kernel branch skip means it is never read).
     // Mirrors Metal BeginSession's EnsureClassLaneBuf call (metal:2647).
     impl_->EnsureClassLaneBuf(static_cast<int>(impl_->img_w_), static_cast<int>(impl_->img_h_));
+    // The exposure anchor: one fixed full-sky plane per backend, geometry from
+    // core/anchor_buffer.hpp and NOT from `spec`. Both are idempotent.
+    impl_->anchor_proj_params_ = BuildAnchorProjParams();
+    impl_->EnsureAnchorBuf();
 
     // Per-ray rotation matrix device buffer (cont_cap_ × 9) is allocated
     // lazily in EnsureSessionBuffers, not here — n_roots is unknown until the
@@ -4361,7 +4434,10 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
         color_params,
         impl_->d_color_filter_desc_,
         impl_->d_color_bit_map_,
-        impl_->d_class_lane_buf_);
+        impl_->d_class_lane_buf_,
+        // Exposure anchor: a session-constant plane + its session-constant projection.
+        impl_->d_anchor_buf_,
+        impl_->anchor_proj_params_);
     ck_reset(cudaPeekAtLastError(), "kernel launch");
     // S2: ev_end_kernel_ recorded inside the loop captures real kernel time.
     // The original outside-loop placement (right next to ev_end_h2d_) collapsed
@@ -4789,6 +4865,25 @@ void CudaTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t&
   // Zero for the next window (mirror Metal std::memset — CUDA uses cudaMemset).
   CheckCuda(cudaMemset(impl_->d_class_lane_buf_, 0, total * sizeof(float)),
             "ReadbackClassLanes cudaMemset d_class_lane_buf");
+}
+
+// The exposure-anchor drain, on the same cadence and with the same reset discipline as
+// ReadbackClassLanes above. Fixed size, so there is no capacity invariant to guard: the
+// plane is kAnchorWidth * kAnchorHeight or it does not exist.
+void CudaTraceBackend::ReadbackAnchorBuffer(std::vector<float>& anchor_y) {
+  if (impl_->d_anchor_buf_ == nullptr) {
+    anchor_y.clear();
+    return;
+  }
+  // Same wait discipline as ReadbackClassLanes / ReadbackXyzAccum — the kernel's atomicAdd
+  // writes must finalize before the D2H copy.
+  cudaDeviceSynchronize();
+  const size_t elems = static_cast<size_t>(kAnchorWidth) * static_cast<size_t>(kAnchorHeight);
+  anchor_y.resize(elems);
+  CheckCuda(cudaMemcpy(anchor_y.data(), impl_->d_anchor_buf_, elems * sizeof(float), cudaMemcpyDeviceToHost),
+            "ReadbackAnchorBuffer D2H d_anchor_buf");
+  CheckCuda(cudaMemset(impl_->d_anchor_buf_, 0, elems * sizeof(float)),
+            "ReadbackAnchorBuffer cudaMemset d_anchor_buf");
 }
 
 // scrum-312 third-clock drain: copies the PERSISTENT cross-batch d_xyz_buf_ +

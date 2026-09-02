@@ -530,7 +530,35 @@ struct KernelParams {
   // as a `device const uchar*` (both regions share buffer 27 to stay within
   // Metal's 30-buffer per-stage cap). Zero when no Complex filter is present.
   uint  and_term_counts_base_offset;
+  // The EXPOSURE ANCHOR's projection — a fixed full-sky dual equal-area view whose geometry
+  // comes from core/anchor_buffer.hpp and NOT from the user's renderer. The exit tails run
+  // ProjectExitToPixel a SECOND time against this and add the hit's Y into anchor_buf
+  // (buffer 24), so the session publishes one sky-level exposure anchor that no lens, fov,
+  // view pose or output resolution can move.
+  // MUST mirror the host KernelParams field of the same name (see the host-side static_assert
+  // on sizeof(KernelParams)).
+  lm_proj::ProjParams anchor_proj;
 };
+
+// Add one emitted ray's Y into the exposure-anchor plane.
+//
+// A free function rather than the inline block the per-class lane accumulation uses, for one
+// reason: it is called from BOTH exit tails (mid-exit and final-layer) with nothing differing
+// but the direction, and those two tails have historically drifted apart when the same logic
+// was pasted into each. Y ALONE is accumulated — the plane's only consumer is a P99 over Y.
+inline void AccumAnchorY(device atomic_float* anchor_buf,
+                         thread const lm_proj::ProjParams& anchor_proj,
+                         float wx, float wy, float wz, float y_val) {
+  lm_proj::ProjResult pr = lm_proj::ProjectExitToPixel(anchor_proj, wx, wy, wz);
+  for (int hi = 0; hi < pr.count; hi++) {
+    int px = pr.hits[hi].px;
+    int py = pr.hits[hi].py;
+    if (px >= 0 && px < anchor_proj.img_w && py >= 0 && py < anchor_proj.img_h) {
+      atomic_fetch_add_explicit(&anchor_buf[uint(py) * uint(anchor_proj.img_w) + uint(px)],
+                                y_val, memory_order_relaxed);
+    }
+  }
+}
 
 kernel void trace_layer_kernel(
     device const float*    root_d   [[buffer(0)]],
@@ -577,10 +605,11 @@ kernel void trace_layer_kernel(
     //   25 : per-instance GetFn table `gate_poly_fn`, one uchar per ABSOLUTE
     //        pool polygon (parallel to poly_n/poly_d at buffer 4/5). Indexed by
     //        the ray's own shape_poly_off + LOCAL path index — see
-    //        ApplyGetFn_dev. (Buffer 24, the former per-(layer,ci)
-    //        prototype prefix-sum table, is retired: the shared-prototype getfn
-    //        table mis-mapped degenerate pool instances under strong shape
-    //        randomization.)
+    //        ApplyGetFn_dev. (Buffer 24 once held a per-(layer,ci) prototype
+    //        prefix-sum table; that was retired because the shared-prototype
+    //        getfn table mis-mapped degenerate pool instances under strong
+    //        shape randomization. The slot now carries the exposure-anchor
+    //        plane — see anchor_buf below.)
     //   26 : Complex filter sub-spec flat buffer
     device const DeviceFilterDesc* gate_filter_desc    [[buffer(23)]],
     device const uchar*            gate_poly_fn        [[buffer(25)]],
@@ -613,6 +642,10 @@ kernel void trace_layer_kernel(
     // read back + folded into RenderConsumer::lane_y_ each drain window. See
     // plan §4 Step 4 for the accumulation semantics + rollback contract.
     device atomic_float*           class_lane_buf      [[buffer(29)]],
+    // The exposure-anchor plane: atomic_float[anchor_proj.img_w * anchor_proj.img_h] of Y.
+    // Fixed size (a build constant, not a function of the session), so unlike class_lane_buf
+    // it never needs a dummy allocation — the host always has one to bind.
+    device atomic_float*           anchor_buf          [[buffer(24)]],
     uint tid [[thread_position_in_grid]]) {
   if (tid >= prm.num_rays) { return; }
   // task-331.5: load the carried component mask once (constant for the whole
@@ -667,6 +700,7 @@ kernel void trace_layer_kernel(
   // `constant` address space — MSL cannot bind a constant object to a thread
   // reference, so copy once per thread and pass the local to both exit blocks.
   lm_proj::ProjParams proj_local = prm.proj;
+  lm_proj::ProjParams anchor_proj_local = prm.anchor_proj;
 
   // path[] carries LOCAL polygon indices (< PolygonFaceCount), so ushort has
   // plenty of headroom (uchar would fit hex-prism's 8 faces; ushort keeps room
@@ -890,6 +924,11 @@ kernel void trace_layer_kernel(
               // sky direction, matching ScatterOutgoingToXyz which feeds the
               // outgoing world dir `d`. Each returned hit is atomically added;
               // landed_weight only bumps on bump_landed (primary, not overlap).
+              // The exposure anchor sees every emitted ray, including the ones the user's
+              // lens does not image at all — that is the whole point of anchoring to the sky
+              // rather than to the frame. Hence OUTSIDE the render hit loop below, which
+              // only runs for rays that landed in-bounds.
+              AccumAnchorY(anchor_buf, anchor_proj_local, wcx, wcy, wcz, cmf_y * cw);
               lm_proj::ProjResult pr_m = lm_proj::ProjectExitToPixel(proj_local, wcx, wcy, wcz);
               for (int hi = 0; hi < pr_m.count; hi++) {
                 int px_m = pr_m.hits[hi].px;
@@ -1020,6 +1059,8 @@ kernel void trace_layer_kernel(
             // world dir `d`. Each returned hit (primary + optional dual-fisheye
             // overlap) is atomically added; landed_weight only bumps on
             // bump_landed (primary, not overlap — parity with Pass 2).
+            // Exposure anchor — same call, same reason, as the mid-exit tail above.
+            AccumAnchorY(anchor_buf, anchor_proj_local, wx, wy, wz, cmf_y * cw);
             lm_proj::ProjResult pr_f = lm_proj::ProjectExitToPixel(proj_local, wx, wy, wz);
             for (int hi = 0; hi < pr_f.count; hi++) {
               int px_f = pr_f.hits[hi].px;

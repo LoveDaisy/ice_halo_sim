@@ -1468,6 +1468,11 @@ void Simulator::DrainDeviceXyz(TraceBackend* backend) {
     // raypath_color config — consumer's ConsumeDeviceFused path stays byte-
     // identical to pre-358.1 (AC4).
     backend->ReadbackClassLanes(sim_data.lane_pixel_data_, sim_data.lane_class_count_);
+    // The exposure anchor plane, on the same drain cadence and with the same waited-on
+    // guarantee. Empty for backends that do not accumulate one — the host-side
+    // AnchorConsumer then has outgoing rays to project instead, and this is not one of
+    // those paths only because SupportsDeviceXyzAccum() is true here.
+    backend->ReadbackAnchorBuffer(sim_data.anchor_y_pixel_data_);
   } else {
     // Degraded path (code-review round-2 Major): backend went null mid-window via
     // the task-282 fallback. The device image is unrecoverable, but we MUST still
@@ -1642,6 +1647,8 @@ void Simulator::SimulateOneWavelengthWithBackend(TraceBackend& backend, const Sc
     // task-358.1 Step 4: drain the device per-color-class Y-lane accumulator.
     // No-op when the backend / session has no raypath_color config (AC4).
     backend.ReadbackClassLanes(sim_data.lane_pixel_data_, sim_data.lane_class_count_);
+    // Exposure anchor plane — see the third-clock drain above for the contract.
+    backend.ReadbackAnchorBuffer(sim_data.anchor_y_pixel_data_);
     data_queue_->Emplace(std::move(sim_data));
     return;
   }

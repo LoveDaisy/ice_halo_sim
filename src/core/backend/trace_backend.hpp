@@ -492,6 +492,27 @@ class TraceBackend {
     class_count = 0;
   }
 
+  // The EXPOSURE ANCHOR plane, for backends that accumulate XYZ on device.
+  //
+  // A device-fused backend has already turned its exit directions into pixels by the time
+  // the host sees anything, so the host CANNOT project them a second time into the anchor
+  // buffer — there is nothing left to project. The anchor therefore has to be a SECOND
+  // ACCUMULATION TARGET inside the same dispatch: one extra ProjectExitToPixel call per
+  // emitted ray, against the fixed anchor parameters, atomically added into a
+  // kAnchorWidth * kAnchorHeight plane of Y. Making it a second RENDERER instead is not an
+  // option — CanUseBackend() rejects any config carrying more than one renderer and drops
+  // the whole session back to the legacy CPU path.
+  //
+  // Copies that plane into `anchor_y` (resized to kAnchorWidth * kAnchorHeight) and resets
+  // the device side for the next window. Called by the simulator immediately after
+  // ReadbackClassLanes, on the same drain cadence, so the caller has ALREADY waited on
+  // outstanding device work (same mirrored guarantee).
+  //
+  // Default: no-op / empty. Backends that do NOT fuse XYZ on device leave it here and are
+  // correct by doing so: their exit rays reach the host through the exit seam, and the
+  // host-side AnchorConsumer projects them itself.
+  virtual void ReadbackAnchorBuffer(std::vector<float>& anchor_y) { anchor_y.clear(); }
+
   // scrum-312 (third-clock drain): true = the device XYZ accumulator PERSISTS
   // across per-batch BeginSession/EndSession cycles (BeginSession does not zero
   // it), so the simulator may decouple readback from the trace clock and drain
