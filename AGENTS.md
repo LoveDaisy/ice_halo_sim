@@ -146,10 +146,13 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   `gui_test` is therefore **built on three platforms and run on one**: the `Ubuntu x86_64` leg of
   `.github/workflows/ci.yml` supplies a display with `xvfb-run` + Mesa's llvmpipe software
   rasterizer and runs the `modal_layout` and `defaults_panel_layout` reference groups there; the
-  macOS and Windows legs still only compile it. Which groups may run under a software rasterizer
-  is a measured fact, not a preference — the per-scene numbers, the reason `lens_proj` is
-  excluded despite its pixels being portable, and **the checklist a red in this layer obliges you
-  to follow instead of calling it a known flake** are all in `doc/testing-architecture.md` §4.6
+  macOS and Windows legs still only compile it. Those two groups are the whole of it — the filter
+  is **positive**, so the binary's other 36 categories (every `functional/` case and the entire
+  `parity/` tag among them) are evaluated on a developer machine and nowhere else. Which groups
+  may run under a software rasterizer is a measured fact, not a preference — the per-scene
+  numbers, the reason `lens_proj` is excluded despite its pixels being portable, and **the
+  checklist a red in this layer obliges you to follow instead of calling it a known flake** are
+  all in `doc/testing-architecture.md` §4.6
   (whose numbers, as that section itself flags, were measured on an arm64 proxy for the amd64
   runner this step actually runs on — read the caveat, not just the table).
   Read that before widening the CI filter, and before dispositioning a visual-regression failure.
@@ -219,7 +222,13 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   design is constrained by measured facts (only equal-area projections are comparable, since the
   CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of an equal-area texture
   does not) rather than by preference. `doc/testing-architecture.md` §4.10 has the full statement,
-  including the CMake shape a second child-process test would need.
+  including the CMake shape a second child-process test would need. A fourth thing, easiest of all
+  to get wrong because it is invisible from a green pipeline: **no CI job runs this tag today**.
+  The one leg that executes `gui_test` names a positive filter of two reference groups that does
+  not include it, and the `E2E Slow` legs build with `-DBUILD_GUI=OFF` and have no such binary, so
+  `./scripts/test.sh {quick,full,pr}` on a machine with a GL context is the only place this fixture
+  is ever evaluated. `doc/testing-architecture.md` §7.5 has the mechanism, the measured cost of
+  enabling it, and why the llvmpipe leg is not currently the right home for it.
 - `scripts/check_loop_fatal_asserts.py` is a **fourth** diff-scoped entry point, alongside
   `check_policies.py`, `check_new_refs.py`, and `check_new_gui_tests.py` above (same "checker is
   the rule" discipline; CI `new-refs` job on PRs vs merge-base, pre-commit hook on the staged
@@ -267,6 +276,11 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
     | Broader regression sweep — unsure how far a change reaches | `./scripts/test.sh full` |
     | Before opening a PR — reproduce the CI e2e-slow shape locally | `./scripts/test.sh pr` |
     | Confirm one specific gate/test actually fails on a deliberately-broken state (not a general sweep) | run that one check directly against the broken state, then again after the fix: `ctest -R <label>`, `pytest <file>::<test> -m ''`, or `gui_test --filter <name>` |
+
+    What each row **costs** in measured seconds, what each scope catches that the cheaper one is
+    structurally unable to report, and the budget rule naming who has to answer for the spend and
+    when, are in `doc/testing-architecture.md` §7. They are deliberately not duplicated here: two
+    copies of a measurement drift apart, and the copy in this table would be the stale one.
 
   - **Judgment discipline**: a command's exit code is the only thing that says pass/fail, and two
     common habits obscure it in different ways. A pipe (`cmd | tail`) leaves `$?` reporting
@@ -520,7 +534,7 @@ Valuable design/architecture docs live in `doc/` (tracked). Consult the relevant
     这个缺口一次攒下三处 MSVC 不兼容、三周无信号；它们已修，但缺口本身还在 ⇒ 动 `test/` 或
     `bench/` 后别拿 mac/Linux 的绿推断 Windows 也绿。
     与 `windows-remote-testing.md`（GUI VSync 物理桌面）场景正交。
-  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. Read before adding or reorganizing any test.
+  - `testing-architecture.md` — **authoritative test-organization spec**: verification-purpose primary axis × subsystem tag, seven layers (unit-correctness / golden-analytic / parity-cross-backend / e2e-correctness / performance / gui / regression-sentinel), the "how to add a test" decision tree, cross-cutting rules (perf denominator = legacy CPU; parity metric-masks-bugs battery; reference ownership), and the layer×subsystem physical-layout blueprint. **§7 is the test-scope contract**: measured per-scope cost (local `quick`/`full`/`pr` and all 16 CI jobs), what each scope catches that the cheaper one structurally cannot, the budget rule (who declares expected test spend, and when they reconcile it), and why independent re-verification is a fixed-cost multiplier that makes cutting base suite cost worth more than its face value. Read before adding or reorganizing any test — and before claiming any change shortens CI.
 - **Engineering policy**: `env-var-policy.md` — **环境变量使用策略**: user-facing behavior switches must NOT live only in env vars (they cause silent per-machine drift / undebuggable bugs); use CLI/config/API instead. A-class runtime knobs (`LUMICE_TRACE_BACKEND` + 6 perf knobs, with file:line) vs B-class test/build infra (leave alone); three disposition rules; and the **decision gate to answer before adding any new `getenv`**. Read before introducing a new env knob.
 - Example config: `examples/config_example.json`
 

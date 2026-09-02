@@ -1077,3 +1077,263 @@ double gate (267.3 corr-blind reinforcement), `test_capi_sentinel_overflow.py` a
 
 > **Legacy CPU red line**: legacy CPU is the parity ground truth (§1.4, §4.2) and the perf
 > denominator (§1.6, §4.1). It and its tests are **never** a cleanup target in any layer.
+
+---
+
+## §7 Test-scope contract: what each scope costs, and what it additionally catches
+
+§1–§6 say where a test belongs. This section says what running them **costs**, what each scope
+**buys over the one below it**, and who is required to do that arithmetic before spending it. It
+exists because the scope table in `AGENTS.md` answers "which command do I run" without answering
+"what does it cost and what does the cheaper one structurally miss" — and a recommendation to run
+the cheap scope first is only followed by someone who knows what the cheap scope cannot see.
+
+### §7.0 What this section covers, and what it does not
+
+This is **not** an audit of the suite, and must not be cited as one. It looks at the head of the
+cost distribution and states the tail it did not look at:
+
+- **Covered in depth**: the three local scopes end to end, and the 8 CI jobs of 391s or longer —
+  4427s of the 5089s of machine time in §7.1's table, i.e. **87%**.
+- **Listed but not analyzed**: the 8 remaining CI jobs, together 662s, i.e. **13%**. Four are
+  second-scale gates (`policy` 24s, `format-check` 13s, `new-refs` 8s, `benchmark-summary` 7s) and
+  three are compile-only jobs (`windows-cuda-compile` 225s, `cuda-compile` 141s, `bench-compile`
+  63s) whose duration says nothing about which tests should run, plus `Ubuntu ARM64` (181s), the
+  cheapest leg of the build matrix. Both proportions are recomputable from that table.
+- **Not enumerated at all**: the individual cases inside a scope. `gui_test` runs 344 cases across
+  38 categories (338 in its correctness pool, 6 in the real-timing pool, per the binary's own run
+  summary); the fast e2e set collects 92; neither was gone through case by case. One
+  measured statement about that distribution is worth carrying, because it bounds what scheduling
+  can achieve: in the fast e2e set, a single case (`test_smoke.py::test_all_configs_run_successfully`,
+  87.3s) accounts for 92% of the whole set's 94.8s parallel wall clock. Below that one test, no
+  amount of parallelism makes the set faster.
+
+### §7.1 What each scope costs
+
+**Local.** Machine: the development Mac that `doc/machines.md` binds to the **Metal reference
+machine** role — Apple silicon, macOS ARM64, 12 logical cores (8 performance). Read every local
+figure below as a property of that machine and not of the suite; `doc/machines.md` is the single
+source for which host holds which role, and a different host moves all of them. Cache state: **warm** static build
+tree at the measured commit — `scripts/test.sh` does not build the static flavor, so no compile
+time is inside these numbers. Concurrency as noted per layer. Machine otherwise idle (load average
+2.2 at the start of the run).
+
+| Scope | Layer | Wall clock | Concurrency |
+|---|---|---|---|
+| `quick` | `ctest -L "unit-correctness\|composition-correctness\|parity\|golden-analytic"` | 36s | ctest default |
+| `quick` | fast e2e (`pytest`, `-m "not slow"` via `pyproject.toml` `addopts`) | 96s | `-n auto` → 12 workers |
+| `quick` | `gui_test` correctness pool (`--fixed-dt`, negative filter) | 47s | single process |
+| | **`quick` total** | **179s** | |
+| `full` | `quick` + `gui_test` real-timing pool (no `--fixed-dt`, positive filter) | +11s | single process |
+| | **`full` total** | **190s** | |
+| `pr` | `full` + shared-lib build (the flavor was absent: cold configure + 43 TUs + install) | +14s | 12-way build |
+| `pr` | slow e2e phase 1 (`pytest --ignore=test/performance -n 3 -m slow`) | 361s | `-n 3` |
+| `pr` | slow e2e phase 2 (throughput gates, alone so they do not measure under load) | 14s | serial, single process |
+| | **`pr` total** | **627s** | |
+
+Three things the `pr` row does not show on its face. **The shared-library layer is not a constant**:
+it cost 14s here because the shared flavor did not exist and had to be built (43 translation units,
+no GUI, no tests, CPM dependencies already cached), and on any later run in the same tree it is a
+freshness check costing effectively nothing — so the first `pr` of a session and the ones after it
+are different prices. **Phase 1 skipped 29 of its 109 collected items** (80 passed): the backend
+guards deselect what the machine cannot run, so this figure is what a Metal-capable Mac pays, not
+what the set costs everywhere. **The layers sum to 579s against a 627s wall clock**; the ~48s
+difference is the script's own preconditions — the static build-tree and `addopts` checks, the
+extraction of the two `gui_test` filters from `scripts/build.sh`, and the probe that asks
+`test/e2e/capi_runner.py` which library the slow layer would load — none of which is a test.
+
+A standalone `quick` measured 172s on the previous day on the same machine, against 179s inside
+this run: treat single-run figures here as accurate to roughly ±5%, not better.
+
+**Compile is not in the table above, and is not negligible.** Measured on the same machine:
+a cold configure-plus-build of the static flavor with GUI and tests is **167s**; an incremental
+rebuild after touching one leaf `.cpp` is **33s**; after touching `src/core/math.hpp`, included by
+63 translation units, **49s**. So the honest first-run cost of `quick` on a cold tree is about
+350s, and its steady-state cost during an edit-test loop is about 210s.
+
+**CI.** Runners: GitHub-hosted, per job (`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`,
+`windows-2025`; the CUDA compile leg uses `windows-2022`). Cache state:
+CPM dependencies come from `actions/cache`, so warmth **depends on that run's cache hit** and is
+not guaranteed; nothing else is cached between runs. Concurrency: the jobs below run in parallel as
+a matrix, so the run's wall clock is its **longest job**, not the sum; within a job, the fast e2e
+leg runs `pytest` serially and the slow e2e legs run `-n 3` (with the throughput gates re-run
+serially afterwards, so they do not measure under load).
+
+The figures are the union of a push run and a pull-request run of the same commit (`495c6f6b`),
+because neither event alone runs every job: the build matrix, `policy` and `format-check` are
+push-only, while `e2e-test`, the `E2E Slow` legs and `new-refs` run on pull requests and `main`.
+
+| CI job | Seconds | In §7.0's covered head? |
+|---|---|---|
+| Windows MSVC x86_64 | **740** | yes — longest job, sets the run's wall clock |
+| shared-gui-test-build | 666 | yes |
+| Ubuntu x86_64 | 635 | yes |
+| E2E Slow (macOS ARM64 parity) | 597 | yes |
+| e2e-test | 512 | yes |
+| macOS ARM64 | 464 | yes |
+| E2E Slow (Ubuntu x86_64) | 422 | yes |
+| E2E Slow (macOS ARM64 rest) | 391 | yes |
+| windows-cuda-compile | 225 | no — compile-only |
+| Ubuntu ARM64 | 181 | no |
+| cuda-compile | 141 | no — compile-only |
+| bench-compile | 63 | no — compile-only |
+| policy | 24 | no — second-scale gate |
+| format-check | 13 | no — second-scale gate |
+| new-refs | 8 | no — second-scale gate |
+| benchmark-summary | 7 | no — second-scale gate |
+| | **5089s total machine time** | head = 4427s (87%) |
+
+Where a job's time goes differs by job, and the split cannot be assumed. Step-level timestamps
+from an earlier run of the same shape: `Windows MSVC x86_64` was 78% compile (568s of 726s);
+`shared-gui-test-build`, which runs nothing, 92% compile (589s of 641s); `E2E Slow (macOS rest)`
+was 8% compile and **89% test execution** (612s of 686s); `e2e-test` 84% test execution (377s of
+450s). Those percentages come from a different run than the totals above and are shape, not
+precision.
+
+**Two facts about this table that any CI-time proposal has to answer to.**
+
+1. **The critical path is `Windows MSVC x86_64` (740s) and, behind it, `shared-gui-test-build`
+   (666s).** A run's wall clock is its longest job and nothing else. Therefore: *any proposal to
+   "shorten CI" that does not touch those two jobs buys zero wall clock*, however much machine time
+   it saves. Anywhere a claim of the form "this saves N seconds of CI" is made — in a plan, a PR
+   description, or a review comment — it must first answer **"does it shorten the longest job?"**.
+   The corollary that keeps catching people: rebalancing two shards against each other is worth CI
+   time only while one of them **is** the longest job. The two `E2E Slow` macOS legs sit 143s and
+   349s under the ceiling, so packing them closer is currently worth nothing (`ci.yml`'s `e2e-slow`
+   matrix comment carries the same statement next to the code it constrains).
+2. **A floor sits under the `E2E Slow (macOS ARM64 parity)` leg that no repacking removes.**
+   `test_capi_sentinel_overflow` is **one indivisible pytest case** (3 configs × 12 rounds inside a
+   single function) that pins one xdist worker for the leg's whole duration — ~204s in the grouping
+   that shipped — which is what puts that leg near 600s. Splitting files across legs cannot go below
+   it; only splitting that case could. Quote this number **with its grouping**: the case's cost is a
+   property of the file *and its co-tenants*, and the same case measured 376s when it was starved
+   beside the exit-seam parity file. Costs never survive a regrouping; re-derive them after one.
+
+### §7.2 What each scope catches that the one below it cannot
+
+The three local scopes are strictly nested (`quick` ⊂ `full` ⊂ `pr`), so each answer below is about
+the increment. The answers are mechanisms, not directory lists — the point of each scope is a class
+of defect the cheaper scope is *structurally* unable to report, not merely a set of files it skips.
+
+**`quick` → `full`: wall-clock-dependent behaviour.** `quick` runs `gui_test` with `--fixed-dt`,
+which injects a deterministic 1/60s frame delta. Six cases depend on real elapsed time: the two
+in the `perf_test` category (main-loop FPS and rays-per-second), an accumulation gated on a
+wall-clock deadline rather than a frame count, a background thread that only advances between real
+`ctx->Yield()` calls, and two more of the same shape. `scripts/build.sh` names them twice — once as
+a negative filter (one category, four case names) for the correctness pool, once as the positive
+filter for the real-timing pool — which is the mechanical statement of what `quick` withholds.
+Under `--fixed-dt` those cases are not skipped; they are **starved**, and a starved assertion
+produces a *wrong answer*, not a missing one. That is why they are a separate pool rather than a
+slower part of the same one, and it is the reason a green `quick` is **not evidence** about this
+class: the scope did not fail to reach the question, it answered it from a state that cannot be
+right. The increment costs 11s — about 6% on top of
+`quick`, the cheapest step in this whole table.
+
+**`full` → `pr`: the shared-library route, and the `slow` set.** Two distinct additions.
+*(a)* Everything marked `@pytest.mark.slow` is excluded from `quick` and `full` structurally, by
+`pyproject.toml`'s `addopts = ["-m", "not slow"]` — the cross-backend parity batteries, the
+throughput gates, and the issue-repro sentinels (§6's "do not touch" list) are all in there. *(b)*
+More importantly, `pr` is the **only** local scope in which the library is loaded as a library:
+those tests drive `liblumice` through `ctypes` (`test/e2e/capi_runner.py`), so the export surface,
+the dynamic-symbol resolution, the rpath and the C API's cross-boundary object lifetimes are
+exercised here and nowhere else. `quick` and `full` link the same sources into a test binary, which
+cannot see a defect in how the code is *packaged*. The scope carries a freshness layer for exactly
+this reason: a stale `.dylib` silently tests old code and reports green, so `pr` refuses to trust a
+library it cannot prove is newer than its sources.
+
+**`pr` → CI: the platform matrix, and only that.** CI adds MSVC, x86_64 and ARM64 Linux, and a
+software rasterizer (Xvfb + Mesa llvmpipe) that renders GUI reference scenes without a GPU. None of
+these is reproducible from one developer machine, and the compiler dimension is where they earn
+their keep: `AGENTS.md` records three MSVC incompatibilities that a Clang-only local run could not
+have seen, and that sat undetected for weeks behind platform guards.
+
+**But the containment does not run the other way, and this is the trap.** CI is *not* a superset of
+`pr`. The one CI leg that runs `gui_test` passes a hand-picked **positive** filter naming two
+reference groups, so **2 of that binary's 38 categories run in CI**; the local scopes select by a
+**negative** filter, so every category runs locally — `quick` withholds the one category and four
+cases named above, `full` withholds nothing. For the other 36 categories, including every
+functional case and the whole `parity` tag (§7.5), a developer machine is the only place the
+assertion is ever evaluated. A green CI is not evidence about them.
+
+### §7.3 The budget rule: who answers, and when
+
+The rule below exists because the alternative is the state this section was written out of: every
+individual decision to add a test is locally justified, no one is ever asked what the total costs,
+and the total only grows. The burden of proof therefore sits on the side that spends.
+
+1. **Whoever proposes a change states its expected test spend in the written plan, before
+   implementation starts**: which scopes it will run, how many times, and the estimated wall clock.
+   "I cannot estimate this" is an acceptable answer and should be written down as such. Writing
+   nothing is not acceptable.
+2. **The same person reconciles it at close-out**, in the description of the PR that lands the
+   change: actual against estimate. If the actual exceeds the estimate by more than about 1.5×,
+   record the deviation and its cause — **do not retro-fit the estimate to what happened**, which
+   destroys the only signal this rule produces.
+3. **Whoever reviews the plan checks that declaration 1 is present**; whoever reviews the code
+   checks that reconciliation 2 is present. Neither is a judgement about whether the number is big;
+   both are a check that the question was asked.
+
+The rule is deliberately about *stating and reconciling*, not about staying under a limit. There is
+no budget ceiling to enforce, and inventing one would only produce estimates shaped to fit it.
+
+This section is the first change written under the rule, and it says so rather than presenting the
+rule as established practice: earlier changes in this repository carry no such declaration, and none
+was back-filled for them.
+
+### §7.4 Independent re-verification is a fixed-cost multiplier
+
+**The rule.** A change's own report about itself does not settle whether the work is done. An
+independent pass — someone, or some agent, that did not do the work re-asking whether it meets what
+was asked — is a required step, not an optimization to be dropped when the evidence looks tidy.
+
+**It cannot be replaced by an evidence chain.** This is the substitution that keeps getting
+proposed: attach the logs, the run ids, the commit hashes, and let provenance stand in for the
+second pass. It does not work, because the two answer different questions. A provenance chain
+proves *this output came from that run*. Re-verification asks *whether that run asked the right
+question*. Classes of defect that have actually been caught this way in this repository, none of
+which any amount of provenance could have caught: a self-reported severity that did not match how
+reachable the defect was for a user; a self-reported execution path that was the **opposite** of
+what the configuration file's filter actually did; and a self-reported direction of net change that
+measurement contradicted. In each, the logs were genuine and the run was real. The report about
+them was wrong.
+
+**The consequence, and the reason this sits next to the cost tables.** Because re-verification is
+required and re-reads the same ground, it behaves as a **fixed-cost multiplier** on the suite:
+whatever the base costs, the delivered cost of a change is that base taken more than once. Two
+things follow, and they are the practical output of this whole section:
+
+- Every second removed from the base is removed again under the multiplier. **Cutting base suite
+  cost is worth more than its face value** — this is the argument for §7.0's observation that one
+  87.3s case sets the floor of a 94.8s set.
+- Optimizing scheduling, sharding or parallelism **without** cutting the base leaves the multiplied
+  portion untouched. That is why §7.1's fact 1 is stated as a gate: rebalancing moves work between
+  machines; it does not remove work, so the multiplier keeps charging for it.
+
+### §7.5 Where the `parity` tag runs, and why not in CI
+
+§4.10 introduces `test/gui/parity/`; this is the platform-reach half of it, stated once here and
+pointed at from the other two places that describe it (`AGENTS.md`, and the fixture's own header
+comment in `test/gui/parity/test_gui_cli_export_parity.cpp`).
+
+**Where it runs today.** Nowhere in CI, and this is a mechanical fact of `.github/workflows/ci.yml`,
+not an inference: the single step that executes `gui_test` runs
+`xvfb-run -a … gui_test --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config`
+inside the `Ubuntu x86_64` leg — a positive filter naming two categories, of which `parity` is not
+one — and the three `E2E Slow` legs configure with `-DBUILD_TEST=OFF -DBUILD_GUI=OFF`, so they do
+not have the binary at all. Where it does run is a developer machine with a working GL context:
+`scripts/build.sh`'s correctness pool selects by a negative filter, so the category is included by
+default and `./scripts/test.sh {quick,full,pr}` executes it. Read that as §7.2's last paragraph
+applied to one tag: **a green CI is not evidence about this fixture.**
+
+**Why it is not enabled under llvmpipe today.** Not because of cost. The fixture asserts an *exact*
+equality on the simulated ray count, through the shared `ExpectedSimRayNum()` helper in
+`test/gui/test_gui_shared.hpp` — structurally the same assertion shape as `lens_proj`, which §4.6
+excludes from the CI filter because that count comes up short under the software rasterizer for an
+upstream reason that is still unfixed. Enabling `parity` there would re-import that known defect as
+a red in a required check. For scale, the cost if it were enabled is not the blocker either: the
+`parity` filter takes 24.6s on the 12-core machine of §7.1, which extrapolates to roughly 70–90s on
+a 4-vCPU runner — **an extrapolation, not a measurement** — and it would land inside the
+`Ubuntu x86_64` leg, which sits at 635s — 105s below the `Windows MSVC` ceiling — so by §7.1's
+fact 1 it would still cost close to zero wall clock. The blocker is the known red, so the sequence
+is: close the upstream ray-count shortfall first, re-measure on a real runner, then widen the
+filter. Widening it is a measurement, not an edit.
