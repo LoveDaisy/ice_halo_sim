@@ -24,10 +24,13 @@
 //      difference test_visible_mask_gui_parity.cpp pins for the mask. Every annotation this task
 //      serves (parallels / meridians / angular-distance circles / horizon / zenith-nadir) works
 //      inside the render domain, so the tests below sample there.
-//   2. Rectangular carries the camera azimuth. Core folds it into ProjParams::az0
-//      (ComputeScaleAz0); the GUI treats rectangular as full-sky and applies no view transform at
-//      all. The two therefore agree only where az0 is zero. Pinned by
-//      ProjectionRectangularDivergesUnderCameraAzimuth.
+//   2. Rectangular follows the camera pose on core's side and deliberately does not on the GUI's
+//      (owner decision 2026-09-02): core consumes the full rotation like every other lens, the GUI
+//      treats rectangular as full-sky and applies no view transform at all. The two therefore agree
+//      exactly at a zero pose — which is the only pose the GUI ever renders this lens at, since
+//      RenderPreviewPanel pins it there every frame. Stated by
+//      RectangularFollowsTheCameraPoseAndTheGuiDeliberatelyDoesNot; this is a division of labour,
+//      not an open question.
 //   3. Dual fisheye with a non-zero overlap ring. core's r_scale changes the mapping; the GUI's
 //      display dual-fisheye is fixed at 180 deg per hemisphere and ignores it. Held at overlap = 0
 //      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there.
@@ -345,44 +348,89 @@ TEST(AnnotationOverlayGuiParity, ProjectionAgreesForRectangularWithoutCameraAzim
                       85.0f, "rectangular");
 }
 
-// KNOWN DIVERGENCE (pre-existing): equirectangular is the one lens where core honours the camera
-// azimuth and the GUI does not. ComputeScaleAz0 folds it into ProjParams::az0, so core's
-// equirectangular canvas re-centres as the view turns; the GUI classifies rectangular as full-sky
-// (LensIsFullSky) and applies no view transform at all, so its canvas is pinned to world azimuth.
-// The two therefore differ by a horizontal SHIFT of az0 * scale pixels, which at a whole-turn
-// canvas is most of the frame. Pinned as a shift rather than asserted away: nothing in this task
-// changes it, and a future reconciliation should start by failing this test on purpose.
-TEST(AnnotationOverlayGuiParity, RectangularDivergesUnderCameraAzimuth) {
-  const ann::ViewSnapshot view =
-      MakeView(LensParam::kRectangular, 180.0f, 128, 64, RenderConfig::kFull, /*el=*/0.0f, /*az=*/60.0f);
-  const ProjDiff d = SweepDirections(view, -85.0f, 85.0f);
-  EXPECT_GT(d.compared, 0);
-  EXPECT_GT(d.mismatched, 0) << "core and the GUI now agree about rectangular under a camera azimuth; "
-                                "if that is deliberate, delete this test and fold the case into "
-                                "ProjectionAgreesForRectangularWithoutCameraAzimuth";
-  // The disagreement is HORIZONTAL only: latitude is unaffected by az0, so every sample must keep
-  // its row. A vertical component would mean something other than the az0 shift is loose.
-  float view_matrix[9];
-  lumice::gui::BuildViewMatrix(view.el_deg, view.az_deg, view.roll_deg, view_matrix);
-  const lm_proj::ProjParams p = CoreForwardParams(view);
-  int rows_compared = 0;
-  for (int ai = 0; ai <= 24; ++ai) {
-    const float alt = -85.0f + 170.0f * static_cast<float>(ai) / 24.0f;
-    for (int zi = 0; zi < 36; ++zi) {
-      float w[3];
-      DirFromAltAz(alt, -180.0f + 10.0f * static_cast<float>(zi), w);
-      const ann::CanvasPoint c = ann::ProjectWorldDir(p, w[0], w[1], w[2]);
-      const GuiPoint g = GuiForward(view, view_matrix, w[0], w[1], w[2]);
-      const CanvasHit ch = ToCanvasHit(view, c.px, c.py, c.valid);
-      const CanvasHit gh = ToCanvasHit(view, g.px, g.py, g.valid);
-      if (!ch.drawn || !gh.drawn || NearCanvasBorder(view, ch.px, ch.py)) {
-        continue;
+// The label layer's half of the deliberate split described at the top of this file. core's
+// equirectangular canvas is oriented by the camera — all three angles, not just the azimuth it used
+// to fold into a scalar — while the GUI classifies rectangular as full-sky (LensIsFullSky) and pins
+// its canvas to world coordinates. Both are right for what they do: the GUI resamples a fixed
+// all-sky texture at display time, and the poses where the two answers differ are poses the GUI
+// never renders this lens at (RenderPreviewPanel zeroes them every frame).
+//
+// This test used to say the opposite in its closing sentence — "a future reconciliation should start
+// by failing this test on purpose". That reconciliation happened, and it went the other way: core
+// was widened to follow the whole pose rather than narrowed to match the GUI. What is asserted now
+// is the SHAPE of the difference, which is what tells the two apart:
+//   - azimuth only  → a horizontal shift, latitude untouched (a rotation about world z);
+//   - elevation/roll → a difference with a vertical component, which the azimuth-only projection
+//     was structurally incapable of producing. That is the half that would have been silently green
+//     before 2026-09-02.
+TEST(AnnotationOverlayGuiParity, RectangularFollowsTheCameraPoseAndTheGuiDeliberatelyDoesNot) {
+  // Rows kept, as a function of the pose: does the disagreement stay on one line of latitude?
+  struct RowVerdict {
+    int compared = 0;
+    int moved_rows = 0;
+  };
+  auto verdict = [](const ann::ViewSnapshot& view) {
+    RowVerdict out;
+    float view_matrix[9];
+    lumice::gui::BuildViewMatrix(view.el_deg, view.az_deg, view.roll_deg, view_matrix);
+    const lm_proj::ProjParams p = CoreForwardParams(view);
+    for (int ai = 0; ai <= 24; ++ai) {
+      const float alt = -85.0f + 170.0f * static_cast<float>(ai) / 24.0f;
+      for (int zi = 0; zi < 36; ++zi) {
+        float w[3];
+        DirFromAltAz(alt, -180.0f + 10.0f * static_cast<float>(zi), w);
+        const ann::CanvasPoint c = ann::ProjectWorldDir(p, w[0], w[1], w[2]);
+        const GuiPoint g = GuiForward(view, view_matrix, w[0], w[1], w[2]);
+        const CanvasHit ch = ToCanvasHit(view, c.px, c.py, c.valid);
+        const CanvasHit gh = ToCanvasHit(view, g.px, g.py, g.valid);
+        if (!ch.drawn || !gh.drawn || NearCanvasBorder(view, ch.px, ch.py)) {
+          continue;
+        }
+        ++out.compared;
+        if (std::fabs(ch.py - gh.py) > kPixelTol) {
+          ++out.moved_rows;
+        }
       }
-      ++rows_compared;
-      EXPECT_NEAR(ch.py, gh.py, kPixelTol) << "the rectangular divergence acquired a vertical component";
     }
+    return out;
+  };
+
+  // Azimuth only: the two disagree, and the disagreement is purely horizontal.
+  {
+    const ann::ViewSnapshot view =
+        MakeView(LensParam::kRectangular, 180.0f, 128, 64, RenderConfig::kFull, /*el=*/0.0f, /*az=*/60.0f);
+    const ProjDiff d = SweepDirections(view, -85.0f, 85.0f);
+    EXPECT_GT(d.compared, 0);
+    EXPECT_GT(d.mismatched, 0) << "core and the GUI now agree about rectangular under a camera azimuth; if the GUI "
+                                  "started applying the view transform, this file's premise changed";
+    const RowVerdict rows = verdict(view);
+    EXPECT_GT(rows.compared, 0);
+    EXPECT_EQ(rows.moved_rows, 0) << "an azimuth-only pose turns the sky about world z, so every sample must keep "
+                                     "its row; a vertical component means something other than the pose is loose";
   }
-  EXPECT_GT(rows_compared, 0);
+
+  // Elevation and roll: the disagreement acquires a vertical component. Asserted as a COUNT rather
+  // than as "at least one sample moved", so that a projection which follows only part of the pose
+  // (the pre-2026-09-02 shape being the extreme case, following none of it) cannot pass on a
+  // handful of borderline rows.
+  const struct {
+    float el;
+    float ro;
+    const char* what;
+  } kTilts[] = { { 30.0f, 0.0f, "elevation" }, { 0.0f, 45.0f, "roll" }, { 30.0f, 45.0f, "elevation and roll" } };
+  for (const auto& t : kTilts) {
+    const ann::ViewSnapshot view =
+        MakeView(LensParam::kRectangular, 180.0f, 128, 64, RenderConfig::kFull, t.el, /*az=*/0.0f, t.ro);
+    const RowVerdict rows = verdict(view);
+    if (rows.compared == 0) {
+      ADD_FAILURE() << t.what << ": no sample was drawn by both sides, so this row proves nothing";
+      continue;
+    }
+    EXPECT_GT(rows.moved_rows, rows.compared / 4)
+        << t.what << " (el=" << t.el << " ro=" << t.ro
+        << "): core must lift the equirectangular map out of the horizon plane, so most samples change row ("
+        << rows.moved_rows << " of " << rows.compared << " did)";
+  }
 }
 
 TEST(AnnotationOverlayGuiParity, VisibleRangeIsNotAppliedByTheAnnotationForward) {
