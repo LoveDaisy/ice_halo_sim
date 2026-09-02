@@ -701,7 +701,8 @@ The render configuration defines the renderer parameters.
   "horizon": <boolean>,
   "horizon_label": <boolean>,
   "label": <boolean>,
-  "angular_dist_label": <boolean>
+  "angular_dist_label": <boolean>,
+  "zenith_nadir": { ... }
 }
 ```
 
@@ -716,6 +717,28 @@ The render configuration defines the renderer parameters.
 | `horizon_label` | boolean | no | false | Draw the horizon's TEXT label (`0°`). Added in v4.21. Independent of `horizon`: the label appears with the line switched off. |
 | `label` | boolean | no | false | Draw the TEXT labels for `elevation` and `longitude` — the angle each line stands for. One switch for both families, matching the GUI's single grid label control. Added in v4.21. |
 | `angular_dist_label` | boolean | no | false | Draw the TEXT labels for `angular_dist` (`22°`, `46°`). Added in v4.21. |
+| `zenith_nadir` | object | no | see below | Pixel-space ring markers drawn at the zenith and the nadir. One object for both, not a line list: the two directions are fixed (there is nothing per-line to name), and the GUI exposes a single switch, colour and radius for the pair. Added in v4.19. |
+
+**`zenith_nadir` object**:
+
+```json
+{
+  "enabled": <boolean>,
+  "radius_px": <float>,
+  "opacity": <float>,
+  "color": [<r>, <g>, <b>]
+}
+```
+
+**Defaults**:
+- `enabled`: false
+- `radius_px`: 8.0
+- `opacity`: 0.6
+- `color`: [0.8, 0.2, 0.2] (sRGB)
+
+**Note**: every key is optional, including `enabled` — a present-but-partial object keeps the
+struct defaults above for whatever it leaves out. `enabled` defaults to false, so a config that
+omits `zenith_nadir` entirely draws nothing.
 
 **The three `*_label` switches, and the one thing they do NOT control**
 
