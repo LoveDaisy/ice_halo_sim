@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788326826002,
+  "lastUpdate": 1788332012741,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "3c2653c6524e9c7b644754cf4c13d3b6d1554999",
-          "message": "Merge pull request #196 from LoveDaisy/fix/gpu-parity-residual-debt\n\nfix(gpu-parity-residual-debt): 清 raypath-color GPU parity 残余债 (scrum-362)",
-          "timestamp": "2026-07-15T08:02:45+08:00",
-          "tree_id": "a88d7bea3761d9b539cc3074af4b1290e2cec8ef",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/3c2653c6524e9c7b644754cf4c13d3b6d1554999"
-        },
-        "date": 1784074232978,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 373298.3,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 592439.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 384776.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 272833.6,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4776,6 +4728,48 @@ window.BENCHMARK_DATA = {
             "value": 348484.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "18624004d00f891498779bf12248f36046859a41",
+          "message": "Merge pull request #295 from LoveDaisy/feat/fast-e2e-dominant-test\n\ntest(e2e): smoke 按 config 拆成独立 pytest item —— 收集粒度对齐调度粒度，零覆盖损失",
+          "timestamp": "2026-09-02T14:42:18+08:00",
+          "tree_id": "c633f9361f8df5a4557dd160ab557794d6e71044",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/18624004d00f891498779bf12248f36046859a41"
+        },
+        "date": 1788332011110,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 339374.9,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 582822.6,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 449713.2,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
           }
         ]
       }
