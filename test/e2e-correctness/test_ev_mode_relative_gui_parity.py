@@ -26,7 +26,7 @@ them would show up as a difference that has nothing to do with exposure. The con
 to exactly that: black background, default (spectral) ray colour, no grid, no outline. If this
 test ever goes red, check the scene before the formula.
 
-That list used to have four members and it has five. The fifth is the RENDER-DOMAIN MASK, and it
+That list used to have four members and now it has five. The fifth is the RENDER-DOMAIN MASK, and it
 is the one the scene cannot be stripped of: ``RenderConsumer::PostSnapshot`` zeroes every pixel
 whose centre inverse-projects outside the lens domain (and outside ``visible``), while
 ``LUMICE_XyzToSrgbUint8`` is a per-pixel transfer function that masks nothing. On this config's
