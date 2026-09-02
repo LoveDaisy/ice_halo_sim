@@ -213,6 +213,10 @@ def _header_enum_map(prefix: str) -> dict[str, int]:
     The config spells a lens type and a visible range exactly as the lowercase of these suffixes
     (render_config.hpp's NLOHMANN_JSON_SERIALIZE_ENUM tables), so reading the header is what keeps
     this file from carrying a hand-written second copy of either enum.
+
+    Unlike `_header_struct_fields`, this has no "source tree absent" no-op: its caller needs the
+    actual enum values to compute the mask, not just a drift check to skip, so there is nothing
+    correct to return in that case -- this parity test requires the source tree to run.
     """
     text = _HEADER.read_text(encoding="utf-8")
     return {
