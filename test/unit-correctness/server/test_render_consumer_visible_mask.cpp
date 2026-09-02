@@ -324,5 +324,106 @@ TEST_P(VisibleIsADisplayClip, RawEnergyIsIdenticalUnderUpperAndFull) {
       << "). `visible` is a display clip: it must not decide whether a ray's energy reaches the buffer at all.";
 }
 
+
+// ==================================================================================================
+// METERING RULE (478.2, owner ruling 2026-09-02): `ev_mode: relative` anchors its P99 to the WHOLE
+// buffer — the full sky — and never to the subset `visible` leaves on screen.
+//
+// This is the CLI half of one rule shared with the GUI. The GUI's own auto-EV (ComputeEvAuto)
+// anchors to a full-sky texture, because the commit arm that feeds it pins `visible` to FULL
+// (gui/file_io.cpp's kSimCommit branch). Filtering the CLI's P99 by the visibility mask would give
+// the two paths two different metering rules — the exact class of core/GUI divergence this scrum
+// exists to remove.
+//
+// The consequence is deliberate and documented (doc/ev-pipeline-architecture.md §2.7): removing
+// the single-lens ray cull let the excluded hemisphere reach the buffer, which moves the P99 and
+// therefore the brightness of existing single-lens + `visible != full` scenes. That migration is
+// the honest price of this rule, not a defect — so the rule is pinned here rather than left to be
+// re-litigated by whoever next sees the brightness move.
+//
+// Shape of the pin: metering must not be a function of `visible`. Same rays, same buffer, two
+// values of `visible` -> ONE exposure scale. A mask-filtered P99 fails it, because the fixture
+// aims its BRIGHT ray at a pixel `upper` excludes.
+// ==================================================================================================
+
+// The mirror of FindPixelExcludedByVisibleRange: a pixel `upper` KEEPS. Needed so the fixture can
+// put energy on both sides of the clip — with energy only in the excluded region, a mask-filtered
+// P99 would see an empty sample and return 0, which is a degenerate difference rather than the
+// "different anchor" the rule is really about.
+ExcludedPixel FindPixelIncludedByVisibleRange(LensParam::LensType type) {
+  const RenderConfig upper_cfg = MakeFamilyCfg(type, RenderConfig::kUpper);
+  const auto short_pix = static_cast<float>(std::min(upper_cfg.resolution_[0], upper_cfg.resolution_[1]));
+  const Rotation rot = MakeCameraRotation(upper_cfg);
+  const lm_proj::ProjParams params = BuildProjParams(upper_cfg, rot, short_pix);
+  const auto upper_mask = BuildVisibleMask(upper_cfg, rot, short_pix);
+  const int width = upper_cfg.resolution_[0];
+  for (size_t i = 0; i < upper_mask.size(); ++i) {
+    if (upper_mask[i] == 0) {
+      continue;
+    }
+    const auto px = static_cast<int>(i % static_cast<size_t>(width));
+    const auto py = static_cast<int>(i / static_cast<size_t>(width));
+    const mask_detail::MaskDir dir = mask_detail::PixelToWorld(upper_cfg, params, rot, px, py);
+    if (!dir.valid) {
+      continue;
+    }
+    return { static_cast<int>(i), { dir.x, dir.y, dir.z }, true };
+  }
+  return { -1, { 0.0f, 0.0f, 0.0f }, false };
+}
+
+// The bright ray goes to the CLIPPED pixel, the dim one to a kept pixel. So a P99 taken over the
+// visible subset would be anchored ~kDimWeight/kBrightWeight of the way down and the scale would
+// come out ~10x larger — a difference no float tolerance can absorb.
+constexpr float kBrightWeight = 1.0f;
+constexpr float kDimWeight = 0.1f;
+
+TEST(RenderConsumerMeteringRule, RelativeExposureAnchorsToTheWholeBufferNotTheVisibleSubset) {
+  constexpr LensParam::LensType kType = LensParam::kFisheyeEqualArea;  // single-lens family: the one 478.2 changed
+  const ExcludedPixel clipped = FindPixelExcludedByVisibleRange(kType);
+  const ExcludedPixel kept = FindPixelIncludedByVisibleRange(kType);
+  ASSERT_TRUE(clipped.found) << "fixture found no pixel that `upper` clips";
+  ASSERT_TRUE(kept.found) << "fixture found no pixel that `upper` keeps";
+
+  SimData batch;
+  batch.curr_wl_ = 550.0f;
+  batch.outgoing_d_ = { clipped.dir[0], clipped.dir[1], clipped.dir[2], kept.dir[0], kept.dir[1], kept.dir[2] };
+  batch.outgoing_w_ = { kBrightWeight, kDimWeight };
+
+  const auto scale_of = [&](RenderConfig::VisibleRange visible, const SimData& rays) {
+    RenderConfig cfg = MakeFamilyCfg(kType, visible);
+    // kRelative is the default; spelled out so the fixture cannot drift onto the absolute anchor.
+    cfg.ev_mode_ = RenderConfig::kRelative;
+    RenderConsumer rc(cfg, ColorClassTable{});
+    SnapshotOnceWith(&rc, rays);
+    return rc.ExposureScale();
+  };
+
+  const float scale_upper = scale_of(RenderConfig::kUpper, batch);
+  const float scale_full = scale_of(RenderConfig::kFull, batch);
+
+  ASSERT_GT(scale_upper, 0.0f) << "a zero scale would make the equality below hold for the wrong reason";
+  EXPECT_FLOAT_EQ(scale_upper, scale_full)
+      << "`visible: upper` metered to " << scale_upper << " but `visible: full` metered to " << scale_full
+      << ". The relative-EV anchor must not be a function of `visible`: it takes the P99 of the WHOLE snapshot "
+         "buffer, and the display clip is applied afterwards, on the way to pixels. If this went red because the "
+         "P99 was made to respect the visibility mask, that re-opens a CLI/GUI metering divergence — the GUI "
+         "anchors to a full-sky texture (kSimCommit pins visible=FULL). See doc/ev-pipeline-architecture.md §2.7.";
+
+  // Negative control: the clipped pixel's energy really is IN the sample. Drop that ray and the
+  // anchor must move — otherwise the equality above would also hold for a P99 that never saw it.
+  SimData kept_only;
+  kept_only.curr_wl_ = 550.0f;
+  kept_only.outgoing_d_ = { kept.dir[0], kept.dir[1], kept.dir[2] };
+  kept_only.outgoing_w_ = { kDimWeight };
+  const float scale_kept_only = scale_of(RenderConfig::kUpper, kept_only);
+  ASSERT_GT(scale_kept_only, 0.0f) << "the dim ray landed nowhere, so this control says nothing";
+  EXPECT_GT(scale_kept_only / scale_upper, 1.5f)
+      << "removing the ray that lands in the CLIPPED region left the exposure anchor at " << scale_kept_only
+      << " against " << scale_upper
+      << " with it. The two must differ: if they do not, that ray never reached the P99 sample and the equality "
+         "asserted above is vacuous rather than evidence of full-sky metering.";
+}
+
 }  // namespace
 }  // namespace lumice
