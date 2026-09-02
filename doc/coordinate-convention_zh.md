@@ -171,6 +171,84 @@ view 方位与光源方位采用**同一**方位角约定但相互独立。`ligh
 
 §6 chain 重构不影响 `view.*` 字段的取值与语义。已有 config / `.lmc` 文件中 `view.*` 字段保持渲染同样的相机取景。
 
+### 9.6 等距柱状（`rectangular`）镜头：core 跟随姿态，GUI 刻意不跟随
+
+owner 裁定，2026-09-02。两侧回答的是**两个不同的问题**，因此**都是对的**；本节存在的目的是让
+下一位读者不必重推，也不要把其中一侧「修」成另一侧。
+
+**core 侧**：等距柱状图跟随**完整**相机姿态——方位角**和**俯仰**和**滚转——走的是其余每种镜头
+共用的同一个旋转。`BuildProjParams` 对**所有**镜头类型都用 `MakeCameraRotation(cfg)` 填
+`ProjParams::rot`，`ProjectExitToPixel` 的 `kProjRectangular` 分支从单镜头族同一个相机系向量出发：
+
+```
+c = R^T · (−w)              // ApplyRotTranspose，与 linear/fisheye/globe 逐字相同
+lon = atan2(−c.x, +c.z)     // RectangularForward(c.z, −c.x, −c.y)
+lat = asin(−c.y)
+```
+
+**轴的分配值得单写一句**，因为「跟随姿态」有多个置换都满足，只有这一个保住了下面那条退化：
+`+c.z` 是视轴，于是视轴落在图的正中；`−c.y` 是极轴——在 `Rz(−90°+roll)·Ry(90°−el)` 这半条链下，
+相机局部 `+y` 指向世界天底，取负才把天顶放到图的上方；`−c.x` 是剩下的正交轴，**它的符号正是让
+退化精确成立的那一位**。
+
+2026-09-02 之前 core 把相机旋转压成一个标量 `az0 = atan2((R·ẑ)_y, (R·ẑ)_x)` 再从经度里减掉。
+由于 `R·ẑ = (cos el·cos az, cos el·sin az, sin el)`，该标量恒等于 `az`——所以**改变俯仰或滚转
+会得到逐比特相同的一帧**，这正是本次改动要修的。`az0` 字段已从 `ProjParams` 移除，无人读取。
+
+**`el = roll = 0` 处的退化（为什么已发布的东西一张都没动）**：把 `el = 0, roll = 0` 代入
+`R = Rz(az)·Ry(90°−el)·Rz(−90°+roll)`：
+
+```
+R = [[ sin az, 0, cos az],
+     [−cos az, 0, sin az],
+     [      0, −1,     0]]
+```
+
+于是取 `g = −w`：
+
+```
+c.x =  sin az·g_x − cos az·g_y
+c.y = −g_z
+c.z =  cos az·g_x + sin az·g_y
+```
+
+记 `g_x = ρ·cos φ`，`g_y = ρ·sin φ`：
+
+```
+lon = atan2(−c.x, c.z) = atan2(ρ·sin(φ−az), ρ·cos(φ−az)) = φ − az
+lat = asin(−c.y)       = asin(g_z)
+```
+
+这与旧式**完全一致**（旧式 `RectangularForward(−w)` 给出 `lon₀ = atan2(g_y, g_x) = φ`、
+`lat₀ = asin(g_z)`，再 `lon = lon₀ − az0`，而 `az0 = az`）。逐点相等由
+`LmProj.RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm`
+（`test/golden-analytic/core/test_projection.cpp`）断言——它把旧公式**逐字抄进测试**，
+使这条等式在字段被删之后仍然可检验。
+
+**唯一的例外是两个极点** `g = ±ẑ`：那里两侧 `atan2` 的两个参数同时为零，经度按等距柱状图的
+本性就是任意的。旧式把极点放在 `−az` 列，新式放在视轴列；**行**（携带语义的那一半）不变。
+
+由这条退化直接得到两个推论，无需额外论证：所有已发布的 `rectangular` config 渲染结果不变
+（它们全都在 `el = roll = 0`）；GUI↔CLI 的导出对照也不需要新论证，因为 GUI 只会在零姿态下
+导出这个镜头（见下）。
+
+**GUI 侧**：预览保持一张**固定的全天纹理**，对它不做任何视图变换：`LensIsFullSky` 把
+`rectangular` 与四种 dual-fisheye 归为同一类，`preview_renderer.cpp` 对该类设
+`needs_view_transform = false`，而 `RenderPreviewPanel` **每一帧**都把该类的
+`elevation / azimuth / roll` 钉为零。这是**职责划分而非遗漏**——GUI 侧所有相机姿态变换都是前端
+的工作，在显示期通过重采样纹理完成；把姿态推进投影里等于做两遍。
+
+由于那条每帧规则是**唯一的执行点**（`.lmc` 加载器、CLI JSON 导入器、个人默认值覆盖三者都是纯
+转写，且四个 `renderer.*` 键全部是可作默认值的字段），它被从两个方向钉住：
+`view_display_controls/an_arriving_document_cannot_smuggle_a_full_sky_pose` 覆盖三条到达路径
+以及它们产出的导出 config，`view_display_controls/which_view_sliders_apply_depends_on_the_lens`
+覆盖控件路径。
+
+两侧的相互对照见
+`VisibleMaskGuiParity.RectangularFollowsTheFullCameraPoseAndTheGuiIsAFixedTexture` 与
+`AnnotationOverlayGuiParity.RectangularFollowsTheCameraPoseAndTheGuiDeliberatelyDoesNot`：
+零姿态下精确一致，方位角下差一个纯水平位移，俯仰/滚转下差异出现纵向分量。
+
 ## 10. 持久化兼容
 
 ### 10.1 语义变化字段（破坏性）

@@ -260,6 +260,103 @@ camera convention that is separate from the simulator camera in §9.1–9.5.
 These conventions are *internal* to the GUI preview pipeline; they do not
 affect serialization, simulation, or the export camera (§9.1–9.5).
 
+### 9.7 Equirectangular (`rectangular`) Lens: Core Follows the Pose, the GUI Does Not
+
+Owner decision, 2026-09-02. The two sides answer different questions about this
+lens and are *both* right; this section exists so the next reader does not have
+to re-derive that, and does not "fix" one of them into the other.
+
+**Core.** The equirectangular map follows the **full** camera pose — azimuth
+**and** elevation **and** roll — through the very same rotation every other lens
+consumes. `BuildProjParams` fills `ProjParams::rot` with
+`MakeCameraRotation(cfg)` for every lens type, and the `kProjRectangular` branch
+of `ProjectExitToPixel` starts from the same camera-frame vector the single-lens
+family uses:
+
+```
+c = R^T · (−w)              // ApplyRotTranspose, identical to linear/fisheye/globe
+lon = atan2(−c.x, +c.z)     // RectangularForward(c.z, −c.x, −c.y)
+lat = asin(−c.y)
+```
+
+The axis assignment is the part worth stating, because several permutations
+would satisfy "follows the pose" and only this one keeps the degeneracy below:
+`+c.z` is the optical axis, so the boresight lands at the centre of the map;
+`−c.y` is the polar axis, because the camera's local `+y` points at the world
+nadir under the `Rz(−90°+roll)·Ry(90°−el)` half of the chain; `−c.x` is the
+remaining quadrature axis, and its sign is what makes the degeneracy exact.
+
+Until 2026-09-02 core reduced the camera rotation to one scalar,
+`az0 = atan2((R·ẑ)_y, (R·ẑ)_x)`, and subtracted it from the longitude. Since
+`R·ẑ = (cos el·cos az, cos el·sin az, sin el)`, that scalar is identically `az`
+— so a tilted or rolled camera produced a **bit-identical frame**, which is what
+the change fixes. The `az0` field is gone from `ProjParams`; nothing reads it.
+
+**Degeneracy at `el = roll = 0` (why nothing that shipped moved).** Substituting
+`el = 0, roll = 0` into `R = Rz(az)·Ry(90°−el)·Rz(−90°+roll)` gives
+
+```
+R = [[ sin az, 0, cos az],
+     [−cos az, 0, sin az],
+     [      0, −1,     0]]
+```
+
+so with `g = −w`:
+
+```
+c.x =  sin az·g_x − cos az·g_y
+c.y = −g_z
+c.z =  cos az·g_x + sin az·g_y
+```
+
+Writing `g_x = ρ·cos φ`, `g_y = ρ·sin φ`:
+
+```
+lon = atan2(−c.x, c.z) = atan2(ρ·sin(φ−az), ρ·cos(φ−az)) = φ − az
+lat = asin(−c.y)       = asin(g_z)
+```
+
+which is *exactly* the old form (`RectangularForward(−w)` giving
+`lon₀ = atan2(g_y, g_x) = φ` and `lat₀ = asin(g_z)`, then `lon = lon₀ − az0`
+with `az0 = az`). The pointwise equality is asserted by
+`LmProj.RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm`
+(`test/golden-analytic/core/test_projection.cpp`), which carries the old formula
+verbatim so the identity survives the field's deletion.
+
+The **one** exception is the two poles, `g = ±ẑ`: there both `atan2` arguments
+vanish on both sides and the longitude is arbitrary by the nature of the map.
+The old form put the pole at column `−az`, the new one at the boresight column.
+The row — the half that carries meaning — is unchanged.
+
+Two consequences follow from the degeneracy rather than from any extra work:
+every shipped `rectangular` config renders identically (they all sit at
+`el = roll = 0`), and the GUI↔CLI export comparison needs no new argument, since
+the GUI only ever exports this lens at a zero pose (below).
+
+**GUI.** The preview keeps a **fixed all-sky texture** and applies no view
+transform to it at all: `LensIsFullSky` puts `rectangular` in the same class as
+the four dual-fisheye types, `preview_renderer.cpp` sets
+`needs_view_transform = false` for them, and `RenderPreviewPanel` pins
+`elevation / azimuth / roll` to zero for that class on **every frame**. This is
+the division of labour, not an omission — on the GUI side every camera-pose
+transform is the front end's job, applied at display time by resampling the
+texture, so pushing the pose into the projection would apply it twice.
+
+Because that per-frame rule is the single enforcement point (the `.lmc` loader,
+the CLI-JSON importer and the personal-defaults overlay are all plain
+transcripts, and all four `renderer.*` keys are default-eligible), it is pinned
+from both directions:
+`view_display_controls/an_arriving_document_cannot_smuggle_a_full_sky_pose`
+covers the three arrival paths and the exported config they produce, and
+`view_display_controls/which_view_sliders_apply_depends_on_the_lens` covers the
+widget path.
+
+The two sides are compared against each other in
+`VisibleMaskGuiParity.RectangularFollowsTheFullCameraPoseAndTheGuiIsAFixedTexture`
+and `AnnotationOverlayGuiParity.RectangularFollowsTheCameraPoseAndTheGuiDeliberatelyDoesNot`:
+they agree exactly at a zero pose, differ by a pure horizontal shift under an
+azimuth, and differ with a vertical component under elevation or roll.
+
 ## 10. Persistence Compatibility
 
 ### 10.1 Fields with Changed Semantics (Breaking)
