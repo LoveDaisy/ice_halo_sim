@@ -259,9 +259,9 @@ def _render_domain_mask(doc: dict) -> np.ndarray:
     lib.LUMICE_ReleaseAnnotationOverlay.restype = None
     lib.LUMICE_ReleaseAnnotationOverlay.argtypes = [ctypes.POINTER(_AnnotationOverlay)]
 
-    err = lib.LUMICE_ComputeAnnotationOverlay(ctypes.byref(request), ctypes.byref(overlay))
-    assert err == 0, f"LUMICE_ComputeAnnotationOverlay failed err={err}"
     try:
+        err = lib.LUMICE_ComputeAnnotationOverlay(ctypes.byref(request), ctypes.byref(overlay))
+        assert err == 0, f"LUMICE_ComputeAnnotationOverlay failed err={err}"
         assert (overlay.width, overlay.height) == (width, height), (
             f"overlay canvas {overlay.width}x{overlay.height} != config {width}x{height}"
         )

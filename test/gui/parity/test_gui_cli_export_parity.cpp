@@ -470,7 +470,7 @@ const ParityScene kScenes[] = {
   //
   // The new figure by this file's own two rules: mean 31.037 sigma 0.1098 (N=12 category runs on
   // an idle machine, the same N the THRESHOLDS note above calibrates at). 29.9 is mean - 1.14 dB
-  // = 10.4 sigma, 1.02 dB below the worst honest run, and 3.36 dB above the largest reading of
+  // = 10.4 sigma, 1.02 dB below the worst honest run, and 3.46 dB above the largest reading of
   // the break this row exists to catch (26.44 / 26.40 / 26.28, the relative-illumination factor
   // absent from the shader). 30.0 was the figure this recalibration was authorized at, computed
   // against an N=4 sigma of 0.096; at the sigma re-measured here it lands at 9.5 sigma, just
