@@ -330,3 +330,21 @@ Preset 与 Case 的对应关系：
 **实现**：屏幕 x 手性落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`，legacy CPU / Metal / CUDA 三端共享的单一真源）的单镜头分支，故所有后端继承同一约定。GUI 的独立 forward 实现（`preview_renderer.cpp::ProjectWorldDirToScreen`、`overlay_labels.cpp::WorldDirToPixel`）本就产出相同的 `右 = +az`。
 
 **回归守卫**：手性翻转对 forward/inverse 往返测试不可见（任何自洽约定下往返都恒闭合），故用**绝对屏幕左右符号**断言钉死：`test/golden-analytic/core/test_projection.cpp`（backend 绝对列 pin）+ `test/unit-correctness/gui/test_render_handedness_guard.cpp`（backend + 两条 GUI forward + 交互读回的跨实现对拍）。
+## 14. 像素中心约定（前向分箱 ↔ 掩码 ↔ shader）
+
+§13 固定的是「方向落在屏幕哪一侧」。本节固定它下面那个亚像素问题：**给定一个连续图像坐标，它是哪个像素？该像素的中心又在哪？** 这两半此前的答案相差恰好半个像素。
+
+**约定：像素 `px` 覆盖连续区间 `[px - res/2, px + 1 - res/2)`，其中心在 `px + 0.5 - res/2`。** 图像关于画面中心对称，可寻址区间为 `[-res/2, res/2)`。
+
+映射的两个方向都由这一句话推出，且各自只有一个 owner：
+
+- **正向**（天空方向 → 像素索引）：`px = floor(v + res/2)`，落在 `lm_proj::ProjectExitToPixel`（`src/core/shared/projection_shared.h`）每个分支末尾的分箱处。`LM_FLOOR` / `LM_FN` 使该头文件被三后端共同编译，故 legacy CPU / Metal / CUDA 不可能在这件事上分歧。
+- **反向**（像素索引 → 天空方向）：在 `px + 0.5 - res/2` 处取样，由渲染域掩码（`src/core/lens_proj_build.hpp` 的 `mask_detail::PixelToWorld` 及各族 helper）与 GUI 预览 shader 各自独立实现——后者的 `pos = v_ndc * u_resolution * 0.5` 就是同一条对称约定在 NDC 下的写法。
+
+两者精确复合：把像素中心代入正向得 `floor(px + 0.5) == px`（对任意整数 `px` 恒成立），⇒ 往返回到出发的那个像素，不留任何余量。
+
+**它取代了什么**：前向分箱此前是 `floor(v + res/2 + 0.5)`，可寻址区间成了 `[-res/2 - 0.5, res/2 - 0.5)`——不以画面中心对称，且与掩码 / shader 所设的约定差半个像素。它造成的后果全部是亚像素级、单独看没有一条像是错的，这正是它长期存活的原因：往返会滑一格；恰好落在成像圆边缘的方向可能一侧判进、另一侧判出；dual-fisheye 圆盘最外圈会被压成宽度只有正常像素千分之几的薄片。
+
+**消费这条约定时**：core 给出的是**像素索引**，不是连续坐标。任何要拿 core 的答案与连续位置比较的地方——GUI 的 forward、反投影、overlay 锚点——必须先换算，取该像素的**中心**（图像空间的 `index + 0.5`）。拿裸索引去比连续坐标，量到的是截断而不是投影；在旧的 `+0.5` 分箱下这个类别错误被藏住了，因为那时索引恰好是连续坐标的 *round*，残差是对称的半像素。
+
+**回归守卫**：`test/golden-analytic/core/test_visible_mask.cpp` 里两条对前向与掩码自带反向做**精确相等**往返的用例（`GlobeInverse.RoundTripsAgainstTheForwardGlobeBranch`、`RectangularInverse.RoundTripsAgainstTheForwardRectangularBranch`）。它们要求原样拿回出发像素、零容差——这正是半像素偏心一旦重现就会变红、而不会被某条容差静默吸收的原因。

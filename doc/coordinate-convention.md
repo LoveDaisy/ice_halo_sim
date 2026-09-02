@@ -492,3 +492,56 @@ convention), this convention is pinned with **absolute screen-side** assertions:
 and `test/unit-correctness/gui/test_render_handedness_guard.cpp` (cross-implementation
 check across backend + both GUI forwards + the interaction read-back). See
 scrum-321 (azimuth-handedness-alignment) for the audit and decision record.
+## 11. Pixel Centre Convention (Forward Binning ↔ Mask ↔ Shader)
+
+§10 fixes which *side* of the screen a direction lands on. This section fixes the
+sub-pixel question underneath it: given a continuous image coordinate, **which
+pixel is that, and where inside the pixel is its centre?** The two halves used to
+answer differently, by exactly half a pixel.
+
+**Convention: pixel `px` covers the continuous span `[px - res/2, px + 1 - res/2)`,
+and its centre is at `px + 0.5 - res/2`.** The image is symmetric about the frame
+centre, and the addressable span is `[-res/2, res/2)`.
+
+Both directions of the mapping follow from that one statement, and each is owned
+by exactly one place:
+
+- **Forward** (sky direction → pixel index): `px = floor(v + res/2)` — the binning
+  at the end of every branch of `lm_proj::ProjectExitToPixel`
+  (`src/core/shared/projection_shared.h`). `LM_FLOOR` / `LM_FN` make that header
+  compile into all three backends, so legacy CPU, Metal and CUDA cannot disagree
+  about it.
+- **Inverse** (pixel index → sky direction): sample at `px + 0.5 - res/2` — the
+  render-domain mask (`src/core/lens_proj_build.hpp`, `mask_detail::PixelToWorld`
+  and the per-family helpers) and, independently, the GUI preview shader, whose
+  `pos = v_ndc * u_resolution * 0.5` is the same symmetric convention expressed in
+  NDC.
+
+They compose exactly: substituting a pixel centre into the forward gives
+`floor(px + 0.5) == px` for every integer `px`, so a round trip returns the pixel
+it started from with no slack.
+
+**What this replaced.** Forward binning used to be `floor(v + res/2 + 0.5)`, which
+put its addressable span at `[-res/2 - 0.5, res/2 - 0.5)` — not symmetric about the
+frame centre, and half a pixel away from what the mask and the shader assumed. The
+visible consequences were all sub-pixel and none of them was wrong-looking on its
+own, which is why it survived so long: a round trip slid by a pixel; a direction on
+an image-circle rim could bin inside on one side and outside on the other; and the
+extreme rim of a dual-fisheye disc was squeezed into slivers a few thousandths of a
+pixel wide.
+
+**Consuming this convention.** Core answers a pixel INDEX, not a continuous
+coordinate. Anything that compares core's answer against a continuous position — a
+GUI forward, an un-projection, an overlay anchor — must convert first, by taking
+that pixel's centre (`index + 0.5` in image space). Comparing the bare index
+against a continuous coordinate measures the truncation rather than the projection;
+under the old `+ 0.5` binning that category error was hidden, because the index
+happened to be a *round* of the continuous coordinate and the residual was a
+symmetric half pixel.
+
+**Regression guard.** Exact-equality round trips over the forward and the mask's
+own inverse, in `test/golden-analytic/core/test_visible_mask.cpp`
+(`GlobeInverse.RoundTripsAgainstTheForwardGlobeBranch` and
+`RectangularInverse.RoundTripsAgainstTheForwardRectangularBranch`). They demand
+the recovered pixel back, with no tolerance, which is what makes any reappearance
+of a half-pixel offset a red rather than a slack absorbed silently.
