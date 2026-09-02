@@ -309,18 +309,31 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
   }
 
   if (t == kProjRectangular) {
-    // Rectangular: no per-ray rotation; camera azimuth pre-computed into az0.
-    ProjXY proj = RectangularForward(-wx, -wy, -wz);
-    float lon = proj.x - p.az0;
-    // Use CPU's canonical while-loop wrap for bit-exact parity with legacy
-    // (Metal side uses floor-based single-expression wrap; that path is 315.3's
-    // parity concern, not this task's — see plan.md risk 1).
-    while (lon < -LM_PI_F) {
-      lon += 2.0f * LM_PI_F;
-    }
-    while (lon > LM_PI_F) {
-      lon -= 2.0f * LM_PI_F;
-    }
+    // Rectangular follows the FULL camera pose (azimuth AND elevation AND roll), not just the
+    // azimuth it used to fold into a scalar `az0`. It consumes the same camera-frame vector the
+    // single-lens family does, c = R^T * (-w), and reads the map's two axes off it:
+    //   lon_ref  = +c.z — the optical axis, so the boresight sits at the centre of the map;
+    //   polar    = -c.y — the camera's local +y points at the world nadir under the
+    //                     (-90 + roll) / (90 - el) chain, so negating it puts the zenith on top;
+    //   lon_quad = -c.x — the quadrature axis, whose sign is what makes this construction
+    //                     POINTWISE identical to the azimuth-only form it replaces whenever
+    //                     el = roll = 0 (the pose every full-sky lens is pinned to on the GUI
+    //                     side). doc/coordinate-convention.md carries the derivation;
+    //                     LmProj.RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm
+    //                     is the assertion. Other permutations satisfy "follows the pose" but
+    //                     break that degeneracy, so this is not a free choice.
+    float cx = 0.0f;
+    float cy = 0.0f;
+    float cz = 0.0f;
+    ApplyRotTranspose(p.rot, -wx, -wy, -wz, &cx, &cy, &cz);
+    float lon_ref = cz;
+    float lon_quad = -cx;
+    float polar = -cy;
+    ProjXY proj = RectangularForward(lon_ref, lon_quad, polar);
+    // proj.x is atan2(lon_quad, lon_ref) and so already lies in [-pi, pi]. The legacy while-loop
+    // wrap that used to follow the `- az0` subtraction is therefore unreachable and is gone; the
+    // modulo below is a separate, still-live concern (lon = +pi bins one column past the canvas).
+    float lon = proj.x;
     int raw_x = static_cast<int>(LM_FLOOR(lon * p.scale + static_cast<float>(p.img_w) / 2.0f + 0.5f));
     int px = ((raw_x % p.img_w) + p.img_w) % p.img_w;
     int py = static_cast<int>(LM_FLOOR(-proj.y * p.scale + static_cast<float>(p.img_h) / 2.0f + 0.5f));

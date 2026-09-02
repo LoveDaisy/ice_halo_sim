@@ -1180,10 +1180,20 @@ TEST(LmProj, RectangularAtZeroElevationAndRollReproducesTheAzimuthOnlyForm) {
       // arithmetic (atan2 of rotated components vs a subtraction), so a sample sitting on a bin
       // edge may round either way. Anything larger is a real divergence. The column distance is
       // circular — the map wraps, so column 0 and column w-1 are neighbours.
+      EXPECT_LE(std::abs(got[1] - legacy[1]), 1) << lbl;
+      if (std::abs(d[2]) > 0.999f) {
+        // The two poles are the one place the equality does NOT hold, and it is a property of
+        // the equirectangular map rather than of either formula: longitude is atan2 of two
+        // components that both vanish there, so the column a pole lands in is arbitrary. The old
+        // form put it at `-az`, the new one at the boresight; both are one degenerate ray in one
+        // arbitrary column of the polar row. Asserted as a boundary rather than hidden by a
+        // widened tolerance — the row, which is the part that carries meaning, still matches
+        // above.
+        continue;
+      }
       int col_dist = std::abs(got[0] - legacy[0]);
       col_dist = std::min(col_dist, w - col_dist);
       EXPECT_LE(col_dist, 1) << lbl;
-      EXPECT_LE(std::abs(got[1] - legacy[1]), 1) << lbl;
     }
   }
 }
