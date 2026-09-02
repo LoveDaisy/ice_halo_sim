@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788311803283,
+  "lastUpdate": 1788311806335,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4794,54 +4794,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "5913d079de3656d3730020f9968d7047cfcdeb3f",
-          "message": "Merge pull request #194 from LoveDaisy/fix/gui-test-lifecycle-coroutine-gl\n\nfix(gui-test): guard optimistic_async_stop against no-GL-context coroutine upload",
-          "timestamp": "2026-07-14T18:56:18+08:00",
-          "tree_id": "c3f530adc1861772f9d4dbccfde72308aee3dc4c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5913d079de3656d3730020f9968d7047cfcdeb3f"
-        },
-        "date": 1784027018169,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 823376.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1175039.4,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 742694.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 661103.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "20112ea074c4336866f0877a7e8247f1f897c1f1",
           "message": "Merge pull request #195 from LoveDaisy/fix/gui-view-lens-no-resim\n\nfix(gui-state): view/lens/hemisphere changes must not trigger re-sim",
           "timestamp": "2026-07-15T00:23:26+08:00",
@@ -9554,6 +9506,54 @@ window.BENCHMARK_DATA = {
             "value": 610265.5,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc5de377009120dd26063703a16f31027aaffd62",
+          "message": "Merge pull request #293 from LoveDaisy/feat/test-time-and-scope-discipline\n\nfeat(ci/doc): 测试时间预算的 owner —— 实测拓扑、分片重装箱、分层契约",
+          "timestamp": "2026-09-02T09:04:32+08:00",
+          "tree_id": "cfe6beb5c25bbb4014f67bf142635e635a347f4e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fc5de377009120dd26063703a16f31027aaffd62"
+        },
+        "date": 1788311805928,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 1019010.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1161234.4,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 763810.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 641346.7,
+            "unit": "rays/sec",
+            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
           }
         ]
       }
