@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788369963245,
+  "lastUpdate": 1788369965413,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9560,50 +9560,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "2cbcffd86aaaf5817d43b9b2504d063d705d802c",
-          "message": "Merge pull request #199 from LoveDaisy/feat/painter-alpha-over\n\nfeat(painter-composite): painter 改亮度即 alpha 的 Porter-Duff over 合成 + 设默认",
-          "timestamp": "2026-07-15T15:15:11+08:00",
-          "tree_id": "8745cf535cc23d151ae929caa4af4ab41d872d10",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/2cbcffd86aaaf5817d43b9b2504d063d705d802c"
-        },
-        "date": 1784100158780,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 66.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.7,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95.4,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "e8f266452c9b204f5f067a0e9b7de29251e583e6",
           "message": "Merge pull request #200 from LoveDaisy/test/painter-default-e2e-coverage\n\ntest(painter-default-e2e): 补 painter 默认合成模式的 e2e 全链路覆盖",
           "timestamp": "2026-07-15T16:30:15+08:00",
@@ -13918,6 +13874,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 92.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dfe34bc13b012f367d913460738f8dc02a50faa0",
+          "message": "Merge pull request #298 from LoveDaisy/chore/gui-unit-heartbeat-wallclock-margin\n\ntest(gui-unit): 心跳用例改 wait-until，墙钟余量 250ms → 秒级",
+          "timestamp": "2026-09-03T01:12:40+08:00",
+          "tree_id": "1b9799920e428da55ee87172d76c0d6689c879f4",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/dfe34bc13b012f367d913460738f8dc02a50faa0"
+        },
+        "date": 1788369964890,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 79.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.4,
             "unit": "%"
           }
         ]
