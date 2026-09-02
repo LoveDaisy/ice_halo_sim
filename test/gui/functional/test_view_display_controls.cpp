@@ -37,11 +37,20 @@
 // "Screen too small" banner that no preset makes go away.
 
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <nlohmann/json.hpp>
+#include <set>
 #include <string>
+#include <vector>
 
 #include "gui/app.hpp"  // g_state / g_server / g_preview_vp / DoRun — the exposure-mode case
+#include "gui/defaults_diff.hpp"
+#include "gui/file_io.hpp"
 #include "gui/gui_state.hpp"
 #include "gui/mono_exposure_scale.hpp"
+#include "gui/user_defaults.hpp"
+#include "support/user_defaults_test_env.hpp"
 #include "test_gui_shared.hpp"
 
 namespace {
@@ -551,6 +560,107 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
           break;
         }
       }
+    };
+  }
+
+  // The same invariant as the case above, quantified over the three ways a document ARRIVES rather
+  // than over the ways it is edited. It matters separately because the loaders are transcripts:
+  // ParseRendererFromGuiJson (.lmc), DeserializeFromJson (CLI JSON import) and the personal-defaults
+  // overlay each write renderer.elevation/azimuth/roll straight out of the file with no full-sky
+  // rule of their own, and all four keys are default-eligible, so a hand-edited file really can put
+  // a full-sky lens and a non-zero pose into GuiState together.
+  //
+  // Enforcement is one place and one place only — the renderer-invariant block at the top of
+  // RenderPreviewPanel, which runs every frame — so what this asserts is that the block covers the
+  // arrival paths and not just the widgets. The second half of each check is the part that says why
+  // anyone should care: the exported CLI config, the one artifact whose pose changes what core
+  // renders, must come out zeroed too. Since core's rectangular projection follows the full camera
+  // pose (2026-09-02), an export that carried elevation 20 here would render a tilted all-sky map
+  // that the preview never showed.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "an_arriving_document_cannot_smuggle_a_full_sky_pose");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+
+      // The document every installer below carries.
+      gui::GuiState doctored = gui::InitDefaultState();
+      doctored.renderer.lens_type = gui::kLensTypeRectangular;
+      doctored.renderer.elevation = 20.0f;
+      doctored.renderer.azimuth = 35.0f;
+      doctored.renderer.roll = -15.0f;
+
+      // Post-arrival check, shared by the three installers: one frame, then the pose is gone from
+      // the state AND from what the state would export.
+      auto settled_pose_is_zero = [](ImGuiTestContext* c, const char* via) {
+        c->Yield(3);
+        const auto& r = gui::g_state.renderer;
+        if (r.elevation != 0.0f || r.azimuth != 0.0f || r.roll != 0.0f) {
+          IM_ERRORF("%s: the arriving pose survived (el=%f az=%f ro=%f)", via, static_cast<double>(r.elevation),
+                    static_cast<double>(r.azimuth), static_cast<double>(r.roll));
+          return;
+        }
+        if (!gui::LensIsFullSky(r.lens_type)) {
+          IM_ERRORF("%s: the lens did not arrive; the pose check above proves nothing", via);
+          return;
+        }
+        std::string exported;
+        if (!gui::BuildExportJsonOrWarn(gui::g_state, &exported, nullptr)) {
+          IM_ERRORF("%s: the exported config could not be built", via);
+          return;
+        }
+        const nlohmann::json doc = nlohmann::json::parse(exported, nullptr, false);
+        if (doc.is_discarded() || !doc.contains("render") || !doc["render"].is_array() || doc["render"].empty()) {
+          IM_ERRORF("%s: the exported config has no render block to read", via);
+          return;
+        }
+        const nlohmann::json view = doc["render"][0].value("view", nlohmann::json::object());
+        if (view.value("elevation", 0.0) != 0.0 || view.value("azimuth", 0.0) != 0.0 ||
+            view.value("roll", 0.0) != 0.0) {
+          IM_ERRORF("%s: the exported config carries a full-sky pose: %s", via, view.dump().c_str());
+        }
+      };
+
+      // 1. .lmc — the GUI's own document format.
+      {
+        const std::string path = GuiTestTempPath("full_sky_pose.lmc").string();
+        IM_CHECK(gui::SaveLmcFile(path, doctored, gui::g_preview, /*save_texture=*/false));
+        gui::DoOpen(path);
+        settled_pose_is_zero(ctx, ".lmc load");
+        std::remove(path.c_str());
+      }
+
+      // 2. CLI JSON import. The vehicle is the export arm itself: it transcribes the pose, which is
+      // exactly what makes a config written by an older build (or by hand) able to carry one back in.
+      if (!ctx->IsError()) {
+        ResetTestState();
+        std::string json;
+        IM_CHECK(gui::BuildExportJsonOrWarn(doctored, &json, nullptr));
+        const std::string path = GuiTestTempPath("full_sky_pose.json").string();
+        IM_CHECK(gui::ExportConfigJson(path, json));
+        gui::DoOpen(path);
+        settled_pose_is_zero(ctx, "CLI JSON import");
+        std::remove(path.c_str());
+      }
+
+      // 3. Personal defaults. Not reachable through the settings panel — it greys these rows under a
+      // full-sky lens — but the override file is user-editable JSON, and MakeNewDocumentState applies
+      // whatever it finds. This is the path field_editor_registry.hpp's argument leans on.
+      if (!ctx->IsError()) {
+        ResetTestState();
+        const std::filesystem::path dir = lumice::test_user_defaults::FreshOverlayDir("full_sky_pose");
+        nlohmann::json overlay = nlohmann::json::object();
+        const std::vector<gui::DefaultDiffRow> rows = gui::BuildDefaultDiffRows(doctored, overlay);
+        IM_CHECK(gui::ApplyCheckedRowsToDoc(
+            overlay, rows, { "renderer.lens_type", "renderer.elevation", "renderer.azimuth", "renderer.roll" },
+            doctored));
+        IM_CHECK(gui::WriteUserDefaultsFile(dir, overlay));
+        gui::g_state = gui::MakeNewDocumentState(dir);
+        settled_pose_is_zero(ctx, "personal defaults");
+        lumice::test_user_defaults::ResetUserDefaultsChannels();
+      }
+
+      ResetTestState();
     };
   }
 
