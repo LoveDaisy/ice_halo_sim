@@ -35,12 +35,17 @@
 //      display dual-fisheye is fixed at 180 deg per hemisphere and ignores it. Held at overlap = 0
 //      throughout, for the same reason test_visible_mask_gui_parity.cpp holds it there.
 //
-// PIXEL CONVENTIONS. Core answers in image space (x right, y down, origin top-left) and bins with
-// floor(v + 0.5), i.e. it rounds the continuous coordinate. The GUI answers as a continuous offset
-// from the viewport centre, y up. ToImageSpace() below converts, and the tolerance is
-// kPixelTol = 1.0, which covers core's half-pixel rounding with room for float noise; it is NOT a
-// slack that would hide a projection difference, since every divergence in the list above is
-// hemisphere-scale, not sub-pixel.
+// PIXEL CONVENTIONS. Core answers a PIXEL INDEX in image space (x right, y down, origin top-left),
+// binning with floor(v) about res/2; the GUI answers a CONTINUOUS offset from the viewport centre,
+// y up. The two are not the same kind of number, so the comparison converts core's index to the
+// continuous coordinate it stands for — the centre of that pixel, index + 0.5 — before measuring
+// any distance. Comparing the bare index against a continuous coordinate would measure the
+// truncation, not the projections: the residual would run to a full pixel with a systematic sign,
+// and it did until 2026-09-02, when forward binning still carried an extra + 0.5 that made the
+// index a ROUND of the continuous coordinate and hid the category error behind a symmetric +-0.5.
+// With the centres compared, what is left is one quantisation step, and kPixelTol = 1.0 covers it
+// with room for float noise; it is NOT a slack that would hide a projection difference, since
+// every divergence in the list above is hemisphere-scale, not sub-pixel.
 
 #include <gtest/gtest.h>
 
@@ -179,12 +184,11 @@ CanvasHit ToCanvasHit(const ann::ViewSnapshot& view, float px, float py, bool va
 }
 
 // The half-pixel band along the canvas edge where "inside or outside" is not decidable at this
-// resolution. Core bins with floor(v + 0.5) about res/2 — half a pixel off the symmetric centre
-// convention the GUI uses (the asymmetry is stated in lens_proj_build.hpp's own header comment),
-// so a direction landing exactly on the image-circle rim or a frame corner can round in on one
-// side and out on the other. That is a binning artefact, not a projection difference, and a
-// comparison whose unit is one pixel cannot resolve it. Samples in the band are counted and
-// reported rather than silently dropped, and the caller asserts the band stays a rim.
+// resolution. Core answers a whole pixel while the GUI answers a continuous coordinate, so a
+// direction landing exactly on the image-circle rim or a frame corner can quantise in on one side
+// and out on the other. That is a binning artefact, not a projection difference, and a comparison
+// whose unit is one pixel cannot resolve it. Samples in the band are counted and reported rather
+// than silently dropped, and the caller asserts the band stays a rim.
 bool NearCanvasBorder(const ann::ViewSnapshot& view, float px, float py) {
   const float w = static_cast<float>(view.width);
   const float h = static_cast<float>(view.height);
@@ -215,7 +219,9 @@ ProjDiff SweepDirections(const ann::ViewSnapshot& view, float alt_lo, float alt_
       DirFromAltAz(alt, az, w);
       const ann::CanvasPoint c = ann::ProjectWorldDir(p, w[0], w[1], w[2]);
       const GuiPoint g = GuiForward(view, view_matrix, w[0], w[1], w[2]);
-      const CanvasHit ch = ToCanvasHit(view, c.px, c.py, c.valid);
+      // + 0.5: core's answer is a pixel INDEX, and the continuous coordinate it stands for is that
+      // pixel's centre. See the PIXEL CONVENTIONS note at the top of this file.
+      const CanvasHit ch = ToCanvasHit(view, c.px + 0.5f, c.py + 0.5f, c.valid);
       const CanvasHit gh = ToCanvasHit(view, g.px, g.py, g.valid);
       std::ostringstream where;
       where << "alt=" << alt << " az=" << az;

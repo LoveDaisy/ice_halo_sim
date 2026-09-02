@@ -233,13 +233,21 @@ TEST(OverlayLabels, FrontModeLabelsOnlyTheHemisphereItDrawsAndStillLabelsItsEdge
 
   // Un-project one anchor. The labels arrive in viewport pixels with a top-left origin; the
   // un-projection works in centre-origin, y-up coordinates.
+  //
+  // The + 0.5 is what makes "which sky is this label over" a well-posed question. A label anchor is
+  // a whole PIXEL, produced by core's forward binning (floor(v) about res/2), and the direction it
+  // stands for is the one at that pixel's CENTRE — un-project the bare index and the recovered
+  // direction is up to a whole pixel off, always toward the same side, which is exactly the kind of
+  // systematic slide that puts a seam label on the wrong hemisphere. Before 2026-09-02 forward
+  // binning carried an extra + 0.5, so the bare index happened to be a ROUND of the continuous
+  // coordinate and the error was a symmetric half pixel that stayed inside kFrontEps.
   auto anchor_wx = [&](const gui::OverlayLabel& l, float vp_w, float vp_h, int lens, float fov) {
     float wx = 0.0f;
     float wy = 0.0f;
     float wz = 0.0f;
     bool valid = false;
-    gui::detail::PixelToWorldDirForTesting(l.screen_x - vp_w * 0.5f, vp_h * 0.5f - l.screen_y, vp_w, vp_h, lens, fov,
-                                           view, &wx, &wy, &wz, &valid);
+    gui::detail::PixelToWorldDirForTesting(l.screen_x + 0.5f - vp_w * 0.5f, vp_h * 0.5f - (l.screen_y + 0.5f), vp_w,
+                                           vp_h, lens, fov, view, &wx, &wy, &wz, &valid);
     return valid ? wx : 0.0f;
   };
 
