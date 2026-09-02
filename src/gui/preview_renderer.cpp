@@ -131,12 +131,16 @@ const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
 // site — the halves are not independently meaningful.
 //
 // CPU equivalents: lumice::XyzToSrgbUint8(..., background) in src/util/color_space.hpp composes
-// the same two halves around the same seam — that is the one the .lmc bake reaches through
-// LUMICE_XyzToSrgbUint8WithBackground — and so does RenderConsumer::PostSnapshot's use_real_color
-// branch (src/server/render.cpp). Three implementations of one chain: one has to be GLSL, and the
-// other two are separate because the render loop writes bytes as it composites while the batch
-// converter is handed a finished buffer. Nothing enforces that they agree; the pixel comparison in
-// test/gui/functional/test_preview_background.cpp is what holds this one to the CPU one.
+// the same two halves around the same seam, and so does RenderConsumer::PostSnapshot's
+// use_real_color branch (src/server/render.cpp). Three implementations of one chain: one has to be
+// GLSL, and the other two are separate because the render loop writes bytes as it composites while
+// the batch converter is handed a finished buffer. Nothing enforces that they agree; the pixel
+// comparison in test/gui/functional/test_preview_background.cpp is what holds this one to the CPU
+// one.
+//
+// The .lmc bake is NOT one of them any more: it reaches the background-free overload, because the
+// sky is a setting rather than part of the stored picture and joins right here instead. See
+// app.cpp's RefreshCpuTextureForSave and PreviewRenderer::TextureMode.
 
 // Gamut clip + XYZ->RGB matrix. NOT clamped and NOT gamma-encoded: the background composites here.
 vec3 xyzToLinearRgb(vec3 xyz) {
