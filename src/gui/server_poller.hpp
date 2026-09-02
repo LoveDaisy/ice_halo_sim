@@ -61,8 +61,10 @@ struct TexturePayload {
   // ONLY when raypath_color is active on this snapshot. Like xyz_buffer it is a view — only
   // assign it together with `frame`. is_composite tells the main-thread upload path which
   // GL texture format + shader mode to use:
-  //   is_composite == true  → UploadTexture(rgb_buffer, W, H) + u_xyz_mode=0
-  //   is_composite == false → UploadXyzTexture(xyz_buffer, W, H) + u_xyz_mode=1 (unchanged)
+  //   is_composite == true  → UploadRadianceTexture(rgb_buffer, W, H)  (TextureMode::kSrgbRadiance)
+  //   is_composite == false → UploadXyzTexture(xyz_buffer, W, H)       (TextureMode::kXyz, unchanged)
+  // Both get the target lens's relative illumination and the sky colour from the shader, so
+  // toggling the composite preview changes which rays are shown and nothing else.
   // xyz_buffer / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
   // (auto-EV + quality gate are not touched by this change), even when is_composite
   // is true — see plan §3 keypoint 3.

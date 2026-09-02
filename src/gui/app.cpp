@@ -306,22 +306,21 @@ static void RefreshCpuTextureForSave() {
   ev_in.total_pixels = w * h;
   const lumice::gui::MonoExposure ev = lumice::gui::ComputeMonoExposure(g_state.renderer.ev_mode, ev_in);
 
-  // Convert XYZ→sRGB on CPU using the same algorithm as the shader, background included: this
-  // buffer is what SaveLmcFile bakes into the document, so if it skipped the background the saved
-  // picture would differ from the one on screen in exactly the way this whole path exists to
-  // prevent. The conversion wants LINEAR RGB (the addition happens before the transfer curve)
-  // while GuiState holds the picker's sRGB, hence the conversion first.
+  // Convert XYZ→sRGB on CPU using the same exposure the shader is showing, and WITHOUT the sky
+  // colour. The background is a setting, not part of the picture: it is stored in the document's
+  // JSON (SerializeRendererForGui's "background") and re-added by the preview shader at display
+  // time, for a reopened document exactly as for a live one. Summing it in here instead is what
+  // used to make the two differ — a composited texel cannot afterwards receive the target lens's
+  // relative illumination, because scaling it would dim the sky too. See
+  // PreviewRenderer::TextureMode and doc/ev-pipeline-architecture.md §7.5.
   //
   // Unconditional, with no visibility gate: this buffer is not a view of the sky, it is the
   // fixed full-sky dual-fisheye SOURCE the preview re-projects. The gate the shader applies
   // (result.w >= 0.5 && pixel_visible) is a screen-space property of the current lens / fov /
   // orientation, which this buffer has none of — every legal world direction lands inside one of
   // its two discs, and the packing's corner padding is never sampled back out.
-  float background_linear[3];
-  lumice::SrgbToLinearRgb(g_state.renderer.background, background_linear);
   std::vector<unsigned char> srgb(static_cast<size_t>(w) * h * 3);
-  LUMICE_XyzToSrgbUint8WithBackground(xyz_results[0].xyz_buffer, srgb.data(), w * h, ev.intensity_scale,
-                                      background_linear);
+  LUMICE_XyzToSrgbUint8(xyz_results[0].xyz_buffer, srgb.data(), w * h, ev.intensity_scale);
 
   g_preview.UpdateCpuTextureData(srgb.data(), w, h);
 }
@@ -646,7 +645,14 @@ void ResetFrontendState(GuiState& state, FrontendResetReason reason, const Front
       g_preview.ClearBackground();
       break;
     case FrontendResetReason::kOpenBaked:
-      g_preview.UploadTexture(baked->data, baked->width, baked->height);
+      // Which upload entry point is decided by the file, not by this owner: a v>=4 .lmc carries
+      // radiance-only pixels the shader still owes the vignetting and the sky, a pre-v4 one has
+      // the sky already summed in and can only be shown as it is.
+      if (baked->radiance_only) {
+        g_preview.UploadRadianceTexture(baked->data, baked->width, baked->height);
+      } else {
+        g_preview.UploadTexture(baked->data, baked->width, baked->height);
+      }
       g_preview.ClearBackground();
       break;
     case FrontendResetReason::kRevert:
@@ -756,14 +762,15 @@ void DoOpen(const std::filesystem::path& path) {
   // can leave a count behind that belongs to no load at all.
   TakeShapeDistDowngradeCount();
   TakeFilterNoPredicateDowngradeCount();
-  if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h)) {
+  bool tex_radiance_only = false;
+  if (LoadLmcFile(path, g_state, tex_data, tex_w, tex_h, tex_radiance_only)) {
     // Data restore + command-semantic fields (path/dirty/run_intent stay in handler).
     g_state.current_file_path = path;
     g_state.dirty = false;
     if (!tex_data.empty()) {
       // Intent: a baked static result (→ kDone via ReconcileSimState, no server run).
       g_state.run_intent = RunIntent::kLoaded;
-      FrontendTexturePayload payload{ tex_data.data(), tex_w, tex_h };
+      FrontendTexturePayload payload{ tex_data.data(), tex_w, tex_h, tex_radiance_only };
       ResetFrontendState(g_state, FrontendResetReason::kOpenBaked, &payload);
     } else {
       // Intent: no result to show (→ kIdle). Mirrors DoNew() / JSON-import
@@ -1653,7 +1660,11 @@ void SyncFromPoller() {
     // Both buffers are views into the result frame the payload holds, so `payload` staying alive
     // for this whole block is what keeps them readable.
     if (effective_composite) {
-      g_preview.UploadTexture(payload->rgb_buffer, payload->width, payload->height);
+      // Radiance-only: the composite bake carries no background (the GUI pushes none), so the
+      // shader adds the sky and the lens's relative illumination here, the same way it does for
+      // the mono XYZ branch beside it. Toggling the composite preview therefore changes which
+      // rays are shown, and nothing about how the picture is exposed or vignetted.
+      g_preview.UploadRadianceTexture(payload->rgb_buffer, payload->width, payload->height);
     } else {
       g_preview.UploadXyzTexture(payload->xyz_buffer, payload->width, payload->height);
     }

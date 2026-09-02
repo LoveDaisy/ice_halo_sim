@@ -47,6 +47,8 @@ namespace {
 // changes, kLmcVersion is bumped in the same edit (file_io.cpp calls that bump mandatory) and
 // these three constants have to follow — otherwise the corruptions below land on the wrong bytes
 // and these cases quietly stop testing what they name.
+constexpr size_t kVersionField = 4;
+constexpr size_t kFlagsField = 8;
 constexpr size_t kJsonOffsetField = 12;
 constexpr size_t kJsonSizeField = 20;
 constexpr size_t kTexOffsetField = 28;
@@ -140,6 +142,16 @@ void WriteU64Field(std::vector<unsigned char>& bytes, size_t offset, uint64_t va
   std::memcpy(bytes.data() + offset, &value, sizeof(value));
 }
 
+uint32_t ReadU32Field(const std::vector<unsigned char>& bytes, size_t offset) {
+  uint32_t v = 0;
+  std::memcpy(&v, bytes.data() + offset, sizeof(v));
+  return v;
+}
+
+void WriteU32Field(std::vector<unsigned char>& bytes, size_t offset, uint32_t value) {
+  std::memcpy(bytes.data() + offset, &value, sizeof(value));
+}
+
 // Produce a real, valid .lmc through the production writer rather than hand-assembling a header.
 // The corruptions below then edit one field of a file that the shipping code wrote, so a change to
 // the writer cannot leave these cases testing a format the loader no longer reads.
@@ -167,8 +179,9 @@ void ExpectLoadFailsAndDocumentUnchanged(const std::filesystem::path& path, cons
   std::vector<unsigned char> tex_data;
   int tex_w = 0;
   int tex_h = 0;
+  bool tex_radiance_only = false;
 
-  EXPECT_FALSE(LoadLmcFile(path, current, tex_data, tex_w, tex_h))
+  EXPECT_FALSE(LoadLmcFile(path, current, tex_data, tex_w, tex_h, tex_radiance_only))
       << "premise broken: this file was supposed to be unloadable, so the corruption did not take";
 
   EXPECT_EQ(current.current_file_path, SentinelDocument().current_file_path)
@@ -288,7 +301,8 @@ TEST(LmcLoadAtomicityChain, SuccessfulLoadWithTextureFullyReplacesTheDocument) {
   std::vector<unsigned char> tex_data;
   int tex_w = 0;
   int tex_h = 0;
-  ASSERT_TRUE(LoadLmcFile(f.path, current, tex_data, tex_w, tex_h));
+  bool tex_radiance_only = false;
+  ASSERT_TRUE(LoadLmcFile(f.path, current, tex_data, tex_w, tex_h, tex_radiance_only));
 
   ASSERT_EQ(current.crystals.size(), 1u);
   EXPECT_FLOAT_EQ(current.crystals[0].height.center, 2.5f) << "the file's document did not land";
@@ -309,7 +323,8 @@ TEST(LmcLoadAtomicityChain, SuccessfulLoadWithoutTextureFullyReplacesTheDocument
   std::vector<unsigned char> tex_data;
   int tex_w = 0;
   int tex_h = 0;
-  ASSERT_TRUE(LoadLmcFile(f.path, current, tex_data, tex_w, tex_h));
+  bool tex_radiance_only = false;
+  ASSERT_TRUE(LoadLmcFile(f.path, current, tex_data, tex_w, tex_h, tex_radiance_only));
 
   ASSERT_EQ(current.crystals.size(), 1u);
   EXPECT_FLOAT_EQ(current.crystals[0].height.center, 2.5f) << "the file's document did not land";
@@ -317,6 +332,51 @@ TEST(LmcLoadAtomicityChain, SuccessfulLoadWithoutTextureFullyReplacesTheDocument
   EXPECT_TRUE(current.current_file_path.empty()) << "the sentinel's path survived a successful load";
   EXPECT_FALSE(current.dirty) << "the sentinel's dirty flag survived a successful load";
   EXPECT_TRUE(tex_data.empty());
+}
+
+// The header field that says what the texture section MEANS, and the one pre-v4 answer that is
+// still reachable.
+//
+// Why this proposition lives in the atomicity file rather than beside the JSON round trips: it is
+// a claim about the BINARY container, and the header-offset constants and the byte-level edit
+// helpers that make a claim like it checkable exist only here.
+//
+// What breaks without it. From v=4 the texture is the halo's radiance alone and the preview shader
+// adds the lens's relative illumination and the sky at display time; up to v=3 the sky was summed
+// into every texel by the writer and the shader can only draw those bytes as they are (subtracting
+// it back out is not invertible where the bake clipped). One bit in the header separates the two,
+// and reading it wrong paints the sky twice or not at all — a wrong PICTURE, with no error
+// anywhere. The pre-v4 half is a path no writer produces any more, so nothing else exercises it.
+TEST(LmcLoadAtomicityChain, TheHeaderSaysWhetherTheTextureCarriesTheSkyAndAPreV4FileSaysItDoes) {
+  TempFile f{ TempPath("lumice_lmc_texture_semantics.lmc") };
+  ASSERT_TRUE(WriteValidLmc(f.path, /*with_texture=*/true));
+
+  GuiState state = SentinelDocument();
+  std::vector<unsigned char> tex_data;
+  int tex_w = 0;
+  int tex_h = 0;
+  bool tex_radiance_only = false;
+
+  ASSERT_TRUE(LoadLmcFile(f.path, state, tex_data, tex_w, tex_h, tex_radiance_only));
+  EXPECT_TRUE(tex_radiance_only) << "a file the shipping writer just produced must declare its texture radiance-only";
+
+  // Now the same file as a pre-v4 writer would have left it: version 3, and the flag bit absent.
+  // Both edits together, because either alone describes a file that never existed.
+  std::vector<unsigned char> bytes = ReadAllBytes(f.path);
+  ASSERT_GE(bytes.size(), static_cast<size_t>(44));
+  const uint32_t flags = ReadU32Field(bytes, kFlagsField);
+  ASSERT_NE(flags & 0x2u, 0u) << "premise broken: the writer did not set the radiance-only flag, so clearing it "
+                                 "below tests nothing";
+  WriteU32Field(bytes, kVersionField, 3);
+  WriteU32Field(bytes, kFlagsField, flags & ~0x2u);
+  ASSERT_TRUE(WriteAllBytes(f.path, bytes));
+
+  GuiState legacy_state = SentinelDocument();
+  tex_data.clear();
+  tex_radiance_only = true;  // set to the WRONG value first, so a loader that never writes it fails
+  ASSERT_TRUE(LoadLmcFile(f.path, legacy_state, tex_data, tex_w, tex_h, tex_radiance_only));
+  EXPECT_FALSE(tex_radiance_only) << "a pre-v4 file's texture has the sky baked in and must not be re-lit";
+  EXPECT_EQ(tex_data, TexturePixels()) << "the pixels themselves are unchanged by the semantics flag";
 }
 
 }  // namespace

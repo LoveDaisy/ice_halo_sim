@@ -808,13 +808,39 @@ image is captured in — on the way. `test/unit-correctness/gui/test_preview_jac
 both halves of this: unity on axis for every lens and FOV, and a corner that darkens monotonically
 as the FOV widens.
 
-**Known boundary, stated rather than left to be discovered.** The factor is applied only in XYZ
-mode. A document loaded from a `.lmc` renders from an 8-bit texture that
-`LUMICE_XyzToSrgbUint8WithBackground` has already composited the sky colour into, and vignetting
-that would dim the **background** too — which neither the CLI nor the live path does, the sky
-joining after the exposure. The composite cannot be undone from the shader, so a loaded `.lmc` shows
-a non-equal-area projection without its vignetting. Equal-area projections are unaffected either
-way: their factor is exactly 1.
+**Every texture the preview shows gets the factor, and one obsolete file format does not.** This
+paragraph used to record the opposite as a permanent boundary: the factor was applied only in XYZ
+mode, so a document loaded from a `.lmc` — an 8-bit texture that
+`LUMICE_XyzToSrgbUint8WithBackground` had already composited the sky colour into — rendered a
+non-equal-area projection without its vignetting. That was a real mechanism and the wrong endpoint.
+Vignetting is a property of the **target lens at display time**, not of the stored picture, so the
+frontend owes it to a reopened document exactly as to a live one; what actually blocked that was the
+sky being summed into the stored texels, and the fix is to stop summing it, not to try to subtract
+it back out (subtraction is not invertible where the bake clipped).
+
+So the sky colour is stored where it belongs — as a **setting**, in the document's JSON — and the
+bake carries the halo's radiance alone. `PreviewRenderer::TextureMode` names the three source
+semantics: `kXyz` (live float radiance), `kSrgbRadiance` (8-bit radiance-only: a `.lmc` from
+format v4 on, and the raypath-colour composite the server bakes), and `kSrgbComposited` (the
+1×1 blank, and a pre-v4 `.lmc` whose sky is summed in and can only be drawn as it is). The first two
+take the same tail — relative illumination, then the sky, then the transfer curve — which is what
+makes save-then-reopen render the picture that was on screen; `test/gui/visual/test_preview_pixels.cpp`'s
+`save_open_visual_consistency` is the pixel measurement of that claim, and it moved from 19.9 dB to
+38.6 dB when the two paths were unified. Equal-area projections were never affected either way:
+their factor is exactly 1.
+
+Two consequences worth naming. The raypath-colour composite is covered by the same change and had
+the same defect on a **live** path — toggling the composite preview on a non-equal-area lens used to
+make the vignetting appear and disappear with it — so the GUI no longer pushes a background into the
+server-side composite bake (`LUMICE_SetCompositeBackground` remains for non-GUI consumers; its
+all-zero default is an algebraic no-op). And a pre-v4 `.lmc` still shows no vignetting, which is not
+a residual defect but the only honest reading of pixels whose sky cannot be separated back out.
+
+The 8-bit branch's own contract — that a composited texture is drawn exactly as it is, while the XYZ
+branch beside it applies the factor — stays pinned by
+`test/gui/functional/test_preview_background.cpp`'s
+`the_baked_document_lacks_the_projection_vignetting`, which is what keeps `kSrgbComposited` from
+quietly drifting into re-lighting pixels it cannot re-light.
 
 
 ---

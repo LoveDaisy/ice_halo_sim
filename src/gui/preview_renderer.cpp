@@ -36,7 +36,7 @@ uniform mat3 u_view_matrix;  // view-to-world rotation (inverse view)
 uniform int u_visible;       // 0=upper, 1=lower, 2=full
 uniform int u_front;         // 1=discard back hemisphere
 uniform float u_intensity_scale;  // = intensity_factor / per_pixel_intensity (0 = RGB mode)
-uniform int u_xyz_mode;           // 1 = XYZ float texture, 0 = sRGB uint8 texture
+uniform int u_tex_mode;           // kTexModeSrgbComposited / kTexModeXyz / kTexModeSrgbRadiance
 uniform vec3 u_background;        // sky colour, LINEAR RGB (see PreviewParams::background_color_linear)
 uniform sampler2D u_bg_texture;
 uniform float u_max_abs_dz;      // overlap zone |sky.z| threshold (0 = no blend)
@@ -96,6 +96,23 @@ uniform float u_lens_border_alpha;
 
 const float PI = 3.14159265358979323846;
 
+// Source-texture semantics. Mirrors PreviewRenderer::TextureMode (preview_renderer.hpp) — the two
+// enumerations are one contract and their values must stay in step.
+//
+//   kTexModeSrgbComposited  8-bit sRGB texels that ALREADY carry the sky colour, drawn as they are.
+//                           Two producers: ClearTexture()'s 1x1 black pixel, and a .lmc written
+//                           before the format carried radiance-only textures (v <= 3). Neither can
+//                           be corrected here: the sky is summed into the texel and un-summing it
+//                           is not invertible where the bake clipped.
+//   kTexModeXyz             float XYZ radiance from the live simulation.
+//   kTexModeSrgbRadiance    8-bit sRGB texels carrying the halo's radiance ALONE, exposure already
+//                           applied, no sky. Everything a display still owes the picture — the
+//                           lens's relative illumination, then the sky — is applied below, by the
+//                           same two steps and in the same order as the XYZ branch.
+const int kTexModeSrgbComposited = 0;
+const int kTexModeXyz = 1;
+const int kTexModeSrgbRadiance = 2;
+
 // Algorithm synced with CPU: src/util/color_space.hpp (GamutClipXyz + XyzToLinearRgb + LinearToSrgb)
 // Matrix values from src/util/color_data.hpp kXyzToRgb (C++ row-major → GLSL column-major)
 const mat3 kXyzToRgb = mat3(
@@ -114,12 +131,16 @@ const vec3 kWhitePointD65 = vec3(0.95047, 1.00000, 1.08883);
 // site — the halves are not independently meaningful.
 //
 // CPU equivalents: lumice::XyzToSrgbUint8(..., background) in src/util/color_space.hpp composes
-// the same two halves around the same seam — that is the one the .lmc bake reaches through
-// LUMICE_XyzToSrgbUint8WithBackground — and so does RenderConsumer::PostSnapshot's use_real_color
-// branch (src/server/render.cpp). Three implementations of one chain: one has to be GLSL, and the
-// other two are separate because the render loop writes bytes as it composites while the batch
-// converter is handed a finished buffer. Nothing enforces that they agree; the pixel comparison in
-// test/gui/functional/test_preview_background.cpp is what holds this one to the CPU one.
+// the same two halves around the same seam, and so does RenderConsumer::PostSnapshot's
+// use_real_color branch (src/server/render.cpp). Three implementations of one chain: one has to be
+// GLSL, and the other two are separate because the render loop writes bytes as it composites while
+// the batch converter is handed a finished buffer. Nothing enforces that they agree; the pixel
+// comparison in test/gui/functional/test_preview_background.cpp is what holds this one to the CPU
+// one.
+//
+// The .lmc bake is NOT one of them any more: it reaches the background-free overload, because the
+// sky is a setting rather than part of the stored picture and joins right here instead. See
+// app.cpp's RefreshCpuTextureForSave and PreviewRenderer::TextureMode.
 
 // Gamut clip + XYZ->RGB matrix. NOT clamped and NOT gamma-encoded: the background composites here.
 vec3 xyzToLinearRgb(vec3 xyz) {
@@ -141,6 +162,12 @@ vec3 xyzToLinearRgb(vec3 xyz) {
     // clip above (the clip is defined as the scaling that lands this product inside [0,1]); the
     // clamp that matters runs in clampAndGamma, after the background has been added.
     return kXyzToRgb * xyz;
+}
+
+// The inverse of clampAndGamma's transfer curve, for the one branch that starts from sRGB BYTES
+// and still has linear-light work left to do. Mirrors lumice::SrgbToLinear (src/util/color_space.hpp).
+vec3 srgbToLinear(vec3 srgb) {
+    return mix(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), step(0.04045, srgb));
 }
 
 // Clamp + sRGB gamma (branchless via mix+step). The second half of the chain above.
@@ -608,20 +635,27 @@ void main() {
 
     if (pixel_visible) {
       vec3 tex_color = sampleDualFisheye(world_dir);
-      if (u_xyz_mode == 1) {
-        // The projection's own natural vignetting, applied to the energy BEFORE the exposure scale
-        // multiplies it: it states how much of this direction's radiance the target lens's pixel
-        // collects, so it belongs to the quantity being exposed rather than to the exposure. See
-        // the relIllum* block above and src/gui/preview_jacobian.hpp for the derivation.
-        //
-        // Only in XYZ mode, and that is a stated boundary rather than an oversight. u_xyz_mode == 0
-        // is an 8-bit texture baked by LUMICE_XyzToSrgbUint8WithBackground, which has already
-        // composited the sky colour into every texel. Vignetting it would dim the BACKGROUND too,
-        // which neither the CLI nor the branch below does -- the sky joins after the exposure,
-        // undimmed -- and the composite cannot be undone from this side. So a document loaded from
-        // a .lmc shows a non-equal-area projection without its vignetting; equal-area ones are
-        // unaffected either way, their factor being exactly 1.
-        tex_color *= rel_illum;
+      if (u_tex_mode != kTexModeSrgbComposited) {
+        // Linear-light radiance for this pixel. The two source formats decode differently and
+        // agree from here on: vignetting, then sky, then the transfer curve, in that order and by
+        // these same lines. That shared tail is the whole point — it is what makes a document
+        // reopened from disk render the picture the live view was showing when it was saved.
+        vec3 radiance_linear;
+        if (u_tex_mode == kTexModeXyz) {
+          // The projection's own natural vignetting, applied to the energy BEFORE the exposure
+          // scale multiplies it: it states how much of this direction's radiance the target lens's
+          // pixel collects, so it belongs to the quantity being exposed rather than to the
+          // exposure. See the relIllum* block above and src/gui/preview_jacobian.hpp.
+          radiance_linear = xyzToLinearRgb(tex_color * rel_illum);
+        } else {
+          // kTexModeSrgbRadiance: the exposure was already applied when these bytes were baked, so
+          // there is no u_intensity_scale here and no gamut clip to redo — only the decode. The
+          // vignetting is still a display-time property of the TARGET lens, not of the stored
+          // picture, so it is applied here rather than baked, exactly as in the branch above. What
+          // makes that possible is that the bake no longer sums the sky into the texel: scaling a
+          // composited texel would dim the sky too, which neither the CLI nor this shader does.
+          radiance_linear = srgbToLinear(tex_color) * rel_illum;
+        }
 
         // The sky colour joins the halo here: inside this gate, and in linear RGB between the two
         // halves of the colour chain. Both placements are load-bearing.
@@ -645,11 +679,11 @@ void main() {
         // it here would answer it silently. test/gui/functional/test_preview_background.cpp pins
         // the annulus so that whenever it IS answered, it lands as a red.
         //
-        // Only in XYZ mode. u_xyz_mode == 0 is a static 8-bit texture — a document loaded from
-        // disk, whose pixels were already baked with whatever background was in effect when it was
-        // saved (LUMICE_XyzToSrgbUint8WithBackground, app.cpp RefreshCpuTextureForSave). Adding
-        // here too would apply it twice.
-        tex_color = clampAndGamma(xyzToLinearRgb(tex_color) + u_background);
+        // Not in kTexModeSrgbComposited. Those texels are a 1x1 black clear, or a .lmc written
+        // before the format carried radiance-only textures — whose pixels were baked with whatever
+        // background was in effect when they were saved. Adding here too would apply it twice, and
+        // subtracting the old one back out is not invertible where the bake clipped.
+        tex_color = clampAndGamma(radiance_linear + u_background);
       }
       final_color = tex_color;
     }
@@ -681,6 +715,19 @@ void main() {
 }
 )glsl";
 // clang-format on
+
+// The kTexMode* block inside the fragment shader above and PreviewRenderer::TextureMode are one
+// contract across a language boundary GL gives us no way to check: Render() sends the C++ value
+// and the shader compares it against its own literals. These assertions pin the C++ half to the
+// numbers written up there, so a change made only here is a build error. The other direction —
+// editing the GLSL literals alone — the compiler cannot see, so ADDING A FOURTH MODE means
+// touching all four places: the enum (preview_renderer.hpp), the const block in the shader
+// string, the branch in the shader body that reads u_tex_mode, and this assertion list.
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kSrgbComposited) == 0,
+              "kTexModeSrgbComposited in the fragment shader is 0");
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kXyz) == 1, "kTexModeXyz in the fragment shader is 1");
+static_assert(static_cast<int>(PreviewRenderer::TextureMode::kSrgbRadiance) == 2,
+              "kTexModeSrgbRadiance in the fragment shader is 2");
 
 static unsigned int CompileShader(unsigned int type, const char* source) {
   unsigned int shader = glCreateShader(type);
@@ -759,7 +806,7 @@ bool PreviewRenderer::Init() {
   // enabling background-only rendering before the simulation is started.
   // Shared with Render()'s needs_gl_blank_ consumer so a single code path owns
   // "sim layer reset to black" (both init and post-ClearTexture reuse the same
-  // GL sequence + xyz_mode_ = false side effect).
+  // GL sequence + tex_mode_ reset side effect).
   UploadBlankSimTexture();
 
   // Create background texture.
@@ -853,21 +900,23 @@ void PreviewRenderer::ClearTexture() {
   needs_gl_blank_ = true;
 }
 
-// Upload a 1x1 black pixel into the GL texture_ storage and reset xyz_mode_.
+// Upload a 1x1 black pixel into the GL texture_ storage and reset tex_mode_.
 // Reused by Init() (initial GL storage) and Render() (post-ClearTexture
 // deferred reset). Must be called on the main thread (owns GL context).
 // Does NOT touch tex_width_/tex_height_ — those track "does the app have
 // real sim/loaded pixel data" (drives HasTexture()) and must stay 0 across
 // this call so ClearTexture()'s CPU-side "cleared" state remains visible to
-// callers like Save. Side effect: xyz_mode_ = false, because a 1x1 RGB uint8
-// pixel is not XYZ float data — leaving xyz_mode_ = true would mislead the
-// shader on the next real upload path.
+// callers like Save. Side effect: tex_mode_ = kSrgbComposited, because a 1x1 RGB
+// uint8 pixel is not XYZ float data — leaving a stale mode would mislead the
+// shader on the next real upload path. Composited rather than radiance-only on
+// purpose: this pixel means "there is nothing to show", and the radiance mode
+// would paint the sky colour over the whole frame instead of leaving it black.
 void PreviewRenderer::UploadBlankSimTexture() {
   static const unsigned char kBlack[3] = { 0, 0, 0 };
   glBindTexture(GL_TEXTURE_2D, texture_);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, kBlack);
   glBindTexture(GL_TEXTURE_2D, 0);
-  xyz_mode_ = false;
+  tex_mode_ = TextureMode::kSrgbComposited;
 }
 
 void PreviewRenderer::UpdateCpuTextureData(const unsigned char* data, int width, int height) {
@@ -881,6 +930,16 @@ void PreviewRenderer::UpdateCpuTextureData(const unsigned char* data, int width,
 }
 
 void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int height) {
+  UploadUint8Texture(data, width, height, TextureMode::kSrgbComposited);
+}
+
+void PreviewRenderer::UploadRadianceTexture(const unsigned char* data, int width, int height) {
+  UploadUint8Texture(data, width, height, TextureMode::kSrgbRadiance);
+}
+
+// The GL half both uint8 entry points share. `mode` is the only thing that differs, and it is a
+// property of what the CALLER baked, which is why it is a parameter here rather than a guess.
+void PreviewRenderer::UploadUint8Texture(const unsigned char* data, int width, int height, TextureMode mode) {
   if (!texture_ || !data) {
     return;
   }
@@ -896,7 +955,7 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
   glBindTexture(GL_TEXTURE_2D, texture_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);  // RGB data may not be 4-byte aligned
 
-  if (width != tex_width_ || height != tex_height_ || xyz_mode_) {
+  if (width != tex_width_ || height != tex_height_ || tex_mode_ == TextureMode::kXyz) {
     // Re-allocate texture when switching from float to uint8 or size changed
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
     tex_width_ = width;
@@ -905,7 +964,7 @@ void PreviewRenderer::UploadTexture(const unsigned char* data, int width, int he
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
   }
 
-  xyz_mode_ = false;
+  tex_mode_ = mode;
   glBindTexture(GL_TEXTURE_2D, 0);
 }
 
@@ -914,7 +973,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     return;
   }
   // Fresh real pixel data is about to land in texture_; make the newest write
-  // win over any pending deferred blank (see UploadTexture for rationale).
+  // win over any pending deferred blank (see UploadUint8Texture for rationale).
   needs_gl_blank_ = false;
 
   // Do NOT update tex_data_ (CPU copy) — XYZ float data is not suitable for .lmc save.
@@ -961,7 +1020,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
   // Upload from PBO to texture (async DMA)
   glBindTexture(GL_TEXTURE_2D, texture_);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  if (width != tex_width_ || height != tex_height_ || !xyz_mode_) {
+  if (width != tex_width_ || height != tex_height_ || tex_mode_ != TextureMode::kXyz) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, nullptr);
     tex_width_ = width;
     tex_height_ = height;
@@ -978,7 +1037,7 @@ void PreviewRenderer::UploadXyzTexture(const float* data, int width, int height)
     GUI_LOG_WARNING("[GL] UploadXyzTexture: glFenceSync failed, next write to slot {} will be unguarded", w);
   }
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-  xyz_mode_ = true;
+  tex_mode_ = TextureMode::kXyz;
   glBindTexture(GL_TEXTURE_2D, 0);
   pbo_index_ = 1 - pbo_index_;
 }
@@ -1566,7 +1625,7 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1f(glGetUniformLocation(shader_program_, "u_fov"), params.view_proj.fov);
   glUniform1i(glGetUniformLocation(shader_program_, "u_visible"), params.view_proj.visible);
   glUniform1i(glGetUniformLocation(shader_program_, "u_front"), params.view_proj.front ? 1 : 0);
-  glUniform1i(glGetUniformLocation(shader_program_, "u_xyz_mode"), xyz_mode_ ? 1 : 0);
+  glUniform1i(glGetUniformLocation(shader_program_, "u_tex_mode"), static_cast<int>(tex_mode_));
   glUniform3f(glGetUniformLocation(shader_program_, "u_background"), params.background_color_linear[0],
               params.background_color_linear[1], params.background_color_linear[2]);
   glUniform1f(glGetUniformLocation(shader_program_, "u_intensity_scale"), params.exposure.intensity_scale);

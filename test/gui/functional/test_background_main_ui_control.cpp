@@ -316,9 +316,10 @@ void RegisterBackgroundMainUiControlTests(ImGuiTestEngine* engine) {
 
   // The governance promise, on the control rather than on the field. test_state_reconcile.cpp
   // already pins that a renderer.background DIFF drives nothing; what it cannot say is whether the
-  // widget reaches the field by a route that also touches something else — the panel's own push
-  // path calls LUMICE_SetCompositeBackground and wakes the poller on the way past, and "wakes the
-  // poller" and "restarts the simulation" are one careless line apart.
+  // widget reaches the field by a route that also touches something else. The sky colour is a
+  // display-time setting today — the shader adds it when it draws — so the panel has no push path
+  // of its own to the server; the point of this case is that it stays that way, because "nudge the
+  // preview" and "restart the simulation" are one careless line apart.
   //
   // The mid-drag checks are the sharp half. This control writes the live field on every frame the
   // mouse is held, so a guard that only ran on release would leave the intermediate frames free to

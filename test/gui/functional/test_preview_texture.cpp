@@ -133,7 +133,8 @@ void RegisterPreviewTextureTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> loaded;
       int loaded_w = 0;
       int loaded_h = 0;
-      IM_CHECK(gui::LoadLmcFile(tmp_path, gui::g_state, loaded, loaded_w, loaded_h));
+      bool loaded_radiance_only = false;
+      IM_CHECK(gui::LoadLmcFile(tmp_path, gui::g_state, loaded, loaded_w, loaded_h, loaded_radiance_only));
       IM_CHECK_EQ(loaded_w, kW);
       IM_CHECK_EQ(loaded_h, kH);
       IM_CHECK(!loaded.empty());
@@ -186,7 +187,8 @@ void RegisterPreviewTextureTests(ImGuiTestEngine* engine) {
       std::vector<unsigned char> loaded;
       int loaded_w = 0;
       int loaded_h = 0;
-      IM_CHECK(gui::LoadLmcFile(tmp_path, loaded_state, loaded, loaded_w, loaded_h));
+      bool loaded_radiance_only = false;
+      IM_CHECK(gui::LoadLmcFile(tmp_path, loaded_state, loaded, loaded_w, loaded_h, loaded_radiance_only));
       IM_CHECK_EQ(loaded_w, kNewW);
       IM_CHECK_EQ(loaded_h, kNewH);
       IM_CHECK_EQ(loaded.size(), static_cast<size_t>(kNewW) * kNewH * 3);

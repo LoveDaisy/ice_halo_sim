@@ -369,6 +369,66 @@ TEST_F(CompositeBackground, PushingABackgroundRebakesTheCompositeWithoutResimula
   LUMICE_ReleaseResultFrame(frame1);
 }
 
+// Nobody pushes a background any more, so the composite must carry none.
+//
+// The GUI used to push the sky down this setter every frame; it no longer does, because the sky is
+// painted at display time now, by the preview shader, for the composite and the mono path alike.
+// That removal left the composite's correctness resting on a premise nothing in this suite stated:
+// that a server NEVER told a background renders with none. Mechanically it holds —
+// `composite_background_linear_` is `{0,0,0}` at construction, `SetCompositeBackground` is its only
+// writer, and the compositor ADDS it, so zero is an exact no-op — but every case above pushes a
+// colour first, so all of them would still pass if that default drifted to something non-black, and
+// the picture would gain a sky the user never chose with nothing turning red.
+//
+// One composite mode is enough here, unlike the pushed-colour cases above: what is being pinned is
+// the value of a field read once per bake, not the point in each mode's exposure route where it
+// gets added.
+TEST_F(CompositeBackground, AServerNeverToldABackgroundBakesNone) {
+  RunSim("dominant", "[0, 0, 0]");
+
+  LUMICE_ResultFrame* frame = nullptr;
+  ASSERT_EQ(LUMICE_AcquireResultFrame(server_, &frame), LUMICE_OK);
+  LUMICE_RenderResult comp[2]{};
+  LUMICE_RawXyzResult xyz[2]{};
+  ASSERT_EQ(LUMICE_FrameGetComposite(frame, comp, 1), LUMICE_OK);
+  ASSERT_EQ(LUMICE_FrameGetRawXyz(frame, xyz, 1), LUMICE_OK);
+  ASSERT_NE(comp[0].img_buffer, nullptr) << "no composite produced — the case would be vacuous";
+  ASSERT_NE(xyz[0].xyz_buffer, nullptr);
+  ASSERT_EQ(comp[0].img_width, kWidth);
+  ASSERT_EQ(comp[0].img_height, kHeight);
+
+  // Same measured selection as the pushed-colour case: pixels no ray reached, where the composite
+  // reduces to the background alone. Reading an arbitrary dark pixel instead would be weaker — a
+  // pixel holding a sliver of radiance truncates to byte 0 on its own and would hide a background
+  // small enough to sum below the next byte.
+  size_t checked = 0;
+  size_t painted = 0;
+  int first_painted = -1;
+  for (int idx = 0; idx < kWidth * kHeight; ++idx) {
+    const float* v = xyz[0].xyz_buffer + static_cast<size_t>(idx) * 3;
+    if (v[0] != 0.0f || v[1] != 0.0f || v[2] != 0.0f) {
+      continue;
+    }
+    ++checked;
+    const uint8_t* p = comp[0].img_buffer + static_cast<size_t>(idx) * 3;
+    if (p[0] != 0 || p[1] != 0 || p[2] != 0) {
+      ++painted;
+      if (first_painted < 0) {
+        first_painted = idx;
+      }
+    }
+  }
+  LUMICE_ReleaseResultFrame(frame);
+
+  ASSERT_GT(checked, 0u) << "every pixel carries energy — no pixel can pin an unpainted background";
+  // Reported outside the scan, not asserted inside it: a drifted default paints EVERY pixel in the
+  // domain, so asserting per pixel would print thousands of identical failures for one defect.
+  EXPECT_EQ(0u, painted) << painted << " of " << checked
+                         << " zero-energy pixels came back non-black without any background having been pushed"
+                         << " (first at index " << first_painted << ") — the server's default composite background"
+                         << " is no longer the all-zero no-op the display path relies on";
+}
+
 // Parameter validation on the new setter. The pointer argument is the one the exposure setter does
 // not have, so it is the one branch that cannot be inherited from that precedent.
 TEST_F(CompositeBackground, NullArgumentsAreRejected) {
