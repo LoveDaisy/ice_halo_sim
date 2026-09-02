@@ -16,64 +16,55 @@
 
 namespace lumice {
 
-// Per-type `scale`/`az0` derivation — the one place this trig lives. Shared
-// by BuildProjParams() (RenderConfig-driven) and lens_proj.hpp::ToShared()
+// Per-type `scale` derivation — the one place this trig lives. Shared by
+// BuildProjParams() (RenderConfig-driven) and lens_proj.hpp::ToShared()
 // (LensProjParam-driven) so the two callers can never drift apart.
-struct ScaleAz0 {
-  float scale;
-  float az0;
-};
-
-inline ScaleAz0 ComputeScaleAz0(LensParam::LensType type, float fov_rad, float short_pix, int res_w, int res_h,
-                                const Rotation& rot) {
-  ScaleAz0 out{ 1.0f, 0.0f };
+inline float ComputeLensScale(LensParam::LensType type, float fov_rad, float short_pix, int res_w, int res_h) {
+  float scale = 1.0f;
   switch (type) {
     case LensParam::kLinear:
-      out.scale = short_pix / 2.0f / std::tan(fov_rad / 2.0f);
+      scale = short_pix / 2.0f / std::tan(fov_rad / 2.0f);
       break;
     case LensParam::kFisheyeEqualArea:
-      out.scale = short_pix / 2.0f / std::sqrt(2.0f) / std::sin(fov_rad / 4.0f);
+      scale = short_pix / 2.0f / std::sqrt(2.0f) / std::sin(fov_rad / 4.0f);
       break;
     case LensParam::kFisheyeEquidistant:
-      out.scale = short_pix * math::kPi_2 / fov_rad;
+      scale = short_pix * math::kPi_2 / fov_rad;
       break;
     case LensParam::kFisheyeStereographic:
-      out.scale = short_pix / 2.0f / std::tan(fov_rad / 4.0f);
+      scale = short_pix / 2.0f / std::tan(fov_rad / 4.0f);
       break;
     case LensParam::kFisheyeOrthographic:
-      out.scale = short_pix / 2.0f / std::sin(fov_rad / 2.0f);
+      scale = short_pix / 2.0f / std::sin(fov_rad / 2.0f);
       break;
     case LensParam::kRectangular: {
       auto short_res = std::min(res_w / 2, res_h);
-      out.scale = static_cast<float>(short_res) / math::kPi;
-      float ax_z[3]{ 0, 0, 1 };
-      rot.Apply(ax_z);
-      out.az0 = std::atan2(ax_z[1], ax_z[0]);
+      scale = static_cast<float>(short_res) / math::kPi;
       break;
     }
     case LensParam::kGlobe:
       // Globe uses the same focal = img_radius/tan(fov/2) as linear (the GUI
       // shader `globeInverse` computes focal identically). scale == focal so
-      // ProjectExitToPixel's globe branch is pure mul; az0 unused.
-      out.scale = short_pix / 2.0f / std::tan(fov_rad / 2.0f);
+      // ProjectExitToPixel's globe branch is pure mul.
+      scale = short_pix / 2.0f / std::tan(fov_rad / 2.0f);
       break;
     case LensParam::kDualFisheyeEqualArea:
     case LensParam::kDualFisheyeEquidistant:
     case LensParam::kDualFisheyeStereographic:
     case LensParam::kDualFisheyeOrthographic:
       // Dual-fisheye types: scale unused (r_scale carries the coverage
-      // control); az0 unused.
+      // control).
       break;
   }
-  return out;
+  return scale;
 }
 
 // Host-only helper: assemble the POD lm_proj::ProjParams consumed by
 // lm_proj::ProjectExitToPixel. Predigests all trig-heavy setup (per-type
-// `scale`, dual-fisheye `r_scale` + overlap threshold, rectangular `az0`)
-// so the per-ray function stays branch/mul only. This header is a single
+// `scale`, dual-fisheye `r_scale` + overlap threshold) so the per-ray
+// function stays branch/mul only. This header is a single
 // source of truth for legacy CPU sites: lens_proj.hpp's per-type
-// `*Project` thin wrappers (via ComputeScaleAz0), scatter_accum.hpp's
+// `*Project` thin wrappers (via ComputeLensScale), scatter_accum.hpp's
 // ScatterOutgoingToXyz, and server/render.cpp's RenderConsumer::Consume.
 inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotation& rot, float short_pix) {
   lm_proj::ProjParams p{};
@@ -86,16 +77,15 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
   p.r_scale = 1.0f;
   p.max_abs_dz = 0.0f;
 
-  // rot[9] carries the row-major camera rotation for single-lens types
-  // (kLinear + 4 single-fisheye). Other types don't read it but we fill
-  // identity for POD determinism (avoids leaving uninitialized floats).
+  // rot[9] carries the row-major camera rotation for every type that follows the
+  // camera pose (kLinear + 4 single-fisheye + kRectangular + kGlobe). The
+  // dual-fisheye family does not read it but we fill it anyway for POD
+  // determinism (avoids leaving uninitialized floats).
   const float* mat = rot.GetMat();
   std::memcpy(p.rot, mat, 9 * sizeof(float));
 
   const float fov_rad = cfg.lens_.fov_ * math::kDegreeToRad;
-  const auto sa = ComputeScaleAz0(cfg.lens_.type_, fov_rad, short_pix, cfg.resolution_[0], cfg.resolution_[1], rot);
-  p.scale = sa.scale;
-  p.az0 = sa.az0;
+  p.scale = ComputeLensScale(cfg.lens_.type_, fov_rad, short_pix, cfg.resolution_[0], cfg.resolution_[1]);
 
   switch (cfg.lens_.type_) {
     case LensParam::kLinear:
@@ -130,7 +120,7 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
       break;
     case LensParam::kGlobe:
       // Globe carries no r_scale / max_abs_dz; its perspective scale is in
-      // p.scale (ComputeScaleAz0). ProjectExitToPixel's globe branch handles it.
+      // p.scale (ComputeLensScale). ProjectExitToPixel's globe branch handles it.
       break;
   }
   return p;
@@ -268,15 +258,20 @@ inline MaskDir DualFisheyePixelToWorld(LensParam::LensType type, const lm_proj::
 // no latitude maps into. |lat| > pi/2 is that region, and it is the same guard the GUI shader's
 // `rectangularInverse` applies. On a 2:1 or wider canvas the caps are empty and the domain half
 // of the mask is trivially true — a correct conclusion, not an omitted test.
-inline MaskDir RectangularPixelToWorld(const lm_proj::ProjParams& p, int px, int py) {
-  const float lon = (static_cast<float>(px) + 0.5f - static_cast<float>(p.img_w) / 2.0f) / p.scale + p.az0;
+//
+// This lens follows the full camera pose, so like the single-lens family it recovers a
+// CAMERA-frame direction and hands it to CameraDirToWorld. The forward fed
+// RectangularForward(c.z, -c.x, -c.y) (see projection_shared.h's kProjRectangular branch), so the
+// (dx, dy, dz) that comes back out restores c = (-dy, -dz, dx).
+inline MaskDir RectangularPixelToWorld(const lm_proj::ProjParams& p, const Rotation& rot, int px, int py) {
+  const float lon = (static_cast<float>(px) + 0.5f - static_cast<float>(p.img_w) / 2.0f) / p.scale;
   const float lat = -(static_cast<float>(py) + 0.5f - static_cast<float>(p.img_h) / 2.0f) / p.scale;
   if (std::fabs(lat) > math::kPi_2) {
     return { 0.0f, 0.0f, 0.0f, false };
   }
-  // RectangularForward is fed (-w), so its inverse returns (-w) and w is the negation.
   const projection::Dir3 d = projection::RectangularInverse(lon, lat);
-  return { -d.x, -d.y, -d.z, true };
+  const projection::Dir3 c{ -d.y, -d.z, d.x, true };
+  return CameraDirToWorld(rot, c);
 }
 
 // Whether a world direction survives the configured visible-hemisphere restriction. Applied to
@@ -336,7 +331,7 @@ inline MaskDir PixelToWorld(const RenderConfig& cfg, const lm_proj::ProjParams& 
     case LensParam::kDualFisheyeOrthographic:
       return DualFisheyePixelToWorld(cfg.lens_.type_, p, px, py);
     case LensParam::kRectangular:
-      return RectangularPixelToWorld(p, px, py);
+      return RectangularPixelToWorld(p, rot, px, py);
     case LensParam::kGlobe: {
       const float x =
           static_cast<float>(px) + 0.5f - static_cast<float>(width) / 2.0f - static_cast<float>(p.lens_shift_x);
@@ -469,7 +464,7 @@ inline std::vector<uint8_t> BuildVisibleMask(const RenderConfig& cfg, const Rota
   }
   std::vector<uint8_t> mask(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
 
-  // Reuse the very params the forward path runs on (scale / az0 / r_scale), so the mask cannot
+  // Reuse the very params the forward path runs on (scale / rot / r_scale), so the mask cannot
   // drift from the projection it is the inverse of.
   const lm_proj::ProjParams p = BuildProjParams(cfg, rot, short_pix);
   float forward[3];

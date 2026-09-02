@@ -116,7 +116,6 @@ struct ProjParams {
   int lens_shift_x;
   int lens_shift_y;
   float scale;
-  float az0;
   float r_scale;
   float max_abs_dz;
   float rot[9];
@@ -417,7 +416,7 @@ LM_FN ProjResult ProjectExitToPixel(LM_THREAD const ProjParams& p, float wx, flo
     // Because linear matches the GUI and globe differs from linear by exactly
     // the same delta on both sides, globe matches the GUI by transitivity
     // (including the x/y/row pixel convention — no extra flip is introduced).
-    // `p.scale` = focal = img_radius/tan(fov/2), host-computed in ComputeScaleAz0
+    // `p.scale` = focal = img_radius/tan(fov/2), host-computed in ComputeLensScale
     // (identical to the linear scale formula, matching GUI focal).
     float cx = 0.0f;
     float cy = 0.0f;

@@ -76,7 +76,7 @@ Dir3 FisheyeOrthographicInverse(float x, float y, float r_scale = 1.0f);
 // Input: sky-space unit direction (NO camera rotation).
 // Output: (lon, lat) where lon in [-pi, pi], lat in [-pi/2, pi/2].
 //   Always valid (full-globe coverage).
-//   The caller handles: az0 subtraction, scaling, lon wrapping, pixel offset.
+//   The caller handles: the camera-frame axis assignment, scaling and pixel offset.
 
 ProjXY RectangularForward(float dx, float dy, float dz);
 
@@ -96,7 +96,7 @@ Dir3 RectangularInverse(float lon, float lat);
 // coordinates already normalized so that r = 1 is the coverage boundary, because their
 // domain test IS a radius bound. Globe's domain test is a ray-sphere discriminant, which
 // is not a radius bound, so it takes the RAW screen offsets (x, y) in pixels together
-// with `focal` — numerically the same `scale` ComputeScaleAz0 produces for kGlobe, so a
+// with `focal` — numerically the same `scale` ComputeLensScale produces for kGlobe, so a
 // caller passes that value straight through rather than recomputing it.
 //
 // Invalid when the ray misses the sphere (discriminant < 0 — the whole region outside the

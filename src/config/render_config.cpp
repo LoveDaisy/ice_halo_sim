@@ -135,7 +135,7 @@ void from_json(const nlohmann::json& j, LensParam& l) {
         break;
       case LensParam::kGlobe:
         // Globe's on-image scale uses focal = img_radius/tan(fov/2), identical
-        // to the linear model (see ComputeScaleAz0 / GUI globeInverse), so the
+        // to the linear model (see ComputeLensScale / GUI globeInverse), so the
         // f→fov mapping mirrors linear.
         l.fov_ = std::atan2(d, f) * 2 * math::kRadToDegree;
         break;

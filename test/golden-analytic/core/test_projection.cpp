@@ -1083,8 +1083,9 @@ TEST(LmProj, RectangularWrapWhileVsFloorEquivalence) {
 
 // =============== Rectangular follows the full camera pose ===============
 // The equirectangular map is oriented by the camera, and by the WHOLE camera: azimuth, elevation
-// and roll all move it. It used to consume only the azimuth (ComputeScaleAz0 reduced the camera
-// rotation to a single `az0` scalar and the forward subtracted it from the longitude), so a
+// and roll all move it. It used to consume only the azimuth (the host reduced the camera
+// rotation to a single `az0` scalar, since removed, and the forward subtracted it from the
+// longitude), so a
 // config could tilt or roll the camera and get a bit-identical frame back. Owner decision
 // 2026-09-02: core keeps maximum flexibility and follows the full pose; the GUI deliberately does
 // NOT (it wants a fixed all-sky texture and does every pose transform on the front end) — see

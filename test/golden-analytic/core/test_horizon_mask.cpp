@@ -250,39 +250,83 @@ TEST(HorizonMask, HorizonOutsideTheFrameDrawsNothing) {
   EXPECT_EQ(CountOn(Outline(cfg)), 0u);
 }
 
-TEST(HorizonMask, EquirectangularKeepsTheHorizonOnTheCentreRow) {
-  // The equirectangular frame maps latitude linearly onto rows and is horizon-centred by
-  // construction (RectangularPixelToWorld does not consult the camera rotation at all), so the
-  // line is the centre row across the FULL width, elevation notwithstanding. That last clause is
-  // asserted rather than assumed: it is the one lens whose annotation does not move with the view.
+TEST(HorizonMask, EquirectangularTiltsTheHorizonWithTheCameraElevation) {
+  // The equirectangular map follows the FULL camera pose (owner decision 2026-09-02), so the
+  // celestial horizon is only the centre row when the camera sits in the horizon plane. Tilt the
+  // camera by `el` and the horizon becomes a great circle inclined by `el` to the map equator.
+  //
+  // The oracle is the closed form for such a circle and is derived from spherical geometry alone,
+  // not from this repo's projection code: a great circle at inclination i, crossing the equator at
+  // longitude +/- 90 deg, satisfies
+  //
+  //     tan(lat) = -tan(i) * cos(lon)
+  //
+  // Independent of sign and handedness conventions except for the one sign that says which way an
+  // upward tilt pushes the horizon, which the el = 0 row (where the formula degenerates to the
+  // centre row) cannot pin and the two opposite-signed rows below can.
+  //
+  // This test used to assert the opposite — "the line is the centre row across the FULL width,
+  // elevation notwithstanding" — which was true of the azimuth-only rectangular projection it was
+  // written against. That projection is gone; the property it pinned was a consequence of core
+  // discarding the camera's elevation, not of what an equirectangular map is.
   constexpr int kRw = 256;
   constexpr int kRh = 128;
+  const float scale = static_cast<float>(std::min(kRw / 2, kRh)) / 3.14159265358979323846f;
   for (float el : { 0.0f, 30.0f, -45.0f }) {
     const RenderConfig cfg = MakeCfg(LensParam::kRectangular, 90.0f, kRw, kRh, RenderConfig::kFull, el);
     const std::vector<uint8_t> mask = Outline(cfg);
+    const float tan_i = std::tan(el * 3.14159265358979323846f / 180.0f);
 
     Mismatches missing;
+    Mismatches stray;
     for (int px = 0; px < kRw; px++) {
-      if (!At(mask, cfg, px, kRh / 2 - 1) || !At(mask, cfg, px, kRh / 2)) {
+      const float lon = (static_cast<float>(px) + 0.5f - static_cast<float>(kRw) / 2.0f) / scale;
+      const float lat = std::atan(-tan_i * std::cos(lon));
+      const float row = -lat * scale + static_cast<float>(kRh) / 2.0f - 0.5f;  // pixel-centre convention
+      bool any = false;
+      for (int py = 0; py < kRh; py++) {
+        if (!At(mask, cfg, px, py)) {
+          continue;
+        }
+        any = true;
+        // The band is a couple of pixels wide by construction (the width rule is 1.5x the local
+        // degrees-per-pixel) and widens where the curve is steepest, so 3 rows of slack around
+        // the predicted centre covers the whole line without covering the frame.
+        if (std::abs(static_cast<float>(py) - row) > 3.0f) {
+          stray.Note("(" + std::to_string(px) + "," + std::to_string(py) + ") vs row " + std::to_string(row));
+        }
+      }
+      if (!any) {
         missing.Note("column " + std::to_string(px));
       }
     }
-    EXPECT_EQ(missing.count, 0u) << "el=" << el << ": the centre row pair must span the whole width; first "
-                                 << missing.first;
+    EXPECT_EQ(missing.count, 0u) << "el=" << el << ": every column must carry the line; first " << missing.first;
+    EXPECT_EQ(stray.count, 0u) << "el=" << el << ": the line must follow tan(lat) = -tan(el) cos(lon); first "
+                               << stray.first;
+  }
+}
 
-    Mismatches stray;
-    for (int py = 0; py < kRh; py++) {
-      if (py >= kRh / 2 - 2 && py <= kRh / 2 + 1) {
-        continue;
-      }
-      for (int px = 0; px < kRw; px++) {
-        if (At(mask, cfg, px, py)) {
-          stray.Note("(" + std::to_string(px) + "," + std::to_string(py) + ")");
-        }
+TEST(HorizonMask, EquirectangularLeavesTheCentreRowOnceTheCameraTilts) {
+  // The half of the statement above that is a BEHAVIOUR CHANGE rather than a refinement, asserted
+  // on its own so that a regression to the azimuth-only projection cannot hide inside a tolerance:
+  // at el = 0 the centre row pair spans the whole width, and at el != 0 it does not.
+  constexpr int kRw = 256;
+  constexpr int kRh = 128;
+  auto centre_row_columns = [&](float el) {
+    const RenderConfig cfg = MakeCfg(LensParam::kRectangular, 90.0f, kRw, kRh, RenderConfig::kFull, el);
+    const std::vector<uint8_t> mask = Outline(cfg);
+    int n = 0;
+    for (int px = 0; px < kRw; px++) {
+      if (At(mask, cfg, px, kRh / 2 - 1) && At(mask, cfg, px, kRh / 2)) {
+        n++;
       }
     }
-    EXPECT_EQ(stray.count, 0u) << "el=" << el << ": the line must stay within two rows of the centre; first "
-                               << stray.first;
+    return n;
+  };
+  EXPECT_EQ(centre_row_columns(0.0f), kRw) << "with the camera in the horizon plane the line IS the centre row";
+  for (float el : { 30.0f, -45.0f }) {
+    EXPECT_LT(centre_row_columns(el), kRw / 4)
+        << "el=" << el << ": a tilted camera must lift the horizon off the centre row over most of the width";
   }
 }
 

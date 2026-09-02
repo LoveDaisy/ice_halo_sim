@@ -43,9 +43,9 @@ namespace lens_proj_internal {
 // (predigested by lens_proj.hpp's own callers — currently test_projection.cpp
 // and any future direct `*Project` caller; scatter_accum.hpp / render.cpp
 // build lm_proj::ProjParams directly via BuildProjParams(cfg, rot, short_pix)
-// and do not go through this path). The per-type `scale`/`az0` derivation
+// and do not go through this path). The per-type `scale` derivation
 // itself is NOT duplicated here — it delegates to
-// lumice::ComputeScaleAz0() (lens_proj_build.hpp), the single source of
+// lumice::ComputeLensScale() (lens_proj_build.hpp), the single source of
 // truth also used by BuildProjParams().
 inline lm_proj::ProjParams ToShared(const LensProjParam& p, LensParam::LensType type) {
   lm_proj::ProjParams s{};
@@ -62,9 +62,7 @@ inline lm_proj::ProjParams ToShared(const LensProjParam& p, LensParam::LensType 
   std::memcpy(s.rot, mat, 9 * sizeof(float));
 
   const float fov_rad = p.fov_ * math::kDegreeToRad;
-  const auto sa = ComputeScaleAz0(type, fov_rad, p.short_pix_, p.resolution_[0], p.resolution_[1], p.rot_);
-  s.scale = sa.scale;
-  s.az0 = sa.az0;
+  s.scale = ComputeLensScale(type, fov_rad, p.short_pix_, p.resolution_[0], p.resolution_[1]);
   return s;
 }
 

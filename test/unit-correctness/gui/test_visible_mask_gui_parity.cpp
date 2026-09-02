@@ -275,7 +275,7 @@ Boundaries BoundariesFor(LensParam::LensType t, float fov_deg, float short_pix) 
   const float fov = fov_deg * lumice::math::kDegreeToRad;
   const float half_fov = fov / 2.0f;
   const float img_radius = short_pix / 2.0f;
-  const float core = lumice::ComputeScaleAz0(t, fov, short_pix, 0, 0, lumice::Rotation{}).scale * CoreRadiusBound(t);
+  const float core = lumice::ComputeLensScale(t, fov, short_pix, 0, 0) * CoreRadiusBound(t);
   float gui = std::numeric_limits<float>::infinity();
   if (t == LensParam::kFisheyeEqualArea) {
     gui = img_radius / std::sin(half_fov / 2.0f);

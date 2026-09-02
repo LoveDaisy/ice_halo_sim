@@ -16,7 +16,7 @@ frame into three regions that are all present in one image:
   B. inside it, below the horizon      -> `visible: upper` cuts it -> black
   C. inside it, above the horizon      -> sky                    -> the authored background
 
-Geometry, all of it derived rather than observed. `ComputeScaleAz0`'s equal-area branch gives
+Geometry, all of it derived rather than observed. `ComputeLensScale`'s equal-area branch gives
 scale = (short_edge / 2) / (sqrt(2) * sin(fov/4)), which at fov=180 on a 400x300 canvas is exactly
 150. The core mask's domain guard (`FisheyeEqualAreaInverse`) rejects normalised r beyond the
 lens's rim, and for equal-area that rim is sqrt(2) -- theta = 180 deg -- so the imaged disc reaches
