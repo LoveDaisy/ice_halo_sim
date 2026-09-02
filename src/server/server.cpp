@@ -1207,6 +1207,24 @@ uint64_t ServerImpl::DrainedEpoch() const {
 //      cannot deadlock the signal: only the consumer can leave the queue
 //      non-empty, and the consumer re-runs this check after every item it takes.
 //
+//      SCOPE NOTE — this signal is correct, but it does not treat the failure
+//      mode that produced the whole-dispatch-grain shortfalls quoted above.
+//      Term 6's "late instead of wrong" degradation, and this predicate as a
+//      whole, are about sim_scene_cnt_ settling at a wrong PERSISTENT value, or
+//      about a batch that is still queued when someone asks. Neither describes a
+//      producer that DISCARDS a batch's data while still balancing the counter:
+//      that batch leaves the queue and the counter still nets to zero, so every
+//      term here reads exactly as if nothing were wrong and the epoch is
+//      reported drained — correctly, since nothing is outstanding; the data is
+//      simply gone. That case is guarded elsewhere: AccountThenPublishBatch
+//      (scene_batch_publish.hpp) makes the count reflect an in-flight batch
+//      before the batch is reachable, and ConsumeData no longer gates
+//      consumption on the count at all (its generation_ check is what discards).
+//      Term 4's "plausible mechanism for the whole-dispatch-grain deficit" was
+//      written before that mechanism was pinned down; the read-order hole it
+//      describes is real and still worth the ordering it prescribes here, but it
+//      is not what the observed shortfalls turned out to be.
+//
 // THE OTHER DIRECTION — a CommitConfig landing BEFORE this call reads `epoch`,
 // not mid-check. Term 2's note above only argues the safe case (CommitConfig
 // lands between the epoch read and the rest of the predicate). The mirror
@@ -1588,10 +1606,12 @@ void ServerImpl::GenerateScene() {
   // 1-vs-N pairing imbalance on discrete-spectrum configs: sim_scene_cnt_ went
   // negative as the consumer drained N - 1 "extra" SimData per batch, GetStatus
   // saw the predicate fall to false, and CLI single-snapshot rendering reported
-  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (line
-  // 772 `if (sim_scene_cnt_ > 0)` → else branch). Resolve by incrementing here
-  // by the same N the simulator will emplace, so the counter matches the
-  // consumer's per-SimData decrement. The scene is captured under scene_mutex_
+  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (via a
+  // `if (sim_scene_cnt_ > 0)` gate ConsumeData no longer has — that gate has since
+  // been removed, so a drifted counter can no longer cost data; it now only costs
+  // an early "drained" verdict, and trips ConsumeData's ILOG_WARN sentinel).
+  // Resolve by incrementing here by the same N the simulator will emplace, so the
+  // counter matches the consumer's per-SimData decrement. The scene is captured under scene_mutex_
   // above and immutable for this GenerateScene invocation, so N is computed
   // once. Throttle/notify thresholds (kMaxSceneCnt, kMaxSceneCnt/2) now refer
   // to in-flight SimData, which is also the right quantity for memory control.
