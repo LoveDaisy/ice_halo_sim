@@ -126,6 +126,129 @@ inline lm_proj::ProjParams BuildProjParams(const RenderConfig& cfg, const Rotati
 }
 
 
+// Solid angle subtended by ONE pixel on the OPTICAL AXIS of this projection, in steradians.
+//
+// WHAT IT IS FOR. A rendered pixel holds a radiance INTEGRATED over its own solid angle
+// (`L * Omega_p`), while the exposure anchor core publishes is a bare radiance per steradian
+// (`core/anchor_buffer.hpp::AnchorL99Sky`). Turning one into the other needs a solid angle, and
+// the one it needs is the ON-AXIS one specifically: the GUI preview shader already multiplies
+// by the target lens's RELATIVE illumination `m(pos) = Omega_p(pos) / Omega_p(axis)`
+// (`src/gui/preview_jacobian.hpp`), so a CLI scale built on `Omega_axis` and a GUI scale built
+// on the bare anchor land on the same per-pixel expression `L * m(pos) / L99_sky`. Any other
+// normalization point would put a lens-dependent gain between the two.
+//
+// IT TAKES THE PROJECTION POD, NOT (type, fov, resolution). Two reasons, and the second is not a
+// preference: (a) this is the exact struct `ProjectExitToPixel` consumes, so the Jacobian cannot
+// be computed against a fov or a resolution the projection did not actually use; (b) the
+// dual-fisheye family's answer depends on `r_scale`, which is a function of `overlap_` and of
+// the type (`ComputeEARScale` / `ComputeEDRScale` / `ComputeSTRScale`), and is therefore not
+// reconstructible from (type, fov, short_pix, res) at all. A signature that could not see the
+// overlap would return a silently wrong number for every config that sets one.
+//
+// DERIVATION, shared by every branch. For a rotationally symmetric map rho = f(theta) in pixels,
+//
+//     dOmega = sin(theta) dtheta dphi,  dA = rho drho dphi
+//     Omega_p(rho) = sin(theta) |dtheta/drho| / rho   ->   1 / f'(0)^2  as theta -> 0
+//
+// so every branch below is `numerator / (on-axis pixel-per-radian)^2`, where the numerator is a
+// property of the MAPPING FAMILY and the denominator a property of this instance's calibration.
+// The `sin(theta) -> theta` limit is what collapses each family to one constant:
+//
+//   rho = s*tan(theta)      (linear)         f'(0) = s        ->  1 / s^2
+//   rho = s*sqrt(2)sin(t/2) (equal area)     f'(0) = s/sqrt2  ->  2 / s^2
+//   rho = s*theta/(pi/2)    (equidistant)    f'(0) = s/(pi/2) ->  (pi/2)^2 / s^2
+//   rho = s*tan(theta/2)    (stereographic)  f'(0) = s/2      ->  4 / s^2
+//   rho = s*sin(theta)      (orthographic)   f'(0) = s        ->  1 / s^2
+//
+// Cross-checked term for term against `preview_jacobian.hpp`'s Omega_p column, which states the
+// same five closed forms in (img_radius, half_fov) rather than in `scale`; the two agree once
+// ComputeLensScale above is substituted. That header is the GUI's authority for the SHAPE, this
+// one is core's for the on-axis LEVEL, and they must not disagree about the point where the
+// shape is normalized to 1.
+//
+// Returns 0 for a degenerate calibration rather than an infinity, the same convention every
+// other guard on this path uses (`ExposureScale`, `AnchorL99Sky`).
+inline float ComputeAxisSolidAngle(const lm_proj::ProjParams& p) {
+  // The four family numerators above, named once so the single-lens and dual-fisheye branches
+  // cannot pick different ones for the same mapping.
+  constexpr float kEqualAreaNumer = 2.0f;
+  const float kEquidistantNumer = math::kPi_2 * math::kPi_2;
+  constexpr float kStereographicNumer = 4.0f;
+  constexpr float kUnitNumer = 1.0f;
+
+  const auto type = static_cast<LensParam::LensType>(p.proj_type);
+
+  // Dual-fisheye pixels-per-unit-hemisphere-radius. DualFisheyeToPixelXY lays each disc out at
+  // radius `min(w/2, h)/2`, and the *Forward functions scale the hemisphere into it by `r_scale`
+  // (< 1 exactly when an overlap ring is asked for), so the hemisphere's own rim sits at
+  // `r * r_scale` pixels and THAT is the calibration the derivative is taken against. Computed
+  // for every type but consumed only by the four dual branches.
+  const int dual_short_res = std::min(p.img_w / 2, p.img_h);
+  const float dual_scale = static_cast<float>(dual_short_res) / 2.0f * p.r_scale;
+
+  float numer = 0.0f;
+  float pix_per_rad = 0.0f;
+  switch (type) {
+    case LensParam::kLinear:
+      numer = kUnitNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kGlobe:
+      // The one branch whose numerator is not a bare family constant. Globe images the unit
+      // sphere from a camera at distance D, so rho = focal*sin(psi)/(D - cos(psi)) and
+      // f'(0) = focal/(D - 1); preview_jacobian.hpp's RelIllumGlobe normalizes its own
+      // Omega_p at exactly this (D-1)^2/focal^2. Reusing linear's `1/focal^2` here — which is
+      // what a reading of ComputeLensScale alone would suggest, since globe and linear share
+      // their `scale` — would be wrong by (D-1)^2 = 9 at the current D, i.e. 3.2 stops.
+      numer = kUnitNumer;
+      pix_per_rad = p.scale / (lm_proj::kGlobeCameraD - 1.0f);
+      break;
+    case LensParam::kFisheyeEqualArea:
+      numer = kEqualAreaNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kFisheyeEquidistant:
+      numer = kEquidistantNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kFisheyeStereographic:
+      numer = kStereographicNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kFisheyeOrthographic:
+      numer = kUnitNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kRectangular:
+      // Not radial, but the same limit: `px = lon*scale`, `py = -lat*scale`, so
+      // dA = scale^2 dlon dlat against dOmega = cos(lat) dlon dlat. On axis lat = 0.
+      numer = kUnitNumer;
+      pix_per_rad = p.scale;
+      break;
+    case LensParam::kDualFisheyeEqualArea:
+      numer = kEqualAreaNumer;
+      pix_per_rad = dual_scale;
+      break;
+    case LensParam::kDualFisheyeEquidistant:
+      numer = kEquidistantNumer;
+      pix_per_rad = dual_scale;
+      break;
+    case LensParam::kDualFisheyeStereographic:
+      numer = kStereographicNumer;
+      pix_per_rad = dual_scale;
+      break;
+    case LensParam::kDualFisheyeOrthographic:
+      numer = kUnitNumer;
+      pix_per_rad = dual_scale;
+      break;
+  }
+  if (pix_per_rad <= 0.0f) {
+    return 0.0f;
+  }
+  return numer / (pix_per_rad * pix_per_rad);
+}
+
+
 // ==================================================================================================
 // Per-pixel render-domain mask
 //
