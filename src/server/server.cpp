@@ -30,6 +30,7 @@
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
 #include "server/render.hpp"
+#include "server/scene_batch_publish.hpp"
 #include "server/server.hpp"
 #include "server/stats.hpp"
 #include "util/cpu_info.hpp"
@@ -1206,6 +1207,24 @@ uint64_t ServerImpl::DrainedEpoch() const {
 //      cannot deadlock the signal: only the consumer can leave the queue
 //      non-empty, and the consumer re-runs this check after every item it takes.
 //
+//      SCOPE NOTE — this signal is correct, but it does not treat the failure
+//      mode that produced the whole-dispatch-grain shortfalls quoted above.
+//      Term 6's "late instead of wrong" degradation, and this predicate as a
+//      whole, are about sim_scene_cnt_ settling at a wrong PERSISTENT value, or
+//      about a batch that is still queued when someone asks. Neither describes a
+//      producer that DISCARDS a batch's data while still balancing the counter:
+//      that batch leaves the queue and the counter still nets to zero, so every
+//      term here reads exactly as if nothing were wrong and the epoch is
+//      reported drained — correctly, since nothing is outstanding; the data is
+//      simply gone. That case is guarded elsewhere: AccountThenPublishBatch
+//      (scene_batch_publish.hpp) makes the count reflect an in-flight batch
+//      before the batch is reachable, and ConsumeData no longer gates
+//      consumption on the count at all (its generation_ check is what discards).
+//      Term 4's "plausible mechanism for the whole-dispatch-grain deficit" was
+//      written before that mechanism was pinned down; the read-order hole it
+//      describes is real and still worth the ordering it prescribes here, but it
+//      is not what the observed shortfalls turned out to be.
+//
 // THE OTHER DIRECTION — a CommitConfig landing BEFORE this call reads `epoch`,
 // not mid-check. Term 2's note above only argues the safe case (CommitConfig
 // lands between the epoch read and the rest of the predicate). The mirror
@@ -1303,198 +1322,204 @@ void ServerImpl::ConsumeData() {
 
     ILOG_TRACE(logger_, "ConsumeData: get data: {}", fmt::ptr(&sim_data));
 
-    if (sim_scene_cnt_ > 0) {
-      // Generation check: discard batches from outdated configs
-      if (sim_data.generation_ != scene_generation_.load()) {
-        ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
-                   scene_generation_.load());
-      } else {
-        // task-color-degrade-gui-surfacing: this batch belongs to the current
-        // committed config (generation matches) — publish its GPU color-degrade
-        // tally to the atomics the C API poll path reads. OVERWRITE, not +=:
-        // the value is a config constant, identical on every batch, so the last
-        // writer simply refreshes it. GPU-only; CPU SimData carries all-zeros.
-        last_color_symmetry_group_overflow_.store(sim_data.color_degrade_counts_.symmetry_group_overflow,
-                                                  std::memory_order_release);
-        last_color_or_summand_overflow_.store(sim_data.color_degrade_counts_.or_summand_overflow,
-                                              std::memory_order_release);
-        last_color_class_overflow_.store(sim_data.color_degrade_counts_.color_class_overflow,
-                                         std::memory_order_release);
-        // 0-exit-batch guard: backend exit-seam path may emplace a SimData with
-        // outgoing_d_/rays_ both empty when all rays were filtered/absorbed
-        // (e.g. selective BD filter). Skip consumer projection so we don't
-        // dirty snapshot_dirty_/has_ever_consumed_ on a black contribution, but
-        // STILL fall through to sim_scene_cnt_-- below — that decrement is the
-        // counter invariant paired with GenerateScene's ++ (see simulator.cpp
-        // exit-seam: empty Emplace must reach the consumer's --). Do not move
-        // the -- inside this branch.
-        // S1 device-fused (scrum-302): the backend accumulates XYZ on-device and
-        // emplaces a SimData carrying xyz_pixel_data_ with outgoing_d_ AND rays_
-        // both empty. That payload IS renderable — without this clause it would
-        // be misclassified as a 0-exit black batch and the consumer skipped,
-        // dropping the entire device-fused image (zero output, parity corr=0).
-        bool has_renderable =
-            !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty() || !sim_data.xyz_pixel_data_.empty();
-        if (has_renderable) {
-          auto t_lock0 = std::chrono::steady_clock::now();
-          std::lock_guard<TicketMutex> lock(consumer_mutex_);
-          auto t_lock1 = std::chrono::steady_clock::now();
-          // WARNING for anyone adding a SimData field: the chunk below is a
-          // hand-rolled field-by-field copy, NOT a copy of sim_data, so a new
-          // field silently arrives at the consumers as a default-constructed 0
-          // on this path — and ONLY on this path, which is what makes it hard to
-          // see (the legacy CPU route hands the whole SimData over intact, so it
-          // keeps working while the backend route quietly reports nothing).
-          // Every stats field needs a line here, on the correct side of the
-          // accumulated/overwritten split below.
-          //
-          // task-268.4: chunk by kCommitCap on the backend exit-seam path
-          // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
-          // carries root_ray_count_ + the stochastic crystal-draw count —
-          // StatsConsumer accumulates both, so spreading them across chunks
-          // would N×-count and break the stats invariant. (The deterministic
-          // crystal count is the opposite case; see the chunk fill below.)
-          // Legacy CPU SimData (rays_ non-empty) are
-          // delivered whole because their consumers project via per-ray
-          // indices into rays_, which has no clean sub-batch slice.
-          // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
-          // variables.
-          const bool is_exit_seam_path = sim_data.rays_.Empty() && !sim_data.outgoing_d_.empty();
-          if (!is_exit_seam_path) {
-            for (auto& c : consumers_) {
-              c->Consume(sim_data);
-            }
-          } else {
-            size_t exit_count = sim_data.outgoing_w_.size();
-            size_t emitted = 0;
-            do {
-              size_t chunk_count = std::min(kCommitCap, exit_count - emitted);
-              SimData chunk;
-              chunk.curr_wl_ = sim_data.curr_wl_;
-              chunk.generation_ = sim_data.generation_;
-              // ACCUMULATED stats fields go on the first chunk only; the rest
-              // carry 0 / empty so StatsConsumer's running sums land on the same
-              // totals a single whole-Consume call would yield.
-              if (emitted == 0) {
-                chunk.root_ray_count_ = sim_data.root_ray_count_;
-                // Same side of the split as root_ray_count_, for the same
-                // reason: RenderConsumer adds it up, so repeating it on every
-                // chunk would multiply the normalization denominator by the
-                // chunk count and darken the image in proportion to the commit
-                // grain. Omitting it entirely is the other failure — a zero
-                // denominator on this path alone, i.e. a black image only when
-                // the exit-seam backend is in use.
-                chunk.emitted_energy_ = sim_data.emitted_energy_;
-                chunk.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
-                chunk.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
-                chunk.crystals_ = sim_data.crystals_;
-                chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
-              }
-              // OVERWRITTEN stats fields must go on EVERY chunk — the consumer
-              // stores rather than adds, so leaving this at 0 on the trailing
-              // chunks would have the last one wipe the value the first chunk
-              // published. The inverse of the rule above, for the inverse
-              // aggregation.
-              chunk.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
-              chunk.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
-              if (chunk_count > 0) {
-                chunk.outgoing_d_.assign(
-                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
-                    sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
-                // Invariant: outgoing_w_ is sliced to exactly chunk_count, so
-                // chunk.outgoing_w_.size() == chunk_count is the consumer's
-                // per-chunk outgoing-ray count (it reads .size(), see render.cpp).
-                chunk.outgoing_w_.assign(
-                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
-                    sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
-                // scrum-268.8 (DR-3): per-ray wavelength must be sliced in
-                // lock-step with outgoing_w_ — omitting it here left chunked
-                // SimData with empty outgoing_wl_, so the consumer fell back to
-                // per-batch curr_wl_ and the CMF decoupled from the per-ray SPD
-                // weight (flat / illuminant-independent color). Empty for CPU /
-                // discrete-wl paths, where the fallback is correct.
-                if (!sim_data.outgoing_wl_.empty()) {
-                  chunk.outgoing_wl_.assign(
-                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted),
-                      sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
-                }
-                if (sim_data.exit_records_.size() >= emitted + chunk_count) {
-                  chunk.exit_records_.assign(
-                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),
-                      sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
-                }
-              }
-              for (auto& c : consumers_) {
-                c->Consume(chunk);
-              }
-              emitted += chunk_count;
-            } while (emitted < exit_count);
-          }
-          auto t_consume = std::chrono::steady_clock::now();
-          snapshot_dirty_ = true;
-          has_ever_consumed_ = true;
-          auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
-          auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
-          ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
-                     sim_data.rays_.size_, sim_data.outgoing_w_.size(), lock_us, consume_us);
-          if (!first_consume_logged) {
-            ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
-            first_consume_logged = true;
+    // Bookkeeping sentinel only — does NOT gate consumption. AccountThenPublishBatch
+    // (scene_batch_publish.hpp) credits sim_scene_cnt_ before a batch is ever published, so a
+    // real, current-generation batch should never observe a non-positive count here while
+    // state_ == kRunning; the generation_ check below is what actually discards stale data.
+    // If this fires, sim_scene_cnt_ has drifted — check GenerateScene's kNsimdataPerBatch
+    // pairing first, since that is the one precedent for this counter going wrong.
+    if (sim_scene_cnt_.load() <= 0) {
+      ILOG_WARN(logger_, "ConsumeData: sim_scene_cnt_={} non-positive while consuming a batch (root_ray_count={})",
+                sim_scene_cnt_.load(), sim_data.root_ray_count_);
+    }
+
+    // Generation check: discard batches from outdated configs
+    if (sim_data.generation_ != scene_generation_.load()) {
+      ILOG_DEBUG(logger_, "ConsumeData: discarding batch (generation {} != {})", sim_data.generation_,
+                 scene_generation_.load());
+    } else {
+      // This batch belongs to the current
+      // committed config (generation matches) — publish its GPU color-degrade
+      // tally to the atomics the C API poll path reads. OVERWRITE, not +=:
+      // the value is a config constant, identical on every batch, so the last
+      // writer simply refreshes it. GPU-only; CPU SimData carries all-zeros.
+      last_color_symmetry_group_overflow_.store(sim_data.color_degrade_counts_.symmetry_group_overflow,
+                                                std::memory_order_release);
+      last_color_or_summand_overflow_.store(sim_data.color_degrade_counts_.or_summand_overflow,
+                                            std::memory_order_release);
+      last_color_class_overflow_.store(sim_data.color_degrade_counts_.color_class_overflow, std::memory_order_release);
+      // 0-exit-batch guard: backend exit-seam path may emplace a SimData with
+      // outgoing_d_/rays_ both empty when all rays were filtered/absorbed
+      // (e.g. selective BD filter). Skip consumer projection so we don't
+      // dirty snapshot_dirty_/has_ever_consumed_ on a black contribution, but
+      // STILL fall through to sim_scene_cnt_-- below — that decrement is the
+      // counter invariant paired with GenerateScene's ++ (see simulator.cpp
+      // exit-seam: empty Emplace must reach the consumer's --). Do not move
+      // the -- inside this branch.
+      // S1 device-fused route: the backend accumulates XYZ on-device and
+      // emplaces a SimData carrying xyz_pixel_data_ with outgoing_d_ AND rays_
+      // both empty. That payload IS renderable — without this clause it would
+      // be misclassified as a 0-exit black batch and the consumer skipped,
+      // dropping the entire device-fused image (zero output, parity corr=0).
+      bool has_renderable =
+          !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty() || !sim_data.xyz_pixel_data_.empty();
+      if (has_renderable) {
+        auto t_lock0 = std::chrono::steady_clock::now();
+        std::lock_guard<TicketMutex> lock(consumer_mutex_);
+        auto t_lock1 = std::chrono::steady_clock::now();
+        // WARNING for anyone adding a SimData field: the chunk below is a
+        // hand-rolled field-by-field copy, NOT a copy of sim_data, so a new
+        // field silently arrives at the consumers as a default-constructed 0
+        // on this path — and ONLY on this path, which is what makes it hard to
+        // see (the legacy CPU route hands the whole SimData over intact, so it
+        // keeps working while the backend route quietly reports nothing).
+        // Every stats field needs a line here, on the correct side of the
+        // accumulated/overwritten split below.
+        //
+        // Chunk by kCommitCap on the backend exit-seam path
+        // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
+        // carries root_ray_count_ + the stochastic crystal-draw count —
+        // StatsConsumer accumulates both, so spreading them across chunks
+        // would N×-count and break the stats invariant. (The deterministic
+        // crystal count is the opposite case; see the chunk fill below.)
+        // Legacy CPU SimData (rays_ non-empty) are
+        // delivered whole because their consumers project via per-ray
+        // indices into rays_, which has no clean sub-batch slice.
+        // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
+        // variables.
+        const bool is_exit_seam_path = sim_data.rays_.Empty() && !sim_data.outgoing_d_.empty();
+        if (!is_exit_seam_path) {
+          for (auto& c : consumers_) {
+            c->Consume(sim_data);
           }
         } else {
-          // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
-          // outgoing_d_ AND rays_ both empty). A batch that ran to completion
-          // with a legitimately all-black result is still *valid data*: the
-          // simulation converged, the answer is just zero intensity. We flip
-          // has_ever_consumed_ so the frame's xyz results report
-          // has_valid_data=true, and dirty the snapshot so PrepareSnapshot
-          // produces a clean zero frame (without this, an all-black simulation
-          // — e.g. an impossible raypath filter — never sets has_valid_data, so
-          // the buffered poller waits for "valid data" forever and times out at
-          // 600s). The legacy CPU path never hit this because its rays_ is
-          // always non-empty, so has_renderable stayed true; the exit-seam path
-          // is the first to surface it. See doc/capi-lifecycle-architecture.md
-          // ("zero-output completion").
-          //
-          // The batch contributes no pixels, but it did emit rays, and the
-          // renderer's normalization divides by emitted energy — so it must be
-          // consumed for its bookkeeping even though it has no image to add.
-          // (It used to be dropped whole, which was right while the denominator
-          // was the LANDED weight: a batch that landed nothing owed nothing.
-          // Under an absolute scale that same drop would leave the denominator
-          // counting only the batches that survived their filter, re-brightening
-          // a filtered scene back to the unfiltered look — the exact
-          // content-dependence the absolute scale exists to remove, and worst
-          // where filtering is strictest.) So hand the consumers an
-          // accounting-only SimData: no rays, no outgoing data, no image
-          // contribution, just the counters. root_ray_count_ and the sample
-          // counts ride along because the legacy CPU path already delivers them
-          // for its all-filtered batches — leaving them out here would keep the
-          // stats disagreeing across backends for the same scene. A black batch
-          // still cannot bias the image: RenderConsumer accumulates nothing from
-          // an empty payload.
-          SimData accounting;
-          accounting.curr_wl_ = sim_data.curr_wl_;
-          accounting.generation_ = sim_data.generation_;
-          accounting.root_ray_count_ = sim_data.root_ray_count_;
-          accounting.emitted_energy_ = sim_data.emitted_energy_;
-          accounting.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
-          accounting.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
-          accounting.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
-          accounting.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
-          {
-            std::lock_guard<TicketMutex> lock(consumer_mutex_);
-            for (auto& c : consumers_) {
-              c->Consume(accounting);
+          size_t exit_count = sim_data.outgoing_w_.size();
+          size_t emitted = 0;
+          do {
+            size_t chunk_count = std::min(kCommitCap, exit_count - emitted);
+            SimData chunk;
+            chunk.curr_wl_ = sim_data.curr_wl_;
+            chunk.generation_ = sim_data.generation_;
+            // ACCUMULATED stats fields go on the first chunk only; the rest
+            // carry 0 / empty so StatsConsumer's running sums land on the same
+            // totals a single whole-Consume call would yield.
+            if (emitted == 0) {
+              chunk.root_ray_count_ = sim_data.root_ray_count_;
+              // Same side of the split as root_ray_count_, for the same
+              // reason: RenderConsumer adds it up, so repeating it on every
+              // chunk would multiply the normalization denominator by the
+              // chunk count and darken the image in proportion to the commit
+              // grain. Omitting it entirely is the other failure — a zero
+              // denominator on this path alone, i.e. a black image only when
+              // the exit-seam backend is in use.
+              chunk.emitted_energy_ = sim_data.emitted_energy_;
+              chunk.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
+              chunk.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
+              chunk.crystals_ = sim_data.crystals_;
+              chunk.crystal_axis_dists_ = sim_data.crystal_axis_dists_;
             }
-          }
-          snapshot_dirty_ = true;
-          has_ever_consumed_ = true;
-          ILOG_DEBUG(logger_, "ConsumeData: 0-exit batch (all filtered) — marking valid_data, zero snapshot");
+            // OVERWRITTEN stats fields must go on EVERY chunk — the consumer
+            // stores rather than adds, so leaving this at 0 on the trailing
+            // chunks would have the last one wipe the value the first chunk
+            // published. The inverse of the rule above, for the inverse
+            // aggregation.
+            chunk.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
+            chunk.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
+            if (chunk_count > 0) {
+              chunk.outgoing_d_.assign(
+                  sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted) * 3,
+                  sim_data.outgoing_d_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count) * 3);
+              // Invariant: outgoing_w_ is sliced to exactly chunk_count, so
+              // chunk.outgoing_w_.size() == chunk_count is the consumer's
+              // per-chunk outgoing-ray count (it reads .size(), see render.cpp).
+              chunk.outgoing_w_.assign(
+                  sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                  sim_data.outgoing_w_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+              // DR-3: per-ray wavelength must be sliced in
+              // lock-step with outgoing_w_ — omitting it here left chunked
+              // SimData with empty outgoing_wl_, so the consumer fell back to
+              // per-batch curr_wl_ and the CMF decoupled from the per-ray SPD
+              // weight (flat / illuminant-independent color). Empty for CPU /
+              // discrete-wl paths, where the fallback is correct.
+              if (!sim_data.outgoing_wl_.empty()) {
+                chunk.outgoing_wl_.assign(
+                    sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                    sim_data.outgoing_wl_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+              }
+              if (sim_data.exit_records_.size() >= emitted + chunk_count) {
+                chunk.exit_records_.assign(
+                    sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted),
+                    sim_data.exit_records_.begin() + static_cast<std::ptrdiff_t>(emitted + chunk_count));
+              }
+            }
+            for (auto& c : consumers_) {
+              c->Consume(chunk);
+            }
+            emitted += chunk_count;
+          } while (emitted < exit_count);
         }
+        auto t_consume = std::chrono::steady_clock::now();
+        snapshot_dirty_ = true;
+        has_ever_consumed_ = true;
+        auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
+        auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
+        ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
+                   sim_data.rays_.size_, sim_data.outgoing_w_.size(), lock_us, consume_us);
+        if (!first_consume_logged) {
+          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+          first_consume_logged = true;
+        }
+      } else {
+        // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
+        // outgoing_d_ AND rays_ both empty). A batch that ran to completion
+        // with a legitimately all-black result is still *valid data*: the
+        // simulation converged, the answer is just zero intensity. We flip
+        // has_ever_consumed_ so the frame's xyz results report
+        // has_valid_data=true, and dirty the snapshot so PrepareSnapshot
+        // produces a clean zero frame (without this, an all-black simulation
+        // — e.g. an impossible raypath filter — never sets has_valid_data, so
+        // the buffered poller waits for "valid data" forever and times out at
+        // 600s). The legacy CPU path never hit this because its rays_ is
+        // always non-empty, so has_renderable stayed true; the exit-seam path
+        // is the first to surface it. See doc/capi-lifecycle-architecture.md
+        // ("zero-output completion").
+        //
+        // The batch contributes no pixels, but it did emit rays, and the
+        // renderer's normalization divides by emitted energy — so it must be
+        // consumed for its bookkeeping even though it has no image to add.
+        // (It used to be dropped whole, which was right while the denominator
+        // was the LANDED weight: a batch that landed nothing owed nothing.
+        // Under an absolute scale that same drop would leave the denominator
+        // counting only the batches that survived their filter, re-brightening
+        // a filtered scene back to the unfiltered look — the exact
+        // content-dependence the absolute scale exists to remove, and worst
+        // where filtering is strictest.) So hand the consumers an
+        // accounting-only SimData: no rays, no outgoing data, no image
+        // contribution, just the counters. root_ray_count_ and the sample
+        // counts ride along because the legacy CPU path already delivers them
+        // for its all-filtered batches — leaving them out here would keep the
+        // stats disagreeing across backends for the same scene. A black batch
+        // still cannot bias the image: RenderConsumer accumulates nothing from
+        // an empty payload.
+        SimData accounting;
+        accounting.curr_wl_ = sim_data.curr_wl_;
+        accounting.generation_ = sim_data.generation_;
+        accounting.root_ray_count_ = sim_data.root_ray_count_;
+        accounting.emitted_energy_ = sim_data.emitted_energy_;
+        accounting.stochastic_crystal_sample_count_ = sim_data.stochastic_crystal_sample_count_;
+        accounting.stochastic_orientation_sample_count_ = sim_data.stochastic_orientation_sample_count_;
+        accounting.deterministic_crystal_count_ = sim_data.deterministic_crystal_count_;
+        accounting.deterministic_orientation_count_ = sim_data.deterministic_orientation_count_;
+        {
+          std::lock_guard<TicketMutex> lock(consumer_mutex_);
+          for (auto& c : consumers_) {
+            c->Consume(accounting);
+          }
+        }
+        snapshot_dirty_ = true;
+        has_ever_consumed_ = true;
+        ILOG_DEBUG(logger_, "ConsumeData: 0-exit batch (all filtered) — marking valid_data, zero snapshot");
       }
-    } else {
-      ILOG_DEBUG(logger_, "ConsumeData: skip consume (sim_scene_cnt_={})", sim_scene_cnt_.load());
     }
     // scrum-312 third-clock: a windowed device-fused SimData stands in for N
     // per-wavelength calls (sim_scene_credit_ == N); all other paths credit 1.
@@ -1581,10 +1606,12 @@ void ServerImpl::GenerateScene() {
   // 1-vs-N pairing imbalance on discrete-spectrum configs: sim_scene_cnt_ went
   // negative as the consumer drained N - 1 "extra" SimData per batch, GetStatus
   // saw the predicate fall to false, and CLI single-snapshot rendering reported
-  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (line
-  // 772 `if (sim_scene_cnt_ > 0)` → else branch). Resolve by incrementing here
-  // by the same N the simulator will emplace, so the counter matches the
-  // consumer's per-SimData decrement. The scene is captured under scene_mutex_
+  // kIdle while 4/5 of the wavelengths' batches still got skip-consumed (via a
+  // `if (sim_scene_cnt_ > 0)` gate ConsumeData no longer has — that gate has since
+  // been removed, so a drifted counter can no longer cost data; it now only costs
+  // an early "drained" verdict, and trips ConsumeData's ILOG_WARN sentinel).
+  // Resolve by incrementing here by the same N the simulator will emplace, so the
+  // counter matches the consumer's per-SimData decrement. The scene is captured under scene_mutex_
   // above and immutable for this GenerateScene invocation, so N is computed
   // once. Throttle/notify thresholds (kMaxSceneCnt, kMaxSceneCnt/2) now refer
   // to in-flight SimData, which is also the right quantity for memory control.
@@ -1614,8 +1641,8 @@ void ServerImpl::GenerateScene() {
   size_t committed_num = 0;
   while (per_wl_ray_num == kInfSize || committed_num < per_wl_ray_num) {
     size_t batch_ray_num = std::min(kBatchCap, per_wl_ray_num - committed_num);
-    scene_queue_->Emplace(SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
-    sim_scene_cnt_ += static_cast<int>(kNsimdataPerBatch);
+    AccountThenPublishBatch(sim_scene_cnt_, static_cast<int>(kNsimdataPerBatch), *scene_queue_,
+                            SimBatch{ batch_ray_num, scene, generation, renders, raypath_color });
     if (!first_batch_logged) {
       ILOG_INFO(logger_, "GenerateScene: first batch enqueued at {:.1f}ms after start",
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gen_start).count());
