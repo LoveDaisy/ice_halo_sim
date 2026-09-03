@@ -37,13 +37,29 @@ is unchanged from the single-mode behavior this document originally documented.
 
 ### 2.1 P99-Anchored Normalization
 
-The core algorithm (`ComputeP99Y` / `ComputeEvAuto`, both in `src/core/ev_anchor.hpp`
-— reached via the C API, `LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto`) is:
+The anchor is a **property of the scene, not of the frame**: it is a P99 sky radiance measured
+once per snapshot by the server, on a fixed full-sky equal-area buffer that no lens, FOV, camera
+pose, `visible` clip or resolution touches, and the CLI divides by the very same number. The GUI
+does not compute a P99 of its own; it reads `LUMICE_RawXyzResult::anchor_l99_sky` and converts it
+into the units of the texture it is displaying. See
+[`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §2.5 and §2.8 for the mechanism,
+the migration law, and why the GUI's conversion is a multiplication where the CLI's is a division.
 
-1. **Extract** all positive Y-channel values from the visible XYZ buffer
-   (`data.xyz_data`) shipped by the server poller.
-2. **Compute the P99 value** (`y_p99`): the 99th percentile of those Y values.
-3. **Normalize** relative to the per-pixel landed intensity:
+> ⚠️ This replaced a P99 the GUI took over its own simulation texture. That earlier rule made the
+> displayed brightness a statement about *the lens looking at the sky* rather than about the sky,
+> which is why the GUI and the CLI carried a constant gain against each other and why moving the
+> `sim_resolution` slider used to re-expose the preview.
+
+The core algorithm (`ComputeEvAuto`, `src/core/ev_anchor.hpp` — reached via the C API,
+`LUMICE_ComputeEvAuto`) is then:
+
+1. **Take** the published anchor, converted into the displayed texture's units:
+   ```
+   y_p99 = axis_solid_angle × anchor_l99_sky
+   ```
+   (both fields come from the same `LUMICE_RawXyzResult` row; `axis_solid_angle` is the solid
+   angle one on-axis texel of that texture subtends).
+2. **Normalize** relative to the per-pixel landed intensity:
    ```
    p99_norm = y_p99 / snapshot_intensity
    ```
@@ -64,23 +80,26 @@ no data is available yet, the EV contribution is 0 and the GUI shows `(auto: no 
 
 ### 2.2 Data Source
 
-The P99 is computed in the poller thread from the visible XYZ buffer
-(`PollerData::p99_y`); `snapshot_intensity` is the per-pixel landed intensity
-returned by the server. Both fields are populated unconditionally — there is no
-filter-dependent branching.
+The anchor is carried out of the server by the poller thread and used unchanged;
+`snapshot_intensity` is the per-pixel landed intensity returned alongside it. All three fields are
+populated unconditionally — there is no filter-dependent branching.
 
 ```cpp
-g_state.p99_raw_y = data.p99_y;
+g_state.p99_raw_y = payload->axis_solid_angle * payload->anchor_l99_sky;
 g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, target_white);
 ```
 
+(The composite / raypath-colour preview is the one exception: it anchors to `composite_p99_y`,
+the P99 over the participating class lanes, which is already in the buffer's units and needs no
+conversion.)
+
 ### 2.3 Filter Interaction
 
-When a ray-path filter is active, only filter-pass rays accumulate into the visible
-framebuffer (Design A: filter-fail rays terminate immediately in `CollectData`).
-The P99 / `snapshot_intensity` pair therefore tracks the filtered subset; switching
-or toggling a filter generally changes the EV scale, since both numerator and
-denominator are computed over the new visible set.
+When a ray-path filter is active, only filter-pass rays accumulate at all (Design A: filter-fail
+rays terminate immediately in `CollectData`), and that includes the anchor buffer. The anchor /
+`snapshot_intensity` pair therefore tracks the filtered subset; switching or toggling a filter
+generally changes the EV scale, since both numerator and denominator are computed over the new
+set of rays.
 
 This is a deliberate trade-off: prior revisions implemented a filter-independent
 anchor lane to keep EV stable across filter toggles. Internal testing showed the
@@ -154,7 +173,8 @@ mechanism (§2.6, §4, §7).
 | Component | File | Purpose |
 |-----------|------|---------|
 | Algorithm (single owner) | `src/core/ev_anchor.hpp` | `ComputeP99Y`, `ComputeEvAuto`, reached via C API |
-| P99 computation | `src/gui/server_poller.cpp` | Computes `p99_y` from staged XYZ data |
+| Anchor measurement | `src/server/anchor_consumer.cpp`, `src/core/anchor_buffer.hpp` | One full-sky plane per session; publishes `anchor_l99_sky` |
+| Anchor transport | `src/gui/server_poller.cpp` | Carries `anchor_l99_sky` + `axis_solid_angle` into `TexturePayload`; computes no statistic |
 | EV source | `src/gui/app.cpp` — `SyncFromPoller()` | Maps `p99_y` + `snapshot_intensity` → `ev_auto` |
 | Mode-aware exposure (single owner) | `src/gui/mono_exposure_scale.hpp` | `ComputeMonoExposure()` — branches on `ev_mode`; feeds display, export, and `.lmc` thumbnail |
 | GUI display | `src/gui/app_panels.cpp` | Mode combo, EV readout text |

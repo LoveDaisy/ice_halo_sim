@@ -24,22 +24,36 @@ Display 分组的 **Mode** 控件（Relative / Absolute，见 §3）在两套曝
 
 ### 2.1 P99 锚点归一化
 
-核心算法（`ComputeP99Y` / `ComputeEvAuto`，均在 `src/core/ev_anchor.hpp` 中——经 C API
-`LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto` 到达）：
+锚点是**场景的属性，不是本帧的属性**：它由 server 每次快照在一块固定的全天等面积缓冲上量一次
+P99 天空辐亮度，任何 lens / FOV / 相机朝向 / `visible` 裁剪 / 分辨率都碰不到它，而 CLI 除的正是
+同一个数。GUI 不再自算 P99，它读 `LUMICE_RawXyzResult::anchor_l99_sky`，再换算到自己所显示纹理
+的单位。机制、迁移律，以及「为何 GUI 侧是乘、CLI 侧是除」见
+[`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §2.5 与 §2.8。
 
-1. **提取**可见 XYZ buffer（`data.xyz_data`）中所有正值的 Y 通道。
-2. **计算 P99 值**（`y_p99`）：上述 Y 值的第 99 百分位数。
-3. **相对每像素 landed 强度归一化**：
+> ⚠️ 这取代了原先 GUI 对自己的仿真纹理取 P99 的做法。旧规则让显示亮度成为「镜头看天空」的陈述
+> 而非「天空」的陈述，这正是 GUI 与 CLI 之间长期带着一个常数增益、以及拖动 `sim_resolution`
+> 滑条会改变预览亮度的原因。
+
+核心算法（`ComputeEvAuto`，在 `src/core/ev_anchor.hpp` 中——经 C API `LUMICE_ComputeEvAuto`
+到达）随后为：
+
+1. **取**已发布的锚点，换算到所显示纹理的单位：
+   ```
+   y_p99 = axis_solid_angle × anchor_l99_sky
+   ```
+   （两个字段来自同一行 `LUMICE_RawXyzResult`；`axis_solid_angle` 是该纹理光轴上一个 texel
+   所张的立体角）。
+2. **相对每像素 landed 强度归一化**：
    ```
    p99_norm = y_p99 / snapshot_intensity
    ```
-4. **将 `p99_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。`target_white` 固定为 135。
+3. **将 `p99_norm` 映射到 sRGB [0, 255] 刻度上的 `target_white`**。`target_white` 固定为 135。
    映射先做 sRGB 传递函数的逆变换，得到线性目标值：
    ```
    t = target_white / 255
    target_linear = (t ≤ 0.04045) ? t / 12.92 : ((t + 0.055) / 1.055)^2.4
    ```
-5. **计算 EV 偏移**（单位：曝光档），结果夹到 [−6, +6]：
+4. **计算 EV 偏移**（单位：曝光档），结果夹到 [−6, +6]：
    ```
    ev_auto = log2(target_linear / p99_norm)
    ```
@@ -48,7 +62,11 @@ Display 分组的 **Mode** 控件（Relative / Absolute，见 §3）在两套曝
 
 ### 2.2 数据来源
 
-P99 在 poller 线程中由可见 XYZ buffer 计算（`PollerData::p99_y`）；`snapshot_intensity` 为 server 返回的每像素 landed 强度。两个字段无条件填充，没有按 filter 分支。
+锚点由 poller 线程从 server 原样带出、不做任何统计；`snapshot_intensity` 为 server 返回的每像素
+landed 强度。三个字段均无条件填充，没有按 filter 分支。
+
+（合成 / raypath-colour 预览是唯一例外：它锚 `composite_p99_y`，即参与色类 lane 的 P99，
+本身已经在缓冲的单位里，不需要换算。）
 
 ```cpp
 g_state.p99_raw_y = data.p99_y;
@@ -57,7 +75,9 @@ g_state.ev_auto = ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, t
 
 ### 2.3 Filter 交互
 
-存在 ray-path filter 时，只有 filter-pass 的射线累积到可见 framebuffer（Design A：filter-fail 射线在 `CollectData` 中立即终止）。P99 / `snapshot_intensity` 二元组因此追踪 filter 子集；切换或开关 filter 通常会改变 EV 刻度，因为分子分母都基于新的可见集计算。
+存在 ray-path filter 时，只有 filter-pass 的射线会累积（Design A：filter-fail 射线在
+`CollectData` 中立即终止），锚点缓冲也不例外。锚点 / `snapshot_intensity` 二元组因此追踪 filter
+子集；切换或开关 filter 通常会改变 EV 刻度，因为分子分母都基于新的射线集合计算。
 
 这是有意取舍：之前版本使用 anchor lane 让 EV 在 filter 切换时保持稳定，但内测表明该功能极少使用，且 multi-scattering 开销巨大（`ms_prob=0.5` 时约 2×）。在 `task-remove-anchor-lane` 中移除 anchor lane，回退到更简单的 self-P99 路径。
 
@@ -106,7 +126,8 @@ composite 在同一 EV 下依然可比。
 | 组件 | 文件 | 用途 |
 |------|------|------|
 | 算法（单一 owner） | `src/core/ev_anchor.hpp` | `ComputeP99Y`, `ComputeEvAuto`，经 C API 到达 |
-| P99 计算 | `src/gui/server_poller.cpp` | 从 staged XYZ 数据计算 `p99_y` |
+| 锚点测量 | `src/server/anchor_consumer.cpp`、`src/core/anchor_buffer.hpp` | 每 session 一块全天平面，发布 `anchor_l99_sky` |
+| 锚点传输 | `src/gui/server_poller.cpp` | 把 `anchor_l99_sky` + `axis_solid_angle` 带进 `TexturePayload`，不做任何统计 |
 | EV 数据源 | `src/gui/app.cpp` — `SyncFromPoller()` | 将 `p99_y` + `snapshot_intensity` 映射为 `ev_auto` |
 | 模式感知曝光（单一 owner） | `src/gui/mono_exposure_scale.hpp` | `ComputeMonoExposure()`——按 `ev_mode` 分叉；供显示/导出/`.lmc` 缩略图共用 |
 | GUI 显示 | `src/gui/app_panels.cpp` | Mode 下拉、EV 读数文本 |

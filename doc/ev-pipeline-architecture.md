@@ -128,10 +128,21 @@ brightness baseline and re-shooting every visual reference.
 | `snapshot_generation` | Increments per snapshot; compare to detect data changes |
 | `effective_pixels` | Non-zero pixel count (stats display) |
 | `emitted_energy` | `snapshot_emitted_energy_` — total spectral energy the light source EMITTED into the snapshot, raw (NOT divided by `kNormScale × total_pixels`, unlike `snapshot_intensity` above). The `kAbsolute` denominator; see §7. |
+| `anchor_l99_sky` (v4.22) | The session's exposure anchor: P99 sky radiance per steradian, measured on a fixed full-sky equal-area plane no renderer's lens/fov/view/`visible`/resolution touches. **Frame-level, identical on every row** — it describes the scene, not the row. The `kRelative` numerator's other half. |
+| `axis_solid_angle` (v4.23) | Steradians subtended by one on-axis pixel of **this** row's view. **Per-renderer**, unlike the field above. The unit bridge between that radiance and what `xyz_buffer` holds. |
 
-The EV anchor (P99) is **not** a C API field on the mono / full-spectrum path — it is
-derived GUI-side from `xyz_buffer` (§2.5). C API consumers that need an anchor for the
-mono path must compute their own.
+The mono/full-spectrum EV anchor **is** a C API surface as of v4.22/v4.23, and it is the same
+one the renderer used rather than an input a consumer has to reconstruct:
+
+```
+scale = intensity_factor × TargetWhiteToLinear(135) / ( axis_solid_angle × anchor_l99_sky )
+```
+
+Both fields are needed, and a consumer that holds a buffer of its own must use the solid angle of
+**the buffer it is exposing** — the GUI preview multiplies by the SIMULATION renderer's
+`axis_solid_angle`, not the target lens's, because the texture it exposes is that renderer's
+output (§2.5). Before v4.23 only the first field was published, which left the relative branch
+the one formula in this API a consumer could not reproduce (§2.8).
 
 > **Composite-path exception (task-345.3)**: `LUMICE_RenderResult::composite_p99_y`
 > IS a C API field, but ONLY on the composite path — today that is
@@ -179,44 +190,54 @@ next result-frame acquisition rebakes the composite. Mono path is untouched.
 
 ### §2.5 GUI Poller and SyncFromPoller
 
-The EV anchor is computed on the **poller thread**, not the server. In
-`ServerPoller::PollOnce` (`server_poller.cpp:513`):
+The GUI does **not** compute an EV anchor. It reads the server's, which is the same scalar
+`RenderConsumer::ExposureScale()` divides by, and that is the whole point of the arrangement: two
+independently computed anchors over two different pixel populations were argued to be equal and
+measurably were not (§2.8).
+
+`ServerPoller::PollOnce` (`server_poller.cpp`) carries two fields out of
+`LUMICE_RawXyzResult` into `TexturePayload`:
 
 ```
-staged_.p99_y = ComputeP99Y(xyz_data, width, height, kEvAutoDownsampleFactor)
+payload->anchor_l99_sky   = xyz_results[0].anchor_l99_sky     // P99 sky RADIANCE, per steradian
+payload->axis_solid_angle = xyz_results[0].axis_solid_angle   // sr subtended by one texel of THIS texture
 ```
 
-`LUMICE_ComputeP99Y()` (C API; algorithm in `core/ev_anchor.hpp`) with
-`kEvAutoDownsampleFactor = 8` (`gui_constants.hpp` — the call site's choice of the coarse
-branch, not part of the algorithm):
-
-1. Box-sum downsamples the Y channel onto a coarse `(w/8) × (h/8)` grid
-   (`DownsampleBoxSumY`; trailing rows/cols that don't divide evenly are dropped).
-2. Takes the P99 over the **non-zero coarse bins** (`nth_element` at
-   `⌊count × 0.99⌋`, clamped to `count - 1`).
-3. Divides by `f² = 64` to return a **fine-equivalent P99**.
-4. Falls back to the fine per-pixel P99 path if `f ≤ 1` or the coarse grid collapses.
-
-Rationale (`scrum-auto-ev-77halo-followup`): coarse bins have `f²` larger expected
-hit count, so the P99-over-lit anchor stabilises earlier in sparse scenes and previews
-brighten faster, while staying mathematically equivalent to the fine anchor:
-`ev = log2(target_linear × snapshot_fine / (P99_coarse / f²))`.
-
-> Because of the `/f²` rescale, `PollerData.p99_y` is **only** an EV anchor, not a
-> raw per-pixel Y measurement — downstream consumers must not treat it as one.
-
-`SyncFromPoller()` (`app.cpp:741`) then transfers the result to GUI state with a
-**single path** (no filter/no-filter branch):
+`SyncFromPoller()` (`app.cpp`) then multiplies them and hands the product to the same two-hop
+computation the GUI has always used:
 
 ```
-g_state.snapshot_intensity = data.snapshot_intensity
-g_state.p99_raw_y          = data.p99_y
-g_state.ev_auto            = ComputeEvAuto(p99_raw_y, snapshot_intensity, target_white)
+g_state.p99_raw_y = payload->axis_solid_angle * payload->anchor_l99_sky
+g_state.ev_auto   = ComputeEvAuto(p99_raw_y, snapshot_intensity, target_white)
 ```
+
+**Why the multiplication, and why it is not optional.** `anchor_l99_sky` is a radiance (per
+steradian); the simulation texture holds a radiance *integrated over each texel's solid angle*.
+Converting between them takes exactly one factor and the server publishes it per renderer
+(§2.4). The CLI performs the same conversion in the other direction — it *divides* by its own
+view's `axis_solid_angle`, because it holds a render rather than a texture — and the two chains
+meet on one per-pixel expression (§2.8).
+
+> ⚠️ Omitting the conversion is worth about **15 stops** on the 1024×512 all-sky texture
+> (`Ω ≈ 3.05e-5`), and it does **not** present as a black preview. `ComputeEvAuto` clamps to
+> `[-6, 6]`, so the error arrives as a plausible picture a few stops dark with the clamp
+> silently absorbing the rest. This was observed, not imagined: it cost the `export_parity`
+> fixture 5–8 dB while every other test stayed green.
 
 `LUMICE_ComputeEvAuto()` (C API; algorithm in `core/ev_anchor.hpp`) returns
 `log2(target_linear / (p99_raw_y / snapshot_intensity))`, clamped to `[-6, 6]`, or
-`0` if either input is non-positive.
+`0` if either input is non-positive. The `snapshot_intensity` in that numerator is not decoration
+and must not be replaced by 1: `ComputeMonoExposure`'s `kRelative` branch divides by the same
+value again (`intensity_scale = intensity_factor / snapshot_intensity`) and the two cancel
+exactly, leaving `2^exposure_offset × target_linear / anchor`. Pinned by
+`MonoExposureScale.ChainedWithComputeEvAutoTheSnapshotIntensityCancels`
+(`test/unit-correctness/gui/test_mono_exposure_scale.cpp`) at three values of
+`snapshot_intensity`, because one value cannot tell "cancels" from "agrees here".
+
+**The composite path is the exception and does not converge.** When `raypath_color` is active the
+payload carries `composite_p99_y` instead — a P99 over the participating class lanes of this same
+buffer (§6.6) — and it needs no conversion, being already in the buffer's units.
+`SyncFromPoller` is the single place that picks between the two.
 
 Note: `ev_auto` is computed and displayed in **both** `ev_mode`s (§2.6), but it is
 only ever consumed by the `kRelative` exposure formula. Under `kAbsolute` the GUI
@@ -234,15 +255,21 @@ anchor to different physical quantities:
 ```
 kRelative (default):
     ExposureScale() = intensity_factor_ × TargetWhiteToLinear(kAnchorTargetWhite)
-                       / ComputeP99Y(snapshot, kMonoAnchorDownsampleFactor)
-    — self-anchored to THIS frame's own P99. Algebraically identical to what
-      §2.5's GUI two-hop computation produces (the snapshot_intensity factor
-      cancels between ComputeEvAuto's numerator and the shader's
-      intensity_scale = intensity_factor / snapshot_intensity step), so a CLI
-      render in kRelative reproduces what the GUI displays for the same
-      snapshot — see §6.5. Being self-anchored, it carries no energy term: the
-      picture keeps its look as ray_num grows, and the config alone does NOT
-      determine output brightness (ray_num co-determines it).
+                       / (ComputeAxisSolidAngle(this view) × anchor_l99_sky_)
+    — anchored to the SCENE's sky radiance. anchor_l99_sky_ is the P99 radiance
+      per steradian over the session's fixed full-sky equal-area anchor plane
+      (core/anchor_buffer.hpp), measured once per snapshot by AnchorConsumer and
+      pushed in by ServerImpl::DoSnapshot; no lens, fov, view pose, `visible`
+      clip or output resolution can move it. ComputeAxisSolidAngle
+      (core/lens_proj_build.hpp) converts that radiance into the units this
+      renderer's buffer holds. The GUI reads the SAME two numbers and multiplies
+      where this divides (§2.5), so the two land on one per-pixel expression
+      rather than on two anchors argued to be equal — see §2.8 for what this
+      replaced and what it moved.
+      Being anchored to a statistic over the accumulation rather than to emitted
+      energy, it still carries no energy term: the picture keeps its look as
+      ray_num grows, and the config alone does NOT determine output brightness
+      (ray_num co-determines it).
 
 kAbsolute:
     ExposureScale() = intensity_factor_ × kNormScale × total_pix
@@ -276,28 +303,37 @@ appearance-only field — like `intensity_factor_`, it never triggers
 `NeedsRebuild()` (§6.4) because it selects which formula runs, not the
 accumulation layout.
 
-### §2.7 The Metering Rule: `kRelative` Anchors to the Whole Buffer, Not to What `visible` Leaves on Screen
+### §2.7 The Metering Rule: `visible` Does Not Reach the Meter
 
-`ComputeP99Y` in §2.6's `kRelative` formula is handed the **whole** snapshot buffer
-(`render.cpp`, `ExposureScale()`'s `kRelative` branch): every pixel that received energy,
-including the pixels the `visible` hemisphere clip will drop on the way to the image. The
-visibility mask (`BuildVisibleMask`, applied in `PostSnapshot` and `ApplyCompositeBackground`)
-is a **display** clip, applied after metering — it decides what you see, never what the meter
-measured. `ParticipatingExposureScale` is filtered by color-class participation (§6.6) and by
-nothing else; it is not filtered by `visible` either.
+`visible` is a **display** clip and never a metering input. The visibility mask
+(`BuildVisibleMask`, applied in `PostSnapshot` and `ApplyCompositeBackground`) decides what you
+see, never what the meter measured. `ParticipatingExposureScale` is filtered by color-class
+participation (§6.6) and by nothing else; it is not filtered by `visible` either.
 
-This is one rule shared with the GUI rather than a CLI-side choice. The GUI's own auto-EV
-(`ComputeEvAuto`, §2.5) anchors to a full-sky texture, because the commit arm that produces
-that texture pins `visible` to FULL regardless of the user's setting (`gui/file_io.cpp`'s
-`kSimCommit` branch; the divergence is declared in `test_scene_commit_chain.cpp`'s
-`kDivergingKeys`). Filtering the server's P99 by the visibility mask would therefore give the
-two paths two different metering rules — the class of core/GUI divergence this work exists to
-remove. Pinned by
-`RenderConsumerMeteringRule.RelativeExposureAnchorsToTheWholeBufferNotTheVisibleSubset`
-(`test/unit-correctness/server/test_render_consumer_visible_mask.cpp`), which meters one ray
-batch under `visible: upper` and `visible: full` and demands one scale.
+Since the two-sided anchor (§2.8) this is **structural rather than a discipline the code has to
+keep**. The `kRelative` anchor is measured by `AnchorConsumer` over a fixed full-sky plane that
+has no `visible` field, no lens and no view pose to consult; there is no longer a place where
+the mask *could* be applied to the meter. Previously the anchor was a P99 over the renderer's own
+output buffer, so "hand it the whole buffer, not the visible subset" was a rule someone could
+have got wrong.
 
-#### The brightness migration this rule charges for
+What the rule guarded is unchanged: the GUI and the server must meter the same thing, and the GUI
+simulates through a commit arm that pins `visible` to FULL regardless of the user's setting
+(`gui/file_io.cpp`'s `kSimCommit` branch; the divergence is declared in
+`test_scene_commit_chain.cpp`'s `kDivergingKeys`). The property is now pinned one level up, as the
+stronger statement it became: `RenderConsumerMeteringRule.RelativeExposureIsIndependentOfThisFramesOwnPixels`
+(`test/unit-correctness/server/test_render_consumer_visible_mask.cpp`) meters one ray batch under
+`visible: upper` and `visible: full` **and** with a ray deleted, demands one scale for all three,
+and restates the retired per-view rule inside itself as the control that says those equalities
+are not vacuous.
+
+#### The brightness migration the retired rule charged for
+
+> **Historical record.** The migration below shipped with the change that made `visible` a pure
+> display clip, and the numbers describe *that* step. The mechanism it charges for cannot recur:
+> the anchor no longer sees `visible` at all, by construction. The current step's own migration
+> is §2.8, and it supersedes this one wherever the two would both apply.
+
 
 `visible` became a pure display clip for all four lens families: no lens type culls ray energy
 any more (previously the single-lens branch of `ProjectExitToPixel` dropped rays outside the
@@ -347,6 +383,139 @@ Restoring a previous look, if a specific render needs it:
 No compensating scale is applied anywhere in the pipeline. Compensating would mean making the
 meter a function of `visible` again by a different route, which is the thing this section rules
 out.
+
+### §2.8 The Two-Sided Anchor: One Number for the CLI and the GUI
+
+#### What it replaced
+
+`ev_mode: relative` used to anchor each side to **its own** P99, over two different pixel
+populations:
+
+- the CLI, to a P99 over the renderer's own output buffer (`ExposureScale`);
+- the GUI, to a P99 over the whole simulation texture (`server_poller.cpp`).
+
+Both were "the frame anchoring to itself", and the two were argued to be equivalent. They are
+not, and the failure is not subtle once named: **a P99 over an output buffer is a property of the
+sky times the lens**, because the buffer holds `L · Ω_p` and `Ω_p` is the projection's own
+vignetting. Point two different lenses at one sky and they disagree about how bright that sky is
+— measured at up to **2.5 stops** across ordinary configs (table below), and the CLI/GUI pair
+carried the residue as a constant gain neither side could see alone.
+
+#### What replaced it
+
+One measurement, two consumers, and a unit conversion at each end:
+
+```
+core     L99_sky  = P99( fixed full-sky equal-area anchor plane ) / Ω_anchor      [radiance, per sr]
+                    — AnchorConsumer + core/anchor_buffer.hpp; no lens, fov, view,
+                      `visible` or output resolution can move it.
+
+CLI      scale    = intensity_factor · target_linear / ( Ω_axis(view) · L99_sky )
+                    — its buffer holds L·Ω_p, so it DIVIDES by the on-axis solid angle.
+
+GUI      ev_auto  = ComputeEvAuto( Ω_axis(sim texture) · L99_sky, snapshot_intensity, 135 )
+                    — its texture holds L·Ω_texel, so it MULTIPLIES by the same kind of factor.
+```
+
+Both reduce to the same per-pixel expression, which is what makes this an elimination of the
+divergence rather than a replacement of two anchors by two nearly-equal ones:
+
+```
+displayed(pos) = L(pos) · m(pos) / L99_sky ,      m = Ω_p(pos) / Ω_axis
+```
+
+`m` is the target lens's **relative illumination**, supplied per pixel by the preview shader
+(`src/gui/preview_jacobian.hpp`) and baked into the CLI's buffer by the projection itself. The
+two implementations therefore look different — only the CLI's expression names `Ω_axis` — and
+that asymmetry is the design, not an omission.
+
+`Ω_axis` is published per renderer as `LUMICE_RawXyzResult::axis_solid_angle` (§2.4), which is
+what lets *any* C API consumer reproduce the relative scale, not only the GUI. Before it, the
+header promised reproducibility for the absolute branch (`emitted_energy`) and could not deliver
+it for the default one.
+
+#### The migration law
+
+```
+new_scale / old_scale  =  p99_view / ( Ω_axis(view) · L99_sky )
+```
+
+Both factors on the right are obtainable by a caller: `Ω_axis(view)` and `L99_sky` are published
+fields, and `p99_view` is the P99 the caller's own previous pipeline computed. Unlike §7.2's
+`landed_fraction` this is **not** a quantity core can hand you directly — it depends on the
+retired anchor, which nothing computes any more.
+
+**Every `ev_mode: relative` render moves**, not only the ones some previous migration singled
+out. There is no lens, fov or resolution for which the two anchors coincide except by accident.
+
+Measured across 13 lens/fov/resolution combinations on two scenes (a 22° halo and a parhelion
+display), paired within one simulation so no run-to-run noise enters the ratio:
+
+| view | halo_22 | parhelion |
+|---|---|---|
+| `dual_fisheye_equal_area` 180° 1024×512 | −0.07 | −0.24 |
+| `fisheye_equal_area` 180° 512² (zenith) | +0.20 | −0.24 |
+| `fisheye_equal_area` 120° 512² | +0.67 | **+1.53** |
+| `fisheye_equidistant` 180° 512² | −0.07 | −0.49 |
+| `fisheye_stereographic` 180° 512² | −0.89 | **−1.02** |
+| `rectangular` 360° 1024×512 | −0.38 | −0.83 |
+| `linear` 120° 512×683 | −0.73 | −0.89 |
+| `linear` 60° 512² | +0.60 | **+2.55** |
+| `linear` 20° 512² | **−2.02** | +0.26 |
+| `linear` 20° 1024² | −1.45 | −0.27 |
+
+Stops; negative = darker after. Range **−2.02 … +2.55 stop (24×)**.
+
+> ⚠️ The sign is **not** a function of how narrow the frame is, and "a narrow lens no longer
+> auto-brightens" is the wrong summary. `linear 20°` moves −2.02 stop on one scene and +0.26 on
+> the other; `linear 60°` moves **+2.55** on the scene where 20° moved up only slightly. What
+> the shift actually measures is `L99(what this frame is looking at) / L99(the whole sky)`, so it
+> depends on whether the framing happens to hold the bright features. Do not extrapolate from
+> this table to a scene that matters — re-measure it.
+
+#### The two behaviour changes this buys, and why they are wanted
+
+1. **Changing the view no longer changes the brightness.** Two renders of one document at
+   different fovs, lenses or camera angles are now directly comparable: the same sky direction
+   is displayed at the same brightness in both. Previously a narrow frame metered only what it
+   held and re-normalized to fill the tonal range, so cropping in was indistinguishable from
+   the scene getting brighter.
+2. **Changing the output resolution no longer changes the brightness.** `linear 20°` measured
+   0.52–0.57 stop between 512² and 1024² under the retired anchor. The anchor is now a radiance,
+   independent of any resolution — the renderer's and the anchor plane's alike. In the GUI this
+   is the more visible half: moving the `sim_resolution` slider used to re-expose the preview,
+   because the texture that slider sizes *was* the anchor.
+
+Both are the same statement — the exposure describes the scene, not the act of looking at it,
+which is what a camera does — and both are the reason the shifts in the table are accepted
+rather than compensated for.
+
+#### The cost this pays off
+
+`§2.6` used to record, as an accepted cost, that under `relative` **the config alone does not
+determine output brightness**. Half of that is now paid off and half is not, and the split is
+worth stating precisely because it is easy to over-claim:
+
+- **Paid off:** the *view* no longer co-determines brightness. Lens, fov, camera pose, `visible`
+  and output resolution are all out of the anchor, structurally.
+- **Still true, and deliberately so:** `ray_num` co-determines it. The anchor is a P99 over an
+  accumulating Monte-Carlo estimate, so it converges as the run proceeds; that self-anchoring is
+  exactly what keeps a picture's look stable as `ray_num` grows (§7.4), and giving it up means
+  `ev_mode: absolute`, which exists for callers who want it.
+
+So: "the same config renders at the same brightness however you look at it" is now true; "the
+config file fully determines the brightness" is still false under `relative`, and is what
+`absolute` is for.
+
+#### What is NOT covered
+
+`ParticipatingExposureScale` — the composite (raypath-colour) path's anchor (§6.6) — was audited
+and deliberately left alone. It anchors the *participating class lanes* of this view, which is a
+different physical question ("which rays are being shown"), and it has never had the divergence
+this section removes: it is computed once, server-side, and the GUI reads the same
+`composite_p99_y` field the CLI's own bake used. One consequence is worth knowing, because it is
+new: mono `relative` is now view-independent while composite `relative` is not, so toggling
+raypath colour changes how the brightness responds to a fov change.
 
 ---
 
@@ -850,18 +1019,25 @@ m(pos) = Ω_p(pos) / Ω_p(on axis)
 ```
 
 — the projection's relative illumination, dimensionless and 1 at the frame centre — and NOT the
-absolute ratio `Ω_p / Ω_texel_source`. The reason is mechanical. Both sides self-anchor their
-exposure, and on different images: the GUI's relative-EV denominator is a P99 over the **source
-texture** (`src/gui/server_poller.cpp`'s `LUMICE_ComputeP99Y`, taken before any reprojection), the
-CLI's is a P99 over its **own already-Jacobian-baked render** (`RenderConsumer::ExposureScale`,
-`src/server/render.cpp`). Writing both chains out, the GUI displays `L / P99_sky(L)` and the CLI
-displays `L · Ω_p / P99_frame(L · Ω_p)`: the *scale* of `Ω_p` cancels on the CLI side against its
-own anchor, and only its *shape* was ever missing. Multiplying by the absolute ratio would therefore
-not restore agreement — it would add a second, uncorrelated global gain whose physical content is
-the preview canvas's angular resolution, which is a display choice. Measured: that gain is 0.331 for
-an equal-area fisheye at fov 96 on 512×683 (the GUI would go three times too dark) and 16 for a
-rectilinear lens at fov 160 on the same canvas (sixteen times too bright, i.e. clipped). It would
-have turned two green parity scenes red to fix a third.
+absolute ratio `Ω_p / Ω_texel_source`.
+
+The reason used to be an argument about two self-anchors, and since §2.8 it is an identity. Both
+sides now divide by the same published sky radiance `L99_sky`, and each converts it into its own
+buffer's units with that buffer's own on-axis solid angle — the CLI divides by `Ω_axis(view)`, the
+GUI multiplies by `Ω_axis(sim texture)`. Writing both chains out:
+
+```
+CLI displays   L · Ω_p / ( Ω_axis · L99_sky )   =   L · m(pos) / L99_sky
+GUI displays   L · m(pos) / L99_sky
+```
+
+so a factor normalized **on axis** is exactly what makes the two the same picture; any other
+normalization point would leave a lens-dependent gain between them. Multiplying by the absolute
+ratio would add a global gain whose physical content is the preview canvas's angular resolution,
+which is a display choice. Measured: that gain is 0.331 for an equal-area fisheye at fov 96 on
+512×683 (the GUI would go three times too dark) and 16 for a rectilinear lens at fov 160 on the
+same canvas (sixteen times too bright, i.e. clipped). It would have turned two green parity scenes
+red to fix a third.
 
 **What this means for `kAbsolute`.** `kAbsolute` does not re-derive its anchor per frame, so
 whatever the shader multiplies in lands directly in absolute brightness. Normalizing on axis decides
