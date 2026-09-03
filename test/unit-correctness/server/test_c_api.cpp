@@ -44,11 +44,24 @@ static_assert(sizeof(((LUMICE_StatsResult*)nullptr)->crystal_num) >= 8, "stats c
 // that 4-byte pad at offset 52 rather than onto the end, so the size stays 64 and
 // `epoch` keeps offset 56 — the offset asserts below are what make that a checked
 // claim rather than a hoped-for one.
-static_assert(sizeof(LUMICE_RawXyzResult) == 64, "LUMICE_RawXyzResult ABI must be 64 bytes (capi_runner.py mirror)");
+// The exposure anchor `anchor_l99_sky` then found NO pad left to occupy — the four asserts
+// below are what turned that from an assumption into a checked fact — so it went on the end
+// at offset 64 and the struct grew to 68, rounded to 72 by its own 8-byte alignment. This is
+// a real ABI size change, not a free append: an un-recompiled caller's buffer is 8 bytes
+// short per row. Both numbers are asserted rather than one derived from the other, because
+// an offset can move without the size changing and vice versa.
+static_assert(sizeof(LUMICE_RawXyzResult) == 72, "LUMICE_RawXyzResult ABI must be 72 bytes (capi_runner.py mirror)");
 static_assert(offsetof(LUMICE_RawXyzResult, effective_pixels) == 48, "LUMICE_RawXyzResult layout drift");
 static_assert(offsetof(LUMICE_RawXyzResult, emitted_energy) == 52,
               "emitted_energy must occupy the pre-existing pad, not grow the struct");
 static_assert(offsetof(LUMICE_RawXyzResult, epoch) == 56, "epoch offset must be unchanged by emitted_energy");
+// Lands in the tail padding anchor_l99_sky's 8-byte rounding created, so it costs no size. The
+// offset assertion is what says it went THERE and not onto the end (which would grow the struct
+// to 80 and silently overrun every mirrored caller's buffer).
+static_assert(offsetof(LUMICE_RawXyzResult, axis_solid_angle) == 68,
+              "axis_solid_angle must occupy anchor_l99_sky's tail padding, not extend the struct");
+static_assert(offsetof(LUMICE_RawXyzResult, anchor_l99_sky) == 64,
+              "anchor_l99_sky must append after epoch, leaving every existing offset alone");
 
 // ABI guards for the other structs test/e2e/capi_runner.py mirrors. Added after
 // task-cuda-ctypes-teardown-crash: LUMICE_RenderResult grew from 24 → 32 bytes

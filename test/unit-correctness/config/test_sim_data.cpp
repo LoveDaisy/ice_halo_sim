@@ -64,8 +64,9 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // stochastic/deterministic pair (+2 size_t, 16B), bumping 360 → 376.
 // The absolute-normalization denominator adds emitted_energy_ (float, 4B) next
 // to root_ray_count_, padded to 8B by the size_t fields around it, bumping
-// 376 → 384.
-static_assert(sizeof(SimData) == 384,
+// 376 → 384. The exposure anchor adds anchor_y_pixel_data_ (vector<float>, 24B)
+// for the device-side anchor-plane drain, bumping 384 → 408.
+static_assert(sizeof(SimData) == 408,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -133,6 +134,10 @@ SimData MakePopulatedSimData() {
   // the drained per-class Y lanes on the consumer queue's move path.
   s.lane_pixel_data_ = { 0.11f, 0.22f, 0.33f, 0.44f };
   s.lane_class_count_ = 2;
+  // The exposure anchor plane, on the same footing and with the same move-assign trap.
+  // Distinct values from lane_pixel_data_ above so a copy/move that crossed the two
+  // vectors cannot pass by coincidence.
+  s.anchor_y_pixel_data_ = { 1.5f, 2.5f, 3.5f };
   s.crystals_.emplace_back();
   // Propagation coverage for both halves of the crystal-geometry count. They
   // are distinct fields with distinct values on purpose: a copy/move that
@@ -995,6 +1000,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_FLOAT_EQ(copy.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(copy.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
   EXPECT_EQ(copy.lane_class_count_, 2u) << "lane_class_count_ not copied";
+  EXPECT_EQ(copy.anchor_y_pixel_data_, original.anchor_y_pixel_data_) << "anchor_y_pixel_data_ not copied";
   EXPECT_EQ(copy.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not copied";
   EXPECT_EQ(copy.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not copied";
   EXPECT_EQ(copy.stochastic_orientation_sample_count_, 6400u) << "stochastic_orientation_sample_count_ not copied";
@@ -1022,6 +1028,9 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
   copy.lane_pixel_data_.clear();
   EXPECT_EQ(original.lane_pixel_data_.size(), 4u) << "lane_pixel_data_ not deep-copied";
+
+  copy.anchor_y_pixel_data_.clear();
+  EXPECT_EQ(original.anchor_y_pixel_data_.size(), 3u) << "anchor_y_pixel_data_ not deep-copied";
 
   copy.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-copied";
@@ -1057,6 +1066,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_FLOAT_EQ(target.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(target.lane_pixel_data_, original.lane_pixel_data_);  // task-358.1 Step 4
   EXPECT_EQ(target.lane_class_count_, 2u) << "lane_class_count_ not assigned";
+  EXPECT_EQ(target.anchor_y_pixel_data_, original.anchor_y_pixel_data_) << "anchor_y_pixel_data_ not assigned";
   EXPECT_EQ(target.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not assigned";
   EXPECT_EQ(target.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not assigned";
   EXPECT_EQ(target.stochastic_orientation_sample_count_, 6400u) << "stochastic_orientation_sample_count_ not assigned";
@@ -1124,6 +1134,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_FLOAT_EQ(moved.xyz_landed_weight_, 1.5f);
   EXPECT_EQ(moved.lane_pixel_data_.size(), 4u);  // task-358.1 Step 4
   EXPECT_EQ(moved.lane_class_count_, 2u) << "lane_class_count_ not moved";
+  EXPECT_EQ(moved.anchor_y_pixel_data_.size(), 3u) << "anchor_y_pixel_data_ not moved";
   EXPECT_EQ(moved.stochastic_crystal_sample_count_, 4u) << "stochastic_crystal_sample_count_ not moved";
   EXPECT_EQ(moved.deterministic_crystal_count_, 9u) << "deterministic_crystal_count_ not moved";
   EXPECT_EQ(moved.stochastic_orientation_sample_count_, 6400u) << "stochastic_orientation_sample_count_ not moved";
@@ -1155,6 +1166,7 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   // above (this is exactly the "same move-assign trap as outgoing_wl_" the
   // Step 4 comment at sim_data.cpp warns about).
   EXPECT_TRUE(original.lane_pixel_data_.empty());
+  EXPECT_TRUE(original.anchor_y_pixel_data_.empty());
 
   // (c) POD scalar fields are NOT reset on move — this is the current
   // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be
@@ -1197,6 +1209,11 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   ASSERT_EQ(dst.lane_pixel_data_.size(), 4u) << "lane_pixel_data_ not move-assigned";
   EXPECT_FLOAT_EQ(dst.lane_pixel_data_[0], 0.11f);
   EXPECT_EQ(dst.lane_class_count_, 2u) << "lane_class_count_ not move-assigned";
+  // The anchor plane rides the same path: this is the move-assign the consumer queue
+  // actually performs, so a plain copy here would drop it on exactly the GPU backends
+  // that produce one.
+  ASSERT_EQ(dst.anchor_y_pixel_data_.size(), 3u) << "anchor_y_pixel_data_ not move-assigned";
+  EXPECT_FLOAT_EQ(dst.anchor_y_pixel_data_[0], 1.5f);
 
   // Source moved-from state.
   EXPECT_EQ(src.rays_.rays_, nullptr);
@@ -1206,6 +1223,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   // task-358.1 Step 4 (code-review-01 Suggestion #3): same rationale as
   // MoveConstructTransfersOwnership above.
   EXPECT_TRUE(src.lane_pixel_data_.empty());
+  EXPECT_TRUE(src.anchor_y_pixel_data_.empty());
 
   // Self-move-assignment must preserve all fields (source code has
   // &other == this guard). Snapshot → self-move → assert preservation.

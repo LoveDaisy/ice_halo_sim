@@ -112,6 +112,9 @@ class CudaTraceBackend : public TraceBackend {
   // raypath_color config — the RenderConsumer then falls back to its host-side
   // rule-lane accumulation path (AC4 zero-cost).
   void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) override;
+  // Drain the device exposure-anchor plane and reset it for the next window. See
+  // TraceBackend::ReadbackAnchorBuffer for why a device-fused backend must accumulate one.
+  void ReadbackAnchorBuffer(std::vector<float>& anchor_y) override;
   // [TEST-ONLY] task-358.3 (renamed from SetCaptureComponent / ReadbackComponent
   // Capture after Fork-C retirement, closing blueprint §6(c) decoupling): the
   // ray's per-layer `this_mask` is now purely Design-2 colour bits (Fork-C

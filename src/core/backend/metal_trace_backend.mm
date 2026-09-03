@@ -39,6 +39,7 @@
 #include "core/filter_spec.hpp"
 #include "core/geo3d.hpp"
 #include "core/lat_lut.hpp"          // BuildLatLut / LatLut (330.2 unified LUT sampler)
+#include "core/anchor_buffer.hpp"    // BuildAnchorProjParams / kAnchorWidth (exposure anchor)
 #include "core/lens_proj_build.hpp"  // BuildProjParams / ProjParams (315.3 unified render projection)
 #include "core/math.hpp"
 #include "core/metal_filter_match_src.hpp"
@@ -224,6 +225,18 @@ struct KernelParams {
   // cap). Zero when no Complex filter is present. Must match the MSL field of
   // the same name in `KernelParams`.
   uint32_t and_term_counts_base_offset;
+  // The EXPOSURE ANCHOR's projection (core/anchor_buffer.hpp): a fixed full-sky dual
+  // equal-area view the user's config cannot touch. Built ONCE per session by
+  // BuildAnchorProjParams and consumed by a second lm_proj::ProjectExitToPixel call in the
+  // exit tail, whose hit is atomically added into anchor_buf (buffer 24).
+  //
+  // A whole second ProjParams rather than a couple of scalars because the anchor goes
+  // through the SAME projection function the render pass uses — the one property that makes
+  // the three backends' anchors agree without anyone auditing three copies of the math.
+  //
+  // Placed last, after the 4-byte and_term_counts_base_offset, so it starts at offset 300
+  // — 4-aligned, which is all ProjParams (max member alignment 4) requires.
+  lm_proj::ProjParams anchor_proj;
 };
 // sizeof(ProjParams) == 68 (5 ints + 3 floats + float[9]). Two fields have left it in the 478
 // series: rectangular's `az0` (the lens now consumes the full camera pose out of `rot` like every
@@ -237,8 +250,10 @@ struct KernelParams {
 // KernelParams therefore stays 304 across this change: the 4 bytes `visible_range` gave back are
 // absorbed by the internal pad its removal opened ahead of color_class_bits. That the two numbers
 // move independently is the whole reason both are asserted rather than one derived from the other.
+// The exposure anchor then appends a second ProjParams (68) at offset 300, taking the struct to
+// 368 with no new padding — ProjParams' own alignment is 4, and 300 is already 4-aligned.
 static_assert(sizeof(lm_proj::ProjParams) == 68u, "ProjParams layout drift — check projection_shared.h");
-static_assert(sizeof(KernelParams) == 304u,
+static_assert(sizeof(KernelParams) == 368u,
               "KernelParams size mismatch — update host struct to match Metal-side layout");
 
 // Device root-gen latitude path tags. Numeric wire encoding is single-sourced
@@ -716,6 +731,19 @@ struct MetalTraceBackend::Impl {
   // BuildProjParams(render, camera_rot, short_pix). Copied into
   // KernelParams::proj by DispatchLayer; consumed by ProjectExitToPixel.
   lm_proj::ProjParams proj_params_{};
+  // The exposure anchor's fixed projection + its device plane.
+  //   anchor_proj_params_ : BuildAnchorProjParams(), a constant of the build. Held as a
+  //                         member (not recomputed per dispatch) purely so the KernelParams
+  //                         fill stays a copy.
+  //   anchor_buf_         : atomic_float[kAnchorWidth * kAnchorHeight] of Y — Y ALONE, not
+  //                         packed XYZ, because the only consumer is a P99 over the Y
+  //                         channel. Same PERSISTENT third-clock lifecycle as
+  //                         class_lane_buf_ / xyz_image: zeroed on allocation, then reset
+  //                         per drain window by ReadbackAnchorBuffer, NEVER per BeginSession
+  //                         (BeginSession runs per BATCH, so zeroing there would discard
+  //                         every batch of the window but the last).
+  lm_proj::ProjParams anchor_proj_params_{};
+  id<MTLBuffer>   anchor_buf_ = nil;
 
   RandomNumberGenerator rng{ 0 };
   // Seed-once flag — see CpuTraceBackend::seeded_ rationale (per-SimBatch
@@ -1090,6 +1118,9 @@ struct MetalTraceBackend::Impl {
   // freshly allocated buffer. Idempotent: no-op when the requested capacity
   // matches the current allocation and shape.
   void EnsureClassLaneBuf(int w, int h);
+  // Allocate the exposure-anchor plane once (its size is a compile-time constant, so unlike
+  // the lane buffer it can never need regrowing) and zero it. Idempotent.
+  void EnsureAnchorBuf();
   // Poly/tri buffer sizes are the ACCUMULATED totals across every shape in the
   // K-shape pool being uploaded on this call (sum of per-shape poly_cnt /
   // tri_cnt). Grow-only: when a subsequent pool needs at most as much, this is
@@ -1299,6 +1330,16 @@ void MetalTraceBackend::Impl::EnsureClassLaneBuf(int w, int h) {
     class_lane_pix_capacity_ = needed_elems;
     std::memset([class_lane_buf_ contents], 0, needed_elems * sizeof(float));
   }
+}
+
+void MetalTraceBackend::Impl::EnsureAnchorBuf() {
+  if (anchor_buf_ != nil) {
+    return;
+  }
+  const size_t elems = static_cast<size_t>(kAnchorWidth) * static_cast<size_t>(kAnchorHeight);
+  anchor_buf_ = [device newBufferWithLength:elems * sizeof(float) options:MTLResourceStorageModeShared];
+  assert(anchor_buf_ != nil);
+  std::memset([anchor_buf_ contents], 0, elems * sizeof(float));
 }
 
 void MetalTraceBackend::Impl::EnsurePolyBuffers(size_t poly_cnt) {
@@ -2591,6 +2632,9 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // 315.3: single POD carries all projection routing (proj_type /
   // r_scale / max_abs_dz / scale / rot / etc.) into the kernel exit tail.
   params.proj     = proj_params_;
+  // The exposure anchor's own projection — a session constant, identical on every dispatch
+  // and independent of everything in `spec`.
+  params.anchor_proj = anchor_proj_params_;
   // task-358.3 (renamed from capture_component): gate the test-only capture
   // ring append (0 in prod → append branch skipped).
   params.capture_ray_mask = capture_ray_mask_ ? 1u : 0u;
@@ -2767,6 +2811,7 @@ void MetalTraceBackend::Impl::DispatchLayer(size_t num_rays,
   // buffer, allocated as class_count * W * H (or a 4-byte dummy when
   // class_count==0 so this binding stays non-nil under Metal's nil-ban).
   [enc setBuffer:class_lane_buf_           offset:0 atIndex:29];
+  [enc setBuffer:anchor_buf_               offset:0 atIndex:24];
 
   NSUInteger tg = std::min<NSUInteger>(256, pso.maxTotalThreadsPerThreadgroup);
   [enc dispatchThreads:MTLSizeMake(num_rays, 1, 1)
@@ -2865,6 +2910,7 @@ void MetalTraceBackend::Impl::Reset() {
   // scrum-268.8 (DR-3): cie_x/y/z removed from Impl.
   // 315.3: unified projection params reset to POD default.
   proj_params_ = lm_proj::ProjParams{};
+  anchor_proj_params_ = lm_proj::ProjParams{};
   have_crystal = false;
   current_n_idx = 0.0f;
   // K-shape pool bookkeeping: host-side state clears every session so a stale
@@ -3122,6 +3168,12 @@ void MetalTraceBackend::BeginSession(const SessionSpec& spec) {
   // BeginSession), then re-zeroed by ReadbackClassLanes after every drain
   // window — mirrors the landed_weight_buf_ lifecycle.
   impl_->EnsureClassLaneBuf(impl_->width, impl_->height);
+
+  // The exposure anchor: one fixed full-sky plane per session, geometry from
+  // core/anchor_buffer.hpp and NOT from `spec`. Both calls are idempotent and cheap; they
+  // sit here rather than in the constructor only because `device` is created lazily.
+  impl_->anchor_proj_params_ = BuildAnchorProjParams();
+  impl_->EnsureAnchorBuf();
 
   // task-358.3: reset the per-session ray-mask capture accumulators (renamed
   // from component-mask; Fork-C ComponentTable retired).
@@ -3651,6 +3703,20 @@ void MetalTraceBackend::ReadbackClassLanes(std::vector<float>& lane_data, size_t
   // Reset the device accumulator so the next window starts clean (mirrors
   // ReadbackXyzAccum's post-copy zero on xyz_image / landed_weight_buf_).
   std::memset([impl_->class_lane_buf_ contents], 0, total * sizeof(float));
+}
+
+// The exposure-anchor drain, on the same cadence and with the same reset discipline as
+// ReadbackClassLanes above. Fixed size, so unlike the lane drain there is no capacity
+// invariant to check — the plane is kAnchorWidth * kAnchorHeight or it does not exist.
+void MetalTraceBackend::ReadbackAnchorBuffer(std::vector<float>& anchor_y) {
+  if (impl_->anchor_buf_ == nil) {
+    anchor_y.clear();
+    return;
+  }
+  const size_t elems = static_cast<size_t>(kAnchorWidth) * static_cast<size_t>(kAnchorHeight);
+  anchor_y.resize(elems);
+  std::memcpy(anchor_y.data(), [impl_->anchor_buf_ contents], elems * sizeof(float));
+  std::memset([impl_->anchor_buf_ contents], 0, elems * sizeof(float));
 }
 
 // task-268.4 per-layer destructive drain. Identical to ReadbackExitRays

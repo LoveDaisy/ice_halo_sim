@@ -123,6 +123,9 @@ class MetalTraceBackend : public TraceBackend {
   // per-color-class Y accumulator to host and reset the device side for the
   // next window. See TraceBackend::ReadbackClassLanes for contract + layout.
   void ReadbackClassLanes(std::vector<float>& lane_data, size_t& class_count) override;
+  // Drain the device exposure-anchor plane and reset it for the next window. See
+  // TraceBackend::ReadbackAnchorBuffer for why a device-fused backend must accumulate one.
+  void ReadbackAnchorBuffer(std::vector<float>& anchor_y) override;
   // scrum-312.4: Metal joins the third clock (persistent cross-batch XYZ
   // accumulator + display-cadence drain). Unlike CUDA the payoff is architectural
   // uniformity, not throughput — unified-memory readback was already ~free.

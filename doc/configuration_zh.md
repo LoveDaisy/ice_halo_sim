@@ -622,7 +622,7 @@ habit（而不仅是均值对称）的唯一方式——最典型的场景是三
 | `background` | 浮点数组 | 否 | [0, 0, 0] | 背景颜色 RGB，**sRGB** 空间（即取色器上显示的那组数） |
 | `ray_color` | 浮点数组 | 否 | [-1, -1, -1] | 光线颜色 RGB，-1表示使用真实颜色 |
 | `intensity_factor` | 浮点数 | 否 | 1.0 | 强度因子（`2^EV`） |
-| `ev_mode` | 字符串 | 否 | "relative" | 曝光锚点：`"relative"` 自锚到本帧自身 P99（历史行为——画面外观随 `ray_num` 增长保持不变，但 config 本身不能决定输出亮度）；`"absolute"` 锚到光源发射的能量，使不同 config 在同一 `intensity_factor` 下直接可比（仅限同一 lens/FOV/分辨率——见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7）。缺该键或值无法识别都视为 `"relative"`。另见 [`doc/adaptive-brightness.zh.md`](adaptive-brightness.zh.md) §3。 |
+| `ev_mode` | 字符串 | 否 | "relative" | 曝光锚点：`"relative"` 锚到**场景**的天空亮度——在一块固定全天缓冲上量到的 P99 辐亮度，因此 lens / FOV / 相机朝向 / `visible` / 输出分辨率都不再改变曝光，同一份 config 无论怎么看都渲染出同样的亮度（画面外观同样随 `ray_num` 增长保持稳定，即 `ray_num` 仍与亮度相关——那正是 `"absolute"` 存在的理由）；`"absolute"` 锚到光源发射的能量，使不同 config 在同一 `intensity_factor` 下直接可比（仅限同一 lens/FOV/分辨率——见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §7）。缺该键或值无法识别都视为 `"relative"`。⚠️ 换锚时 `"relative"` 的输出亮度**发生了位移**：所有 config 都会动，实测语料上为 −2.02…+2.55 stop，方向取决于场景；迁移律与实测表见 [`doc/ev-pipeline-architecture.md`](ev-pipeline-architecture.md) §2.8，若某张图需要恢复旧观感，`intensity_factor` 可精确抵消。另见 [`doc/adaptive-brightness.zh.md`](adaptive-brightness.zh.md) §3。 |
 | `grid` | 对象 | 否 | 见下方 | 网格配置 |
 | `filter` | 整数数组 | 否 | [] | 多散射过滤器ID数组 |
 

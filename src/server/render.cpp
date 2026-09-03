@@ -180,6 +180,13 @@ bool RenderConsumer::HasColorClassSignal(size_t class_idx) const {
   return false;
 }
 
+float RenderConsumer::AxisSolidAngle() const {
+  // Rebuilt rather than cached: it is a handful of trig, called once per snapshot, and taking it
+  // from the same BuildProjParams the per-ray path uses is what stops it being computed against a
+  // fov, a resolution or an overlap the projection did not actually use.
+  return ComputeAxisSolidAngle(BuildProjParams(config_, rot_, short_pix_));
+}
+
 // task-336.3: single source of truth for the mono-image exposure scale (see
 // plan §1.1). PostSnapshot() below calls this so the inline scale and the
 // compositor's scale can never drift apart.
@@ -195,31 +202,48 @@ float RenderConsumer::ExposureScale() const {
     return config_.intensity_factor_ * kNormScale * total_pix / snapshot_emitted_energy_;
   }
 
-  // kRelative: anchor to THIS frame's own P99, reproducing what the GUI displays today.
+  // kRelative: anchor to the SCENE's sky radiance, which is the same number the GUI anchors to.
   //
-  // The GUI does it in two hops -- ComputeEvAuto returns
-  // ev = log2(target_linear * snapshot_intensity / p99_coarse), the pipeline consumes it as
+  // The denominator is `Omega_axis(this view) * L99_sky`, and the two factors answer two
+  // different questions that used to be answered by one P99 over this renderer's own buffer:
+  //   * L99_sky (anchor_l99_sky_) is HOW BRIGHT THE SKY IS — a P99 radiance per steradian over
+  //     the session's fixed full-sky equal-area anchor plane, invariant to lens, fov, view,
+  //     `visible` and output resolution. Measured once per snapshot by AnchorConsumer and pushed
+  //     in by DoSnapshot; see core/anchor_buffer.hpp for why it is a radiance and not a raw P99.
+  //   * Omega_axis converts that radiance into the units THIS buffer holds. Each pixel here
+  //     accumulated the energy arriving over its own solid angle, so the buffer is `L * Omega_p`;
+  //     dividing by the ON-AXIS solid angle leaves `L * m(pos) / L99_sky`, where
+  //     m = Omega_p / Omega_axis is exactly the relative illumination the GUI preview shader
+  //     applies per pixel (src/gui/preview_jacobian.hpp). That is why the two sides now agree
+  //     even though the expressions do not look alike: the GUI's texture holds bare L and its
+  //     shader carries m(pos), so its scalar needs no Omega_axis, and the two chains meet on the
+  //     same per-pixel product.
+  //
+  // The GUI reaches its half in two hops -- ComputeEvAuto returns
+  // ev = log2(target_linear * snapshot_intensity / anchor), the pipeline consumes it as
   // intensity_factor = 2^ev, and the shader then multiplies raw Y by
   // intensity_scale = intensity_factor / snapshot_intensity. The snapshot_intensity CANCELS
-  // between those two hops, leaving an effective per-pixel multiplier of
-  // target_linear / p99_coarse. That is why the expression below carries no energy term at all,
-  // neither emitted nor landed: a self-anchored scale cannot contain one. (Same cancellation,
-  // same reason, as ParticipatingExposureScale below -- see its comment for the failure mode a
-  // naive mirror of ComputeEvAuto's numerator produces.)
+  // between those two hops, leaving an effective per-pixel multiplier of target_linear / anchor.
+  // That is why the expression below carries no energy term at all, neither emitted nor landed:
+  // an anchor that is itself a statistic over the accumulation cannot contain one. (Same
+  // cancellation, same reason, as ParticipatingExposureScale below -- see its comment for the
+  // failure mode a naive mirror of ComputeEvAuto's numerator produces.)
   //
   // What is deliberately NOT reproduced is ComputeEvAuto's clamp to [-6, 6] stops. That clamp
   // guards a GUI slider's usable range; applying it here would make the CLI's brightness depend
   // on a UI affordance the CLI does not have.
-  const float p99 =
-      ComputeP99Y(snapshot_xyz_.get(), config_.resolution_[0], config_.resolution_[1], kMonoAnchorDownsampleFactor);
-  if (p99 <= 0.0f) {
+  if (anchor_l99_sky_ <= 0.0f) {
+    return 0.0f;
+  }
+  const float omega_axis = AxisSolidAngle();
+  if (omega_axis <= 0.0f) {
     return 0.0f;
   }
   const float target_linear = TargetWhiteToLinear(kAnchorTargetWhite);
   if (target_linear <= 0.0f) {
     return 0.0f;
   }
-  return config_.intensity_factor_ * target_linear / p99;
+  return config_.intensity_factor_ * target_linear / (omega_axis * anchor_l99_sky_);
 }
 
 // task-347 (Fix B): composite-path self-anchored exposure scale. See
@@ -985,16 +1009,23 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
   // handed over raw. Raw is what a caller needs to reproduce ExposureScale()
   // itself (scale = intensity_factor · kNormScale · total_pix / emitted_energy);
   // pre-dividing it would only force every caller to multiply the divisor back.
-  return { config_.id_,
-           config_.resolution_[0],
-           config_.resolution_[1],
-           snapshot_xyz_.get(),
-           per_pixel_intensity,
-           config_.intensity_factor_,
-           {},
-           {},
-           effective_pix_,
-           snapshot_emitted_energy_ };
+  //
+  // The relative branch's own divisor is published the same way and for the same reason: the
+  // anchor is a radiance, this buffer is a radiance times a solid angle, and without the solid
+  // angle a caller cannot get from one to the other. `anchor_l99_sky_` is filled in by
+  // ServerImpl::DoSnapshot (it belongs to the session, not to this renderer); this one is ours.
+  RawXyzResult r{ config_.id_,
+                  config_.resolution_[0],
+                  config_.resolution_[1],
+                  snapshot_xyz_.get(),
+                  per_pixel_intensity,
+                  config_.intensity_factor_,
+                  {},
+                  {},
+                  effective_pix_,
+                  snapshot_emitted_energy_ };
+  r.axis_solid_angle_ = AxisSolidAngle();
+  return r;
 }
 
 // See doc/ev-pipeline-architecture.md §3.2

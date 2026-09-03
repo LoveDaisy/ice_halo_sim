@@ -208,6 +208,17 @@ struct SimData {
   // (W*H)` — carried so the consumer can validate the shape without knowing W/H.
   std::vector<float> lane_pixel_data_;
   size_t lane_class_count_ = 0;
+  // The EXPOSURE ANCHOR plane, when a backend accumulated one on device.
+  // kAnchorWidth * kAnchorHeight floats of Y (core/anchor_buffer.hpp owns the geometry) —
+  // Y alone, not packed XYZ, because the only thing ever read off this plane is a P99 of
+  // its Y channel.
+  //
+  // Populated on the SAME drain cadence as lane_pixel_data_ above, via
+  // TraceBackend::ReadbackAnchorBuffer. Empty on every host-side path — there the
+  // AnchorConsumer projects out of outgoing_d_/outgoing_w_ itself, so there is nothing for
+  // a backend to hand over. The two cases are mutually exclusive by construction and the
+  // consumer branches on which one it got.
+  std::vector<float> anchor_y_pixel_data_;
 
   // --- Consumer-side bookkeeping (NOT physical render payload) ---
   // The fields below are counters the server/consumer use for stats + queue

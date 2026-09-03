@@ -294,15 +294,33 @@ struct ParityScene {
 // by a fixed factor whenever the exported canvas is not the simulation texture's own shape —
 // which is the "comparable only at equal lens / FOV / resolution" boundary
 // doc/ev-pipeline-architecture.md states for absolute mode, not a defect for this fixture to
-// report. Relative mode has no such term: both sides self-anchor on their own frame.
+// report. Relative mode has no such term: both sides read ONE anchor.
 //
-// What relative mode leaves behind is a residual, and it is stated rather than hidden: the two
-// anchors are P99 over DIFFERENT pixel populations (the GUI's over the whole simulation texture,
-// the CLI's over the framed view), so a narrow frame reads brighter on the GUI side. Measured on
-// the single-lens scene as the mean ratio over lit pixels: 1.36 at fov 60, 1.21 at fov 96, 1.13 at
-// fov 150 — monotone in how much sky the frame holds. It costs this scene absolute PSNR, and
-// nothing else: it is stable run to run (sigma below), so it lowers the operating point without
-// touching the gate's ability to see a field break, which the table above measures directly.
+// Relative mode used to leave a residual behind, and this note used to state it: the two anchors
+// were P99 over DIFFERENT pixel populations (the GUI's over the whole simulation texture, the
+// CLI's over the framed view), so a narrow frame read brighter on the GUI side — measured on the
+// single-lens scene as a mean ratio over lit pixels of 1.36 at fov 60, 1.21 at fov 96 and 1.13 at
+// fov 150, monotone in how much sky the frame holds.
+//
+// That residual is GONE. Both sides now divide by the same published sky radiance
+// (LUMICE_RawXyzResult::anchor_l99_sky) and each converts it into its own buffer's units with
+// that buffer's own on-axis solid angle (axis_solid_angle) — the CLI divides, the GUI multiplies,
+// and the two chains meet on one per-pixel expression. See doc/ev-pipeline-architecture.md 2.8.
+// Measured on these three scenes as the linear-light least-squares gain of CLI against GUI over
+// unsaturated lit pixels:
+//
+//   scene                     before        after
+//   full_sky_dual_fisheye     +0.018 stop   +0.002 stop
+//   single_lens_angled        -0.290 stop   +0.016 stop
+//   single_lens_rectilinear   +0.375 stop   +0.110 stop
+//
+// What survives on the rectilinear row is not the anchor: +0.110 stop is the radial cos^3
+// residual that scene exists to see (the two paths resample the source texture differently), and
+// it is why that row still reads below the other two's agreement rather than at infinity.
+//
+// The thresholds below all MOVED with this, and the direction is worth stating because it is the
+// opposite of what a relaxation looks like: every mean went UP, two of them slightly and the
+// rectilinear one by 4.2 dB.
 //
 // PROJECTION FAMILY. Two of the three scenes use an EQUAL-AREA projection and the third does not,
 // and the split is load-bearing in both directions. The CLI renders its lens directly, so each
@@ -375,12 +393,25 @@ const ParityScene kScenes[] = {
   // this file's stated 10 sigma bar either way. Its neighbour catches the identical break at
   // 26.05 dB, 1.15 dB under a threshold that sits 29 sigma below ITS mean. Same disposition, same
   // reason, as the dropped meridian two paragraphs up.
+  //
+  // RECALIBRATED 26.0 -> 27.0 with the two-sided exposure anchor (see the EXPOSURE ANCHOR note
+  // above). mean 27.517 sigma 0.0309 (N=12, range 27.46-27.57), up 0.46 dB from 27.058.
+  //
+  // The threshold had to move even though the mean moved AWAY from it, which is the opposite of
+  // this file's usual disposition, and the reason is that the BREAK moved too: the angular_dist
+  // single-line break this row exists to catch now reads 26.42 / 26.46 dB, up from 25.73, i.e.
+  // PAST the old 26.0 threshold. Left alone this row would have kept passing while quietly
+  // ceasing to gate anything. 27.0 = mean - 0.52 dB = 16.7 sigma, 0.46 dB below the worst honest
+  // run and 0.54 dB above the break — the widest split available inside a 0.75 dB window, since
+  // the 10 sigma bar caps the threshold at 27.21 and the break floors it at 26.46. The margins
+  // are smaller in dB than this file's other rows carry and larger in sigma; sigma is what the
+  // stated rule is written in, and this row's sigma is a third of what it was.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_zenith_nadir=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/26.0, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
   // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
   // angular_dist lines, at 26.89 dB. Raised from 27.0 when the grid was switched on: the mean moved
@@ -407,6 +438,14 @@ const ParityScene kScenes[] = {
   // second-smallest this scene owns rather than the smallest — the angular_dist single-line break
   // at 26.89 still binds — so the threshold stays where it is rather than being tightened onto the
   // more visible failure and away from the one that actually sets the floor.
+  //
+  // RE-MEASURED with the two-sided exposure anchor (see the EXPOSURE ANCHOR note above): mean
+  // 27.719 sigma 0.0272 (N=12, range 27.67-27.77), up 0.12 dB. This scene's arms already agreed to
+  // +0.018 stop before the change and now agree to +0.002, so there was little for it to gain —
+  // it is the full-sky equal-area lens, i.e. very nearly the anchor plane's own geometry.
+  // Threshold unchanged at 27.2: 19 sigma below the mean, 0.47 dB below the worst honest run, and
+  // still above the angular_dist single-line break, re-measured here at 26.89 / 26.97 dB (unmoved
+  // — it is an annotation break, and this row's exposure barely shifted).
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
@@ -437,10 +476,12 @@ const ParityScene kScenes[] = {
   // above. The threshold did not have to move with it. N=4 on the new mean, so do not read the
   // small sigma as a licence to run this tighter than 31.5.
   //
-  // RECALIBRATED 31.5 -> 29.9, and the cause is NAMED rather than filed as legitimate drift,
-  // because "the mean moved" is exactly what a real defect also looks like from here.
+  // HISTORY, 31.5 -> 29.9. Kept as a record because it is the measurement the row's current
+  // figure is read against, and because the mechanism it names — one arm's anchor moving while
+  // the other's stayed put — is exactly what the two-sided anchor below made impossible. It no
+  // longer describes this row's threshold; the current calibration is the block after it.
   //
-  // The cause is the change that made `visible` a DISPLAY-TIME clip. Before it, a single-lens
+  // The cause was the change that made `visible` a DISPLAY-TIME clip. Before it, a single-lens
   // scene with `visible: upper` had the excluded hemisphere's rays dropped inside
   // ProjectExitToPixel, so they never landed in the buffer the CLI's relative-EV anchor is
   // measured over. After it they land and are blanked at bake time instead — and the anchor is
@@ -468,27 +509,45 @@ const ParityScene kScenes[] = {
   //     their calibrated means and still 22 / 27 sigma above their own thresholds, against
   //     -1.75 dB here.
   //
-  // The new figure by this file's own two rules: mean 31.037 sigma 0.1098 (N=12 category runs on
-  // an idle machine, the same N the THRESHOLDS note above calibrates at). 29.9 is mean - 1.14 dB
-  // = 10.4 sigma, 1.02 dB below the worst honest run, and 3.46 dB above the largest reading of
-  // the break this row exists to catch (26.44 / 26.40 / 26.28, the relative-illumination factor
-  // absent from the shader). 30.0 was the figure this recalibration was authorized at, computed
-  // against an N=4 sigma of 0.096; at the sigma re-measured here it lands at 9.5 sigma, just
-  // under this file's stated 10 sigma bar, so the number followed the rule rather than the
-  // rounding. Do not read the small sigma as a licence to run this tighter — same caveat as
-  // every other row here, and N=12 on a mean that has just moved.
+  // The figure that step landed on, by this file's own two rules: mean 31.037 sigma 0.1098 (N=12
+  // category runs on an idle machine, the same N the THRESHOLDS note above calibrates at). 29.9
+  // was mean - 1.14 dB = 10.4 sigma, 1.02 dB below the worst honest run, and 3.46 dB above the
+  // largest reading of the break this row exists to catch (26.44 / 26.40 / 26.28, the
+  // relative-illumination factor absent from the shader).
   //
   // Why a re-shoot was not the disposition, which is what every other red in the same batch got:
   // this row owns no committed asset (see the top of this file — this suite must never enter
   // regen_gui_test_refs.py's GROUPS), so "the reference is stale" has no meaning for it. The
   // threshold IS the calibration, which is the one thing a legitimate move of the mean can make
   // it correct to re-measure rather than a way to turn a red green.
+  //
+  // END OF HISTORY. ---------------------------------------------------------------------------
+  //
+  // RECALIBRATED 29.9 -> 34.0 with the two-sided exposure anchor, and this is the row the change
+  // was predicted on: the constant gain named above was the whole reason 31.5 had to become 29.9,
+  // so removing it had to give the dB back. It did, and then some.
+  //
+  // mean 35.235 sigma 0.0225 (N=12 category runs on an idle machine). That is 4.20 dB above the
+  // 31.037 this row read under the retired anchor and 2.45 dB above the 32.79 it read before the
+  // `visible` change — i.e. the gain this pair "has always carried" is gone rather than merely
+  // restored to its earlier size. Measured directly on the two images as well: the linear-light
+  // least-squares gain of CLI against GUI fell from +0.375 stop to +0.110 stop, and what is left
+  // is the radial cos^3 residual this scene exists to see, not an anchor difference.
+  //
+  // 34.0 = mean - 1.235 dB = 54.9 sigma, 1.19 dB below the worst honest run, and 8.55 dB above
+  // the break this row exists to catch, RE-MEASURED at the new operating point rather than
+  // carried over: with the relative-illumination factor absent from the shader it now reads
+  // 25.43 / 25.48 / 25.44 dB (it was 26.44 / 26.40 / 26.28 — the break got deeper as the honest
+  // reading rose). The margin above the break is enormous and the threshold is deliberately not
+  // pushed into it: the binding consideration on this row is the same caveat every other row here
+  // carries, N=12 on a mean that has just moved a long way, so it keeps roughly the same dB of
+  // headroom over the worst honest run that the previous two calibrations used (1.02, 1.14).
   {"single_lens_rectilinear",
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_zenith_nadir=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/29.9, /*expect_w=*/512, /*expect_h=*/683},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.0, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
 // 512 -> a 1024x512 dual-equal-area simulation texture, the smallest this suite offers. Both the

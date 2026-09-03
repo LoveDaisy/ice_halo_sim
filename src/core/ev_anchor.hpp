@@ -43,12 +43,20 @@ inline float TargetWhiteToLinear(float target_white) {
 // trailing rows/cols that don't divide evenly are dropped (same rule as the
 // Python reference `e6_gold_downsample.py`).  Returns an empty vector if the
 // coarse dimensions collapse to zero so callers can fall back to the fine
-// path.  Channel index 1 (Y), stride 3 (XYZ).
+// path.
 //
-// PRECONDITION: `xyz_data` is a borrowed view of at least img_width*img_height*3 floats. A raw
-// pointer carries no length, so the caller's dimensions are the only bound this function has —
-// exactly as before, since the vector overload this replaced never consulted `.size()` either.
-inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width, int img_height, int f) {
+// `channel_stride` / `y_offset` name where Y sits: the default (3, 1) is a packed XYZ
+// image, which is what every render buffer is. The exposure anchor plane passes (1, 0)
+// because it stores Y ALONE — it is a measurement, not an image, and nothing downstream
+// of it ever reads an X or a Z. Two parameters rather than one derived from the other
+// because "stride 1 implies offset 0" is a coincidence of today's two callers, not a rule.
+//
+// PRECONDITION: `xyz_data` is a borrowed view of at least
+// img_width*img_height*channel_stride floats. A raw pointer carries no length, so the
+// caller's dimensions are the only bound this function has — exactly as before, since the
+// vector overload this replaced never consulted `.size()` either.
+inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width, int img_height, int f,
+                                            int channel_stride = 3, int y_offset = 1) {
   if (f <= 0 || img_width <= 0 || img_height <= 0) {
     return {};
   }
@@ -64,9 +72,11 @@ inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width
       int r0 = rc * f;
       int c0 = cc * f;
       for (int dr = 0; dr < f; ++dr) {
-        size_t row_base = (static_cast<size_t>(r0 + dr) * static_cast<size_t>(img_width)) * 3;
+        size_t row_base =
+            (static_cast<size_t>(r0 + dr) * static_cast<size_t>(img_width)) * static_cast<size_t>(channel_stride);
         for (int dc = 0; dc < f; ++dc) {
-          size_t idx = row_base + (static_cast<size_t>(c0 + dc) * 3) + 1;  // Y channel
+          size_t idx = row_base + (static_cast<size_t>(c0 + dc) * static_cast<size_t>(channel_stride)) +
+                       static_cast<size_t>(y_offset);
           sum += xyz_data[idx];
         }
       }
@@ -104,12 +114,16 @@ inline std::vector<float> DownsampleBoxSumY(const float* xyz_data, int img_width
 //
 // Returns 0 if no positive Y entries exist (fine or coarse, by path).
 //
-// PRECONDITION (same as DownsampleBoxSumY): `xyz_data` views at least img_width*img_height*3
-// floats. img_width/img_height are required rather than defaulted — a raw pointer carries no
-// length, so there is no buffer to fall back to measuring.
-inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor = 1) {
+// PRECONDITION (same as DownsampleBoxSumY): `xyz_data` views at least
+// img_width*img_height*channel_stride floats. img_width/img_height are required rather than
+// defaulted — a raw pointer carries no length, so there is no buffer to fall back to measuring.
+// `channel_stride` / `y_offset` default to a packed XYZ image; see DownsampleBoxSumY for the
+// one caller that does not have one.
+inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, int downsample_factor = 1,
+                         int channel_stride = 3, int y_offset = 1) {
   if (downsample_factor > 1) {
-    std::vector<float> coarse = DownsampleBoxSumY(xyz_data, img_width, img_height, downsample_factor);
+    std::vector<float> coarse =
+        DownsampleBoxSumY(xyz_data, img_width, img_height, downsample_factor, channel_stride, y_offset);
     if (!coarse.empty()) {
       std::vector<float> y_vals;
       y_vals.reserve(coarse.size());
@@ -131,10 +145,12 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
   // for an empty buffer. The explicit test is not decoration: unlike a vector's size(), a negative
   // int silently becomes an enormous size_t, and this loop has no other bound.
   const size_t float_count =
-      (img_width > 0 && img_height > 0) ? static_cast<size_t>(img_width) * static_cast<size_t>(img_height) * 3 : 0;
+      (img_width > 0 && img_height > 0) ?
+          static_cast<size_t>(img_width) * static_cast<size_t>(img_height) * static_cast<size_t>(channel_stride) :
+          0;
   std::vector<float> y_vals;
-  y_vals.reserve(float_count / 3);
-  for (size_t i = 1; i < float_count; i += 3) {
+  y_vals.reserve(float_count / static_cast<size_t>(channel_stride));
+  for (size_t i = static_cast<size_t>(y_offset); i < float_count; i += static_cast<size_t>(channel_stride)) {
     if (xyz_data[i] > 0.0f) {
       y_vals.push_back(xyz_data[i]);
     }
@@ -145,15 +161,24 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
   return NthElementP99(y_vals);
 }
 
-// The two numbers the P99 self-anchor is parameterised by. They have an owner here because the
-// server now anchors too (RenderConsumer::ExposureScale's kRelative branch), and a second
-// hardcoded copy of each would be a third place for them to drift.
+// The two numbers the P99 self-anchor is parameterised by.
 //
-// Both are MIRRORED, not shared, on the GUI side: `src/gui/` may not include `core/`, so
-// gui_constants.hpp::kEvAutoDownsampleFactor and GuiState::target_white hold the same two values
-// independently. That mirroring predates this owner and is not removed by it — the API boundary
-// is what forbids sharing. What changed is only that the core side now has one named owner
-// instead of a literal repeated per call site.
+// WHO READS WHICH, as of the two-sided anchor adoption. `kAnchorTargetWhite` still has two
+// consumers on this side (ExposureScale's kRelative branch and ParticipatingExposureScale), and
+// the GUI mirrors it in GuiState::target_white. `kMonoAnchorDownsampleFactor` now has exactly
+// ONE: `anchor_buffer.hpp::kAnchorDownsampleFactor`, which aliases it for the full-sky anchor
+// plane. The call site that used to be its second consumer — a P99 over the renderer's own
+// output buffer, inside ExposureScale — is gone with the per-view anchor it belonged to. The
+// constant is not folded into anchor_buffer.hpp all the same: that header pairs it with the
+// anchor's RESOLUTION and says why the two only move together, which is an argument that needs
+// the box-sum factor to be a name rather than an 8.
+//
+// The GUI mirrors `kAnchorTargetWhite`, not shares it: `src/gui/` may not include `core/`, so
+// GuiState::target_white holds the same value independently. That mirroring predates this owner
+// and is not removed by it — the API boundary is what forbids sharing. Its neighbour on the GUI
+// side, `gui_constants.hpp::kEvAutoDownsampleFactor`, is GONE for the same reason core's second
+// consumer went: the GUI reads the server's anchor instead of computing one, so a downsample
+// factor is no longer anything a consumer has to know.
 //
 // f=8 is the MONO path's choice specifically. Coarse and fine are not two precisions of one
 // statistic (see ComputeP99Y's comment: 64x apart on the 77halo fixture), so the composite path

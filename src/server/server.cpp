@@ -25,6 +25,7 @@
 #if defined(LUMICE_CUDA_ENABLED)
 #include "core/backend/cuda_trace_backend.hpp"  // CudaDeviceAvailable() for ResolveGpuRoute
 #endif
+#include "server/anchor_consumer.hpp"
 #include "server/component_compositor.hpp"
 #include "server/consumer.hpp"
 #include "server/ray_num_semantics.hpp"
@@ -665,7 +666,7 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
           rc->ResetWith(it->second, config_manager_.scene_.light_source_.param_);
           ++it;
         } else {
-          c->Reset();  // StatsConsumer
+          c->Reset();  // StatsConsumer / AnchorConsumer
         }
       }
     } else {
@@ -679,6 +680,15 @@ Error ServerImpl::CommitConfig(const nlohmann::json& config_json, bool* out_reus
             std::make_shared<RenderConsumer>(r, active_class_table_, config_manager_.scene_.light_source_.param_));
       }
       consumers_.emplace_back(std::make_shared<StatsConsumer>());
+      // One per SESSION, not one per renderer. See AnchorConsumer's own docs for why that
+      // is the contract rather than an economy: every element of consumers_ receives the
+      // same batch, so a second instance would double-count the same physical rays into a
+      // scalar that is supposed to describe the sky.
+      //
+      // It needs no ResetWith counterpart on the reuse branch above: its buffer's shape is
+      // a compile-time constant and depends on no user field, so there is nothing a config
+      // change could invalidate — the plain Reset() the branch already calls is complete.
+      consumers_.emplace_back(std::make_shared<AnchorConsumer>());
     }
   }
   auto rebuild_end = std::chrono::steady_clock::now();
@@ -748,6 +758,22 @@ bool ServerImpl::DoSnapshot() {
       ILOG_DEBUG(logger_, "DoSnapshot: skip (snapshot_dirty_=false)");
       return false;
     }
+    // Clear every renderer's exposure anchor BEFORE anything measures a new one. The set again
+    // happens in Phase 2, between the measurement and the bake; this is the half that makes a
+    // MISSED set fail safely. Without it a renderer that Phase 2 somehow skipped would bake with
+    // the previous pass's anchor — a plausible number, off by however much the scene moved —
+    // instead of with 0, which ExposureScale already treats as "no anchor yet" and returns 0 for.
+    // Cheap enough to be unconditional: one float store per renderer per snapshot.
+    // Resets consumers_, not snapshot_consumers — deliberately: snapshot_consumers is the copy
+    // taken a few lines below, so at that copy point the two are identical by construction (both
+    // under this same consumer_mutex_ hold, with no consumer add/remove between). The Phase 2
+    // push loop further down (which sets the REAL anchor before PostSnapshot bakes) walks
+    // snapshot_consumers rather than consumers_ only because it runs outside this lock.
+    for (const auto& c : consumers_) {
+      if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+        rc->SetAnchorL99Sky(0.0f);
+      }
+    }
     for (const auto& c : consumers_) {
       c->PrepareSnapshot();
     }
@@ -791,6 +817,30 @@ bool ServerImpl::DoSnapshot() {
   frame->snapshot_generation_ = generation;
   frame->epoch_ = committed_epoch_.load(std::memory_order_acquire);
   frame->has_valid_data_ = valid_data;
+  // The exposure anchor, read once per snapshot from the session's single AnchorConsumer.
+  // PrepareSnapshot (Phase 1, under consumer_mutex_) already froze it, so this reads a
+  // value no concurrent Consume can move. Frames built before an AnchorConsumer exists —
+  // there is none until the first CommitConfig — keep the 0 default.
+  for (const auto& c : snapshot_consumers) {
+    if (auto* ac = dynamic_cast<AnchorConsumer*>(c.get())) {
+      frame->anchor_l99_sky_ = ac->SnapshotL99Sky();
+      break;
+    }
+  }
+  // Hand that anchor to the renderers BEFORE they bake with it. PostSnapshot below calls
+  // ExposureScale, whose kRelative branch divides by this value, so the ordering here is not
+  // bookkeeping — it is the difference between a correctly exposed frame and a black one. It sits
+  // after the AnchorConsumer read for the same reason: `frame->anchor_l99_sky_` is the ONE
+  // measurement of this pass, and every renderer must expose against that same one rather than
+  // reach for the anchor itself and risk reading it at a different moment.
+  //
+  // No extra lock: the whole pass holds do_snapshot_mutex_, snapshot_consumers holds shared_ptrs
+  // so nothing here can be freed, and this touches state only Phase 2 reads.
+  for (const auto& c : snapshot_consumers) {
+    if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
+      rc->SetAnchorL99Sky(frame->anchor_l99_sky_);
+    }
+  }
   {
     for (const auto& c : snapshot_consumers) {
       c->PostSnapshot();
@@ -820,6 +870,8 @@ bool ServerImpl::DoSnapshot() {
       r.has_valid_data_ = valid_data;
       r.snapshot_generation_ = generation;
       r.epoch_ = frame->epoch_;
+      // Broadcast, not recompute: the anchor was measured ONCE for this snapshot, above.
+      r.anchor_l99_sky_ = frame->anchor_l99_sky_;
       frame->xyz_results_.push_back(r);
       frame->xyz_storage_.push_back(rc->SnapshotXyzStorage());
     }

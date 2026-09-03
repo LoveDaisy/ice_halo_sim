@@ -47,11 +47,34 @@ struct TexturePayload {
   int effective_pixels = 0;
   // Ray count at the time texture data was captured (not global stats).
   LUMICE_RayCount texture_ray_count = 0;
-  // Auto-EV anchor.  When the poller is configured with kEvAutoDownsampleFactor > 1
-  // (see LUMICE_ComputeP99Y), this is the **fine-equivalent P99** = P99_coarse / f^2 and
-  // is NOT a raw per-pixel Y statistic — use it only as the EV anchor that feeds
-  // LUMICE_ComputeEvAuto, never as a true Y measurement.
+  // Auto-EV anchor for the COMPOSITE (raypath-colour) path only: the server's P99 over the union
+  // of participating class lanes (LUMICE_CompositeResult::composite_p99_y). Zero on the mono
+  // path, which anchors to the sky instead — see anchor_l99_sky below.
   float p99_y = 0;
+  // The mono path's auto-EV anchor: LUMICE_RawXyzResult::anchor_l99_sky, the P99 sky RADIANCE
+  // per steradian measured once per snapshot over the server's fixed full-sky anchor plane.
+  //
+  // It replaces a client-side LUMICE_ComputeP99Y over the simulation texture, and the difference
+  // is the point of the change rather than an optimization: that P99 was a second, independently
+  // computed anchor, so the GUI and the CLI carried a constant brightness offset against each
+  // other for any lens the two happened to disagree about. There is one anchor now and both
+  // sides read it. Being a radiance it is also independent of the texture's resolution, so
+  // changing sim_resolution no longer changes preview brightness.
+  float anchor_l99_sky = 0;
+  // LUMICE_RawXyzResult::axis_solid_angle for the SIMULATION renderer whose buffer `xyz_buffer`
+  // points at — the on-axis solid angle one texel of THIS texture subtends.
+  //
+  // It is the unit bridge, and leaving it out is not a rounding error: `anchor_l99_sky` is a
+  // radiance while the texture holds a radiance integrated over a texel, so an exposure built on
+  // the bare anchor is wrong by this factor — about 3.05e-5 on the 1024x512 all-sky texture, i.e.
+  // 15 stops. The damage does not present as a black preview, which is what makes it worth a
+  // comment: ComputeEvAuto clamps to +/-6 stops, so the error arrives as a plausible-looking
+  // picture a few stops dark, with the clamp silently absorbing the rest.
+  //
+  // NOT the same number as the target lens's on-axis solid angle. The preview reprojects this
+  // texture into whatever lens the user picked, and the shader supplies THAT lens's shape
+  // separately as a relative illumination (preview_jacobian.hpp). This one belongs to the source.
+  float axis_solid_angle = 0;
   // RawXyzResult.epoch: the lifecycle epoch this texture was produced under. May lag the
   // bundle epoch when carried forward (1.5 display keying distinguishes the two).
   unsigned long long payload_epoch = 0;
@@ -65,9 +88,10 @@ struct TexturePayload {
   //   is_composite == false → UploadXyzTexture(xyz_buffer, W, H)       (TextureMode::kXyz, unchanged)
   // Both get the target lens's relative illumination and the sky colour from the shader, so
   // toggling the composite preview changes which rays are shown and nothing else.
-  // xyz_buffer / p99_y / snapshot_intensity / effective_pixels are ALWAYS populated
+  // xyz_buffer / anchor_l99_sky / snapshot_intensity / effective_pixels are ALWAYS populated
   // (auto-EV + quality gate are not touched by this change), even when is_composite
-  // is true — see plan §3 keypoint 3.
+  // is true — see plan §3 keypoint 3. `p99_y` is the exception and always was: it is the
+  // composite path's own anchor and stays 0 on the mono path.
   const unsigned char* rgb_buffer = nullptr;
   bool is_composite = false;
 };

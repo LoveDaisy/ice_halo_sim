@@ -1289,8 +1289,15 @@ struct GuiState {
   unsigned long long texture_upload_count = 0;  // Cumulative texture uploads (diagnostic counter)
 
   // Auto-EV runtime state (display layer only, not persisted, not in ConfigSnapshot)
-  float p99_raw_y = 0.0f;       // Un-normalized P99 Y value; updated each texture upload
-  float ev_auto = 0.0f;         // P99-anchored auto-EV in stops; recomputed from p99_raw_y
+  //
+  // p99_raw_y holds whichever anchor the CURRENT display mode uses, and the two are different
+  // quantities rather than two measurements of one: mono carries the server's
+  // anchor_l99_sky (a sky RADIANCE per steradian, measured on the fixed full-sky anchor plane and
+  // shared with the CLI), composite carries composite_p99_y (a P99 over the participating class
+  // lanes of THIS view). The name predates the split and is kept because it is what the readout
+  // and the tests already call it; SyncFromPoller is the single place that picks.
+  float p99_raw_y = 0.0f;       // Anchor for the displayed mode; updated each texture upload
+  float ev_auto = 0.0f;         // Anchor-derived auto-EV in stops; recomputed from p99_raw_y
   float target_white = 135.0f;  // Target P99 brightness on 0-255 sRGB scale
 
   // task-345.4: display-time raypath-color composite vs full-spectrum toggle.

@@ -88,7 +88,7 @@ struct Split {
   double sum_y_region = 0.0;  // ... and over the fixed centre box
   float emitted_energy = 0.0f;
   float snapshot_intensity = 0.0f;
-  float p99_y = 0.0f;
+  float anchor_l99_sky = 0.0f;
   int width = 0;
   int height = 0;
 };
@@ -155,9 +155,11 @@ Split MeasureSplit(const char* split) {
         out.height = xyz[0].img_height;
         out.emitted_energy = xyz[0].emitted_energy;
         out.snapshot_intensity = xyz[0].snapshot_intensity;
-        // The same two calls, with the same downsample factor, that server_poller.cpp and app.cpp
-        // make to fill GuiState::p99_raw_y — not a reimplementation of the percentile here.
-        out.p99_y = LUMICE_ComputeP99Y(xyz[0].xyz_buffer, out.width, out.height, kEvAutoDownsampleFactor);
+        // The same field server_poller.cpp carries into TexturePayload and app.cpp feeds to
+        // LUMICE_ComputeEvAuto — read, not recomputed. The GUI stopped taking a P99 of its own
+        // when the two sides were put on one anchor; a reimplementation here would put the
+        // retired rule back into the only place that still checks this chain.
+        out.anchor_l99_sky = xyz[0].anchor_l99_sky;
         const float* buf = xyz[0].xyz_buffer;
         for (int y = 0; y < out.height; ++y) {
           for (int x = 0; x < out.width; ++x) {
@@ -180,14 +182,15 @@ Split MeasureSplit(const char* split) {
 
 // The displayed luminance the mono preview would produce for one split, at one mode, at one EV.
 //
-// `ev_auto` is derived here exactly as the app derives it, from this frame's own P99 — which is the
-// point of the relative branch: the anchor moves per frame. Under absolute the value is computed
-// and passed in anyway, so that a formula which quietly folded it back in would show up as a
-// failure rather than as an argument nobody passed.
+// `ev_auto` is derived here exactly as the app derives it, from the server's published sky anchor
+// — which is the point of the relative branch: the anchor is the scene's, and both the preview and
+// a CLI render of the same document read that one number. Under absolute the value is computed and
+// passed in anyway, so that a formula which quietly folded it back in would show up as a failure
+// rather than as an argument nobody passed.
 double DisplayedLuminance(MonoEvMode mode, const Split& s, double raw_sum, float exposure_offset) {
   MonoExposureInput in;
   in.exposure_offset = exposure_offset;
-  in.ev_auto = LUMICE_ComputeEvAuto(s.p99_y, s.snapshot_intensity, GuiState{}.target_white);
+  in.ev_auto = LUMICE_ComputeEvAuto(s.anchor_l99_sky, s.snapshot_intensity, GuiState{}.target_white);
   in.snapshot_intensity = s.snapshot_intensity;
   in.snapshot_emitted_energy = s.emitted_energy;
   in.total_pixels = s.width * s.height;

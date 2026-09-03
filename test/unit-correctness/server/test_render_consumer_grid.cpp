@@ -26,6 +26,7 @@
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
 #include "server/render.hpp"
+#include "support/render_anchor.hpp"
 
 namespace lumice {
 namespace {
@@ -81,8 +82,7 @@ SimData MakeOneRayBatch() {
 std::vector<uint8_t> SnapshotOnce(RenderConsumer* rc) {
   auto data = MakeOneRayBatch();
   rc->Consume(data);
-  rc->PrepareSnapshot();
-  rc->PostSnapshot();
+  lumice::test::TakeSnapshotAtFormerSelfAnchor(rc);
   auto result = rc->GetResult();
   const auto* rr = std::get_if<RenderResult>(&result);
   if (rr == nullptr || rr->img_buffer_ == nullptr) {

@@ -46,8 +46,11 @@ import numpy as np
 # (backend-lifecycle-epoch, 1.3) grew it back to 64 (48-byte effective_pixels +
 # 4 pad + 8-byte epoch, 8-aligned). `emitted_energy` then went into that 4-byte
 # pad rather than onto the end, so the size is still 64 and `epoch` still sits
-# at offset 56. Matches the C++ static_assert in
-# test/unit-correctness/server/test_c_api.cpp.
+# at offset 56. The exposure anchor `anchor_l99_sky` found no pad left, so it
+# appended after `epoch` at offset 64 and GREW the struct to 72 (68 rounded up
+# by the 8-byte alignment). `axis_solid_angle` then went into the 4 bytes of tail
+# padding that rounding created, so the size is still 72. Matches the C++
+# static_assert in test/unit-correctness/server/test_c_api.cpp.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
         ("renderer_id",                ctypes.c_int),
@@ -61,10 +64,12 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("effective_pixels",           ctypes.c_int),
         ("emitted_energy",             ctypes.c_float),
         ("epoch",                      ctypes.c_uint64),
+        ("anchor_l99_sky",             ctypes.c_float),
+        ("axis_solid_angle",           ctypes.c_float),
     ]
 
 
-assert ctypes.sizeof(LUMICE_RawXyzResult) == 64, (
+assert ctypes.sizeof(LUMICE_RawXyzResult) == 72, (
     "LUMICE_RawXyzResult size mismatch — verify lumice.h field layout"
 )
 
@@ -80,6 +85,8 @@ for _name, _offset in (
     ("effective_pixels", 48),
     ("emitted_energy", 52),
     ("epoch", 56),
+    ("anchor_l99_sky", 64),
+    ("axis_solid_angle", 68),
 ):
     _actual = getattr(LUMICE_RawXyzResult, _name).offset
     assert _actual == _offset, (
@@ -228,6 +235,15 @@ class SimResult:
     # snapshot_intensity above: that one measures what landed on a pixel, this
     # one what went in, and they differ by everything that removes a ray.
     emitted_energy: float = 0.0
+    # The session's exposure anchor: P99 sky radiance per steradian, measured on
+    # a fixed full-sky buffer rather than on this renderer's output. A property
+    # of the scene, so it is the same on every row of one frame — see the field's
+    # contract in lumice.h.
+    anchor_l99_sky: float = 0.0
+    # On-axis per-pixel solid angle of THIS renderer's view, steradians. The unit bridge
+    # between anchor_l99_sky (a radiance) and the pixel buffer (a radiance times a pixel's
+    # solid angle); see LUMICE_RawXyzResult in lumice.h.
+    axis_solid_angle: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 
@@ -257,6 +273,10 @@ class BufferedSimResult:
     log_lines: List[str] = field(default_factory=list)
     # See SimResult.emitted_energy — same field, same contract.
     emitted_energy: float = 0.0
+    # See SimResult.anchor_l99_sky — same field, same contract.
+    anchor_l99_sky: float = 0.0
+    # See SimResult.axis_solid_angle — same field, same contract.
+    axis_solid_angle: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 
@@ -685,6 +705,8 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
             has_valid_data=bool(r.has_valid_data),
             effective_pixels=int(r.effective_pixels),
             emitted_energy=float(r.emitted_energy),
+            anchor_l99_sky=float(r.anchor_l99_sky),
+            axis_solid_angle=float(r.axis_solid_angle),
             crystal_num=crystal_num,
             orientation_num=orientation_num,
         )
@@ -862,6 +884,8 @@ def run_scene_capi_buffered(
                     r_valid = bool(r.has_valid_data)
                     r_eff = int(r.effective_pixels)
                     r_emitted = float(r.emitted_energy)
+                    r_anchor = float(r.anchor_l99_sky)
+                    r_axis_omega = float(r.axis_solid_angle)
                     if r_xyz_addr is None:
                         raise RuntimeError(
                             f"{config_path}: race — xyz pointer became NULL after IDLE check"
@@ -916,6 +940,8 @@ def run_scene_capi_buffered(
                 has_valid_data=r_valid,
                 effective_pixels=r_eff,
                 emitted_energy=r_emitted,
+                anchor_l99_sky=r_anchor,
+                axis_solid_angle=r_axis_omega,
                 img_width=r_w,
                 img_height=r_h,
                 flt_buf=flt_buf,

@@ -180,13 +180,41 @@ class RenderConsumer : public IConsume {
   //     two scenes at the same EV incomparable.
   //
   //   kRelative (the default): intensity_factor_ * TargetWhiteToLinear(kAnchorTargetWhite)
-  //     / ComputeP99Y(snapshot, kMonoAnchorDownsampleFactor)   (0 if that P99 is 0).
-  //     This is the frame anchoring to ITSELF — algebraically the same per-pixel multiplier the
-  //     GUI's ComputeEvAuto + shader pair has always applied, so a CLI render matches what the
-  //     GUI shows. Being self-anchored, it carries no energy term: the image keeps its look as
-  //     ray_num grows, and correspondingly the config alone does NOT determine output
-  //     brightness. See the derivation at the definition in render.cpp.
+  //     / (ComputeAxisSolidAngle(this view) * anchor_l99_sky_)   (0 if either factor is 0).
+  //     The denominator is the SCENE's brightness, not this frame's: anchor_l99_sky_ is the P99
+  //     radiance per steradian over the session's fixed full-sky anchor plane
+  //     (core/anchor_buffer.hpp), which no lens, fov, view or output resolution can move, and
+  //     ComputeAxisSolidAngle is the only thing that converts it into the units this buffer is
+  //     in (a radiance integrated over a pixel). The GUI's ComputeEvAuto now reads the SAME
+  //     scalar and its shader supplies the same conversion as a per-pixel relative illumination,
+  //     so the two land on one per-pixel expression rather than on two anchors that were argued
+  //     to be equal. It used to be a P99 over THIS renderer's own output buffer, which made the
+  //     exposure a statement about how the sky was being looked at.
+  //     Being anchored to an accumulated statistic rather than to emitted energy, it still
+  //     carries no energy term: the image keeps its look as ray_num grows. What CHANGED with the
+  //     anchor is which parts of the config move the brightness — see the migration law in
+  //     doc/ev-pipeline-architecture.md and the derivation at the definition in render.cpp.
   float ExposureScale() const;
+
+  // The snapshot's exposure anchor, pushed in by ServerImpl::DoSnapshot between
+  // AnchorConsumer::PrepareSnapshot (which measures it) and PostSnapshot (which bakes with it).
+  // A push rather than a pull because the anchor belongs to the SESSION and this object is one
+  // of possibly several renderers: there is no per-renderer answer to reach for.
+  //
+  // DoSnapshot resets every RenderConsumer's copy to 0 at the top of each pass and sets it again
+  // before the bake. That is not belt-and-braces: without the reset, a pass that failed to set it
+  // would silently expose this frame with the PREVIOUS frame's anchor — a plausible wrong number
+  // no test can distinguish from a right one — whereas 0 lands on ExposureScale's existing
+  // "anchor not measurable yet" guard, which is already covered.
+  void SetAnchorL99Sky(float l99_sky) { anchor_l99_sky_ = l99_sky; }
+
+  // The solid angle one on-axis pixel of THIS view subtends, in steradians — the factor that
+  // converts the published sky radiance into the units this consumer's buffer holds. Public
+  // rather than folded into ExposureScale because it is the one number a caller needs to
+  // reproduce or invert this renderer's relative-mode exposure from outside, and because having
+  // ONE owner of "which ProjParams does this consumer project with" is what stops a second
+  // caller building its own from a fov the projection did not use.
+  float AxisSolidAngle() const;
 
   // task-347 (Fix B): server-side self-anchored exposure scale for the
   // composite (raypath_color) path. Given the participating-P99 of the current
@@ -398,6 +426,10 @@ class RenderConsumer : public IConsume {
   // shape of two historical GUI brightness bugs.
   float total_emitted_energy_ = 0;
   float snapshot_emitted_energy_ = 0;
+  // The relative-mode anchor for the snapshot being baked, per SetAnchorL99Sky above. Unlike the
+  // two pairs beside it this one is not accumulated here — it is measured by AnchorConsumer over
+  // a plane this class never sees, and arrives already frozen for the pass.
+  float anchor_l99_sky_ = 0;
   int effective_pix_ = 0;  // Non-zero pixel count from last PrepareSnapshot
   std::unique_ptr<float[]> internal_xyz_;
   std::unique_ptr<float[]> comp_xyz_;  // Neumaier compensation buffer (S1 device-fused)
