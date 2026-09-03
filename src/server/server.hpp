@@ -161,6 +161,9 @@ struct RawXyzResult {
   // output. IDENTICAL on every row of a frame by construction — it describes the scene, not
   // the renderer — and carried per row only because that is where a caller already looks.
   float anchor_l99_sky_ = 0.0f;
+  // On-axis per-pixel solid angle of THIS renderer's view, in steradians — the factor that turns
+  // the radiance above into the units xyz_buffer_ holds. Per-renderer, unlike anchor_l99_sky_.
+  float axis_solid_angle_ = 0.0f;
   // Lifecycle epoch (committed_epoch_ at snapshot time). Stamped when the frame is
   // acquired; consumed by the GUI display-keying in 1.5. See
   // doc/gui-preview-lifecycle-architecture.md §4/§5.

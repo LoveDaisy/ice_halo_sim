@@ -61,6 +61,20 @@ struct TexturePayload {
   // sides read it. Being a radiance it is also independent of the texture's resolution, so
   // changing sim_resolution no longer changes preview brightness.
   float anchor_l99_sky = 0;
+  // LUMICE_RawXyzResult::axis_solid_angle for the SIMULATION renderer whose buffer `xyz_buffer`
+  // points at — the on-axis solid angle one texel of THIS texture subtends.
+  //
+  // It is the unit bridge, and leaving it out is not a rounding error: `anchor_l99_sky` is a
+  // radiance while the texture holds a radiance integrated over a texel, so an exposure built on
+  // the bare anchor is wrong by this factor — about 3.05e-5 on the 1024x512 all-sky texture, i.e.
+  // 15 stops. The damage does not present as a black preview, which is what makes it worth a
+  // comment: ComputeEvAuto clamps to +/-6 stops, so the error arrives as a plausible-looking
+  // picture a few stops dark, with the clamp silently absorbing the rest.
+  //
+  // NOT the same number as the target lens's on-axis solid angle. The preview reprojects this
+  // texture into whatever lens the user picked, and the shader supplies THAT lens's shape
+  // separately as a relative illumination (preview_jacobian.hpp). This one belongs to the source.
+  float axis_solid_angle = 0;
   // RawXyzResult.epoch: the lifecycle epoch this texture was produced under. May lag the
   // bundle epoch when carried forward (1.5 display keying distinguishes the two).
   unsigned long long payload_epoch = 0;

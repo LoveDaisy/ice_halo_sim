@@ -1687,9 +1687,18 @@ void SyncFromPoller() {
     // supplies per pixel. Passing 1 here instead would break that cancellation and leave a
     // 1/snapshot_intensity gain on the preview.
     //
+    // The anchor is a RADIANCE and this texture holds a radiance integrated over a texel, so it
+    // is converted into the texture's own units before it can anchor anything: one multiply by
+    // the source renderer's on-axis solid angle, which the server publishes for exactly this.
+    // The CLI divides by ITS view's solid angle at the same point (RenderConsumer::ExposureScale)
+    // — same bridge, opposite direction, because one holds a texture and the other a render.
+    // Omitting it is worth 15 stops on the all-sky texture, and ComputeEvAuto's +/-6 clamp turns
+    // that into a picture that merely looks a few stops dark rather than into an obvious black.
+    //
     // The composite path keeps its own anchor and its own field (payload->p99_y); this branch is
-    // the mono one, and the two do not converge — see server_poller.cpp.
-    g_state.p99_raw_y = payload->is_composite ? payload->p99_y : payload->anchor_l99_sky;
+    // the mono one, and the two do not converge — see server_poller.cpp. That field is already a
+    // P99 over the composite lanes of this same buffer, so it needs no conversion.
+    g_state.p99_raw_y = payload->is_composite ? payload->p99_y : payload->axis_solid_angle * payload->anchor_l99_sky;
     g_state.ev_auto = LUMICE_ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
     GUI_LOG_VERBOSE("[GUI] SyncFromPoller: anchor={:.6f} (composite={}), ev_auto={:.3f}", g_state.p99_raw_y,
                     payload->is_composite, g_state.ev_auto);

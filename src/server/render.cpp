@@ -1009,16 +1009,23 @@ RawXyzResult RenderConsumer::GetRawXyzResult() const {
   // handed over raw. Raw is what a caller needs to reproduce ExposureScale()
   // itself (scale = intensity_factor · kNormScale · total_pix / emitted_energy);
   // pre-dividing it would only force every caller to multiply the divisor back.
-  return { config_.id_,
-           config_.resolution_[0],
-           config_.resolution_[1],
-           snapshot_xyz_.get(),
-           per_pixel_intensity,
-           config_.intensity_factor_,
-           {},
-           {},
-           effective_pix_,
-           snapshot_emitted_energy_ };
+  //
+  // The relative branch's own divisor is published the same way and for the same reason: the
+  // anchor is a radiance, this buffer is a radiance times a solid angle, and without the solid
+  // angle a caller cannot get from one to the other. `anchor_l99_sky_` is filled in by
+  // ServerImpl::DoSnapshot (it belongs to the session, not to this renderer); this one is ours.
+  RawXyzResult r{ config_.id_,
+                  config_.resolution_[0],
+                  config_.resolution_[1],
+                  snapshot_xyz_.get(),
+                  per_pixel_intensity,
+                  config_.intensity_factor_,
+                  {},
+                  {},
+                  effective_pix_,
+                  snapshot_emitted_energy_ };
+  r.axis_solid_angle_ = AxisSolidAngle();
+  return r;
 }
 
 // See doc/ev-pipeline-architecture.md §3.2

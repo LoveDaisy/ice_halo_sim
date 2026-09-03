@@ -2849,6 +2849,7 @@ LUMICE_ErrorCode LUMICE_FrameGetRawXyz(const LUMICE_ResultFrame* frame, LUMICE_R
     // is computed is AnchorConsumer::PrepareSnapshot; everything from there to here is a
     // copy, which is what keeps CLI and GUI on literally the same number.
     out[i].anchor_l99_sky = results[i].anchor_l99_sky_;
+    out[i].axis_solid_angle = results[i].axis_solid_angle_;
   }
 
   // Sentinel: see doc/capi-lifecycle-architecture.md §5.2 (fix: 5287efe).

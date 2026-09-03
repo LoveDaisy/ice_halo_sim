@@ -144,6 +144,16 @@ extern "C" {
 // appearance; a core that diverged here would create the very GUI/CLI mismatch the annotation
 // layer exists to remove.
 //
+// v4.23: LUMICE_RawXyzResult gains `axis_solid_angle`, the missing half of the exposure anchor.
+// `anchor_l99_sky` (v4.22) is a RADIANCE and `xyz_buffer` holds a radiance INTEGRATED over each
+// pixel's solid angle, so the anchor alone never let a caller reproduce the renderer's own
+// relative-mode scale — the conversion factor was known only inside core. It is published here,
+// which makes the promise this header already made about `emitted_energy` ("a consumer can
+// reproduce that scale") true for the relative branch too. NOT a size change: it lands in the
+// four bytes of tail padding `anchor_l99_sky` left behind, so sizeof stays 72 and every existing
+// offset is unchanged. A caller that ignores it is unaffected; a caller that mirrors the struct
+// should still add the field so its own padding matches.
+//
 // BREAKING (v4.22): LUMICE_RawXyzResult gains a trailing `anchor_l99_sky` field — the
 // session's exposure anchor, measured on a fixed full-sky buffer instead of on the
 // renderer's own output. It is APPENDED after `epoch`, and unlike `emitted_energy` (which
@@ -152,7 +162,7 @@ extern "C" {
 // shorter buffer and LUMICE_FrameGetRawXyz writes past the end of it. Recompile against
 // this header, and update any mirrored struct definition (ctypes, FFI) in lockstep.
 // No behavior change accompanies it: nothing in the renderer reads the new field yet.
-#define LUMICE_API_VERSION 422
+#define LUMICE_API_VERSION 423
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -352,6 +362,27 @@ typedef struct LUMICE_RawXyzResult_ {
   // 0 means the sky carried no positive Y this snapshot (nothing simulated yet, or every
   // ray filtered away) — the same "no samples" convention every other P99 in this API uses.
   float anchor_l99_sky;
+  // The solid angle, in steradians, that ONE pixel on THIS renderer's optical axis subtends.
+  //
+  // The unit bridge between the two quantities above it: `anchor_l99_sky` is a radiance (per
+  // steradian) while `xyz_buffer` holds a radiance integrated over each pixel's own solid angle,
+  // so converting between them takes exactly this factor. With it, the relative-mode scale the
+  // renderer applied is
+  //     scale = intensity_factor * TargetWhiteToLinear(135) / (axis_solid_angle * anchor_l99_sky)
+  // which is the relative-branch counterpart of the `emitted_energy` formula documented above.
+  //
+  // UNLIKE `anchor_l99_sky`, this IS per-renderer: it is a property of this row's lens, fov,
+  // overlap and output resolution and differs from row to row. A consumer holding a buffer of its
+  // own — a preview that resamples this one, say — must use the solid angle of the buffer it is
+  // actually exposing, not this row's, unless they are the same buffer.
+  //
+  // On-axis specifically, not an average: away from the axis the per-pixel solid angle varies by
+  // the projection's relative illumination, and normalizing at the axis is what lets a viewer
+  // apply that shape separately (it is 1 at the frame centre by construction).
+  //
+  // 0 only for a degenerate calibration (a zero-size or zero-scale view), matching the "no
+  // measurement" convention of the fields above.
+  float axis_solid_angle;
 } LUMICE_RawXyzResult;
 
 typedef struct LUMICE_StatsResult_ {

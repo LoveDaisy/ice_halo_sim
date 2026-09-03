@@ -350,6 +350,18 @@ class _GuiMonoPath:
         xyz = np.ascontiguousarray(result.flt_buf.reshape(-1), dtype=np.float32)
         p_xyz = xyz.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
 
+        # Core publishes its own answer for the same quantity (LUMICE_RawXyzResult::
+        # axis_solid_angle, from ComputeAxisSolidAngle). This file derives it independently, so
+        # comparing the two is free and is the only end-to-end check that core's closed form and
+        # the projection's definition agree -- the unit tests hold that function to an oracle in
+        # C++, this holds it to one written from the header's own equations in another language.
+        # Not used in place of the local value: a fixture that consumed core's number could not
+        # then check it.
+        assert abs(result.axis_solid_angle / omega_axis - 1.0) < 1e-5, (
+            f"core publishes axis_solid_angle={result.axis_solid_angle:.9g} for this view, this "
+            f"file derives {omega_axis:.9g} from the projection's own closed form. One of the two "
+            "is wrong, and every exposure on both arms is scaled by it"
+        )
         assert result.anchor_l99_sky > 0.0, (
             "the server published anchor_l99_sky=0, i.e. no sky anchor was measured at all. "
             "Every assertion below would then be comparing two black frames"

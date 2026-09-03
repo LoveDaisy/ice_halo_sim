@@ -48,8 +48,9 @@ import numpy as np
 # pad rather than onto the end, so the size is still 64 and `epoch` still sits
 # at offset 56. The exposure anchor `anchor_l99_sky` found no pad left, so it
 # appended after `epoch` at offset 64 and GREW the struct to 72 (68 rounded up
-# by the 8-byte alignment). Matches the C++ static_assert in
-# test/unit-correctness/server/test_c_api.cpp.
+# by the 8-byte alignment). `axis_solid_angle` then went into the 4 bytes of tail
+# padding that rounding created, so the size is still 72. Matches the C++
+# static_assert in test/unit-correctness/server/test_c_api.cpp.
 class LUMICE_RawXyzResult(ctypes.Structure):
     _fields_ = [
         ("renderer_id",                ctypes.c_int),
@@ -64,6 +65,7 @@ class LUMICE_RawXyzResult(ctypes.Structure):
         ("emitted_energy",             ctypes.c_float),
         ("epoch",                      ctypes.c_uint64),
         ("anchor_l99_sky",             ctypes.c_float),
+        ("axis_solid_angle",           ctypes.c_float),
     ]
 
 
@@ -84,6 +86,7 @@ for _name, _offset in (
     ("emitted_energy", 52),
     ("epoch", 56),
     ("anchor_l99_sky", 64),
+    ("axis_solid_angle", 68),
 ):
     _actual = getattr(LUMICE_RawXyzResult, _name).offset
     assert _actual == _offset, (
@@ -268,6 +271,8 @@ class BufferedSimResult:
     emitted_energy: float = 0.0
     # See SimResult.anchor_l99_sky — same field, same contract.
     anchor_l99_sky: float = 0.0
+    # See SimResult.axis_solid_angle — same field, same contract.
+    axis_solid_angle: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 
@@ -697,6 +702,7 @@ def run_scene_capi(config_path: str, sim_seed: int = 0, timeout_sec: int = 180) 
             effective_pixels=int(r.effective_pixels),
             emitted_energy=float(r.emitted_energy),
             anchor_l99_sky=float(r.anchor_l99_sky),
+            axis_solid_angle=float(r.axis_solid_angle),
             crystal_num=crystal_num,
             orientation_num=orientation_num,
         )
@@ -875,6 +881,7 @@ def run_scene_capi_buffered(
                     r_eff = int(r.effective_pixels)
                     r_emitted = float(r.emitted_energy)
                     r_anchor = float(r.anchor_l99_sky)
+                    r_axis_omega = float(r.axis_solid_angle)
                     if r_xyz_addr is None:
                         raise RuntimeError(
                             f"{config_path}: race — xyz pointer became NULL after IDLE check"
@@ -930,6 +937,7 @@ def run_scene_capi_buffered(
                 effective_pixels=r_eff,
                 emitted_energy=r_emitted,
                 anchor_l99_sky=r_anchor,
+                axis_solid_angle=r_axis_omega,
                 img_width=r_w,
                 img_height=r_h,
                 flt_buf=flt_buf,

@@ -55,6 +55,12 @@ static_assert(offsetof(LUMICE_RawXyzResult, effective_pixels) == 48, "LUMICE_Raw
 static_assert(offsetof(LUMICE_RawXyzResult, emitted_energy) == 52,
               "emitted_energy must occupy the pre-existing pad, not grow the struct");
 static_assert(offsetof(LUMICE_RawXyzResult, epoch) == 56, "epoch offset must be unchanged by emitted_energy");
+static_assert(offsetof(LUMICE_RawXyzResult, anchor_l99_sky) == 64, "LUMICE_RawXyzResult layout drift");
+// Lands in the tail padding anchor_l99_sky's 8-byte rounding created, so it costs no size. The
+// offset assertion is what says it went THERE and not onto the end (which would grow the struct
+// to 80 and silently overrun every mirrored caller's buffer).
+static_assert(offsetof(LUMICE_RawXyzResult, axis_solid_angle) == 68,
+              "axis_solid_angle must occupy anchor_l99_sky's tail padding, not extend the struct");
 static_assert(offsetof(LUMICE_RawXyzResult, anchor_l99_sky) == 64,
               "anchor_l99_sky must append after epoch, leaving every existing offset alone");
 
