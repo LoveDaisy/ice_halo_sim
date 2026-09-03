@@ -6,19 +6,39 @@ applied its own anchor in the preview shader. Making the two agree is the whole 
 ``relative`` mode -- and "agree" has to mean the pixels, not the intent, because the two are
 separate implementations that were only ever reasoned to be equivalent:
 
-  GUI  : ev   = ComputeEvAuto(P99, snapshot_intensity, 135)      [clamped to +/-6 stops]
+  GUI  : ev   = ComputeEvAuto(Omega_axis * L99_sky, snapshot_intensity, 135)  [+/-6 stop clamp]
          scale = 2^(exposure_offset + ev) / snapshot_intensity
-  CLI  : scale = intensity_factor * TargetWhiteToLinear(135) / P99
+  CLI  : scale = intensity_factor * TargetWhiteToLinear(135) / (Omega_axis * L99_sky)
 
 They are the same number because ``snapshot_intensity`` cancels between ``ComputeEvAuto``'s
 numerator and the shader's divisor, and because an exported config's ``intensity_factor`` IS
 ``2^exposure_offset``. That cancellation is an algebraic claim about code in two files, which
 is exactly the kind of claim that holds until someone edits one of them.
 
-No window is needed to check it. The GUI's mono display path is three C API calls over the raw
-buffer -- ``LUMICE_ComputeP99Y`` / ``LUMICE_ComputeEvAuto`` / ``LUMICE_XyzToSrgbUint8`` -- and
-running those three IS running the GUI's algorithm, on the same shared library the app links.
-So this compares the server's baked image against the GUI's own formula, over one simulation.
+WHAT ``L99_sky`` IS, AND WHY BOTH LINES NOW NAME THE SAME ONE. It is
+``LUMICE_RawXyzResult::anchor_l99_sky``: the P99 radiance per steradian, measured once per
+snapshot over the session's fixed full-sky equal-area anchor plane (core/anchor_buffer.hpp),
+which no lens, fov, view or output resolution can move. Each arm used to take its OWN P99 --
+the CLI over the framed output buffer, the GUI over the whole simulation texture -- and this
+fixture used to write that divergence down as the definition of correctness, which is what it
+was: two populations, two numbers, one of them a statement about the lens rather than about the
+sky. There is one number now, and both lines above read it rather than derive it.
+
+WHY THE ``Omega_axis`` FACTOR IS ON BOTH LINES AND NOT A THIRD ANCHOR. The anchor is a
+RADIANCE; a rendered pixel is a radiance integrated over that pixel's solid angle. The real GUI
+closes that gap in the shader -- its texture holds bare radiance and the fragment stage
+multiplies the target lens's relative illumination ``m(pos) = Omega_p(pos) / Omega_axis(view)``
+(src/gui/preview_jacobian.hpp). This fixture's GUI arm is not the shader: it is fed the
+renderer's own ``L * Omega_p`` buffer, so the whole of ``m(pos)`` collapses into one division by
+``Omega_axis``, leaving the two arms algebraically identical. ``Omega_axis`` is computed below
+from the projection's own closed form rather than read out of core, for the same reason the two
+constants under it are literals.
+
+No window is needed to check it. The GUI's mono display path is two C API calls over an anchor
+the server hands it -- ``LUMICE_ComputeEvAuto`` / ``LUMICE_XyzToSrgbUint8`` -- and running those
+two IS running the GUI's algorithm, on the same shared library the app links. So this compares
+the server's baked image against the GUI's own formula, over one simulation. It used to be three
+calls; the one that went is ``LUMICE_ComputeP99Y``, the client-side anchor itself.
 
 Why the scene is deliberately plain. A background colour, a ray_color tint, a grid or the
 celestial outline all enter the CLI's bake and none enter ``LUMICE_XyzToSrgbUint8``, so any of
@@ -76,12 +96,14 @@ PARITY_CONFIG = CONFIGS_DIR / "ev_mode_relative_gui_parity.json"
 
 _SEED = 42
 
-# The GUI's own two constants, restated as literals rather than read from the source under test:
-# f=8 is the mono path's downsample factor (gui_constants.hpp::kEvAutoDownsampleFactor, mirrored
-# in core as kMonoAnchorDownsampleFactor) and 135 is the target white (GuiState::target_white /
-# kAnchorTargetWhite). Reading them from the thing being checked would make a changed constant
-# agree with itself.
-_GUI_DOWNSAMPLE_FACTOR = 8
+# The GUI's own constant, restated as a literal rather than read from the source under test:
+# 135 is the target white (GuiState::target_white / kAnchorTargetWhite). Reading it from the
+# thing being checked would make a changed constant agree with itself.
+#
+# The downsample factor that used to sit beside it is gone with the client-side P99 it belonged
+# to: the anchor's own box-sum factor is paired with the anchor's resolution inside core
+# (anchor_buffer.hpp says why the pair moves together), and no consumer of L99_sky has to know
+# either -- which is the property publishing a per-steradian radiance buys.
 _GUI_TARGET_WHITE = 135.0
 
 # Measured on the parity config: 7 differing channels out of 1_572_864, all off by one step.
@@ -278,18 +300,40 @@ def _psnr(a: np.ndarray, b: np.ndarray) -> float:
     return float("inf") if mse == 0.0 else float(10.0 * np.log10(255.0**2 / mse))
 
 
+def _axis_solid_angle(doc: dict) -> float:
+    """Solid angle subtended by ONE pixel on the optical axis of this fixture's lens, in sr.
+
+    Derived here rather than read from ``ComputeAxisSolidAngle``: core's copy is one of the two
+    things this fixture exists to check, and a test that asks the implementation what the answer
+    is can only ever confirm that it agrees with itself.
+
+    Only the dual-fisheye equal-area family is implemented, and the assertion below is what keeps
+    that from becoming a silent mis-application if the config is ever re-pointed at another lens.
+    For that family the closed form is exact and constant over the whole disc, which is the
+    property "equal area" names: ``FisheyeEqualAreaForward`` maps a direction to disc radius
+    ``rho = r_scale * sqrt(1 - dz)`` (its ``k = r_scale / sqrt(1 + dz)`` times the transverse
+    component), so the cap inside ``rho`` subtends ``2*pi*(rho/r_scale)^2`` while covering a disc
+    area of ``pi*rho^2`` -- i.e. ``2 / r_scale^2`` sr per unit disc area, everywhere. In pixels,
+    with ``DualFisheyeToPixelXY``'s disc radius ``r = min(w/2, h)/2`` and the overlap shrink
+    ``r_scale = 1/sqrt(1 + overlap)`` (``projection.cpp::ComputeEARScale``), that is
+    ``2 * (1 + overlap) / r^2``.
+    """
+    render = doc["render"][0]
+    assert render["lens"]["type"] == "dual_fisheye_equal_area", (
+        f"_axis_solid_angle only implements the dual-fisheye equal-area closed form, but the "
+        f"fixture's lens is {render['lens']['type']!r} -- derive that family's on-axis solid "
+        "angle here before re-pointing the config, do not let this return the wrong constant"
+    )
+    width, height = (int(v) for v in render["resolution"])
+    disc_radius = min(width // 2, height) / 2.0
+    return 2.0 * (1.0 + float(render.get("overlap", 0.0))) / (disc_radius**2)
+
+
 class _GuiMonoPath:
-    """The GUI's mono display formula, as the three C API calls the app makes."""
+    """The GUI's mono display formula, as the two C API calls the app makes."""
 
     def __init__(self) -> None:
         self._lib = ctypes.CDLL(str(_find_lib()))
-        self._lib.LUMICE_ComputeP99Y.restype = ctypes.c_float
-        self._lib.LUMICE_ComputeP99Y.argtypes = [
-            ctypes.POINTER(ctypes.c_float),
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-        ]
         self._lib.LUMICE_ComputeEvAuto.restype = ctypes.c_float
         self._lib.LUMICE_ComputeEvAuto.argtypes = [ctypes.c_float] * 3
         self._lib.LUMICE_XyzToSrgbUint8.restype = ctypes.c_int
@@ -300,15 +344,22 @@ class _GuiMonoPath:
             ctypes.c_float,
         ]
 
-    def render(self, result) -> tuple[np.ndarray, float]:
+    def render(self, result, omega_axis: float) -> tuple[np.ndarray, float]:
         """Returns (sRGB image the GUI would show, the auto-EV it chose in stops)."""
         w, h = int(result.img_width), int(result.img_height)
         xyz = np.ascontiguousarray(result.flt_buf.reshape(-1), dtype=np.float32)
         p_xyz = xyz.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
 
-        p99 = self._lib.LUMICE_ComputeP99Y(p_xyz, w, h, _GUI_DOWNSAMPLE_FACTOR)
+        assert result.anchor_l99_sky > 0.0, (
+            "the server published anchor_l99_sky=0, i.e. no sky anchor was measured at all. "
+            "Every assertion below would then be comparing two black frames"
+        )
+        # The anchor is a radiance; the buffer being exposed is a radiance integrated over each
+        # pixel's solid angle. See the module docstring for why one multiplication by the on-axis
+        # solid angle is the whole of the shader's m(pos) on this arm.
+        anchor = omega_axis * result.anchor_l99_sky
         ev_auto = self._lib.LUMICE_ComputeEvAuto(
-            ctypes.c_float(p99),
+            ctypes.c_float(anchor),
             ctypes.c_float(result.snapshot_intensity),
             ctypes.c_float(_GUI_TARGET_WHITE),
         )
@@ -330,7 +381,7 @@ class _GuiMonoPath:
 def _compare(config_path: Path, doc: dict) -> dict:
     result = run_scene_capi_buffered(str(config_path), sim_seed=_SEED, backend="legacy", timeout_sec=600)
     assert result.has_valid_data, f"{config_path.name}: simulation produced no data"
-    gui_image, ev_auto = _GuiMonoPath().render(result)
+    gui_image, ev_auto = _GuiMonoPath().render(result, _axis_solid_angle(doc))
     # The fifth CLI-bake-only item, applied to the GUI arm exactly as the renderer applies it:
     # PostSnapshot writes 0 into a masked-out pixel BEFORE the background term and before any
     # annotation, so on this scene a masked pixel is black in linear and black in the PNG.
