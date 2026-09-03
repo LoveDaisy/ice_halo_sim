@@ -112,9 +112,19 @@ std::string Where(const ViewCase& c) {
 
 // The load-bearing assertion of the whole task: same points, bit for bit.
 //
-// Red-state note for whoever changes ResolveMarkerDir: flipping the sign of the zenith's z
-// component makes this fail on every case that images both poles, because only the `markers` route
-// would move. That was run before this test was committed; it is not hypothetical.
+// What this can and cannot catch, established by running both probes before it was committed
+// rather than by reasoning about it:
+//   - Break ONE route (give `zenith_nadir` back its own hardcoded sampling with a flipped sign)
+//     and this goes red on every case that images a pole. That is the failure it exists for.
+//   - Flip the sign inside ResolveMarkerDir and this stays GREEN, because both routes call it and
+//     both move together. That is not a gap in this test, it is the direct consequence of the
+//     design it verifies: agreement is guaranteed by shared code, so shared code is invisible to
+//     an agreement test.
+// So this file says "there is one implementation", never "the direction is right". The direction
+// is pinned separately, by the MarkerDirectionTable cases in
+// test/unit-correctness/core/test_annotation_overlay.cpp, which is what actually went red under
+// the second probe. Anyone reading the two as one guard will trust this file for something it
+// cannot do.
 TEST(AnnotationMarkerEquivalence, MarkerListReproducesTheLegacyZenithNadirPairExactly) {
   int valid_seen = 0;
   int invalid_seen = 0;
