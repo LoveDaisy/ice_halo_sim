@@ -240,6 +240,10 @@ class SimResult:
     # of the scene, so it is the same on every row of one frame — see the field's
     # contract in lumice.h.
     anchor_l99_sky: float = 0.0
+    # On-axis per-pixel solid angle of THIS renderer's view, steradians. The unit bridge
+    # between anchor_l99_sky (a radiance) and the pixel buffer (a radiance times a pixel's
+    # solid angle); see LUMICE_RawXyzResult in lumice.h.
+    axis_solid_angle: float = 0.0
     crystal_num: int = 0
     orientation_num: int = 0
 

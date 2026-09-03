@@ -1,5 +1,5 @@
-#ifndef CONSUMER_ANCHOR_H_
-#define CONSUMER_ANCHOR_H_
+#ifndef SERVER_ANCHOR_CONSUMER_H_
+#define SERVER_ANCHOR_CONSUMER_H_
 
 #include <cstddef>
 #include <memory>
@@ -78,4 +78,4 @@ class AnchorConsumer : public IConsume {
 
 }  // namespace lumice
 
-#endif  // CONSUMER_ANCHOR_H_
+#endif  // SERVER_ANCHOR_CONSUMER_H_
