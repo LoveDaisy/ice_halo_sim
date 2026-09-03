@@ -34,6 +34,7 @@
 #include "core/ev_anchor.hpp"
 #include "server/anchor_consumer.hpp"
 #include "server/render.hpp"
+#include "server/server.hpp"
 
 namespace lumice {
 namespace {
@@ -95,14 +96,21 @@ float AnchorFor(const SimData& data) {
   return ac.SnapshotL99Sky();
 }
 
-// The OLD anchor for one batch under a given renderer config: the reciprocal-ish scale
-// ExposureScale() publishes, which is 1/P99 up to config-fixed constants. Used only as the
-// control that the property under test is not already true by accident.
-float LegacyAnchorScaleFor(const SimData& data, const RenderConfig& cfg) {
+// The RETIRED per-view anchor for one batch under a given renderer config: the coarse P99 over
+// that renderer's own output buffer. Used only as the control that the property under test is
+// not already true by accident.
+//
+// Restated here rather than read back out of ExposureScale(), because ExposureScale no longer
+// computes it — it divides by the scalar this consumer publishes, so asking it would compare the
+// new anchor against itself. This is the rule as it stood before the two-sided adoption, and it
+// lives in a test for the same reason a control always does: the thing it measures is gone from
+// production, and the claim "the new anchor does not move" is empty without it.
+float LegacyAnchorFor(const SimData& data, const RenderConfig& cfg) {
   RenderConsumer rc(cfg);
   rc.Consume(data);
   rc.PrepareSnapshot();
-  return rc.ExposureScale();
+  const RawXyzResult raw = rc.GetRawXyzResult();
+  return ComputeP99Y(raw.xyz_buffer_, raw.img_width_, raw.img_height_, kMonoAnchorDownsampleFactor);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,8 +124,8 @@ TEST(AnchorConsumer, InvariantToLensWhileLegacyAnchorMoves) {
   auto a_ea = MakeRenderConfig(LensParam::kFisheyeEqualArea, 180.0f, 512, 512);
 
   // Control: the old, per-renderer anchor really does depend on the lens.
-  float legacy_linear = LegacyAnchorScaleFor(data, a_linear);
-  float legacy_ea = LegacyAnchorScaleFor(data, a_ea);
+  float legacy_linear = LegacyAnchorFor(data, a_linear);
+  float legacy_ea = LegacyAnchorFor(data, a_ea);
   ASSERT_GT(legacy_linear, 0.0f);
   ASSERT_GT(legacy_ea, 0.0f);
   EXPECT_GT(std::abs(std::log2(legacy_linear / legacy_ea)), 0.2f)
@@ -142,9 +150,9 @@ TEST(AnchorConsumer, InvariantToFovAndResolutionWhileLegacyAnchorMoves) {
   auto big = MakeRenderConfig(LensParam::kFisheyeEqualArea, 180.0f, 1024, 1024);
   auto wide = MakeRenderConfig(LensParam::kFisheyeEqualArea, 60.0f, 512, 512);
 
-  float legacy_small = LegacyAnchorScaleFor(data, small);
-  float legacy_big = LegacyAnchorScaleFor(data, big);
-  float legacy_wide = LegacyAnchorScaleFor(data, wide);
+  float legacy_small = LegacyAnchorFor(data, small);
+  float legacy_big = LegacyAnchorFor(data, big);
+  float legacy_wide = LegacyAnchorFor(data, wide);
   ASSERT_GT(legacy_small, 0.0f);
   ASSERT_GT(legacy_big, 0.0f);
   ASSERT_GT(legacy_wide, 0.0f);
@@ -300,8 +308,8 @@ TEST(AnchorConsumer, VisibleIsNotAnAnchorInput) {
   auto upper = MakeRenderConfig(LensParam::kFisheyeEqualArea, 180.0f, 256, 256);
   auto lower = upper;
   lower.visible_ = RenderConfig::kLower;
-  (void)LegacyAnchorScaleFor(data, upper);
-  (void)LegacyAnchorScaleFor(data, lower);
+  (void)LegacyAnchorFor(data, upper);
+  (void)LegacyAnchorFor(data, lower);
   EXPECT_FLOAT_EQ(AnchorFor(data), once);
 }
 

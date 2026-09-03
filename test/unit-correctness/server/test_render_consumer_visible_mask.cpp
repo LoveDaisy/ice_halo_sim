@@ -23,9 +23,12 @@
 #include "config/color_class_table.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/ev_anchor.hpp"
 #include "core/lens_proj_build.hpp"  // BuildVisibleMask
 #include "core/scatter_accum.hpp"    // MakeCameraRotation
 #include "server/render.hpp"
+#include "server/server.hpp"
+#include "support/render_anchor.hpp"
 
 namespace lumice {
 namespace {
@@ -61,8 +64,7 @@ SimData MakeOneRayBatch() {
 const uint8_t* SnapshotOnce(RenderConsumer* rc) {
   auto data = MakeOneRayBatch();
   rc->Consume(data);
-  rc->PrepareSnapshot();
-  rc->PostSnapshot();
+  lumice::test::TakeSnapshotAtFormerSelfAnchor(rc);
   auto result = rc->GetResult();
   const auto* rr = std::get_if<RenderResult>(&result);
   return rr != nullptr ? rr->img_buffer_ : nullptr;
@@ -235,8 +237,7 @@ SimData MakeOneRayBatchTowards(const float dir[3]) {
 const uint8_t* SnapshotOnceWith(RenderConsumer* rc, const SimData& batch) {
   SimData data = batch;
   rc->Consume(data);
-  rc->PrepareSnapshot();
-  rc->PostSnapshot();
+  lumice::test::TakeSnapshotAtFormerSelfAnchor(rc);
   auto result = rc->GetResult();
   const auto* rr = std::get_if<RenderResult>(&result);
   return rr != nullptr ? rr->img_buffer_ : nullptr;
@@ -378,7 +379,19 @@ ExcludedPixel FindPixelIncludedByVisibleRange(LensParam::LensType type) {
 constexpr float kBrightWeight = 1.0f;
 constexpr float kDimWeight = 0.1f;
 
-TEST(RenderConsumerMeteringRule, RelativeExposureAnchorsToTheWholeBufferNotTheVisibleSubset) {
+// The metering rule of doc/ev-pipeline-architecture.md 2.7, restated for the two-sided anchor.
+//
+// The rule used to be "the relative anchor takes the P99 of the WHOLE snapshot buffer, and the
+// `visible` clip is applied afterwards" — a discipline the code had to keep, because the anchor
+// was computed from that buffer and could have been made to respect the mask. It is now a
+// STRUCTURAL fact instead: the anchor is measured by AnchorConsumer over a fixed full-sky plane
+// that has no `visible` field, no lens and no view, and arrives here as a pushed scalar. What is
+// worth pinning at this layer is therefore the stronger property that replaced it — the scale is
+// a function of (anchor, Omega_axis, intensity_factor) and of NOTHING in this frame's own pixels.
+//
+// The retired rule is restated inside the test as the control, because production no longer
+// computes it and there is otherwise nothing to show that the property is not vacuous.
+TEST(RenderConsumerMeteringRule, RelativeExposureIsIndependentOfThisFramesOwnPixels) {
   constexpr LensParam::LensType kType = LensParam::kFisheyeEqualArea;  // single-lens family: the one 478.2 changed
   const ExcludedPixel clipped = FindPixelExcludedByVisibleRange(kType);
   const ExcludedPixel kept = FindPixelIncludedByVisibleRange(kType);
@@ -390,39 +403,66 @@ TEST(RenderConsumerMeteringRule, RelativeExposureAnchorsToTheWholeBufferNotTheVi
   batch.outgoing_d_ = { clipped.dir[0], clipped.dir[1], clipped.dir[2], kept.dir[0], kept.dir[1], kept.dir[2] };
   batch.outgoing_w_ = { kBrightWeight, kDimWeight };
 
+  SimData kept_only;
+  kept_only.curr_wl_ = 550.0f;
+  kept_only.outgoing_d_ = { kept.dir[0], kept.dir[1], kept.dir[2] };
+  kept_only.outgoing_w_ = { kDimWeight };
+
+  // One scene, one anchor: the same scalar the server would push to every renderer of a session.
+  // Its VALUE is arbitrary here — what the cases below vary is everything else.
+  constexpr float kSceneAnchor = 4.0e3f;
+
   const auto scale_of = [&](RenderConfig::VisibleRange visible, const SimData& rays) {
     RenderConfig cfg = MakeFamilyCfg(kType, visible);
     // kRelative is the default; spelled out so the fixture cannot drift onto the absolute anchor.
     cfg.ev_mode_ = RenderConfig::kRelative;
     RenderConsumer rc(cfg, ColorClassTable{});
-    SnapshotOnceWith(&rc, rays);
+    SimData data = rays;
+    rc.Consume(data);
+    rc.PrepareSnapshot();
+    rc.SetAnchorL99Sky(kSceneAnchor);
     return rc.ExposureScale();
+  };
+
+  // The retired per-view rule, restated: the coarse P99 over this renderer's own output buffer.
+  // Nothing in src/ computes this any more, which is exactly why the control has to.
+  const auto former_anchor_of = [&](RenderConfig::VisibleRange visible, const SimData& rays) {
+    RenderConfig cfg = MakeFamilyCfg(kType, visible);
+    cfg.ev_mode_ = RenderConfig::kRelative;
+    RenderConsumer rc(cfg, ColorClassTable{});
+    SimData data = rays;
+    rc.Consume(data);
+    rc.PrepareSnapshot();
+    const RawXyzResult raw = rc.GetRawXyzResult();
+    return ComputeP99Y(raw.xyz_buffer_, raw.img_width_, raw.img_height_, kMonoAnchorDownsampleFactor);
   };
 
   const float scale_upper = scale_of(RenderConfig::kUpper, batch);
   const float scale_full = scale_of(RenderConfig::kFull, batch);
+  const float scale_kept_only = scale_of(RenderConfig::kUpper, kept_only);
 
-  ASSERT_GT(scale_upper, 0.0f) << "a zero scale would make the equality below hold for the wrong reason";
+  ASSERT_GT(scale_upper, 0.0f) << "a zero scale would make the equalities below hold for the wrong reason";
   EXPECT_FLOAT_EQ(scale_upper, scale_full)
       << "`visible: upper` metered to " << scale_upper << " but `visible: full` metered to " << scale_full
-      << ". The relative-EV anchor must not be a function of `visible`: it takes the P99 of the WHOLE snapshot "
-         "buffer, and the display clip is applied afterwards, on the way to pixels. If this went red because the "
-         "P99 was made to respect the visibility mask, that re-opens a CLI/GUI metering divergence — the GUI "
-         "anchors to a full-sky texture (kSimCommit pins visible=FULL). See doc/ev-pipeline-architecture.md §2.7.";
+      << ". `visible` is a display clip and must not reach the exposure at all. If this went red, something "
+         "re-introduced a per-view anchor — which re-opens the CLI/GUI metering divergence this scrum closed.";
+  EXPECT_FLOAT_EQ(scale_kept_only, scale_upper)
+      << "deleting a ray from the frame moved the exposure, from " << scale_upper << " to " << scale_kept_only
+      << ". The relative anchor is a property of the SCENE, measured once per snapshot on the full-sky anchor "
+         "plane; a frame's own pixels are not allowed to move it. See doc/ev-pipeline-architecture.md 2.7.";
 
-  // Negative control: the clipped pixel's energy really is IN the sample. Drop that ray and the
-  // anchor must move — otherwise the equality above would also hold for a P99 that never saw it.
-  SimData kept_only;
-  kept_only.curr_wl_ = 550.0f;
-  kept_only.outgoing_d_ = { kept.dir[0], kept.dir[1], kept.dir[2] };
-  kept_only.outgoing_w_ = { kDimWeight };
-  const float scale_kept_only = scale_of(RenderConfig::kUpper, kept_only);
-  ASSERT_GT(scale_kept_only, 0.0f) << "the dim ray landed nowhere, so this control says nothing";
-  EXPECT_GT(scale_kept_only / scale_upper, 1.5f)
-      << "removing the ray that lands in the CLIPPED region left the exposure anchor at " << scale_kept_only
-      << " against " << scale_upper
-      << " with it. The two must differ: if they do not, that ray never reached the P99 sample and the equality "
-         "asserted above is vacuous rather than evidence of full-sky metering.";
+  // Control: the two equalities above are not vacuous. Under the RETIRED rule both comparisons
+  // moved — the `visible` one is what 478.2 measured and named in the parity fixture, and the
+  // deleted ray is a 1.5x+ swing in the frame's own P99. A test that could not tell those apart
+  // would pass for a build whose exposure ignored every input.
+  const float former_upper = former_anchor_of(RenderConfig::kUpper, batch);
+  const float former_kept_only = former_anchor_of(RenderConfig::kUpper, kept_only);
+  ASSERT_GT(former_upper, 0.0f) << "the control's own sample is empty, so it says nothing";
+  ASSERT_GT(former_kept_only, 0.0f) << "the dim ray landed nowhere, so this control says nothing";
+  EXPECT_GT(former_upper / former_kept_only, 1.5f)
+      << "under the retired per-view rule the two frames anchored to " << former_upper << " and " << former_kept_only
+      << ". If those are equal the fixture stopped exercising the difference, and the "
+         "invariance asserted above is a statement about nothing.";
 }
 
 }  // namespace

@@ -90,11 +90,22 @@ float LegacyLandedScale(const RenderConfig& cfg, float landed_weight) {
   return cfg.intensity_factor_ * kNormScale * static_cast<float>(total_pix) / landed_weight;
 }
 
-float ScaleFor(const RenderConfig& cfg, const std::vector<float>& weights, float emitted) {
+// The sky anchor every relative-mode case below is exposed against. One number for the whole
+// file: the point of the new anchor is that it is a property of the SCENE, so a fixture that
+// varied it per case would be varying the scene rather than the thing under test. The value
+// itself is arbitrary — only the absolute branch has a physically meaningful denominator, and it
+// ignores this one entirely.
+constexpr float kSceneAnchorL99 = 4.0e3f;
+
+// The server's own order: measure, push, then ask. Pushing unconditionally (the absolute branch
+// does not read it) keeps the two modes' fixtures identical apart from ev_mode_.
+float ScaleFor(const RenderConfig& cfg, const std::vector<float>& weights, float emitted,
+               float anchor_l99_sky = kSceneAnchorL99) {
   RenderConsumer rc(cfg, ColorClassTable{});
   auto data = MakeBatch(weights, emitted);
   rc.Consume(data);
   rc.PrepareSnapshot();
+  rc.SetAnchorL99Sky(anchor_l99_sky);
   return rc.ExposureScale();
 }
 
@@ -222,22 +233,27 @@ TEST(RenderConsumerExposureScale, RawXyzResultCarriesTheRawEmittedTotal) {
 }
 
 // =============================================================================
-// ev_mode = kRelative: the frame anchors to ITSELF.
+// ev_mode = kRelative: the frame anchors to the SKY, through a scalar it is handed.
 //
 // Every case above pins the absolute branch (MakeConfig sets kAbsolute explicitly). These pin
-// the other branch, whose defining property is the opposite one: no energy term at all, so the
-// emitted total can move by any factor without moving the scale.
+// the other branch, whose defining properties are two: no energy term at all, so the emitted
+// total can move by any factor without moving the scale; and no dependence on this frame's own
+// pixels either, since the anchor is measured elsewhere (AnchorConsumer, over a fixed full-sky
+// plane) and pushed in by ServerImpl::DoSnapshot before the bake.
 //
-// The P99 here is genuinely hand-computable rather than re-derived from ComputeP99Y. MakeBatch
-// sends every ray straight up, so on the 16x16 upper-hemisphere fisheye the whole weight lands
-// on ONE pixel and the other 255 are exactly zero. Downsampling by kMonoAnchorDownsampleFactor
-// (8) gives a 2x2 coarse grid with exactly one non-zero bin, whose box sum is that single
-// pixel's Y. One non-zero sample means P99 == that sample, and ComputeP99Y then divides by f^2
-// to return a fine-equivalent figure. So:
-//     p99 = Y_lit / 64
-// with Y_lit read off the published raw buffer (a measurement, not a formula), and therefore
-//     scale = intensity_factor * TargetWhiteToLinear(135) * 64 / Y_lit.
+// The expected value is hand-computable end to end. The scale is
+//     intensity_factor * TargetWhiteToLinear(135) / (Omega_axis * L99_sky)
+// and Omega_axis is exact on this fixture rather than approximate: an equal-area fisheye at
+// fov 180 on a 16x16 frame has ComputeLensScale = 16/2/sqrt(2)/sin(45 deg) = 8 exactly, and an
+// equal-area map's on-axis pixel subtends 2/scale^2 (see core/lens_proj_build.hpp), i.e.
+//     Omega_axis = 2 / 64 = 0.03125 sr
+// written below as a literal so the assertion does not ask the subject what the answer is.
 // =============================================================================
+
+// The on-axis pixel solid angle of MakeConfig()'s lens, derived above. A hand-computed constant
+// on purpose: reading ComputeAxisSolidAngle here would make the expectation agree with whatever
+// that function returns, which is the one thing it must not do.
+constexpr float kFixtureAxisSolidAngle = 2.0f / 64.0f;
 
 RenderConfig MakeRelativeConfig() {
   auto cfg = MakeConfig();
@@ -257,20 +273,56 @@ float LitPixelY(const RenderConsumer& rc) {
   return sum;
 }
 
-TEST(RenderConsumerExposureScaleRelative, MatchesTheHandComputedSelfAnchor) {
+TEST(RenderConsumerExposureScaleRelative, MatchesTheHandComputedSkyAnchor) {
   const auto cfg = MakeRelativeConfig();
-  RenderConsumer rc(cfg, ColorClassTable{});
-  auto data = MakeBatch(Weights(), 1000.0f);
-  rc.Consume(data);
-  rc.PrepareSnapshot();
+  const float expected =
+      cfg.intensity_factor_ * TargetWhiteToLinear(kAnchorTargetWhite) / (kFixtureAxisSolidAngle * kSceneAnchorL99);
 
-  const float y_lit = LitPixelY(rc);
-  ASSERT_GT(y_lit, 0.0f);
-  const float f2 = static_cast<float>(kMonoAnchorDownsampleFactor) * static_cast<float>(kMonoAnchorDownsampleFactor);
-  const float p99 = y_lit / f2;
-  const float expected = cfg.intensity_factor_ * TargetWhiteToLinear(kAnchorTargetWhite) / p99;
+  EXPECT_FLOAT_EQ(ScaleFor(cfg, Weights(), 1000.0f), expected);
+}
 
-  EXPECT_FLOAT_EQ(rc.ExposureScale(), expected);
+TEST(RenderConsumerExposureScaleRelative, IsInverselyProportionalToTheSkyAnchor) {
+  // The anchor is the denominator and nothing else stands between it and the scale: doubling the
+  // sky's brightness must halve the exposure exactly. Stated separately from the case above
+  // because that one would also pass for a formula that happened to hit the same number at one
+  // anchor value.
+  const auto cfg = MakeRelativeConfig();
+  const float at_1x = ScaleFor(cfg, Weights(), 1000.0f, kSceneAnchorL99);
+  const float at_2x = ScaleFor(cfg, Weights(), 1000.0f, 2.0f * kSceneAnchorL99);
+  ASSERT_GT(at_1x, 0.0f);
+  EXPECT_FLOAT_EQ(at_2x, at_1x / 2.0f);
+}
+
+TEST(RenderConsumerExposureScaleRelative, IgnoresThisFramesOwnPixels) {
+  // The property the two-sided anchor exists for, at this layer: the exposure is a statement
+  // about the SCENE, so moving the frame's own content — here by a factor of 4 in landed weight,
+  // which is a 2-stop swing in the P99 the retired rule anchored to — must not move it at all.
+  const auto cfg = MakeRelativeConfig();
+  std::vector<float> heavy;
+  heavy.reserve(Weights().size());
+  for (float w : Weights()) {
+    heavy.push_back(w * 4.0f);
+  }
+
+  RenderConsumer light_rc(cfg, ColorClassTable{});
+  auto light_batch = MakeBatch(Weights(), 1000.0f);
+  light_rc.Consume(light_batch);
+  light_rc.PrepareSnapshot();
+  RenderConsumer heavy_rc(cfg, ColorClassTable{});
+  auto heavy_batch = MakeBatch(heavy, 1000.0f);
+  heavy_rc.Consume(heavy_batch);
+  heavy_rc.PrepareSnapshot();
+
+  // Control: the frames really do differ, by the factor the retired anchor would have seen.
+  const float light_y = LitPixelY(light_rc);
+  const float heavy_y = LitPixelY(heavy_rc);
+  ASSERT_GT(light_y, 0.0f);
+  EXPECT_NEAR(heavy_y / light_y, 4.0f, 1e-3f) << "the two fixtures no longer differ, so the invariance below is "
+                                                 "a statement about nothing";
+
+  light_rc.SetAnchorL99Sky(kSceneAnchorL99);
+  heavy_rc.SetAnchorL99Sky(kSceneAnchorL99);
+  EXPECT_FLOAT_EQ(heavy_rc.ExposureScale(), light_rc.ExposureScale());
 }
 
 TEST(RenderConsumerExposureScaleRelative, IgnoresTheEmittedTotalTheAbsoluteBranchDividesBy) {
@@ -301,17 +353,31 @@ TEST(RenderConsumerExposureScaleRelative, IsADifferentNumberFromTheAbsoluteBranc
   EXPECT_NE(rel, abs_scale);
 }
 
-TEST(RenderConsumerExposureScaleRelative, BlackFrameHasNoAnchorAndScoresZero) {
-  // A frame with no lit pixel has no P99 to anchor to. Zero is the same answer the absolute
-  // branch gives for its own undefined case (nothing emitted) — not an exception, not a
-  // silently huge scale from dividing by an epsilon.
+TEST(RenderConsumerExposureScaleRelative, NoAnchorScoresZeroRatherThanCarryingTheLastOne) {
+  // Two ways to arrive with no anchor, one answer. Zero is the same answer the absolute branch
+  // gives for its own undefined case (nothing emitted) — not an exception, not a silently huge
+  // scale from dividing by an epsilon.
+  //
+  // The second case is the one ServerImpl::DoSnapshot's per-pass reset exists for. A renderer is
+  // reused across snapshots and this member persists, so a pass that failed to push would
+  // otherwise expose the new frame with the PREVIOUS scene's anchor — a plausible wrong number
+  // rather than a visibly broken one. The reset turns that into this, which is covered.
   const auto cfg = MakeRelativeConfig();
-  RenderConsumer rc(cfg, ColorClassTable{});
-  auto data = MakeBatch({ 0.0f, 0.0f }, 1000.0f);
-  rc.Consume(data);
-  rc.PrepareSnapshot();
 
-  EXPECT_EQ(rc.ExposureScale(), 0.0f);
+  RenderConsumer never_pushed(cfg, ColorClassTable{});
+  auto data = MakeBatch(Weights(), 1000.0f);
+  never_pushed.Consume(data);
+  never_pushed.PrepareSnapshot();
+  EXPECT_EQ(never_pushed.ExposureScale(), 0.0f);
+
+  RenderConsumer cleared(cfg, ColorClassTable{});
+  auto second = MakeBatch(Weights(), 1000.0f);
+  cleared.Consume(second);
+  cleared.PrepareSnapshot();
+  cleared.SetAnchorL99Sky(kSceneAnchorL99);
+  ASSERT_GT(cleared.ExposureScale(), 0.0f) << "the fixture never had an anchor, so clearing it proves nothing";
+  cleared.SetAnchorL99Sky(0.0f);
+  EXPECT_EQ(cleared.ExposureScale(), 0.0f);
 }
 
 TEST(RenderConsumerExposureScaleRelative, ScalesWithIntensityFactorLikeTheAbsoluteBranchDoes) {

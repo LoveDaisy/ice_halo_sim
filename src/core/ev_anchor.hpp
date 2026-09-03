@@ -161,15 +161,24 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
   return NthElementP99(y_vals);
 }
 
-// The two numbers the P99 self-anchor is parameterised by. They have an owner here because the
-// server now anchors too (RenderConsumer::ExposureScale's kRelative branch), and a second
-// hardcoded copy of each would be a third place for them to drift.
+// The two numbers the P99 self-anchor is parameterised by.
 //
-// Both are MIRRORED, not shared, on the GUI side: `src/gui/` may not include `core/`, so
+// WHO READS WHICH, as of the two-sided anchor adoption. `kAnchorTargetWhite` still has two
+// consumers on this side (ExposureScale's kRelative branch and ParticipatingExposureScale), and
+// the GUI mirrors it in GuiState::target_white. `kMonoAnchorDownsampleFactor` now has exactly
+// ONE: `anchor_buffer.hpp::kAnchorDownsampleFactor`, which aliases it for the full-sky anchor
+// plane. The call site that used to be its second consumer — a P99 over the renderer's own
+// output buffer, inside ExposureScale — is gone with the per-view anchor it belonged to. The
+// constant is not folded into anchor_buffer.hpp all the same: that header pairs it with the
+// anchor's RESOLUTION and says why the two only move together, which is an argument that needs
+// the box-sum factor to be a name rather than an 8.
+//
+// The GUI mirrors both, not shares them: `src/gui/` may not include `core/`, so
 // gui_constants.hpp::kEvAutoDownsampleFactor and GuiState::target_white hold the same two values
 // independently. That mirroring predates this owner and is not removed by it — the API boundary
-// is what forbids sharing. What changed is only that the core side now has one named owner
-// instead of a literal repeated per call site.
+// is what forbids sharing. Note that the GUI's copy of the downsample factor is now unread by
+// the mono exposure path for the same reason core's second consumer went: the GUI reads the
+// server's anchor instead of computing one.
 //
 // f=8 is the MONO path's choice specifically. Coarse and fine are not two precisions of one
 // statistic (see ComputeP99Y's comment: 64x apart on the 77halo fixture), so the composite path
