@@ -1384,9 +1384,15 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
   // to stand here, one per row and bound; they are the same act (type an out-of-domain value, OK,
   // read back) over a table of rows, so the table is the honest shape.
   //
-  // The input path applies std::clamp only — it does NOT exercise the non-linear drag mapping. The
-  // kLog vs kLinear distinction is still caught, though, because the two rows below have different
-  // bounds and a row that lost its declared range would land on the wrong number here.
+  // The input path applies std::clamp only — it does NOT exercise the non-linear drag mapping. A
+  // row that lost its declared range is still caught, though, because the rows below have different
+  // bounds and such a row would land on the wrong number here.
+  //
+  // The expectations are written as literals rather than read out of kShapeScalarDomains, on
+  // purpose: the table is what the clamp itself reads, so deriving from it would make this case
+  // agree with any domain the table happened to hold. The literals are the second authority. What
+  // they are supposed to be is pinned separately, against the enum, by kExpected in
+  // test/unit-correctness/gui/test_gui_widget_rules.cpp.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "edit_modal", "each_shape_row_clamps_typed_values_to_its_declared_domain");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1397,9 +1403,14 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
         float expected;
         const char* why;
       };
-      // Height is kLog over [0.01, 100]; the pyramid H rows are kLinear over [0, 1].
+      // Height is the kLogLinear hybrid over [1e-4, 100]; the pyramid H rows are kLinear over
+      // [0, 1]. Height's floor is positive not because its law cannot express zero — the hybrid
+      // reaches its own floor exactly, which is why the pyramid's Prism H can be switched off from
+      // its slider — but because core rejects a prism height that is not strictly greater than
+      // 1e-5 (src/core/crystal.cpp), so the control refuses to offer one.
       const Row kRows[] = {
-        { gui::CrystalType::kPrism, "**/##Height##modal_cr_input", 0.0f, 0.01f, "kLog cannot reach zero" },
+        { gui::CrystalType::kPrism, "**/##Height##modal_cr_input", 0.0f, 1e-4f,
+          "the declared floor is positive, to stay clear of core's gate" },
         { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 0.0f, 0.0f, "kLinear starts at zero" },
         { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 1.5f, 1.0f, "clamped to the upper bound" },
         { gui::CrystalType::kPyramid, "**/##Upper H##modal_cr_input", 0.5f, 0.5f, "an in-range value is identity" },
@@ -2208,7 +2219,7 @@ void RegisterEditModalTests(ImGuiTestEngine* engine) {
       // normalizes Height too, so leaving it behind would only mean core rewrites the face on
       // commit); height→face is the source-side scope — the row has no swatch, but it is the
       // group's leader, and an edit to the leader is exactly the edit the whole group must follow.
-      // Both values sit inside BOTH sliders' ranges (Height's [0.01, 100] and a face's [0, 2]), so
+      // Both values sit inside BOTH sliders' ranges (Height's [1e-4, 100] and a face's [0, 2]), so
       // nothing here is a clamp; cross-range clamping has its own case.
       ctx->ItemInputValue("**/##Face 3##modal_fd_input", 0.75f);
       ctx->Yield(2);

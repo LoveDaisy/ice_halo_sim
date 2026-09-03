@@ -443,7 +443,9 @@ TEST(SliderMapping, EndpointSnappingWritesBackTheBoundExactly) {
   EXPECT_EQ(SqrtNormToValueSnapped(-1.0f, sqrt_max_360, 360.0f), 0.0f);
   EXPECT_FLOAT_EQ(SqrtNormToValueSnapped(3.0f, sqrt_max_360, 360.0f), 9.0f);
 
-  // Prism height: log scale over [0.01, 100].
+  // The pure log law over [0.01, 100]. No shape scalar rides it today — the prism height moved to
+  // the hybrid below when it gained a floor of its own — but the law is still reachable from the
+  // domain table, so its snapping stays pinned here.
   EXPECT_EQ(LogNormToValueSnapped(1.0f, 0.01f, 100.0f), 100.0f);
   EXPECT_EQ(LogNormToValueSnapped(0.0f, 0.01f, 100.0f), 0.01f);
   EXPECT_EQ(LogNormToValueSnapped(2.0f, 0.01f, 100.0f), 100.0f);
