@@ -18,10 +18,16 @@ cover:
 > **Historical note**: earlier revisions of this pipeline carried a second
 > "F1 anchor lane" that accumulated filter-fail emission separately to produce a
 > filter-independent P99.5 statistic. That lane was **removed in PR #115**
-> (`task-remove-anchor-lane`, commit `6375ee0`). The current pipeline is a single
-> lane that anchors EV on the visible (filtered) framebuffer's own P99. If you find
-> stray references to `anchor_d_`, `anchor_internal_xyz_`, `anchor_p995_y`, or a
-> "dual lane", they are stale — the live code has none of these.
+> (commit `6375ee0`). If you find stray references to
+> `anchor_d_`, `anchor_internal_xyz_`, `anchor_p995_y`, or a "dual lane", they are
+> stale — the live code has none of these.
+>
+> The word "anchor" has since come back attached to something else and the two must
+> not be confused. Today's `AnchorConsumer` / `anchor_l99_sky` (§2.8) is a SECOND
+> ACCUMULATION TARGET, not a second ray lane: it bins the same rays a renderer bins,
+> into one fixed full-sky plane, and costs no extra tracing. The removed F1 lane's
+> cost was that filter-fail rays had to keep TRACING to feed it, which is a different
+> thing entirely and is not being reintroduced.
 
 ---
 
@@ -735,9 +741,11 @@ promise this document made ahead of the mechanism; it is now a tested fact.
 `ComputeMonoExposure`'s `kRelative` branch (§4) and server-side `ExposureScale()`'s
 `kRelative` branch (§2.6) are two independent implementations of the same formula on
 the same snapshot, and the GUI↔CLI pixel-level comparison in
-`test/e2e-correctness` (101.6 dB PSNR against a live GUI render; the residual traces
-to floating-point last-bit differences, not an algorithmic divergence) is the
-evidence that they agree in practice, not just on paper. `kAbsolute` makes no such
+`test/e2e-correctness/test_ev_mode_relative_gui_parity.py` (max one 8-bit step over
+1.5M channels; the residual traces to floating-point last-bit differences, not an
+algorithmic divergence) is the evidence that they agree in practice, not just on
+paper. Since §2.8 they are no longer even two implementations of one formula over two
+anchors — they are two conversions of one published anchor. `kAbsolute` makes no such
 promise across the GUI/CLI boundary: the CLI's `kRelative` self-anchor has no analog
 of the GUI slider's own clamping behavior (§2.5's `ComputeEvAuto` clamps to
 `[-6, 6]`; the CLI path deliberately does not reproduce that clamp — see
@@ -1122,8 +1130,12 @@ quietly drifting into re-lighting pixels it cannot re-light.
 | `sizeof(RenderConfig)` static_assert (144) | `render_config.cpp:167` |
 | `DownsampleBoxSumY()` / `ComputeP99Y()` / `ComputeEvAuto()` / `NthElementP99()` / `TargetWhiteToLinear()` | `core/ev_anchor.hpp` |
 | `LUMICE_ComputeP99Y` / `LUMICE_ComputeEvAuto` (C API surface) | `include/lumice.h`, `c_api.cpp` |
-| `kEvAutoDownsampleFactor` (8) | `gui_constants.hpp` |
-| Poller P99 anchor computation | `server_poller.cpp` — `ServerPoller::PollOnce()` |
+| `kMonoAnchorDownsampleFactor` (8) / `kAnchorTargetWhite` (135) | `core/ev_anchor.hpp` |
+| `AnchorL99Sky()` / anchor plane geometry | `core/anchor_buffer.hpp` |
+| `ComputeAxisSolidAngle()` — the per-view unit bridge | `core/lens_proj_build.hpp` |
+| `AnchorConsumer` — the session's one anchor accumulator | `server/anchor_consumer.{hpp,cpp}` |
+| Anchor push into the renderers, per snapshot | `server.cpp` — `ServerImpl::DoSnapshot()` |
+| Poller anchor transport (computes no statistic) | `server_poller.cpp` — `ServerPoller::PollOnce()` |
 | `SyncFromPoller()` — ev_auto computation | `app.cpp:741` |
 | `BuildExportParams()` — export EV consistency | `app.cpp:284-289` |
 | `RefreshCpuTextureForSave()` — .lmc thumbnail EV | `app.cpp:227-248` |

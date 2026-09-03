@@ -173,12 +173,12 @@ inline float ComputeP99Y(const float* xyz_data, int img_width, int img_height, i
 // anchor's RESOLUTION and says why the two only move together, which is an argument that needs
 // the box-sum factor to be a name rather than an 8.
 //
-// The GUI mirrors both, not shares them: `src/gui/` may not include `core/`, so
-// gui_constants.hpp::kEvAutoDownsampleFactor and GuiState::target_white hold the same two values
-// independently. That mirroring predates this owner and is not removed by it — the API boundary
-// is what forbids sharing. Note that the GUI's copy of the downsample factor is now unread by
-// the mono exposure path for the same reason core's second consumer went: the GUI reads the
-// server's anchor instead of computing one.
+// The GUI mirrors `kAnchorTargetWhite`, not shares it: `src/gui/` may not include `core/`, so
+// GuiState::target_white holds the same value independently. That mirroring predates this owner
+// and is not removed by it — the API boundary is what forbids sharing. Its neighbour on the GUI
+// side, `gui_constants.hpp::kEvAutoDownsampleFactor`, is GONE for the same reason core's second
+// consumer went: the GUI reads the server's anchor instead of computing one, so a downsample
+// factor is no longer anything a consumer has to know.
 //
 // f=8 is the MONO path's choice specifically. Coarse and fine are not two precisions of one
 // statistic (see ComputeP99Y's comment: 64x apart on the 77halo fixture), so the composite path
