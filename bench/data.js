@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788420082278,
+  "lastUpdate": 1788435086000,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "9e05cea90d94df75e7d0bf0cd62dce574afaffaa",
-          "message": "Merge pull request #201 from LoveDaisy/chore/classify-pixels-stale-docstring\n\ndocs(image_utils): 修正 classify_pixels_by_color_direction 过时 docstring",
-          "timestamp": "2026-07-15T17:49:19+08:00",
-          "tree_id": "b15db229e3139294d532f532c945a31d5c0b255f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/9e05cea90d94df75e7d0bf0cd62dce574afaffaa"
-        },
-        "date": 1784109418234,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 327883.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 592517.5,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 382827.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 345125.7,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4770,6 +4722,54 @@ window.BENCHMARK_DATA = {
             "value": 348213.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6c3c5042e4f17c60ecba3cbf6ff38267594826fa",
+          "message": "Merge pull request #300 from LoveDaisy/fix/scene-cnt-publish-ordering\n\nfix(server): 记账先于发布，消除批次静默丢失的竞态窗口",
+          "timestamp": "2026-09-03T19:19:00+08:00",
+          "tree_id": "a4a02453a42967340bf873f3b689410b89d032b9",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6c3c5042e4f17c60ecba3cbf6ff38267594826fa"
+        },
+        "date": 1788435084338,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 368794.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 583443.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 393386.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 321914.4,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
         ]
       }
