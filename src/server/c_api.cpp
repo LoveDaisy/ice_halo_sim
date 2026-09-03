@@ -3331,6 +3331,7 @@ namespace {
 struct AnnotationStorage {
   lumice::annotation::Overlay overlay;
   std::vector<LUMICE_AnnotationLabel> labels;
+  std::vector<LUMICE_AnnotationMarkerPoint> marker_points;
 };
 
 const unsigned char* MaskPtr(const std::vector<uint8_t>& m) {
@@ -3348,6 +3349,53 @@ bool ReadAngleList(const float* data, int count, int cap, std::vector<float>* ou
     return false;
   }
   out->assign(data, data + count);
+  return true;
+}
+
+// The marker id space is declared twice — as core's MarkerId enum and as the
+// LUMICE_ANNOTATION_MARKER_* macros — because the C header cannot include the C++ one. This cast
+// is the ONLY place the two meet, so the equality that makes it sound is asserted right here
+// rather than described in a comment somewhere: reordering either side, or adding an id to one of
+// them alone, becomes a compile error instead of a marker that silently resolves to the wrong
+// direction. The count line is the half that catches an ADDITION (the per-id lines all still pass
+// when a seventh id is appended on one side only).
+static_assert(static_cast<int>(lumice::annotation::kMarkerZenith) == LUMICE_ANNOTATION_MARKER_ZENITH,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerNadir) == LUMICE_ANNOTATION_MARKER_NADIR,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerSun) == LUMICE_ANNOTATION_MARKER_SUN,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerSubsun) == LUMICE_ANNOTATION_MARKER_SUBSUN,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerAnthelion) == LUMICE_ANNOTATION_MARKER_ANTHELION,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerAntisolar) == LUMICE_ANNOTATION_MARKER_ANTISOLAR,
+              "core MarkerId and LUMICE_ANNOTATION_MARKER_* have diverged");
+static_assert(static_cast<int>(lumice::annotation::kMarkerCount) == LUMICE_ANNOTATION_MARKER_COUNT,
+              "a marker id was added to one side of the C API boundary only");
+
+// A request marker id list, validated and converted. Returns false with `err` set on a malformed
+// list. The range check is not redundant with ResolveMarkerDir's own default branch: it is what
+// turns a caller's bad id into a reported error instead of a silent fallback to the zenith.
+bool ReadMarkerIdList(const int* data, int count, std::vector<lumice::annotation::MarkerId>* out,
+                      LUMICE_ErrorCode* err) {
+  if (count < 0 || count > LUMICE_MAX_ANNOTATION_MARKERS) {
+    *err = LUMICE_ERR_INVALID_VALUE;
+    return false;
+  }
+  if (count > 0 && data == nullptr) {
+    *err = LUMICE_ERR_NULL_ARG;
+    return false;
+  }
+  out->clear();
+  out->reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    if (data[i] < 0 || data[i] >= LUMICE_ANNOTATION_MARKER_COUNT) {
+      *err = LUMICE_ERR_INVALID_VALUE;
+      return false;
+    }
+    out->push_back(static_cast<lumice::annotation::MarkerId>(data[i]));
+  }
   return true;
 }
 
@@ -3393,7 +3441,8 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest*
       !ReadAngleList(request->longitude_deg, request->longitude_count, LUMICE_MAX_ANNOTATION_LINES, &req.longitude_deg,
                      &err) ||
       !ReadAngleList(request->angular_dist_deg, request->angular_dist_count, LUMICE_MAX_ANNOTATION_CIRCLES,
-                     &req.angular_dist_deg, &err)) {
+                     &req.angular_dist_deg, &err) ||
+      !ReadMarkerIdList(request->marker_ids, request->marker_count, &req.markers, &err)) {
     return err;
   }
 
@@ -3423,6 +3472,11 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest*
     storage->labels.push_back(dst);
   }
 
+  storage->marker_points.reserve(o.markers.size());
+  for (const lumice::annotation::CanvasPoint& p : o.markers) {
+    storage->marker_points.push_back({ p.px, p.py, p.valid ? 1 : 0 });
+  }
+
   out->width = o.width;
   out->height = o.height;
   out->drawable = MaskPtr(o.drawable);
@@ -3438,6 +3492,8 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest*
   out->nadir_valid = o.nadir.valid ? 1 : 0;
   out->labels = storage->labels.empty() ? nullptr : storage->labels.data();
   out->label_count = static_cast<int>(storage->labels.size());
+  out->marker_points = storage->marker_points.empty() ? nullptr : storage->marker_points.data();
+  out->marker_count = static_cast<int>(storage->marker_points.size());
   out->storage = storage.release();
   return LUMICE_OK;
 }
@@ -3458,6 +3514,8 @@ void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay) {
   overlay->angular_dist = nullptr;
   overlay->labels = nullptr;
   overlay->label_count = 0;
+  overlay->marker_points = nullptr;
+  overlay->marker_count = 0;
   overlay->zenith_valid = 0;
   overlay->nadir_valid = 0;
 }

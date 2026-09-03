@@ -162,7 +162,26 @@ extern "C" {
 // shorter buffer and LUMICE_FrameGetRawXyz writes past the end of it. Recompile against
 // this header, and update any mirrored struct definition (ctypes, FFI) in lockstep.
 // No behavior change accompanies it: nothing in the renderer reads the new field yet.
-#define LUMICE_API_VERSION 423
+//
+// BREAKING (v4.24): the annotation overlay generalizes its single hardcoded zenith/nadir pair into
+// a list of NAMED reference directions. New symbols: LUMICE_AnnotationMarkerPoint, the
+// LUMICE_ANNOTATION_MARKER_* id family with LUMICE_ANNOTATION_MARKER_COUNT and
+// LUMICE_MAX_ANNOTATION_MARKERS, LUMICE_AnnotationRequest::marker_ids / marker_count, and
+// LUMICE_AnnotationOverlay::marker_points / marker_count.
+// Every one of them is APPENDED at the PHYSICAL end of its struct — after `want_labels` in the
+// request, after `storage` in the overlay — not at the position semantics would suggest (beside
+// zenith_px/zenith_valid). That is the whole compatibility strategy and the reason the overlay's
+// new fields read out of order: both structs already carry published fields, so ANY insertion
+// would move offsets that compiled callers hold. sizeof() grows for both; a caller that was NOT
+// recompiled hands the API a shorter struct and the new fields are read or written past the end of
+// it. Recompile against this header.
+// Nothing is removed and nothing changes meaning: `zenith_nadir`, zenith_px/py/valid and
+// nadir_px/py/valid all stay, with the behavior they had. They are no longer a separate
+// IMPLEMENTATION, though — that field and MARKER_ZENITH / MARKER_NADIR now run through one
+// direction table and one sampler inside core, so the two routes return the same points by
+// construction. A caller that only zero-initializes its request (marker_count = 0) sees no change
+// at all, which is why the GUI and the CLI needed no edit for this version.
+#define LUMICE_API_VERSION 424
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -1461,6 +1480,28 @@ LUMICE_ErrorCode LUMICE_GetCrystalMesh(const LUMICE_CrystalParam* crystal, unsig
 // "-180.0" plus a two-byte UTF-8 degree sign.
 #define LUMICE_ANNOTATION_LABEL_MAX 16
 
+// Named reference directions that can be reported as canvas POINTS (see
+// LUMICE_AnnotationRequest::marker_ids). Two are absolute, four are defined relative to
+// `reference_dir` — the sun, in every use so far:
+//   SUBSUN     the sun reflected in a horizontal surface: same azimuth, negated altitude
+//   ANTHELION  opposite azimuth, SAME altitude
+//   ANTISOLAR  the full antipode of the sun: opposite azimuth AND altitude
+// Values are pinned to core's lumice::annotation::MarkerId by static_assert at the single place
+// that converts between the two; neither side may be reordered on its own.
+#define LUMICE_ANNOTATION_MARKER_ZENITH 0
+#define LUMICE_ANNOTATION_MARKER_NADIR 1
+#define LUMICE_ANNOTATION_MARKER_SUN 2
+#define LUMICE_ANNOTATION_MARKER_SUBSUN 3
+#define LUMICE_ANNOTATION_MARKER_ANTHELION 4
+#define LUMICE_ANNOTATION_MARKER_ANTISOLAR 5
+#define LUMICE_ANNOTATION_MARKER_COUNT 6
+
+// Sanity ceiling on the marker request list, in the same sense as LUMICE_MAX_ANNOTATION_LINES: it
+// guards against a malformed count, it is not a design limit. Deliberately larger than
+// LUMICE_ANNOTATION_MARKER_COUNT because duplicates are legal — asking for the same marker twice
+// reports it twice rather than being an error.
+#define LUMICE_MAX_ANNOTATION_MARKERS 16
+
 // The view an overlay is computed for. Separate from LUMICE_RenderParam on purpose: this carries
 // `front`, which the renderer has no field for, and it describes a pure computation with no Scene
 // or Server lifetime around it. `width`/`height` are the CANVAS the answer is expressed in, which
@@ -1511,6 +1552,17 @@ typedef struct LUMICE_AnnotationRequest_ {
   // Zero skips the curve walk. The masks alone are several times cheaper than masks plus anchors,
   // and a consumer that draws no text has no use for the anchors.
   int want_labels;
+
+  // Named reference directions (LUMICE_ANNOTATION_MARKER_*) to report canvas positions for; NULL
+  // with a zero count means none. Borrowed for the duration of the call, like the angle lists
+  // above. Duplicates are legal and are reported once each, in request order.
+  //
+  // Independent of `zenith_nadir`: setting one says nothing about the other, and a caller may set
+  // both. MARKER_ZENITH / MARKER_NADIR here reach the SAME two points that field reports, computed
+  // by the same code inside core rather than by a parallel implementation, so the two routes cannot
+  // disagree.
+  const int* marker_ids;
+  int marker_count;
 } LUMICE_AnnotationRequest;
 
 // One label: where to put it, what it says, and which curve it came from.
@@ -1524,6 +1576,15 @@ typedef struct LUMICE_AnnotationLabel_ {
   float value_deg;
   char text[LUMICE_ANNOTATION_LABEL_MAX];
 } LUMICE_AnnotationLabel;
+
+// Where one requested marker landed. `valid` is non-zero only when the direction is imaged by the
+// lens, inside the canvas, and inside the requested hemisphere — the same three conditions a label
+// anchor has to meet. px/py are unspecified when it is zero.
+typedef struct LUMICE_AnnotationMarkerPoint_ {
+  float px;  // canvas pixel, x right
+  float py;  // canvas pixel, y down
+  int valid;
+} LUMICE_AnnotationMarkerPoint;
 
 // The result. The caller allocates this struct (stack is fine); core allocates what the pointers
 // point at, and LUMICE_ReleaseAnnotationOverlay frees it. Every pointer below is owned by core and
@@ -1564,6 +1625,16 @@ typedef struct LUMICE_AnnotationOverlay_ {
   // pass this struct to LUMICE_ReleaseAnnotationOverlay exactly once instead. Copying the struct
   // copies the handle, so only ONE copy may be released — treat it as a move, not a value.
   void* storage;
+
+  // Parallel to the request's marker_ids: marker_points[i] is where marker_ids[i] landed.
+  // marker_count equals the request's, and the array is NULL when it is zero. Owned by `storage`
+  // like every other pointer here, and released with it.
+  //
+  // Placed after `storage` rather than beside zenith/nadir where it belongs semantically, because
+  // this is an APPEND: every field above keeps the offset it was published with. Reading order is
+  // worth less than not moving a field a compiled caller already knows the offset of.
+  const LUMICE_AnnotationMarkerPoint* marker_points;
+  int marker_count;
 } LUMICE_AnnotationOverlay;
 
 // Compute the overlay for one view. `*out` is fully overwritten on success and left untouched on
@@ -1580,8 +1651,8 @@ typedef struct LUMICE_AnnotationOverlay_ {
 //
 // Returns LUMICE_ERR_NULL_ARG if `request` or `out` is NULL, or a list pointer is NULL with a
 // non-zero count; LUMICE_ERR_INVALID_VALUE for an unknown lens_type / visible, a negative count,
-// or a count past LUMICE_MAX_ANNOTATION_LINES / _CIRCLES; LUMICE_ERR_UNKNOWN on allocation
-// failure.
+// a count past LUMICE_MAX_ANNOTATION_LINES / _CIRCLES / _MARKERS, or a marker id outside
+// [0, LUMICE_ANNOTATION_MARKER_COUNT); LUMICE_ERR_UNKNOWN on allocation failure.
 LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest* request,
                                                  LUMICE_AnnotationOverlay* out);
 
