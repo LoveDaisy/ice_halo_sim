@@ -172,26 +172,66 @@ struct LensProjScene {
 // inside the rule's own 0.5 dB quantization. The invariant that matters is unaffected either way:
 // a floored mean − 1.0 dB always leaves at least 1.0 dB of margin, which on these sigmas is 10σ
 // or more. Twenty more full-suite runs could have moved a threshold by at most one 0.5 dB step.
+//
+// ============================================================================================
+// RE-SHOT, ALL NINE, when the mono exposure anchor became a property of the SCENE rather than of
+// the displayed buffer (doc/ev-pipeline-architecture.md §2.8). Every row's mean moved DOWN by a
+// strikingly uniform amount, and since a mean moving down is what a defect also looks like from
+// here, the reading is stated rather than filed as drift:
+//
+//   scene                                  mean before → after     sigma before → after
+//   fisheye_equal_area_120                 20.030 → 19.83  (-0.20)   0.1040 → 0.0611
+//   fisheye_equal_area_120_border          20.013 → 19.81  (-0.20)   0.0918 → 0.0994
+//   fisheye_orthographic_180               19.033 → 18.77  (-0.26)   0.0799 → 0.0508
+//   linear                                 21.749 → 21.56  (-0.19)   0.1033 → 0.1044
+//   dual_fisheye_equal_area_full           27.666 → 27.49  (-0.18)   0.0827 → 0.0415
+//   dual_fisheye_equal_area_full_border    27.071 → 26.89  (-0.18)   0.0464 → 0.0409
+//   overlay_ea                             20.734 → 20.46  (-0.27)   0.0989 → 0.0961
+//   rectangular                            28.562 → 28.41  (-0.15)   0.0591 → 0.0684
+//   sky_colour_ea_180                      28.540 → 28.26  (-0.28)   0.1645 → 0.1571
+//
+// WHAT THAT MEASURES. These PSNRs compare ONE capture against a 10-run pixel mean, so the number
+// is the run-to-run noise floor and nothing else. Sigma did not grow — it fell on five rows — so
+// the statistic did not become less reliable; the single-run deviation itself grew, by a uniform
+// 2.0-3.3% in RMS error. The mechanism is the change itself seen from its noise side: the
+// exposure used to be anchored on a P99 of the very texture being displayed, so a run whose
+// texture came out brighter got a proportionally larger divisor and the fluctuation partly
+// cancelled. The anchor is now measured on a different buffer (the full-sky anchor plane, fed by
+// the same batches but binned differently), so that cancellation is only partial. It is the exact
+// dual of the property the change exists for — the exposure no longer tracks this frame's own
+// pixels, which is what RenderConsumerExposureScaleRelative.IgnoresThisFramesOwnPixels asserts
+// directly — and it is a one-time 0.2 dB, not a trend.
+//
+// THE THRESHOLDS THEREFORE WENT DOWN, and that is not a red being relaxed away. Every scene was
+// green at the OLD thresholds both before and after the re-shoot (measured: 19.65 / 26.73 / 18.71
+// / 21.46 / 20.52 / 28.31 / 28.15 / 19.68 / 27.48 dB against the old references). What the new
+// figures restore is the group's own 1.0 dB cross-machine floor, which the old thresholds had
+// silently eaten into (0.76-0.99 dB) once the mean moved: the floor exists precisely so a
+// reference compared on another machine does not flake, and leaving it thin is how the retired
+// auto_ev group used to flake. Each new value is the driver's mechanical output, mean − 1.0 dB
+// floored to 0.5 dB, and the 0.5 dB step every row took is the flooring crossing a boundary on a
+// 0.2 dB move, not a 0.5 dB concession.
+// ============================================================================================
 static const LensProjScene kScenes[] = {
-  // mean 20.030 σ0.1040
-  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
+  // mean 19.83 σ0.0611 (N=10)
+  {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f},
-  // mean 19.033 σ0.0799 (N=10)
-  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.0,  0.4f,
+  // mean 18.77 σ0.0508 (N=10)
+  {"fisheye_orthographic_180",     LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 17.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeOrthographic, 180.0f, 20.0f},
-  // mean 21.749 σ0.1033 (N=10)
+  // mean 21.56 σ0.1044 (N=10)
   // fov=90 matches the Linear entry in kSingleLens[] (test_render_handedness_guard.cpp), so a
   // suspected linearInverse regression can be cross-read against that deterministic sign pin
   // at the same focal length.
   {"linear",                       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 20.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeLinear,              90.0f, 20.0f},
-  // mean 27.666 σ0.0827
-  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.5,  5.0f,
+  // mean 27.49 σ0.0415 (N=10)
+  {"dual_fisheye_equal_area_full", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.0,  5.0f,
    LensSetup::kDualFisheyeExport},
-  // mean 28.562 σ0.0591 (N=10)
-  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.5,  5.0f,
+  // mean 28.41 σ0.0684 (N=10)
+  {"rectangular",                  LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 27.0,  5.0f,
    LensSetup::kEquirectExport},
-  // mean 20.734 σ0.0989
+  // mean 20.46 σ0.0961 (N=10)
   // Overlay scene: same equal-area branch as the first row, tilted to elevation=45 with the
   // zenith/nadir markers and the coordinate grid enabled. It is the only committed pixel
   // coverage of overlayAuxLines(); it moved here from the retired auto_ev group, which had
@@ -201,7 +241,7 @@ static const LensProjScene kScenes[] = {
   // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
   // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
   // scene is no noisier than it was; only its operating point moved.
-  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
+  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
   // Lens-border scenes. Each reuses the setup of the scene named in its own name and changes ONE
@@ -213,14 +253,14 @@ static const LensProjScene kScenes[] = {
   // Ray budgets are inherited from the reused scenes for the reason those budgets exist: the border
   // is a thin bright curve, so its contribution to PSNR is small, and lowering the budget here would
   // raise the Monte-Carlo floor the border has to stand out from.
-  // mean 20.013 σ0.0918
-  {"fisheye_equal_area_120_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.4f,
+  // mean 19.81 σ0.0994 (N=10)
+  {"fisheye_equal_area_120_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   120.0f, 20.0f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
    /*enable_lens_border=*/true},
-  // mean 27.071 σ0.0464 — 0.6 dB under its borderless twin, which is the border's own contribution
+  // mean 26.89 σ0.0409 (N=10) — 0.6 dB under its borderless twin, which is the border's own contribution
   // to the frame: the two circles are a thin bright curve over an otherwise identical capture.
-  {"dual_fisheye_equal_area_full_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 26.0, 5.0f,
+  {"dual_fisheye_equal_area_full_border", LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 128, 25.5, 5.0f,
    LensSetup::kDualFisheyeExport,
    /*lens_type=*/0, /*fov=*/0.f, /*elevation=*/0.f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
@@ -245,8 +285,8 @@ static const LensProjScene kScenes[] = {
   //
   // The colour is the one the rest of this scrum probes with, so a byte read off this reference is
   // directly comparable with the numbers those suites assert.
-  // mean 28.540 σ0.1645
-  {"sky_colour_ea_180",            LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 192, 27.5,  0.4f,
+  // mean 28.26 σ0.1571 (N=10)
+  {"sky_colour_ea_180",            LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 192, 27.0,  0.4f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 0.0f,
    /*enable_overlay=*/false, /*overlay_zenith_nadir=*/false, /*overlay_grid=*/false,
    /*enable_lens_border=*/false,

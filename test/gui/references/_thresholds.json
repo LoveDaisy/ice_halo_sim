@@ -15,72 +15,72 @@
       }
     },
     "lens_proj": {
-      "generated_at": "2026-09-01T18:44:42",
+      "generated_at": "2026-09-03T11:25:16",
       "n_ref_runs": 10,
       "n_calib_runs": 10,
       "scenes": {
         "dual_fisheye_equal_area_full": {
-          "psnr_mean": 27.6657,
-          "psnr_std": 0.0827,
+          "psnr_mean": 27.486,
+          "psnr_std": 0.0415,
           "identical_runs": 0,
-          "n_samples": 30,
-          "threshold": 26.5
+          "n_samples": 10,
+          "threshold": 26.0
         },
         "fisheye_equal_area_120": {
-          "psnr_mean": 20.0303,
-          "psnr_std": 0.104,
+          "psnr_mean": 19.828,
+          "psnr_std": 0.0611,
           "identical_runs": 0,
-          "n_samples": 30,
-          "threshold": 19.0
+          "n_samples": 10,
+          "threshold": 18.5
         },
         "fisheye_orthographic_180": {
-          "psnr_mean": 19.033,
-          "psnr_std": 0.0799,
+          "psnr_mean": 18.768,
+          "psnr_std": 0.0508,
           "identical_runs": 0,
           "n_samples": 10,
-          "threshold": 18.0
+          "threshold": 17.5
         },
         "rectangular": {
-          "psnr_mean": 28.562,
-          "psnr_std": 0.0591,
+          "psnr_mean": 28.412,
+          "psnr_std": 0.0684,
           "identical_runs": 0,
           "n_samples": 10,
-          "threshold": 27.5
+          "threshold": 27.0
         },
         "linear": {
-          "psnr_mean": 21.749,
-          "psnr_std": 0.1033,
+          "psnr_mean": 21.563,
+          "psnr_std": 0.1044,
           "identical_runs": 0,
           "n_samples": 10,
           "threshold": 20.5
         },
         "overlay_ea": {
-          "psnr_mean": 20.731,
-          "psnr_std": 0.0989,
-          "identical_runs": 0,
-          "n_samples": 10,
-          "threshold": 19.5
-        },
-        "dual_fisheye_equal_area_full_border": {
-          "psnr_mean": 27.071,
-          "psnr_std": 0.0464,
-          "identical_runs": 0,
-          "n_samples": 10,
-          "threshold": 26.0
-        },
-        "fisheye_equal_area_120_border": {
-          "psnr_mean": 20.013,
-          "psnr_std": 0.0918,
+          "psnr_mean": 20.459,
+          "psnr_std": 0.0961,
           "identical_runs": 0,
           "n_samples": 10,
           "threshold": 19.0
         },
-        "sky_colour_ea_180": {
-          "psnr_mean": 28.542,
-          "psnr_std": 0.1645,
+        "dual_fisheye_equal_area_full_border": {
+          "psnr_mean": 26.892,
+          "psnr_std": 0.0409,
           "identical_runs": 0,
           "n_samples": 10,
-          "threshold": 27.5
+          "threshold": 25.5
+        },
+        "fisheye_equal_area_120_border": {
+          "psnr_mean": 19.808,
+          "psnr_std": 0.0994,
+          "identical_runs": 0,
+          "n_samples": 10,
+          "threshold": 18.5
+        },
+        "sky_colour_ea_180": {
+          "psnr_mean": 28.263,
+          "psnr_std": 0.1571,
+          "identical_runs": 0,
+          "n_samples": 10,
+          "threshold": 27.0
         }
       }
     },
