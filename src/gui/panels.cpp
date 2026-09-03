@@ -53,10 +53,15 @@ static bool RenderNonlinearSlider(const char* slider_id, float* value, float min
       *value = slider_mapping::LogNormToValueSnapped(norm, min_val, max_val);
       changed = true;
     }
-  } else if (scale == SliderScale::kLogLinear && min_val == 0.0f) {
-    float norm = slider_mapping::LogLinearValueToNorm(*value, max_val);
+  } else if (scale == SliderScale::kLogLinear && min_val >= 0.0f) {
+    // Any non-negative floor, not just exactly 0: the law's linear segment now runs
+    // [min_val, kLogLinearX0]. Its upper limit (min_val < kLogLinearX0) is not re-checked here
+    // because it is checked where the floors are written -- shape_scalar_domain.hpp static_asserts
+    // it over every kLogLinear row -- and a runtime test here could only fail after the value had
+    // already been drawn.
+    float norm = slider_mapping::LogLinearValueToNorm(*value, min_val, max_val);
     if (ImGui::SliderFloat(slider_id, &norm, 0.0f, 1.0f, "", ImGuiSliderFlags_NoInput)) {
-      *value = slider_mapping::LogLinearNormToValueSnapped(norm, max_val);
+      *value = slider_mapping::LogLinearNormToValueSnapped(norm, min_val, max_val);
       changed = true;
     }
   } else {
