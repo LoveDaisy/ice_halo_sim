@@ -1674,10 +1674,25 @@ void SyncFromPoller() {
     g_state.effective_pixels = payload->effective_pixels;
     g_state.texture_upload_count++;
     g_state.last_uploaded_texture_serial = snap->texture_serial;  // record exact-once cursor
-    // Auto-EV: visible framebuffer self-P99 normalization (see doc/adaptive-brightness.md).
-    g_state.p99_raw_y = payload->p99_y;
+    // Auto-EV. The anchor is the SERVER's sky radiance (LUMICE_RawXyzResult::anchor_l99_sky),
+    // the same scalar RenderConsumer::ExposureScale divides by, so the preview and a CLI render
+    // of this document are exposed against one number rather than two that were argued to agree
+    // (see doc/adaptive-brightness.md and doc/ev-pipeline-architecture.md).
+    //
+    // Only the FIRST argument changed. snapshot_intensity stays the real value, because it is
+    // not a leftover: ComputeEvAuto puts it in the numerator, ComputeMonoExposure's kRelative
+    // branch divides the result by it again, and the two cancel exactly — leaving
+    // intensity_scale = 2^exposure_offset * target_linear / anchor_l99_sky, which is the CLI's
+    // expression divided by Omega_axis, which is what the shader's relative-illumination factor
+    // supplies per pixel. Passing 1 here instead would break that cancellation and leave a
+    // 1/snapshot_intensity gain on the preview.
+    //
+    // The composite path keeps its own anchor and its own field (payload->p99_y); this branch is
+    // the mono one, and the two do not converge — see server_poller.cpp.
+    g_state.p99_raw_y = payload->is_composite ? payload->p99_y : payload->anchor_l99_sky;
     g_state.ev_auto = LUMICE_ComputeEvAuto(g_state.p99_raw_y, g_state.snapshot_intensity, g_state.target_white);
-    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: p99_raw_y={:.6f}, ev_auto={:.3f}", g_state.p99_raw_y, g_state.ev_auto);
+    GUI_LOG_VERBOSE("[GUI] SyncFromPoller: anchor={:.6f} (composite={}), ev_auto={:.3f}", g_state.p99_raw_y,
+                    payload->is_composite, g_state.ev_auto);
   }
 }
 

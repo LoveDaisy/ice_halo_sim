@@ -19,19 +19,21 @@
 //
 // — the RELATIVE ILLUMINATION of the projection, the standard photometric quantity, dimensionless
 // and equal to 1 at the frame centre by construction. It is deliberately NOT the absolute ratio
-// Omega_p / Omega_texel_source, and the reason is mechanical rather than aesthetic. Both sides of
-// the GUI<->CLI comparison self-anchor their exposure on their own image, and they anchor on
-// DIFFERENT images: the GUI's relative-EV denominator is a P99 over the source texture
-// (server_poller.cpp's LUMICE_ComputeP99Y, computed before any reprojection), the CLI's is a P99
-// over its own already-Jacobian-baked render (server/render.cpp RenderConsumer::ExposureScale).
-// Writing out both chains, the GUI displays L / P99_sky(L) and the CLI displays
-// L * Omega_p / P99_frame(L * Omega_p): the SCALE of Omega_p cancels on the CLI side against its
-// own anchor, and only the SHAPE is left over as a disagreement. Multiplying the GUI by the
-// absolute ratio would therefore not restore agreement — it would add a second, uncorrelated global
-// gain whose physical content is the target canvas's angular resolution, which is a display choice.
-// Measured: that gain is 0.331 for an equal-area fisheye at fov 96 on 512x683 (the GUI would go
-// three times too dark) and 16 for a rectilinear lens at fov 160 on the same canvas (sixteen times
-// too bright, i.e. clipped). Normalizing on axis adds the shape and leaves the level alone.
+// Omega_p / Omega_texel_source, and since the two-sided anchor adoption the reason is no longer an
+// argument about two self-anchors but an identity. Both sides now divide by the SAME published sky
+// radiance L99_sky (core/anchor_buffer.hpp), and the CLI additionally divides by the on-axis solid
+// angle of its own lens, because its buffer holds L * Omega_p while the anchor is a radiance
+// (core/lens_proj_build.hpp::ComputeAxisSolidAngle). Writing out both chains:
+//
+//     CLI displays   L * Omega_p / (Omega_axis * L99_sky)  =  L * m(pos) / L99_sky
+//     GUI displays   L * m(pos)  /  L99_sky
+//
+// so m normalized ON AXIS is exactly the factor that makes the two the same picture. Multiplying
+// the GUI by the absolute ratio instead would add a global gain whose physical content is the
+// target canvas's angular resolution, which is a display choice: measured, that gain is 0.331 for
+// an equal-area fisheye at fov 96 on 512x683 (the GUI would go three times too dark) and 16 for a
+// rectilinear lens at fov 160 on the same canvas (sixteen times too bright, i.e. clipped).
+// Normalizing on axis adds the shape and leaves the level alone.
 //
 // Two consequences worth stating because they are load-bearing further down:
 //   * Every equal-area branch has m identically 1, exactly, at every pixel. Equal-area previews are
@@ -42,6 +44,8 @@
 //     the right one: absolute mode's cross-lens comparability is already outside its stated
 //     contract (the GUI's absolute denominator counts the SOURCE TEXTURE's pixels, app.cpp, while
 //     the CLI's counts its own canvas's, render.cpp), so an absolute Omega_p would not repair it.
+//     Absolute mode is untouched by the two-sided anchor: it divides by emitted energy, which is
+//     a different denominator on a different code path.
 //
 // DERIVATION, shared by every entry below. For any projection with rotational symmetry about the
 // optical axis, writing rho for the image radius and theta for the polar angle it images:

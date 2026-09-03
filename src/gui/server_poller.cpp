@@ -481,6 +481,7 @@ void ServerPoller::PollOnce() {
       payload->width = xyz_results[0].img_width;
       payload->height = xyz_results[0].img_height;
       payload->snapshot_intensity = xyz_results[0].snapshot_intensity;
+      payload->anchor_l99_sky = xyz_results[0].anchor_l99_sky;
       payload->emitted_energy = xyz_results[0].emitted_energy;
       payload->intensity_factor = xyz_results[0].intensity_factor;
       payload->effective_pixels = xyz_results[0].effective_pixels;
@@ -504,14 +505,16 @@ void ServerPoller::PollOnce() {
       }
       // task-345.3: composite P99 anchor comes from the server (union of participating
       // classes' unexposed lanes — see doc/ev-pipeline-architecture.md §2.4 for the
-      // "P99 is composite-only C API field" carve-out). Mono/non-composite path stays on
-      // the client-side xyz statistic; the two paths do NOT converge — mixing full-
-      // spectrum pixels back in was the "composite too dim" root cause this task fixes.
+      // "P99 is composite-only C API field" carve-out). The two paths do NOT converge — mixing
+      // full-spectrum pixels back in was the "composite too dim" root cause that task fixes.
+      //
+      // The mono branch that used to sit beside this one is gone. It called LUMICE_ComputeP99Y
+      // over the simulation texture, which made the GUI's exposure a SECOND anchor beside the
+      // CLI's: two numbers over two different pixel populations, argued to be equivalent and
+      // measurably not. The mono path now carries the server's anchor_l99_sky (assigned above,
+      // unconditionally) and computes no statistic of its own.
       if (payload->is_composite) {
         payload->p99_y = composite_results[0].composite_p99_y;
-      } else {
-        payload->p99_y =
-            LUMICE_ComputeP99Y(payload->xyz_buffer, payload->width, payload->height, kEvAutoDownsampleFactor);
       }
       // (payload is default-constructed with rgb_buffer null + is_composite=false,
       // so the not-active branch is a no-op; explicit reset would be redundant.)
