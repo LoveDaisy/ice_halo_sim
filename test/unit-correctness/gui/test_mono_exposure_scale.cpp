@@ -18,11 +18,14 @@
 #include <cmath>
 #include <string>
 
+#include "core/ev_anchor.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/mono_exposure_scale.hpp"
 
 namespace {
 
+using lumice::ComputeEvAuto;
+using lumice::TargetWhiteToLinear;
 using lumice::gui::ComputeMonoExposure;
 using lumice::gui::FormatMonoEvReadout;
 using lumice::gui::MonoEvMode;
@@ -62,6 +65,34 @@ TEST(MonoExposureScale, RelativeIgnoresEmittedEnergyEntirely) {
 
   EXPECT_FLOAT_EQ(ComputeMonoExposure(MonoEvMode::kRelative, a).intensity_scale,
                   ComputeMonoExposure(MonoEvMode::kRelative, b).intensity_scale);
+}
+
+// ComputeEvAuto's snapshot_intensity argument must NOT be hardcoded (e.g. to 1.0f) regardless of
+// what p99_raw_y is anchored to: ComputeMonoExposure's kRelative branch (above) divides by the
+// SAME real snapshot_intensity again, and the two only cancel when both hops see the identical
+// value. This pins that two-hop cancellation across three distinct snapshot_intensity values, so
+// a change that breaks the identity (e.g. hardcoding either hop's argument) fails here instead of
+// silently reintroducing a spurious 1/snapshot_intensity factor into displayed brightness. See
+// doc/ev-pipeline-architecture.md §2.5.
+TEST(MonoExposureScale, ChainedWithComputeEvAutoTheSnapshotIntensityCancels) {
+  // Chosen close to TargetWhiteToLinear(135) so ev_auto stays well inside ComputeEvAuto's
+  // [-6, 6] clamp across all three snapshot_intensity values below -- a clamped ev_auto would
+  // make the cancellation untestable (the clamp, not the algebra, would decide the outcome).
+  const float anchor = 0.25f;  // stand-in for axis_solid_angle * anchor_l99_sky
+  const float target_white = 135.0f;
+  const float exposure_offset = 1.5f;
+  const float target_linear = TargetWhiteToLinear(target_white);
+  const float want_scale = std::pow(2.0f, exposure_offset) * target_linear / anchor;
+
+  for (float snapshot_intensity : { 0.2f, 1.0f, 3.5f }) {
+    MonoExposureInput in;
+    in.exposure_offset = exposure_offset;
+    in.ev_auto = ComputeEvAuto(anchor, snapshot_intensity, target_white);
+    in.snapshot_intensity = snapshot_intensity;
+
+    const MonoExposure got = ComputeMonoExposure(MonoEvMode::kRelative, in);
+    EXPECT_NEAR(got.intensity_scale, want_scale, want_scale * 1e-4f) << "snapshot_intensity=" << snapshot_intensity;
+  }
 }
 
 TEST(MonoExposureScale, RelativeYieldsZeroScaleWhenNothingHasLanded) {

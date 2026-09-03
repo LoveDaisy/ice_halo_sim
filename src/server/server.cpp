@@ -764,6 +764,11 @@ bool ServerImpl::DoSnapshot() {
     // the previous pass's anchor — a plausible number, off by however much the scene moved —
     // instead of with 0, which ExposureScale already treats as "no anchor yet" and returns 0 for.
     // Cheap enough to be unconditional: one float store per renderer per snapshot.
+    // Resets consumers_, not snapshot_consumers — deliberately: snapshot_consumers is the copy
+    // taken a few lines below, so at that copy point the two are identical by construction (both
+    // under this same consumer_mutex_ hold, with no consumer add/remove between). The Phase 2
+    // push loop further down (which sets the REAL anchor before PostSnapshot bakes) walks
+    // snapshot_consumers rather than consumers_ only because it runs outside this lock.
     for (const auto& c : consumers_) {
       if (auto* rc = dynamic_cast<RenderConsumer*>(c.get())) {
         rc->SetAnchorL99Sky(0.0f);
