@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788369965413,
+  "lastUpdate": 1788420075375,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "e8f266452c9b204f5f067a0e9b7de29251e583e6",
-          "message": "Merge pull request #200 from LoveDaisy/test/painter-default-e2e-coverage\n\ntest(painter-default-e2e): 补 painter 默认合成模式的 e2e 全链路覆盖",
-          "timestamp": "2026-07-15T16:30:15+08:00",
-          "tree_id": "e9f46c194ddee502cab098deb32fc54ec94eba1b",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e8f266452c9b204f5f067a0e9b7de29251e583e6"
-        },
-        "date": 1784104653822,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 454060.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 592068.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 406272.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 354522.1,
-            "unit": "rays/sec",
-            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4768,6 +4720,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 344775,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "82310d302119a07fff51338e811ffd189ee0aac1",
+          "message": "Merge pull request #299 from LoveDaisy/feat/relative-ev-anchor\n\nfeat(core): 把 relative 曝光锚点做对 —— 锚到固定全天缓冲，CLI 与 GUI 消费同一个数",
+          "timestamp": "2026-09-03T15:07:51+08:00",
+          "tree_id": "582e122487ca1d78c26a6dae0bb7dc213f067af6",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/82310d302119a07fff51338e811ffd189ee0aac1"
+        },
+        "date": 1788420073654,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 381836.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 584684.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 488166.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 348213.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
