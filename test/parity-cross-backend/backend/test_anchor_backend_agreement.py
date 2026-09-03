@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import platform
 import tempfile
 from pathlib import Path
 
@@ -64,7 +66,44 @@ _HOST_REL_TOL = 1e-6
 # be vacuous rather than passing. Measured spread on this scene: ~1.1%.
 _MAX_USEFUL_SPREAD = 0.10
 
-_ROUTES = ("legacy", "cpu_backend", "metal")
+# There is one device-fused route per host, never two: Metal on a Mac, CUDA on the
+# Linux/Windows reference machine. Naming it by host rather than hard-coding "metal"
+# is what lets this file cover the CUDA kernel's anchor accumulation at all — the
+# kernel change is per-backend, so a test that only ever asks for "metal" would
+# report a clean run on the CUDA box while never having executed the CUDA code it
+# is meant to be checking. Detection reuses the repository's existing CUDA test
+# gate (`platform` + LUMICE_HAS_CUDA, see doc/gpu-remote-cuda-build-testing.md §1)
+# rather than introducing a knob of its own.
+_DEVICE_ROUTE = (
+    "cuda"
+    if platform.system() in ("Linux", "Windows") and os.environ.get("LUMICE_HAS_CUDA") == "1"
+    else "metal"
+)
+
+_ROUTES = ("legacy", "cpu_backend", _DEVICE_ROUTE)
+
+# Tolerance for the "both routes simulated the SAME scene" guard at the end of
+# test_device_fused_route_agrees_within_monte_carlo_noise. It is per-route on
+# purpose, because the two device backends are not equally close to legacy on
+# this quantity and one shared number would have to be either a lie or useless:
+#
+#   metal: the landed-energy mean matches legacy to ~0.02%, so the guard can be
+#          sharp and is left sharp.
+#   cuda:  it does NOT. On this scene the CUDA route sits on a plateau 1.21%
+#          BELOW legacy (median over seeds 42/43/44: 185.42 vs 187.69), which is
+#          ~80x its own seed-to-seed spread (0.015%) and ~200x legacy's (0.006%),
+#          so it is systematic rather than a different draw. That offset is NOT
+#          introduced by the anchor work: a clean CUDA build of the pre-anchor
+#          base commit 08aa2833, where no anchor code exists at all, measures
+#          -1.2097% on the same probe against -1.2087% here, and legacy's own
+#          three values are unchanged to every printed digit across the two
+#          builds. It is a pre-existing CUDA-vs-legacy energy divergence, out of
+#          scope here and reported upward rather than fixed by this test.
+#
+# What this guard has to discriminate is a device route that simulated a
+# DIFFERENT scene, and that produces a factor, not a percent — so 5% still does
+# the guard's actual job on CUDA while refusing to pretend the 1.2% is not there.
+_SCENE_SAMENESS_REL = {"metal": 1e-3, "cuda": 5e-2}[_DEVICE_ROUTE]
 
 _CONFIG = "cpu_backend_route"
 
@@ -126,7 +165,7 @@ def test_host_routes_publish_the_bit_identical_anchor():
 
 @pytest.mark.slow
 def test_device_fused_route_agrees_within_monte_carlo_noise():
-    """metal vs legacy: judged against the statistic's own spread, not a fixed ulp.
+    """device route vs legacy: judged against the statistic's own spread, not a fixed ulp.
 
     The device-fused route generates its rays ON DEVICE from its own RNG stream, so
     it traces a DIFFERENT realization of the same sky. The anchor is a P99 over
@@ -155,9 +194,9 @@ def test_device_fused_route_agrees_within_monte_carlo_noise():
         "do NOT widen the bound below to accommodate it."
     )
 
-    m = _run(str(CONFIGS_DIR / f"{_CONFIG}.json"), "metal")
+    m = _run(str(CONFIGS_DIR / f"{_CONFIG}.json"), _DEVICE_ROUTE)
     if m.fell_back:
-        pytest.skip("metal: backend fell back to legacy on this host — routes not distinct")
+        pytest.skip(f"{_DEVICE_ROUTE}: backend fell back to legacy on this host — routes not distinct")
     assert m.anchor_l99_sky > 0.0, (
         f"{_CONFIG}: the device-fused route published no anchor at all — its kernel is not "
         "accumulating the anchor plane, or the drain never reaches the consumer"
@@ -181,7 +220,8 @@ def test_device_fused_route_agrees_within_monte_carlo_noise():
     # this, a device route simulating something else entirely could sit inside the
     # bound by coincidence.
     assert m.snapshot_intensity == pytest.approx(
-        _run(str(CONFIGS_DIR / f"{_CONFIG}.json"), "legacy").snapshot_intensity, rel=1e-3
+        _run(str(CONFIGS_DIR / f"{_CONFIG}.json"), "legacy").snapshot_intensity,
+        rel=_SCENE_SAMENESS_REL,
     ), "the two routes did not even simulate the same scene — the anchor comparison is moot"
 
 
