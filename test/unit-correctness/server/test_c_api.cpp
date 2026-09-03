@@ -4723,6 +4723,106 @@ TEST(AnnotationOverlayApi, OnlyRequestedCategoriesGetABuffer) {
   LUMICE_ReleaseAnnotationOverlay(&out);
 }
 
+// The marker list is the C API's only NEW input shape in v4.24, and it is the one place an int
+// crosses into a C++ enum. Its validation is therefore load-bearing in a way the angle lists' is
+// not: an unchecked id would not be rejected downstream, it would silently resolve to whatever
+// ResolveMarkerDir's default branch answers, and the caller would get a plausible point for a
+// marker it never asked for.
+TEST(AnnotationOverlayApi, RejectsMalformedMarkerLists) {
+  const int ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_SUN };
+  LUMICE_AnnotationOverlay out{};
+
+  LUMICE_AnnotationRequest negative_id = MakeAnnotationRequest(64, 32);
+  const int negative_ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH, -1 };
+  negative_id.marker_ids = negative_ids;
+  negative_id.marker_count = 2;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&negative_id, &out), LUMICE_ERR_INVALID_VALUE);
+
+  // MARKER_COUNT is the count, not the last id — the classic off-by-one at this boundary.
+  LUMICE_AnnotationRequest past_end = MakeAnnotationRequest(64, 32);
+  const int past_end_ids[] = { LUMICE_ANNOTATION_MARKER_COUNT };
+  past_end.marker_ids = past_end_ids;
+  past_end.marker_count = 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&past_end, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest negative_count = MakeAnnotationRequest(64, 32);
+  negative_count.marker_ids = ids;
+  negative_count.marker_count = -1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&negative_count, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest too_many = MakeAnnotationRequest(64, 32);
+  too_many.marker_ids = ids;
+  too_many.marker_count = LUMICE_MAX_ANNOTATION_MARKERS + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&too_many, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest null_list = MakeAnnotationRequest(64, 32);
+  null_list.marker_ids = nullptr;
+  null_list.marker_count = 2;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&null_list, &out), LUMICE_ERR_NULL_ARG);
+
+  EXPECT_EQ(out.storage, nullptr) << "a rejected call must leave nothing to release";
+  LUMICE_ReleaseAnnotationOverlay(&out);
+}
+
+TEST(AnnotationOverlayApi, MarkerPointsComeBackParallelToTheRequestedIds) {
+  // Every id at once, so the array carries more than one distinct point and an implementation that
+  // wrote the same value everywhere would show. The upper-hemisphere clip makes at least one of
+  // them invalid, which is the other half of the contract.
+  const int ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH,    LUMICE_ANNOTATION_MARKER_NADIR,
+                      LUMICE_ANNOTATION_MARKER_SUN,       LUMICE_ANNOTATION_MARKER_SUBSUN,
+                      LUMICE_ANNOTATION_MARKER_ANTHELION, LUMICE_ANNOTATION_MARKER_ANTISOLAR };
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(128, 128);
+  req.view.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  req.view.lens_fov = 180.0f;
+  req.marker_ids = ids;
+  req.marker_count = static_cast<int>(sizeof(ids) / sizeof(ids[0]));
+  req.reference_dir[0] = -0.6f;
+  req.reference_dir[1] = -0.48f;
+  req.reference_dir[2] = -0.64f;
+
+  LUMICE_AnnotationOverlay out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_OK);
+  ASSERT_EQ(out.marker_count, req.marker_count);
+  ASSERT_NE(out.marker_points, nullptr);
+
+  int valid_count = 0;
+  for (int i = 0; i < out.marker_count; ++i) {
+    if (out.marker_points[i].valid) {
+      ++valid_count;
+      EXPECT_TRUE(std::isfinite(out.marker_points[i].px)) << "i=" << i;
+      EXPECT_TRUE(std::isfinite(out.marker_points[i].py)) << "i=" << i;
+    }
+  }
+  EXPECT_GT(valid_count, 1) << "an all-sky view imaged at most one of six markers";
+
+  // The zenith reached through the marker list is the same point the legacy field reports — the
+  // C API half of the equivalence core pins in
+  // test/golden-analytic/core/test_annotation_marker_equivalence.cpp.
+  LUMICE_AnnotationRequest legacy = req;
+  legacy.marker_ids = nullptr;
+  legacy.marker_count = 0;
+  legacy.zenith_nadir = 1;
+  LUMICE_AnnotationOverlay legacy_out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&legacy, &legacy_out), LUMICE_OK);
+  EXPECT_EQ(legacy_out.marker_points, nullptr) << "no markers requested, so no array";
+  EXPECT_EQ(legacy_out.marker_count, 0);
+  EXPECT_EQ(legacy_out.zenith_valid, out.marker_points[0].valid);
+  EXPECT_EQ(legacy_out.nadir_valid, out.marker_points[1].valid);
+  if (legacy_out.zenith_valid) {
+    EXPECT_EQ(legacy_out.zenith_px, out.marker_points[0].px);
+    EXPECT_EQ(legacy_out.zenith_py, out.marker_points[0].py);
+  }
+  if (legacy_out.nadir_valid) {
+    EXPECT_EQ(legacy_out.nadir_px, out.marker_points[1].px);
+    EXPECT_EQ(legacy_out.nadir_py, out.marker_points[1].py);
+  }
+  LUMICE_ReleaseAnnotationOverlay(&legacy_out);
+
+  LUMICE_ReleaseAnnotationOverlay(&out);
+  EXPECT_EQ(out.marker_points, nullptr) << "Release must not leave a view of freed memory";
+  EXPECT_EQ(out.marker_count, 0);
+}
+
 TEST(AnnotationOverlayApi, DegenerateViewIsAnEmptyOverlayNotAnError) {
   LUMICE_AnnotationRequest req = MakeAnnotationRequest(0, 32);
   LUMICE_AnnotationOverlay out{};

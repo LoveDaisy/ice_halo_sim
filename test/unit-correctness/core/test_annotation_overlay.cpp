@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -602,4 +603,246 @@ TEST(AnnotationOverlay, AngularDistLabelsSitOnTheCircleTheyName) {
   EXPECT_GT(checked, 0) << "no circle anchor was imageable — the assertion above never ran";
   EXPECT_GT(saw_22, 0) << "the 22 deg ring produced no label";
   EXPECT_GT(saw_46, 0) << "the 46 deg ring produced no label";
+}
+
+// =============== The named direction table ===============
+// Each id is asserted against the GEOMETRIC RELATION that defines it, not against the assignment
+// that implements it. "subsun.z == -sun.z" would be a transcription of ResolveMarkerDir's body and
+// would pass just as happily if both were wrong; "the subsun is the sun mirrored in the horizontal
+// plane, so it has the sun's azimuth and the negated altitude" is a statement about the sky that
+// the code has to satisfy. Where a relation is expressible as a dot product it is written that
+// way, because a dot product cannot be satisfied by a sign error in one component.
+//
+// The sun directions swept below come from SunWorldDir rather than from hand-written vectors, so
+// these cases are anchored to the same convention the rest of the module uses (altitude = asin(-z))
+// instead of re-deriving it — and if that convention ever changed, these would move with it.
+
+namespace {
+
+// Every sun direction the table is exercised at: a spread of azimuths crossed with a spread of
+// altitudes, above and below the horizon. Poles are excluded here on purpose — they are where the
+// AZIMUTH degenerates, which is SunHorizonDir's problem and is swept in its own cases below.
+std::vector<std::array<float, 3>> SunDirSweep() {
+  std::vector<std::array<float, 3>> out;
+  for (float az : { 0.0f, 37.0f, 90.0f, 180.0f, 271.0f }) {
+    for (float alt : { -62.0f, -15.0f, 0.0f, 23.5f, 71.0f }) {
+      const lumice::SunParam sun{ alt, az, 0.5f };
+      std::array<float, 3> d{ 0.0f, 0.0f, 0.0f };
+      ann::SunWorldDir(sun, d.data());
+      out.push_back(d);
+    }
+  }
+  return out;
+}
+
+float Dot(const float a[3], const float b[3]) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+float Length(const float v[3]) {
+  return std::sqrt(Dot(v, v));
+}
+
+// Altitude and azimuth in this module's convention, so the relations below can be stated in the
+// vocabulary they are actually defined in.
+float AltOf(const float v[3]) {
+  return std::asin(std::clamp(-v[2], -1.0f, 1.0f)) / lumice::math::kDegreeToRad;
+}
+
+float AzOf(const float v[3]) {
+  return std::atan2(-v[1], -v[0]) / lumice::math::kDegreeToRad;
+}
+
+// Signed difference between two azimuths, on the circle: 271 and -89 are the same bearing.
+float AzDelta(float a, float b) {
+  return std::fmod(a - b + 540.0f, 360.0f) - 180.0f;
+}
+
+}  // namespace
+
+TEST(MarkerDirectionTable, EveryIdResolvesToAUnitVector) {
+  // The four sun-relative ids are reflections of a unit vector and the two poles are constants, so
+  // unit length is not automatic only in the sense that a typo would break it — which is exactly
+  // what this guards. A non-unit direction would still project to a plausible pixel, because the
+  // lens forward normalizes internally, so nothing downstream would report it.
+  const int ids[] = { ann::kMarkerZenith, ann::kMarkerNadir,     ann::kMarkerSun,
+                      ann::kMarkerSubsun, ann::kMarkerAnthelion, ann::kMarkerAntisolar };
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    for (int id : ids) {
+      float d[3] = { 0.0f, 0.0f, 0.0f };
+      ann::ResolveMarkerDir(static_cast<ann::MarkerId>(id), sun.data(), d);
+      EXPECT_NEAR(Length(d), 1.0f, 1e-5f) << "id=" << id;
+      for (int k = 0; k < 3; ++k) {
+        EXPECT_TRUE(std::isfinite(d[k])) << "id=" << id << " k=" << k;
+      }
+    }
+  }
+}
+
+TEST(MarkerDirectionTable, ZenithAndNadirAreTheAntipodalPolesAndIgnoreTheSun) {
+  // Altitude +90 and -90 in this module's convention, which puts the zenith at z = -1. The
+  // altitude assertion is the one that catches the sign confusion with the crystal-orientation
+  // convention (where +z is up); a bare "they are antipodal" would pass with both flipped.
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float z[3] = { 0.0f, 0.0f, 0.0f };
+    float n[3] = { 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(ann::kMarkerZenith, sun.data(), z);
+    ann::ResolveMarkerDir(ann::kMarkerNadir, sun.data(), n);
+    EXPECT_NEAR(AltOf(z), 90.0f, 1e-4f);
+    EXPECT_NEAR(AltOf(n), -90.0f, 1e-4f);
+    EXPECT_NEAR(Dot(z, n), -1.0f, 1e-6f);
+    // Independent of the sun: same answer for every direction in the sweep.
+    EXPECT_EQ(z[0], 0.0f);
+    EXPECT_EQ(z[1], 0.0f);
+    EXPECT_LT(z[2], 0.0f) << "the zenith must be z < 0 in this module's convention";
+    EXPECT_GT(n[2], 0.0f);
+  }
+}
+
+TEST(MarkerDirectionTable, SunResolvesToTheReferenceDirectionItself) {
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(ann::kMarkerSun, sun.data(), d);
+    EXPECT_NEAR(Dot(d, sun.data()), 1.0f, 1e-6f) << "the sun marker is not the sun direction";
+  }
+}
+
+TEST(MarkerDirectionTable, SubsunIsTheSunMirroredInTheHorizontalPlane) {
+  // Definition: the sun's reflection in a horizontal surface — same bearing, altitude negated.
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(ann::kMarkerSubsun, sun.data(), d);
+    EXPECT_NEAR(AltOf(d), -AltOf(sun.data()), 1e-3f);
+    if (std::abs(AltOf(sun.data())) < 89.0f) {  // azimuth is defined away from the poles
+      EXPECT_NEAR(AzDelta(AzOf(d), AzOf(sun.data())), 0.0f, 1e-3f) << "the subsun changed bearing";
+    }
+  }
+}
+
+TEST(MarkerDirectionTable, AnthelionIsOppositeInBearingAtTheSameAltitude) {
+  // Definition: 180 degrees around from the sun, at the sun's own altitude. This is the id most
+  // easily confused with the antisolar point, and the altitude clause is what separates them.
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(ann::kMarkerAnthelion, sun.data(), d);
+    EXPECT_NEAR(AltOf(d), AltOf(sun.data()), 1e-3f);
+    if (std::abs(AltOf(sun.data())) < 89.0f) {
+      EXPECT_NEAR(std::abs(AzDelta(AzOf(d), AzOf(sun.data()))), 180.0f, 1e-3f);
+    }
+  }
+}
+
+TEST(MarkerDirectionTable, AntisolarIsExactlyOppositeTheSun) {
+  // Definition: the antipode. Stated as a dot product rather than component-wise so that no single
+  // sign error can satisfy it.
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(ann::kMarkerAntisolar, sun.data(), d);
+    EXPECT_NEAR(Dot(d, sun.data()), -1.0f, 1e-6f);
+  }
+}
+
+TEST(MarkerDirectionTable, TheFourSunRelativeIdsAreDistinctForAGenericSun) {
+  // Without this, every relation above could be satisfied by a table that collapsed several ids
+  // onto one direction (a sun at altitude 0 really does merge the sun with its subsun, which is
+  // why the sun here is deliberately generic rather than swept).
+  const lumice::SunParam sun_param{ 34.0f, 61.0f, 0.5f };
+  float sun[3] = { 0.0f, 0.0f, 0.0f };
+  ann::SunWorldDir(sun_param, sun);
+
+  const int ids[] = { ann::kMarkerSun, ann::kMarkerSubsun, ann::kMarkerAnthelion, ann::kMarkerAntisolar };
+  std::vector<std::array<float, 3>> dirs;
+  for (int id : ids) {
+    std::array<float, 3> d{ 0.0f, 0.0f, 0.0f };
+    ann::ResolveMarkerDir(static_cast<ann::MarkerId>(id), sun, d.data());
+    dirs.push_back(d);
+  }
+  for (size_t i = 0; i < dirs.size(); ++i) {
+    for (size_t j = i + 1; j < dirs.size(); ++j) {
+      EXPECT_LT(Dot(dirs[i].data(), dirs[j].data()), 0.999f) << "ids " << ids[i] << " and " << ids[j] << " coincide";
+    }
+  }
+}
+
+TEST(MarkerDirectionTable, AnOutOfRangeIdYieldsTheZenithRatherThanGarbage) {
+  // ResolveMarkerDir's callers project whatever it writes, so the contract is that `out` is always
+  // a usable unit vector. The C API rejects a bad id before it gets here; a C++ caller inside core
+  // is not required to, which is why the default branch exists at all.
+  float sun[3] = { 0.0f, 0.0f, -1.0f };
+  for (int bad : { -1, static_cast<int>(ann::kMarkerCount), 999 }) {
+    float d[3] = { 7.0f, 7.0f, 7.0f };
+    ann::ResolveMarkerDir(static_cast<ann::MarkerId>(bad), sun, d);
+    EXPECT_NEAR(Length(d), 1.0f, 1e-5f) << "id=" << bad;
+    EXPECT_NEAR(AltOf(d), 90.0f, 1e-4f) << "id=" << bad;
+  }
+}
+
+// =============== SunHorizonDir: the view-preset direction, and its pole ===============
+
+TEST(SunHorizonDir, KeepsTheSunsBearingAndDropsItsAltitude) {
+  // The defining relation: same bearing, altitude 0. Asserted through the azimuth recovery rather
+  // than against normalize(x, y, 0), which would just restate the implementation.
+  for (const std::array<float, 3>& sun : SunDirSweep()) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::SunHorizonDir(sun.data(), d);
+    EXPECT_NEAR(Length(d), 1.0f, 1e-5f);
+    EXPECT_EQ(d[2], 0.0f) << "the horizon direction must have zero altitude exactly";
+    EXPECT_NEAR(AzDelta(AzOf(d), AzOf(sun.data())), 0.0f, 1e-3f);
+  }
+}
+
+TEST(SunHorizonDir, StaysAUnitVectorThroughTheDegenerateBand) {
+  // The sweep crosses the fallback threshold: 89.9 and 89.99 deg are above it (the horizontal
+  // component is ~1.7e-3 and ~1.7e-4, both well over kSunHorizonDegenerateEps), while exactly
+  // +/-90 is below it — the horizontal component there is the float residue of cos(pi/2), 4.4e-8.
+  //
+  // The requirement is NOT continuity across that boundary. Azimuth is undefined at a pole, so no
+  // choice of fallback can be continuous there; a nearest-neighbour fallback would be worse, since
+  // the residue's sign makes the recovered bearing at exactly 90 deg point 180 deg away from the
+  // bearing at 89.999 deg. What IS required, and is what this asserts, is that the answer is
+  // always a finite unit vector in the horizon plane.
+  for (float az : { 0.0f, 37.0f, 214.0f }) {
+    for (float alt : { 90.0f, 89.999f, 89.99f, 89.9f, -89.9f, -89.99f, -89.999f, -90.0f }) {
+      const lumice::SunParam sun_param{ alt, az, 0.5f };
+      float sun[3] = { 0.0f, 0.0f, 0.0f };
+      ann::SunWorldDir(sun_param, sun);
+      float d[3] = { 0.0f, 0.0f, 0.0f };
+      ann::SunHorizonDir(sun, d);
+      for (int k = 0; k < 3; ++k) {
+        EXPECT_TRUE(std::isfinite(d[k])) << "az=" << az << " alt=" << alt << " k=" << k;
+      }
+      EXPECT_NEAR(Length(d), 1.0f, 1e-5f) << "az=" << az << " alt=" << alt;
+      EXPECT_EQ(d[2], 0.0f) << "az=" << az << " alt=" << alt;
+    }
+  }
+}
+
+TEST(SunHorizonDir, ExactPolesFallBackToTheDocumentedFixedBearing) {
+  // A sun handed in as an exact pole vector has a horizontal component of exactly zero, so this is
+  // the true division-by-zero input rather than the near-miss the sweep above produces. Both poles
+  // must give the SAME fixed answer: the fallback is a constant, not a function of which pole.
+  const float poles[2][3] = { { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f, 1.0f } };
+  for (const auto& p : poles) {
+    float d[3] = { 0.0f, 0.0f, 0.0f };
+    ann::SunHorizonDir(p, d);
+    EXPECT_EQ(d[0], 1.0f);
+    EXPECT_EQ(d[1], 0.0f);
+    EXPECT_EQ(d[2], 0.0f);
+  }
+}
+
+TEST(SunHorizonDir, TheThresholdIsWellClearOfTheAltitudesItMustNotSwallow) {
+  // Guards the threshold VALUE, not just the branch: a kSunHorizonDegenerateEps raised to, say,
+  // 1e-3 would silently start returning the fixed bearing for a sun at 89.9 deg — a real altitude
+  // whose azimuth is perfectly well defined — and every other case in this file would still pass.
+  const lumice::SunParam sun_param{ 89.9f, 214.0f, 0.5f };
+  float sun[3] = { 0.0f, 0.0f, 0.0f };
+  ann::SunWorldDir(sun_param, sun);
+  const float horizontal = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1]);
+  EXPECT_GT(horizontal, ann::kSunHorizonDegenerateEps * 100.0f)
+      << "the fallback threshold has grown into altitudes that carry a real bearing";
+
+  float d[3] = { 0.0f, 0.0f, 0.0f };
+  ann::SunHorizonDir(sun, d);
+  EXPECT_NEAR(AzDelta(AzOf(d), AzOf(sun)), 0.0f, 1e-3f) << "89.9 deg was treated as degenerate";
 }

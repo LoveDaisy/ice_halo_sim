@@ -223,6 +223,7 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/core/test_visible_mask.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_axis_solid_angle.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_horizon_mask.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_annotation_marker_equivalence.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp"
