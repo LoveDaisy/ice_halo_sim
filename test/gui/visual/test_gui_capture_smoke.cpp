@@ -4,7 +4,10 @@
 // come from the preview-export path — this one reads the default framebuffer instead.
 //
 // Scene: the default GUI frame right after ResetTestState() — no simulation, no random
-// source — so it doubles as the coverage for FullFrameCaptureState itself.
+// source — so it doubles as the coverage for FullFrameCaptureState itself. "Default" is not
+// what ResetTestState() alone delivers: the right panel's scroll offset belongs to ImGui, not
+// to GuiState, and survives into this case from whatever ran before it. The case pins it
+// itself, below; see the comment there for why that owner and not ResetTestState().
 //
 // Category "capture_harness" is deliberately not "smoke": gui_test's --filter is a
 // case-insensitive SUBSTRING match on name OR category (imgui_te_engine::PassFilter), so a
@@ -31,8 +34,40 @@ void RegisterCaptureHarnessTests(ImGuiTestEngine* engine) {
     ResetTestState();
     g_fullframe_capture.Reset();
 
+    // Put the right panel back at its top before the shot. ImGui keeps a scroll position per
+    // window ID, and ##RightPanel is submitted every frame by the app rather than torn down
+    // between cases, so any earlier case that scrolled it (the engine's ItemClick scrolls its
+    // target into view on its own) hands this one a panel already scrolled — measured here as
+    // Scroll.y=145 (its full ScrollMax) under the correctness pool vs 0 when this case runs
+    // alone, i.e. two different frames claiming to be the same scene.
+    //
+    // Rewound here rather than at the end of whoever scrolled — same convention as
+    // RewindSettingsList in test/gui/functional/test_defaults_panel.cpp, and for the same
+    // reason: the set of cases that may scroll this panel is not closed over time, so only the
+    // consumer can make this scene depend on nothing but itself.
+    //
+    // The owner is this case, not ResetTestState(): scroll offset is state ImGui owns per
+    // window, which ResetTestState() deliberately does not reach (see the ScopedPopups note in
+    // test_gui_shared.hpp for the same boundary drawn around ImGui's popup stack).
+    //
+    // Fatal rather than a guarded skip: with the panel not found the scroll offset is whatever
+    // the previous case left, which is the very thing this scene must not depend on — a silent
+    // skip would hand the comparison back that dependency with nothing pointing at it.
+    ctx->Yield(3);
+    ImGuiWindow* right_panel = ctx->GetWindowByRef("##RightPanel");
+    IM_CHECK(right_panel != nullptr);
+    ctx->ScrollToTop(right_panel->ID);
+    ctx->Yield(2);
+
     // Eliminate hover state: a highlighted card baked into the reference would make
     // every later no-hover run fail (same rationale as visual/left_panel).
+    //
+    // AFTER the rewind above, not before, and that order is load-bearing: ScrollToTop reaches
+    // its target by driving the mouse wheel over the window, so it parks the cursor inside the
+    // panel — and only when it has work to do. Rewinding second left the scrollbar drawn in its
+    // hovered tint (ScrollbarGrabHovered, alpha 0.55) in the pool run and its resting tint
+    // (0.35) when the case ran alone: 3263 pixels of order dependence surviving the fix meant
+    // to remove it, in the one 8px column the eye is least likely to check.
     ctx->MouseMoveToPos(ImVec2(-100.0f, -100.0f));
     ctx->Yield(3);
 
