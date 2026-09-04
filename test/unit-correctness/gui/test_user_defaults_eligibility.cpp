@@ -145,8 +145,9 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "layers", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
     { "filters", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
     { "raypath_color", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
-    // namespace 3 — app preference, out of scope for phase one.
-    { "use_gpu_backend", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
+    // namespace 3 — app preferences. use_gpu_backend is the one member with a storage channel of
+    // its own (the `app` root key), so it is eligible; the rest still have nowhere to be stored.
+    { "use_gpu_backend", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "gui_log_level", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "core_log_level", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "log_to_file", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
@@ -168,27 +169,34 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
   }
 }
 
-TEST(UserDefaultsEligibility, IneligibleScalarResetCoversEverySmugglableField) {
-  // Coverage gate for ResetIneligibleScalarFields (user_defaults.cpp). Most ineligible fields
-  // are structurally unreachable from the override file — no JSON key at all, or a collection
-  // the read path clears wholesale. The exception is a field registered kStructSoft with
-  // auto_diff_excluded: an ordinary serializable scalar the deserializer will happily read,
-  // which therefore needs an explicit reset. If someone adds another such field without
-  // extending that reset, this assertion fails instead of leaving a silent hole.
+TEST(UserDefaultsEligibility, IneligibleScalarResetCoversEveryAppPreferenceField) {
+  // Coverage gate for ResetIneligibleScalarFields (user_defaults.cpp). It restores the fields the
+  // DOCUMENT half of an override file must never decide but could structurally reach — an ordinary
+  // serializable scalar has a well-formed place at the file's top level. Those are exactly the
+  // fields registered app_preference_eligible: their one legitimate channel is the `app` root key,
+  // so anything the document half applied to them has to be undone before that channel is read. If
+  // someone registers another such field without extending the reset, this fails instead of
+  // leaving a silent hole.
   //
-  // Scope note (deliberate narrowing): the predicate below is exactly the shape of the current
-  // exception. A structurally DIFFERENT future category of "serializable but ineligible" would
-  // not be caught here — extending the predicate is part of introducing such a category.
-  std::size_t smugglable = 0;
+  // The predicate used to be `tier == kStructSoft && auto_diff_excluded`. It named the same single
+  // field, but for a reason that has nothing to do with where a default is stored — an app
+  // preference registered under any other tier would have walked straight past it.
+  //
+  // Scope note (deliberate narrowing): a structurally DIFFERENT future category of "reachable from
+  // the document half but not decidable by it" would not be caught here — extending the predicate
+  // is part of introducing such a category.
+  std::size_t app_preference_fields = 0;
   for (const auto& entry : kFieldTierTable) {
-    if (entry.tier == FieldTier::kStructSoft && entry.auto_diff_excluded) {
-      ++smugglable;
-      EXPECT_EQ(ResolveDefaultEligibility(entry.name).eligibility, DefaultEligibility::kIneligible) << entry.name;
+    if (entry.app_preference_eligible) {
+      ++app_preference_fields;
+      // Eligible — through the `app` root key, which is what having this bit set MEANS. The
+      // reset exists to keep the OTHER channel shut, not to make the field undefaultable.
+      EXPECT_EQ(ResolveDefaultEligibility(entry.name).eligibility, DefaultEligibility::kEligible) << entry.name;
     }
   }
-  EXPECT_EQ(smugglable, kIneligibleScalarResetFieldCount)
-      << "A new kStructSoft/auto_diff_excluded field appeared. Add it to "
-         "ResetIneligibleScalarFields() in src/gui/user_defaults.cpp and bump "
+  EXPECT_EQ(app_preference_fields, kIneligibleScalarResetFieldCount)
+      << "A new app_preference_eligible field appeared. Add it to ResetIneligibleScalarFields() "
+         "and to ApplyAppPreferencesOverride() in src/gui/user_defaults.cpp, and bump "
          "kIneligibleScalarResetFieldCount.";
 }
 

@@ -102,17 +102,32 @@ std::string DescribeAxisPresetClamp(AxisPreset preset, float requested, float st
          " — that boundary is where the neighbouring preset's criterion begins, not a physical limit.";
 }
 
-// Reset the ineligible fields that a hand-edited override file could otherwise smuggle in.
+// Re-assert that the DOCUMENT half of an override file did not decide an app-preference field.
 //
-// Most ineligible fields are structurally unreachable from the override file: kDisplay and the
-// `kView \ serialized` set have no JSON key at all, and the collections are cleared wholesale
-// by the caller. The exception is a field that is registered kStructSoft with
-// auto_diff_excluded — an ordinary serializable scalar that DeserializeGuiStateJson will
-// happily read. Today that is exactly `use_gpu_backend`.
+// It is the boundary between namespace 1 (the GuiState half, applied by ApplyUserDefaultsOverlay)
+// and namespace 3 (the `app` root key), pinned in code. Most fields namespace 1 may not decide are
+// structurally unreachable from it anyway — kDisplay and the `kView \ serialized` set have no JSON
+// key at all, and the collections are cleared wholesale by the caller. This handles the ones that
+// are ordinary serializable scalars, where the file's top level has a well-formed place to put
+// them. Today that is exactly `use_gpu_backend`, registered app_preference_eligible.
+//
+// It does NOT rest on the claim that the deserializer would read such a key today: for
+// use_gpu_backend it would not — the GuiState serializer is written key by key (file_io.cpp) and
+// has no entry for this field, so a top-level `use_gpu_backend` is inert on the way in. The reason
+// to keep the reset anyway is that this is the one line where "namespace 1 cannot decide this
+// field" is stated as code, its cost is one assignment, and the alternative is that the boundary
+// holds only for as long as nobody adds the field to the serializer. An earlier version of this
+// comment asserted the deserializer WOULD read it; that was checked and is false, which is the
+// second reason the justification is stated as a boundary rather than as a defence against a
+// specific reader.
+//
+// ORDER: this must run BEFORE ApplyAppPreferencesOverride, never after — reversed, it would wipe
+// the personal default namespace 3 had just legitimately applied. Both calls are welded into
+// ResetIneligibleScalarsThenApplyAppOverride below so no call site has to know that.
 //
 // Keep kIneligibleScalarResetFieldCount (user_defaults.hpp) in step with this body; the AC1
-// test asserts the constant equals the population of the predicate above, so adding another
-// such field turns that test red rather than leaving a silent hole here.
+// test asserts the constant equals the population of the app_preference_eligible predicate, so
+// adding another such field turns that test red rather than leaving a silent hole here.
 void ResetIneligibleScalarFields(GuiState& state) {
   const GuiState factory{};
   state.use_gpu_backend = factory.use_gpu_backend;
@@ -548,6 +563,72 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
   }
 }
 
+// ------------------------------------------------------------------------------------------------
+// The `app` root key (namespace 3). See user_defaults.hpp for why it is a third root key rather
+// than another GuiState field in the document half.
+// ------------------------------------------------------------------------------------------------
+
+namespace {
+constexpr const char* kAppRootKey = "app";
+constexpr const char* kUseGpuBackendKey = "use_gpu_backend";
+}  // namespace
+
+std::optional<bool> ReadUseGpuBackendFromDoc(const nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    return std::nullopt;
+  }
+  // find() rather than the operator[] chain, for the same reason as ReadAxisPresetZenithStdFromDoc:
+  // the document is user-editable and operator[] on a non-object throws.
+  const auto app = doc.find(kAppRootKey);
+  if (app == doc.end() || !app->is_object()) {
+    return std::nullopt;
+  }
+  const auto value = app->find(kUseGpuBackendKey);
+  if (value == app->end() || !value->is_boolean()) {
+    return std::nullopt;
+  }
+  return value->get<bool>();
+}
+
+void WriteUseGpuBackendToDoc(nlohmann::json& doc, bool value) {
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  // Surgical: ONE key is touched, so the GuiState half and `presets` survive by construction.
+  // operator[] is fine on the write path — it starts from a document this process controls, not
+  // from whatever a user may have typed into the file.
+  doc[kAppRootKey][kUseGpuBackendKey] = value;
+}
+
+void EraseUseGpuBackendFromDoc(nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  const auto app_it = doc.find(kAppRootKey);
+  if (app_it == doc.end() || !app_it->is_object()) {
+    return;
+  }
+  app_it->erase(kUseGpuBackendKey);
+  if (app_it->empty()) {
+    doc.erase(kAppRootKey);
+  }
+}
+
+void ApplyAppPreferencesOverride(GuiState& state, const nlohmann::json& doc) {
+  if (const std::optional<bool> use_gpu = ReadUseGpuBackendFromDoc(doc); use_gpu.has_value()) {
+    state.use_gpu_backend = *use_gpu;
+  }
+}
+
+void ResetIneligibleScalarsThenApplyAppOverride(GuiState& state, const nlohmann::json& doc, bool has_dir) {
+  // Order is the invariant; see this function's declaration in user_defaults.hpp for why the two
+  // calls live in one body and why the reset half is not gated on has_dir.
+  ResetIneligibleScalarFields(state);
+  if (has_dir) {
+    ApplyAppPreferencesOverride(state, doc);
+  }
+}
+
 void AdoptAxisPresetZenithStdOverrideInMemory(AxisPreset preset, std::optional<float> stored_value) {
   const auto slot = static_cast<std::size_t>(preset);
   if (slot >= kAxisPresetSlotCount) {
@@ -635,8 +716,10 @@ GuiState MakeNewDocumentState(std::optional<std::filesystem::path> override_dir)
 
   // The override file is user-editable, so the read path — not just the write path — has to
   // enforce eligibility. Otherwise "which fields may be defaults" would be advisory metadata
-  // that anyone can step around with a text editor.
-  ResetIneligibleScalarFields(state);
+  // that anyone can step around with a text editor. The same call also applies the `app` root
+  // key, which is the ONLY channel that may decide those fields — the two are one function
+  // because their order is what makes both halves true (see its declaration).
+  ResetIneligibleScalarsThenApplyAppOverride(state, doc, dir.has_value());
 
   // Namespace 4 (collections): a key path into these carries a document-local index, so they
   // are never written as defaults — but clear them anyway so a hand-edited file cannot make a
