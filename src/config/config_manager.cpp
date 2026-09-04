@@ -139,6 +139,38 @@ RenderConfig ParseRenderConfig(const nlohmann::json& j_render, const ConfigManag
     if (j_grid.contains("zenith_nadir")) {
       j_grid.at("zenith_nadir").get_to(render.zenith_nadir_);
     }
+    // The marker family. Note what is NOT here: no rewriting of "zenith_nadir" into two markers_
+    // entries. The arbitration between the two lives in RenderConsumer, so that every path which
+    // produces a RenderConfig — this parser, c_api.cpp's, and direct C++ construction — gets the
+    // same rule instead of each producer having to remember to apply it.
+    if (j_grid.contains("markers")) {
+      // get_to appends element by element and rethrows on the first bad one, so a list whose third
+      // entry names an unknown id leaves the first two behind. Cleared on the way out rather than
+      // reasoned about: ParseRenderConfig's exception does abort the whole document today, but that
+      // makes "no half-parsed markers_ escapes" a property of a caller several frames up instead of
+      // of this function.
+      try {
+        j_grid.at("markers").get_to(render.markers_);
+      } catch (...) {
+        render.markers_.clear();
+        throw;
+      }
+      // An array-level rule, so it cannot live in MarkerStyleParam::from_json. Rejected rather than
+      // deduplicated: one marker has one colour, so a list naming a marker twice is a question with
+      // no answer, and answering it silently by keeping either occurrence is the failure mode this
+      // schema avoids everywhere else.
+      MarkerRefId dup{};
+      if (HasDuplicateMarkerId(render.markers_, &dup)) {
+        render.markers_.clear();
+        throw nlohmann::detail::out_of_range::create(404, "duplicate marker id in grid.markers", j_grid);
+      }
+    }
+    if (j_grid.contains("markers_opacity")) {
+      j_grid.at("markers_opacity").get_to(render.markers_opacity_);
+    }
+    if (j_grid.contains("markers_radius_px")) {
+      j_grid.at("markers_radius_px").get_to(render.markers_radius_px_);
+    }
   }
 
   // Design A: renderer-side ms_filter_ was removed (filter is applied

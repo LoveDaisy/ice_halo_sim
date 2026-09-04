@@ -181,7 +181,29 @@ extern "C" {
 // direction table and one sampler inside core, so the two routes return the same points by
 // construction. A caller that only zero-initializes its request (marker_count = 0) sees no change
 // at all, which is why the GUI and the CLI needed no edit for this version.
-#define LUMICE_API_VERSION 424
+//
+// BREAKING (v4.25): LUMICE_RenderParam gains a trailing block of four fields — `markers` (an array
+// of the new LUMICE_MarkerStyle, capacity LUMICE_MAX_CONFIG_MARKERS), `markers_count`,
+// `markers_opacity` and `markers_radius_px`. They are APPENDED after `angular_dist_label`, so every
+// existing field keeps its offset while sizeof() grows; a caller that was NOT recompiled hands the
+// API a shorter struct and the new fields are read past the end of it. Recompile against this
+// header. The JSON keys are "grid.markers" (an array of {"id", "enabled", "color"} objects),
+// "grid.markers_opacity" and "grid.markers_radius_px".
+// This is the RENDERER half of what v4.24 did to the annotation overlay: v4.24 let a caller ASK
+// where six named directions land, this one lets a config say which of them to DRAW and in what
+// colour. `id` is spelled as the same LUMICE_ANNOTATION_MARKER_* value in both, and as a string in
+// JSON ("zenith" / "nadir" / "sun" / "subsun" / "anthelion" / "antisolar").
+// Nothing is removed and nothing changes meaning: `zenith_nadir` and its three appearance fields
+// stay, and a config that carries only them renders the pixels it always did. Where both are
+// present, the non-empty `markers` list wins and `zenith_nadir` is ignored — the full statement of
+// that rule, and why it lives in the renderer rather than in either JSON decoder, is at the
+// `markers` field itself.
+// Note the accompanying BEHAVIOR change, which has no ABI half: the CLI renderer's marker stage was
+// two hardcoded rings computed ONCE at consumer construction; it is now an N-entry loop, and the
+// positions are recomputed on ResetWith as well. That second half is not tidiness — four of the six
+// directions are defined relative to the sun, and the sun is exactly what ResetWith can change.
+// A caller that leaves markers_count at 0 sees no change at all.
+#define LUMICE_API_VERSION 425
 #define LUMICE_MAX_RENDER_RESULTS 16
 #define LUMICE_MAX_STATS_RESULTS 1
 
@@ -487,6 +509,18 @@ void LUMICE_SetLogCallback(LUMICE_LogCallback callback);
 // order of magnitude of the other sanity ceilings; the shipped corpus peaks at 1 angular-distance
 // line.
 #define LUMICE_MAX_CONFIG_GRID_LINES 64
+
+// Per-renderer marker ceiling (LUMICE_RenderParam::markers[]). NOT a sanity ceiling like the
+// constants above, and the difference matters: those pick a round number with headroom because the
+// thing they bound is unbounded in principle. This one is EXACT. A renderer's marker list rejects
+// duplicate ids, and the id space itself has LUMICE_ANNOTATION_MARKER_COUNT members, so a list that
+// passed validation cannot physically hold more entries than there are ids. Widening it would not
+// admit anything.
+// Spelled as a literal rather than as LUMICE_ANNOTATION_MARKER_COUNT because that macro is defined
+// in the annotation section far below this line, and the C preprocessor needs it visible at the
+// point of use; c_api.cpp carries the static_assert that pins the two together, so a seventh id
+// added to one side alone is a compile error rather than a silently truncated array.
+#define LUMICE_MAX_CONFIG_MARKERS 6
 
 // BREAKING (v4.10): LUMICE_AxisDist renamed+widened to
 // LUMICE_Distribution and now serves ANY randomizable scalar (axis angles AND crystal shape
@@ -851,6 +885,23 @@ typedef struct LUMICE_GridLine_ {
   float color[3];
 } LUMICE_GridLine;
 
+// One entry of a renderer's marker list: WHICH named sky direction gets a ring, and what colour.
+//
+// `id` is a LUMICE_ANNOTATION_MARKER_* value — the same id space LUMICE_AnnotationRequest uses, so
+// "which direction" has one vocabulary across the API. An id outside [0, MARKER_COUNT) is an error,
+// never a silent fallback to the zenith.
+//
+// Colour is per entry; radius and opacity are NOT. They live on LUMICE_RenderParam as one pair for
+// the whole family, because a set of reference points is read as a family — telling them apart is
+// what colour is for, and a ring at a different size or a different transparency reads as a
+// different KIND of thing rather than as a different point. `color` is sRGB, like
+// LUMICE_GridLine.color and unlike `background`.
+typedef struct LUMICE_MarkerStyle_ {
+  int id;
+  int enabled;
+  float color[3];
+} LUMICE_MarkerStyle;
+
 // BREAKING (v4.3): norm_mode field removed; struct layout changed. Callers must recompile against this header.
 // BREAKING (v4.11): extended from the 6-field projection-agnostic subset to the full renderer
 // description (lens / lens_shift / view / visible / background / ray_color / grid /
@@ -965,6 +1016,37 @@ typedef struct LUMICE_RenderParam_ {
   int horizon_label;
   int grid_label;
   int angular_dist_label;
+  // ADDED (v4.25). The reference-point markers: N named sky directions, each drawn as a
+  // pixel-space ring, each with its own colour. The generalization of `zenith_nadir` above, which
+  // stays exactly as it is (see the v4.25 note at LUMICE_API_VERSION).
+  //
+  // WHICH OF THE TWO GETS DRAWN is decided at render time by ONE rule, stated here because it is
+  // the only place a caller sees both: a NON-EMPTY `markers` list wins outright, and
+  // `zenith_nadir` is consulted only when `markers_count` is 0. Not a merge — a config that lists
+  // markers describes its whole marker set, and quietly adding two more rings from a legacy field
+  // it also happens to carry would draw something nobody asked for.
+  // The rule lives in the renderer rather than in the JSON decoder on purpose: every path that
+  // builds a renderer (this struct, a JSON document, a direct core RenderConfig) then gets the same
+  // arbitration, instead of each producer having to remember to apply it.
+  //
+  // APPEARANCE ONLY, like `zenith_nadir`: WHERE each ring lands comes from
+  // LUMICE_ComputeAnnotationOverlay's marker_points, and there is no position to set here.
+  //
+  // `markers_opacity` / `markers_radius_px` are FAMILY-WIDE — see LUMICE_MarkerStyle for why only
+  // colour is per entry.
+  //
+  // WARNING, the same one `zenith_nadir` carries and for the same reason: these two have NON-ZERO
+  // defaults on the JSON side (radius 8 px, opacity 0.6 — core's RenderConfig). A zero-initialized
+  // struct with markers listed and nothing else asks for zero-radius, fully transparent rings, i.e.
+  // no visible marker. Set both, or go through JSON.
+  //
+  // Duplicate ids are rejected, not deduplicated: one marker has one colour, so a list naming a
+  // marker twice is a question with no answer, and picking either occurrence silently would answer
+  // it anyway.
+  LUMICE_MarkerStyle markers[LUMICE_MAX_CONFIG_MARKERS];
+  int markers_count;
+  float markers_opacity;
+  float markers_radius_px;
 } LUMICE_RenderParam;
 
 // =============== Scene (opaque handle) ===============
