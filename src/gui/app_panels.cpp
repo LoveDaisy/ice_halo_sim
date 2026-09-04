@@ -143,9 +143,15 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
     in.elevation_deg = ComputeGridElevationAngles(step);
     in.longitude_deg = ComputeGridLongitudeAngles(step);
   }
-  // The marker pair has no list to fill and no label switch of its own — it is a bool the request
-  // either carries or does not.
-  in.zenith_nadir = state.show_zenith_nadir_line;
+  // The reference-point markers, gated per point rather than per family: an id joins the list when
+  // EITHER of its two switches is on, the same "whoever is switched on joins the list" rule the
+  // three angle lists above follow. Both switches count for the same reason the horizon's do — a
+  // user drawing only the name still needs the position the name is placed at.
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    if (state.markers[i].show || state.markers[i].label) {
+      in.marker_ids.push_back(i);
+    }
+  }
   // The horizon, gated on EITHER of its switches, exactly like the three families above. It used
   // to be the label switch alone, because the preview derived the line itself in its fragment
   // shader and the mask that came back was a cost with no reader. It has one now.
@@ -154,6 +160,10 @@ AnnotationViewInput AnnotationViewInputFor(const GuiState& state, const RenderCo
 }
 
 namespace {
+
+// Clearance between a marker ring's outer edge and the top of its name. Small enough to read as
+// belonging to that ring, large enough that the two do not touch at the family's minimum radius.
+constexpr float kMarkerLabelGapPx = 4.0f;
 
 // The half of a CurveLabelSet that does not depend on which family it is: rescale core's anchors
 // from the canvas the request named into the target draw list's space.
@@ -200,6 +210,45 @@ CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const Gu
   set.has_bg = false;  // as the walk this replaced drew it: numbers with no plate behind them
   FillCurveLabelSet(cache, cache.HorizonLabels(), vp_w, vp_h, &set);
   return set;
+}
+
+std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                                float vp_h) {
+  std::vector<CurveLabelSet> out;
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    if (!state.markers[i].label) {
+      continue;
+    }
+    // An unimaged point gets no name. Not a degradation to notice — zenith and nadir are opposite
+    // directions, so on any lens short of full-sky at least one of the six is normally off-canvas,
+    // and DrawOverlayLabels' viewport clamp would otherwise pin its name to an edge it has no
+    // business marking.
+    const AnnotationOverlayCache::Point& p = cache.MarkerPoint(i);
+    if (!p.valid) {
+      continue;
+    }
+    // ONE SET PER MARKER, which is what buys the six their own colours: CurveLabelSet's colour is
+    // per set (AppendCurveLabels resolves it once, outside its anchor loop), so a single six-anchor
+    // set could only draw them all in one colour — and telling the points apart is what colour is
+    // for here. AppendCurveLabels APPENDS, so six sets into one vector take part in one collision
+    // pass exactly as a six-anchor set would; the shared kGroupMarkers is what keeps them competing
+    // with each other and not with the grid.
+    CurveLabelSet set;
+    std::copy(std::begin(state.markers[i].color), std::end(state.markers[i].color), std::begin(set.color));
+    set.alpha = state.markers_alpha;
+    set.group = kGroupMarkers;
+    FillCurveLabelSet(cache, { AnnotationOverlayCache::Label{ p.px, p.py, 0.0f, kMarkerDisplayNames[i] } }, vp_w, vp_h,
+                      &set);
+    // Below the ring rather than on it: the anchor core reports is the marker's CENTRE, and a name
+    // drawn there would sit inside the very ring it names. The offset is applied after
+    // FillCurveLabelSet because the ring's radius is already in the target draw list's pixels
+    // (markers_radius_px is a screen-space size, not a canvas one) while the anchor needed scaling.
+    if (!set.anchors.empty()) {
+      set.anchors[0].py += state.markers_radius_px + kMarkerLabelGapPx;
+    }
+    out.push_back(std::move(set));
+  }
+  return out;
 }
 
 CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h) {
@@ -805,34 +854,49 @@ void RenderSunCirclesAnglePopup() {
   }
 }
 
-// The pixel radius behind the Zenith/Nadir row's fold. It is the one field only that row has, and
-// giving it a column of its own would have cost every other row an empty cell (and the name column
-// the width) to say something about one of the five — the fold is what buys "Angular Dist." its
-// uncut name (doc/gui-visual-language.md §4.4).
-void RenderZenithNadirRadiusPopup() {
-  const FieldEditorConstraint zn_r_c = ConstraintFor("overlay_zenith_nadir_radius_px", g_state);
-  // The same control the five alpha cells of this table use, one row above. It was a
-  // [slider][input][label] triple, which is a second answer to "how is a bounded float edited
-  // here?" given a cell's width away from the first one.
-  //
-  // The name has to be drawn here rather than passed in: DragFloatField folds its whole label
-  // argument into the widget id ("##" + label), so nothing of it is ever displayed. Worth drawing
-  // — the alpha cells get their name from the column header they sit under, and a fold has no
-  // header, so without this the popup would hold one bare number.
+// The two FAMILY-WIDE marker fields, behind the Reference Points section header's fold.
+//
+// Family-wide is why they are here and not in the section's table: alpha and radius apply to all
+// six rings at once (GuiState::markers_alpha / markers_radius_px, mirroring LUMICE_RenderParam's
+// own family/entry split), so a per-row cell for either would be six controls editing one value.
+// The section header owns them for the same reason the Zenith/Nadir ROW used to own the radius —
+// the fold is where a field that only one thing has goes — except the "one thing" is now the family
+// rather than a row.
+void RenderMarkersFamilyPopup() {
+  const FieldEditorConstraint alpha_c = ConstraintFor(kMarkersAlphaKey, g_state);
+  const FieldEditorConstraint radius_c = ConstraintFor(kMarkersRadiusKey, g_state);
+  // The same control the four alpha cells of the table above use. The names have to be drawn here
+  // rather than passed in: DragFloatField folds its whole label argument into the widget id
+  // ("##" + label), so nothing of it is ever displayed — and unlike an alpha cell, a field in a
+  // popup has no column header to take its name from.
+  constexpr float kFieldWidth = 100.0f;
+  constexpr const char* kLabels[] = { "Alpha", "Radius" };
+  // Right-align the two controls with each other: "Alpha" and "Radius" are different widths, so
+  // drawing each name followed by SameLine would step the two inputs by that difference.
+  float name_w = 0.0f;
+  for (const char* label : kLabels) {
+    name_w = std::max(name_w, ImGui::CalcTextSize(label).x);
+  }
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Radius");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(100.0f);
-  DragFloatField("Radius##zenith_nadir", &g_state.zenith_nadir_radius_px, static_cast<float>(zn_r_c.min_value),
-                 static_cast<float>(zn_r_c.max_value), zn_r_c.fmt, zn_r_c.scale);
+  ImGui::TextUnformatted(kLabels[0]);
+  ImGui::SameLine(name_w + ImGui::GetStyle().ItemSpacing.x);
+  ImGui::SetNextItemWidth(kFieldWidth);
+  DragFloatField("Alpha##markers_family", &g_state.markers_alpha, static_cast<float>(alpha_c.min_value),
+                 static_cast<float>(alpha_c.max_value), alpha_c.fmt, alpha_c.scale);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(kLabels[1]);
+  ImGui::SameLine(name_w + ImGui::GetStyle().ItemSpacing.x);
+  ImGui::SetNextItemWidth(kFieldWidth);
+  DragFloatField("Radius##markers_family", &g_state.markers_radius_px, static_cast<float>(radius_c.min_value),
+                 static_cast<float>(radius_c.max_value), radius_c.fmt, radius_c.scale);
 }
 
-// What a row's fold holds, when it holds anything. Two of the five overlays have a field the others
-// do not, and they are not the same field.
+// What a row's fold holds, when it holds anything. One of the four overlays has a field the others
+// do not. (The reference-point markers' two family fields are NOT here: they belong to the section
+// below this table, not to a row in it.)
 enum class OverlayFold {
   kNone,
   kSunCircleAngles,
-  kZenithNadirRadius,
 };
 
 // One auxiliary line, as the table reads it. Every row answers the same questions — colour, name,
@@ -859,7 +923,160 @@ struct OverlayRowSpec {
   OverlayFold fold;
 };
 
-// The Overlay group: the five auxiliary lines drawn over the preview, as one table.
+// The six columns BOTH overlay tables use, declared once so the reference-point section's rows line
+// up with the four line rows above it rather than merely looking as if they do. The two tables have
+// to be two — the section between them is collapsible, and a table cannot be half-hidden — so this
+// function is what stops them being two column layouts as well.
+//
+// The Alpha width is calibrated against THIS panel's width budget and not carried over from the
+// wider layout the first table was written for: the right panel is kRightPanelWidth (300 px) wide,
+// which leaves a table ~274 px, and the fixed columns plus cell padding claim all but ~129 px of
+// it. Anything this column takes comes straight off the Name column, which is the only stretching
+// one — so this number is the name column's budget stated from the other side. The arbiter is not
+// this comment but test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off, which
+// now measures the marker names against it too.
+constexpr int kOverlayTableColumnCount = 6;
+void SetupOverlayTableColumns() {
+  constexpr float kAlphaColWidth = 54.6f;
+  const float swatch_w = ImGui::GetFrameHeight();
+  const float check_w = ImGui::GetFrameHeight();
+  const float fold_w = ImGui::GetFrameHeight();
+  ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
+  // Id only, no header text: this column's header would sit directly under the "Overlay" the
+  // group's own CollapsingHeader already carries, and a word repeated one line below itself reads
+  // as a second, different thing. The other four headers name what their cells hold, which the
+  // group title does not say.
+  ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
+  ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
+  ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+}
+
+// The sky reference points, as a collapsed section under the four line rows.
+//
+// WHY NOT A FIFTH ROW of the table above, which is where the zenith/nadir pair used to sit: there
+// are six of these, they arrive together, and a user turning on the anthelion is doing a different
+// KIND of thing than a user turning on the grid. Six more rows in the main table would triple its
+// height for one family and bury the four lines a user reaches far more often; a collapsed section
+// keeps the panel's opening state at four rows and puts the family one click away.
+//
+// The section is closed by default and its open state is SERIALIZED (markers_section_open), so a
+// document that had the family open reopens with it open.
+void RenderMarkersSection() {
+  // Externally-owned open state, in the one form ImGui supports: seed the header from the field
+  // every frame, then take the header's own return value back. A click lands between those two
+  // steps, so the value read back is the post-click one and the field follows the user rather than
+  // fighting them.
+  ImGui::SetNextItemOpen(g_state.markers_section_open, ImGuiCond_Always);
+  const bool section_open = ImGui::CollapsingHeader("Reference Points##markers");
+  g_state.markers_section_open = section_open;
+
+  // [All] / [None] / [...] drawn ON the header's own row, right-aligned. Deliberately NOT a
+  // tri-state checkbox on the header: a tri-state control has to represent "some", which invites
+  // the question of what clicking it from "some" means, and the answer would be a rule the user has
+  // to learn. Two buttons say what they do and have no state of their own to read.
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float all_w = ImGui::CalcTextSize("All").x + style.FramePadding.x * 2.0f;
+  const float none_w = ImGui::CalcTextSize("None").x + style.FramePadding.x * 2.0f;
+  const float fold_w = ImGui::CalcTextSize(ICON_FA_ELLIPSIS).x + style.FramePadding.x * 2.0f;
+  const float buttons_w = all_w + none_w + fold_w + style.ItemSpacing.x * 2.0f;
+  ImGui::SameLine(ImGui::GetContentRegionMax().x - buttons_w);
+  if (ImGui::SmallButton("All##markers_all")) {
+    for (MarkerAppearance& m : g_state.markers) {
+      m.show = true;
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Draw every reference point");
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("None##markers_none")) {
+    for (MarkerAppearance& m : g_state.markers) {
+      m.show = false;
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Draw none of them");
+  }
+  ImGui::SameLine();
+  // Triple hash for the same reason the table's row folds use one: the label carries a visible
+  // glyph, and ImGui hashes the WHOLE label for "glyph##suffix", so the id would contain the icon
+  // codepoint and renaming the icon would silently rename the item.
+  constexpr const char* kFamilyFoldId = "###markers_family_fold";
+  if (ImGui::SmallButton((std::string(ICON_FA_ELLIPSIS) + kFamilyFoldId).c_str())) {
+    ImGui::OpenPopup(kFamilyFoldId);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Marker alpha and radius");
+  }
+  if (ImGui::BeginPopup(kFamilyFoldId)) {
+    RenderMarkersFamilyPopup();
+    ImGui::EndPopup();
+  }
+
+  if (!section_open) {
+    return;
+  }
+
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg;
+  const ImVec2 outer_size(ImGui::GetContentRegionAvail().x, 0.0f);
+  if (!ImGui::BeginTable("##MarkersTable", kOverlayTableColumnCount, kFlags, outer_size)) {
+    return;
+  }
+  // Columns set up but NO TableHeadersRow: the table one section above already carries "Line" and
+  // "Label" over these same two columns, and a second copy of them three rows down would read as
+  // two different pairs of columns rather than as one pair continued.
+  SetupOverlayTableColumns();
+
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    MarkerAppearance& m = g_state.markers[i];
+    ImGui::TableNextRow();
+
+    ImGui::TableSetColumnIndex(0);
+    ImGui::ColorEdit3((std::string("##marker_color_") + kMarkerSerialNames[i]).c_str(), m.color,
+                      ImGuiColorEditFlags_NoInputs);
+
+    ImGui::TableSetColumnIndex(1);
+    ImGui::AlignTextToFramePadding();
+    // "Switched on but this view does not image it" is a THIRD state, and it has to be
+    // distinguishable from "switched off" — otherwise a user who ticks the subsun under
+    // visible=upper sees a ticked box and no ring, with nothing on screen saying which of the two
+    // reasons applies. The tick stays as the user set it (their intent is not overridden); it is the
+    // NAME that greys, saying "this one is not on the canvas right now".
+    //
+    // HasResult() is part of the condition, not an optimisation: before the annotation cache has
+    // settled every point reads invalid, and greying all six for the few frames after a toggle would
+    // report a clipping that is not happening.
+    const bool clipped =
+        m.show && PreviewAnnotationOverlay().HasResult() && !PreviewAnnotationOverlay().MarkerPoint(i).valid;
+    if (clipped) {
+      ImGui::TextDisabled("%s", kMarkerDisplayNames[i]);
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Not in this view — the lens or the visible-hemisphere setting crops it out.");
+      }
+    } else {
+      ImGui::TextUnformatted(kMarkerDisplayNames[i]);
+    }
+
+    ImGui::TableSetColumnIndex(2);
+    Checkbox((std::string("##marker_line_") + kMarkerSerialNames[i]).c_str(), &m.show);
+
+    ImGui::TableSetColumnIndex(3);
+    Checkbox((std::string("##marker_label_") + kMarkerSerialNames[i]).c_str(), &m.label);
+
+    // Columns 4 (Alpha) and 5 (fold) stay EMPTY for every marker row, and both emptinesses are
+    // statements rather than omissions. Alpha is family-wide, so a per-row cell would be six
+    // controls editing one value; the fold column says "this row owns a field the others do not",
+    // which no marker does — the family's two fields hang off the section header instead.
+  }
+
+  ImGui::EndTable();
+}
+
+// The Overlay group: the four auxiliary lines drawn over the preview, as one table — plus, below
+// it, the sky reference points as a collapsed section of their own (see the header there for why
+// they are not a fifth row).
 //
 // It replaces four stacked two-row blocks that repeated the word "Alpha" four times and anchored
 // their checkboxes at an x computed from the width of the longest name — an arrangement in which
@@ -878,30 +1095,23 @@ void RenderOverlaysTab() {
     { "Angular Dist.", "##sun_circles_color", g_state.sun_circles_color, "##sun_circles_line",
       &g_state.show_sun_circles_line, "##sun_circles_label", &g_state.show_sun_circles_label, "##sun_circles_alpha",
       "overlay_sun_circles_alpha", &g_state.sun_circles_alpha, "###sun_circles_fold", OverlayFold::kSunCircleAngles },
-    // The marker pair: pixel-space dots at the zenith and the nadir. No text label — hence a null
-    // label id — and the only row with a radius.
-    { "Zenith/Nadir", "##zenith_nadir_color", g_state.zenith_nadir_color, "##zenith_nadir_line",
-      &g_state.show_zenith_nadir_line, nullptr, nullptr, "##zenith_nadir_alpha", "overlay_zenith_nadir_alpha",
-      &g_state.zenith_nadir_alpha, "###zenith_nadir_fold", OverlayFold::kZenithNadirRadius },
     // The lens image circle. No text label (null label id, empty cell) and no fold: unlike the
-    // marker pair above it has no radius of its own to expose — the shader derives the circle from
-    // the lens type, the FOV and the viewport, so there is nothing here for a user to set.
+    // angular-distance circles above it owns no field of its own — the shader derives the circle
+    // from the lens type, the FOV and the viewport, so there is nothing here for a user to set.
     { "Lens Border", "##lens_border_color", g_state.lens_border_color, "##lens_border_line",
       &g_state.show_lens_border_line, nullptr, nullptr, "##lens_border_alpha", "overlay_lens_border_alpha",
       &g_state.lens_border_alpha, nullptr, OverlayFold::kNone },
   };
 
-  const float swatch_w = ImGui::GetFrameHeight();
-  const float check_w = ImGui::GetFrameHeight();
-  const float fold_w = ImGui::GetFrameHeight();
   // Calibrated against THIS panel's width budget, not carried over from the wider layout this table
   // was first written for: the right panel is kRightPanelWidth (300 px) wide, which leaves the table
   // ~274 px, and the fixed columns plus cell padding claim all but ~129 px of it. Anything this
   // column takes comes straight off the Name column, which is the only stretching one — so this
   // number is the name column's budget stated from the other side. The arbiter is not this comment
   // but test_overlay_controls.cpp's the_columns_line_up_and_no_name_is_cut_off: if a font or style
-  // change makes a name overflow, this literal is the one knob to turn.
-  constexpr float kAlphaColWidth = 54.6f;
+  // change makes a name overflow, this literal is the one knob to turn. The reference-point
+  // section's table reuses these same widths, so its six names are measured against the same
+  // budget — see RenderMarkersSection.
 
   // Name is the ONLY stretching column. That is the mechanism behind "the name is not cut off":
   // every other column states the width it needs, and whatever is left goes to the names — rather
@@ -911,16 +1121,7 @@ void RenderOverlaysTab() {
   if (!ImGui::BeginTable("##OverlaysTable", 6, kFlags, outer_size)) {
     return;
   }
-  ImGui::TableSetupColumn("##color", ImGuiTableColumnFlags_WidthFixed, swatch_w);
-  // Id only, no header text: this column's header would sit directly under the "Overlay" the
-  // group's own CollapsingHeader already carries, and a word repeated one line below itself reads
-  // as a second, different thing. The other four headers name what their cells hold, which the
-  // group title does not say.
-  ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
-  ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Line").x));
-  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, std::max(check_w, ImGui::CalcTextSize("Label").x));
-  ImGui::TableSetupColumn("Alpha", ImGuiTableColumnFlags_WidthFixed, kAlphaColWidth);
-  ImGui::TableSetupColumn("##fold", ImGuiTableColumnFlags_WidthFixed, fold_w);
+  SetupOverlayTableColumns();
   ImGui::TableHeadersRow();
 
   for (const OverlayRowSpec& row : rows) {
@@ -970,19 +1171,17 @@ void RenderOverlaysTab() {
       ImGui::OpenPopup(row.fold_id);
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(row.fold == OverlayFold::kSunCircleAngles ? "Edit angles" : "Marker radius");
+      ImGui::SetTooltip("Edit angles");
     }
     if (ImGui::BeginPopup(row.fold_id)) {
-      if (row.fold == OverlayFold::kSunCircleAngles) {
-        RenderSunCirclesAnglePopup();
-      } else {
-        RenderZenithNadirRadiusPopup();
-      }
+      RenderSunCirclesAnglePopup();
       ImGui::EndPopup();
     }
   }
 
   ImGui::EndTable();
+
+  RenderMarkersSection();
 }
 
 }  // namespace
@@ -1488,7 +1687,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // still needs the mask. Which families the request actually carries is decided inside
     // AnnotationViewInputFor, off the same switches; each switch then gates its own half below.
     if (g_state.show_sun_circles_line || g_state.show_sun_circles_label || g_state.show_grid_line ||
-        g_state.show_grid_label || g_state.show_zenith_nadir_line || g_state.show_horizon_line ||
+        g_state.show_grid_label || AnyMarkerRequested(g_state) || g_state.show_horizon_line ||
         g_state.show_horizon_label) {
       g_annotation_overlay.Update(
           MakeAnnotationViewKey(AnnotationViewInputFor(g_state, rc), g_preview_vp.vp_w, g_preview_vp.vp_h));
@@ -1520,13 +1719,14 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       pp.overlay.horizon_mask_generation = g_annotation_overlay.Generation();
     }
 
-    // Zenith / Nadir pixel-space marker. The APPEARANCE below is the GUI's own state; the two
-    // POSITIONS come from core (below the lens-border block), not from a GUI-side projection.
-    pp.overlay.show_zenith_nadir = g_state.show_zenith_nadir_line;
-    std::copy(std::begin(g_state.zenith_nadir_color), std::end(g_state.zenith_nadir_color),
-              std::begin(pp.overlay.zenith_nadir_color));
-    pp.overlay.zenith_nadir_alpha = g_state.zenith_nadir_alpha;
-    pp.overlay.zenith_nadir_radius_px = g_state.zenith_nadir_radius_px;
+    // The reference-point markers. The APPEARANCE below is the GUI's own state; the POSITIONS come
+    // from core (below the lens-border block), not from a GUI-side projection.
+    pp.overlay.markers_alpha = g_state.markers_alpha;
+    pp.overlay.markers_radius_px = g_state.markers_radius_px;
+    for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+      std::copy(std::begin(g_state.markers[i].color), std::end(g_state.markers[i].color),
+                pp.overlay.marker_color[i].begin());
+    }
     pp.overlay.show_lens_border = g_state.show_lens_border_line;
     std::copy(std::begin(g_state.lens_border_color), std::end(g_state.lens_border_color),
               std::begin(pp.overlay.lens_border_color));
@@ -1537,10 +1737,17 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // projection of the two world directions through ProjectWorldDirToScreen — the same duplicate
     // implementation the label walk had, and the one this task removes. The ring is still
     // rasterized by the shader; only the position's source moved.
-    CanvasPointToShaderScreenPos(g_annotation_overlay.ZenithPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
-                                 pp.overlay.zenith_screen_pos);
-    CanvasPointToShaderScreenPos(g_annotation_overlay.NadirPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
-                                 pp.overlay.nadir_screen_pos);
+    for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+      // A marker whose LINE switch is off is handed the default-constructed (invalid) point, which
+      // CanvasPointToShaderScreenPos already turns into the sentinel — the same path an unimaged
+      // marker takes. That is why there is no enable uniform: "switched off" and "not on this
+      // canvas" are the same instruction to the shader, and writing them the same way means the
+      // two cannot disagree. Note the switch read here is `show` alone: a marker with only its
+      // LABEL on is in the request (its name needs an anchor) but must draw no ring.
+      const AnnotationOverlayCache::Point p =
+          g_state.markers[i].show ? g_annotation_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
+      CanvasPointToShaderScreenPos(p, g_preview_vp.vp_w, g_preview_vp.vp_h, pp.overlay.marker_screen_pos[i].data());
+    }
 
     // Overlay labels at viewport edges. All three families' anchors come from core, through the one
     // AnnotationOverlayCache result the masks above already read — the GUI walks no curve of its
@@ -1564,10 +1771,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     // as the FramebufferScale the backend multiplies by. Feeding device pixels here and scale 1
     // there also lands the positions correctly, which is why the export path's half-done version
     // of this conversion looked right while rendering the text at 1/dpi of its size.
-    if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label) {
+    if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label ||
+        AnyMarkerLabelShown(g_state)) {
       const float vp_sw = panel_width;
       const float vp_sh = preview_height;
-      // All three sets go into ONE vector so they take part in one collision pass, which is where
+      // Every set goes into ONE vector so they take part in one collision pass, which is where
       // the per-set group is read.
       if (g_state.show_horizon_label) {
         g_preview_vp.curve_labels.push_back(BuildHorizonLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
@@ -1577,6 +1785,11 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       }
       if (g_state.show_grid_label) {
         g_preview_vp.curve_labels.push_back(BuildGridLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
+      }
+      // No outer switch of its own, unlike the three above: each marker carries its own label
+      // switch, so the builder returns an empty vector when none of the six is on.
+      for (CurveLabelSet& set : BuildMarkerLabelSets(g_annotation_overlay, g_state, vp_sw, vp_sh)) {
+        g_preview_vp.curve_labels.push_back(std::move(set));
       }
     }
 

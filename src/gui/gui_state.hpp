@@ -1501,6 +1501,25 @@ struct GuiState {
   }
 };
 
+// ---- Sky reference-point marker predicates (single owner) ----
+//
+// "Is any marker asking for X" is answered in one place because five call sites ask it: the
+// annotation request's gate, the preview's per-frame cache Update, the label block, the off-screen
+// export's own refresh, and the panel. Each of them writing its own six-way disjunction is five
+// chances for one of them to be updated and the others not — the exact drift the array replaced
+// six named fields to prevent.
+inline bool AnyMarkerShown(const GuiState& s) {
+  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.show; });
+}
+inline bool AnyMarkerLabelShown(const GuiState& s) {
+  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.label; });
+}
+// Whether core has to project ANY marker for this frame. Either switch counts, exactly like the
+// horizon's two: a user drawing only the names still needs the positions the names are placed at.
+inline bool AnyMarkerRequested(const GuiState& s) {
+  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.show || m.label; });
+}
+
 // ---- Display-side identity / numbering formatters (single owner) ----
 //
 // These four live here rather than in each renderer because every one of them had ALREADY drifted

@@ -25,6 +25,11 @@ struct OverlayLabel {
 // the sets built in app_panels.cpp choose between them by name rather than by literal.
 constexpr int kGroupGrid = 0;
 constexpr int kGroupSunCircles = 1;
+// The sky reference points' names. Its own group, not the circles': a marker's name sits beside a
+// single point rather than along a curve, and two DIFFERENT reference points that happen to project
+// close together must both stay named — suppressing one would say the sky has fewer named
+// directions than it does, which is the opposite of what this family is for.
+constexpr int kGroupMarkers = 2;
 
 // Turn core's label anchors into OverlayLabels the two draw paths already understand. Kept here
 // rather than in either caller because both of them need it and the conversion — canvas pixels to

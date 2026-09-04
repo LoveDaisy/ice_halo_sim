@@ -521,7 +521,7 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           in.visible = vp.params.view_proj.visible;
           in.front = vp.params.view_proj.front;
           in.overlap = gui::kDualFisheyeOverlap;
-          in.zenith_nadir = true;
+          in.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
           marker_overlay.Refresh(gui::MakeAnnotationViewKey(in, vp.vp_w, vp.vp_h));
           IM_CHECK(marker_overlay.HasResult());
           // The scene exists to cover the ring, and a ring is small enough that its ABSENCE would
@@ -529,12 +529,20 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           // pass the comparison and quietly leave overlayAuxLines' only committed pixel coverage
           // testing the grid alone. Zenith only: this view's nadir is behind the camera, which is
           // the state the sentinel below is for.
-          IM_CHECK(marker_overlay.ZenithPoint().valid);
-          vp.params.overlay.show_zenith_nadir = true;
-          gui::CanvasPointToShaderScreenPos(marker_overlay.ZenithPoint(), vp.vp_w, vp.vp_h,
-                                            vp.params.overlay.zenith_screen_pos);
-          gui::CanvasPointToShaderScreenPos(marker_overlay.NadirPoint(), vp.vp_w, vp.vp_h,
-                                            vp.params.overlay.nadir_screen_pos);
+          IM_CHECK(marker_overlay.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).valid);
+          // The colour is stated here rather than left to the struct's default, and the value is
+          // the one the zenith/nadir pair carried when this reference was shot. Two reasons, and
+          // both are about keeping the committed image the arbiter of the SHADER rather than of a
+          // default: OverlayDecoration::marker_color zero-initialises to black, so a scene that
+          // said nothing would draw a black ring on a black sky and cover nothing; and pinning the
+          // literal means a future change to GuiState's palette moves what a user sees without
+          // moving what this reference asserts. Only the two ids this scene asks for are set — the
+          // other four stay at the sentinel position and draw nothing.
+          for (int id : { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR }) {
+            vp.params.overlay.marker_color[id] = { 0.8f, 0.2f, 0.2f };
+            gui::CanvasPointToShaderScreenPos(marker_overlay.MarkerPoint(id), vp.vp_w, vp.vp_h,
+                                              vp.params.overlay.marker_screen_pos[id].data());
+          }
         }
         if (scene.overlay_grid) {
           vp.params.overlay.show_grid = true;

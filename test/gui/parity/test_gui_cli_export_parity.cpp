@@ -265,11 +265,18 @@ struct ParityScene {
   // both arms build it from one core call, so it is two readings of one curve rather than two
   // implementations. See the exclusion note above.
   bool show_grid;
-  // The zenith / nadir ring markers, on in both scenes and the newest member of the "two readings
-  // of one call" family: both arms take the two points from LUMICE_ComputeAnnotationOverlay and
-  // draw a ring of the config's radius around each. Unlike the three line families this one is a
-  // PAIR, and the two halves are independent — which is what the single-sided break below tests.
-  bool show_zenith_nadir;
+  // The sky reference-point ring markers, on in both scenes and the newest member of the "two
+  // readings of one call" family: both arms take the points from LUMICE_ComputeAnnotationOverlay
+  // and draw a ring of the config's radius around each. Unlike the three line families this one is
+  // a SET of six independent members, each with its own colour — which is what the encoding
+  // assertion below reads, since the pixels cannot (see the markers row in the field table).
+  //
+  // ALL SIX rather than a representative subset: four of them (sun, subsun, anthelion, antisolar)
+  // are defined RELATIVE TO THE SUN, so they are the only rows in this table whose position depends
+  // on a field of the document other than the view — and the export has to carry that field for the
+  // child process to place them where the preview did. A subset that left them out would leave the
+  // whole sun-relative half of the id space unexercised end to end.
+  bool show_markers;
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
   float ray_num_millions;
@@ -439,7 +446,7 @@ const ParityScene kScenes[] = {
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
+   /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
   // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
@@ -479,7 +486,7 @@ const ParityScene kScenes[] = {
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
+   /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
@@ -575,7 +582,7 @@ const ParityScene kScenes[] = {
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
+   /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.0, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
@@ -618,9 +625,14 @@ struct ExportedRenderInfo {
   int width = 0;
   int height = 0;
   int renderer_id = -1;
-  // Whether the exported document asks the CLI for the zenith / nadir markers at all. Read from
-  // the document rather than from GuiState because that is what the child process will read.
-  bool zenith_nadir = false;
+  // What the exported document asks the CLI to draw for the marker family. Read from the document
+  // rather than from GuiState because that is what the child process will read.
+  //
+  // Two numbers, not one bool: the GUI always writes all six entries and expresses the switch as
+  // each entry's `enabled` (file_io.cpp BuildScene says why), so "the family is on" is a COUNT and
+  // a list that lost an entry is a different failure from a list whose entries all went false.
+  int markers_listed = 0;
+  int markers_enabled = 0;
   // Whether it asks for the celestial horizon, read from the same place and for the same reason.
   // This one has a recorded incident behind it: the export arm once wrote the INVERSE of the
   // switch, so both directions are worth a check. The OFF direction is asked in
@@ -643,8 +655,13 @@ ExportedRenderInfo ParseExportedRenderInfo(const std::string& json_str) {
   info.width = jr["resolution"][0].get<int>();
   info.height = jr["resolution"][1].get<int>();
   info.renderer_id = jr.value("id", 0);
-  if (jr.contains("grid") && jr["grid"].contains("zenith_nadir")) {
-    info.zenith_nadir = jr["grid"]["zenith_nadir"].value("enabled", false);
+  if (jr.contains("grid") && jr["grid"].contains("markers") && jr["grid"]["markers"].is_array()) {
+    for (const auto& m : jr["grid"]["markers"]) {
+      info.markers_listed++;
+      if (m.value("enabled", false)) {
+        info.markers_enabled++;
+      }
+    }
   }
   if (jr.contains("grid")) {
     info.horizon = jr["grid"].value("horizon", false);
@@ -720,7 +737,9 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::g_state.show_horizon_line = scene.show_horizon;
       gui::g_state.show_sun_circles_line = scene.show_sun_circles;
       gui::g_state.show_grid_line = scene.show_grid;
-      gui::g_state.show_zenith_nadir_line = scene.show_zenith_nadir;
+      for (gui::MarkerAppearance& m : gui::g_state.markers) {
+        m.show = scene.show_markers;
+      }
       // FULL OPACITY, deliberately, and not the 0.3 a user gets. The two arms composite an overlay
       // line in different colour spaces — the CLI blends it into radiance before the transfer curve
       // (server/render.cpp PostSnapshot), the preview shader after it (overlayAuxLines runs on the
@@ -734,7 +753,7 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       // The markers take the same override for the same reason, and they need it more than the
       // lines do: a ring is a handful of pixels, so a per-pixel byte difference on every one of
       // them is most of what the marker contributes to the frame at all.
-      gui::g_state.zenith_nadir_alpha = 1.0f;
+      gui::g_state.markers_alpha = 1.0f;
       // The horizon is the one line that CANNOT take that override, and the reason is a decision
       // rather than an oversight: core has no per-annotation appearance fields for it (unlike
       // GridLineParam) and paints it from a file-scope constant, kOutlineAlpha = 0.6 in
@@ -796,7 +815,10 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK(info.ok);
       IM_CHECK_EQ(info.width, scene.expect_w);
       IM_CHECK_EQ(info.height, scene.expect_h);
-      IM_CHECK_EQ(info.zenith_nadir, scene.show_zenith_nadir);
+      // Six entries always, regardless of the switch — the constant-shape export BuildScene argues
+      // for. Their `enabled` is what the switch moves.
+      IM_CHECK_EQ(info.markers_listed, LUMICE_ANNOTATION_MARKER_COUNT);
+      IM_CHECK_EQ(info.markers_enabled, scene.show_markers ? LUMICE_ANNOTATION_MARKER_COUNT : 0);
       IM_CHECK_EQ(info.horizon, scene.show_horizon);
 
       const std::filesystem::path scratch_dir =
@@ -828,10 +850,27 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       // said which of the two arms had drifted.
       IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
       IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
-      IM_CHECK_EQ(vp.params.overlay.show_zenith_nadir, scene.show_zenith_nadir);
+      // The preview arm's own reading of the same switch. There is no enable flag in this struct —
+      // a marker that is off is written as the sentinel position — so the check is that every slot
+      // did or did not receive a real coordinate. `>=` and not `==` on the count: a marker whose
+      // direction this view does not image is ALSO written as the sentinel, legitimately, so the
+      // assertion is that the family reached the shader at all, not that all six landed.
+      {
+        int placed = 0;
+        for (const auto& pos : vp.params.overlay.marker_screen_pos) {
+          if (pos[0] != gui::kOverlaySentinel || pos[1] != gui::kOverlaySentinel) {
+            placed++;
+          }
+        }
+        if (scene.show_markers) {
+          IM_CHECK_GT(placed, 0);
+        } else {
+          IM_CHECK_EQ(placed, 0);
+        }
+      }
       IM_CHECK_EQ(vp.params.overlay.show_horizon, scene.show_horizon);
       IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
-      IM_CHECK_EQ(vp.params.overlay.zenith_nadir_alpha, 1.0f);
+      IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
       IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
       if (scene.show_sun_circles) {
         IM_CHECK(vp.params.overlay.angular_dist_mask != nullptr);

@@ -75,16 +75,19 @@ uniform float u_horizon_alpha;
 uniform float u_grid_alpha;
 uniform float u_sun_circles_alpha;
 
-// Zenith / Nadir pixel-space ring marker uniforms (task-gui-zenith-nadir-marker).
+// Sky reference-point ring marker uniforms. One array slot per core marker id
+// (LUMICE_ANNOTATION_MARKER_*), so the CPU uploads all six in two calls and the
+// loop below needs no count.
 // Screen positions are center-origin, y-up, in pixels — same convention as
 // `pos = v_ndc * u_resolution * 0.5` (see main()). Sentinel (-9999, -9999)
-// trivially fails the distance test so the ring is skipped.
-uniform int u_show_zenith_nadir;
-uniform vec2 u_zenith_screen_pos;
-uniform vec2 u_nadir_screen_pos;
-uniform float u_zenith_nadir_radius_px;
-uniform vec3 u_zenith_nadir_color;
-uniform float u_zenith_nadir_alpha;
+// trivially fails the distance test so that ring is skipped, which is how a
+// marker the user switched off is expressed: there is no enable uniform.
+// The literal 6 is LUMICE_ANNOTATION_MARKER_COUNT; GLSL cannot include the
+// header, so a static_assert after this string pins the two spellings together.
+uniform vec2 u_marker_screen_pos[6];
+uniform vec3 u_marker_color[6];
+uniform float u_markers_radius_px;
+uniform float u_markers_alpha;
 
 // Lens border uniforms: the outline of the projection's own valid image circle
 // (where the inverse function's domain guard flips w from 1 to 0). Purely a
@@ -456,8 +459,8 @@ vec4 globeInverse(vec2 pos, float half_fov, out float ri) {
 //
 // It takes no world direction any more, and that absence is the statement: every CURVE this draws
 // now comes from a mask core computed for this exact view, so there is nothing left here to derive
-// from the fragment's own direction. What remains direction-free is the zenith / nadir pair, whose
-// two points arrive as pixel-space uniforms.
+// from the fragment's own direction. What remains direction-free is the reference-point marker
+// family, whose points arrive as pixel-space uniforms.
 //
 // pos_pix: pixel-space position of the current fragment, center-origin (0,0),
 // y-up. Matches the CPU helper ProjectWorldDirToScreen for marker overlays.
@@ -497,19 +500,23 @@ vec3 overlayAuxLines(vec3 color, vec2 pos_pix) {
     color = mix(color, u_horizon_color, t * u_horizon_alpha);
   }
 
-  // Zenith / Nadir pixel-space ring markers — drawn last so they sit on top
-  // of all other overlays. CPU passes sentinel (-9999, -9999) when the marker
-  // is offscreen / behind the camera; the distance test rejects it naturally.
-  if (u_show_zenith_nadir != 0) {
+  // Sky reference-point ring markers — drawn last so they sit on top of all
+  // other overlays. CPU passes sentinel (-9999, -9999) for a marker that is
+  // switched off, offscreen or behind the camera; the distance test rejects it
+  // naturally, which is why there is no per-marker enable to read.
+  //
+  // A constant-bound loop over the whole id space rather than six unrolled
+  // blocks: the bound is a compile-time constant so there is no dynamic
+  // branching, and the alternative is the same arithmetic written six times.
+  // Order is id order, and the LATER id wins where two rings overlap — the same
+  // last-writer rule the three curve families above already follow.
+  {
     const float kRingHalfWidthPx = 1.5;
-    float dz = length(pos_pix - u_zenith_screen_pos);
-    float tz = 1.0 - smoothstep(0.0, kRingHalfWidthPx,
-                                abs(dz - u_zenith_nadir_radius_px));
-    color = mix(color, u_zenith_nadir_color, tz * u_zenith_nadir_alpha);
-    float dn = length(pos_pix - u_nadir_screen_pos);
-    float tn = 1.0 - smoothstep(0.0, kRingHalfWidthPx,
-                                abs(dn - u_zenith_nadir_radius_px));
-    color = mix(color, u_zenith_nadir_color, tn * u_zenith_nadir_alpha);
+    for (int i = 0; i < 6; ++i) {
+      float d = length(pos_pix - u_marker_screen_pos[i]);
+      float t = 1.0 - smoothstep(0.0, kRingHalfWidthPx, abs(d - u_markers_radius_px));
+      color = mix(color, u_marker_color[i], t * u_markers_alpha);
+    }
   }
 
   return color;
@@ -728,6 +735,15 @@ void main() {
   frag_color = vec4(final_color, 1.0);
 }
 )glsl";
+
+// The `6` written into u_marker_screen_pos[6] / u_marker_color[6] and into the loop bound of
+// overlayAuxLines above. GLSL cannot include lumice.h, so the two spellings of the id-space size
+// are pinned here instead of merely being expected to match: growing the marker family without
+// widening the arrays would upload six of N points and silently drop the rest.
+static_assert(LUMICE_ANNOTATION_MARKER_COUNT == 6,
+              "the fragment shader hard-codes 6 marker uniform slots; update kFragmentShader's "
+              "u_marker_screen_pos[6] / u_marker_color[6] and its loop bound together with this");
+
 // clang-format on
 
 // The kTexMode* block inside the fragment shader above and PreviewRenderer::TextureMode are one
@@ -1741,15 +1757,22 @@ void PreviewRenderer::Render(int vp_x, int vp_y, int vp_w, int vp_h, const Previ
   glUniform1f(glGetUniformLocation(shader_program_, "u_grid_alpha"), ov.grid_alpha);
   glUniform1f(glGetUniformLocation(shader_program_, "u_sun_circles_alpha"), ov.sun_circles_alpha);
 
-  glUniform1i(glGetUniformLocation(shader_program_, "u_show_zenith_nadir"), ov.show_zenith_nadir ? 1 : 0);
-  glUniform2f(glGetUniformLocation(shader_program_, "u_zenith_screen_pos"), ov.zenith_screen_pos[0],
-              ov.zenith_screen_pos[1]);
-  glUniform2f(glGetUniformLocation(shader_program_, "u_nadir_screen_pos"), ov.nadir_screen_pos[0],
-              ov.nadir_screen_pos[1]);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_radius_px"), ov.zenith_nadir_radius_px);
-  glUniform3f(glGetUniformLocation(shader_program_, "u_zenith_nadir_color"), ov.zenith_nadir_color[0],
-              ov.zenith_nadir_color[1], ov.zenith_nadir_color[2]);
-  glUniform1f(glGetUniformLocation(shader_program_, "u_zenith_nadir_alpha"), ov.zenith_nadir_alpha);
+  // "[0]" and not the bare array name: glGetUniformLocation is specified to resolve the FIRST
+  // ELEMENT of an array, and while most drivers also accept the bare name, the spec does not
+  // require it. A miss returns -1, which glUniform* then silently ignores — so the failure mode
+  // this spelling avoids is six markers that never draw and no error anywhere.
+  // std::array's elements are contiguous and each inner array is exactly its two/three floats, so
+  // one *fv call with a count of six uploads the whole family.
+  static_assert(sizeof(ov.marker_screen_pos) == sizeof(float) * 2 * LUMICE_ANNOTATION_MARKER_COUNT,
+                "marker_screen_pos must be a flat float[N][2] for the single glUniform2fv upload");
+  static_assert(sizeof(ov.marker_color) == sizeof(float) * 3 * LUMICE_ANNOTATION_MARKER_COUNT,
+                "marker_color must be a flat float[N][3] for the single glUniform3fv upload");
+  glUniform2fv(glGetUniformLocation(shader_program_, "u_marker_screen_pos[0]"), LUMICE_ANNOTATION_MARKER_COUNT,
+               ov.marker_screen_pos[0].data());
+  glUniform3fv(glGetUniformLocation(shader_program_, "u_marker_color[0]"), LUMICE_ANNOTATION_MARKER_COUNT,
+               ov.marker_color[0].data());
+  glUniform1f(glGetUniformLocation(shader_program_, "u_markers_radius_px"), ov.markers_radius_px);
+  glUniform1f(glGetUniformLocation(shader_program_, "u_markers_alpha"), ov.markers_alpha);
 
   glUniform1i(glGetUniformLocation(shader_program_, "u_show_lens_border"), ov.show_lens_border ? 1 : 0);
   glUniform3f(glGetUniformLocation(shader_program_, "u_lens_border_color"), ov.lens_border_color[0],

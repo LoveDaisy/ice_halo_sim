@@ -250,13 +250,24 @@ const std::vector<FieldProbe>& FieldProbes() {
         s.grid_color[2] = 0.125f;
       },
       [](const GuiState& s) { return JoinFloats(s.grid_color, 3); } },
-    { "renderer.zenith_nadir_color",
+    // A marker colour, and deliberately the SUN's rather than the zenith's: the zenith is the one
+    // id whose key has a legacy fallback, so a round trip through it could pass on the old key
+    // alone. The sun has no legacy source, so this probe can only succeed through the new one.
+    { "renderer.marker_sun_color",
       [](GuiState& s) {
-        s.zenith_nadir_color[0] = 0.2f;
-        s.zenith_nadir_color[1] = 0.4f;
-        s.zenith_nadir_color[2] = 0.6f;
+        s.markers[LUMICE_ANNOTATION_MARKER_SUN].color[0] = 0.2f;
+        s.markers[LUMICE_ANNOTATION_MARKER_SUN].color[1] = 0.4f;
+        s.markers[LUMICE_ANNOTATION_MARKER_SUN].color[2] = 0.6f;
       },
-      [](const GuiState& s) { return JoinFloats(s.zenith_nadir_color, 3); } },
+      [](const GuiState& s) { return JoinFloats(s.markers[LUMICE_ANNOTATION_MARKER_SUN].color, 3); } },
+    // The per-marker LABEL switch, which no other probe reaches: it is the one field of the family
+    // with no predecessor at all (the pair these generalize drew no text), so nothing but its own
+    // key can carry it across a save/load.
+    { "renderer.marker_anthelion_label",
+      [](GuiState& s) { s.markers[LUMICE_ANNOTATION_MARKER_ANTHELION].label = true; },
+      [](const GuiState& s) -> std::string {
+        return s.markers[LUMICE_ANNOTATION_MARKER_ANTHELION].label ? "1" : "0";
+      } },
     { "renderer.lens_border_color",
       [](GuiState& s) {
         s.lens_border_color[0] = 0.9f;

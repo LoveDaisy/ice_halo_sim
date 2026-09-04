@@ -1,10 +1,12 @@
 // The right panel's Overlay group: the auxiliary lines drawn over the preview and the angle list
 // behind the Angular Dist. row's fold.
 //
-// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws five rows of the same
-// record — colour, name, line, text label, opacity — as one ImGui table, and its one non-obvious
+// What this suite is for. `RenderOverlaysTab` (src/gui/app_panels.cpp) draws four rows of the same
+// record — colour, name, line, text label, opacity — as one ImGui table, followed by a collapsed
+// "Reference Points" section holding a SECOND table of six sky-marker rows. Its one non-obvious
 // property is a LAYOUT one: the columns have to line up across rows whose names have very different
-// widths, and the longest name must not be cut off. That is only checkable against a rendered
+// widths — ACROSS BOTH TABLES, which are two tables only because the section between them folds —
+// and the longest name must not be cut off. That is only checkable against a rendered
 // frame, and it is the kind of thing that silently stops being true when a name is added or a
 // column's width budget grows. It matters more here than it would in a wider container: the group
 // lives in a 300 px panel, so the name column is what every other column's declared width leaves
@@ -66,8 +68,14 @@ struct ScopedRef {
   ImGuiTestContext* ctx_;
 };
 
-// The five rows, by the id suffix their widgets carry.
-const char* const kRows[] = { "horizon", "grid", "sun_circles", "zenith_nadir", "lens_border" };
+// The four line rows of the main table, by the id suffix their widgets carry.
+const char* const kRows[] = { "horizon", "grid", "sun_circles", "lens_border" };
+
+// The six reference-point rows of the second table, by the id suffix their widgets carry. Mirrored
+// from kMarkerSerialNames for the same reason NameOfRow mirrors the display names: a rename there
+// that is not made here is exactly what these cases exist to catch.
+const char* const kMarkerRows[] = { "zenith", "nadir", "sun", "subsun", "anthelion", "antisolar" };
+const char* const kMarkerNames[] = { "Zenith", "Nadir", "Sun", "Subsun", "Anthelion", "Antisolar" };
 
 // The name each row displays. Mirrored rather than read from the panel because the panel's row table
 // is file-local to app_panels.cpp — and because a name that changed there without changing here is
@@ -82,9 +90,6 @@ const char* NameOfRow(const std::string& row) {
   }
   if (row == "sun_circles") {
     return "Angular Dist.";
-  }
-  if (row == "zenith_nadir") {
-    return "Zenith/Nadir";
   }
   return "Lens Border";
 }
@@ -152,18 +157,55 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
           break;
         }
       }
-      IM_CHECK_GT(line_x, 0.0f);  // a run of five misses would leave this unset
+      IM_CHECK_GT(line_x, 0.0f);  // a run of four misses would leave this unset
 
-      // "Empty cell IS the information" (doc/gui-visual-language.md §4.4): the marker row carries no
-      // text label, so its Label cell holds nothing — not a disabled checkbox, not a dash. The lens
-      // border row says the same thing for the same reason: what it draws is a circle, not a word.
-      // Asserted against the three rows that DO have one, so the claim is about these two rows and
-      // not about the id being spelled some other way.
-      IM_CHECK_EQ(ctx->ItemInfo("**/##zenith_nadir_label", ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
+      // "Empty cell IS the information" (doc/gui-visual-language.md §4.4): the lens border row draws
+      // a circle, not a word, so its Label cell holds nothing — not a disabled checkbox, not a dash.
+      // Asserted against the three rows that DO have one, so the claim is about that row and not
+      // about the id being spelled some other way.
       IM_CHECK_EQ(ctx->ItemInfo("**/##lens_border_label", ImGuiTestOpFlags_NoError).ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##horizon_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##grid_label").ID, (ImGuiID)0);
       IM_CHECK_NE(ctx->ItemInfo("**/##sun_circles_label").ID, (ImGuiID)0);
+
+      // THE SAME TWO CLAIMS over the reference-point section's own table, which is where they are
+      // now easiest to break: six names arrived at once, "Anthelion" and "Antisolar" are longer than
+      // anything the four rows above carry, and the two tables share a column layout
+      // (SetupOverlayTableColumns) rather than merely looking as though they do. A drift between
+      // them would show up here as the marker rows' Line column starting at a different x from the
+      // line rows' — which is why line_x is carried over from the loop above rather than re-seeded.
+      gui::g_state.markers_section_open = true;
+      ctx->Yield(3);
+      for (size_t i = 0; i < IM_ARRAYSIZE(kMarkerRows); ++i) {
+        const std::string row = kMarkerRows[i];
+        const ImGuiTestItemInfo line = ctx->ItemInfo(("**/##marker_line_" + row).c_str());
+        ImGuiID color_id = 0;
+        if (line.Window != nullptr) {
+          // Same three-seed reconstruction as above, against the SECOND table's id.
+          const ImGuiID table_id = ImGui::GetIDWithSeed("##MarkersTable", nullptr, line.Window->ID);
+          const ImGuiID swatch_group = ImGui::GetIDWithSeed(("##marker_color_" + row).c_str(), nullptr, table_id);
+          color_id = ImGui::GetIDWithSeed("##ColorButton", nullptr, swatch_group);
+        }
+        const ImGuiTestItemInfo color = ctx->ItemInfo(color_id, ImGuiTestOpFlags_NoError);
+        if (line.ID == 0 || color.ID == 0) {
+          IM_ERRORF("marker row %s: the Line checkbox or the colour swatch is missing", row.c_str());
+          break;
+        }
+        if (line.RectFull.Min.x != line_x) {
+          IM_ERRORF("marker row %s: Line starts at x=%.1f, the line rows measured %.1f", row.c_str(),
+                    static_cast<double>(line.RectFull.Min.x), static_cast<double>(line_x));
+          break;
+        }
+        const float name_w = ImGui::CalcTextSize(kMarkerNames[i]).x;
+        const float name_room = line.RectFull.Min.x - color.RectFull.Max.x;
+        if (name_room < name_w) {
+          IM_ERRORF("marker row %s: %.1f px between the swatch and Line, the name needs %.1f", row.c_str(),
+                    static_cast<double>(name_room), static_cast<double>(name_w));
+          break;
+        }
+      }
+      gui::g_state.markers_section_open = false;
+      ctx->Yield(2);
 
       // The header row. The name column draws none, because the group's own CollapsingHeader
       // already says "Overlay" one line above it and a word repeated directly under itself reads as
@@ -189,9 +231,13 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The other half of "empty cell is the information": the fold column. Only two of the five rows
-  // have a field the others lack, and only those two offer the button — a fold button on every row
-  // would say the opposite of what this layout is for.
+  // The other half of "empty cell is the information": the fold column. Only one of the four line
+  // rows has a field the others lack, and only it offers the button — a fold button on every row
+  // would say the opposite of what this layout is for. The six reference-point rows below extend
+  // the claim rather than qualify it: NONE of them offers one, because the two fields their family
+  // owns (alpha, radius) are family-wide and hang off the section header instead. That header fold
+  // is asserted here too, and the two are different statements — "this ROW owns a field the other
+  // rows do not" against "this FAMILY owns a field no row can express".
   //
   // Read in the DEFAULT document state, both sun-circle switches off, and that is the point: which
   // rows offer a fold is a property of the ROWS — of which of them owns a field the others lack —
@@ -216,10 +262,33 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         IM_CHECK(!ctx->ItemExists("**/###horizon_fold"));
         IM_CHECK(!ctx->ItemExists("**/###grid_fold"));
         IM_CHECK(ctx->ItemExists("**/###sun_circles_fold"));
-        IM_CHECK(ctx->ItemExists("**/###zenith_nadir_fold"));
-        // No fold: unlike the marker pair, the lens border owns no field of its own — the shader
-        // derives the circle from the lens, the FOV and the viewport, so there is nothing to edit.
+        // No fold: unlike the angular-distance circles, the lens border owns no field of its own —
+        // the shader derives the circle from the lens, the FOV and the viewport, so there is
+        // nothing to edit.
         IM_CHECK(!ctx->ItemExists("**/###lens_border_fold"));
+
+        // The family's fold, on the section header. Offered while the section is still CLOSED, and
+        // that is part of the claim: alpha and radius belong to the family, not to its rows, so
+        // reaching them must not require unfolding the six.
+        IM_CHECK(!gui::g_state.markers_section_open);
+        IM_CHECK(ctx->ItemExists("**/###markers_family_fold"));
+
+        // ...and no marker ROW offers one, with the section open. A per-row fold here would be six
+        // buttons leading to the same two family-wide values.
+        gui::g_state.markers_section_open = true;
+        ctx->Yield(3);
+        for (const char* row : kMarkerRows) {
+          const std::string fold = "**/###marker_" + std::string(row) + "_fold";
+          if (ctx->ItemExists(fold.c_str())) {
+            IM_ERRORF("marker row %s offers a fold; the family's two fields live on the section header", row);
+            break;
+          }
+        }
+        gui::g_state.markers_section_open = false;
+        ctx->Yield(2);
+        if (ctx->IsError()) {
+          return;
+        }
 
         ctx->ItemClick("**/###sun_circles_fold");
       }
@@ -370,11 +439,16 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The marker radius, the other field behind a fold. Same proposition as the angle list above —
-  // that folding a minority field away did not put it out of reach — and it needs stating
-  // separately because the two folds hold entirely different editors.
+  // The marker family's two fields behind the section header's fold. Same proposition as the angle
+  // list above — that folding a minority field away did not put it out of reach — and it needs
+  // stating separately because the two folds hold entirely different editors.
+  //
+  // BOTH fields, not just the radius: the family's alpha moved into this popup when the marker row
+  // left the main table, so it is no longer covered by the alpha-cell case at the end of this file
+  // and would otherwise have no reader at all.
   {
-    ImGuiTest* t = IM_REGISTER_TEST(engine, "overlay_controls", "the_marker_radius_is_editable_behind_its_fold");
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "overlay_controls", "the_marker_family_fields_are_editable_behind_the_fold");
     t->TestFunc = [](ImGuiTestContext* ctx) {
       ResetTestState();
       const ScopedPopups popup_guard(ctx);
@@ -384,29 +458,36 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
         // Named ref so the negative check reads "not submitted inline" and not "scrolled past" —
         // see the case above. Released before the popup, which is a different window.
         const ScopedRef panel_ref(ctx, "//##RightPanel");
-        // The selector lost SliderWithInput's "_input" half along with the control: the radius is
-        // the same DragFloatField the alpha cells use now, and that submits ONE item whose id is
+        // The selector lost SliderWithInput's "_input" half along with the control: both fields are
+        // the same DragFloatField the alpha cells use, and that submits ONE item whose id is
         // "##" + the label it was handed.
-        IM_CHECK(!ctx->ItemExists("**/##Radius##zenith_nadir"));  // folded away, not shown inline
-        ctx->ItemClick("**/###zenith_nadir_fold");
+        IM_CHECK(!ctx->ItemExists("**/##Radius##markers_family"));  // folded away, not shown inline
+        IM_CHECK(!ctx->ItemExists("**/##Alpha##markers_family"));
+        ctx->ItemClick("**/###markers_family_fold");
       }
       ctx->Yield(3);
 
-      // Both ends of the declared domain (2..20 px), so the popup's control is the registry's
-      // control and not a second opinion about the range.
-      ctx->ItemInputValue("**/##Radius##zenith_nadir", 100.0f);
+      // Both ends of both declared domains (2..20 px, 0..1), so the popup's controls are the
+      // registry's controls and not a second opinion about the ranges.
+      ctx->ItemInputValue("**/##Radius##markers_family", 100.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
-      ctx->ItemInputValue("**/##Radius##zenith_nadir", -5.0f);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 20.0f);
+      ctx->ItemInputValue("**/##Radius##markers_family", -5.0f);
       ctx->Yield();
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 2.0f);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 2.0f);
+      ctx->ItemInputValue("**/##Alpha##markers_family", 100.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.markers_alpha, 1.0f);
+      ctx->ItemInputValue("**/##Alpha##markers_family", -5.0f);
+      ctx->Yield();
+      IM_CHECK_EQ(gui::g_state.markers_alpha, 0.0f);
 
       ctx->KeyPress(ImGuiKey_Escape);
       ctx->Yield(2);
     };
   }
 
-  // The five alpha cells, at both ends of each declared domain. Literals throughout, for the reason
+  // The four alpha cells, at both ends of each declared domain. Literals throughout, for the reason
   // spelled out at the head of functional/test_scene_controls.cpp: the call site reads the registry,
   // so asking the registry what to expect would compare one line of code against itself.
   //
@@ -422,8 +503,10 @@ void RegisterOverlayControlTests(ImGuiTestEngine* engine) {
       const ScopedRef panel_ref(ctx, "//##RightPanel");
 
       float* const kSlots[] = {
-        &gui::g_state.horizon_alpha,      &gui::g_state.grid_alpha,        &gui::g_state.sun_circles_alpha,
-        &gui::g_state.zenith_nadir_alpha, &gui::g_state.lens_border_alpha,
+        &gui::g_state.horizon_alpha,
+        &gui::g_state.grid_alpha,
+        &gui::g_state.sun_circles_alpha,
+        &gui::g_state.lens_border_alpha,
       };
       for (size_t i = 0; i < IM_ARRAYSIZE(kRows); ++i) {
         const std::string ref = "**/##" + std::string(kRows[i]) + "_alpha";

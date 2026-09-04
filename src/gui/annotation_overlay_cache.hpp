@@ -1,9 +1,12 @@
 #ifndef LUMICE_GUI_ANNOTATION_OVERLAY_CACHE_HPP
 #define LUMICE_GUI_ANNOTATION_OVERLAY_CACHE_HPP
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "include/lumice.h"  // LUMICE_ANNOTATION_MARKER_COUNT — the id space this cache is indexed by
 
 namespace lumice::gui {
 
@@ -53,10 +56,14 @@ class AnnotationOverlayCache {
     // above, which is now one call serving three families.
     std::vector<float> elevation_deg;
     std::vector<float> longitude_deg;
-    // The zenith / nadir markers. A bool rather than a list because there is nothing to enumerate:
-    // the two directions are fixed, and what varies is only whether the caller wants them.
-    bool zenith_nadir = false;
-    // The celestial horizon. A bool for the same reason zenith_nadir is — there is one such curve,
+    // Which named reference directions to report a canvas position for, as
+    // LUMICE_ANNOTATION_MARKER_* ids. A LIST, unlike the bool this replaced: there were two fixed
+    // directions and the only question was whether the caller wanted them, and now there are six
+    // the caller picks from independently. Same "whoever is switched on joins the list" rule the
+    // three angle lists above follow, and for the same reason — an id in this list is a direction
+    // core projects, so an unwanted one is work nobody reads.
+    std::vector<int> marker_ids;
+    // The celestial horizon. A bool because there is one such curve,
     // at altitude 0 — and asked for by EITHER of its two switches, exactly like the three families
     // above. It used to be the label switch alone, because the preview derived the LINE itself in
     // its fragment shader from fwidth(altitude) and the mask that came back with the anchors was a
@@ -125,11 +132,16 @@ class AnnotationOverlayCache {
   // GUI colours it separately (a red of its own, against the grid's shared colour), and an
   // appearance boundary is exactly what a separate list is for.
   const std::vector<Label>& HorizonLabels() const { return horizon_labels_; }
-  // The zenith / nadir marker positions. Both invalid unless HasResult() and the key asked for
-  // them; each carries its own `valid`, because a view images one of them far more often than
-  // both.
-  const Point& ZenithPoint() const { return zenith_; }
-  const Point& NadirPoint() const { return nadir_; }
+  // Where one named reference direction landed, INDEXED BY THE CORE MARKER ID rather than by the
+  // position of that id in the request list — so a caller reads MarkerPoint(MARKER_SUBSUN) without
+  // knowing, or having to keep, which slot it asked for it in. Invalid unless HasResult() and the
+  // key asked for that id; each carries its own `valid`, because a view images some of the six far
+  // more often than others (zenith and nadir are opposite directions and rarely both on canvas).
+  // An id outside the range returns a permanently-invalid point rather than reading out of bounds.
+  const Point& MarkerPoint(int marker_id) const {
+    static const Point kNone{};
+    return (marker_id < 0 || marker_id >= LUMICE_ANNOTATION_MARKER_COUNT) ? kNone : marker_points_[marker_id];
+  }
 
   // Bumped on every recompute, from a counter shared by ALL instances. A consumer that caches
   // something derived from a result — PreviewRenderer's GL texture — compares this instead of the
@@ -160,8 +172,8 @@ class AnnotationOverlayCache {
   std::vector<Label> grid_labels_;
   std::vector<uint8_t> horizon_mask_;
   std::vector<Label> horizon_labels_;
-  Point zenith_;
-  Point nadir_;
+  // Indexed by core marker id, not by request order — see MarkerPoint().
+  std::array<Point, LUMICE_ANNOTATION_MARKER_COUNT> marker_points_;
   uint64_t generation_ = 0;  // 0 = never computed, which a consumer's "nothing uploaded" sentinel matches
 };
 
@@ -183,7 +195,7 @@ struct AnnotationViewInput {
   std::vector<float> angular_dist_deg;
   std::vector<float> elevation_deg;
   std::vector<float> longitude_deg;
-  bool zenith_nadir = false;
+  std::vector<int> marker_ids;
   bool horizon = false;
 };
 AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput& in, int width, int height);
