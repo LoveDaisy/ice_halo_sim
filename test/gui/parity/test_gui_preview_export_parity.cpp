@@ -43,15 +43,30 @@
 // of 2 and measures the rendered glyph extent. The two cases are complements: that one varies the
 // DPI and looks at one arm, this one holds the DPI at 1 and compares two arms.
 //
-// ==================================== Why an inset, and 2 px =================================
+// ================================ Why the inset is zero, and stays =============================
 //
-// The comparison skips `kInsetPx` pixels on each of the four sides. This is NOT a tolerance and
-// must not be grown to make a red go away: it excludes pixels that do not belong to the preview at
-// all. The capture hook reads the default framebuffer AFTER ImGui_ImplOpenGL3_RenderDrawData, so
-// the outermost ring of the viewport rectangle carries the preview panel's own ImGui border — drawn
-// over the blit, by a path the export has no counterpart for and should not have one. One pixel is
-// what ImGui draws; 2 is that pixel plus one, so a border whose antialiasing bleeds inward by a
-// fraction cannot decide the outcome. Everything inside is compared byte for byte.
+// The capture hook reads the DEFAULT framebuffer, after ImGui_ImplOpenGL3_RenderDrawData, so the
+// obvious hazard is chrome ImGui paints over the blit along the rectangle's edge — pixels that do
+// not belong to the preview at all and that the export has no counterpart for. `kInsetPx` exists
+// to skip such a ring, and the answer to how wide it must be is zero, on two independent grounds
+// that agree:
+//   * White box. `##PreviewPanel` is opened with `ImGuiWindowFlags_NoBackground`
+//     (src/gui/app_panels.cpp), and ImGui's RenderWindowOuterBorders draws its `AddRect` only
+//     when that flag is ABSENT; the fallback branch beside it needs `ImGuiChildFlags_ResizeX/Y`,
+//     which a top-level window does not carry. So no window border is emitted over this
+//     rectangle, whatever style.WindowBorderSize says.
+//   * Measured. At `kInsetPx = 0` the two arms come back byte-identical over all 900x912 pixels
+//     of the viewport, this suite's whole rectangle, with nothing skipped.
+// Keep it at 0. Widening it is how this gate would quietly stop watching its own edges — and the
+// edge is where a blit-rectangle or DPI-rounding regression shows up FIRST. If a future change
+// really does paint chrome inside this rectangle, the honest fix is to say which pixels and why,
+// here, with a number that came from a measurement like the one above; it is not a dial to turn
+// until a red goes away.
+//
+// The one condition under which a nonzero inset was ever observed is out of this harness's reach:
+// a one-off probe that forced `GLFW_COCOA_RETINA_FRAMEBUFFER` on saw the outermost 1 px differ at
+// dpi 2, where `vp_x = (int)(panel_x * dpi_scale_x)` truncates and the neighbours' edges can land
+// inside the rounded rectangle. See the DPI section above for why no gui_test case can reach that.
 //
 // Byte-exact is the right bar here, and it is a measured fact rather than an aspiration: with the
 // two arms fed one snapshot of one frame's inputs, they run identical GL work on identical data in
@@ -77,8 +92,11 @@
 
 namespace {
 
-// See the "Why an inset" block above: panel chrome the export has no counterpart for, not slack.
-constexpr int kInsetPx = 2;
+// Pixels skipped on each of the four sides. Zero, measured and argued in the "Why the inset is
+// zero" block above — a named knob at 0, not a leftover: it is the one place a future harness that
+// really does paint chrome over this rectangle would state how much, and it keeps the diagnostic
+// line below reporting how many pixels were actually compared.
+constexpr int kInsetPx = 0;
 
 // One off-screen render of a snapshot the test took from g_preview_vp, answered in RGBA.
 //
