@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788435091042,
+  "lastUpdate": 1788507856431,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "6ee81825abca90286b1eaef923f6aeaaaabae056",
-          "message": "Merge pull request #202 from LoveDaisy/feat/filter-form-big-or\n\nfeat: 放开 filter OR-clause 上限 8/16→4096(纯过滤,染色 mask 不动)",
-          "timestamp": "2026-07-16T07:43:52+08:00",
-          "tree_id": "c02e2eebc9625ec984d3d85fbb779cf8f25ea060",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/6ee81825abca90286b1eaef923f6aeaaaabae056"
-        },
-        "date": 1784159457397,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 437881.2,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 584634.6,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 384094.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 373585.8,
-            "unit": "rays/sec",
-            "extra": "CPU: INTEL(R) XEON(R) PLATINUM 8573C\\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4770,6 +4722,54 @@ window.BENCHMARK_DATA = {
             "value": 321914.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "365ba58f71d4354ec1035328c12ffd3427c6492e",
+          "message": "Merge pull request #301 from LoveDaisy/feat/crystal-slider-domain-and-format\n\nfeat(gui): 柱晶高度域扩到 1e-4，滑杆显示格式由映射闭式定下界并在编译期判错",
+          "timestamp": "2026-09-04T15:31:05+08:00",
+          "tree_id": "c649e8f7c8eff961a4f64eb3b5956f027157ad32",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/365ba58f71d4354ec1035328c12ffd3427c6492e"
+        },
+        "date": 1788507854909,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 399172.1,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 580539.8,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 375039.2,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 355399.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
