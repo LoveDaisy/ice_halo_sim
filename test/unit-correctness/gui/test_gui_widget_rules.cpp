@@ -638,6 +638,15 @@ TEST(ShapeScalarDomain, EveryNonlinearRowResolvesEveryPixelOfItsSliderWithMargin
     // row would first break is beyond 3x -- a margin, not a coin flip. A row that only clears the
     // 1x check is one layout change away from a frozen readout and would be indistinguishable, in
     // a green run, from a row with room to spare.
+    //
+    // 3x is a deliberately temporary threshold, not a derived one, and it has a known coverage
+    // gap: substituting the measured 179 px width gives a threshold of 537 px, and a %.4f-format
+    // row's first pixel collision was measured at 675 px -- inside the 3x margin, so this gate
+    // would not have caught that mismatch (>=4x would). The gap is accepted here rather than
+    // closed by raising the multiple, because the multiple itself is a stand-in for a quantity a
+    // follow-up is expected to derive directly (a format's distinguishable precision vs. the
+    // mapping's per-pixel relative step), and fitting the constant to today's one known bad row
+    // buys a defense that is retired as soon as that quantity lands.
     for (int multiple : { 1, 2, 3 }) {
       const int width = kMeasuredMaxSliderWidthPx * multiple;
       EXPECT_EQ(CountAdjacentPixelCollisions(row, width), 0)

@@ -82,17 +82,21 @@ static_assert(sizeof(kShapeScalarDomains) / sizeof(kShapeScalarDomains[0]) == LU
 // min_value at or above that threshold gives it a zero or negative denominator: a division by zero,
 // or a slider whose travel runs backwards. Nothing downstream would report it — the widget would
 // simply behave absurdly — and the branch in panels.cpp that routes to this law admits any
-// non-negative floor, so the check belongs here, at the one place the floors are written.
+// non-negative floor, so the check belongs here, at the one place the floors are written. Checks
+// both halves of the mapping's REQUIRES (slider_mapping.hpp): the floor below kLogLinearX0, and
+// the ceiling above it (a max_value at or below kLogLinearX0 would collapse the log segment the
+// same way a bad floor collapses the linear one).
 constexpr bool AllLogLinearRowsLieInTheMappingsDomain() {
   for (const ShapeScalarDomain& d : kShapeScalarDomains) {
-    if (d.scale == SliderScale::kLogLinear && !(d.min_value >= 0.0f && d.min_value < slider_mapping::kLogLinearX0)) {
+    if (d.scale == SliderScale::kLogLinear && !(d.min_value >= 0.0f && d.min_value < slider_mapping::kLogLinearX0 &&
+                                                d.max_value > slider_mapping::kLogLinearX0)) {
       return false;
     }
   }
   return true;
 }
 static_assert(AllLogLinearRowsLieInTheMappingsDomain(),
-              "a kLogLinear row's min_value must satisfy 0 <= min_value < kLogLinearX0");
+              "a kLogLinear row must satisfy 0 <= min_value < kLogLinearX0 < max_value");
 
 // The domain for `scalar_id`. Total over the enum; out-of-range ids are a programming error the
 // caller cannot recover from, so this asserts rather than substituting a domain (a wrong band on
