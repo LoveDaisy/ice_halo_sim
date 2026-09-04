@@ -1503,14 +1503,19 @@ struct GuiState {
 
 // ---- Sky reference-point marker predicates (single owner) ----
 //
-// "Is any marker asking for X" is answered in one place because five call sites ask it: the
-// annotation request's gate, the preview's per-frame cache Update, the label block, the off-screen
-// export's own refresh, and the panel. Each of them writing its own six-way disjunction is five
-// chances for one of them to be updated and the others not — the exact drift the array replaced
-// six named fields to prevent.
-inline bool AnyMarkerShown(const GuiState& s) {
-  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.show; });
-}
+// "Is any marker asking for X" is answered here because three call sites ask it — the preview's
+// per-frame cache Update (app_panels.cpp), the off-screen export's own refresh (file_io.cpp) and
+// the label block — and each of them writing its own six-way disjunction is three chances for one
+// to be updated and the others not. That is the same drift the array replaced six named fields to
+// prevent, one level up.
+//
+// TWO predicates, not one, because the two questions are genuinely different: whether core has to
+// PROJECT anything, and whether any NAME has to be drawn. A marker with only its label switched on
+// needs the projection (a name is placed at a point) but draws no ring, so collapsing them would
+// make one of the two call sites wrong.
+//
+// There is deliberately no third, `AnyMarkerShown`: nothing in the product asks it. The panel's
+// per-row clipping notice reads that marker's own switch, and [All]/[None] assign rather than test.
 inline bool AnyMarkerLabelShown(const GuiState& s) {
   return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.label; });
 }

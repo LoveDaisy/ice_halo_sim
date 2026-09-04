@@ -382,7 +382,12 @@ void RegisterMarkerPanelTests(ImGuiTestEngine* engine) {
         const ScopedRefForMarkers panel_ref(ctx, "//##RightPanel");
         ctx->ItemClick("**/None##markers_none");
         ctx->Yield(2);
-        IM_CHECK(!gui::AnyMarkerShown(gui::g_state));
+        for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+          if (gui::g_state.markers[i].show) {
+            IM_ERRORF("[None] left marker %s on", gui::kMarkerSerialNames[i]);
+            break;
+          }
+        }
       }
     };
   }
