@@ -33,8 +33,41 @@ namespace lumice::gui {
 //     already reads the group off each set. An EMPTY list is how a caller says "no text": there is
 //     no second, GUI-walked source to gate separately any more, so the list is the whole decision.
 //     Defaulted, so a caller wanting none states nothing.
+//   - `dpi_scale_*` is the point-to-device-pixel ratio of the target surface: `dst_w`/`dst_h` are
+//     DEVICE pixels, while `curve_labels`' anchors and the text drawn from them live in LOGICAL
+//     POINTS. The glyph's device-pixel height is the baked font size times this scale and nothing
+//     else, so a caller that hands device-pixel anchors and leaves this at 1.0 gets text at half
+//     size on a Retina display while the positions still look right — that asymmetry was the
+//     defect this parameter exists to make impossible to reintroduce. Defaulted to 1.0 for the
+//     callers whose target has no DPI of its own (the reference-image and unit-test paths, which
+//     name their own canvas size in pixels and pass no labels at all).
 std::vector<unsigned char> RenderExportToRgba(PreviewRenderer& renderer, const PreviewParams& params, int dst_w,
-                                              int dst_h, const std::vector<CurveLabelSet>& curve_labels = {});
+                                              int dst_h, const std::vector<CurveLabelSet>& curve_labels = {},
+                                              float dpi_scale_x = 1.0f, float dpi_scale_y = 1.0f);
+
+// Render one on-screen preview frame through the SAME core the export above uses, then blit it
+// back onto the caller's framebuffer at the viewport rect `(dst_x, dst_y, dst_w, dst_h)`.
+//
+// This is the whole point of the pairing: image, overlay lines and overlay labels reach the screen
+// and the exported PNG through one function, so "the screenshot shows what the screen shows" is a
+// property of the structure rather than of two paths kept in step by hand. There is no second
+// label drawing path to gate, to scale, or to forget.
+//
+// Contract (differences from RenderExportToRgba only):
+//   - The FBO is PERSISTENT across calls — this runs every frame — and is reallocated only when
+//     `(dst_w, dst_h)` changes. Call DestroyPreviewFrameFbo() before the GL context goes away.
+//   - dst_w/dst_h <= 0 is a no-op (a collapsed panel or a minimized window produces it every
+//     frame, and glRenderbufferStorage with a zero extent is undefined).
+//   - The FBO is cleared with the CALLER'S current clear colour, not with black: the region this
+//     blit overwrites used to be painted by the caller's own glClear, and any pixel the preview
+//     shader does not reach must keep the colour it had before this function existed.
+void RenderPreviewFrameAndBlit(PreviewRenderer& renderer, const PreviewParams& params, int dst_x, int dst_y, int dst_w,
+                               int dst_h, const std::vector<CurveLabelSet>& curve_labels, float dpi_scale_x,
+                               float dpi_scale_y);
+
+// Release the persistent FBO held by RenderPreviewFrameAndBlit. Must be called on the GL thread
+// while the context is still current, next to the other renderer teardown calls.
+void DestroyPreviewFrameFbo();
 
 // Partial-override helpers for export paths. Both assume `params` already carries the
 // live EV-synced `intensity_factor` / `intensity_scale` from `BuildExportParams()` and

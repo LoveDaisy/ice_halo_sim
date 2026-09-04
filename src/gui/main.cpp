@@ -17,6 +17,7 @@
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/export_fbo_renderer.hpp"
 #include "gui/file_io.hpp"
 #include "gui/gl_common.h"
 #include "gui/gl_init.h"
@@ -399,10 +400,17 @@ int main(int argc, char** argv) {
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Render preview shader before ImGui overlay
+    // Render the preview before the ImGui overlay: image, overlay lines and overlay labels into an
+    // off-screen FBO, then blitted back onto this viewport rect. The FBO is the same render core
+    // the Screenshot export reads back, which is what makes the two agree by construction rather
+    // than by two paths being kept in step. Position in the sequence is unchanged, so ImGui's draw
+    // data still lands on top and modals still occlude the preview — labels included, now for the
+    // same reason the lines already were.
     if (gui::g_preview_vp.active) {
-      gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
-                            gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+      gui::RenderPreviewFrameAndBlit(gui::g_preview, gui::g_preview_vp.params, gui::g_preview_vp.vp_x,
+                                     gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h,
+                                     gui::g_preview_vp.curve_labels, gui::g_preview_vp.dpi_scale_x,
+                                     gui::g_preview_vp.dpi_scale_y);
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -418,11 +426,12 @@ int main(int argc, char** argv) {
       glfwMakeContextCurrent(backup_current_context);
     }
 
-    // gui-polish-v10: Screenshot exports (with or without overlay) now go through the
-    // off-screen FBO path in RenderExportToRgba — no deferred default-framebuffer capture
-    // is needed here. The old pending_screenshot hook that read back from the default FB
-    // was retired because it unavoidably captured ImGui chrome (e.g. an open Save menu)
-    // together with the preview (Bug 2).
+    // Screenshot exports and the on-screen preview above share ONE render core
+    // (RenderFrameContentToBoundFbo, export_fbo_renderer.cpp): the screen blits the FBO back into
+    // this framebuffer, the export reads the same FBO's pixels. No deferred default-framebuffer
+    // capture is needed or wanted here — the old pending_screenshot hook that read back from the
+    // default FB was retired because it unavoidably captured ImGui chrome (e.g. an open Save menu)
+    // together with the preview.
 
     glfwSwapBuffers(window);
 
@@ -441,6 +450,7 @@ int main(int argc, char** argv) {
   gui::g_server_poller.Stop();  // Stop poller before destroying server
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();
+  gui::DestroyPreviewFrameFbo();  // the preview path's persistent FBO, owned by export_fbo_renderer.cpp
   LUMICE_DestroyServer(gui::g_server);
   gui::g_server = nullptr;
 

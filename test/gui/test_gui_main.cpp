@@ -26,6 +26,7 @@
 #include "gui/color_window.hpp"
 #include "gui/defaults_panel.hpp"
 #include "gui/edit_modals.hpp"
+#include "gui/export_fbo_renderer.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_init.h"
 #include "gui/gui_constants.hpp"
@@ -180,6 +181,7 @@ void ResetTestState() {
   gui::g_state.modal_layout_vertical = false;
   gui::g_state.modal_immediate_mode = false;
   gui::g_preview_vp.active = false;
+  gui::g_preview_vp.curve_labels.clear();
   gui::g_programmatic_resize = 0;
 
   // Runtime state
@@ -597,7 +599,6 @@ int main(int argc, char** argv) {
   RegisterAngularDistCircleTests(engine);
   RegisterPreviewViewportTests(engine);
   RegisterPerfTests(engine);
-  RegisterOverlayLabelTests(engine);
   RegisterFaceNumberOverlayTests(engine);
   RegisterRunLifecycleTests(engine);
   RegisterStatusBarTests(engine);
@@ -744,10 +745,16 @@ int main(int argc, char** argv) {
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Render preview shader before ImGui overlay (matches real app's main.cpp)
+    // Render the preview before the ImGui overlay (matches real app's main.cpp): image, overlay
+    // lines and overlay labels into an off-screen FBO, blitted back onto the viewport rect. This
+    // harness must stay on the SAME call as production — it is where the on-screen reference-image
+    // groups and every full-frame capture get their pixels, so a divergence here would test a
+    // frame loop the app does not have.
     if (gui::g_preview_vp.active) {
-      gui::g_preview.Render(gui::g_preview_vp.vp_x, gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w,
-                            gui::g_preview_vp.vp_h, gui::g_preview_vp.params);
+      gui::RenderPreviewFrameAndBlit(gui::g_preview, gui::g_preview_vp.params, gui::g_preview_vp.vp_x,
+                                     gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h,
+                                     gui::g_preview_vp.curve_labels, gui::g_preview_vp.dpi_scale_x,
+                                     gui::g_preview_vp.dpi_scale_y);
     }
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -872,6 +879,7 @@ int main(int argc, char** argv) {
   gui::g_thumbnail_cache.Destroy();
   gui::g_crystal_renderer.Destroy();
   gui::g_preview.Destroy();
+  gui::DestroyPreviewFrameFbo();
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();

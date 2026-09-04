@@ -48,7 +48,10 @@ namespace {
 // readback sitting next to snapshot_intensity: it is a measurement of the snapshot the poller
 // just delivered, not a setting, so it is deliberately ineligible as a personal default for the
 // same reason the stats_* readbacks are.
-constexpr std::size_t kExpectedGovernedFieldCount = 73;
+// 72 since the Screenshot export stopped having an overlay gate of its own — the preview and the
+// export render one frame through one function, so what the PNG contains is decided by the Overlay
+// panel's per-family switches and there is no second flag to classify.
+constexpr std::size_t kExpectedGovernedFieldCount = 72;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;

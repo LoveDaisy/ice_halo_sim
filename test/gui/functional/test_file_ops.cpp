@@ -455,9 +455,9 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // The two checkboxes in the Save menu are preferences, not commands: they must read back checked
-  // the next time the menu opens. A menu item bound to a copy of the flag toggles happily and
-  // forgets, and the user finds out when the file they saved has no texture in it.
+  // The Save menu's checkbox is a preference, not a command: it must read back checked the next
+  // time the menu opens. A menu item bound to a copy of the flag toggles happily and forgets, and
+  // the user finds out when the file they saved has no texture in it.
   {
     ImGuiTest* t = IM_REGISTER_TEST(engine, "file_ops", "the_save_menu_toggles_are_remembered_across_openings");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -465,13 +465,6 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
 
       const bool texture_before = gui::g_state.save_texture;
-      IM_CHECK(!gui::g_state.screenshot_include_overlay);  // documented default: a plain screenshot
-
-      ctx->ItemClick("##TopBar/Save");
-      ctx->Yield(2);
-      ctx->ItemClick("**/Include Overlay in Screenshot");
-      ctx->Yield(2);
-      IM_CHECK(gui::g_state.screenshot_include_overlay);
 
       ctx->ItemClick("##TopBar/Save");
       ctx->Yield(2);
@@ -479,14 +472,13 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
       ctx->Yield(2);
       IM_CHECK_EQ(gui::g_state.save_texture, !texture_before);
 
-      // Reopen and read the marks back: both edits survived, and the second did not reset the first.
+      // Reopen and read the mark back: the edit survived closing and reopening the menu.
       ctx->ItemClick("##TopBar/Save");
       ctx->Yield(2);
-      IM_CHECK(gui::g_state.screenshot_include_overlay);
       IM_CHECK_EQ(gui::g_state.save_texture, !texture_before);
-      ctx->ItemClick("**/Include Overlay in Screenshot");  // back off, and observe it move
+      ctx->ItemClick("**/Include Texture in .lmc");  // back off, and observe it move
       ctx->Yield(2);
-      IM_CHECK(!gui::g_state.screenshot_include_overlay);
+      IM_CHECK_EQ(gui::g_state.save_texture, texture_before);
     };
   }
 

@@ -33,6 +33,20 @@ struct PreviewViewport {
   int vp_w = 0;
   int vp_h = 0;
   PreviewParams params;
+  // Point-to-device-pixel ratio of the window the viewport above was measured in. Published here
+  // because the deferred render needs it (the FBO is device pixels, the text inside it is points)
+  // and because the screenshot export reads it to build its anchors in the same space the screen
+  // does — the one place that decides the two are the same.
+  float dpi_scale_x = 1.0f;
+  float dpi_scale_y = 1.0f;
+  // Overlay label anchors for this frame, in LOGICAL POINTS relative to the viewport's top-left.
+  // Published, not drawn, by RenderPreviewPanel: the labels are part of the preview image now and
+  // are rasterized with it in the deferred pass, not onto an ImGui window's draw list.
+  //
+  // LEVEL-TRIGGERED, exactly like `active` above and for the same reason: RenderPreviewPanel runs
+  // unconditionally every frame and republishes both, so a stale set can never outlive the frame
+  // that made it. Written only where `active` is set true, cleared where `active` is set false.
+  std::vector<CurveLabelSet> curve_labels;
 };
 
 enum class PendingAction { kNone, kNew, kOpen, kQuit };

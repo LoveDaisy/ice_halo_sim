@@ -406,28 +406,38 @@ void DoExportPreviewPng() {
   }
 
   PreviewParams params = BuildExportParams();
-  const bool want_labels = g_state.screenshot_include_overlay;
 
   int w = g_preview_vp.vp_w;
   int h = g_preview_vp.vp_h;
-  // Built at the FBO's own size, which for this export is the live viewport's, so the anchors need
-  // no rescaling and the exported PNG puts the numbers where the screen does. An empty list is how
-  // this path says "no text" now that there is no second, walk-driven source to switch off
-  // alongside it.
+  // The FBO is the live viewport's DEVICE pixel size, so the exported PNG is the full-resolution
+  // twin of what is on screen (on a Retina display, twice the width of the preview area — that is
+  // correct and deliberate, not a bug to normalize away).
+  //
+  // The anchors, though, are built at the viewport's LOGICAL POINT size and the DPI is handed to
+  // RenderExportToRgba separately, because that is the space a draw list works in and the space
+  // the on-screen preview publishes its own sets in (app_panels.cpp). Building them at w/h and
+  // leaving the scale at 1 is self-consistent for POSITIONS and silently halves the TEXT, which is
+  // the defect this alignment removes: the two paths now name the same rectangle in the same
+  // units, so there is no conversion left for one of them to do differently.
+  //
+  // WHICH labels appear is decided by the Overlay panel's per-family switches alone. There is no
+  // second, export-only gate: a screenshot shows the overlay the screen shows, and a user wanting
+  // a clean image turns the families off where they turned them on.
+  const float dpi_x = g_preview_vp.dpi_scale_x;
+  const float dpi_y = g_preview_vp.dpi_scale_y;
+  const float label_w = dpi_x > 0.0f ? static_cast<float>(w) / dpi_x : static_cast<float>(w);
+  const float label_h = dpi_y > 0.0f ? static_cast<float>(h) / dpi_y : static_cast<float>(h);
   std::vector<CurveLabelSet> curve_labels;
-  if (want_labels && g_state.show_horizon_label) {
-    curve_labels.push_back(
-        BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  if (g_state.show_horizon_label) {
+    curve_labels.push_back(BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
   }
-  if (want_labels && g_state.show_sun_circles_label) {
-    curve_labels.push_back(
-        BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  if (g_state.show_sun_circles_label) {
+    curve_labels.push_back(BuildSunCirclesLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
   }
-  if (want_labels && g_state.show_grid_label) {
-    curve_labels.push_back(
-        BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, static_cast<float>(w), static_cast<float>(h)));
+  if (g_state.show_grid_label) {
+    curve_labels.push_back(BuildGridLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));
   }
-  auto rgba = RenderExportToRgba(g_preview, params, w, h, curve_labels);
+  auto rgba = RenderExportToRgba(g_preview, params, w, h, curve_labels, dpi_x, dpi_y);
   if (rgba.empty()) {
     GUI_LOG_ERROR("[GUI] Export screenshot failed: RenderExportToRgba returned empty (vp={}x{})", w, h);
     return;

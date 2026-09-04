@@ -1140,12 +1140,6 @@ struct GuiState {
   bool dirty = false;
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
-  // Screenshot overlay toggle — when true, Screenshot export composites overlay
-  // labels onto the off-screen export FBO via RenderExportToRgba. UI-only, not
-  // serialized. (Pre gui-polish-v10 this flag also queued a deferred default-framebuffer
-  // readback via pending_screenshot; that mechanism was retired — see SUMMARY.)
-  bool screenshot_include_overlay = false;
-
   // Request a GPU trace backend (Metal on Apple, CUDA on NVIDIA). Toggling this
   // reconstructs the server on the next DoRun via MaybeReconstructServerForBackend
   // (backend is a construction-time topology property: CPU N-worker vs GPU single

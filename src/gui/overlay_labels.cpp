@@ -448,11 +448,6 @@ void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& la
   }
 }
 
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
-                       float vp_screen_h) {
-  AppendOverlayToDrawList(ImGui::GetWindowDrawList(), labels, vp_screen_x, vp_screen_y, vp_screen_w, vp_screen_h);
-}
-
 namespace detail {
 
 // Test-only thin wrapper exposing the anonymous-namespace PixelToWorldDir so

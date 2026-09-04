@@ -176,6 +176,13 @@ struct ExportRequest {
   float exposure_offset = 0.0f;
   int dst_w = 0;
   int dst_h = 0;
+  // Point-to-device-pixel ratio of the target surface. The FBO size above is DEVICE pixels; this
+  // says how many of them one draw-list unit covers, and so how large the text comes out.
+  float dpi_scale = 1.0f;
+  // Draw ONE label of known text at the centre of the viewport instead of the scene's own overlay.
+  // Centre, because a label there meets neither the viewport clamp nor another label's collision
+  // box, so its rendered extent is a function of the DPI conversion and of nothing else.
+  bool synth_center_label = false;
   // Which of the two panorama presets to apply on top of the live preview params, or -1 to render
   // the live params untouched (what Screenshot does). The value is a lens id so the cases read the
   // way the menu items do.
@@ -218,8 +225,22 @@ void RunExportRequest() {
 
   // Every label the export draws is now a CurveLabelSet built from core's anchors — the horizon
   // included, since the GUI's own walk is gone. An empty list is how this path says "no overlay".
+  //
+  // Anchors are in LOGICAL POINTS, which is the viewport's device size divided by the DPI — the
+  // same conversion app.cpp's Screenshot path and app_panels.cpp's on-screen publication both do.
   std::vector<gui::CurveLabelSet> curve_labels;
-  if (g_req.with_overlay) {
+  const float label_w = static_cast<float>(w) / g_req.dpi_scale;
+  const float label_h = static_cast<float>(h) / g_req.dpi_scale;
+  if (g_req.synth_center_label) {
+    gui::CurveLabelSet set;
+    set.color[0] = 1.0f;
+    set.color[1] = 1.0f;
+    set.color[2] = 1.0f;
+    set.alpha = 1.0f;
+    set.has_bg = false;  // ink only: the plate would measure the padding constant, not the glyphs
+    set.anchors.push_back(gui::CurveLabelAnchor{ label_w * 0.5f, label_h * 0.5f, "88gg88gg" });
+    curve_labels.push_back(set);
+  } else if (g_req.with_overlay) {
     // Turn enough of the overlay on that the labelled path really has something to draw.
     gui::g_state.show_horizon_line = true;
     gui::g_state.show_horizon_label = true;
@@ -229,12 +250,11 @@ void RunExportRequest() {
     // cache is the export's own for the same reason app.cpp's is the preview's.
     gui::AnnotationOverlayCache& cache = gui::PreviewAnnotationOverlay();
     cache.Refresh(gui::MakeAnnotationViewKey(gui::AnnotationViewInputFor(gui::g_state, gui::g_state.renderer), w, h));
-    curve_labels.push_back(
-        gui::BuildHorizonLabelSet(cache, gui::g_state, static_cast<float>(w), static_cast<float>(h)));
-    curve_labels.push_back(gui::BuildGridLabelSet(cache, gui::g_state, static_cast<float>(w), static_cast<float>(h)));
+    curve_labels.push_back(gui::BuildHorizonLabelSet(cache, gui::g_state, label_w, label_h));
+    curve_labels.push_back(gui::BuildGridLabelSet(cache, gui::g_state, label_w, label_h));
   }
 
-  auto buf = gui::RenderExportToRgba(gui::g_preview, params, w, h, curve_labels);
+  auto buf = gui::RenderExportToRgba(gui::g_preview, params, w, h, curve_labels, g_req.dpi_scale, g_req.dpi_scale);
   g_req.ok = !buf.empty();
   g_req.rgba = std::move(buf);
   g_req.rgba_w = w;
@@ -316,6 +336,103 @@ void ResolveExportSize(int preset_lens, int* dst_w, int* dst_h) {
   }
   *dst_w = 0;  // 0 = "use the live viewport", resolved in RunExportRequest
   *dst_h = 0;
+}
+
+// How large the ink one render added to another is, and where it sits. Both buffers are the same
+// scene at the same FBO size and differ only in the labels drawn on top, so what this measures is
+// the label's ink and nothing else — no assumption about the scene's own colours, which is what a
+// "find the bright pixels" scan would have needed.
+//
+// SIZE IS THE INTENSITY-WEIGHTED SPREAD, not a thresholded bounding box, and the reason is
+// resolution rather than taste: the glyphs are ~12 px tall at DPI 1, so a box measured in whole
+// pixels carries ~4% of quantisation error on its own — against a 5% bar that leaves the judgement
+// deciding on which side of a threshold one antialiased row of pixels happens to land. The spread
+// is sub-pixel accurate because the fringe enters it weighted by its own coverage, so the same 5%
+// tolerance becomes a statement about the DPI conversion instead of about the rasterizer. It is the
+// same claim on a sharper instrument, which is the only direction this judgement may ever move.
+// The box is still measured and reported, for reading a failure by eye.
+struct InkMetrics {
+  bool ok = false;
+  double cx = 0.0;  // intensity-weighted centre, device pixels
+  double cy = 0.0;
+  double sigma_x = 0.0;  // intensity-weighted spread; scales linearly with the glyph size
+  double sigma_y = 0.0;
+  int box_w = 0;  // thresholded bounding box, reported only
+  int box_h = 0;
+};
+
+InkMetrics MeasureInk(const std::vector<unsigned char>& base, const std::vector<unsigned char>& with_ink, int w,
+                      int h) {
+  InkMetrics m;
+  if (base.size() != with_ink.size() || base.size() != static_cast<size_t>(w) * h * 4) {
+    return m;
+  }
+  // Both renders draw the same deterministic scene at the same size, so a difference of any size is
+  // ink. The floor is here only to keep a driver's last-bit noise out of the moments.
+  constexpr int kInkFloor = 8;
+  constexpr int kBoxThreshold = 32;
+  double mass = 0.0;
+  double sx = 0.0;
+  double sy = 0.0;
+  double sxx = 0.0;
+  double syy = 0.0;
+  int min_x = w;
+  int max_x = -1;
+  int min_y = h;
+  int max_y = -1;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const size_t i = (static_cast<size_t>(y) * w + x) * 4;
+      int d = 0;
+      for (int c = 0; c < 3; ++c) {
+        d = std::max(d, std::abs(static_cast<int>(with_ink[i + c]) - static_cast<int>(base[i + c])));
+      }
+      if (d < kInkFloor) {
+        continue;
+      }
+      const double wgt = d;
+      mass += wgt;
+      sx += wgt * x;
+      sy += wgt * y;
+      sxx += wgt * x * x;
+      syy += wgt * y * y;
+      if (d >= kBoxThreshold) {
+        min_x = std::min(min_x, x);
+        max_x = std::max(max_x, x);
+        min_y = std::min(min_y, y);
+        max_y = std::max(max_y, y);
+      }
+    }
+  }
+  if (mass <= 0.0 || max_x < min_x) {
+    return m;
+  }
+  m.cx = sx / mass;
+  m.cy = sy / mass;
+  m.sigma_x = std::sqrt(std::max(0.0, sxx / mass - m.cx * m.cx));
+  m.sigma_y = std::sqrt(std::max(0.0, syy / mass - m.cy * m.cy));
+  m.box_w = max_x - min_x + 1;
+  m.box_h = max_y - min_y + 1;
+  m.ok = m.sigma_x > 0.0 && m.sigma_y > 0.0;
+  return m;
+}
+
+// One off-screen render at a stated DPI, with or without the synthetic centre label.
+bool DriveSizedRender(ImGuiTestContext* ctx, int dst_w, int dst_h, float dpi_scale, bool synth_label,
+                      std::vector<unsigned char>* out) {
+  g_req.Reset();
+  g_req.preset_lens = -1;
+  g_req.dst_w = dst_w;
+  g_req.dst_h = dst_h;
+  g_req.dpi_scale = dpi_scale;
+  g_req.synth_center_label = synth_label;
+  g_req.requested = true;
+  ctx->Yield(2);
+  if (!g_req.done || !g_req.ok) {
+    return false;
+  }
+  *out = std::move(g_req.rgba);
+  return true;
 }
 
 // Render the same description twice and report how far the two results are apart. Shared by the
@@ -526,6 +643,72 @@ void RegisterExportPreviewTests(ImGuiTestEngine* engine) {
       const double psnr = DriveRepeatAndComparePsnr(ctx, /*preset_lens=*/-1, /*with_overlay=*/true);
       fprintf(stderr, "[export] labelled determinism PSNR = %.2f dB\n", psnr);
       IM_CHECK(psnr >= 30.0);
+    };
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // The DPI conversion, as a red/green judgement rather than as something only a Retina screen can
+  // show a person.
+  // -------------------------------------------------------------------------------------------
+
+  // What the two paths agree on is not "the same number of pixels of text" but "text of the same
+  // SIZE RELATIVE TO THE IMAGE". A canvas of fixed device size, described once at DPI 1 and once at
+  // DPI 2, must therefore come back with text twice as large: the label's device-pixel size is the
+  // baked font size times the DPI and depends on nothing else.
+  //
+  // This is the shape of the defect it exists to keep out: the export used to hand device-pixel
+  // anchors to a draw list rendered at FramebufferScale 1, which is self-consistent for the
+  // POSITIONS — the numbers landed where they should — and silently drew the glyphs at 1/DPI of
+  // their on-screen size. Nothing about that is visible on a non-HiDPI machine, and on a Retina one
+  // it looks like a font preference rather than a bug. Under this case it is a ratio of 1.0 where 2.0
+  // is required.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "export", "label_size_scales_with_the_target_dpi");
+    t->GuiFunc = ExportRequestGuiFunc;
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      SeedSynthPreview(ctx);
+      const int w = gui::g_preview_vp.vp_w;
+      const int h = gui::g_preview_vp.vp_h;
+      IM_CHECK(w > 0);
+      IM_CHECK(h > 0);
+
+      // One baseline for both arms: same size, same params, no labels. The DPI reaches only the
+      // label pass, so the scene underneath is identical and subtracts out exactly.
+      std::vector<unsigned char> base;
+      IM_CHECK(DriveSizedRender(ctx, w, h, 1.0f, /*synth_label=*/false, &base));
+
+      std::vector<unsigned char> at_1x;
+      IM_CHECK(DriveSizedRender(ctx, w, h, 1.0f, /*synth_label=*/true, &at_1x));
+      std::vector<unsigned char> at_2x;
+      IM_CHECK(DriveSizedRender(ctx, w, h, 2.0f, /*synth_label=*/true, &at_2x));
+
+      const InkMetrics ink_1x = MeasureInk(base, at_1x, w, h);
+      const InkMetrics ink_2x = MeasureInk(base, at_2x, w, h);
+      IM_CHECK(ink_1x.ok);
+      IM_CHECK(ink_2x.ok);
+
+      const double wr = ink_2x.sigma_x / ink_1x.sigma_x;
+      const double hr = ink_2x.sigma_y / ink_1x.sigma_y;
+      fprintf(stderr,
+              "[export] label ink 1x sigma = %.2f x %.2f (box %dx%d), 2x sigma = %.2f x %.2f (box %dx%d), "
+              "ratios = %.3f / %.3f\n",
+              ink_1x.sigma_x, ink_1x.sigma_y, ink_1x.box_w, ink_1x.box_h, ink_2x.sigma_x, ink_2x.sigma_y, ink_2x.box_w,
+              ink_2x.box_h, wr, hr);
+
+      // Relative error against the exact factor of 2, width and height separately. ONE tolerance,
+      // stated as one number: a second, looser way of saying the same thing is how a judgement gets
+      // diluted without anyone deciding to dilute it. If a measurement ever shows this cannot catch
+      // a half-size regression, the answer is to TIGHTEN it, never to widen it.
+      IM_CHECK(std::abs(wr - 2.0) / 2.0 <= 0.05);
+      IM_CHECK(std::abs(hr - 2.0) / 2.0 <= 0.05);
+
+      // The conversion must move the size WITHOUT moving the label: the anchors are stated in
+      // logical points in both arms, so the ink stays centred on the same device pixel. This is the
+      // half that stays green under the old defect, and pinning it is what stops a "fix" that
+      // scales the text by rescaling the whole coordinate system.
+      IM_CHECK(std::abs(ink_2x.cx - ink_1x.cx) <= 2.0);
+      IM_CHECK(std::abs(ink_2x.cy - ink_1x.cy) <= 2.0);
     };
   }
 

@@ -375,7 +375,12 @@ void RenderTopBar(float window_width) {
       // matters: a user looking for their settings does not open a Save menu to find them, and in
       // practice did not. The entry is now a Settings button in the top bar — see RenderTopBar.
       ImGui::MenuItem("Include Texture in .lmc", nullptr, &g_state.save_texture);
-      ImGui::MenuItem("Include Overlay in Screenshot", nullptr, &g_state.screenshot_include_overlay);
+      // No "Include Overlay in Screenshot" here any more, and deliberately not moved elsewhere:
+      // the Screenshot export renders the same frame the preview does, so the Overlay panel's
+      // per-family switches are the only thing that decides what the PNG contains. A second gate
+      // would have to agree with those switches to mean anything, and its whole history was of
+      // not agreeing — it defaulted off, never persisted, and gated only the text while the lines
+      // went out regardless.
       ImGui::EndPopup();
     }
   }
@@ -1347,6 +1352,9 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
   float preview_height = panel_height;
 
   g_preview_vp.active = false;
+  // Same statement, same reason: both halves of the publication are level-triggered, so the frame
+  // that does not republish them is the frame that has neither. See PreviewViewport in app.hpp.
+  g_preview_vp.curve_labels.clear();
 
   if (g_preview.HasTexture() || g_preview.HasBackground()) {
     // Compute viewport in framebuffer pixels (for HiDPI)
@@ -1368,6 +1376,10 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     g_preview_vp.vp_y = static_cast<int>(kStatusBarHeight * dpi_scale_y);  // OpenGL Y is bottom-up
     g_preview_vp.vp_w = static_cast<int>(panel_width * dpi_scale_x);
     g_preview_vp.vp_h = static_cast<int>(preview_height * dpi_scale_y);
+    // Published for the deferred render (and read by the screenshot export, which builds its
+    // anchors in the same logical-point space this panel does).
+    g_preview_vp.dpi_scale_x = dpi_scale_x;
+    g_preview_vp.dpi_scale_y = dpi_scale_y;
     auto& pp = g_preview_vp.params;
     pp.view_proj = BuildPreviewViewProjFromRenderer(rc);
     // Mono exposure, recomputed every frame from GuiState (mono_exposure_scale.hpp). Computing it
@@ -1530,45 +1542,42 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     CanvasPointToShaderScreenPos(g_annotation_overlay.NadirPoint(), g_preview_vp.vp_w, g_preview_vp.vp_h,
                                  pp.overlay.nadir_screen_pos);
 
-    // Overlay labels at viewport edges (drawn on the preview window's draw list so modals
-    // correctly occlude them). All three families' anchors come from core now, through the one
+    // Overlay labels at viewport edges. All three families' anchors come from core, through the one
     // AnnotationOverlayCache result the masks above already read — the GUI walks no curve of its
     // own any more, so the preview and the CLI cannot place the same number differently.
+    //
+    // PUBLISHED, NOT DRAWN. The labels are rasterized into the preview's own FBO in the deferred
+    // pass (RenderPreviewFrameAndBlit, called from the frame loop after ImGui::Render()), which is
+    // the same function and the same pixels the screenshot export reads back. That is what makes
+    // "the PNG shows what the screen shows" structural: there is no second drawing path here to
+    // gate differently, scale differently, or forget. Modals still occlude them, now for the same
+    // reason the overlay LINES are occluded — the whole preview image is blitted before ImGui's
+    // draw data is rendered on top.
+    //
+    // The rect is (0, 0, panel_width, preview_height): FBO-local LOGICAL POINTS. No MainVpPos()
+    // offset any more — the old absolute-OS-screen-space anchoring existed because the labels went
+    // onto an ImGui window draw list under ImGuiConfigFlags_ViewportsEnable; a self-owned draw list
+    // targeting the preview FBO starts at its own origin.
+    //
+    // Logical points, not the device-pixel vp_w/vp_h: the anchors, the collision boxes and the
+    // glyphs must all live in the space the draw list works in, and the DPI enters exactly once,
+    // as the FramebufferScale the backend multiplies by. Feeding device pixels here and scale 1
+    // there also lands the positions correctly, which is why the export path's half-done version
+    // of this conversion looked right while rendering the text at 1/dpi of its size.
     if (g_state.show_horizon_label || g_state.show_grid_label || g_state.show_sun_circles_label) {
-      // Viewport rect in absolute OS screen coordinates. DrawOverlayLabels emits to
-      // ImGui::GetWindowDrawList(), and with ImGuiConfigFlags_ViewportsEnable (gui-polish-v15)
-      // draw list coordinates are absolute screen space, not relative to the host GLFW window.
-      // Anchor (panel_x, kTopBarHeight) through MainVpPos() so labels stay glued to the
-      // preview viewport when the host window is dragged or sits on a non-primary monitor.
-      // Note: the export_fbo_renderer.cpp path passes (0, 0, w, h) intentionally — it owns a
-      // self-allocated ImDrawList targeting an off-screen FBO and must NOT add this offset.
-      ImVec2 vp_origin = MainVpPos(panel_x, kTopBarHeight);
-      float vp_sx = vp_origin.x;
-      float vp_sy = vp_origin.y;
-      float vp_sw = panel_width;
-      float vp_sh = preview_height;
-
-      // Cleared here rather than by the first producer: every family is now an appended set, so
-      // there is no longer a call that owns the vector's reset.
-      //
-      // The anchors are in the CANVAS pixel space the request named — which is the framebuffer,
-      // vp_w/vp_h — while the draw list works in logical screen points. On a HiDPI display those
-      // differ by the DPI scale, so the anchors are scaled by BuildCurveLabelSet's helper rather
-      // than being offset alone; without that a label sits at twice its distance from the
-      // viewport's top-left. All three sets go into ONE vector so they take part in one collision
-      // pass, which is where the per-set group is read.
-      static std::vector<OverlayLabel> labels;
-      labels.clear();
+      const float vp_sw = panel_width;
+      const float vp_sh = preview_height;
+      // All three sets go into ONE vector so they take part in one collision pass, which is where
+      // the per-set group is read.
       if (g_state.show_horizon_label) {
-        AppendCurveLabels(BuildHorizonLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+        g_preview_vp.curve_labels.push_back(BuildHorizonLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
       }
       if (g_state.show_sun_circles_label) {
-        AppendCurveLabels(BuildSunCirclesLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+        g_preview_vp.curve_labels.push_back(BuildSunCirclesLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
       }
       if (g_state.show_grid_label) {
-        AppendCurveLabels(BuildGridLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh), vp_sx, vp_sy, labels);
+        g_preview_vp.curve_labels.push_back(BuildGridLabelSet(g_annotation_overlay, g_state, vp_sw, vp_sh));
       }
-      DrawOverlayLabels(labels, vp_sx, vp_sy, vp_sw, vp_sh);
     }
 
     // Mouse interaction: orbit with drag, FOV with scroll — or, with the pan/zoom modifier held,

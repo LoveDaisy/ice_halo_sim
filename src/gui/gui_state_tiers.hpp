@@ -133,7 +133,6 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "defaults_panel_open",        FieldTier::kSession,    false },
     { "current_file_path",          FieldTier::kSession,    false },
     { "save_texture",               FieldTier::kSession,    false },
-    { "screenshot_include_overlay", FieldTier::kSession,    false },
     { "modal_immediate_mode",       FieldTier::kSession,    false },
 };
 
