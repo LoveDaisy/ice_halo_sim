@@ -80,6 +80,104 @@ TEST_F(RngTest, UniformTest) {
 }
 
 
+// ============================================================================
+// GetUniform()-to-subscript boundary contract (task 490.2)
+//
+// What these cases pin down and how the evidence was obtained:
+//
+// `std::uniform_real_distribution<float>` is specified over the half-open
+// [0, 1), but that is a statement about the *standard*, not about any shipping
+// implementation. Three were measured at 6e9 draws each on 2026-09-04:
+// libc++ (Apple clang, arm64) returns exactly 1.0f at ~3.1e-8; MSVC STL 19.44
+// and libstdc++ 13.3 returned it zero times. So the defect these cases guard
+// lives on the development / Metal-reference machine and NOT on either CI leg
+// — a green CI is not evidence that it does not happen.
+//
+// The red state below is a white-box algebraic statement (the OLD expression
+// `(size_t)(1.0f * n)` evaluates to `n`, i.e. one past the end of a Fisher-Yates
+// range), not an end-to-end reproduction that draws through mt19937 until 1.0f
+// happens to come up. That is deliberate and is the stronger option here, not a
+// shortcut: the same measurement exhaustively verified `n = 1..2^25` plus
+// large-`n` fixed points on all three platforms and found `u < 1` structurally
+// incapable of overshooting, which makes `u == 1.0f` the *only* input that can
+// produce the defect. Injecting that one input therefore covers the whole
+// failure set, deterministically, on every platform — whereas a seed-scanning
+// reproduction would be dead weight on the two CI legs that cannot hit it.
+// ============================================================================
+
+TEST_F(RngTest, ClampUniformToIndexRedStateOldExpressionOvershoots) {
+  // RED: what the pre-490.2 call sites computed. `simulator.cpp` and
+  // `cpu_trace_backend.cpp` both wrote `j = (size_t)(GetUniform() * (size_ - i)) + i`,
+  // so at i == 0 with u == 1.0f this is exactly `j == size_` — a subscript one
+  // past the live region. RayBuffer::SwapRay's assert compares capacity_, not
+  // size_, so this does not even fire in a Debug build: it silently swaps a
+  // stale out-of-range slot into the active region.
+  EXPECT_EQ(static_cast<size_t>(1.0f * static_cast<float>(16u)), 16u)
+      << "the old subscript expression must be shown to overshoot, or the fix below proves nothing";
+
+  // RED, large-n form: the overshoot is not always exactly one. When n > 2^24
+  // and the (size_t -> float) conversion itself rounds up, the product lands
+  // several slots past the end — which is why the fix must clamp with `>=` and
+  // an `if (j == n)` special case would miss precisely these inputs.
+  EXPECT_GT(static_cast<size_t>(1.0f * static_cast<float>(size_t{ 1073743824 })), size_t{ 1073743825 })
+      << "large-n overshoot must exceed one, or the `>=`-vs-`==` argument is vacuous";
+}
+
+
+TEST_F(RngTest, ClampUniformToIndexClampsUpperBoundary) {
+  // GREEN: the one input that can overshoot is now inside [0, n).
+  EXPECT_EQ(lumice::detail::ClampUniformToIndex(1.0f, 16u), 15u);
+
+  // GREEN, large-n: the three fixed points measured to overshoot by more than
+  // one (16777219 -> +1, 33554439 -> +1, 1073743824 -> +48) must each land on
+  // n - 1 exactly. Asserting `n - 1` rather than merely `< n` is what pins the
+  // clamp shape: an `if (j == n) j = n - 1` special case leaves the third one at
+  // n + 47 and would fail here.
+  for (size_t n : { size_t{ 16777219 }, size_t{ 33554439 }, size_t{ 1073743824 } }) {
+    EXPECT_EQ(lumice::detail::ClampUniformToIndex(1.0f, n), n - 1) << "n = " << n;
+  }
+}
+
+
+TEST_F(RngTest, ClampUniformToIndexLeavesInteriorDrawsUnchanged) {
+  // The clamp must engage on the boundary and nowhere else: for every u < 1 the
+  // result has to be bit-identical to the old expression, otherwise every
+  // fixed-seed reference image shifts.
+  const float interior[] = { 0.0f, 0.25f, 0.5f, 0.75f, std::nextafter(1.0f, 0.0f) };
+  for (size_t n : { size_t{ 1 }, size_t{ 2 }, size_t{ 16 }, size_t{ 1024 }, size_t{ 16777219 } }) {
+    for (float u : interior) {
+      EXPECT_EQ(lumice::detail::ClampUniformToIndex(u, n), static_cast<size_t>(u * static_cast<float>(n)))
+          << "u = " << u << ", n = " << n;
+    }
+  }
+}
+
+
+TEST_F(RngTest, GetUniformIndexConsumesExactlyOneDraw) {
+  // The "RNG draw sequence is bit-unchanged" acceptance condition, at the unit
+  // level: swapping a hand-written `(size_t)(GetUniform() * n)` for
+  // GetUniformIndex(n) must not shift the stream by a single draw. Two
+  // generators seeded identically are advanced through the two forms and then
+  // compared on their next draw — the same shape
+  // test_crystal_sync_group_sampling.cpp uses for its own draw-count checks.
+  lumice::RandomNumberGenerator rng(42);
+  lumice::RandomNumberGenerator ref(42);
+
+  constexpr size_t kN = 37;
+  for (size_t i = 0; i < 64; i++) {
+    const size_t via_named = rng.GetUniformIndex(kN);
+    const size_t via_inline = static_cast<size_t>(ref.GetUniform() * static_cast<float>(kN));
+    // Non-fatal on purpose: both generators advance by exactly one draw per
+    // iteration whether or not the values agree, so a mismatch on one row does
+    // not invalidate the rows after it — and the draw-count check below stays
+    // meaningful either way. Reporting every disagreeing row is more useful
+    // than stopping at the first.
+    EXPECT_EQ(via_named, via_inline) << "draw " << i << ": interior draws must agree with the old form";
+  }
+  ASSERT_EQ(rng.GetUniform(), ref.GetUniform()) << "GetUniformIndex consumed a different number of RNG draws";
+}
+
+
 TEST_F(RngTest, IsFullSphereUniform) {
   using lumice::AxisDistribution;
   using lumice::DistributionType;

@@ -495,7 +495,7 @@ size_t DeterministicOrientationCount(const SceneConfig& config) {
 }
 
 
-RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
+size_t ComputeAllDataCapacity(const SceneConfig& config, size_t ray_num) {
   // Calculate total rays (expected value) used in the whole simulation.
   // total = n * (2 * k + 1) * (1 + k * p1 + k^2 * p1 * p2 + k^3 * p1 * p2 * p3 + ...)
   // where k = max_hits
@@ -510,9 +510,12 @@ RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
     y_max *= config.max_hits_;
     x_max += y_max;
   }
-  total_ray_num = static_cast<size_t>(total_ray_num * std::min(x * 1.5f, x_max));
+  return static_cast<size_t>(total_ray_num * std::min(x * 1.5f, x_max));
+}
 
-  return RayBuffer(total_ray_num);
+
+RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num) {
+  return RayBuffer(ComputeAllDataCapacity(config, ray_num));
 }
 
 
@@ -808,8 +811,15 @@ Simulator::Simulator(QueuePtrS<SimBatch> config_queue, QueuePtrS<SimData> data_q
 Simulator::Simulator(Simulator&& other) noexcept
     : config_queue_(std::move(other.config_queue_)), data_queue_(std::move(other.data_queue_)),
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), effective_seed_(other.effective_seed_),
+      all_data_observer_(other.all_data_observer_), all_data_observer_ctx_(other.all_data_observer_ctx_),
       rng_(other.rng_), logger_(std::move(other.logger_)),
-      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
+      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {
+  // The observer is a raw function pointer plus a context that the test owns (typically a stack
+  // object in the test body). Leaving it live on the moved-from object would let a later Run() on
+  // that object call back into a context the mover has taken over.
+  other.all_data_observer_ = nullptr;
+  other.all_data_observer_ctx_ = nullptr;
+}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -822,6 +832,10 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   idle_ = other.idle_.load();
   seed_ = other.seed_;
   effective_seed_ = other.effective_seed_;
+  all_data_observer_ = other.all_data_observer_;
+  all_data_observer_ctx_ = other.all_data_observer_ctx_;
+  other.all_data_observer_ = nullptr;
+  other.all_data_observer_ctx_ = nullptr;
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
@@ -1145,7 +1159,12 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   ColorGateTable color_gate_table = BuildColorGateTable(color_cfg, config);
   ILOG_DEBUG(logger_, "ColorGateTable built: {} entries (legacy path)", color_gate_table.entries_.size());
 
-  RayBuffer all_data = AllocateAllData(config, ray_num);
+  // Recycled across batches instead of freshly allocated: see the SimWorkspace
+  // member comment for why this matters (Windows CRT heap-cache threshold) and
+  // why it is sound (nothing downstream reads the buffer's content). Reset is
+  // grow-never-shrink, so the steady state asks the allocator for nothing.
+  auto& all_data = workspace.all_data;
+  all_data.Reset(ComputeAllDataCapacity(config, ray_num));
   std::vector<float> outgoing_d;
   std::vector<float> outgoing_w;
   // task-331.1: per-outgoing-ray component mask parallel to outgoing_d_/w_.
@@ -1356,7 +1375,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     // parallel components_ array behind and decorrelate the cross-layer mask
     // (task-331.3). RNG draw order is unchanged (SwapRay draws nothing).
     for (size_t i = 0; i < init_data[0].size_; i++) {
-      size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
+      size_t j = rng_.GetUniformIndex(init_data[0].size_ - i) + i;
       init_data[0].SwapRay(i, j);
     }
 
@@ -1372,7 +1391,14 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
   assert(all_crystals.size() == all_axis_dists.size());
   sim_data.crystals_ = std::move(all_crystals);
   sim_data.crystal_axis_dists_ = std::move(all_axis_dists);
-  sim_data.rays_ = std::move(all_data);
+  // Test-only observation seat for the raw ray segments (see
+  // Simulator::SetAllDataObserverForTest). Synchronous, on this thread, before
+  // the batch is published; nullptr in production.
+  if (all_data_observer_ != nullptr) {
+    all_data_observer_(all_data_observer_ctx_, all_data);
+  }
+  // The buffer stays in the workspace; only its segment count travels.
+  sim_data.ray_seg_count_ = all_data.size_;
   sim_data.outgoing_d_ = std::move(outgoing_d);
   sim_data.outgoing_w_ = std::move(outgoing_w);
   sim_data.outgoing_component_ = std::move(outgoing_component);  // task-331.1

@@ -104,7 +104,6 @@ The `IConsume` interface defines the consumer abstraction:
 **Implementations**:
 - `RenderConsumer`: Renders simulation data into images
 - `StatsConsumer`: Collects statistics such as ray count and crystal count
-- `ShowRayInfoConsumer`: Displays ray information for debugging
 
 ### 4. Queue System
 
@@ -245,7 +244,6 @@ The system uses a multi-threaded architecture:
 - `IConsume`: Abstract consumer interface
 - `RenderConsumer`: Render consumer; implements various lens projection algorithms
 - `StatsConsumer`: Statistics consumer
-- `ShowRayInfoConsumer`: Ray information consumer
 - `c_api.cpp`: C API wrapper implementation
 
 **Characteristics**:

@@ -6,7 +6,7 @@ namespace lumice {
 
 void StatsConsumer::Consume(const SimData& data) {
   sim_rays_ += data.root_ray_count_;
-  total_rays_ += data.rays_.size_;
+  total_rays_ += data.ray_seg_count_;
   // The two halves of the crystal-geometry count aggregate differently, and
   // conflating them is what made this stat scale with the dispatch grain and
   // the worker-pool size. Stochastic draws are genuinely distinct geometries

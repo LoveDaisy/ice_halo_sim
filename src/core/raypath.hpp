@@ -113,8 +113,8 @@ struct RaySeg {
   float p_[3];  // Generally it is for end point, **NOT** for start point.
   float w_;
   // Polygon-face index this segment originated from (i.e. the parent segment's
-  // to_face_). Records the face the ray just exited; used for show_rays logging
-  // and as a SoA-ready bookkeeping field. The actual source-face guard passed to
+  // to_face_). Records the face the ray just exited, as a SoA-ready bookkeeping
+  // field. The actual source-face guard passed to
   // Propagate is the *current* segment's to_face_ via BufferWrapper — not this
   // field directly. kInvalidId means no source face (first segment of a chain).
   IdType from_face_;

@@ -57,14 +57,30 @@ _HEAVY_CONFIGS = [
 # `rays_per_sec` is a SINGLE sample per run (no warm-up/median). Since
 # task-fix-throughput-bench-honesty the [BENCHMARK] rate is the steady trace
 # rate (setup excluded, 5ms poll), so it no longer deflates the fast Metal
-# backend: Metal(default 32768 dispatch) now reads ~8-10x legacy on the heavy
-# multi-MS+filter scenes (bench_throughput.py 2026-06-19: complex_filter 8.14x,
-# filtered_bd 10.09x; the earlier "3.5-5.5x" was the setup-inflated reading).
-# A floor of 3.0x is conservative but meaningful: heavy-scene thermal CoV can
-# reach ~25% on a single sample, and 8x × thermal still sits well above 3.0x,
-# while a true engine collapse / near-hang trips it. For a systematic
-# median+CoV evaluation, use `scripts/bench_throughput.py`.
-_SANITY_FLOOR = 3.0
+# backend.
+#
+# THIS RATIO HAS A MOVING DENOMINATOR, and that has now bitten once. The floor
+# was 3.0, derived from a measured nominal of ~8-10x (bench_throughput.py
+# 2026-06-19: complex_filter 8.14x, filtered_bd 10.09x) — i.e. it sat at roughly
+# 0.30-0.37x of nominal, leaving ~3x of headroom for the ~25% thermal CoV a
+# single heavy-scene sample carries. Those nominals are now HISTORY: recycling
+# the legacy CPU path's per-batch `all_data` buffer (SimWorkspace) made the
+# DENOMINATOR ~2.2-2.5x faster on the same box, with the Metal numerator
+# unchanged. Measured A/B on one machine, 3-5 reps per arm, arms interleaved:
+#
+#   scene                         legacy multi rays/s      Metal multi rays/s
+#   ms_multi_crystal_complex_filter   1.93M -> 4.27M    12.8-19.5M (both arms)
+#   ms_multi_crystal_filtered_bd      2.00M -> 4.99M    14.1-19.5M (both arms)
+#
+# so nominal fell to ~2.9-4.0x and the old 3.0 floor landed ON TOP of the
+# distribution — it produced a red at ratio=2.889 with nothing wrong. Re-derived
+# on the same reasoning as the original: floor = ~0.45x of the new nominal
+# (~3.2x), which is 1.9x below the lowest sample actually observed (2.85), so a
+# 25% thermal excursion cannot reach it, while still firing well before Metal
+# degrades to "no faster than legacy" (_GATE = 1.0 below). The pre-registered D1
+# gate itself is NOT touched. For a systematic median+CoV evaluation, use
+# `scripts/bench_throughput.py`.
+_SANITY_FLOOR = 1.5
 _GATE = 1.0           # D1 pre-registered gate: Metal multi >= legacy (xfail until Scrum 2)
 _TIMEOUT = 240        # --benchmark is bounded (poll-until-IDLE); guard against hangs
 

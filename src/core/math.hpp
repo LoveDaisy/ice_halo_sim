@@ -205,12 +205,55 @@ inline bool DistributionValueEqual(const Distribution& a, const Distribution& b)
 }
 
 
+namespace detail {
+
+//! @brief Map a uniform draw `u` to an index in `[0, n)`, clamping the upper boundary.
+//! @details The single owner of "turn a GetUniform() draw into a subscript". Split out of
+//!   RandomNumberGenerator::GetUniformIndex as a pure function (touching no RNG state) so the
+//!   boundary case can be unit-tested by direct injection instead of by drawing until the
+//!   boundary happens to come up — the same shape detail::RandomSampleSelectBin (geo3d.cpp)
+//!   uses for its own boundary logic.
+//! @note The clamp is `>=`, not `== n`, and that is load-bearing. `std::uniform_real_distribution`
+//!   is specified over the half-open `[0, 1)` but three standard libraries were measured at
+//!   6e9 draws each (2026-09-04): libc++ (Apple clang, arm64) returns exactly `1.0f` at a rate
+//!   of ~3.1e-8, while MSVC STL 19.44 and libstdc++ 13.3 returned it zero times. On `u == 1.0f`
+//!   the product `u * (float)n` overshoots by more than one whenever `n > 2^24` and `(size_t →
+//!   float)` itself rounds up — measured `n = 1073743824` lands 48 past the end — so an `== n`
+//!   special case would silently miss exactly those inputs. `u < 1` is structurally safe
+//!   (exhaustively verified for `n = 1..2^25` plus large-`n` fixed points on all three
+//!   platforms), so `u == 1.0f` is the only input the clamp ever engages on.
+//! @warning The measurement above is a property of the standard library implementation, not of
+//!   the C++ standard. Changing toolchain or platform does not make the clamp unnecessary; it
+//!   only changes which implementations reach it.
+//! @param u a draw from RandomNumberGenerator::GetUniform(); values outside [0, 1] are not expected
+//! @param n the exclusive upper bound; must be > 0
+size_t ClampUniformToIndex(float u, size_t n);
+
+}  // namespace detail
+
 class RandomNumberGenerator {
  public:
   explicit RandomNumberGenerator(uint32_t seed);
 
   float GetGaussian();
+
+  //! @brief Draw a uniform float. Nominally `[0, 1)` — but see the warning.
+  //! @warning If you are about to use the result as a subscript (`(size_t)(GetUniform() * n)`),
+  //!   use GetUniformIndex(n) instead. Some standard library implementations return exactly
+  //!   `1.0f` (measured on libc++, see detail::ClampUniformToIndex), which puts that expression
+  //!   one — or, for large `n`, several — slots past the end. Do not hand-write
+  //!   `if (idx >= n) idx = n - 1` at the call site; that convention is what left this repo with
+  //!   guards on the GPU paths and none on the CPU ones.
   float GetUniform();
+
+  //! @brief Draw a uniform index in `[0, n)`. The single owner of the GetUniform()-to-subscript
+  //!   conversion; see detail::ClampUniformToIndex for the boundary contract and the measurement
+  //!   behind it.
+  //! @details Consumes exactly one GetUniform() draw, so substituting it for a hand-written
+  //!   `(size_t)(GetUniform() * n)` leaves the RNG draw order and draw count bit-for-bit unchanged.
+  //! @param n the exclusive upper bound; must be > 0
+  size_t GetUniformIndex(size_t n);
+
   float Get(Distribution dist);
   void Reset();
   void SetSeed(uint32_t seed);

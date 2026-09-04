@@ -81,11 +81,41 @@ class Simulator {
   // `seeded_` idempotency contract. Exposed for unit tests only.
   uint32_t GetEffectiveSeed() const { return effective_seed_; }
 
+  // Observation hook for the legacy CPU path's per-batch `all_data` buffer,
+  // invoked SYNCHRONOUSLY on the simulator's own thread at the point the batch
+  // is sealed, just before the SimData is queued. Exposed for unit tests only:
+  // `all_data` never leaves the producer thread (the whole point of recycling
+  // it in SimWorkspace), so a test that needs to inspect the raw ray segments
+  // has no consumer-side seat to do it from any more.
+  //
+  // Contract: set only for the lifetime of a test fixture, from the same thread
+  // that will read the results; production leaves it at nullptr and pays a
+  // single predictable branch per batch. This is NOT a production extension
+  // point — a real consumer belongs on the SimData/consumer seam, not here.
+  // A plain function pointer + context, deliberately not std::function: the
+  // hook is permanent interface surface on a hot-path production type.
+  using AllDataObserverFn = void (*)(void* ctx, const RayBuffer& all_data);
+  void SetAllDataObserverForTest(AllDataObserverFn fn, void* ctx) {
+    all_data_observer_ = fn;
+    all_data_observer_ctx_ = ctx;
+  }
+
  private:
   using CrystalCache = std::vector<std::pair<const CrystalParam*, Crystal>>;
   struct SimWorkspace {
     RayBuffer buffer_data[2]{};
     RayBuffer init_data[2]{};
+    // Per-batch accumulation buffer for the legacy CPU path. Lives here, next
+    // to the two pools it already sits beside, so it is RECYCLED across batches
+    // (Reset = grow-never-shrink) instead of being freshly allocated and then
+    // handed to SimData every batch. At 2 MS layers that buffer is ~1.9 MB,
+    // which is past the Windows CRT's 512 KB heap-cache threshold, so the old
+    // per-batch construct/destruct pair went straight to VirtualAlloc /
+    // VirtualFree — measured as the root cause of the 2-layer-MS Windows/Linux
+    // throughput gap. Keeping it here is only sound because nothing downstream
+    // reads its CONTENT: SimData carries the segment count alone
+    // (`ray_seg_count_`), see the note there.
+    RayBuffer all_data{};
   };
   // `emitted_weight` is the per-ray spectral weight to CHARGE THE NORMALIZATION
   // DENOMINATOR with, deliberately separate from `wl_param.weight_`, which is the
@@ -200,6 +230,11 @@ class Simulator {
   // so the device-gen path activates even when the user-facing `seed_` is 0
   // (default multi-worker random mode). See task 260.6.
   uint32_t effective_seed_;
+
+  // See SetAllDataObserverForTest. nullptr in every production build path.
+  AllDataObserverFn all_data_observer_ = nullptr;
+  void* all_data_observer_ctx_ = nullptr;
+
   RandomNumberGenerator rng_;
   Logger logger_{ "Simulator" };
   // Preferred trace backend. release-write by ServerImpl::SetPreferredBackend,

@@ -4242,11 +4242,15 @@ LayerHandlePtr CudaTraceBackend::TraceLayer(const RootRaySource& roots) {
           impl_->pinned_pos_[i * 3 + 0] = r.p_[0];
           impl_->pinned_pos_[i * 3 + 1] = r.p_[1];
           impl_->pinned_pos_[i * 3 + 2] = r.p_[2];
-          uint32_t wl_idx = static_cast<uint32_t>(impl_->rng_.GetUniform() *
-                                                  static_cast<float>(impl_->wl_pool_size_));
-          if (wl_idx >= impl_->wl_pool_size_) {
-            wl_idx = impl_->wl_pool_size_ - 1u;
-          }
+          // The upper-boundary guard that used to be hand-written here now
+          // lives in GetUniformIndex — the single owner of the
+          // GetUniform()-to-subscript contract (task 490.2). Behaviour is
+          // unchanged; what changes is that the CPU Fisher-Yates paths, which
+          // never had this guard, now share it. The narrowing to uint32_t is
+          // inherent to that convergence, not leftover code: GetUniformIndex
+          // returns size_t while the GPU buffer is uint32_t. It cannot
+          // overflow — the result is < wl_pool_size_, itself a uint32_t.
+          uint32_t wl_idx = static_cast<uint32_t>(impl_->rng_.GetUniformIndex(impl_->wl_pool_size_));
           impl_->pinned_root_wl_idx_[i] = wl_idx;
           impl_->pinned_ws_[i] = impl_->wl_pool_host_[wl_idx].spd_weight;
           impl_->pinned_from_poly_[i] =

@@ -66,7 +66,11 @@ static_assert(sizeof(void*) == 8, "SimData layout assumes 64-bit pointers");
 // to root_ray_count_, padded to 8B by the size_t fields around it, bumping
 // 376 → 384. The exposure anchor adds anchor_y_pixel_data_ (vector<float>, 24B)
 // for the device-side anchor-plane drain, bumping 384 → 408.
-static_assert(sizeof(SimData) == 408,
+// The all_data recycling change replaces the RayBuffer rays_ member (56B) with
+// a single size_t ray_seg_count_ (8B) — the legacy CPU path recycles that
+// buffer in Simulator::SimWorkspace instead of handing it over each batch —
+// shrinking 408 → 360.
+static_assert(sizeof(SimData) == 360,
               "SimData layout changed — update test_sim_data.cpp DeepCopy/Move assertions "
               "and sim_data.cpp's static_assert.");
 #endif
@@ -82,12 +86,16 @@ RaySeg MakeRay(int marker) {
   return r;
 }
 
-// Helper: build a fully populated SimData with rays_.size_ < rays_.capacity_
-// (capacity=8, size=5). The size != capacity input shape is load-bearing —
-// it would catch a future "memcpy size bytes instead of capacity bytes"
-// refactor that silently truncates trailing data.
+// Helper: build a fully populated SimData.
+//
+// `ray_seg_count_` used to be a whole RayBuffer (`rays_`) here, and this helper
+// deliberately gave it size 5 < capacity 8 to catch a "memcpy size bytes
+// instead of capacity bytes" truncation. That shape belongs to RayBuffer, which
+// still owns it — see the RayBufferTest / RayBufferComponentTest groups above,
+// which cover the deep-copy/move semantics directly. SimData now carries only
+// the count, so what is left to assert here is plain value propagation.
 SimData MakePopulatedSimData() {
-  SimData s(8);
+  SimData s;
   s.curr_wl_ = 550.0f;
   s.generation_ = 42;
   s.root_ray_count_ = 7;
@@ -95,9 +103,9 @@ SimData MakePopulatedSimData() {
   // helper: a copy that mistakenly picked up a neighbouring field would still
   // read as "some value" and pass a mere non-zero check.
   s.emitted_energy_ = 615.375f;
-  for (int i = 0; i < 5; i++) {
-    s.rays_.EmplaceBack(MakeRay(i), RaypathRecorder{});
-  }
+  // Distinct from root_ray_count_ above: a copy/move that crossed the two
+  // would still read as "some plausible count".
+  s.ray_seg_count_ = 5;
   s.outgoing_d_ = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f };
   s.outgoing_w_ = { 0.5f, 0.7f };
   // scrum-268.8 (DR-3): outgoing_wl_ deep-copy / move coverage.
@@ -978,12 +986,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.root_ray_count_, 7u) << "root_ray_count_ not copied";
   EXPECT_FLOAT_EQ(copy.emitted_energy_, 615.375f) << "emitted_energy_ not copied";
 
-  // rays_ field assertions.
-  EXPECT_EQ(copy.rays_.size_, 5u);
-  EXPECT_EQ(copy.rays_.capacity_, 8u);
-  for (int i = 0; i < 5; i++) {
-    EXPECT_FLOAT_EQ(copy.rays_[i].w_, original.rays_[i].w_);
-  }
+  EXPECT_EQ(copy.ray_seg_count_, 5u) << "ray_seg_count_ not copied";
 
   // Vector field equality.
   EXPECT_EQ(copy.outgoing_d_, original.outgoing_d_);
@@ -1011,9 +1014,7 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
   EXPECT_EQ(copy.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not copied";
 
   // Deep copy independence — each pointer/container field independently.
-  copy.rays_[0].w_ = 999.0f;
-  EXPECT_FLOAT_EQ(original.rays_[0].w_, 0.0f) << "rays_ not deep-copied";
-
+  // (ray_seg_count_ is a scalar: value semantics, nothing to alias.)
   copy.outgoing_d_.clear();
   EXPECT_EQ(original.outgoing_d_.size(), 6u) << "outgoing_d_ not deep-copied";
 
@@ -1042,7 +1043,10 @@ TEST(SimDataTest, CopyConstructDeepCopy) {
 
 TEST(SimDataTest, CopyAssignmentDeepCopy) {
   auto original = MakePopulatedSimData();
-  SimData target(3);  // Different initial capacity, exercises rays_ realloc path.
+  SimData target;
+  // Non-default prior value so the assignment has to overwrite, not merely
+  // leave the default in place.
+  target.ray_seg_count_ = 3;
   target = original;
 
   // Field completeness (mirror of copy ctor test).
@@ -1050,11 +1054,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.generation_, 42u) << "generation_ not assigned";
   EXPECT_EQ(target.root_ray_count_, 7u) << "root_ray_count_ not assigned";
   EXPECT_FLOAT_EQ(target.emitted_energy_, 615.375f) << "emitted_energy_ not assigned";
-  EXPECT_EQ(target.rays_.size_, 5u);
-  EXPECT_EQ(target.rays_.capacity_, 8u);
-  for (int i = 0; i < 5; i++) {
-    EXPECT_FLOAT_EQ(target.rays_[i].w_, original.rays_[i].w_);
-  }
+  EXPECT_EQ(target.ray_seg_count_, 5u) << "ray_seg_count_ not assigned";
   EXPECT_EQ(target.outgoing_d_, original.outgoing_d_);
   EXPECT_EQ(target.outgoing_w_, original.outgoing_w_);
   EXPECT_EQ(target.outgoing_wl_, original.outgoing_wl_);                // scrum-268.8 (DR-3)
@@ -1077,8 +1077,6 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(target.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not assigned";
 
   // Deep copy independence.
-  target.rays_[0].w_ = 999.0f;
-  EXPECT_FLOAT_EQ(original.rays_[0].w_, 0.0f) << "rays_ not deep-assigned";
   target.exit_records_.clear();
   EXPECT_EQ(original.exit_records_.size(), 2u) << "exit_records_ not deep-assigned";
   target.crystals_.clear();
@@ -1092,9 +1090,7 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   const uint64_t kSnapGen = orig.generation_;
   const size_t kSnapRoot = orig.root_ray_count_;
   const float kSnapEmitted = orig.emitted_energy_;
-  const size_t kSnapRaysSize = orig.rays_.size_;
-  const size_t kSnapRaysCap = orig.rays_.capacity_;
-  const float kSnapRay0W = orig.rays_[0].w_;
+  const size_t kSnapRaySegCount = orig.ray_seg_count_;
   const size_t kSnapCrystalsSize = orig.crystals_.size();
 
   SimData& self_alias = orig;
@@ -1104,23 +1100,17 @@ TEST(SimDataTest, CopyAssignmentDeepCopy) {
   EXPECT_EQ(orig.generation_, kSnapGen);
   EXPECT_EQ(orig.root_ray_count_, kSnapRoot);
   EXPECT_FLOAT_EQ(orig.emitted_energy_, kSnapEmitted);
-  EXPECT_EQ(orig.rays_.size_, kSnapRaysSize);
-  EXPECT_EQ(orig.rays_.capacity_, kSnapRaysCap);
-  EXPECT_FLOAT_EQ(orig.rays_[0].w_, kSnapRay0W);
+  EXPECT_EQ(orig.ray_seg_count_, kSnapRaySegCount);
   EXPECT_EQ(orig.crystals_.size(), kSnapCrystalsSize);
 }
 
 
 TEST(SimDataTest, MoveConstructTransfersOwnership) {
   auto original = MakePopulatedSimData();
-  RaySeg* original_ptr = original.rays_.rays_.get();
 
   SimData moved(std::move(original));
 
-  // Moved object: pointer ownership transfer (no memcpy), all fields valid.
-  EXPECT_EQ(moved.rays_.rays_.get(), original_ptr) << "ownership transfer expected";
-  EXPECT_EQ(moved.rays_.size_, 5u);
-  EXPECT_EQ(moved.rays_.capacity_, 8u);
+  EXPECT_EQ(moved.ray_seg_count_, 5u) << "ray_seg_count_ not moved";
   EXPECT_FLOAT_EQ(moved.curr_wl_, 550.0f);
   EXPECT_EQ(moved.generation_, 42u);
   EXPECT_EQ(moved.root_ray_count_, 7u);
@@ -1144,13 +1134,8 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_EQ(moved.color_degrade_counts_.or_summand_overflow, 6u) << "color_degrade or_summand not moved";
   EXPECT_EQ(moved.color_degrade_counts_.color_class_overflow, 7u) << "color_degrade color_class not moved";
 
-  // Moved-from source contract — three categories:
-  // (a) rays_ pointer ownership transferred → nullptr + zeroed size/capacity.
-  EXPECT_EQ(original.rays_.rays_, nullptr);
-  EXPECT_EQ(original.rays_.size_, 0u);
-  EXPECT_EQ(original.rays_.capacity_, 0u);
-
-  // (b) std::vector members are moved-from. The C++ standard only guarantees
+  // Moved-from source contract — two categories:
+  // (a) std::vector members are moved-from. The C++ standard only guarantees
   // "valid but unspecified" state, but libc++/libstdc++ both leave them empty.
   // This assertion locks the current observed behavior; if migrating to MSVC
   // STL or a future libc++ change, this may need to be relaxed.
@@ -1168,9 +1153,10 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
   EXPECT_TRUE(original.lane_pixel_data_.empty());
   EXPECT_TRUE(original.anchor_y_pixel_data_.empty());
 
-  // (c) POD scalar fields are NOT reset on move — this is the current
-  // contract. We deliberately do NOT assert curr_wl_/generation_/etc. to be
-  // zero. Future refactors that change this behavior should update both
+  // (b) POD scalar fields are NOT reset on move — this is the current
+  // contract, and ray_seg_count_ joined that category when the ray buffer
+  // stopped travelling on SimData. We deliberately do NOT assert
+  // curr_wl_/generation_/ray_seg_count_/etc. to be zero. Future refactors that change this behavior should update both
   // sim_data.cpp and this comment.
 }
 
@@ -1178,13 +1164,11 @@ TEST(SimDataTest, MoveConstructTransfersOwnership) {
 TEST(SimDataTest, MoveAssignAndSelfMove) {
   // Normal move-assignment.
   auto src = MakePopulatedSimData();
-  RaySeg* src_ptr = src.rays_.rays_.get();
-  SimData dst(3);  // Different initial capacity.
+  SimData dst;
+  dst.ray_seg_count_ = 3;  // Non-default prior value; the move must overwrite it.
   dst = std::move(src);
 
-  EXPECT_EQ(dst.rays_.rays_.get(), src_ptr);
-  EXPECT_EQ(dst.rays_.size_, 5u);
-  EXPECT_EQ(dst.rays_.capacity_, 8u);
+  EXPECT_EQ(dst.ray_seg_count_, 5u) << "ray_seg_count_ not move-assigned";
   EXPECT_FLOAT_EQ(dst.curr_wl_, 550.0f);
   EXPECT_EQ(dst.generation_, 42u);
   EXPECT_EQ(dst.crystals_.size(), 1u);
@@ -1216,9 +1200,6 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   EXPECT_FLOAT_EQ(dst.anchor_y_pixel_data_[0], 1.5f);
 
   // Source moved-from state.
-  EXPECT_EQ(src.rays_.rays_, nullptr);
-  EXPECT_EQ(src.rays_.size_, 0u);
-  EXPECT_EQ(src.rays_.capacity_, 0u);
   EXPECT_TRUE(src.crystals_.empty());
   // task-358.1 Step 4 (code-review-01 Suggestion #3): same rationale as
   // MoveConstructTransfersOwnership above.
@@ -1230,8 +1211,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
   auto self = MakePopulatedSimData();
   const float kSnapCurrWl = self.curr_wl_;
   const uint64_t kSnapGen = self.generation_;
-  const size_t kSnapRaysSize = self.rays_.size_;
-  RaySeg* snap_rays_ptr = self.rays_.rays_.get();
+  const size_t kSnapRaySegCount = self.ray_seg_count_;
   const size_t kSnapOutgoingWSize = self.outgoing_w_.size();
   const float kSnapEmitted = self.emitted_energy_;
   const size_t kSnapCrystalsSize = self.crystals_.size();
@@ -1242,8 +1222,7 @@ TEST(SimDataTest, MoveAssignAndSelfMove) {
 
   EXPECT_FLOAT_EQ(self.curr_wl_, kSnapCurrWl);
   EXPECT_EQ(self.generation_, kSnapGen);
-  EXPECT_EQ(self.rays_.size_, kSnapRaysSize);
-  EXPECT_EQ(self.rays_.rays_.get(), snap_rays_ptr);
+  EXPECT_EQ(self.ray_seg_count_, kSnapRaySegCount);
   EXPECT_EQ(self.outgoing_w_.size(), kSnapOutgoingWSize);
   EXPECT_FLOAT_EQ(self.emitted_energy_, kSnapEmitted);
   EXPECT_EQ(self.crystals_.size(), kSnapCrystalsSize);

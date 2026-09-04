@@ -63,7 +63,15 @@ void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size
 // Append the new to_face_ id onto every recorder slot in buffer_data[1].
 void FillRayOtherInfo(const Crystal& curr_crystal, RayBuffer buffer_data[2]);
 
+// Expected total-ray capacity of the all_data buffer for a session. Pure
+// function of the scene and the session's root ray count: split out of
+// AllocateAllData so a caller that RECYCLES a buffer across batches can ask
+// for the capacity without being handed a freshly allocated one.
+size_t ComputeAllDataCapacity(const SceneConfig& config, size_t ray_num);
+
 // Allocate the all_data buffer with expected total-ray capacity for a session.
+// Thin wrapper over ComputeAllDataCapacity for the call sites that genuinely
+// want a fresh buffer (the TraceBackend seam paths).
 RayBuffer AllocateAllData(const SceneConfig& config, size_t ray_num);
 
 // Sample the raw prism shape scalars, honoring PrismCrystalParam::sync_group_

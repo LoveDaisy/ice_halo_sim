@@ -1291,8 +1291,9 @@ void ServerImpl::ConsumeData() {
   // independent of the LUMICE_DISPATCH_RAY_NUM dispatch granularity. Falls
   // back to the historical LUMICE_BATCH_RAY_NUM env name when set so existing
   // scripts keep their commit cadence unchanged. Legacy CPU-path SimData
-  // (non-empty rays_) bypass the chunker — the consumer projects via per-ray
-  // indices into rays_, which cannot be sliced without recomputing indices.
+  // (non-zero ray_seg_count_) bypass the chunker — the consumer projects via
+  // per-ray indices into its buffer, which cannot be sliced without recomputing
+  // indices.
   // Commit granularity + its legacy LUMICE_BATCH_RAY_NUM fallback and one-time
   // deprecation WARN are all resolved inside util/env_knobs (the single
   // registered getenv site; see doc/env-var-policy.md). Re-resolved on each
@@ -1305,16 +1306,16 @@ void ServerImpl::ConsumeData() {
     auto sim_data = data_queue_->Get();
     // Interruption sentinel (scrum-258.1 Step 3 — 协议固化):
     // a default-constructed SimData (queue shutdown / simulator early exit)
-    // has rays_ empty AND root_ray_count_ == 0. Discriminating on
+    // has ray_seg_count_ == 0 AND root_ray_count_ == 0. Discriminating on
     // root_ray_count_ correctly distinguishes the sentinel from:
-    //   - legacy CPU path: rays_ non-empty;
-    //   - backend exit-seam path: rays_ empty + outgoing_d_/w_ populated
+    //   - legacy CPU path: ray_seg_count_ non-zero;
+    //   - backend exit-seam path: ray_seg_count_ zero + outgoing_d_/w_ populated
     //     (or empty for a zero-exit batch) but root_ray_count_ = ray_num > 0.
     // The earlier is_backend_path_ key falsely flagged exit-seam batches as
-    // sentinels (rays_ empty + is_backend_path_ false), deadlocking the
+    // sentinels (no ray segments + is_backend_path_ false), deadlocking the
     // consumer; root_ray_count_ is the protocol-level invariant for a real
     // produced batch and works uniformly across both paths.
-    if (sim_data.rays_.Empty() && sim_data.root_ray_count_ == 0) {
+    if (sim_data.ray_seg_count_ == 0 && sim_data.root_ray_count_ == 0) {
       // Simulation is interrupted.
       break;
     }
@@ -1349,7 +1350,7 @@ void ServerImpl::ConsumeData() {
                                             std::memory_order_release);
       last_color_class_overflow_.store(sim_data.color_degrade_counts_.color_class_overflow, std::memory_order_release);
       // 0-exit-batch guard: backend exit-seam path may emplace a SimData with
-      // outgoing_d_/rays_ both empty when all rays were filtered/absorbed
+      // outgoing_d_ empty and ray_seg_count_ zero when all rays were filtered/absorbed
       // (e.g. selective BD filter). Skip consumer projection so we don't
       // dirty snapshot_dirty_/has_ever_consumed_ on a black contribution, but
       // STILL fall through to sim_scene_cnt_-- below — that decrement is the
@@ -1357,12 +1358,12 @@ void ServerImpl::ConsumeData() {
       // exit-seam: empty Emplace must reach the consumer's --). Do not move
       // the -- inside this branch.
       // S1 device-fused route: the backend accumulates XYZ on-device and
-      // emplaces a SimData carrying xyz_pixel_data_ with outgoing_d_ AND rays_
-      // both empty. That payload IS renderable — without this clause it would
+      // emplaces a SimData carrying xyz_pixel_data_ with outgoing_d_ empty AND
+      // ray_seg_count_ zero. That payload IS renderable — without this clause it would
       // be misclassified as a 0-exit black batch and the consumer skipped,
       // dropping the entire device-fused image (zero output, parity corr=0).
       bool has_renderable =
-          !sim_data.outgoing_d_.empty() || !sim_data.rays_.Empty() || !sim_data.xyz_pixel_data_.empty();
+          !sim_data.outgoing_d_.empty() || sim_data.ray_seg_count_ != 0 || !sim_data.xyz_pixel_data_.empty();
       if (has_renderable) {
         auto t_lock0 = std::chrono::steady_clock::now();
         std::lock_guard<TicketMutex> lock(consumer_mutex_);
@@ -1377,17 +1378,17 @@ void ServerImpl::ConsumeData() {
         // accumulated/overwritten split below.
         //
         // Chunk by kCommitCap on the backend exit-seam path
-        // (outgoing_d_ populated AND rays_ empty). Only the FIRST chunk
+        // (outgoing_d_ populated AND ray_seg_count_ zero). Only the FIRST chunk
         // carries root_ray_count_ + the stochastic crystal-draw count —
         // StatsConsumer accumulates both, so spreading them across chunks
         // would N×-count and break the stats invariant. (The deterministic
         // crystal count is the opposite case; see the chunk fill below.)
-        // Legacy CPU SimData (rays_ non-empty) are
+        // Legacy CPU SimData (ray_seg_count_ non-zero) are
         // delivered whole because their consumers project via per-ray
-        // indices into rays_, which has no clean sub-batch slice.
+        // indices into that batch, which has no clean sub-batch slice.
         // NOLINTNEXTLINE(readability-identifier-naming) — local const flag, snake_case is project style for
         // variables.
-        const bool is_exit_seam_path = sim_data.rays_.Empty() && !sim_data.outgoing_d_.empty();
+        const bool is_exit_seam_path = sim_data.ray_seg_count_ == 0 && !sim_data.outgoing_d_.empty();
         if (!is_exit_seam_path) {
           for (auto& c : consumers_) {
             c->Consume(sim_data);
@@ -1464,14 +1465,14 @@ void ServerImpl::ConsumeData() {
         auto lock_us = std::chrono::duration<double, std::micro>(t_lock1 - t_lock0).count();
         auto consume_us = std::chrono::duration<double, std::micro>(t_consume - t_lock1).count();
         ILOG_DEBUG(logger_, "ConsumeData: batch rays={} outgoing={} lock={:.0f}us consume={:.0f}us",
-                   sim_data.rays_.size_, sim_data.outgoing_w_.size(), lock_us, consume_us);
+                   sim_data.ray_seg_count_, sim_data.outgoing_w_.size(), lock_us, consume_us);
         if (!first_consume_logged) {
-          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.rays_.size_);
+          ILOG_INFO(logger_, "ConsumeData: first batch consumed ({} ray segments)", sim_data.ray_seg_count_);
           first_consume_logged = true;
         }
       } else {
         // 0-exit batch on the exit-seam path (all rays filtered/absorbed →
-        // outgoing_d_ AND rays_ both empty). A batch that ran to completion
+        // outgoing_d_ empty AND ray_seg_count_ zero). A batch that ran to completion
         // with a legitimately all-black result is still *valid data*: the
         // simulation converged, the answer is just zero intensity. We flip
         // has_ever_consumed_ so the frame's xyz results report
@@ -1479,8 +1480,8 @@ void ServerImpl::ConsumeData() {
         // produces a clean zero frame (without this, an all-black simulation
         // — e.g. an impossible raypath filter — never sets has_valid_data, so
         // the buffered poller waits for "valid data" forever and times out at
-        // 600s). The legacy CPU path never hit this because its rays_ is
-        // always non-empty, so has_renderable stayed true; the exit-seam path
+        // 600s). The legacy CPU path never hit this because its ray_seg_count_
+        // is always non-zero, so has_renderable stayed true; the exit-seam path
         // is the first to surface it. See doc/capi-lifecycle-architecture.md
         // ("zero-output completion").
         //

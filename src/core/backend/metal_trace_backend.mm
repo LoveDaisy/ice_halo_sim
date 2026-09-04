@@ -2181,10 +2181,14 @@ size_t MetalTraceBackend::Impl::GenerateFirstLayerRootsForCi(const ScatteringSet
   assert(wl_pool_size_ > 0u && !wl_pool_host_.empty() &&
          "wl_pool must be uploaded before host root-gen");
   for (size_t i = 0; i < n; i++) {
-    uint32_t wl_idx = static_cast<uint32_t>(rng.GetUniform() * static_cast<float>(wl_pool_size_));
-    if (wl_idx >= wl_pool_size_) {
-      wl_idx = wl_pool_size_ - 1u;
-    }
+    // The upper-boundary guard that used to be hand-written here now lives in
+    // GetUniformIndex — the single owner of the GetUniform()-to-subscript
+    // contract (task 490.2). Behaviour is unchanged; what changes is that the
+    // CPU Fisher-Yates paths, which never had this guard, now share it.
+    // The narrowing to uint32_t is inherent to that convergence, not leftover
+    // code: GetUniformIndex returns size_t while the GPU buffer is uint32_t. It
+    // cannot overflow — the result is < wl_pool_size_, itself a uint32_t.
+    uint32_t wl_idx = static_cast<uint32_t>(rng.GetUniformIndex(wl_pool_size_));
     wl_idx_ptr[i] = wl_idx;
     w_ptr[i] = wl_pool_host_[wl_idx].spd_weight;
   }
