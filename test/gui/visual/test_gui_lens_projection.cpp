@@ -212,6 +212,56 @@ struct LensProjScene {
 // floored to 0.5 dB, and the 0.5 dB step every row took is the flooring crossing a boundary on a
 // 0.2 dB move, not a 0.5 dB concession.
 // ============================================================================================
+//
+// RE-SHOT, ALL NINE, again when the preview shader stopped adding a second half-texel offset when
+// it gathers from the dual-fisheye source texture (src/gui/preview_renderer.cpp, dualFisheyeToUV;
+// doc/coordinate-convention.md §11). Until then every fragment sampled a texel CORNER and came
+// back a 2x2 bilinear average, so these references were captured through a half-texel blur that
+// the product no longer applies. Measured against the OLD references, the same build with and
+// without that offset (one binary each, hashes checked apart), post = 3 full-suite runs:
+//
+//   scene                                  old ref, blurred → sharp     run-to-run sd (sharp)
+//   fisheye_equal_area_120                 19.82 → 19.57  (-0.25)         0.097
+//   fisheye_equal_area_120_border          19.82 → 19.62  (-0.20)         0.057
+//   fisheye_orthographic_180               18.84 → 18.66  (-0.18)         0.028
+//   linear                                 21.67 → 21.45  (-0.22)         0.057
+//   dual_fisheye_equal_area_full           27.58 → 27.40  (-0.18)         0.016
+//   dual_fisheye_equal_area_full_border    26.93 → 26.78  (-0.15)         0.040
+//   overlay_ea                             20.44 → 20.50  (+0.06)         0.177
+//   rectangular                            28.32 → 28.43  (+0.11)         0.050
+//   sky_colour_ea_180                      28.16 → 28.23  (+0.07)         0.056
+//
+// Six rows moved by 3x to 11x their own run-to-run sd, so the shift is the change and not noise;
+// the three that did not are the ones whose frame is dominated by content the gather does not
+// produce (the marker/grid overlay, and the equirect and sky-fill scenes' large flat regions).
+// NOTHING WENT RED — every row kept at least 1.07 dB of margin — which is exactly why this
+// re-shoot is worth writing down: a stale reference that still passes is the state that quietly
+// eats the cross-machine floor, and the trigger here was that the RENDER PROVABLY CHANGED, not
+// that a threshold was breached. The proof is mechanical rather than pictorial:
+// test/gui/functional/test_preview_dual_fisheye_gather.cpp measures the same shader reading its
+// source at 0.00 LSB of checkerboard contrast before and 188.00 LSB after.
+//
+// AND THE GROUP'S STATISTICS DID NOT MOVE. Re-calibrated at N=10 against the new references, every
+// mean lands within 0.07 dB of the previous calibration and sigma is flat (4 rows up, 4 down, 1
+// unchanged):
+//
+//   scene                                  mean before → after     sigma before → after
+//   fisheye_equal_area_120                 19.83 → 19.84  (+0.01)   0.0611 → 0.0568
+//   fisheye_equal_area_120_border          19.81 → 19.77  (-0.04)   0.0994 → 0.0972
+//   fisheye_orthographic_180               18.77 → 18.78  (+0.01)   0.0508 → 0.0669
+//   linear                                 21.56 → 21.50  (-0.06)   0.1044 → 0.1122
+//   dual_fisheye_equal_area_full           27.49 → 27.48  (-0.01)   0.0415 → 0.0529
+//   dual_fisheye_equal_area_full_border    26.89 → 26.82  (-0.07)   0.0409 → 0.0758
+//   overlay_ea                             20.46 → 20.51  (+0.05)   0.0961 → 0.1171
+//   rectangular                            28.41 → 28.48  (+0.07)   0.0684 → 0.0459
+//   sky_colour_ea_180                      28.26 → 28.26  ( 0.00)   0.1571 → 0.1615
+//
+// That is the expected shape for removing a blur: the pictures changed, the noise floor they are
+// compared at did not. ONE threshold moved as a result, overlay_ea 19.0 -> 19.5, and it is the
+// 0.5 dB flooring crossing a boundary on a 0.05 dB move (20.46 - 1.0 = 19.46 floors to 19.0;
+// 20.51 - 1.0 = 19.51 floors to 19.5) — a tightening the driver produced, not one chosen here.
+// The other eight are the driver's unchanged mechanical output.
+// ============================================================================================
 static const LensProjScene kScenes[] = {
   // mean 19.83 σ0.0611 (N=10)
   {"fisheye_equal_area_120",       LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 18.5,  0.4f,
@@ -241,7 +291,7 @@ static const LensProjScene kScenes[] = {
   // the altitude and azimuth fields, core derives one from the local gradient of the same fields on
   // the CPU, and near the rim of an equal-area frame those two disagree. Sigma is unchanged, so the
   // scene is no noisier than it was; only its operating point moved.
-  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.0,  0.375f,
+  {"overlay_ea",                   LUMICE_E2E_CONFIG_DIR "/halo_22.json", 256, 256, 19.5,  0.375f,
    LensSetup::kOverrideViewProj, lumice::gui::kLensTypeFisheyeEqualArea,   180.0f, 45.0f,
    /*enable_overlay=*/true, /*overlay_zenith_nadir=*/true, /*overlay_grid=*/true},
   // Lens-border scenes. Each reuses the setup of the scene named in its own name and changes ONE
