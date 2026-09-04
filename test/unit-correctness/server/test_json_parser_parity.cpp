@@ -2,7 +2,9 @@
 #include <spdlog/sinks/ostream_sink.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -215,6 +217,177 @@ struct SectionDiff {
   }
 };
 
+// =============== Field-level diff: the dump's one blind spot ===============
+//
+// The per-section dumps below are core's own to_json output, which is what lets a failure name
+// the field instead of spilling raw struct bytes. That works for every field EXCEPT one class:
+// a field the encoder projects through a LOSSY transform on the way out. RenderConfig::
+// background_ is the only such field today — it is linear RGB in the struct and sRGB in the
+// JSON, and LinearToSrgb maps two ADJACENT linear float32 values onto the same printable sRGB
+// float. So two configs that genuinely differ can print byte-identical documents, and the reader
+// is told "these diverge" while being shown two identical dumps.
+//
+// That is not hypothetical: it is how this test failed on CI in Sep 2026. The round trip is
+// decode -> encode -> decode against an oracle of a single decode, and on glibc / MSVC (but not
+// on AppleClang, which is why it was green on macOS) the extra encode/decode pair was not the
+// identity for background 0.05 — a 1 ULP linear drift the dump could not show.
+//
+// So: when the structs disagree, also compare them field by field, mirroring
+// RenderConfig::operator==, and print raw float BIT PATTERNS. Bit patterns rather than decimals
+// precisely because "the printed decimal is the same on both sides" is the failure mode being
+// diagnosed. Scope is deliberately RenderConfig only — it is where the known blind spot is, and
+// the generic no-op overload below leaves every other section on the dump it already prints.
+// If a second lossy encode ever appears in another section, give that type its own overload here.
+
+std::string HexBits(float f) {
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &f, sizeof(bits));
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "0x%08x", bits);
+  return buf;
+}
+
+bool SameBits(float a, float b) {
+  std::uint32_t ba = 0;
+  std::uint32_t bb = 0;
+  std::memcpy(&ba, &a, sizeof(ba));
+  std::memcpy(&bb, &b, sizeof(bb));
+  return ba == bb;
+}
+
+// Report a float pair when EITHER the value comparison or the bit pattern disagrees: the first
+// covers what operator== sees, the second covers the two cases a value comparison is blind to
+// (NaN == NaN is false with identical bits; -0.0f == 0.0f is true with different bits). Printing
+// both spellings tells the reader which of the two they are looking at.
+void AddFloat(const char* name, float a, float b, std::string* out) {
+  if (a == b && SameBits(a, b)) {
+    return;
+  }
+  *out += std::string("\n      ") + name + ": core=" + std::to_string(a) + " (" + HexBits(a) +
+          ")  capi=" + std::to_string(b) + " (" + HexBits(b) + ")";
+}
+
+void AddFloatArray(const char* name, const float* a, const float* b, int n, std::string* out) {
+  for (int i = 0; i < n; i++) {
+    const std::string element = std::string(name) + "[" + std::to_string(i) + "]";
+    AddFloat(element.c_str(), a[i], b[i], out);
+  }
+}
+
+template <typename T>
+void AddScalar(const char* name, const T& a, const T& b, std::string* out) {
+  if (a == b) {
+    return;
+  }
+  *out += std::string("\n      ") + name + ": core=" + std::to_string(static_cast<long long>(a)) +
+          "  capi=" + std::to_string(static_cast<long long>(b));
+}
+
+void AddGridLines(const char* name, const std::vector<lumice::GridLineParam>& a,
+                  const std::vector<lumice::GridLineParam>& b, std::string* out) {
+  if (a.size() != b.size()) {
+    AddScalar((std::string(name) + ".size").c_str(), a.size(), b.size(), out);
+    return;
+  }
+  for (std::size_t i = 0; i < a.size(); i++) {
+    const std::string prefix = std::string(name) + "[" + std::to_string(i) + "].";
+    AddFloat((prefix + "value").c_str(), a[i].value_, b[i].value_, out);
+    AddFloat((prefix + "width").c_str(), a[i].width_, b[i].width_, out);
+    AddFloat((prefix + "opacity").c_str(), a[i].opacity_, b[i].opacity_, out);
+    AddFloatArray((prefix + "color").c_str(), a[i].color_, b[i].color_, 3, out);
+  }
+}
+
+void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vector<lumice::MarkerStyleParam>& b,
+                std::string* out) {
+  if (a.size() != b.size()) {
+    AddScalar("markers.size", a.size(), b.size(), out);
+    return;
+  }
+  for (std::size_t i = 0; i < a.size(); i++) {
+    const std::string prefix = "markers[" + std::to_string(i) + "].";
+    AddScalar((prefix + "id").c_str(), static_cast<int>(a[i].id_), static_cast<int>(b[i].id_), out);
+    AddScalar((prefix + "enabled").c_str(), static_cast<int>(a[i].enabled_), static_cast<int>(b[i].enabled_), out);
+    AddFloatArray((prefix + "color").c_str(), a[i].color_, b[i].color_, 3, out);
+  }
+}
+
+// Mirrors RenderConfig::operator== (config/config_compare.hpp) field for field. The sizeof
+// sentinel is the same tripwire that operator== carries: a new field must be added on both sides,
+// or a divergence in it reports as "no field differs" here.
+std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
+  static_assert(sizeof(lumice::RenderConfig) == 224, "Update FieldDiff when RenderConfig fields change");
+  std::string out;
+  AddScalar("id", a.id_, b.id_, &out);
+  AddScalar("lens.type", static_cast<int>(a.lens_.type_), static_cast<int>(b.lens_.type_), &out);
+  AddFloat("lens.fov", a.lens_.fov_, b.lens_.fov_, &out);
+  AddScalar("lens_shift[0]", a.lens_shift_[0], b.lens_shift_[0], &out);
+  AddScalar("lens_shift[1]", a.lens_shift_[1], b.lens_shift_[1], &out);
+  AddScalar("resolution[0]", a.resolution_[0], b.resolution_[0], &out);
+  AddScalar("resolution[1]", a.resolution_[1], b.resolution_[1], &out);
+  AddFloat("view.azimuth", a.view_.az_, b.view_.az_, &out);
+  AddFloat("view.elevation", a.view_.el_, b.view_.el_, &out);
+  AddFloat("view.roll", a.view_.ro_, b.view_.ro_, &out);
+  AddScalar("visible", static_cast<int>(a.visible_), static_cast<int>(b.visible_), &out);
+  AddScalar("front", static_cast<int>(a.front_), static_cast<int>(b.front_), &out);
+  AddFloatArray("background(linear)", a.background_, b.background_, 3, &out);
+  AddFloatArray("ray_color", a.ray_color_, b.ray_color_, 3, &out);
+  AddFloat("intensity_factor", a.intensity_factor_, b.intensity_factor_, &out);
+  AddFloat("overlap", a.overlap_, b.overlap_, &out);
+  AddScalar("ev_mode", static_cast<int>(a.ev_mode_), static_cast<int>(b.ev_mode_), &out);
+  AddGridLines("grid.angular_dist", a.angular_dist_grid_, b.angular_dist_grid_, &out);
+  AddGridLines("grid.elevation", a.elevation_grid_, b.elevation_grid_, &out);
+  AddGridLines("grid.longitude", a.longitude_grid_, b.longitude_grid_, &out);
+  AddScalar("grid.horizon", static_cast<int>(a.horizon_), static_cast<int>(b.horizon_), &out);
+  AddScalar("zenith_nadir.enabled", static_cast<int>(a.zenith_nadir_.enabled_),
+            static_cast<int>(b.zenith_nadir_.enabled_), &out);
+  AddFloat("zenith_nadir.radius_px", a.zenith_nadir_.radius_px_, b.zenith_nadir_.radius_px_, &out);
+  AddFloat("zenith_nadir.opacity", a.zenith_nadir_.opacity_, b.zenith_nadir_.opacity_, &out);
+  AddFloatArray("zenith_nadir.color", a.zenith_nadir_.color_, b.zenith_nadir_.color_, 3, &out);
+  AddMarkers(a.markers_, b.markers_, &out);
+  AddFloat("markers_opacity", a.markers_opacity_, b.markers_opacity_, &out);
+  AddFloat("markers_radius_px", a.markers_radius_px_, b.markers_radius_px_, &out);
+  return out;
+}
+
+// No field-level view for the other sections; they have no lossy encode and their dump already
+// names the field.
+template <typename T>
+std::string FieldDiff(const T&, const T&) {
+  return {};
+}
+
+// The one place a "these two items differ" failure message is built. Both call sites below share
+// it so the two can never drift apart — the output of this function is the only diagnostic
+// evidence this test produces when it goes red.
+template <typename T>
+std::string DescribeItemDiff(const char* label, lumice::IdType id, const T& expected, const T& actual) {
+  nlohmann::json a;
+  nlohmann::json b;
+  lumice::to_json(a, expected);
+  lumice::to_json(b, actual);
+  const std::string dump_a = a.dump();
+  const std::string dump_b = b.dump();
+  std::string s = std::string("\n  ") + label + " id " + std::to_string(id) + ":";
+  const std::string fields = FieldDiff(expected, actual);
+  if (!fields.empty()) {
+    s += "\n    differing fields (raw struct values; float bit pattern in parentheses):" + fields;
+  }
+  if (dump_a == dump_b) {
+    s += "\n    NOTE: the two dumps below are BYTE-IDENTICAL. The divergence is invisible in JSON "
+         "because the encoder projects the offending field through a lossy transform (today: "
+         "background, linear in the struct and sRGB in the document). Read the field list above, "
+         "not the dumps.";
+    if (fields.empty()) {
+      s += "\n    NOTE: ...and no field-level difference was found either. Either FieldDiff is out "
+           "of step with operator== (a field was added to one and not the other), or the section "
+           "has no field-level view yet — extend FieldDiff for this type.";
+    }
+  }
+  s += "\n    core: " + dump_a + "\n    capi: " + dump_b;
+  return s;
+}
+
 // Per-id diff of one id-keyed section, rendered as core JSON for the two sides.
 template <typename MapT>
 void AppendItemDiff(const char* section, const MapT& expected, const MapT& actual, std::string* detail) {
@@ -225,12 +398,7 @@ void AppendItemDiff(const char* section, const MapT& expected, const MapT& actua
       continue;
     }
     if (!(it->second == item)) {
-      nlohmann::json a;
-      nlohmann::json b;
-      lumice::to_json(a, item);
-      lumice::to_json(b, it->second);
-      *detail += std::string("\n  ") + section + " id " + std::to_string(id) + ":\n    core: " + a.dump() +
-                 "\n    capi: " + b.dump();
+      *detail += DescribeItemDiff(section, id, item, it->second);
     }
   }
 }
@@ -318,13 +486,8 @@ const std::vector<CorpusCase>& Corpus() {
               continue;
             }
             if (!(expected == it->second)) {
-              nlohmann::json a;
-              nlohmann::json b;
-              lumice::to_json(a, expected);
-              lumice::to_json(b, it->second);
               c.renderer_diff = true;
-              c.renderer_diff_detail +=
-                  "\n  renderer id " + std::to_string(id) + ":\n    core: " + a.dump() + "\n    capi: " + b.dump();
+              c.renderer_diff_detail += DescribeItemDiff("renderer", id, expected, it->second);
             }
           }
           if (c.core.config.renderers_.size() != round_trip.config.renderers_.size()) {
