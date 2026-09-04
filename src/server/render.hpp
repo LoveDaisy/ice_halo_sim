@@ -1,6 +1,7 @@
 #ifndef CONSUMER_RENDER_H_
 #define CONSUMER_RENDER_H_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,7 +12,7 @@
 #include "config/color_class_table.hpp"
 #include "config/light_config.hpp"
 #include "config/render_config.hpp"
-#include "core/annotation_overlay.hpp"  // annotation::CanvasPoint (zenith_point_ / nadir_point_)
+#include "core/annotation_overlay.hpp"  // annotation::CanvasPoint / MarkerId (marker_points_)
 #include "server/consumer.hpp"
 #include "util/logger.hpp"
 
@@ -264,8 +265,15 @@ class RenderConsumer : public IConsume {
   // The marker positions, for the tests that pin WHERE a ring lands and WHETHER one is drawn at
   // all. Same rationale as the mask handles above: the alternative is inferring the point back out
   // of the image, which is the thing under test.
-  const annotation::CanvasPoint& ZenithPointForTest() const { return zenith_point_; }
-  const annotation::CanvasPoint& NadirPointForTest() const { return nadir_point_; }
+  const annotation::CanvasPoint& ZenithPointForTest() const { return marker_points_[annotation::kMarkerZenith]; }
+  const annotation::CanvasPoint& NadirPointForTest() const { return marker_points_[annotation::kMarkerNadir]; }
+  // The whole table, indexed by annotation::MarkerId. The two accessors above are views onto its
+  // first two entries and are kept as they were so the zenith/nadir cases that predate the marker
+  // list need no edit — which is what makes their staying green evidence about this change rather
+  // than about a rewritten test.
+  const std::array<annotation::CanvasPoint, annotation::kMarkerCount>& MarkerPointsForTest() const {
+    return marker_points_;
+  }
   // The cached label anchors, per family. Same rationale as the mask handles above, plus one of
   // its own: these say whether the label GEOMETRY was computed, which is the half of the *_label_
   // contract that is independent of the family's line switch. That half cannot be read off the
@@ -314,6 +322,9 @@ class RenderConsumer : public IConsume {
   // identical. `family` selects those two expressions.
   enum class LineFamily { kElevation, kLongitude };
   void RebuildLineFamilyMasks(LineFamily family);
+  // Where every named reference direction lands on this canvas. Called from the constructor and
+  // from ResetWith — see marker_points_ for why both.
+  void RebuildMarkerPoints();
   // Both families at once, for the two call sites (constructor, ResetWith) that always want both.
   void RebuildGridMasks();
 
@@ -408,12 +419,20 @@ class RenderConsumer : public IConsume {
   // the appearance too and would have to be rebuilt whenever the radius changed. PostSnapshot
   // tests the two distances directly instead, which is O(1) per pixel.
   //
-  // Built ONCE in the constructor, like visible_mask_ / horizon_mask_ and unlike the three mask
-  // families above: this geometry depends only on the layout (lens / fov / view / resolution /
-  // visible / overlap), every one of which NeedsRebuild pins for the consumer's whole life. The
-  // appearance fields it does NOT depend on are exactly the ones ResetWith can change.
-  annotation::CanvasPoint zenith_point_;
-  annotation::CanvasPoint nadir_point_;
+  // ALL of them, always — every id in annotation::MarkerId, whichever ones the config asks to
+  // draw. Same argument the horizon mask's declaration makes: which markers are drawn is an
+  // appearance question, so a config that turns one on mid-run arrives through ResetWith with no
+  // rebuild, and a table computed only for the flags held at construction would be missing exactly
+  // the entry the user just asked for. Computing the lot costs one ComputeOverlay with no angle
+  // list and no labels, i.e. the drawable sweep plus six forward projections.
+  //
+  // Built in the constructor AND in ResetWith, unlike the zenith/nadir pair this replaced, which
+  // was built once. The pair could be: two poles are pure geometry, and every layout field they
+  // depend on is pinned for the consumer's life by NeedsRebuild. Four of the six ids here are
+  // defined relative to the SUN, and the sun is precisely one of the two things ResetWith exists
+  // to change. Rebuilding is therefore a necessary consequence of the wider id space, not a
+  // tidying-up.
+  std::array<annotation::CanvasPoint, annotation::kMarkerCount> marker_points_;
   SunParam sun_;
   float total_intensity_ = 0;
   float snapshot_intensity_ = 0;

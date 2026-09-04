@@ -125,20 +125,14 @@ RenderConsumer::RenderConsumer(RenderConfig config, ColorClassTable class_table,
   visible_mask_ = BuildVisibleMask(config_, rot_, short_pix_);
   RebuildAngularDistMasks();
   RebuildGridMasks();
-  // The zenith / nadir marker positions, once. Not gated on config_.zenith_nadir_.enabled_, and
-  // deliberately so: `enabled_` is an appearance field, so a config that turns the markers on
-  // mid-run arrives through ResetWith with no rebuild, and a position computed only for the flag's
-  // value at construction would be missing exactly when the user has just asked for it. Same
-  // argument the horizon mask's declaration makes, and the cost is far smaller — this request
-  // carries no angle list and no labels, so ComputeOverlay does the drawable sweep and two forward
-  // projections, not a level-set sweep per line.
-  {
-    annotation::Request req = MakeMaskRequest(config_);
-    req.zenith_nadir = true;
-    const annotation::Overlay overlay = annotation::ComputeOverlay(req);
-    zenith_point_ = overlay.zenith;
-    nadir_point_ = overlay.nadir;
-  }
+  // Where every named reference direction lands, whether or not the config asks to draw it. Not
+  // gated on which markers are enabled, and deliberately so — that is an appearance question, so a
+  // config that turns one on mid-run arrives through ResetWith with no rebuild, and a table
+  // computed only for the flags held here would be missing exactly the entry the user has just
+  // asked for. Same argument the horizon mask's declaration makes, and the cost is far smaller:
+  // this request carries no angle list and no labels, so ComputeOverlay does the drawable sweep
+  // and six forward projections, not a level-set sweep per line.
+  RebuildMarkerPoints();
   // Same lifetime argument as the three mask families: the label half depends on an appearance
   // flag that ResetWith can change, so it is (re)built here AND there rather than once. The mask
   // half rides along on the same call, which is what leaves the horizon with ONE computation.
@@ -749,25 +743,70 @@ void RenderConsumer::PostSnapshot() {
   angular_dist_layers.reserve(angular_dist_masks_.size());
   collect_layers(angular_dist_masks_, config_.angular_dist_grid_, angular_dist_layers);
 
-  // The zenith / nadir ring markers, on top of everything else — the layer order the preview
-  // shader uses (overlayAuxLines draws them last). No mask: the ring is a circle of a
-  // config-named radius around a single point, so the per-pixel test is a distance comparison,
-  // which is cheaper than a W*H buffer that would have to be rebuilt whenever the radius moved.
+  // The ring markers, on top of everything else — the layer order the preview shader uses
+  // (overlayAuxLines draws them last). No mask: the ring is a circle of a config-named radius
+  // around a single point, so the per-pixel test is a distance comparison, which is cheaper than a
+  // W*H buffer that would have to be rebuilt whenever the radius moved.
   //
-  // The OR is a coarse gate on entering the per-pixel work at all; each point's own `valid` is
-  // still tested individually below, because zenith and nadir are opposite world directions and
-  // any view that is not full-sky has one of them off the canvas.
-  const bool paint_marker = config_.zenith_nadir_.enabled_ && (zenith_point_.valid || nadir_point_.valid);
-  const float marker_alpha = std::clamp(config_.zenith_nadir_.opacity_, 0.0f, 1.0f);
-  const float marker_radius_px = config_.zenith_nadir_.radius_px_;
+  // ARBITRATION between the two ways a config can ask for markers, and the ONLY place in the tree
+  // that decides it. A non-empty markers_ wins outright; zenith_nadir_ is consulted only when
+  // markers_ is empty. It happens HERE, at the consumer, rather than in either JSON decoder,
+  // because RenderConfig has three producers (this file's own callers, config_manager.cpp,
+  // c_api.cpp) and a rule applied by producers is a rule each of them can forget.
+  //
+  // Not a merge: a config that lists markers is describing its whole marker set, and quietly
+  // adding two more rings from a legacy field it also carries would draw something nobody asked
+  // for. Emptiness is the only absence signal there is, so an explicit `"markers": []` beside a
+  // `"zenith_nadir"` falls back to the legacy pair — a vector cannot tell "key absent" from "key
+  // present and empty", and recording a "was the key seen" bit would push a JSON-parsing detail
+  // into a struct that two of its three producers build with no JSON at all.
+  struct MarkerLayer {
+    annotation::CanvasPoint point;
+    float rgb[3];
+  };
+  std::vector<MarkerLayer> marker_layers;
+  float marker_alpha = 0.0f;
+  float marker_radius_px = 0.0f;
+  if (!config_.markers_.empty()) {
+    marker_alpha = std::clamp(config_.markers_opacity_, 0.0f, 1.0f);
+    marker_radius_px = config_.markers_radius_px_;
+    marker_layers.reserve(config_.markers_.size());
+    for (const auto& m : config_.markers_) {
+      if (!m.enabled_) {
+        continue;
+      }
+      MarkerLayer layer{ marker_points_[static_cast<size_t>(m.id_)], { 0.0f, 0.0f, 0.0f } };
+      SrgbToLinearRgb(m.color_, layer.rgb);
+      marker_layers.push_back(layer);
+    }
+  } else if (config_.zenith_nadir_.enabled_) {
+    // The legacy pair, expressed in the same terms. Deliberately the SAME arithmetic in the same
+    // order as the branch above and as the code this replaced: one clamp of the same opacity, one
+    // sRGB conversion of the same colour, then zenith before nadir. That is what makes a
+    // zenith_nadir-only config render the identical bytes rather than merely a similar picture —
+    // the per-pixel work below is one loop over two entries where it used to be two ifs, and no
+    // floating-point operation is added, removed or reordered.
+    marker_alpha = std::clamp(config_.zenith_nadir_.opacity_, 0.0f, 1.0f);
+    marker_radius_px = config_.zenith_nadir_.radius_px_;
+    float rgb[3]{ 0.0f, 0.0f, 0.0f };
+    SrgbToLinearRgb(config_.zenith_nadir_.color_, rgb);
+    marker_layers.push_back({ marker_points_[annotation::kMarkerZenith], { rgb[0], rgb[1], rgb[2] } });
+    marker_layers.push_back({ marker_points_[annotation::kMarkerNadir], { rgb[0], rgb[1], rgb[2] } });
+  }
+  // A coarse gate on entering the per-pixel work at all; each point's own `valid` is still tested
+  // individually below, because opposite world directions cannot both be on a canvas that is not
+  // full-sky.
+  const bool paint_marker =
+      std::any_of(marker_layers.begin(), marker_layers.end(), [](const MarkerLayer& l) { return l.point.valid; });
   // Half the ring's thickness. The same 1.5 px the level-set mask generator lands on for a field
   // that changes by one unit per pixel (LevelSetMaskFromField: clamp(|grad|, 1e-4, 2) * 1.5), and
   // the distance to a fixed point IS such a field — its gradient is a unit vector everywhere. Not
   // a separately chosen number: the markers are the same thickness as every other annotation.
   constexpr float kMarkerHalfWidthPx = 1.5f;
-  float marker_rgb[3]{ 0.0f, 0.0f, 0.0f };
-  SrgbToLinearRgb(config_.zenith_nadir_.color_, marker_rgb);
   const int width_px = config_.resolution_[0];
+  // Hoisted out of the pixel loop so the ring test costs no allocation per pixel. Sized once;
+  // every entry is (re)written before it is read, under the same `paint_marker` guard.
+  std::vector<uint8_t> on_marker_ring(marker_layers.size(), 0);
 
   // One pass per pixel, intermediates kept in registers. This used to be four
   // full-buffer passes (memcpy into a work buffer → scale → color transform →
@@ -829,19 +868,17 @@ void RenderConsumer::PostSnapshot() {
     // Resolved once per pixel rather than per channel: the ring test does not depend on j. The
     // pixel's coordinates are recovered inside the guard so the default (markers off) path pays
     // for neither the division nor the modulo.
-    bool on_zenith_ring = false;
-    bool on_nadir_ring = false;
     if (paint_marker) {
       const auto px = static_cast<float>(i % width_px);
       const auto py = static_cast<float>(i / width_px);
-      const auto on_ring = [&](const annotation::CanvasPoint& p) {
+      for (size_t m = 0; m < marker_layers.size(); ++m) {
+        const annotation::CanvasPoint& p = marker_layers[m].point;
         // `valid` first, and per point: a default-constructed CanvasPoint sits at (0, 0), so a
         // point that missed the canvas would otherwise draw a ring in the corner for a direction
         // the picture does not contain.
-        return p.valid && std::fabs(std::hypot(px - p.px, py - p.py) - marker_radius_px) < kMarkerHalfWidthPx;
-      };
-      on_zenith_ring = on_ring(zenith_point_);
-      on_nadir_ring = on_ring(nadir_point_);
+        on_marker_ring[m] = static_cast<uint8_t>(
+            p.valid && std::fabs(std::hypot(px - p.px, py - p.py) - marker_radius_px) < kMarkerHalfWidthPx);
+      }
     }
     for (int j = 0; j < 3; j++) {
       if (paint_bg) {
@@ -879,13 +916,15 @@ void RenderConsumer::PostSnapshot() {
       if (paint_outline) {
         rgb[j] = rgb[j] * (1.0f - kOutlineAlpha) + outline_rgb[j] * kOutlineAlpha;
       }
-      // Two independent blends rather than one on the union, matching the shader: where the two
-      // rings overlap it composites both, and so does this.
-      if (on_zenith_ring) {
-        rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_rgb[j] * marker_alpha;
-      }
-      if (on_nadir_ring) {
-        rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_rgb[j] * marker_alpha;
+      // One independent blend per layer rather than one on the union, matching the shader: where
+      // two rings overlap it composites both, and so does this. In list order, which for the
+      // legacy pair is zenith then nadir — the order the two hardcoded ifs this replaced had.
+      if (paint_marker) {
+        for (size_t m = 0; m < marker_layers.size(); ++m) {
+          if (on_marker_ring[m] != 0) {
+            rgb[j] = rgb[j] * (1.0f - marker_alpha) + marker_layers[m].rgb[j] * marker_alpha;
+          }
+        }
       }
       rgb[j] = std::clamp(rgb[j], 0.0f, 1.0f);
       rgb[j] = LinearToSrgb(rgb[j]);
@@ -1061,7 +1100,60 @@ void RenderConsumer::ResetWith(const RenderConfig& new_config, const SunParam& n
   RebuildAngularDistMasks();
   RebuildGridMasks();
   RebuildHorizonAnnotation();
+  // AND the markers, which the zenith/nadir pair this generalizes did NOT need here. Those two are
+  // pure geometry and every layout field they depend on is pinned for the consumer's life; four of
+  // the six ids are defined relative to sun_, and sun_ is one of the two things this function
+  // exists to change. Leaving it out would leave the sun-relative markers pointing at wherever the
+  // sun was when the consumer was built.
+  RebuildMarkerPoints();
   Reset();
+}
+
+// The marker id space is declared twice — as core's annotation::MarkerId and as this config
+// layer's MarkerRefId — because config/ cannot include core/annotation_overlay.hpp (that header
+// already includes config/render_config.hpp to take a RenderConfig, so the dependency would
+// close a cycle). This translation unit is the only place the two meet, so the equality that makes
+// the cast below sound is asserted right here rather than described in a comment somewhere:
+// reordering either side, or adding an id to one of them alone, becomes a compile error instead of
+// a marker that silently resolves to the wrong direction. Same shape as c_api.cpp's assertions for
+// the OTHER pairing of this id space, MarkerId against LUMICE_ANNOTATION_MARKER_*.
+static_assert(static_cast<int>(MarkerRefId::kZenith) == static_cast<int>(annotation::kMarkerZenith),
+              "MarkerRefId and annotation::MarkerId have diverged");
+static_assert(static_cast<int>(MarkerRefId::kNadir) == static_cast<int>(annotation::kMarkerNadir),
+              "MarkerRefId and annotation::MarkerId have diverged");
+static_assert(static_cast<int>(MarkerRefId::kSun) == static_cast<int>(annotation::kMarkerSun),
+              "MarkerRefId and annotation::MarkerId have diverged");
+static_assert(static_cast<int>(MarkerRefId::kSubsun) == static_cast<int>(annotation::kMarkerSubsun),
+              "MarkerRefId and annotation::MarkerId have diverged");
+static_assert(static_cast<int>(MarkerRefId::kAnthelion) == static_cast<int>(annotation::kMarkerAnthelion),
+              "MarkerRefId and annotation::MarkerId have diverged");
+static_assert(static_cast<int>(MarkerRefId::kAntisolar) == static_cast<int>(annotation::kMarkerAntisolar),
+              "MarkerRefId and annotation::MarkerId have diverged");
+
+void RenderConsumer::RebuildMarkerPoints() {
+  annotation::Request req = MakeMaskRequest(config_);
+  // The sun, which four of the six ids are reflections of. ComputeOverlay resolves each id against
+  // this vector through core's own direction table (ResolveMarkerDir), so the two poles ignore it
+  // and the other four do not — this file does not reproduce any of that arithmetic.
+  float sun_dir[3];
+  annotation::SunWorldDir(sun_, sun_dir);
+  std::copy(std::begin(sun_dir), std::end(sun_dir), std::begin(req.reference_dir));
+
+  // Every id, in canonical order, so overlay.markers[i] IS marker_points_[i] and no index map is
+  // needed anywhere downstream.
+  req.markers.reserve(annotation::kMarkerCount);
+  for (int i = 0; i < annotation::kMarkerCount; ++i) {
+    req.markers.push_back(static_cast<annotation::MarkerId>(i));
+  }
+
+  const annotation::Overlay overlay = annotation::ComputeOverlay(req);
+  // Defensive on the size: a degenerate view returns an empty overlay, and the table must then be
+  // all-invalid rather than half-written.
+  if (overlay.markers.size() != marker_points_.size()) {
+    marker_points_.fill(annotation::CanvasPoint{});
+    return;
+  }
+  std::copy(overlay.markers.begin(), overlay.markers.end(), marker_points_.begin());
 }
 
 void RenderConsumer::RebuildAngularDistMasks() {

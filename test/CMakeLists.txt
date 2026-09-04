@@ -91,6 +91,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_label.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_zenith_nadir.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_markers.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_composite_background.cpp"
   # Result-frame lifetime guard + the buffer pool underneath it, and the completion/drain
