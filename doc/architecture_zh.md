@@ -101,7 +101,6 @@ struct Error {
 **实现类**：
 - `RenderConsumer`: 渲染消费者，将模拟数据渲染为图像
 - `StatsConsumer`: 统计消费者，收集光线数量、晶体数量等统计信息
-- `ShowRayInfoConsumer`: 光线信息消费者，用于调试
 
 ### 4. 队列系统
 
@@ -242,7 +241,6 @@ Server::GetResults()
 - `IConsume`: 消费者抽象接口
 - `RenderConsumer`: 渲染消费者，实现各种镜头投影算法
 - `StatsConsumer`: 统计消费者
-- `ShowRayInfoConsumer`: 光线信息消费者
 - `c_api.cpp`: C API 封装实现
 
 **特点**：

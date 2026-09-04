@@ -1,19 +1,19 @@
 // Regression sentinel for the RenderConsumer::Consume empty-batch contract.
 //
 // Background: the assertion in RenderConsumer::Consume once read
-//   assert(!data.outgoing_w_.empty() || data.rays_.Empty());
-// which encodes "rays_ non-empty => outgoing_w_ non-empty". That property is
-// NOT something Design A promises: the simulator-side filter is an emit-gate, so
-// an entire Consume() batch having every candidate ray rejected (outgoing_*
-// empty while rays_ is non-empty) is a legitimate tail event, not a malformed
-// state. A low pass-rate filter tripped it in Debug builds (SIGABRT). The
+//   assert(!data.outgoing_w_.empty() || data.ray_seg_count_ == 0);
+// which encodes "batch traced ray segments => outgoing_w_ non-empty". That
+// property is NOT something Design A promises: the simulator-side filter is an
+// emit-gate, so an entire Consume() batch having every candidate ray rejected
+// (outgoing_* empty while ray_seg_count_ is non-zero) is a legitimate tail
+// event, not a malformed state. A low pass-rate filter tripped it in Debug builds (SIGABRT). The
 // assertion was rewritten to the real Design A invariant —
 // outgoing_d_.size() == 3 * outgoing_w_.size() (the parallel-array sizing
 // documented in sim_data.hpp). See doc/filter-architecture.md §4
 // "Empty-batch contract".
 //
 // Coverage:
-//   A. AllRaysFilteredOutDoesNotAbort — a non-empty rays_ with fully-empty
+//   A. AllRaysFilteredOutDoesNotAbort — a non-zero ray_seg_count_ with fully-empty
 //      outgoing_* must Consume() cleanly and leave snapshot_intensity_ at 0.
 //      Runs in every build type (does not depend on assert firing); this is the
 //      positive regression lock for the fix itself.
@@ -55,16 +55,15 @@ RenderConfig MakeMinimalRenderConfig() {
 }
 
 // -----------------------------------------------------------------------------
-// A. Whole batch filtered out (outgoing_* empty, rays_ non-empty) → no abort.
+// A. Whole batch filtered out (outgoing_* empty, ray_seg_count_ non-zero) → no abort.
 // -----------------------------------------------------------------------------
 TEST(RenderConsumerEmptyBatch, AllRaysFilteredOutDoesNotAbort) {
-  // Model "this batch had N candidate rays, all rejected by the filter": rays_
-  // carries a non-zero size while outgoing_d_/outgoing_w_ stay default-empty.
+  // Model "this batch had N candidate rays, all rejected by the filter":
+  // ray_seg_count_ is non-zero while outgoing_d_/outgoing_w_ stay default-empty.
   constexpr size_t kN = 128;
   SimData data;
   data.curr_wl_ = 550.0f;
-  data.rays_.Reset(kN);
-  data.rays_.size_ = kN;
+  data.ray_seg_count_ = kN;
   // outgoing_d_/outgoing_w_/outgoing_component_ left empty on purpose.
 
   RenderConfig cfg = MakeMinimalRenderConfig();

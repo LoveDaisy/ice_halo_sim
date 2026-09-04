@@ -151,7 +151,6 @@ struct RayBuffer {
 
 struct SimData {
   SimData();
-  explicit SimData(size_t capacity);
   SimData(const SimData& other);
   SimData(SimData&& other) noexcept;
   ~SimData() = default;
@@ -162,7 +161,18 @@ struct SimData {
   // ----- Data -----
   float curr_wl_;
   uint64_t generation_ = 0;
-  RayBuffer rays_;
+  // Number of ray SEGMENTS the producing batch traced. Deliberately a count and
+  // not the buffer: no consumer ever read the segment CONTENT off SimData (the
+  // three registered ones use only the count, and server.cpp only asks whether
+  // it is zero), while carrying the buffer forced the legacy CPU path to hand
+  // its ~1.9 MB accumulation buffer away every batch and allocate a new one —
+  // the measured root cause of the 2-layer-MS Windows/Linux gap. The buffer now
+  // stays recycled in Simulator::SimWorkspace; a test that must inspect raw
+  // segments uses Simulator::SetAllDataObserverForTest instead.
+  // NOTE: zero here doubles as the "batch carried no rays" discriminator that
+  // server.cpp's shutdown-sentinel routing reads (`ray_seg_count_ == 0`), which
+  // is exactly what `rays_.Empty()` meant before.
+  size_t ray_seg_count_ = 0;
   std::vector<Crystal> crystals_;
   std::vector<AxisDistribution> crystal_axis_dists_;  // parallel to crystals_
 

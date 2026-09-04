@@ -152,7 +152,7 @@ TEST(StatsConsumer, ChunkedDispatchAppliesTheRightRuleToEachHalf) {
 //
 // This documents a real coupling rather than a defect. Consume() deliberately does
 // NOT defend against it: the "is this a produced batch" predicate is owned by
-// server.cpp::ConsumeData (`rays_.Empty() && root_ray_count_ == 0` breaks out
+// server.cpp::ConsumeData (`ray_seg_count_ == 0 && root_ray_count_ == 0` breaks out
 // before any Consume() call, so the shutdown/interruption sentinel never arrives
 // here). Re-deriving that predicate in this class would create a second authority
 // for the same protocol question and let the two drift — the exact anti-pattern

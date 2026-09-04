@@ -374,7 +374,7 @@ void RenderConsumer::Consume(const SimData& data) {
   // Resize pre-allocated buffers if needed (grow-only).
   // Use outgoing count for capacity — it's the upper bound for filtered rays.
   size_t outgoing_count = data.outgoing_w_.size();
-  size_t needed = std::max(data.rays_.size_, outgoing_count);
+  size_t needed = std::max(data.ray_seg_count_, outgoing_count);
   if (needed > buf_capacity_) {
     buf_capacity_ = needed;
     d_buf_ = std::make_unique<float[]>(buf_capacity_ * 3);
@@ -408,11 +408,11 @@ void RenderConsumer::Consume(const SimData& data) {
   // Copy pre-filtered outgoing rays into contiguous buffers (Design A:
   // simulator-side filter has already dropped non-matching rays).
   //
-  // The original assertion here checked "rays_ non-empty => outgoing_w_
-  // non-empty", but that property is NOT something Design A ever promises: the
-  // simulator-side filter acts as an emit-gate, so an entire Consume() batch
-  // having every candidate ray rejected (outgoing_* empty while rays_ is
-  // non-empty) is a legitimate tail event, not a malformed state — normal
+  // The original assertion here checked "batch traced ray segments =>
+  // outgoing_w_ non-empty", but that property is NOT something Design A ever
+  // promises: the simulator-side filter acts as an emit-gate, so an entire
+  // Consume() batch having every candidate ray rejected (outgoing_* empty while
+  // ray_seg_count_ is non-zero) is a legitimate tail event, not a malformed state — normal
   // per-batch pass rates are already well under 1% (see
   // doc/filter-architecture.md §4 "Empty-batch contract"). What Design A DOES
   // promise is the outgoing_d_/outgoing_w_ parallel-array sizing invariant

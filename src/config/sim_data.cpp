@@ -47,7 +47,13 @@ namespace lumice {
 // that to 8B, bumping 376 → 384.
 // The exposure anchor adds anchor_y_pixel_data_ (vector<float>, 24B) for the device-side
 // anchor-plane drain, bumping 384 → 408.
-static_assert(sizeof(SimData) == 408, "SimData size changed — update copy/move ctors and operators");
+// The all_data recycling change replaces the `RayBuffer rays_` member with a
+// single `size_t ray_seg_count_`: the legacy CPU path now keeps its ~1.9 MB
+// accumulation buffer recycled in Simulator::SimWorkspace instead of moving it
+// into SimData every batch, and no consumer ever read the segments' content.
+// RayBuffer is 56B (2 size_t + 4 pointers + 2 uint16 + 4B tail padding), so the
+// field shrinks 56B → 8B, shrinking 408 → 360.
+static_assert(sizeof(SimData) == 360, "SimData size changed — update copy/move ctors and operators");
 
 namespace {
 
@@ -414,12 +420,10 @@ RayBuffer& RayBuffer::operator=(RayBuffer&& other) noexcept {
 
 SimData::SimData() : curr_wl_(0.0f) {}
 
-SimData::SimData(size_t capacity) : curr_wl_(0.0f), rays_(capacity) {}
-
 SimData::SimData(const SimData& other)
-    : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(other.rays_), crystals_(other.crystals_),
-      crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_), outgoing_w_(other.outgoing_w_),
-      outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
+    : curr_wl_(other.curr_wl_), generation_(other.generation_), ray_seg_count_(other.ray_seg_count_),
+      crystals_(other.crystals_), crystal_axis_dists_(other.crystal_axis_dists_), outgoing_d_(other.outgoing_d_),
+      outgoing_w_(other.outgoing_w_), outgoing_wl_(other.outgoing_wl_), outgoing_component_(other.outgoing_component_),
       exit_records_(other.exit_records_), xyz_pixel_data_(other.xyz_pixel_data_),
       xyz_landed_weight_(other.xyz_landed_weight_), lane_pixel_data_(other.lane_pixel_data_),
       lane_class_count_(other.lane_class_count_), anchor_y_pixel_data_(other.anchor_y_pixel_data_),
@@ -431,7 +435,7 @@ SimData::SimData(const SimData& other)
       sim_scene_credit_(other.sim_scene_credit_), color_degrade_counts_(other.color_degrade_counts_) {}
 
 SimData::SimData(SimData&& other) noexcept
-    : curr_wl_(other.curr_wl_), generation_(other.generation_), rays_(std::move(other.rays_)),
+    : curr_wl_(other.curr_wl_), generation_(other.generation_), ray_seg_count_(other.ray_seg_count_),
       crystals_(std::move(other.crystals_)), crystal_axis_dists_(std::move(other.crystal_axis_dists_)),
       outgoing_d_(std::move(other.outgoing_d_)), outgoing_w_(std::move(other.outgoing_w_)),
       outgoing_wl_(std::move(other.outgoing_wl_)), outgoing_component_(std::move(other.outgoing_component_)),
@@ -452,7 +456,7 @@ SimData& SimData::operator=(const SimData& other) {
 
   curr_wl_ = other.curr_wl_;
   generation_ = other.generation_;
-  rays_ = other.rays_;
+  ray_seg_count_ = other.ray_seg_count_;
   crystals_ = other.crystals_;
   crystal_axis_dists_ = other.crystal_axis_dists_;
   outgoing_d_ = other.outgoing_d_;
@@ -486,7 +490,7 @@ SimData& SimData::operator=(SimData&& other) noexcept {
 
   curr_wl_ = other.curr_wl_;
   generation_ = other.generation_;
-  rays_ = std::move(other.rays_);
+  ray_seg_count_ = other.ray_seg_count_;
   crystals_ = std::move(other.crystals_);
   crystal_axis_dists_ = std::move(other.crystal_axis_dists_);
   outgoing_d_ = std::move(other.outgoing_d_);

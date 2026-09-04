@@ -7,7 +7,6 @@
 
 #include "config/config_manager.hpp"
 #include "core/simulator.hpp"
-#include "server/show_rays.hpp"
 #include "util/queue.hpp"
 
 extern std::string config_file_name;
@@ -26,45 +25,40 @@ class V3TestProj : public ::testing::Test {
 };
 
 
-// For test
-class CopyRayDataConsumer : public lumice::IConsume {
- public:
-  CopyRayDataConsumer(float* output_data) : output_data_(output_data) {}
-
-  void Consume(const lumice::SimData& data) override {
-    int offset = 0;
-    for (const auto& r : data.rays_) {
-      if (r.to_face_ != lumice::kInvalidId || r.w_ < 0) {
-        continue;
-      }
-      std::memcpy(output_data_ + offset * 7 + 0, r.p_, 3 * sizeof(float));
-      std::memcpy(output_data_ + offset * 7 + 3, r.d_, 3 * sizeof(float));
-      output_data_[offset * 7 + 6] = r.w_;
-      offset++;
+// For test: capture the batch's raw ray segments.
+//
+// This used to be an IConsume registered on the consumer thread, reading
+// SimData::rays_. That buffer no longer travels on SimData — the legacy CPU
+// path recycles it inside Simulator::SimWorkspace, so the only remaining seat
+// for a content read is the simulator's own test observer, which fires
+// synchronously on the producer thread just before the batch is queued. Same
+// batch, same rays, same selection rule; only the seat moved.
+void CopyRayData(void* ctx, const lumice::RayBuffer& all_data) {
+  auto* output_data = static_cast<float*>(ctx);
+  int offset = 0;
+  for (const auto& r : all_data) {
+    if (r.to_face_ != lumice::kInvalidId || r.w_ < 0) {
+      continue;
     }
+    std::memcpy(output_data + offset * 7 + 0, r.p_, 3 * sizeof(float));
+    std::memcpy(output_data + offset * 7 + 3, r.d_, 3 * sizeof(float));
+    output_data[offset * 7 + 6] = r.w_;
+    offset++;
   }
+}
 
- private:
-  float* output_data_;
-};
-
+// Queue drain. It registers no IConsume any more — the batch's ray content is
+// captured by the simulator-side observer above — but the produced SimData
+// still has to be taken off the queue and the loop's exit condition still
+// exercises the "no ray segments" sentinel the server reads.
 class Consumer {
  public:
   Consumer(lumice::QueuePtrS<lumice::SimData> data_queue) : data_queue_(data_queue), stop_(false) {}
 
-  void RegisterConsumer(lumice::ConsumerPtrS consumer) { consumers_.emplace_back(std::move(consumer)); }
-
   void Run() {
     while (true) {
       auto data = data_queue_->Get();
-      if (stop_ || data.rays_.Empty()) {
-        break;
-      }
-
-      for (auto& c : consumers_) {
-        c->Consume(data);
-      }
-      if (stop_) {
+      if (stop_ || data.ray_seg_count_ == 0) {
         break;
       }
     }
@@ -73,7 +67,6 @@ class Consumer {
   void Stop() { stop_ = true; }
 
  private:
-  std::vector<lumice::ConsumerPtrS> consumers_;
   lumice::QueuePtrS<lumice::SimData> data_queue_;
   std::atomic_bool stop_;
 };
@@ -90,9 +83,11 @@ TEST_F(V3TestProj, SimpleProj) {
   constexpr uint32_t kTestSeed = 42;
   lumice::Simulator simulator(config_queue, data_queue, kTestSeed);
 
+  simulator.SetAllDataObserverForTest(&CopyRayData, output_data.get());
+
+  // Still drained on its own thread: the batch must actually be produced and
+  // published for the observer above to have fired on a complete batch.
   Consumer consumer(data_queue);
-  consumer.RegisterConsumer(std::make_unique<lumice::ShowRayInfoConsumer>());
-  consumer.RegisterConsumer(std::make_unique<CopyRayDataConsumer>(output_data.get()));
 
   std::thread prod_thread([&simulator]() { simulator.Run(); });
   std::thread cons_thread([&consumer]() { consumer.Run(); });

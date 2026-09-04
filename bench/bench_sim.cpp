@@ -129,7 +129,7 @@ class SimLoopFixtureBase : public benchmark::Fixture {
       data_queue_->Shutdown();
       while (true) {
         auto data = data_queue_->Get();
-        if (data.rays_.Empty()) {
+        if (data.ray_seg_count_ == 0) {
           break;
         }
       }
