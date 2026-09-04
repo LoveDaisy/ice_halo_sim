@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -4978,4 +4979,159 @@ TEST(AnnotationOverlayApi, IsDeterministicAndCarriesNoCrossCallState) {
   EXPECT_NE(b.drawable, nullptr);
   EXPECT_EQ(std::memcmp(b.drawable, b.drawable, n), 0);
   LUMICE_ReleaseAnnotationOverlay(&b);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Marker / sun-horizon DIRECTION queries — the "point the camera at it" half of the family, with
+// no view, no lens and no canvas. The oracle below is the reflection rule written out longhand
+// from the header's prose (subsun negates altitude, anthelion negates azimuth, antisolar both),
+// deliberately NOT a second call into the same code path: an equivalence check against the
+// implementation would pass just as happily with the sign convention inverted on both sides.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// The sun as this family means it: the direction light TRAVELS, so altitude = asin(-z).
+std::array<float, 3> SunDirFor(float altitude_deg, float azimuth_deg) {
+  const double alt = altitude_deg * 3.14159265358979323846 / 180.0;
+  const double az = azimuth_deg * 3.14159265358979323846 / 180.0;
+  return { static_cast<float>(-std::cos(alt) * std::cos(az)), static_cast<float>(-std::cos(alt) * std::sin(az)),
+           static_cast<float>(-std::sin(alt)) };
+}
+
+void ExpectDirNear(const float got[3], const std::array<float, 3>& want, const char* what) {
+  EXPECT_NEAR(got[0], want[0], 1e-5f) << what << " x";
+  EXPECT_NEAR(got[1], want[1], 1e-5f) << what << " y";
+  EXPECT_NEAR(got[2], want[2], 1e-5f) << what << " z";
+}
+
+}  // namespace
+
+TEST(AnnotationMarkerDirectionApi, RejectsNullAndOutOfRangeIds) {
+  const std::array<float, 3> sun = SunDirFor(20.0f, 0.0f);
+  float out[3] = { 7.0f, 7.0f, 7.0f };
+
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, nullptr, out), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, sun.data(), nullptr),
+            LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(-1, sun.data(), out), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_COUNT, sun.data(), out),
+            LUMICE_ERR_INVALID_VALUE);
+  // A rejected call leaves the caller's buffer alone rather than half-writing it. The distinction
+  // matters because core's own ResolveMarkerDir answers a bad id with the zenith.
+  EXPECT_EQ(out[0], 7.0f);
+  EXPECT_EQ(out[1], 7.0f);
+  EXPECT_EQ(out[2], 7.0f);
+}
+
+TEST(AnnotationMarkerDirectionApi, ResolvesEachIdByItsReflectionRule) {
+  // Two altitudes, one of them below the horizon (a sun that has set still has a subsun and an
+  // anthelion, and the camera can still be pointed at them), and a non-zero azimuth so a rule that
+  // confuses "negate the azimuth" with "negate the altitude" cannot pass by symmetry.
+  // One row per altitude, in a lambda rather than inline: a fatal assert in a loop body would
+  // return out of the whole TEST and hide every altitude after the first failing one.
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 37.0f);
+    float out[3] = {};
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ZENITH, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { 0.0f, 0.0f, -1.0f }, "zenith");  // altitude +90 => asin(-z) = +90
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_NADIR, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { 0.0f, 0.0f, 1.0f }, "nadir");
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, sun, "sun");
+
+    // Subsun: same azimuth, negated altitude — the horizontal part is untouched, z flips.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { sun[0], sun[1], -sun[2] }, "subsun");
+
+    // Anthelion: opposite azimuth, SAME altitude — the horizontal part flips, z is untouched.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ANTHELION, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { -sun[0], -sun[1], sun[2] }, "anthelion");
+
+    // Antisolar: the full antipode. Stated as a dot product because that is the relation a view
+    // preset is judged by ("look 180 degrees away from the sun"), not as three negated components.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ANTISOLAR, sun.data(), out), LUMICE_OK);
+    const float dot = out[0] * sun[0] + out[1] * sun[1] + out[2] * sun[2];
+    EXPECT_NEAR(dot, -1.0f, 1e-5f) << "antisolar at altitude " << alt;
+  };
+  check_altitude(23.0f);
+  check_altitude(-12.0f);
+}
+
+TEST(AnnotationMarkerDirectionApi, NormalizesTheSunDirectionItIsGiven) {
+  // The contract says sun_dir need not be a unit vector. Scaling it by 40 must change nothing, and
+  // the result must still be unit length — a caller writing this straight into a dot-product test
+  // has no other way to know.
+  const std::array<float, 3> unit = SunDirFor(31.0f, -70.0f);
+  const std::array<float, 3> scaled = { unit[0] * 40.0f, unit[1] * 40.0f, unit[2] * 40.0f };
+
+  float from_unit[3] = {};
+  float from_scaled[3] = {};
+  ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, unit.data(), from_unit),
+            LUMICE_OK);
+  ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, scaled.data(), from_scaled),
+            LUMICE_OK);
+  ExpectDirNear(from_scaled, { from_unit[0], from_unit[1], from_unit[2] }, "subsun from a scaled sun_dir");
+  const float len =
+      std::sqrt(from_scaled[0] * from_scaled[0] + from_scaled[1] * from_scaled[1] + from_scaled[2] * from_scaled[2]);
+  EXPECT_NEAR(len, 1.0f, 1e-5f);
+}
+
+TEST(SunHorizonDirectionApi, RejectsNullArguments) {
+  const std::array<float, 3> sun = SunDirFor(10.0f, 0.0f);
+  float out[3] = { 7.0f, 7.0f, 7.0f };
+  EXPECT_EQ(LUMICE_ResolveSunHorizonDirection(nullptr, out), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), nullptr), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(out[0], 7.0f);
+}
+
+TEST(SunHorizonDirectionApi, KeepsTheSunsAzimuthAndZeroesItsAltitude) {
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 118.0f);
+    float out[3] = {};
+    ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), out), LUMICE_OK);
+
+    EXPECT_NEAR(out[2], 0.0f, 1e-6f) << "altitude " << alt << " must come back at the horizon";
+    EXPECT_NEAR(std::sqrt(out[0] * out[0] + out[1] * out[1]), 1.0f, 1e-5f);
+    // Same azimuth as the sun: the two horizontal parts are parallel and point the SAME way, which
+    // the cross-product-is-zero test alone would not distinguish from antiparallel.
+    const float sun_h = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1]);
+    ASSERT_GT(sun_h, 1e-3f);
+    EXPECT_NEAR(out[0], sun[0] / sun_h, 1e-5f);
+    EXPECT_NEAR(out[1], sun[1] / sun_h, 1e-5f);
+  };
+  check_altitude(5.0f);
+  check_altitude(62.0f);
+  check_altitude(-40.0f);
+}
+
+TEST(SunHorizonDirectionApi, FallsBackToAFixedDirectionAtThePoles) {
+  // At the pole the sun has no azimuth to carry down. The contract is a FIXED fallback, so the two
+  // poles must answer identically — a nearest-neighbour rule would give them opposite azimuths,
+  // since the float residue of cos() changes sign across +/-90.
+  float up[3] = {};
+  float down[3] = {};
+  const std::array<float, 3> zenith_sun = { 0.0f, 0.0f, -1.0f };
+  const std::array<float, 3> nadir_sun = { 0.0f, 0.0f, 1.0f };
+  ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(zenith_sun.data(), up), LUMICE_OK);
+  ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(nadir_sun.data(), down), LUMICE_OK);
+  ExpectDirNear(up, { 1.0f, 0.0f, 0.0f }, "sun exactly at the zenith");
+  ExpectDirNear(down, { 1.0f, 0.0f, 0.0f }, "sun exactly at the nadir");
+
+  // Finite and unit-length everywhere through the degenerate band, which is what a view preset
+  // needs: no NaN can reach a camera angle.
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 45.0f);
+    float out[3] = {};
+    ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), out), LUMICE_OK) << "altitude " << alt;
+    EXPECT_TRUE(std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2])) << "altitude " << alt;
+    EXPECT_NEAR(std::sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]), 1.0f, 1e-5f) << "altitude " << alt;
+  };
+  check_altitude(89.0f);
+  check_altitude(89.9f);
+  check_altitude(89.999f);
+  check_altitude(90.0f);
 }

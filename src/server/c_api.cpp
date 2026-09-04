@@ -3659,6 +3659,52 @@ void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay) {
 }
 
 
+// Normalize `in` into `out`, or report that it has no direction to give. Shared by the two
+// direction queries below so "a caller may pass an unnormalized sun_dir" is honoured once rather
+// than in each. A zero-length vector is not an error here: it is handed to core as-is, whose two
+// pole ids ignore it and whose sun-relative ones reflect it, and SunHorizonDir's own degenerate
+// branch catches it — the same answer a near-pole sun gets.
+static void NormalizeSunDir(const float in[3], float out[3]) {
+  const float len = std::sqrt(in[0] * in[0] + in[1] * in[1] + in[2] * in[2]);
+  if (len <= 0.0f) {
+    out[0] = in[0];
+    out[1] = in[1];
+    out[2] = in[2];
+    return;
+  }
+  out[0] = in[0] / len;
+  out[1] = in[1] / len;
+  out[2] = in[2] / len;
+}
+
+LUMICE_ErrorCode LUMICE_ResolveAnnotationMarkerDirection(int marker_id, const float sun_dir[3], float out_dir[3]) {
+  if (!sun_dir || !out_dir) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  // Not redundant with ResolveMarkerDir's own default branch: core answers an unknown id with the
+  // zenith by design, and turning that into a REPORTED error is this boundary's job — the same
+  // reasoning ReadMarkerIdList's range check carries.
+  if (!IsValidMarkerId(marker_id)) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  float unit[3];
+  NormalizeSunDir(sun_dir, unit);
+  lumice::annotation::ResolveMarkerDir(static_cast<lumice::annotation::MarkerId>(marker_id), unit, out_dir);
+  return LUMICE_OK;
+}
+
+
+LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float out_dir[3]) {
+  if (!sun_dir || !out_dir) {
+    return LUMICE_ERR_NULL_ARG;
+  }
+  float unit[3];
+  NormalizeSunDir(sun_dir, unit);
+  lumice::annotation::SunHorizonDir(unit, out_dir);
+  return LUMICE_OK;
+}
+
+
 // =============== Crystal Kind ===============
 // The three kind-taking predicates below share one shape, replacing the
 // `(kind == PRISM) ? kPrism : kPyramid` ternary all three used to spell:

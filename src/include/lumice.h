@@ -1744,6 +1744,36 @@ LUMICE_ErrorCode LUMICE_ComputeAnnotationOverlay(const LUMICE_AnnotationRequest*
 // a live overlay exactly once is required; calling it on anything else does nothing).
 void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay);
 
+// A named reference direction as a WORLD DIRECTION, for a caller that wants to POINT THE CAMERA at
+// it rather than find where it lands on a canvas. LUMICE_ComputeAnnotationOverlay answers the
+// second question and needs a whole view (lens, fov, resolution, hemisphere policy) to do it; these
+// two need none of that and cost O(1). They are thin forwards to core's single owner of the symbol
+// rule, so a view preset and a drawn marker cannot drift into two spellings of "where is the
+// subsun".
+//
+// The convention is the one every direction in this family uses: the direction light TRAVELS, so
+// altitude = asin(-z) and the ZENITH IS z = -1. `sun_dir` need not be a unit vector — it is
+// normalized on entry, exactly like LUMICE_AnnotationRequest::reference_dir — and is ignored
+// outright by the two pole ids.
+//
+// Returns LUMICE_ERR_NULL_ARG if `sun_dir` or `out_dir` is NULL; LUMICE_ERR_INVALID_VALUE if
+// `marker_id` is outside [0, LUMICE_ANNOTATION_MARKER_COUNT). `*out_dir` is untouched on failure.
+LUMICE_ErrorCode LUMICE_ResolveAnnotationMarkerDirection(int marker_id, const float sun_dir[3], float out_dir[3]);
+
+// The sun's azimuth carried down to the horizon: the unit vector with the sun's horizontal
+// direction and zero altitude. Deliberately NOT a LUMICE_ANNOTATION_MARKER_* id and deliberately a
+// second function rather than a seventh value of the one above — a marker id's contract is that
+// asking "where does it land on this canvas" is meaningful, and this direction has no landing-point
+// semantics to offer. Same normalization contract as above.
+//
+// Degenerate near the poles, where the sun's horizontal component vanishes and its azimuth is
+// undefined: below a measured threshold the result falls back to world +x (azimuth 0), a fixed
+// direction rather than a nearest-neighbour one because at exactly +/-90 degrees the recovered
+// azimuth is 180 degrees away from the one just short of it.
+//
+// Returns LUMICE_ERR_NULL_ARG if `sun_dir` or `out_dir` is NULL. `*out_dir` is untouched on failure.
+LUMICE_ErrorCode LUMICE_ResolveSunHorizonDirection(const float sun_dir[3], float out_dir[3]);
+
 // =============== Config ID Range ===============
 // Maximum value for LUMICE config IDs (matches core IdType = uint16_t max).
 // GUI code should clamp user-editable IDs to [0, LUMICE_MAX_ID].
