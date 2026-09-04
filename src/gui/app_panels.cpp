@@ -174,15 +174,22 @@ constexpr float kMarkerLabelGapPx = 4.0f;
 // anchors are SCALED rather than merely offset; without this a label sits at twice its distance
 // from the viewport's top-left corner. The export path passes its FBO size and gets the identity,
 // which is what makes one helper serve both.
+// The canvas-to-target scale along one axis, as its own function because TWO places need the same
+// number: the anchor conversion below, and BuildMarkerLabelSets, which adds a length expressed in
+// the CANVAS's pixels onto an anchor that conversion has already moved. Computing it in both places
+// is how the two came to disagree — the marker offset was written as if the length were already in
+// the target's space, which is true only where the two spaces are the same size.
+float CanvasToTargetScale(int canvas_extent, float target_extent) {
+  return canvas_extent > 0 ? target_extent / static_cast<float>(canvas_extent) : 1.0f;
+}
+
 void FillCurveLabelSet(const AnnotationOverlayCache& cache, const std::vector<AnnotationOverlayCache::Label>& labels,
                        float vp_w, float vp_h, CurveLabelSet* set) {
   if (!cache.HasResult()) {
     return;
   }
-  const int mask_w = cache.Width();
-  const int mask_h = cache.Height();
-  const float sx = mask_w > 0 ? vp_w / static_cast<float>(mask_w) : 1.0f;
-  const float sy = mask_h > 0 ? vp_h / static_cast<float>(mask_h) : 1.0f;
+  const float sx = CanvasToTargetScale(cache.Width(), vp_w);
+  const float sy = CanvasToTargetScale(cache.Height(), vp_h);
   set->anchors.reserve(labels.size());
   for (const auto& l : labels) {
     set->anchors.push_back(CurveLabelAnchor{ l.px * sx, l.py * sy, l.text });
@@ -222,8 +229,8 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& ca
     }
     // An unimaged point gets no name. Not a degradation to notice — zenith and nadir are opposite
     // directions, so on any lens short of full-sky at least one of the six is normally off-canvas,
-    // and DrawOverlayLabels' viewport clamp would otherwise pin its name to an edge it has no
-    // business marking.
+    // and the label pass's viewport clamp (AppendOverlayToDrawList) would otherwise pin its name to
+    // an edge it has no business marking.
     const AnnotationOverlayCache::Point& p = cache.MarkerPoint(i);
     if (!p.valid) {
       continue;
@@ -241,11 +248,16 @@ std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& ca
     FillCurveLabelSet(cache, { AnnotationOverlayCache::Label{ p.px, p.py, 0.0f, kMarkerDisplayNames[i] } }, vp_w, vp_h,
                       &set);
     // Below the ring rather than on it: the anchor core reports is the marker's CENTRE, and a name
-    // drawn there would sit inside the very ring it names. The offset is applied after
-    // FillCurveLabelSet because the ring's radius is already in the target draw list's pixels
-    // (markers_radius_px is a screen-space size, not a canvas one) while the anchor needed scaling.
+    // drawn there would sit inside the very ring it names.
+    //
+    // The radius is CONVERTED before it is added, and the gap is not. markers_radius_px is a
+    // device-pixel size — it is what the shader compares against a distance in the same pixels
+    // u_resolution names (preview_renderer.cpp: u_markers_radius_px vs pos_pix), and what the CLI
+    // writes as a ring size — which is the canvas's space here, so it needs the same scaling the
+    // anchor got. kMarkerLabelGapPx is a clearance in the draw list's own space and needs none: a
+    // gap that scaled with the DPI would read as a different design at every zoom level.
     if (!set.anchors.empty()) {
-      set.anchors[0].py += state.markers_radius_px + kMarkerLabelGapPx;
+      set.anchors[0].py += state.markers_radius_px * CanvasToTargetScale(cache.Height(), vp_h) + kMarkerLabelGapPx;
     }
     out.push_back(std::move(set));
   }
@@ -1738,7 +1750,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     pp.overlay.grid_alpha = g_state.grid_alpha;
     pp.overlay.sun_circles_alpha = g_state.sun_circles_alpha;
     // Angular-distance circles and the coordinate grid: ask core where they are, once the view has
-    // settled. ONE request covers all three families, so the mask the shader samples and the label
+    // settled. ONE request covers every family, so the mask the shader samples and the label
     // anchors drawn below cannot end up describing different curves.
     //
     // Lines and labels have separate switches per family, and the request is made when ANY of them
@@ -1753,7 +1765,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
     } else {
       g_annotation_overlay.Update(AnnotationOverlayCache::ViewKey{});
     }
-    // The non-empty check is not belt-and-braces: one call serves three families, so a result can
+    // The non-empty check is not belt-and-braces: one call serves every family, so a result can
     // hold the grid's mask and not the circles' — the user emptied the circle list, say. An empty
     // vector's data() with a non-zero width/height would have Render() upload W*H bytes from a
     // pointer to nothing.
@@ -1809,7 +1821,7 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
                                    pp.overlay.marker_screen_pos[i].data());
     }
 
-    // Overlay labels at viewport edges. All three families' anchors come from core, through the one
+    // Overlay labels at viewport edges. Every family's anchors come from core, through the one
     // AnnotationOverlayCache result the masks above already read — the GUI walks no curve of its
     // own any more, so the preview and the CLI cannot place the same number differently.
     //
