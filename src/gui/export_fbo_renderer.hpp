@@ -8,6 +8,15 @@
 
 namespace lumice::gui {
 
+// Device pixels -> logical points, the conversion that has to agree with `dpi_scale_*` above.
+// One implementation because it is exactly the shape this pairing exists to remove: the same two
+// lines living in two files, one of them carrying the `dpi > 0` guard and the other not, is how
+// the halved export text got in. A non-positive DPI is a surface that never reported one, and for
+// it points and pixels are the same thing.
+inline float DeviceToLogical(int device_px, float dpi) {
+  return dpi > 0.0f ? static_cast<float>(device_px) / dpi : static_cast<float>(device_px);
+}
+
 // Render a preview image to an off-screen FBO and return the raw RGBA8 pixels
 // (row-major, top-down; same orientation stbi_write_png expects).
 //

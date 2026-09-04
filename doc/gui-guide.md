@@ -56,7 +56,9 @@ From left to right, the Top Bar exposes:
     ratio that a saved config could reproduce on another machine; and a view with the **Front**
     hemisphere clip enabled is refused with a warning rather than exported, since the config format
     has no way to express that clip and the CLI would otherwise render the un-clipped view.
-  - `Include Texture in .lmc` / `Include Overlay in Screenshot` — toggles for the next save / screenshot
+  - `Include Texture in .lmc` — toggle for the next save. A screenshot has no overlay toggle of its own:
+    it shows the overlay the screen shows, so a clean image comes from turning the families off in the
+    Overlay panel.
 - **Right panel collapse**: `<` / `>` mirror the left toggle (also bound to the `]` key).
 
 ## Left Panel — Crystal Parameters

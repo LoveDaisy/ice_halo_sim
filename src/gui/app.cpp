@@ -425,8 +425,8 @@ void DoExportPreviewPng() {
   // a clean image turns the families off where they turned them on.
   const float dpi_x = g_preview_vp.dpi_scale_x;
   const float dpi_y = g_preview_vp.dpi_scale_y;
-  const float label_w = dpi_x > 0.0f ? static_cast<float>(w) / dpi_x : static_cast<float>(w);
-  const float label_h = dpi_y > 0.0f ? static_cast<float>(h) / dpi_y : static_cast<float>(h);
+  const float label_w = DeviceToLogical(w, dpi_x);
+  const float label_h = DeviceToLogical(h, dpi_y);
   std::vector<CurveLabelSet> curve_labels;
   if (g_state.show_horizon_label) {
     curve_labels.push_back(BuildHorizonLabelSet(PreviewAnnotationOverlay(), g_state, label_w, label_h));

@@ -52,7 +52,8 @@ GUI 需要 display server 和支持 OpenGL 3.2 Core Profile 的 GPU。
     表达）；`Free` 与 `Match Background` 两个画幅预设退回仿真纹理自身的 2:1，因为两者都不给出
     一个换台机器仍能复现的比例；开启 **Front** 半球裁剪时导出会被拒绝并给出提示，而不是导出——
     config 格式无法表达这个裁剪，否则 CLI 会渲出未裁剪的画面。
-  - `Include Texture in .lmc` / `Include Overlay in Screenshot` —— 控制下次保存 / 截图的 toggle
+  - `Include Texture in .lmc` —— 控制下次保存的 toggle。截图没有自己的 overlay 开关：它显示的就是
+    屏幕上显示的那层 overlay，要干净的图就在 Overlay 面板里关掉对应的族。
 - **右面板折叠按钮**：`<` / `>` 与左侧对称（也可用快捷键 `]`）。
 
 ## Left Panel — Crystal Parameters（左侧面板）

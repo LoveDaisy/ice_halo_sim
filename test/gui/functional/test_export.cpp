@@ -229,8 +229,8 @@ void RunExportRequest() {
   // Anchors are in LOGICAL POINTS, which is the viewport's device size divided by the DPI — the
   // same conversion app.cpp's Screenshot path and app_panels.cpp's on-screen publication both do.
   std::vector<gui::CurveLabelSet> curve_labels;
-  const float label_w = static_cast<float>(w) / g_req.dpi_scale;
-  const float label_h = static_cast<float>(h) / g_req.dpi_scale;
+  const float label_w = gui::DeviceToLogical(w, g_req.dpi_scale);
+  const float label_h = gui::DeviceToLogical(h, g_req.dpi_scale);
   if (g_req.synth_center_label) {
     gui::CurveLabelSet set;
     set.color[0] = 1.0f;
