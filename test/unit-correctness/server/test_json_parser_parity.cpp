@@ -324,8 +324,16 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 // Mirrors RenderConfig::operator== (config/config_compare.hpp) field for field. The sizeof
 // sentinel is the same tripwire that operator== carries: a new field must be added on both sides,
 // or a divergence in it reports as "no field differs" here.
+//
+// One sentinel per type, not one for the whole reachable field set: sizeof(RenderConfig) is blind
+// to anything held through a std::vector, whose size is the same whatever its element type holds.
+// A field added to GridLineParam or MarkerStyleParam would leave the 224 untouched and go silently
+// unreported by AddGridLines / AddMarkers below — which is exactly the class of blind spot this
+// whole diff exists to close — so each nested element type carries its own assert.
 std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
   static_assert(sizeof(lumice::RenderConfig) == 224, "Update FieldDiff when RenderConfig fields change");
+  static_assert(sizeof(lumice::GridLineParam) == 24, "Update AddGridLines when GridLineParam fields change");
+  static_assert(sizeof(lumice::MarkerStyleParam) == 20, "Update AddMarkers when MarkerStyleParam fields change");
   std::string out;
   AddScalar("id", a.id_, b.id_, &out);
   AddScalar("lens.type", static_cast<int>(a.lens_.type_), static_cast<int>(b.lens_.type_), &out);
