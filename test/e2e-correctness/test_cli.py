@@ -443,7 +443,17 @@ class TestBenchmarkIsaField(LumiceTestCase):
             )
 
     def test_isa_key_matches_the_configure_time_record(self):
-        """Cross-check layer — the `isa` value against CMake's own configure record."""
+        """Cross-check layer — the `isa` value against CMake's own configure record.
+
+        Stated assumption: the oracle below treats `compiler_id == "MSVC"` as
+        equivalent to CMake's `MSVC` boolean, which is what CMakeLists.txt actually
+        gates the macro on. Those two decouple under clang-cl (`MSVC` is true, but
+        the compiler id is "Clang"), which would make this oracle expect "native"
+        against a binary correctly reporting "baseline". No clang-cl build exists in
+        this repo's toolchain matrix today; if one is introduced, persist the `MSVC`
+        boolean itself as a second cache snapshot rather than inferring it from the
+        compiler id.
+        """
         cache_path = self._find_cmake_cache()
         if cache_path is None:
             self.skipTest(
