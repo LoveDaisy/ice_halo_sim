@@ -437,14 +437,16 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // rest of this registry is out of the gate's reach for a structural reason, not an oversight:
     // most of its domains are FloatDomainFn closures over live GuiState (renderer.fov and friends),
     // so their bounds are not constant expressions and no static_assert can read them.
-    constexpr float kSunDiameterMin = 0.1f;
-    constexpr float kSunDiameterMax = 5.0f;
-    constexpr const char* kSunDiameterFmt = "%.2f";
-    static_assert(
-        slider_format::FormatIsFineEnough(kSunDiameterFmt, SliderScale::kLinear, kSunDiameterMin, kSunDiameterMax),
-        "the sun diameter slider's format is coarser than its linear mapping resolves");
-    map.emplace("sun.diameter", FloatField([](GuiState& s) { return &s.sun.diameter; },
-                                           FixedDomain(kSunDiameterMin, kSunDiameterMax), kSunDiameterFmt));
+    {
+      constexpr float kSunDiameterMin = 0.1f;
+      constexpr float kSunDiameterMax = 5.0f;
+      constexpr const char* kSunDiameterFmt = "%.2f";
+      static_assert(
+          slider_format::FormatIsFineEnough(kSunDiameterFmt, SliderScale::kLinear, kSunDiameterMin, kSunDiameterMax),
+          "the sun diameter slider's format is coarser than its linear mapping resolves");
+      map.emplace("sun.diameter", FloatField([](GuiState& s) { return &s.sun.diameter; },
+                                             FixedDomain(kSunDiameterMin, kSunDiameterMax), kSunDiameterFmt));
+    }
     map.emplace("sun.spectrum", SpectrumField());
 
     // ---- sim ----
