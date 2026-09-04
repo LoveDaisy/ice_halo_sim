@@ -17,7 +17,8 @@
 #include <array>
 #include <cmath>
 
-#include "gui/gui_state.hpp"  // kMarkerDisplayNames — the Overlay list this menu must agree with
+#include "gui/field_editor_registry.hpp"  // ConstraintFor — the gate and bounds the menu borrows
+#include "gui/gui_state.hpp"              // kMarkerDisplayNames — the Overlay list this menu must agree with
 #include "gui/view_look_at.hpp"
 
 namespace {
@@ -254,4 +255,36 @@ TEST(ViewLookAtNames, MarkerEntriesReadTheirNameFromTheOverlayListsOwnTable) {
   }
   EXPECT_STREQ(lumice::gui::LookAtDisplayName(LookAtId::kSunHorizon), "Sun-side horizon");
   EXPECT_EQ(lumice::gui::LookAtDisplayName(static_cast<LookAtId>(static_cast<int>(LookAtId::kCount))), nullptr);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The gate and the bounds the menu borrows from the Az/El sliders. What the panel does with them
+// is a frame-level claim and lives in test/gui/functional/test_view_display_controls.cpp; what is
+// asserted here is that the registry actually HAS what the panel reads — in particular a reason
+// string to put in the disabled tooltip, which no gui_test case can see (SetTooltip draws through
+// TextUnformatted, id == 0, invisible to the test engine's item registry).
+// ---------------------------------------------------------------------------------------------
+
+TEST(ViewLookAtGate, TheElevationConstraintCarriesEverythingTheMenuNeedsToReadOffIt) {
+  lumice::gui::GuiState state;
+
+  const auto check_lens = [&state](int lens, bool want_enabled, float want_limit) {
+    state.renderer.lens_type = lens;
+    const lumice::gui::FieldEditorConstraint el = lumice::gui::ConstraintFor("renderer.elevation", state);
+    EXPECT_EQ(el.enabled, want_enabled) << "lens " << lens;
+    if (want_enabled) {
+      // The bounds the menu clamps with. Globe stopping one degree short of the pole is the case
+      // that makes clamping load-bearing rather than decorative.
+      EXPECT_TRUE(el.has_numeric_domain) << "lens " << lens;
+      EXPECT_DOUBLE_EQ(el.max_value, want_limit) << "lens " << lens;
+      EXPECT_DOUBLE_EQ(el.min_value, -want_limit) << "lens " << lens;
+    } else {
+      // A disabled entry with nothing to say is worse than no entry: "Look At is grey and I do not
+      // know why" is the confusion this string exists to prevent.
+      EXPECT_NE(el.disabled_reason, nullptr) << "lens " << lens << " is gated but offers no reason";
+    }
+  };
+  check_lens(lumice::gui::kLensTypeLinear, true, 90.0f);
+  check_lens(lumice::gui::kLensTypeGlobe, true, 89.0f);
+  check_lens(lumice::gui::kLensTypeDualFisheyeEqualArea, false, 0.0f);
 }

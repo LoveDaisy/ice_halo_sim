@@ -113,6 +113,25 @@ struct ScopedBackground {
 const char* const kViewInputs[] = { "**/##FOV##view_input", "**/##Elevation##view_input", "**/##Azimuth##view_input",
                                     "**/##Roll##view_input" };
 
+// The Look At entry. A "###" id, so the icon in its label is not part of it.
+const char* const kLookAtButton = "**/###view_look_at";
+
+// Open the Look At menu and pick one entry by its visible name.
+//
+// Two steps, for the reason test_color_window.cpp records at its own popup helper: a wildcard path
+// resolves its prefix with ImHashDecoratedPath, which does not understand "$FOCUSED" — only
+// SetRef() does — so the popup has to BECOME the ref before the wildcard search rather than inside
+// it. Reports nothing itself; the caller checks the state that was supposed to change.
+void PickLookAt(ImGuiTestContext* ctx, const char* entry) {
+  ctx->SetRef("//##RightPanel");
+  ctx->ItemClick(kLookAtButton);
+  ctx->Yield(2);
+  ctx->SetRef("//$FOCUSED");
+  ctx->ItemClick((std::string("**/") + entry).c_str());
+  ctx->Yield(2);
+  ctx->SetRef("");
+}
+
 }  // namespace
 
 void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
@@ -1094,6 +1113,213 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_LE(readout_info.RectFull.GetWidth() - readout_info.RectClipped.GetWidth(),
                   ImGui::GetStyle().ItemSpacing.x);
 
+      ctx->SetRef("");
+    };
+  }
+
+  // ---- Look At presets ----------------------------------------------------------------------
+  //
+  // What a user sees when these break: they pick "Antisolar" and the camera turns somewhere else,
+  // or it turns to the right place and quietly loses the roll and field of view they had set, or
+  // Globe hands them a pose its own slider cannot express so the next touch of that slider snaps
+  // the view away.
+  //
+  // Where the ARITHMETIC is judged: unit-correctness/gui/test_view_look_at.cpp, against analytic
+  // relations (the antisolar direction is 180 degrees from the sun, and so on) with its own
+  // independently written oracle. Nothing below restates that. These cases are about the parts only
+  // a real frame can answer — that the entry is gated by the same rule as the sliders it writes,
+  // that what reaches g_state is the CLAMPED value, that the fields it must not touch are
+  // untouched, and that the menu shows the same words the Overlay list does.
+  //
+  // Deliberately NOT covered here: the tooltip TEXT on the disabled entry. It is drawn through
+  // ImGui::SetTooltip, i.e. TextUnformatted with id == 0, which the test engine's item registry
+  // never sees — the same mechanical limit this file already records for the Resolution tooltip and
+  // test_color_window.cpp records for its own. That the registry has a reason to show at all is
+  // asserted one layer down, in test_view_look_at.cpp.
+
+  // P-LookAt-1 / AC1. The gate is the sliders' gate. Asserted across the lens space rather than at
+  // one lens, because "same rule" is a claim about where the two answers agree AND disagree: a
+  // hand-written `lens == globe` condition would pass a globe-only check and fail here.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "the_look_at_entry_is_gated_exactly_like_the_view_angles");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      ctx->Yield(2);
+
+      // Every lens the product offers, iterated from the product's own list so a lens added later
+      // is covered here without anyone adding a row.
+      for (const int lens : gui::kLensTypePresentationOrder) {
+        gui::g_state.renderer.lens_type = lens;
+        ctx->Yield(3);
+        const ImGuiTestItemInfo look_at = ctx->ItemInfo(kLookAtButton, ImGuiTestOpFlags_NoError);
+        const ImGuiTestItemInfo elevation = ctx->ItemInfo("**/##Elevation##view_input", ImGuiTestOpFlags_NoError);
+        if (look_at.ID == 0) {
+          IM_ERRORF("lens %d does not offer the Look At entry at all", lens);
+        } else if (IsDisabled(look_at) != IsDisabled(elevation)) {
+          IM_ERRORF("lens %d: Look At disabled=%d but the Elevation slider disabled=%d", lens,
+                    static_cast<int>(IsDisabled(look_at)), static_cast<int>(IsDisabled(elevation)));
+        }
+
+        if (ctx->IsError()) {
+          break;
+        }
+      }
+    };
+  }
+
+  // P-LookAt-2 / AC2. The value that lands in g_state is the CLAMPED one, and Globe is where that
+  // is visible: its elevation stops one degree short of the pole, so an unclamped Zenith writes
+  // 90 into a field whose slider tops out at 89. The re-read after further frames is the second
+  // half — a preset that wrote 90 and let the slider pull it back to 89 next frame would satisfy a
+  // "the final value is 89" check on its own, while having spent a frame in a pose the panel says
+  // is impossible.
+  {
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "view_display_controls", "a_preset_writes_the_pose_the_sliders_own_bounds_allow");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeGlobe;
+      ctx->Yield(3);
+      PickLookAt(ctx, "Zenith");
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);  // nothing pulled it afterwards
+
+      PickLookAt(ctx, "Nadir");
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
+      ctx->Yield(4);
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
+
+      // The same two presets under a lens whose bound is the pole itself: 90, not 89. Without this
+      // half, an implementation that hard-coded 89 would pass everything above.
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+      PickLookAt(ctx, "Zenith");
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 90.0f);
+      PickLookAt(ctx, "Nadir");
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, -90.0f);
+    };
+  }
+
+  // P-LookAt-3 / AC3. Roll and field of view are the user's framing; "look at that" does not
+  // include "and throw away how I had it framed". Bitwise, not approximate — the claim is that the
+  // fields were not written, and any tolerance would let a write that happened to be small pass.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "a_preset_leaves_roll_and_fov_untouched");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+      gui::g_state.renderer.roll = 33.0f;
+      gui::g_state.renderer.fov = 47.0f;
+      gui::g_state.sun.altitude = 30.0f;
+      ctx->Yield(3);
+      const float roll_before = gui::g_state.renderer.roll;
+      const float fov_before = gui::g_state.renderer.fov;
+
+      // Every entry, not one: the fields the presets share are written in one place, but the loop
+      // is what says no single entry grew its own side effect.
+      const char* const kEntries[] = {
+        "Zenith", "Nadir", "Sun", "Subsun", "Anthelion", "Antisolar", "Sun-side horizon"
+      };
+      for (const char* entry : kEntries) {
+        PickLookAt(ctx, entry);
+        if (gui::g_state.renderer.roll != roll_before || gui::g_state.renderer.fov != fov_before) {
+          IM_ERRORF("%s changed roll %f->%f or fov %f->%f", entry, static_cast<double>(roll_before),
+                    static_cast<double>(gui::g_state.renderer.roll), static_cast<double>(fov_before),
+                    static_cast<double>(gui::g_state.renderer.fov));
+        }
+
+        if (ctx->IsError()) {
+          break;
+        }
+      }
+    };
+  }
+
+  // P-LookAt-4. The wiring, end to end through the real widget: the preset reads the CURRENT sun
+  // altitude out of g_state and the angles it computes reach the renderer fields. Two altitudes,
+  // one of them below the horizon, because a call site that passed a constant — or read the wrong
+  // field — would satisfy a single-altitude check.
+  //
+  // The relations themselves (elevation equals the sun's altitude; the antisolar point is a half
+  // turn away and mirrored) are the same ones the unit layer proves against its own oracle. What is
+  // new here is only that this menu, in this panel, is connected to them.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "the_sun_presets_follow_the_current_sun_altitude");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+
+      const auto check_altitude = [ctx](float altitude) {
+        gui::g_state.sun.altitude = altitude;
+        ctx->Yield(3);
+
+        PickLookAt(ctx, "Sun");
+        IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation - altitude), 1e-3f);
+        IM_CHECK_LT(std::fabs(gui::g_state.renderer.azimuth), 1e-3f);
+
+        PickLookAt(ctx, "Antisolar");
+        IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation + altitude), 1e-3f);
+        IM_CHECK_LT(std::fabs(std::fabs(gui::g_state.renderer.azimuth) - 180.0f), 1e-3f);
+
+        PickLookAt(ctx, "Sun-side horizon");
+        IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation), 1e-3f);
+        IM_CHECK_LT(std::fabs(gui::g_state.renderer.azimuth), 1e-3f);
+      };
+      check_altitude(30.0f);
+      check_altitude(-12.0f);  // the sun has set; its subsun and anthelion have not
+    };
+  }
+
+  // P-LookAt-5 / AC6. One direction, one name. The six marker entries are looked up by the strings
+  // the Overlay list itself is built from, so a rename that reached only one of the two lists
+  // leaves this case unable to find the entry.
+  {
+    ImGuiTest* t = IM_REGISTER_TEST(engine, "view_display_controls", "the_menu_names_the_directions_the_overlay_does");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ResetTestState();
+      const ScopedPopups popup_guard(ctx);
+      ctx->Yield(2);
+      gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
+      ctx->Yield(3);
+
+      ctx->SetRef("//##RightPanel");
+      ctx->ItemClick(kLookAtButton);
+      ctx->Yield(2);
+      ctx->SetRef("//$FOCUSED");
+      for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+        const std::string entry = std::string("**/") + gui::kMarkerDisplayNames[i];
+        if (!ctx->ItemExists(entry.c_str())) {
+          IM_ERRORF("the menu has no entry named '%s'", gui::kMarkerDisplayNames[i]);
+        }
+
+        if (ctx->IsError()) {
+          break;
+        }
+      }
+      IM_CHECK(ctx->ItemExists("**/Sun-side horizon"));
+      ctx->SetRef("");
+      // Close the menu this case opened by hand. Left up, it covers the button the next step has to
+      // click, and the failure reads as "the button is not hoverable" rather than as the leak it is.
+      ctx->KeyPress(ImGuiKey_Escape);
+      ctx->Yield(2);
+
+      // And picking one closes the menu — a preset is an action, not a mode, so the list must not
+      // stay up waiting for a second choice.
+      PickLookAt(ctx, "Sun");
+      ctx->SetRef("//$FOCUSED");
+      IM_CHECK(!ctx->ItemExists("**/Anthelion"));
       ctx->SetRef("");
     };
   }

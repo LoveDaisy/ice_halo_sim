@@ -27,6 +27,7 @@
 #include "gui/sim_state_rules.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "gui/theme.hpp"
+#include "gui/view_look_at.hpp"
 #include "imgui.h"
 #include "util/color_space.hpp"
 #include "util/path_utils.hpp"  // PathToU8 — the pending export path is shown in the overwrite prompt
@@ -1299,11 +1300,65 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
     ImGui::EndDisabled();
 
     ImGui::Separator();
-    float btn_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    // Two buttons sharing one right-aligned row. Triple hash on the Look At label for the same
+    // reason the marker folds use one: the label carries a glyph, and ImGui hashes the WHOLE label,
+    // so a "##" id would contain the icon codepoint and swapping the icon would silently rename the
+    // item every test locates it by.
+    constexpr const char* kLookAtId = "###view_look_at";
+    const std::string look_at_label = std::string("Look At ") + ICON_FA_CHEVRON_DOWN + kLookAtId;
+    const float frame_pad_x = ImGui::GetStyle().FramePadding.x * 2.0f;
+    float btn_w = ImGui::CalcTextSize("Reset").x + frame_pad_x;
+    const float look_at_w = ImGui::CalcTextSize(look_at_label.c_str(), nullptr, true).x + frame_pad_x;
+    const float pair_w = look_at_w + ImGui::GetStyle().ItemSpacing.x + btn_w;
     float avail = ImGui::GetContentRegionAvail().x;
-    if (avail > btn_w) {
-      ImGui::SameLine(avail - btn_w);
+    if (avail > pair_w) {
+      ImGui::SameLine(avail - pair_w);
     }
+    // The gate is READ from the elevation field's own constraint, not restated: this entry writes
+    // exactly what the Az/El sliders write, so "when may it be used" has to be the same question,
+    // answered in the same place. Under a full-sky lens there is no single viewing direction to
+    // point anywhere, and an entry that stayed live there would offer to centre the camera on the
+    // sun in a view that shows every direction at once.
+    ImGui::BeginDisabled(!el_c.enabled);
+    if (ImGui::SmallButton(look_at_label.c_str())) {
+      ImGui::OpenPopup(kLookAtId);
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (!el_c.enabled && el_c.disabled_reason != nullptr) {
+        ImGui::SetTooltip("%s", el_c.disabled_reason);
+      } else {
+        ImGui::SetTooltip("Point the camera at a named direction");
+      }
+    }
+    ImGui::EndDisabled();
+    // Outside the disabled block: the popup is its own window, and a disabled scope wrapping it
+    // would grey out entries that are only reachable when the button was live in the first place.
+    if (ImGui::BeginPopup(kLookAtId)) {
+      for (int i = 0; i < static_cast<int>(LookAtId::kCount); ++i) {
+        const auto id = static_cast<LookAtId>(i);
+        const char* name = LookAtDisplayName(id);
+        if (name == nullptr) {
+          continue;
+        }
+        if (ImGui::Selectable(name)) {
+          float az = 0.0f;
+          float el = 0.0f;
+          if (ResolveLookAtAzEl(id, g_state.sun.altitude, &az, &el)) {
+            // Clamped with the SLIDERS' OWN bounds, the ones already read above. Globe stops one
+            // degree short of the pole, so an unclamped Zenith preset would leave the camera at a
+            // pose the slider cannot express — and the next touch of that slider would snap it
+            // away, which reads as the preset having been ignored.
+            r.elevation = std::clamp(el, static_cast<float>(el_c.min_value), static_cast<float>(el_c.max_value));
+            r.azimuth = std::clamp(az, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value));
+          }
+          // Roll and fov are the user's framing, not part of "look at that". A preset that reset
+          // them would silently undo work every time it was used.
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::EndPopup();
+    }
+    ImGui::SameLine();
     if (ImGui::SmallButton("Reset##view")) {
       ViewDefaults d = DefaultViewParamsFor(r.lens_type);
       r.fov = d.fov;
