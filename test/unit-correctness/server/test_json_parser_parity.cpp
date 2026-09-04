@@ -247,6 +247,15 @@ std::string HexBits(float f) {
   return buf;
 }
 
+// %.9g, not std::to_string: the latter prints six fraction digits, which renders a 1 ULP drift as
+// two identical strings — the very confusion this block exists to remove. Nine significant digits
+// round-trips every float32.
+std::string Decimal(float f) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(f));
+  return buf;
+}
+
 bool SameBits(float a, float b) {
   std::uint32_t ba = 0;
   std::uint32_t bb = 0;
@@ -263,8 +272,8 @@ void AddFloat(const char* name, float a, float b, std::string* out) {
   if (a == b && SameBits(a, b)) {
     return;
   }
-  *out += std::string("\n      ") + name + ": core=" + std::to_string(a) + " (" + HexBits(a) +
-          ")  capi=" + std::to_string(b) + " (" + HexBits(b) + ")";
+  *out += std::string("\n      ") + name + ": core=" + Decimal(a) + " (" + HexBits(a) + ")  capi=" + Decimal(b) + " (" +
+          HexBits(b) + ")";
 }
 
 void AddFloatArray(const char* name, const float* a, const float* b, int n, std::string* out) {
