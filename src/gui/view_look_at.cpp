@@ -1,5 +1,6 @@
 #include "gui/view_look_at.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "gui/annotation_overlay_cache.hpp"  // GuiSunWorldDir — the GUI's one spelling of the sun
@@ -72,6 +73,26 @@ bool ResolveLookAtAzEl(LookAtId id, float sun_altitude_deg, float* out_az_deg, f
     return false;
   }
   WorldDirToAzEl(target, out_az_deg, out_el_deg);
+  return true;
+}
+
+bool ResolveLookAtPose(LookAtId id, float sun_altitude_deg, const FieldEditorConstraint& el_c,
+                       const FieldEditorConstraint& az_c, float* out_az_deg, float* out_el_deg) {
+  float az = 0.0f;
+  float el = 0.0f;
+  if (!ResolveLookAtAzEl(id, sun_altitude_deg, &az, &el)) {
+    return false;
+  }
+  // has_numeric_domain guards a constraint that carries no interval — a combo or a bool row would
+  // report [0, 0], and clamping to that would point the camera at the equirect centre for every
+  // preset. Neither field this is called with is such a row, which is why the guard passes the
+  // value through rather than failing: the interval is missing, not violated.
+  *out_el_deg = el_c.has_numeric_domain ?
+                    std::clamp(el, static_cast<float>(el_c.min_value), static_cast<float>(el_c.max_value)) :
+                    el;
+  *out_az_deg = az_c.has_numeric_domain ?
+                    std::clamp(az, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value)) :
+                    az;
   return true;
 }
 

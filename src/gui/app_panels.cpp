@@ -1343,13 +1343,12 @@ void RenderRightPanel(GLFWwindow* window, float window_width, float window_heigh
         if (ImGui::Selectable(name)) {
           float az = 0.0f;
           float el = 0.0f;
-          if (ResolveLookAtAzEl(id, g_state.sun.altitude, &az, &el)) {
-            // Clamped with the SLIDERS' OWN bounds, the ones already read above. Globe stops one
-            // degree short of the pole, so an unclamped Zenith preset would leave the camera at a
-            // pose the slider cannot express — and the next touch of that slider would snap it
-            // away, which reads as the preset having been ignored.
-            r.elevation = std::clamp(el, static_cast<float>(el_c.min_value), static_cast<float>(el_c.max_value));
-            r.azimuth = std::clamp(az, static_cast<float>(az_c.min_value), static_cast<float>(az_c.max_value));
+          // Handed the SLIDERS' OWN constraints, the ones already read above for those sliders —
+          // so "which poses may a preset produce" is not a second opinion about the bounds, and
+          // Globe's one-degree back-off from the pole applies here for free.
+          if (ResolveLookAtPose(id, g_state.sun.altitude, el_c, az_c, &az, &el)) {
+            r.elevation = el;
+            r.azimuth = az;
           }
           // Roll and fov are the user's framing, not part of "look at that". A preset that reset
           // them would silently undo work every time it was used.

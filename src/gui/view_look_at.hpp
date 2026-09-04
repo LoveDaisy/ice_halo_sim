@@ -1,7 +1,8 @@
 #ifndef LUMICE_GUI_VIEW_LOOK_AT_HPP
 #define LUMICE_GUI_VIEW_LOOK_AT_HPP
 
-#include "include/lumice.h"  // LUMICE_ANNOTATION_MARKER_* — the id space the first six entries ARE
+#include "gui/field_editor_registry.hpp"  // FieldEditorConstraint — the sliders' own bounds
+#include "include/lumice.h"               // LUMICE_ANNOTATION_MARKER_* — the id space the first six entries ARE
 
 namespace lumice::gui {
 
@@ -77,6 +78,23 @@ void WorldDirToAzEl(const float dir[3], float* az_deg, float* el_deg);
 // Returns false and leaves the outputs untouched if `id` is out of range or the C API rejects the
 // query; the caller writes nothing in that case rather than pointing the camera somewhere arbitrary.
 bool ResolveLookAtAzEl(LookAtId id, float sun_altitude_deg, float* out_az_deg, float* out_el_deg);
+
+// The same thing, brought inside the bounds the Az/El sliders enforce. The caller passes the
+// constraints it already read for those sliders, so the interval is not a second copy of them and
+// cannot drift; what this function owns is only the decision that a preset is subject to it.
+//
+// WHY THIS IS A FUNCTION AND NOT TWO std::clamp CALLS AT THE CALL SITE. The panel redraws the two
+// sliders every frame, and SliderWithInput clamps its value unconditionally (panels.cpp), so an
+// out-of-range write is repaired one frame later whatever the preset did. That makes the clamp
+// invisible to any test that reads the state through the panel: the observed value is the same
+// either way. Naming the step gives the proposition somewhere to be judged — and the proposition is
+// real, because the frame in which the preset writes is a frame the preview, the overlay cache and
+// the export path all read, and under Globe the value they would read is the pole its view matrix
+// is documented to degenerate at.
+//
+// Returns false and writes nothing when ResolveLookAtAzEl does.
+bool ResolveLookAtPose(LookAtId id, float sun_altitude_deg, const FieldEditorConstraint& el_c,
+                       const FieldEditorConstraint& az_c, float* out_az_deg, float* out_el_deg);
 
 }  // namespace lumice::gui
 

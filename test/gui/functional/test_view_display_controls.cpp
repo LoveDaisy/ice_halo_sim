@@ -1168,12 +1168,19 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
     };
   }
 
-  // P-LookAt-2 / AC2. The value that lands in g_state is the CLAMPED one, and Globe is where that
-  // is visible: its elevation stops one degree short of the pole, so an unclamped Zenith writes
-  // 90 into a field whose slider tops out at 89. The re-read after further frames is the second
-  // half — a preset that wrote 90 and let the slider pull it back to 89 next frame would satisfy a
-  // "the final value is 89" check on its own, while having spent a frame in a pose the panel says
-  // is impossible.
+  // P-LookAt-2. The pose the user is left with is the one the panel says is reachable, per lens.
+  //
+  // WHAT THIS CASE CANNOT SEE, stated because the obvious reading of it is wrong: it does NOT
+  // attribute the bound to the preset. The panel redraws the Az/El sliders every frame and
+  // SliderWithInput clamps unconditionally (panels.cpp), so an unclamped preset write is repaired
+  // on the next frame and the value read here is 89 either way — measured, by removing the clamp
+  // and watching this case stay green. The clamp's own proposition is judged where it can go red,
+  // in unit-correctness/gui/test_view_look_at.cpp's ViewLookAtPose cases.
+  //
+  // What is left here is still worth its frames: it is the end-to-end claim that picking an entry
+  // moves the camera to a pose this lens allows, including the pair of lenses whose allowed poles
+  // differ (Globe backs off a degree, a rectilinear lens does not), which a preset wired to the
+  // wrong field or to a constant would fail.
   {
     ImGuiTest* t =
         IM_REGISTER_TEST(engine, "view_display_controls", "a_preset_writes_the_pose_the_sliders_own_bounds_allow");
@@ -1187,7 +1194,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       PickLookAt(ctx, "Zenith");
       IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);
       ctx->Yield(4);
-      IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);  // nothing pulled it afterwards
+      IM_CHECK_EQ(gui::g_state.renderer.elevation, 89.0f);  // and it settles there rather than drifting
 
       PickLookAt(ctx, "Nadir");
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
@@ -1195,13 +1202,19 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(gui::g_state.renderer.elevation, -89.0f);
 
       // The same two presets under a lens whose bound is the pole itself: 90, not 89. Without this
-      // half, an implementation that hard-coded 89 would pass everything above.
+      // half, a preset wired to a constant would pass everything above.
+      //
+      // Approximate on this side, exact on the Globe side above, and the asymmetry is the reason
+      // rather than an oversight: under Globe the value IS the bound, written by a clamp, so it is
+      // bit-exact; here nothing clamps and the value is a trig round trip through float, measured at
+      // 89.999992 for the zenith. What the tolerance must not swallow is the difference this half
+      // exists to see — 89 versus 90 — and 1e-3 is five orders of magnitude clear of it.
       gui::g_state.renderer.lens_type = gui::kLensTypeLinear;
       ctx->Yield(3);
       PickLookAt(ctx, "Zenith");
-      IM_CHECK_EQ(gui::g_state.renderer.elevation, 90.0f);
+      IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation - 90.0f), 1e-3f);
       PickLookAt(ctx, "Nadir");
-      IM_CHECK_EQ(gui::g_state.renderer.elevation, -90.0f);
+      IM_CHECK_LT(std::fabs(gui::g_state.renderer.elevation + 90.0f), 1e-3f);
     };
   }
 

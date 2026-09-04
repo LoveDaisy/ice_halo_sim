@@ -288,3 +288,87 @@ TEST(ViewLookAtGate, TheElevationConstraintCarriesEverythingTheMenuNeedsToReadOf
   check_lens(lumice::gui::kLensTypeGlobe, true, 89.0f);
   check_lens(lumice::gui::kLensTypeDualFisheyeEqualArea, false, 0.0f);
 }
+
+// ---------------------------------------------------------------------------------------------
+// AC2 — the pose a preset is allowed to produce.
+//
+// This is the ONLY layer at which the clamp is judgeable. The panel redraws the Az/El sliders every
+// frame and SliderWithInput clamps unconditionally, so an unclamped preset write is repaired one
+// frame later and the state a gui_test case reads is identical either way — a case there is unable
+// to go red on this, whatever it asserts. Verified by removing the clamp and watching the panel-
+// level case stay green.
+//
+// What the clamp buys is the frame in between, which the preview, the overlay cache and the export
+// path all read: under Globe an unclamped Zenith would put them at the pole the registry backs one
+// degree off from, and the slider would then snap the view away on the next frame — which reads as
+// the preset having been ignored.
+// ---------------------------------------------------------------------------------------------
+
+TEST(ViewLookAtPose, TheGlobeBoundsPullThePolesInByADegree) {
+  lumice::gui::GuiState state;
+  state.renderer.lens_type = lumice::gui::kLensTypeGlobe;
+  const lumice::gui::FieldEditorConstraint el_c = lumice::gui::ConstraintFor("renderer.elevation", state);
+  const lumice::gui::FieldEditorConstraint az_c = lumice::gui::ConstraintFor("renderer.azimuth", state);
+
+  float az = 0.0f;
+  float el = 0.0f;
+  ASSERT_TRUE(lumice::gui::ResolveLookAtPose(LookAtId::kZenith, 20.0f, el_c, az_c, &az, &el));
+  EXPECT_FLOAT_EQ(el, 89.0f) << "Globe must not be handed a pose its own slider cannot express";
+  ASSERT_TRUE(lumice::gui::ResolveLookAtPose(LookAtId::kNadir, 20.0f, el_c, az_c, &az, &el));
+  EXPECT_FLOAT_EQ(el, -89.0f);
+
+  // The unclamped answer is the pole itself — stated so the case above is visibly a clamp and not
+  // an arithmetic that happened to land on 89.
+  float raw_az = 0.0f;
+  float raw_el = 0.0f;
+  ASSERT_TRUE(lumice::gui::ResolveLookAtAzEl(LookAtId::kZenith, 20.0f, &raw_az, &raw_el));
+  EXPECT_FLOAT_EQ(raw_el, 90.0f);
+}
+
+TEST(ViewLookAtPose, ALensWhoseBoundIsThePoleGetsThePole) {
+  // The other half: an implementation that hard-coded 89, or clamped to some fixed interval of its
+  // own, would pass the Globe case above and fail here.
+  lumice::gui::GuiState state;
+  state.renderer.lens_type = lumice::gui::kLensTypeLinear;
+  const lumice::gui::FieldEditorConstraint el_c = lumice::gui::ConstraintFor("renderer.elevation", state);
+  const lumice::gui::FieldEditorConstraint az_c = lumice::gui::ConstraintFor("renderer.azimuth", state);
+
+  float az = 0.0f;
+  float el = 0.0f;
+  ASSERT_TRUE(lumice::gui::ResolveLookAtPose(LookAtId::kZenith, 20.0f, el_c, az_c, &az, &el));
+  EXPECT_FLOAT_EQ(el, 90.0f);
+  ASSERT_TRUE(lumice::gui::ResolveLookAtPose(LookAtId::kNadir, 20.0f, el_c, az_c, &az, &el));
+  EXPECT_FLOAT_EQ(el, -90.0f);
+}
+
+TEST(ViewLookAtPose, EveryPresetLandsInsideTheBoundsUnderEveryLens) {
+  // The claim the two cases above do not make: not "these two entries are clamped correctly" but
+  // "no entry, under any lens, produces a pose outside the interval" — which is what stops a
+  // seventh direction added later from slipping through with no clamp of its own.
+  lumice::gui::GuiState state;
+  const auto check_lens = [&state](int lens) {
+    state.renderer.lens_type = lens;
+    const lumice::gui::FieldEditorConstraint el_c = lumice::gui::ConstraintFor("renderer.elevation", state);
+    const lumice::gui::FieldEditorConstraint az_c = lumice::gui::ConstraintFor("renderer.azimuth", state);
+    if (!el_c.has_numeric_domain || !az_c.has_numeric_domain) {
+      return;  // a lens with no view angle at all; the entry is disabled there
+    }
+    for (int i = 0; i < static_cast<int>(LookAtId::kCount); ++i) {
+      for (const float alt : { 40.0f, 0.0f, -25.0f, 90.0f }) {
+        float az = 0.0f;
+        float el = 0.0f;
+        if (!lumice::gui::ResolveLookAtPose(static_cast<LookAtId>(i), alt, el_c, az_c, &az, &el)) {
+          ADD_FAILURE() << "lens " << lens << " id " << i << " altitude " << alt << " was rejected";
+          continue;
+        }
+        EXPECT_GE(el, static_cast<float>(el_c.min_value)) << "lens " << lens << " id " << i;
+        EXPECT_LE(el, static_cast<float>(el_c.max_value)) << "lens " << lens << " id " << i;
+        EXPECT_GE(az, static_cast<float>(az_c.min_value)) << "lens " << lens << " id " << i;
+        EXPECT_LE(az, static_cast<float>(az_c.max_value)) << "lens " << lens << " id " << i;
+      }
+    }
+  };
+  for (const int lens : lumice::gui::kLensTypePresentationOrder) {
+    check_lens(lens);
+  }
+}
