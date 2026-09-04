@@ -72,7 +72,12 @@
 // two arms fed one snapshot of one frame's inputs, they run identical GL work on identical data in
 // the same process, so any difference is a real divergence between the paths. Do not answer a red
 // by fitting a PSNR threshold to it — that would rebuild the very self-satisfying ruler this file
-// exists to replace.
+// exists to replace, and there is a number for how much would be lost. Making the export arm skip
+// the label layer — the exact shape of the "the Screenshot has no labels on it" defect — moves
+// 1,362 of 820,800 pixels, which is a whole-frame PSNR of 44.75 dB: ABOVE visual/'s 40 dB
+// deterministic floor and far above the CLI parity suite's 25.5 / 26.0 dB. Every threshold this
+// tree has calibrated elsewhere would have stayed green on it. Small breaks are the ones this gate
+// is for, and averaging over 820,800 pixels is what hides them.
 //
 // ==================================== Cadence and assets ====================================
 //
@@ -127,14 +132,52 @@ struct PreviewExportRequest {
 
 PreviewExportRequest g_req;
 
-// UploadTexture and RenderExportToRgba both need the GL context, which is current only on the
+// The source texture, in XYZ.
+//
+// NOT the shared 8-bit InitSynthTexture()/UploadTexture() pair the rest of this suite reaches for,
+// and the difference is load-bearing rather than stylistic. That path lands in
+// PreviewRenderer::TextureMode::kSrgbComposited, whose shader branch takes the stored bytes as the
+// finished picture: it applies no `u_intensity_scale`, adds no sky, and multiplies in no relative
+// illumination. A scene built on it is structurally BLIND to a divergence in any of those three
+// fields — measured, not reasoned, on this very case with one break held fixed: feeding the export
+// arm an `exposure.intensity_scale` 5% off the screen's moves 0 of 820,800 pixels on the 8-bit
+// texture and 820,779 of 820,800 on the XYZ one. UploadXyzTexture is what the product does with a
+// live run's frame (src/gui/app.cpp), and it puts exposure, background and vignetting back inside
+// what this comparison can see.
+//
+// (`intensity_scale` and not `intensity_factor`: the shader's uniform is the former —
+// preview_renderer.cpp's `u_intensity_scale` — and perturbing the latter alone changes no pixel.
+// The distinction is worth writing down because it is how the first attempt at the red-state proof
+// came back green while the gate was working correctly.)
+//
+// Values are chosen to sit clear of both ends: bright enough that the gamut clip and the 8-bit
+// quantisation do not swallow a small perturbation, dim enough not to saturate. They vary per
+// texel in all three channels so that "the two arms agree" is a statement about content and not
+// about a flat field.
+constexpr int kXyzTexW = 64;
+constexpr int kXyzTexH = 64;
+
+std::vector<float> BuildXyzTexture() {
+  std::vector<float> xyz(static_cast<size_t>(kXyzTexW) * kXyzTexH * 3);
+  for (int y = 0; y < kXyzTexH; ++y) {
+    for (int x = 0; x < kXyzTexW; ++x) {
+      const size_t i = (static_cast<size_t>(y) * kXyzTexW + x) * 3;
+      xyz[i + 0] = 0.10f + 0.35f * static_cast<float>(x) / (kXyzTexW - 1);
+      xyz[i + 1] = 0.10f + 0.35f * static_cast<float>(y) / (kXyzTexH - 1);
+      xyz[i + 2] = 0.10f + 0.35f * static_cast<float>((x ^ y) & 63) / 63.0f;
+    }
+  }
+  return xyz;
+}
+
+// UploadXyzTexture and RenderExportToRgba both need the GL context, which is current only on the
 // render thread; TestFunc runs on the test engine's coroutine. Same request/answer scaffolding
 // every GL-touching suite here uses, and a non-capturing function pointer because
 // ImGuiTestGuiFunc is a raw `void (*)(ImGuiTestContext*)`.
 void PreviewExportGuiFunc(ImGuiTestContext* /*ctx*/) {
   if (g_req.upload_requested && !g_req.upload_done) {
-    InitSynthTexture();
-    gui::g_preview.UploadTexture(g_synth_tex.data(), kSynthTexW, kSynthTexH);
+    const std::vector<float> xyz = BuildXyzTexture();
+    gui::g_preview.UploadXyzTexture(xyz.data(), kXyzTexW, kXyzTexH);
     g_req.upload_done = true;
   }
   if (g_req.export_requested && !g_req.export_done) {
@@ -190,6 +233,15 @@ void RegisterPreviewExportParityTests(ImGuiTestEngine* engine) {
     gui::g_state.show_horizon_label = true;
     gui::g_state.show_grid_line = true;
     gui::g_state.show_grid_label = true;
+
+    // The exposure the XYZ branch divides by. RenderPreviewPanel feeds ComputeMonoExposure this
+    // field every frame, and at its post-reset 0 the resulting `intensity_scale` is 0 — a black
+    // frame, and an exposure term that multiplies away to nothing, which would put the exposure
+    // back outside what this comparison can see for a second reason. 1.0 makes the scale the
+    // exposure factor itself.
+    gui::g_state.snapshot_intensity = 1.0f;
+    gui::g_state.ev_auto = 0.0f;
+    gui::g_state.renderer.exposure_offset = 0.0f;
 
     // Something for the projection to sample. A blank texture would make "the two arms show the
     // same content" trivially true over most of the frame.
