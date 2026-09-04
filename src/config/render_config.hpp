@@ -48,6 +48,52 @@ struct ZenithNadirParam {
 void to_json(nlohmann::json& j, const ZenithNadirParam& z);
 void from_json(const nlohmann::json& j, ZenithNadirParam& z);
 
+// Which named sky direction a marker entry names. Numerically one-to-one with
+// annotation::MarkerId, and pinned to it by static_assert in render.cpp — the one translation unit
+// that includes both headers.
+//
+// A separate enum rather than a reuse of annotation::MarkerId, for the same reason
+// RenderConfig::VisibleRange exists next to LUMICE_VISIBLE_*: annotation_overlay.hpp already
+// includes THIS header (it takes a RenderConfig to derive its view), so including it back here
+// would close a cycle. The duplication is two declarations of six integers held equal by a
+// compile-time check, which is the trade this file has already made once.
+enum class MarkerRefId : int {
+  kZenith = 0,
+  kNadir = 1,
+  kSun = 2,
+  kSubsun = 3,
+  kAnthelion = 4,
+  kAntisolar = 5,
+};
+
+// One reference-point marker: WHICH direction, and what colour. Radius and opacity are absent on
+// purpose — they are family-wide fields on RenderConfig, because a set of reference points reads as
+// a family and colour is what tells its members apart (a ring at a different size or transparency
+// reads as a different kind of annotation, not as a different point).
+//
+// `color_` is sRGB, like GridLineParam::color_ and ZenithNadirParam::color_.
+struct MarkerStyleParam {
+  MarkerRefId id_ = MarkerRefId::kZenith;
+  bool enabled_ = false;
+  float color_[3]{ 0.8f, 0.2f, 0.2f };
+};
+
+// Hand-written on both sides, and the from_json half deliberately does NOT go through
+// NLOHMANN_JSON_SERIALIZE_ENUM for `id_`: that macro maps any unregistered string to the FIRST
+// table entry without an error, so a typo would land silently on the zenith. The same failure mode
+// is on record for `visible` (doc/gui-state-governance.md §9: "front" silently becoming "upper"),
+// which is why an unknown id here throws instead.
+void to_json(nlohmann::json& j, const MarkerStyleParam& m);
+void from_json(const nlohmann::json& j, MarkerStyleParam& m);
+
+// True when two entries name the same MarkerRefId. `dup` (optional) receives the offending id.
+//
+// An ARRAY-level rule, so it cannot live in MarkerStyleParam::from_json — that function sees one
+// entry and has no way to look at its siblings. Shared by both JSON decoders (config_manager.cpp
+// and c_api.cpp) rather than implemented twice: two independent duplicate checks are two chances
+// to disagree, and test_json_parser_parity.cpp exists precisely because that has happened before.
+bool HasDuplicateMarkerId(const std::vector<MarkerStyleParam>& markers, MarkerRefId* dup);
+
 struct LensParam {
   enum LensType {
     kLinear,
@@ -173,6 +219,26 @@ struct RenderConfig {
   // No label switch of its own, and not an omission: a marker carries no text at all
   // (annotation::Overlay returns the two as POINTS, not labels), so there is nothing to turn on.
   ZenithNadirParam zenith_nadir_;
+
+  // The reference-point markers — the generalization of zenith_nadir_ above to N named directions
+  // with per-entry colour. Empty by default, which is what makes it opt-in AND what makes it the
+  // "absent" signal: see below.
+  //
+  // ARBITRATION, single-sourced in RenderConsumer: a non-empty markers_ wins outright and
+  // zenith_nadir_ is ignored; zenith_nadir_ is consulted only when markers_ is empty. Not a merge,
+  // because a config that lists markers is describing its whole marker set, and silently adding two
+  // more rings from a legacy field it also carries would draw something nobody asked for.
+  // Emptiness is the ONLY absence signal, which has one consequence worth stating: an explicit
+  // "markers": [] alongside a "zenith_nadir" falls back to the legacy pair, since a vector cannot
+  // tell "key absent" from "key present and empty". Recording an extra "was the key seen" bit to
+  // separate those two would put a JSON-parsing detail into a struct that three other paths build
+  // without any JSON at all.
+  std::vector<MarkerStyleParam> markers_;
+  // Family-wide, one pair for the whole list — see MarkerStyleParam for why only colour is per
+  // entry. The values are ZenithNadirParam's, so a markers_ list that names zenith and nadir and
+  // sets nothing else looks like the legacy pair.
+  float markers_opacity_ = 0.6f;
+  float markers_radius_px_ = 8.0f;
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(    // declare

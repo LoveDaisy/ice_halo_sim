@@ -161,6 +161,12 @@ CurveLabelSet BuildGridLabelSet(const AnnotationOverlayCache& cache, const GuiSt
 // GRID's collision group (the horizon is the parallel at altitude 0) while carrying its own colour
 // and alpha, which is why it is a third set rather than a third family folded into the grid's.
 CurveLabelSet BuildHorizonLabelSet(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w, float vp_h);
+// The reference-point markers' names. A VECTOR of sets, unlike the three above, and that is the
+// whole reason it is a separate function rather than a fourth Build*LabelSet: a set carries ONE
+// colour, and these six points are told apart by colour. One set per marker whose label switch is
+// on and whose point this view actually images; empty when none is.
+std::vector<CurveLabelSet> BuildMarkerLabelSets(const AnnotationOverlayCache& cache, const GuiState& state, float vp_w,
+                                                float vp_h);
 
 // Pick the coordinate grid step (in degrees) for a given FOV. Single source of truth for every
 // consumer that needs to know how dense the grid is: the annotation request the preview and the

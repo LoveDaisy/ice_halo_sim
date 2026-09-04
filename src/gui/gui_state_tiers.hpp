@@ -108,11 +108,13 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     { "horizon_alpha",              FieldTier::kView,       false },
     { "grid_alpha",                 FieldTier::kView,       false },
     { "sun_circles_alpha",          FieldTier::kView,       false },
-    // Zenith / Nadir marker
-    { "show_zenith_nadir_line",     FieldTier::kView,       false },
-    { "zenith_nadir_color",         FieldTier::kView,       false },
-    { "zenith_nadir_alpha",         FieldTier::kView,       false },
-    { "zenith_nadir_radius_px",     FieldTier::kView,       false },
+    // Sky reference-point markers. One row for the whole array, which is this table's grain (the
+    // same grain `renderer` is registered at) — the array's members are per-marker appearance, not
+    // top-level GuiState fields, so there is nothing finer for the gate to require here.
+    { "markers",                    FieldTier::kView,       false },
+    { "markers_alpha",              FieldTier::kView,       false },
+    { "markers_radius_px",          FieldTier::kView,       false },
+    { "markers_section_open",       FieldTier::kView,       false },
     // Lens border
     { "show_lens_border_line",      FieldTier::kView,       false },
     { "lens_border_color",          FieldTier::kView,       false },

@@ -533,9 +533,13 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
     //                   preview's own overlay; the export arm writes the FOV-adaptive step
     //                   expanded into an explicit list, because the CLI has no overlay stage and
     //                   only draws what the config names. See the two intent cases above.
-    //   zenith_nadir  — the same split again, for the marker pair: off with a zeroed appearance on
-    //                   the commit arm vs. the user's switch, colour, radius and alpha on the
-    //                   export arm.
+    //   markers       — the same split again, for the reference points: an EMPTY list on the commit
+    //   markers_opacity arm vs. all six entries with the user's switches and colours on the export
+    //   markers_radius_px arm, plus the family-wide opacity and radius beside them.
+    //                   "zenith_nadir" is deliberately NOT in this list any more, and its absence is
+    //                   the assertion: the GUI stopped writing that legacy field on EITHER arm when
+    //                   the marker list generalized it, so the two arms now agree on it (both zero)
+    //                   and exempting it would stop checking that they still do.
     //   horizon_label — the text beside each of the three line families, one sub-key each. The
     //   label           same split once more, and for exactly the same reason: text baked into the
     //   angular_dist_label
@@ -590,11 +594,11 @@ TEST(SceneCommitChain, IntentionalDivergenceFieldsMatchDocumentedSet) {
       commit_doc["render"][0].erase(key);
       export_doc["render"][0].erase(key);
     }
-    // "grid" itself stays in the comparison below: only its eight diverging sub-fields are exempted
+    // "grid" itself stays in the comparison below: only its ten diverging sub-fields are exempted
     // here, by sub-key rather than by erasing the whole object, so any remaining grid sub-field
     // keeps being checked for an accidental intent-dependent drift.
-    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "zenith_nadir", "horizon_label",
-                             "label", "angular_dist_label" }) {
+    for (const char* sub : { "horizon", "angular_dist", "elevation", "longitude", "markers", "markers_opacity",
+                             "markers_radius_px", "horizon_label", "label", "angular_dist_label" }) {
       EXPECT_TRUE(commit_doc["render"][0]["grid"].contains(sub))
           << "offset " << offset << ": \"grid." << sub << "\" is no longer emitted";
       commit_doc["render"][0]["grid"].erase(sub);

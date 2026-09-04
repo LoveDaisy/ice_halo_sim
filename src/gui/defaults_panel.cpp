@@ -176,9 +176,9 @@ bool IsRowChecked(const std::string& key_path) {
 // unreachable — SliderWithInput ends with an unconditional std::clamp and the main UI calls it
 // every frame, so an out-of-range alpha is pulled back inside the domain on the first frame after
 // load. The reachable fields are therefore precisely the ones whose only editing control is not
-// drawn every frame — overlay_zenith_nadir_radius_px today, whose control lives behind a row fold
-// that is a closed popup until the user opens it — plus anything else a user reaches before its
-// owning panel section is drawn.
+// drawn every frame — overlay_markers_radius_px today, whose control lives behind the Reference
+// Points section's fold, a closed popup until the user opens it — plus anything else a user reaches
+// before its owning panel section is drawn.
 // That inversion is worth knowing when writing a test for this: the "obvious" field to poison is
 // the one that cannot hold the poison.
 //

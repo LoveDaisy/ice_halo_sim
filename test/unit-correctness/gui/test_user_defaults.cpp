@@ -199,10 +199,17 @@ TEST_F(UserDefaults, ac2_kview_difference_set_recomputed) {
     { "horizon_alpha", "overlay_horizon_alpha" },
     { "grid_alpha", "overlay_grid_alpha" },
     { "sun_circles_alpha", "overlay_sun_circles_alpha" },
-    { "show_zenith_nadir_line", "overlay_zenith_nadir_line" },
-    { "zenith_nadir_color", "overlay_zenith_nadir_color" },
-    { "zenith_nadir_alpha", "overlay_zenith_nadir_alpha" },
-    { "zenith_nadir_radius_px", "overlay_zenith_nadir_radius_px" },
+    // `markers` is the one field whose mapping is not one-to-one: the array serializes as THREE
+    // root keys PER MARKER (eighteen in all), and this table has a column for one. The named key is
+    // a representative — enough for the question this table asks, which is "is this field
+    // serialized at all", since that is what eligibility is derived from. That the other seventeen
+    // are all emitted, and each editable, is asserted where it can be asserted properly:
+    // DefaultsDiff.registry_covers_every_row enumerates the REAL row set of a factory document and
+    // compares it against a spelled-out list of all twenty-one marker keys.
+    { "markers", "overlay_marker_zenith_line" },
+    { "markers_alpha", "overlay_markers_alpha" },
+    { "markers_radius_px", "overlay_markers_radius_px" },
+    { "markers_section_open", "overlay_markers_section_open" },
     { "show_lens_border_line", "overlay_lens_border_line" },
     { "lens_border_color", "overlay_lens_border_color" },
     { "lens_border_alpha", "overlay_lens_border_alpha" },

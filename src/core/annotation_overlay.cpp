@@ -225,6 +225,18 @@ float AngularDistDegOfDir(const float ref[3], float wx, float wy, float wz) {
   return std::acos(std::clamp(d, -1.0f, 1.0f)) * kRad2Deg;
 }
 
+// Where one named direction lands. The SINGLE place a marker becomes a canvas point: both the
+// legacy `zenith_nadir` switch and the general `markers` list call this, which is what makes them
+// return identical points by construction rather than by two implementations agreeing. Runs
+// through SampleWorldDir like every curve sample, so "this marker is on screen" means exactly what
+// "this label anchor is on screen" means everywhere else in this file.
+CanvasPoint SampleMarkerPoint(const WalkContext& ctx, MarkerId id, const float sun_dir[3]) {
+  float dir[3] = { 0.0f, 0.0f, 0.0f };
+  ResolveMarkerDir(id, sun_dir, dir);
+  const CurveSample s = SampleWorldDir(ctx, AltitudeDegOfDir(dir[2]), dir[0], dir[1], dir[2]);
+  return { s.px, s.py, s.vis };
+}
+
 }  // namespace
 
 void SunWorldDir(const SunParam& sun, float* out) {
@@ -234,6 +246,66 @@ void SunWorldDir(const SunParam& sun, float* out) {
   out[0] = -std::cos(az) * c_alt;
   out[1] = -std::sin(az) * c_alt;
   out[2] = -std::sin(alt);
+}
+
+void ResolveMarkerDir(MarkerId id, const float sun_dir[3], float out[3]) {
+  const float sx = sun_dir[0];
+  const float sy = sun_dir[1];
+  const float sz = sun_dir[2];
+  switch (id) {
+    case kMarkerNadir:
+      out[0] = 0.0f;
+      out[1] = 0.0f;
+      out[2] = 1.0f;
+      return;
+    case kMarkerSun:
+      out[0] = sx;
+      out[1] = sy;
+      out[2] = sz;
+      return;
+    // The subsun is the sun's reflection in a horizontal surface: same azimuth, negated altitude.
+    case kMarkerSubsun:
+      out[0] = sx;
+      out[1] = sy;
+      out[2] = -sz;
+      return;
+    // The anthelion sits opposite the sun in azimuth at the SAME altitude, which is the azimuth
+    // reflection; the antisolar point is the full antipode, azimuth and altitude both opposed.
+    case kMarkerAnthelion:
+      out[0] = -sx;
+      out[1] = -sy;
+      out[2] = sz;
+      return;
+    case kMarkerAntisolar:
+      out[0] = -sx;
+      out[1] = -sy;
+      out[2] = -sz;
+      return;
+    case kMarkerZenith:
+    case kMarkerCount:
+    default:
+      // kMarkerCount is not a direction and an out-of-range id is a caller defect, but neither may
+      // leave `out` untouched: this function's callers project whatever it wrote, so an
+      // uninitialized vector would be read. The zenith is the safe answer because it is the
+      // fallback Request::reference_dir already uses for a degenerate direction.
+      out[0] = 0.0f;
+      out[1] = 0.0f;
+      out[2] = -1.0f;
+      return;
+  }
+}
+
+void SunHorizonDir(const float sun_dir[3], float out[3]) {
+  const float len = std::sqrt(sun_dir[0] * sun_dir[0] + sun_dir[1] * sun_dir[1]);
+  if (len < kSunHorizonDegenerateEps) {
+    out[0] = 1.0f;
+    out[1] = 0.0f;
+    out[2] = 0.0f;
+    return;
+  }
+  out[0] = sun_dir[0] / len;
+  out[1] = sun_dir[1] / len;
+  out[2] = 0.0f;
 }
 
 RenderConfig ToRenderConfig(const ViewSnapshot& view) {
@@ -376,14 +448,16 @@ Overlay ComputeOverlay(const Request& req) {
   ctx.width = width;
   ctx.height = height;
 
+  // Not level sets: named directions, sampled as points. The legacy pair and the general list are
+  // independent requests that share one sampler — asking for `zenith_nadir` and asking for
+  // {kMarkerZenith, kMarkerNadir} runs literally the same code, so the two answers cannot drift.
   if (req.zenith_nadir) {
-    // Not level sets: two fixed world directions. altitude = asin(-z), so zenith is z = -1. Run
-    // through the same sampler as every curve point, so "the marker is on screen" means exactly
-    // what "this anchor is on screen" means everywhere else.
-    const CurveSample zs = SampleWorldDir(ctx, 90.0f, 0.0f, 0.0f, -1.0f);
-    const CurveSample ns = SampleWorldDir(ctx, -90.0f, 0.0f, 0.0f, 1.0f);
-    out.zenith = { zs.px, zs.py, zs.vis };
-    out.nadir = { ns.px, ns.py, ns.vis };
+    out.zenith = SampleMarkerPoint(ctx, kMarkerZenith, ref_dir);
+    out.nadir = SampleMarkerPoint(ctx, kMarkerNadir, ref_dir);
+  }
+  out.markers.reserve(req.markers.size());
+  for (const MarkerId id : req.markers) {
+    out.markers.push_back(SampleMarkerPoint(ctx, id, ref_dir));
   }
 
   if (!req.labels) {

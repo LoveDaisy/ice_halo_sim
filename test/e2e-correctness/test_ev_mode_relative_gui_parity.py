@@ -163,6 +163,11 @@ class _AnnotationRequest(ctypes.Structure):
         ("reference_dir", ctypes.c_float * 3),
         ("zenith_nadir", ctypes.c_int),
         ("want_labels", ctypes.c_int),
+        # Named reference directions. This fixture asks for none, so the pair stays NULL/0 --
+        # they are mirrored because the struct is allocated HERE and read by core, which makes a
+        # short mirror a wrong size rather than a missing feature.
+        ("marker_ids", ctypes.POINTER(ctypes.c_int)),
+        ("marker_count", ctypes.c_int),
     ]
 
 
@@ -184,6 +189,11 @@ class _AnnotationOverlay(ctypes.Structure):
         ("labels", ctypes.c_void_p),
         ("label_count", ctypes.c_int),
         ("storage", ctypes.c_void_p),
+        # Appended after `storage` in the header so every field above keeps its published offset.
+        # Opaque here for the same reason `labels` is: this fixture reads neither, and a second
+        # mirror of the point struct would be one more thing to keep in step for no use.
+        ("marker_points", ctypes.c_void_p),
+        ("marker_count", ctypes.c_int),
     ]
 
 

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -21,6 +22,7 @@
 #include "config/crystal_config.hpp"  // core PrismCrystalParam + from_json, the sync-group canonical-form authority
 #include "config/filter_config.hpp"   // core FilterConfig + to_json, for emit isomorphism cross-check
 #include "config/raypath_color_config.hpp"  // core RaypathColorConfig + to_json, for color-class isomorphism
+#include "config/render_config.hpp"         // core RenderConfig, for the marker family's non-zero defaults
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "include/lumice.h"
@@ -812,6 +814,107 @@ TEST(ParseConfigApi, RendererLensTypeUnknownStringRejected) {
 TEST(ParseConfigApi, RendererVisibleUnknownStringRejected) {
   auto root = nlohmann::json::parse(MakeFullConfigJson());
   root["render"][0]["visible"] = "not_a_real_visibility";
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+
+// The reference-point marker list (v4.25), at the C API decoder specifically. The parity file
+// checks that CORE and this decoder agree; these check the ERROR CODE this one reports, which
+// parity cannot see — it only knows a document was refused, not by which stage or as what. Three
+// rejections and one acceptance, matching the four malformed-input shapes the schema defines.
+TEST(ParseConfigApi, RendererMarkersDefaultsToAnEmptyListWithCoreAppearanceValues) {
+  // MakeFullConfigJson carries no "grid" object at all, which is the state under test: a document
+  // that predates the field.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  ASSERT_FALSE(root["render"][0].contains("grid"));
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  ASSERT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  ASSERT_GE(config.renderer_count, 1);
+  // Opt-in: a document that never heard of the field asks for no marker.
+  EXPECT_EQ(config.renderers[0].markers_count, 0);
+  // And the two family values are core's non-zero defaults, not zeros — a decoder that
+  // value-initialized them would hand a caller zero-radius fully transparent rings.
+  const lumice::RenderConfig kDefaults;
+  EXPECT_FLOAT_EQ(config.renderers[0].markers_opacity, kDefaults.markers_opacity_);
+  EXPECT_FLOAT_EQ(config.renderers[0].markers_radius_px, kDefaults.markers_radius_px_);
+}
+
+TEST(ParseConfigApi, RendererMarkersRoundTripThroughTheStruct) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] =
+      nlohmann::json::array({ { { "id", "anthelion" }, { "enabled", true }, { "color", { 0.1f, 0.7f, 0.9f } } },
+                              { { "id", "nadir" }, { "enabled", false }, { "color", { 0.5f, 0.5f, 0.5f } } } });
+  root["render"][0]["grid"]["markers_opacity"] = 0.35f;
+  root["render"][0]["grid"]["markers_radius_px"] = 12.0f;
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  ASSERT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  ASSERT_GE(config.renderer_count, 1);
+  const LUMICE_RenderParam& r = config.renderers[0];
+  ASSERT_EQ(r.markers_count, 2);
+  // The id arrives as the LUMICE_ANNOTATION_MARKER_* value, i.e. the same id space the annotation
+  // request uses — one vocabulary across the API, not a second numbering for the renderer.
+  EXPECT_EQ(r.markers[0].id, LUMICE_ANNOTATION_MARKER_ANTHELION);
+  EXPECT_EQ(r.markers[0].enabled, 1);
+  EXPECT_FLOAT_EQ(r.markers[0].color[1], 0.7f);
+  EXPECT_EQ(r.markers[1].id, LUMICE_ANNOTATION_MARKER_NADIR);
+  EXPECT_EQ(r.markers[1].enabled, 0);
+  EXPECT_FLOAT_EQ(r.markers_opacity, 0.35f);
+  EXPECT_FLOAT_EQ(r.markers_radius_px, 12.0f);
+}
+
+TEST(ParseConfigApi, RendererMarkersEmptyArrayIsValid) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array();
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  EXPECT_EQ(config.renderers[0].markers_count, 0);
+}
+
+TEST(ParseConfigApi, RendererMarkersUnknownIdRejected) {
+  // INVALID_VALUE, not MISSING_FIELD: core's from_json throws with a non-403 id precisely so
+  // DecodeCoreField's 403-means-missing mapping does not misfile this as an absent key.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array({ { { "id", "sundog" } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(ParseConfigApi, RendererMarkersMissingIdRejectedAsMissingField) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array({ { { "enabled", true } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+}
+
+TEST(ParseConfigApi, RendererMarkersDuplicateIdRejected) {
+  // INVALID_CONFIG rather than INVALID_VALUE, following this file's existing split: every
+  // individual value here is legal, and what is wrong is the shape of the collection they form.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] =
+      nlohmann::json::array({ { { "id", "sun" }, { "color", { 1.0f, 0.0f, 0.0f } } },
+                              { { "id", "sun" }, { "color", { 0.0f, 0.0f, 1.0f } } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(ParseConfigApi, RendererMarkersNonArrayRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::object({ { "id", "sun" } });
 
   ConfigScratch config{};
   ConfigScratchGuard config_guard(config);
@@ -2516,6 +2619,11 @@ TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
 
 // AC4: LUMICE_API_VERSION exists and is usable in a caller static_assert.
 static_assert(LUMICE_API_VERSION >= 412, "LUMICE_API_VERSION regressed below v4.12");
+// The floor a caller of the marker family needs. Written as a second line rather than by raising
+// the one above, which pins a different promise (the macro is usable at all, since v4.12) — this
+// one says LUMICE_RenderParam::markers exists, and a build where it does not must not compile the
+// cases that set it.
+static_assert(LUMICE_API_VERSION >= 425, "LUMICE_RenderParam::markers requires the v4.25 header");
 
 namespace {
 // struct -> JSON (ConfigToJson) -> struct (ParseConfigString). Returns the
@@ -4723,6 +4831,106 @@ TEST(AnnotationOverlayApi, OnlyRequestedCategoriesGetABuffer) {
   LUMICE_ReleaseAnnotationOverlay(&out);
 }
 
+// The marker list is the C API's only NEW input shape in v4.24, and it is the one place an int
+// crosses into a C++ enum. Its validation is therefore load-bearing in a way the angle lists' is
+// not: an unchecked id would not be rejected downstream, it would silently resolve to whatever
+// ResolveMarkerDir's default branch answers, and the caller would get a plausible point for a
+// marker it never asked for.
+TEST(AnnotationOverlayApi, RejectsMalformedMarkerLists) {
+  const int ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_SUN };
+  LUMICE_AnnotationOverlay out{};
+
+  LUMICE_AnnotationRequest negative_id = MakeAnnotationRequest(64, 32);
+  const int negative_ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH, -1 };
+  negative_id.marker_ids = negative_ids;
+  negative_id.marker_count = 2;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&negative_id, &out), LUMICE_ERR_INVALID_VALUE);
+
+  // MARKER_COUNT is the count, not the last id — the classic off-by-one at this boundary.
+  LUMICE_AnnotationRequest past_end = MakeAnnotationRequest(64, 32);
+  const int past_end_ids[] = { LUMICE_ANNOTATION_MARKER_COUNT };
+  past_end.marker_ids = past_end_ids;
+  past_end.marker_count = 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&past_end, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest negative_count = MakeAnnotationRequest(64, 32);
+  negative_count.marker_ids = ids;
+  negative_count.marker_count = -1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&negative_count, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest too_many = MakeAnnotationRequest(64, 32);
+  too_many.marker_ids = ids;
+  too_many.marker_count = LUMICE_MAX_ANNOTATION_MARKERS + 1;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&too_many, &out), LUMICE_ERR_INVALID_VALUE);
+
+  LUMICE_AnnotationRequest null_list = MakeAnnotationRequest(64, 32);
+  null_list.marker_ids = nullptr;
+  null_list.marker_count = 2;
+  EXPECT_EQ(LUMICE_ComputeAnnotationOverlay(&null_list, &out), LUMICE_ERR_NULL_ARG);
+
+  EXPECT_EQ(out.storage, nullptr) << "a rejected call must leave nothing to release";
+  LUMICE_ReleaseAnnotationOverlay(&out);
+}
+
+TEST(AnnotationOverlayApi, MarkerPointsComeBackParallelToTheRequestedIds) {
+  // Every id at once, so the array carries more than one distinct point and an implementation that
+  // wrote the same value everywhere would show. The upper-hemisphere clip makes at least one of
+  // them invalid, which is the other half of the contract.
+  const int ids[] = { LUMICE_ANNOTATION_MARKER_ZENITH,    LUMICE_ANNOTATION_MARKER_NADIR,
+                      LUMICE_ANNOTATION_MARKER_SUN,       LUMICE_ANNOTATION_MARKER_SUBSUN,
+                      LUMICE_ANNOTATION_MARKER_ANTHELION, LUMICE_ANNOTATION_MARKER_ANTISOLAR };
+  LUMICE_AnnotationRequest req = MakeAnnotationRequest(128, 128);
+  req.view.lens_type = LUMICE_LENS_TYPE_DUAL_FISHEYE_EQUAL_AREA;
+  req.view.lens_fov = 180.0f;
+  req.marker_ids = ids;
+  req.marker_count = static_cast<int>(sizeof(ids) / sizeof(ids[0]));
+  req.reference_dir[0] = -0.6f;
+  req.reference_dir[1] = -0.48f;
+  req.reference_dir[2] = -0.64f;
+
+  LUMICE_AnnotationOverlay out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&req, &out), LUMICE_OK);
+  ASSERT_EQ(out.marker_count, req.marker_count);
+  ASSERT_NE(out.marker_points, nullptr);
+
+  int valid_count = 0;
+  for (int i = 0; i < out.marker_count; ++i) {
+    if (out.marker_points[i].valid) {
+      ++valid_count;
+      EXPECT_TRUE(std::isfinite(out.marker_points[i].px)) << "i=" << i;
+      EXPECT_TRUE(std::isfinite(out.marker_points[i].py)) << "i=" << i;
+    }
+  }
+  EXPECT_GT(valid_count, 1) << "an all-sky view imaged at most one of six markers";
+
+  // The zenith reached through the marker list is the same point the legacy field reports — the
+  // C API half of the equivalence core pins in
+  // test/golden-analytic/core/test_annotation_marker_equivalence.cpp.
+  LUMICE_AnnotationRequest legacy = req;
+  legacy.marker_ids = nullptr;
+  legacy.marker_count = 0;
+  legacy.zenith_nadir = 1;
+  LUMICE_AnnotationOverlay legacy_out{};
+  ASSERT_EQ(LUMICE_ComputeAnnotationOverlay(&legacy, &legacy_out), LUMICE_OK);
+  EXPECT_EQ(legacy_out.marker_points, nullptr) << "no markers requested, so no array";
+  EXPECT_EQ(legacy_out.marker_count, 0);
+  EXPECT_EQ(legacy_out.zenith_valid, out.marker_points[0].valid);
+  EXPECT_EQ(legacy_out.nadir_valid, out.marker_points[1].valid);
+  if (legacy_out.zenith_valid) {
+    EXPECT_EQ(legacy_out.zenith_px, out.marker_points[0].px);
+    EXPECT_EQ(legacy_out.zenith_py, out.marker_points[0].py);
+  }
+  if (legacy_out.nadir_valid) {
+    EXPECT_EQ(legacy_out.nadir_px, out.marker_points[1].px);
+    EXPECT_EQ(legacy_out.nadir_py, out.marker_points[1].py);
+  }
+  LUMICE_ReleaseAnnotationOverlay(&legacy_out);
+
+  LUMICE_ReleaseAnnotationOverlay(&out);
+  EXPECT_EQ(out.marker_points, nullptr) << "Release must not leave a view of freed memory";
+  EXPECT_EQ(out.marker_count, 0);
+}
+
 TEST(AnnotationOverlayApi, DegenerateViewIsAnEmptyOverlayNotAnError) {
   LUMICE_AnnotationRequest req = MakeAnnotationRequest(0, 32);
   LUMICE_AnnotationOverlay out{};
@@ -4771,4 +4979,159 @@ TEST(AnnotationOverlayApi, IsDeterministicAndCarriesNoCrossCallState) {
   EXPECT_NE(b.drawable, nullptr);
   EXPECT_EQ(std::memcmp(b.drawable, b.drawable, n), 0);
   LUMICE_ReleaseAnnotationOverlay(&b);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Marker / sun-horizon DIRECTION queries — the "point the camera at it" half of the family, with
+// no view, no lens and no canvas. The oracle below is the reflection rule written out longhand
+// from the header's prose (subsun negates altitude, anthelion negates azimuth, antisolar both),
+// deliberately NOT a second call into the same code path: an equivalence check against the
+// implementation would pass just as happily with the sign convention inverted on both sides.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+// The sun as this family means it: the direction light TRAVELS, so altitude = asin(-z).
+std::array<float, 3> SunDirFor(float altitude_deg, float azimuth_deg) {
+  const double alt = altitude_deg * 3.14159265358979323846 / 180.0;
+  const double az = azimuth_deg * 3.14159265358979323846 / 180.0;
+  return { static_cast<float>(-std::cos(alt) * std::cos(az)), static_cast<float>(-std::cos(alt) * std::sin(az)),
+           static_cast<float>(-std::sin(alt)) };
+}
+
+void ExpectDirNear(const float got[3], const std::array<float, 3>& want, const char* what) {
+  EXPECT_NEAR(got[0], want[0], 1e-5f) << what << " x";
+  EXPECT_NEAR(got[1], want[1], 1e-5f) << what << " y";
+  EXPECT_NEAR(got[2], want[2], 1e-5f) << what << " z";
+}
+
+}  // namespace
+
+TEST(AnnotationMarkerDirectionApi, RejectsNullAndOutOfRangeIds) {
+  const std::array<float, 3> sun = SunDirFor(20.0f, 0.0f);
+  float out[3] = { 7.0f, 7.0f, 7.0f };
+
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, nullptr, out), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, sun.data(), nullptr),
+            LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(-1, sun.data(), out), LUMICE_ERR_INVALID_VALUE);
+  EXPECT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_COUNT, sun.data(), out),
+            LUMICE_ERR_INVALID_VALUE);
+  // A rejected call leaves the caller's buffer alone rather than half-writing it. The distinction
+  // matters because core's own ResolveMarkerDir answers a bad id with the zenith.
+  EXPECT_EQ(out[0], 7.0f);
+  EXPECT_EQ(out[1], 7.0f);
+  EXPECT_EQ(out[2], 7.0f);
+}
+
+TEST(AnnotationMarkerDirectionApi, ResolvesEachIdByItsReflectionRule) {
+  // Two altitudes, one of them below the horizon (a sun that has set still has a subsun and an
+  // anthelion, and the camera can still be pointed at them), and a non-zero azimuth so a rule that
+  // confuses "negate the azimuth" with "negate the altitude" cannot pass by symmetry.
+  // One row per altitude, in a lambda rather than inline: a fatal assert in a loop body would
+  // return out of the whole TEST and hide every altitude after the first failing one.
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 37.0f);
+    float out[3] = {};
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ZENITH, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { 0.0f, 0.0f, -1.0f }, "zenith");  // altitude +90 => asin(-z) = +90
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_NADIR, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { 0.0f, 0.0f, 1.0f }, "nadir");
+
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUN, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, sun, "sun");
+
+    // Subsun: same azimuth, negated altitude — the horizontal part is untouched, z flips.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { sun[0], sun[1], -sun[2] }, "subsun");
+
+    // Anthelion: opposite azimuth, SAME altitude — the horizontal part flips, z is untouched.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ANTHELION, sun.data(), out), LUMICE_OK);
+    ExpectDirNear(out, { -sun[0], -sun[1], sun[2] }, "anthelion");
+
+    // Antisolar: the full antipode. Stated as a dot product because that is the relation a view
+    // preset is judged by ("look 180 degrees away from the sun"), not as three negated components.
+    ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_ANTISOLAR, sun.data(), out), LUMICE_OK);
+    const float dot = out[0] * sun[0] + out[1] * sun[1] + out[2] * sun[2];
+    EXPECT_NEAR(dot, -1.0f, 1e-5f) << "antisolar at altitude " << alt;
+  };
+  check_altitude(23.0f);
+  check_altitude(-12.0f);
+}
+
+TEST(AnnotationMarkerDirectionApi, NormalizesTheSunDirectionItIsGiven) {
+  // The contract says sun_dir need not be a unit vector. Scaling it by 40 must change nothing, and
+  // the result must still be unit length — a caller writing this straight into a dot-product test
+  // has no other way to know.
+  const std::array<float, 3> unit = SunDirFor(31.0f, -70.0f);
+  const std::array<float, 3> scaled = { unit[0] * 40.0f, unit[1] * 40.0f, unit[2] * 40.0f };
+
+  float from_unit[3] = {};
+  float from_scaled[3] = {};
+  ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, unit.data(), from_unit),
+            LUMICE_OK);
+  ASSERT_EQ(LUMICE_ResolveAnnotationMarkerDirection(LUMICE_ANNOTATION_MARKER_SUBSUN, scaled.data(), from_scaled),
+            LUMICE_OK);
+  ExpectDirNear(from_scaled, { from_unit[0], from_unit[1], from_unit[2] }, "subsun from a scaled sun_dir");
+  const float len =
+      std::sqrt(from_scaled[0] * from_scaled[0] + from_scaled[1] * from_scaled[1] + from_scaled[2] * from_scaled[2]);
+  EXPECT_NEAR(len, 1.0f, 1e-5f);
+}
+
+TEST(SunHorizonDirectionApi, RejectsNullArguments) {
+  const std::array<float, 3> sun = SunDirFor(10.0f, 0.0f);
+  float out[3] = { 7.0f, 7.0f, 7.0f };
+  EXPECT_EQ(LUMICE_ResolveSunHorizonDirection(nullptr, out), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), nullptr), LUMICE_ERR_NULL_ARG);
+  EXPECT_EQ(out[0], 7.0f);
+}
+
+TEST(SunHorizonDirectionApi, KeepsTheSunsAzimuthAndZeroesItsAltitude) {
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 118.0f);
+    float out[3] = {};
+    ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), out), LUMICE_OK);
+
+    EXPECT_NEAR(out[2], 0.0f, 1e-6f) << "altitude " << alt << " must come back at the horizon";
+    EXPECT_NEAR(std::sqrt(out[0] * out[0] + out[1] * out[1]), 1.0f, 1e-5f);
+    // Same azimuth as the sun: the two horizontal parts are parallel and point the SAME way, which
+    // the cross-product-is-zero test alone would not distinguish from antiparallel.
+    const float sun_h = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1]);
+    ASSERT_GT(sun_h, 1e-3f);
+    EXPECT_NEAR(out[0], sun[0] / sun_h, 1e-5f);
+    EXPECT_NEAR(out[1], sun[1] / sun_h, 1e-5f);
+  };
+  check_altitude(5.0f);
+  check_altitude(62.0f);
+  check_altitude(-40.0f);
+}
+
+TEST(SunHorizonDirectionApi, FallsBackToAFixedDirectionAtThePoles) {
+  // At the pole the sun has no azimuth to carry down. The contract is a FIXED fallback, so the two
+  // poles must answer identically — a nearest-neighbour rule would give them opposite azimuths,
+  // since the float residue of cos() changes sign across +/-90.
+  float up[3] = {};
+  float down[3] = {};
+  const std::array<float, 3> zenith_sun = { 0.0f, 0.0f, -1.0f };
+  const std::array<float, 3> nadir_sun = { 0.0f, 0.0f, 1.0f };
+  ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(zenith_sun.data(), up), LUMICE_OK);
+  ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(nadir_sun.data(), down), LUMICE_OK);
+  ExpectDirNear(up, { 1.0f, 0.0f, 0.0f }, "sun exactly at the zenith");
+  ExpectDirNear(down, { 1.0f, 0.0f, 0.0f }, "sun exactly at the nadir");
+
+  // Finite and unit-length everywhere through the degenerate band, which is what a view preset
+  // needs: no NaN can reach a camera angle.
+  const auto check_altitude = [](float alt) {
+    const std::array<float, 3> sun = SunDirFor(alt, 45.0f);
+    float out[3] = {};
+    ASSERT_EQ(LUMICE_ResolveSunHorizonDirection(sun.data(), out), LUMICE_OK) << "altitude " << alt;
+    EXPECT_TRUE(std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2])) << "altitude " << alt;
+    EXPECT_NEAR(std::sqrt(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]), 1.0f, 1e-5f) << "altitude " << alt;
+  };
+  check_altitude(89.0f);
+  check_altitude(89.9f);
+  check_altitude(89.999f);
+  check_altitude(90.0f);
 }

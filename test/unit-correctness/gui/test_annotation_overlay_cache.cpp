@@ -147,17 +147,16 @@ TEST(AnnotationOverlayCache, TheGridMaskIsTheUnionOfTheTwoFamilies) {
 
 // --- The zenith / nadir markers: a FOURTH thing the one call serves ---
 //
-// They differ from the three line families in a way that matters to this class: they are not a
-// list, so "the caller asked for nothing" cannot be read off an empty vector. Every place that
-// decides whether there is work to do has to test the bool separately, and the early-out guard in
-// Recompute() is the one where forgetting is silent.
+// They ARE a list now (marker_ids), like the three line families — but the early-out guard in
+// Recompute() still has to test it separately from the other three, and that is the place where
+// forgetting is silent.
 
 TEST(AnnotationOverlayCache, MarkersAloneStillReachCore) {
   // Markers on, every angle list empty — a user who turned the grid and the circles off. The
   // early-out guard in Recompute() used to test only the three lists, and with that shape this
   // case returns before calling core at all: no result, no points, no warning.
   gui::AnnotationViewInput markers_only = MakeView();
-  markers_only.zenith_nadir = true;
+  markers_only.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
   gui::AnnotationOverlayCache cache;
   cache.Refresh(KeyFor(markers_only));
   ASSERT_TRUE(cache.HasResult()) << "a request carrying only the markers must still be computed";
@@ -165,8 +164,8 @@ TEST(AnnotationOverlayCache, MarkersAloneStillReachCore) {
   EXPECT_TRUE(cache.GridMask().empty());
   // This view is a 120 deg fisheye looking at the horizon's default (elevation 0), so it images
   // neither pole; what the case pins is that core was CALLED, which HasResult() reports.
-  EXPECT_FALSE(cache.ZenithPoint().valid);
-  EXPECT_FALSE(cache.NadirPoint().valid);
+  EXPECT_FALSE(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).valid);
+  EXPECT_FALSE(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_NADIR).valid);
 }
 
 TEST(AnnotationOverlayCache, MarkerPointsAreReportedAndClearedWithTheKey) {
@@ -174,26 +173,28 @@ TEST(AnnotationOverlayCache, MarkerPointsAreReportedAndClearedWithTheKey) {
   gui::AnnotationViewInput up = MakeView();
   up.elevation = 90.0f;
   up.visible = gui::kVisibleUpper;
-  up.zenith_nadir = true;
+  up.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
 
   gui::AnnotationOverlayCache cache;
   cache.Refresh(KeyFor(up));
   ASSERT_TRUE(cache.HasResult());
-  ASSERT_TRUE(cache.ZenithPoint().valid) << "the fixture must image the zenith";
-  EXPECT_NEAR(cache.ZenithPoint().px, 48.0f, 1.5f) << "looking straight up puts the zenith at the canvas centre";
-  EXPECT_NEAR(cache.ZenithPoint().py, 48.0f, 1.5f);
+  ASSERT_TRUE(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).valid) << "the fixture must image the zenith";
+  EXPECT_NEAR(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).px, 48.0f, 1.5f)
+      << "looking straight up puts the zenith at the canvas centre";
+  EXPECT_NEAR(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).py, 48.0f, 1.5f);
   // Its opposite is behind the camera and in the excluded hemisphere, so it must be reported as a
   // miss rather than as some default coordinate.
-  EXPECT_FALSE(cache.NadirPoint().valid);
+  EXPECT_FALSE(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_NADIR).valid);
 
   // Same instance, markers no longer requested: the held point must go, not linger. A consumer
   // reading a stale valid point would draw a ring for a request nobody made.
   gui::AnnotationViewInput no_markers = up;
-  no_markers.zenith_nadir = false;
+  no_markers.marker_ids.clear();
   no_markers.elevation_deg = { 30.0f };
   cache.Refresh(KeyFor(no_markers));
   ASSERT_TRUE(cache.HasResult());
-  EXPECT_FALSE(cache.ZenithPoint().valid) << "a result that did not ask for the markers must hold no point";
+  EXPECT_FALSE(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH).valid)
+      << "a result that did not ask for the markers must hold no point";
 }
 
 TEST(AnnotationOverlayCache, TheViewKeySeesTheMarkerSwitch) {
@@ -203,7 +204,7 @@ TEST(AnnotationOverlayCache, TheViewKeySeesTheMarkerSwitch) {
   gui::AnnotationViewInput off = MakeView();
   off.elevation_deg = { 30.0f };
   gui::AnnotationViewInput on = off;
-  on.zenith_nadir = true;
+  on.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH };
   EXPECT_FALSE(KeyFor(off) == KeyFor(on));
   EXPECT_TRUE(KeyFor(on) == KeyFor(on));
 }
@@ -213,24 +214,61 @@ TEST(AnnotationOverlayCache, TheViewKeySeesTheMarkerSwitch) {
 // Two independent changes at once (origin corner -> centre, y down -> y up), which is exactly the
 // shape a hand-written conversion gets half right. A sign error here is invisible to every
 // compile-time and structural check and shows up only as a ring in a mirrored position.
+//
+// And the y half is CONDITIONAL, which is the third thing to get wrong: the shader hands
+// overlayAuxLines a y-DOWN position for the full-sky family (kFullSkyLensTypes — the flip that
+// makes the GUI's picture match the CLI's), so those five lenses must NOT take the second flip.
 
 TEST(AnnotationOverlayCache, CanvasPointToShaderScreenPosFlipsYAndRecentres) {
   float out[2] = { 0.0f, 0.0f };
+  // A view-matrix lens: the overlay's space is y-UP, so the conversion flips.
+  const int kUp = gui::kLensTypeFisheyeEqualArea;
   // The canvas centre is the shader's origin.
-  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 50.0f, 30.0f, true }, 100, 60, out);
+  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 50.0f, 30.0f, true }, kUp, 100, 60, out);
   EXPECT_FLOAT_EQ(out[0], 0.0f);
   EXPECT_FLOAT_EQ(out[1], 0.0f);
 
   // Top-left corner of the canvas: shader-left and shader-UP, i.e. negative x and POSITIVE y. A
   // conversion that forgot the flip would answer -30 here.
-  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 0.0f, 0.0f, true }, 100, 60, out);
+  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 0.0f, 0.0f, true }, kUp, 100, 60, out);
   EXPECT_FLOAT_EQ(out[0], -50.0f);
   EXPECT_FLOAT_EQ(out[1], 30.0f);
 
   // Bottom-right corner: the opposite sign on both axes.
-  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 100.0f, 60.0f, true }, 100, 60, out);
+  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 100.0f, 60.0f, true }, kUp, 100, 60, out);
   EXPECT_FLOAT_EQ(out[0], 50.0f);
   EXPECT_FLOAT_EQ(out[1], -30.0f);
+}
+
+TEST(AnnotationOverlayCache, CanvasPointToShaderScreenPosLeavesYAloneForTheFullSkyFamily) {
+  // The same canvas point, on the two kinds of lens. x is unaffected — only the y convention
+  // differs — so a conversion that flipped unconditionally answers the NEGATED y here, which puts
+  // every off-centre marker in a mirrored position.
+  //
+  // It stayed invisible while the family had two members: on a full-sky lens the zenith and the
+  // nadir both land on the canvas's horizontal centre line, where the flip is the identity.
+  // Rectangular is the exception that always could have shown it, and the four sun-relative markers
+  // show it everywhere.
+  float up[2] = { 0.0f, 0.0f };
+  float down[2] = { 0.0f, 0.0f };
+  const gui::AnnotationOverlayCache::Point p{ 10.0f, 10.0f, true };
+  CanvasPointToShaderScreenPos(p, gui::kLensTypeFisheyeEqualArea, 100, 60, up);
+  CanvasPointToShaderScreenPos(p, gui::kLensTypeDualFisheyeEqualArea, 100, 60, down);
+  EXPECT_FLOAT_EQ(up[0], down[0]);
+  EXPECT_FLOAT_EQ(up[1], 20.0f);
+  EXPECT_FLOAT_EQ(down[1], -20.0f);
+
+  // Every member of the family, so the branch is the classifier and not a hard-coded id or two.
+  for (int lens : gui::kFullSkyLensTypes) {
+    float v[2] = { 0.0f, 0.0f };
+    CanvasPointToShaderScreenPos(p, lens, 100, 60, v);
+    EXPECT_FLOAT_EQ(v[1], -20.0f) << "lens type " << lens;
+  }
+  // ...and the globe, which is full-sky in the everyday sense but is NOT in that list: its shader
+  // branch applies no y flip, so it converts like the view-matrix lenses.
+  float globe[2] = { 0.0f, 0.0f };
+  CanvasPointToShaderScreenPos(p, gui::kLensTypeGlobe, 100, 60, globe);
+  EXPECT_FLOAT_EQ(globe[1], 20.0f);
 }
 
 TEST(AnnotationOverlayCache, CanvasPointToShaderScreenPosUsesTheCanvasItIsGiven) {
@@ -239,8 +277,8 @@ TEST(AnnotationOverlayCache, CanvasPointToShaderScreenPosUsesTheCanvasItIsGiven)
   float preview[2] = { 0.0f, 0.0f };
   float export_canvas[2] = { 0.0f, 0.0f };
   const gui::AnnotationOverlayCache::Point p{ 10.0f, 10.0f, true };
-  CanvasPointToShaderScreenPos(p, 100, 100, preview);
-  CanvasPointToShaderScreenPos(p, 400, 200, export_canvas);
+  CanvasPointToShaderScreenPos(p, gui::kLensTypeFisheyeEqualArea, 100, 100, preview);
+  CanvasPointToShaderScreenPos(p, gui::kLensTypeFisheyeEqualArea, 400, 200, export_canvas);
   EXPECT_FLOAT_EQ(preview[0], -40.0f);
   EXPECT_FLOAT_EQ(export_canvas[0], -190.0f);
   EXPECT_NE(preview[1], export_canvas[1]);
@@ -251,12 +289,14 @@ TEST(AnnotationOverlayCache, CanvasPointToShaderScreenPosSendsAMissToTheSentinel
   // (0, 0) default through the conversion instead would draw a ring at the canvas corner — the
   // ordinary single-lens case, since one of the two poles is almost always off screen.
   float out[2] = { 0.0f, 0.0f };
-  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 0.0f, 0.0f, false }, 100, 60, out);
+  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 0.0f, 0.0f, false }, gui::kLensTypeFisheyeEqualArea,
+                               100, 60, out);
   EXPECT_FLOAT_EQ(out[0], gui::kOverlaySentinel);
   EXPECT_FLOAT_EQ(out[1], gui::kOverlaySentinel);
 
   // A degenerate canvas is a miss too: half of zero is zero, so the arithmetic would silently
   // answer the point's own coordinates.
-  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 5.0f, 5.0f, true }, 0, 0, out);
+  CanvasPointToShaderScreenPos(gui::AnnotationOverlayCache::Point{ 5.0f, 5.0f, true }, gui::kLensTypeFisheyeEqualArea,
+                               0, 0, out);
   EXPECT_FLOAT_EQ(out[0], gui::kOverlaySentinel);
 }

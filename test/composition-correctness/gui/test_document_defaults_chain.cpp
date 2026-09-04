@@ -104,9 +104,21 @@ const MissingKeyCase kGuiNativeCases[] = {
   LUMICE_MISSING_KEY_ROW(kRoot, s.horizon_alpha, GuiState{}.horizon_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.grid_alpha, GuiState{}.grid_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.sun_circles_alpha, GuiState{}.sun_circles_alpha),
-  LUMICE_MISSING_KEY_ROW(kRoot, s.show_zenith_nadir_line, GuiState{}.show_zenith_nadir_line),
-  LUMICE_MISSING_KEY_ROW(kRoot, s.zenith_nadir_alpha, GuiState{}.zenith_nadir_alpha),
-  LUMICE_MISSING_KEY_ROW(kRoot, s.zenith_nadir_radius_px, GuiState{}.zenith_nadir_radius_px),
+  // The reference-point markers. Zenith is probed rather than all six because the loader's
+  // per-marker fallback chain is where the interesting failure is, and it is longest here: the new
+  // key is absent, so the legacy overlay_zenith_nadir_line is tried, and with THAT absent too the
+  // value must land on this marker's own factory default rather than on a shared literal.
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers[LUMICE_ANNOTATION_MARKER_ZENITH].show,
+                         GuiState{}.markers[LUMICE_ANNOTATION_MARKER_ZENITH].show),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers[LUMICE_ANNOTATION_MARKER_ZENITH].label,
+                         GuiState{}.markers[LUMICE_ANNOTATION_MARKER_ZENITH].label),
+  // A marker with NO legacy source at all: the old pair could speak for zenith and nadir only, so
+  // if this one ever picked up a legacy value it would be reading a key that never meant it.
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers[LUMICE_ANNOTATION_MARKER_ANTISOLAR].show,
+                         GuiState{}.markers[LUMICE_ANNOTATION_MARKER_ANTISOLAR].show),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers_alpha, GuiState{}.markers_alpha),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers_radius_px, GuiState{}.markers_radius_px),
+  LUMICE_MISSING_KEY_ROW(kRoot, s.markers_section_open, GuiState{}.markers_section_open),
   LUMICE_MISSING_KEY_ROW(kRoot, s.show_lens_border_line, GuiState{}.show_lens_border_line),
   LUMICE_MISSING_KEY_ROW(kRoot, s.lens_border_alpha, GuiState{}.lens_border_alpha),
   LUMICE_MISSING_KEY_ROW(kRoot, s.right_panel_collapsed, GuiState{}.right_panel_collapsed),

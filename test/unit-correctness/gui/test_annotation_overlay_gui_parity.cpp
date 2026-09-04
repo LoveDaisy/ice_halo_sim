@@ -546,14 +546,14 @@ void CoreMarkers(const lumice::gui::ViewProjection& vp, int w, int h, MarkerPos*
   in.visible = vp.visible;
   in.front = vp.front;
   in.overlap = 0.0f;  // held at zero for the reason divergence 3 in this file's header gives
-  in.zenith_nadir = true;
+  in.marker_ids = { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR };
   lumice::gui::AnnotationOverlayCache cache;
   cache.Refresh(lumice::gui::MakeAnnotationViewKey(in, w, h));
   ASSERT_TRUE(cache.HasResult()) << "core produced no overlay for this view";
   float zp[2];
   float np[2];
-  lumice::gui::CanvasPointToShaderScreenPos(cache.ZenithPoint(), w, h, zp);
-  lumice::gui::CanvasPointToShaderScreenPos(cache.NadirPoint(), w, h, np);
+  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH), vp.lens_type, w, h, zp);
+  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_NADIR), vp.lens_type, w, h, np);
   *zenith = FromShaderPair(zp);
   *nadir = FromShaderPair(np);
 }

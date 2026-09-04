@@ -88,6 +88,30 @@ PSNR_THRESHOLDS = {
     # 33.06 dB of the previous shoot, so the threshold rises rather than relaxes.
     "render_opts_01": 32.5,
     "dual_fisheye_ref_01": 25.8,
+    # zenith_nadir_marker_compat: the ONE config in this table that sets `grid.zenith_nadir` and
+    # nothing else marker-related, and it exists to be an unchanged picture rather than a new one.
+    # Its reference was shot from the code as it stood BEFORE the marker list (`grid.markers`)
+    # existed, so a later render that scores against it is evidence that generalizing the two
+    # hardcoded rings into an N-entry list left the legacy key's OUTPUT alone — which is a claim
+    # about pixels, not about a branch still being present in the source.
+    # dual_fisheye_equal_area at fov 360 with `visible: full` on purpose: it is the only lens shape
+    # that images both poles at once, so one frame carries both rings. Same calibration method as
+    # the rest of this table: 3 fresh CLI runs, threshold = min(PSNR_2vs1, PSNR_3vs1) - 3 dB
+    # floored to 0.5 dB precision (measured 27.19 / 27.45 dB).
+    "zenith_nadir_marker_compat_01": 24.0,
+    # reference_point_markers: the other half of the pair above, and the opposite kind of claim —
+    # this one records a new capability rather than preserving an old picture, so its reference was
+    # shot AFTER the implementation and proves nothing about compatibility.
+    # All six ids enabled, six distinguishable colours, one family radius (9 px) and one family
+    # opacity (0.85). That combination is the point: a per-entry radius or opacity would show up
+    # here as rings of differing size, and a regression that collapsed the id table onto one
+    # direction would show up as fewer than six rings. Same lens as the compat scene, and for the
+    # same reason — dual_fisheye_equal_area at fov 360 with `visible: full` is the only shape that
+    # images the whole sky, and four of the six ids are reflections of the sun that a half-sky view
+    # would drop.
+    # Same calibration method as the rest of this table: 3 fresh CLI runs, threshold =
+    # min(PSNR_2vs1, PSNR_3vs1) - 3 dB floored to 0.5 dB precision (measured 27.46 / 27.45 dB).
+    "reference_point_markers_01": 24.0,
 }
 
 

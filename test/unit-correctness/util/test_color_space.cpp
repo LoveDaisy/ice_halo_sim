@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
@@ -145,6 +148,73 @@ TEST(ColorSpace, GammaCurvesAreContinuousAtTheirThresholds) {
   // ... and the seam is the same point seen from both spaces.
   EXPECT_NEAR(LinearToSrgb(0.0031308f), 0.04045f, 1e-5f);
   EXPECT_NEAR(SrgbToLinear(0.04045f), 0.0031308f, 1e-5f);
+}
+
+// ---- The bit-exact round trip ----
+//
+// This is the property the JSON boundary actually rests on, and the one the EXPECT_NEAR test
+// below could not see. A config's "background" is decoded to linear on the way in and re-encoded
+// on the way out, so a save/reload applies decode -> encode -> decode where a single decode is the
+// truth; RenderConfig::operator== then compares the two linear floats EXACTLY. A tolerance of
+// 1e-6f passes a one-ULP drift, which is how a real defect sat under a green test until two new
+// corpus configs happened to carry background 0.05 and CI went red on Ubuntu and Windows while
+// staying green on macOS. So this asserts bit patterns, not proximity.
+//
+// Deliberately NOT the whole float32 domain: that is 1.07e9 points and belongs in the one-off
+// exhaustive sweep that qualified the fix (0 failures either way, on AppleClang and glibc). What
+// lives here is the dense-but-cheap version — a stride across the range, the seam neighbourhood
+// where the two branches meet, and the literal values that were red.
+TEST(ColorSpace, GammaRoundTripIsBitExact) {
+  auto bits = [](float f) {
+    std::uint32_t u = 0;
+    std::memcpy(&u, &f, sizeof(u));
+    return u;
+  };
+
+  std::vector<float> samples;
+  for (int i = 0; i <= 20000; i++) {
+    samples.push_back(static_cast<float>(i) / 20000.0f);
+  }
+  // The seam: 0.0031308 * 12.92 is 0.040449936, NOT the 0.04045 the old comment claimed, so the
+  // interval between them is where a mismatched pair of branch predicates shows up and nowhere
+  // else. Walk it one ULP at a time from either side.
+  float seam = 0.0404f;
+  for (int i = 0; i < 4000; i++) {
+    samples.push_back(seam);
+    seam = std::nextafter(seam, 1.0f);
+  }
+  // The reverse direction's seam is somewhere else entirely, and the vector feeds both loops
+  // below, so it needs walking too: LinearToSrgb branches on kSrgbCurveCutoffLinear = 0.0031308 in
+  // LINEAR space, an order of magnitude away from the 0.0404 sRGB-space seam above. Without this
+  // walk the encode/decode/encode direction meets its own branch boundary only at the 5e-5 stride
+  // of the sweep — coarse enough to step straight over a mismatched pair of predicates.
+  float linear_seam = std::nextafter(kSrgbCurveCutoffLinear, 0.0f);
+  for (int i = 0; i < 2000; i++) {
+    samples.push_back(linear_seam);
+    linear_seam = std::nextafter(linear_seam, 0.0f);
+  }
+  linear_seam = kSrgbCurveCutoffLinear;
+  for (int i = 0; i < 2000; i++) {
+    samples.push_back(linear_seam);
+    linear_seam = std::nextafter(linear_seam, 1.0f);
+  }
+  // The two values that were actually red on CI (test/e2e/configs/reference_point_markers.json and
+  // zenith_nadir_marker_compat.json both carry background [0.02, 0.02, 0.05]).
+  samples.push_back(0.02f);
+  samples.push_back(0.05f);
+
+  for (float srgb : samples) {
+    // sRGB -> linear -> sRGB -> linear must land on the same linear float as the first decode.
+    const float linear = SrgbToLinear(srgb);
+    EXPECT_EQ(bits(SrgbToLinear(LinearToSrgb(linear))), bits(linear))
+        << "decode/encode/decode drifted at sRGB " << srgb;
+  }
+  for (float linear : samples) {
+    // ... and the same in the other direction, for the encode-side callers.
+    const float srgb = LinearToSrgb(linear);
+    EXPECT_EQ(bits(LinearToSrgb(SrgbToLinear(srgb))), bits(srgb))
+        << "encode/decode/encode drifted at linear " << linear;
+  }
 }
 
 // The property the JSON boundary rests on: a value authored in sRGB, decoded to linear on the way

@@ -1449,7 +1449,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       IM_CHECK_EQ(hits_from_table, gui::g_state.sim.max_hits);
       IM_CHECK_EQ(hits_from_table, 64);
 
-      // ---- overlay_zenith_nadir_radius_px: the same clamp, where nothing else can be doing it ----
+      // ---- overlay_markers_radius_px: the same clamp, where nothing else can be doing it ----
       //
       // The three fields above all have a main-UI control that clamps them every frame, so their
       // final value is evidence about the table's cell only if the table wrote it first. This
@@ -1457,16 +1457,16 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // is closed unless a user opens it — so as long as this test never opens it, whatever this
       // cell leaves behind is what the field holds, indefinitely. It is therefore the one field
       // whose clamp this suite can attribute to the table with no alternative explanation.
-      gui::g_state.zenith_nadir_radius_px = 8.0f;
+      gui::g_state.markers_radius_px = 8.0f;
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
-      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
-      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 50.0f);
+      FilterTo(ctx, "overlay_markers_radius_px");
+      ctx->ItemInputValue(ValueInputRef("overlay_markers_radius_px").c_str(), 50.0f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 20.0f);
       FilterTo(ctx, "");
       panel.Close();
       ctx->Yield(4);
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 20.0f);  // and it stays: nothing else touches it
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 20.0f);  // and it stays: nothing else touches it
     };
   }
 
@@ -1627,20 +1627,20 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
 
       // A hand-edited defaults file, out of range on three fields.
       json doc;
-      doc["overlay_zenith_nadir_radius_px"] = 90.0f;  // its control is behind a closed fold
-      doc["overlay_grid_alpha"] = 7.0f;               // its own slider clamps it every frame
-      doc["renderer"]["fov"] = 4000.0f;               // the per-frame renderer invariant clamps it
+      doc["overlay_markers_radius_px"] = 90.0f;  // its control is behind a closed fold
+      doc["overlay_grid_alpha"] = 7.0f;          // its own slider clamps it every frame
+      doc["renderer"]["fov"] = 4000.0f;          // the per-frame renderer invariant clamps it
       IM_CHECK(gui::WriteUserDefaultsFile(panel.dir(), doc));
       gui::g_state = gui::MakeNewDocumentState();
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 90.0f);  // the poison did land
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 90.0f);  // the poison did land
       ctx->Yield(4);  // let the main UI render — this is where the other two get pulled back
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
 
       // Positive: the field nothing clamps still holds its out-of-range value, and says so.
-      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
-      IM_CHECK(ctx->ItemExists("**/###note_range_overlay_zenith_nadir_radius_px"));
-      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
+      FilterTo(ctx, "overlay_markers_radius_px");
+      IM_CHECK(ctx->ItemExists("**/###note_range_overlay_markers_radius_px"));
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_markers_radius_px"));
 
       // Negative, twice, for the two different mechanisms that pull a value back in range.
       FilterTo(ctx, "overlay_grid_alpha");
@@ -1660,12 +1660,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       // Both at once, on one row: the out-of-range field, once edited, carries the pencil AND keeps
       // the warning until the edit takes it back into the domain. Editing it to a value inside
       // [2,20] clears the warning and leaves the pencil, which is the pair's whole point.
-      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
-      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 12.0f);
+      FilterTo(ctx, "overlay_markers_radius_px");
+      ctx->ItemInputValue(ValueInputRef("overlay_markers_radius_px").c_str(), 12.0f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 12.0f);
-      IM_CHECK(ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
-      IM_CHECK(!ctx->ItemExists("**/###note_range_overlay_zenith_nadir_radius_px"));
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 12.0f);
+      IM_CHECK(ctx->ItemExists("**/###note_edited_overlay_markers_radius_px"));
+      IM_CHECK(!ctx->ItemExists("**/###note_range_overlay_markers_radius_px"));
       FilterTo(ctx, "");
     };
   }
@@ -1683,24 +1683,24 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state = gui::MakeNewDocumentState();
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
-      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
-      IM_CHECK(!RowIsChecked(ctx, "overlay_zenith_nadir_radius_px"));  // untouched rows open unchecked
+      FilterTo(ctx, "overlay_markers_radius_px");
+      IM_CHECK(!RowIsChecked(ctx, "overlay_markers_radius_px"));  // untouched rows open unchecked
 
-      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 12.5f);
+      ctx->ItemInputValue(ValueInputRef("overlay_markers_radius_px").c_str(), 12.5f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 12.5f);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 12.5f);
       // The edit adopted the row: an edit that Save would discard is the failure this avoids.
-      IM_CHECK(RowIsChecked(ctx, "overlay_zenith_nadir_radius_px"));
+      IM_CHECK(RowIsChecked(ctx, "overlay_markers_radius_px"));
       // ...but nothing has been written yet.
       IM_CHECK(!ReadOverlayBytes(panel.dir()).has_value() ||
-               !gui::DocHasKeyPath(ReadOverlayFile(panel.dir()), "overlay_zenith_nadir_radius_px"));
+               !gui::DocHasKeyPath(ReadOverlayFile(panel.dir()), "overlay_markers_radius_px"));
 
       SaveDefaultsPanel(ctx);
       const json saved = ReadOverlayFile(panel.dir());
-      IM_CHECK(gui::DocHasKeyPath(saved, "overlay_zenith_nadir_radius_px"));
-      IM_CHECK_EQ(saved["overlay_zenith_nadir_radius_px"].get<float>(), 12.5f);
+      IM_CHECK(gui::DocHasKeyPath(saved, "overlay_markers_radius_px"));
+      IM_CHECK_EQ(saved["overlay_markers_radius_px"].get<float>(), 12.5f);
       // Saved => the "you changed this here" pencil is retired: it would now be a lie.
-      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_zenith_nadir_radius_px"));
+      IM_CHECK(!ctx->ItemExists("**/###note_edited_overlay_markers_radius_px"));
       FilterTo(ctx, "");
     };
   }
@@ -1798,10 +1798,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state = gui::MakeNewDocumentState();
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
-      FilterTo(ctx, "overlay_zenith_nadir_radius_px");
+      FilterTo(ctx, "overlay_markers_radius_px");
 
-      const float base = gui::g_state.zenith_nadir_radius_px;  // 8.0, in a [2, 20] domain
-      const ImGuiTestItemInfo slider = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_radius_px").c_str());
+      const float base = gui::g_state.markers_radius_px;  // 8.0, in a [2, 20] domain
+      const ImGuiTestItemInfo slider = ctx->ItemInfo(ValueSliderRef("overlay_markers_radius_px").c_str());
       // Asked before the drag, so that "this test is not addressing the widget it thinks it is"
       // reports as itself instead of as "the value did not land" — telling those two apart is the
       // whole reason this case can be trusted when it goes red.
@@ -1812,27 +1812,27 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         // Pressing an ImGui slider already moves its value to the press position, so a cell that
         // wrote per frame would have written a different number here — this is not a vacuous
         // "nothing happened yet" assertion.
-        IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, base);
+        IM_CHECK_EQ(gui::g_state.markers_radius_px, base);
 
         drag.MoveTo(PointAcross(slider, 0.85f));
         // Still held after moving the other way across the bar: a fix that special-cased only the
         // first frame of a drag would not survive this second look.
-        IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, base);
+        IM_CHECK_EQ(gui::g_state.markers_radius_px, base);
 
         drag.Release();
       }
       // Released: the drag lands, and it lands where the mouse was — not merely "somewhere else".
       // 0.85 of the way along [2, 20] is ~17; the bound below is loose enough to survive the grab
       // rectangle's own width and tight enough that a stale or half-way value fails it.
-      IM_CHECK_NE(gui::g_state.zenith_nadir_radius_px, base);
-      IM_CHECK_GT(gui::g_state.zenith_nadir_radius_px, 12.0f);
-      IM_CHECK_LE(gui::g_state.zenith_nadir_radius_px, 20.0f);
+      IM_CHECK_NE(gui::g_state.markers_radius_px, base);
+      IM_CHECK_GT(gui::g_state.markers_radius_px, 12.0f);
+      IM_CHECK_LE(gui::g_state.markers_radius_px, 20.0f);
 
       // The keyboard path is the half that always worked; asserted here so a fix that traded one
       // for the other cannot pass. Typing after a drag is also the real sequence a user performs.
-      ctx->ItemInputValue(ValueInputRef("overlay_zenith_nadir_radius_px").c_str(), 5.5f);
+      ctx->ItemInputValue(ValueInputRef("overlay_markers_radius_px").c_str(), 5.5f);
       ctx->Yield(3);
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, 5.5f);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, 5.5f);
 
       FilterTo(ctx, "");
     };
@@ -1888,7 +1888,7 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
     // therefore keyed per field, and this is the case that would go red if it stopped being.
     //
     // Both rows have to be on screen for that to be reachable at all, which is what the shared
-    // "overlay_zenith_nadir" filter buys: it leaves the radius (a [2, 20] float) and the alpha (a
+    // "overlay_markers_" filter buys: it leaves the radius (a [2, 20] float) and the alpha (a
     // [0, 1] float) rendering side by side.
     ImGuiTest* t = IM_REGISTER_TEST(engine, "defaults_panel", "two_slider_cells_do_not_share_one_drag_scratch");
     t->TestFunc = [](ImGuiTestContext* ctx) {
@@ -1896,12 +1896,12 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       gui::g_state = gui::MakeNewDocumentState();
 
       panel.OpenOn(gui::DefaultsPanelSection::kSettings);
-      FilterTo(ctx, "overlay_zenith_nadir");
+      FilterTo(ctx, "overlay_markers_");
 
-      const float alpha_base = gui::g_state.zenith_nadir_alpha;  // 0.6, in [0, 1]
-      const ImGuiTestItemInfo radius = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_radius_px").c_str());
+      const float alpha_base = gui::g_state.markers_alpha;  // 0.6, in [0, 1]
+      const ImGuiTestItemInfo radius = ctx->ItemInfo(ValueSliderRef("overlay_markers_radius_px").c_str());
       IM_CHECK(radius.ID != 0);
-      const ImGuiTestItemInfo alpha = ctx->ItemInfo(ValueSliderRef("overlay_zenith_nadir_alpha").c_str());
+      const ImGuiTestItemInfo alpha = ctx->ItemInfo(ValueSliderRef("overlay_markers_alpha").c_str());
       IM_CHECK(alpha.ID != 0);
 
       {
@@ -1909,10 +1909,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
         drag.MoveTo(PointAcross(radius, 0.75f));
         drag.Release();
       }
-      IM_CHECK_GT(gui::g_state.zenith_nadir_radius_px, 12.0f);
+      IM_CHECK_GT(gui::g_state.markers_radius_px, 12.0f);
       // The neighbour was rendering throughout and was never touched.
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_alpha, alpha_base);
-      const float radius_landed = gui::g_state.zenith_nadir_radius_px;
+      IM_CHECK_EQ(gui::g_state.markers_alpha, alpha_base);
+      const float radius_landed = gui::g_state.markers_radius_px;
 
       {
         ScopedMouseDown drag(ctx, PointAcross(alpha, 0.1f));
@@ -1921,10 +1921,10 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
       }
       // The alpha drag lands its OWN value — a scratch shared with the radius would have offered a
       // number from the other field's domain, clamped into [0, 1] as 1.0.
-      IM_CHECK_NE(gui::g_state.zenith_nadir_alpha, alpha_base);
-      IM_CHECK_LT(gui::g_state.zenith_nadir_alpha, 0.4f);
+      IM_CHECK_NE(gui::g_state.markers_alpha, alpha_base);
+      IM_CHECK_LT(gui::g_state.markers_alpha, 0.4f);
       // ...and does not disturb what the radius already committed.
-      IM_CHECK_EQ(gui::g_state.zenith_nadir_radius_px, radius_landed);
+      IM_CHECK_EQ(gui::g_state.markers_radius_px, radius_landed);
 
       FilterTo(ctx, "");
     };

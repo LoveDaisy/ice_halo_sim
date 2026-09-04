@@ -91,6 +91,7 @@ add_executable(unit_correctness_test
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_horizon.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_label.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_zenith_nadir.cpp"
+  "${PROJ_TEST_DIR}/unit-correctness/server/test_render_consumer_markers.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_component_compositor.cpp"
   "${PROJ_TEST_DIR}/unit-correctness/server/test_composite_background.cpp"
   # Result-frame lifetime guard + the buffer pool underneath it, and the completion/drain
@@ -223,6 +224,7 @@ add_executable(golden_analytic_test
   "${PROJ_TEST_DIR}/golden-analytic/core/test_visible_mask.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_axis_solid_angle.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_horizon_mask.cpp"
+  "${PROJ_TEST_DIR}/golden-analytic/core/test_annotation_marker_equivalence.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_prism.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_closed_form_pyramid.cpp"
   "${PROJ_TEST_DIR}/golden-analytic/core/test_incidence_sampling_polygon_oracle.cpp"
@@ -277,6 +279,7 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_horizon_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_annotation_overlay_cache.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_marker_document_compat.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_axis_absent_alignment.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_user_defaults.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_render_bg_logic.cpp"
@@ -288,7 +291,8 @@ if(BUILD_GUI)
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_composite_preview.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_color_window_logic.cpp"
     "${PROJ_TEST_DIR}/unit-correctness/gui/test_gui_identity_formatting.cpp"
-    "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp")
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_semantic_colors.cpp"
+    "${PROJ_TEST_DIR}/unit-correctness/gui/test_view_look_at.cpp")
   target_include_directories(gui_unit_test
     PRIVATE ${PROJ_TEST_DIR})
   # Source-scan gates read app.cpp off disk to prove a helper is REACHED from every document-entry

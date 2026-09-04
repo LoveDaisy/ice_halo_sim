@@ -37,6 +37,15 @@ struct Applicability {
 };
 using ApplicabilityFn = std::function<Applicability(const GuiState&)>;
 using FloatDomainFn = std::function<std::pair<float, float>(const GuiState&)>;
+// How a field factory reaches its slot in the state. std::function rather than the raw function
+// pointer these used to be, matching the two callbacks above: the marker family registers its
+// eighteen entries from a loop over the id, so its accessors CAPTURE that id and a capturing lambda
+// does not convert to a function pointer. Uniform across all five factories rather than widened
+// only where it is needed today — a family of five signatures with two spellings of the same
+// parameter reads as an accident, and the cost is one indirect call while a static registry is
+// built once.
+template <typename T>
+using SlotFn = std::function<T*(GuiState&)>;
 
 Applicability AlwaysApplies(const GuiState&) {
   return Applicability{};
@@ -94,7 +103,7 @@ struct ScalarDragState {
   bool was_active = false;
 };
 
-FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, const char* fmt,
+FieldEditorEntry FloatField(SlotFn<float> access, FloatDomainFn domain, const char* fmt,
                             SliderScale scale = SliderScale::kLinear, ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kFloatSlider;
@@ -130,7 +139,7 @@ FieldEditorEntry FloatField(float* (*access)(GuiState&), FloatDomainFn domain, c
   return entry;
 }
 
-FieldEditorEntry IntField(int* (*access)(GuiState&), int min_value, int max_value,
+FieldEditorEntry IntField(SlotFn<int> access, int min_value, int max_value,
                           ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kIntSlider;
@@ -158,7 +167,7 @@ FieldEditorEntry IntField(int* (*access)(GuiState&), int min_value, int max_valu
   return entry;
 }
 
-FieldEditorEntry BoolField(bool* (*access)(GuiState&), ApplicabilityFn applicable = AlwaysApplies) {
+FieldEditorEntry BoolField(SlotFn<bool> access, ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kCheckbox;
   entry.Constraint = [applicable](const GuiState& state) {
@@ -183,7 +192,7 @@ struct ColorFieldDragState {
 // A colour triple. No numeric domain on purpose: ColorEdit3 has no min/max to restate, which is
 // also why the three fields with no main-UI colour control at all (see the registry below) carry no
 // risk of inventing a constraint that disagrees with one.
-FieldEditorEntry ColorField(float* (*access)(GuiState&)) {
+FieldEditorEntry ColorField(SlotFn<float> access) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kColor;
   entry.Constraint = [](const GuiState&) { return FieldEditorConstraint{}; };
@@ -234,7 +243,7 @@ FieldEditorEntry ColorField(float* (*access)(GuiState&)) {
 // serialized value may be something else entirely (sim_resolution stores 1024 while the control
 // edits index 1) — holding that translation HERE is why entries have to be functions of the state
 // rather than a static value table.
-FieldEditorEntry ComboField(int* (*access)(GuiState&), const char* const* names, int count,
+FieldEditorEntry ComboField(SlotFn<int> access, const char* const* names, int count,
                             ApplicabilityFn applicable = AlwaysApplies) {
   FieldEditorEntry entry;
   entry.kind = FieldEditorKind::kCombo;
@@ -562,12 +571,28 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
                 FloatField([](GuiState& s) { return &s.grid_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
     map.emplace("overlay_sun_circles_alpha",
                 FloatField([](GuiState& s) { return &s.sun_circles_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
-    map.emplace("overlay_zenith_nadir_line", BoolField([](GuiState& s) { return &s.show_zenith_nadir_line; }));
-    map.emplace("overlay_zenith_nadir_color", ColorField([](GuiState& s) { return s.zenith_nadir_color; }));
-    map.emplace("overlay_zenith_nadir_alpha",
-                FloatField([](GuiState& s) { return &s.zenith_nadir_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
-    map.emplace("overlay_zenith_nadir_radius_px",
-                FloatField([](GuiState& s) { return &s.zenith_nadir_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
+    // The reference-point markers: three entries per marker, registered in a LOOP rather than
+    // written out eighteen times. The accessors capture the marker's index and the key comes from
+    // MarkerFieldKey — the same function file_io.cpp writes and reads the document with — so the
+    // registry and the serializer cannot drift into two spellings of one key.
+    //
+    // The four families above are still spelled out one by one, and deliberately: they have four
+    // different GuiState field names and no index to loop over. This block loops because the state
+    // it edits IS an array.
+    for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+      map.emplace(MarkerFieldKey(i, MarkerKeyPart::kLine), BoolField([i](GuiState& s) { return &s.markers[i].show; }));
+      map.emplace(MarkerFieldKey(i, MarkerKeyPart::kLabel),
+                  BoolField([i](GuiState& s) { return &s.markers[i].label; }));
+      map.emplace(MarkerFieldKey(i, MarkerKeyPart::kColor),
+                  ColorField([i](GuiState& s) { return s.markers[i].color; }));
+    }
+    // Family-wide, so outside the loop — one alpha and one radius for all six, mirroring both
+    // GuiState and LUMICE_RenderParam. Domains unchanged from the pair these generalize.
+    map.emplace(kMarkersAlphaKey,
+                FloatField([](GuiState& s) { return &s.markers_alpha; }, FixedDomain(0.0f, 1.0f), "%.2f"));
+    map.emplace(kMarkersRadiusKey,
+                FloatField([](GuiState& s) { return &s.markers_radius_px; }, FixedDomain(2.0f, 20.0f), "%.1f px"));
+    map.emplace(kMarkersSectionOpenKey, BoolField([](GuiState& s) { return &s.markers_section_open; }));
     map.emplace("overlay_lens_border_line", BoolField([](GuiState& s) { return &s.show_lens_border_line; }));
     map.emplace("overlay_lens_border_color", ColorField([](GuiState& s) { return s.lens_border_color; }));
     map.emplace("overlay_lens_border_alpha",

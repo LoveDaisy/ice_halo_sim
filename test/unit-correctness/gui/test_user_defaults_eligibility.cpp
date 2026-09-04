@@ -131,7 +131,14 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "bg_scale", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "aspect_preset", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "right_panel_collapsed", DefaultEligibility::kEligible, IneligibleReason::kNone },
-    { "show_zenith_nadir_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    // The reference-point markers. `markers` is an ARRAY field and is nonetheless eligible, which
+    // is the case worth pinning: eligibility turns on the TIER, not on the C++ type, and the
+    // collection verdict is about key paths that carry a document-local INDEX (a crystal's slot
+    // number means nothing in another document). This array is indexed by a fixed id space, and its
+    // serialized key paths name the marker rather than a position, so none of that applies.
+    { "markers", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "markers_alpha", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "markers_section_open", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "show_lens_border_line", DefaultEligibility::kEligible, IneligibleReason::kNone },
     // namespace 4 — collections. A key path into these carries a document-local index.
     { "crystals", DefaultEligibility::kIneligible, IneligibleReason::kCollection },

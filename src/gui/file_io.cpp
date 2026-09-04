@@ -1956,15 +1956,39 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
         FillGridLines(elevation, state.grid_color, state.grid_alpha, dst.elevation_grid, &dst.elevation_grid_count);
         FillGridLines(longitude, state.grid_color, state.grid_alpha, dst.longitude_grid, &dst.longitude_grid_count);
       }
-      // The zenith / nadir markers. Gated on their own switch like everything above, and unlike
-      // the three line families they carry no angle list — the two directions are fixed, so the
-      // only data is the appearance. The colour needs no conversion: this field is sRGB, the
-      // convention every LUMICE_GridLine.color follows and `background` does not.
-      dst.zenith_nadir = state.show_zenith_nadir_line ? 1 : 0;
-      dst.zenith_nadir_radius_px = state.zenith_nadir_radius_px;
-      dst.zenith_nadir_opacity = state.zenith_nadir_alpha;
-      std::copy(std::begin(state.zenith_nadir_color), std::end(state.zenith_nadir_color),
-                std::begin(dst.zenith_nadir_color));
+      // The reference-point markers. Unlike the three line families they carry no angle list —
+      // each id names a fixed direction — so the only data is which ids are on and what colour
+      // each is. The colour needs no conversion: this field is sRGB, the convention every
+      // LUMICE_GridLine.color follows and `background` does not.
+      //
+      // ALL SIX SLOTS ARE FILLED, with `enabled` carrying the switch, rather than only the ones the
+      // user has switched on. Two reasons, both about what the CLI then does with the document:
+      //   * the arbitration in render.cpp is "a NON-EMPTY markers list wins outright; the legacy
+      //     zenith_nadir field is consulted only when the list is empty". Filtering to enabled
+      //     entries would make a document with all six off fall through to that legacy branch —
+      //     so which code path renders the export would depend on how many boxes the user ticked.
+      //     A constant six takes the same branch every time;
+      //   * an unticked marker keeps its colour in the exported config, so a user editing the JSON
+      //     turns one on by flipping `enabled` rather than by reconstructing an entry. That is also
+      //     what makes the export a faithful record of the panel rather than of its output.
+      // markers_count is bounded by construction: LUMICE_MAX_CONFIG_MARKERS is exactly the id
+      // space, and one entry per id cannot repeat one (which core rejects rather than dedupes).
+      static_assert(LUMICE_MAX_CONFIG_MARKERS >= LUMICE_ANNOTATION_MARKER_COUNT,
+                    "every marker id must fit in LUMICE_RenderParam::markers[]");
+      for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+        dst.markers[i].id = i;
+        dst.markers[i].enabled = state.markers[i].show ? 1 : 0;
+        std::copy(std::begin(state.markers[i].color), std::end(state.markers[i].color),
+                  std::begin(dst.markers[i].color));
+      }
+      dst.markers_count = LUMICE_ANNOTATION_MARKER_COUNT;
+      dst.markers_radius_px = state.markers_radius_px;
+      dst.markers_opacity = state.markers_alpha;
+      // dst.zenith_nadir is deliberately LEFT AT ZERO on this arm, which it never used to be: the
+      // GUI now describes its whole marker set through markers[], and the arbitration above means
+      // a legacy field written beside it would be dead weight that only misleads a reader of the
+      // exported JSON. It is therefore no longer a field the two intent arms diverge on — both
+      // leave it zero (test_scene_commit_chain.cpp's kDivergingKeys says so).
     } else {
       // v4.11: LUMICE_RenderParam carries the full renderer description, so the values the C API
       // used to hardcode while re-encoding a renderer now have to be stated here.
@@ -1992,17 +2016,18 @@ ScenePtr BuildScene(const GuiState& state, SceneIntent intent, FilterOverflowInf
     // control anywhere, so there is no user-visible value for the export arm to be honest about.
     // If one is ever added, this is the line that has to stop being a comment.
     //
-    // All four annotation families — the three line lists and the marker pair — stay zero on the
-    // kSimCommit arm, and deliberately: that arm asks core for a TEXTURE the preview then
-    // re-projects and draws its own overlay on top of, so an annotation baked into it would be
-    // drawn twice. Same reason dst.horizon is unconditionally 1 there. The export arm above fills
-    // all four, which is what makes them the divergence set test_scene_commit_chain.cpp's
-    // kDivergingKeys pins.
+    // All four annotation families — the three line lists and the six reference-point markers —
+    // stay zero on the kSimCommit arm, and deliberately: that arm asks core for a TEXTURE the
+    // preview then re-projects and draws its own overlay on top of, so an annotation baked into it
+    // would be drawn twice. Same reason dst.horizon is unconditionally 1 there. The export arm
+    // above fills all four, which is what makes them the divergence set
+    // test_scene_commit_chain.cpp's kDivergingKeys pins.
     //
-    // The marker block leaving its three appearance fields at zero on this arm is harmless for the
-    // same reason the empty lists are: with dst.zenith_nadir = 0 nothing reads them. It is NOT the
-    // same statement as the JSON decoders' "a missing key means core's defaults" — that one is
-    // about a document, this one about a struct the commit arm fills itself.
+    // The marker block leaving its appearance fields at zero on this arm is harmless for the same
+    // reason the empty lists are: with markers_count = 0 nothing reads them, and an empty list
+    // falling through to a zeroed zenith_nadir draws nothing either. It is NOT the same statement
+    // as the JSON decoders' "a missing key means core's defaults" — that one is about a document,
+    // this one about a struct the commit arm fills itself.
     //
     // grid.elevation and grid.longitude used to carry a longer caveat here — that the GUI's one
     // FOV-adaptive step and core's explicit per-line list were two models nobody had reconciled.
@@ -2863,11 +2888,25 @@ std::string SerializeGuiStateJson(const GuiState& state) {
   root["overlay_horizon_alpha"] = state.horizon_alpha;
   root["overlay_grid_alpha"] = state.grid_alpha;
   root["overlay_sun_circles_alpha"] = state.sun_circles_alpha;
-  root["overlay_zenith_nadir_line"] = state.show_zenith_nadir_line;
-  root["overlay_zenith_nadir_color"] = { state.zenith_nadir_color[0], state.zenith_nadir_color[1],
-                                         state.zenith_nadir_color[2] };
-  root["overlay_zenith_nadir_alpha"] = state.zenith_nadir_alpha;
-  root["overlay_zenith_nadir_radius_px"] = state.zenith_nadir_radius_px;
+  // The reference-point markers: THREE FLAT KEYS PER MARKER, not one array key holding six
+  // objects. The shape is forced by what reads this document downstream — defaults_diff.cpp walks
+  // it into the personal-defaults panel and treats an ARRAY AS ONE LEAF (see its header), so an
+  // "overlay_markers" array would collapse the whole family into a single unencodable row that
+  // field_editor_registry.cpp cannot offer an editor for, silently making six colours and twelve
+  // switches read-only. Flat leaves keep each one its own editable row, exactly as the
+  // zenith/nadir pair these generalize already had.
+  //
+  // Every key here is spelled by MarkerFieldKey, which the reader below and the editor registry
+  // also call; there is no literal "overlay_marker_sun_color" anywhere in the tree.
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    root[MarkerFieldKey(i, MarkerKeyPart::kLine)] = state.markers[i].show;
+    root[MarkerFieldKey(i, MarkerKeyPart::kLabel)] = state.markers[i].label;
+    root[MarkerFieldKey(i, MarkerKeyPart::kColor)] = { state.markers[i].color[0], state.markers[i].color[1],
+                                                       state.markers[i].color[2] };
+  }
+  root[kMarkersAlphaKey] = state.markers_alpha;
+  root[kMarkersRadiusKey] = state.markers_radius_px;
+  root[kMarkersSectionOpenKey] = state.markers_section_open;
   root["overlay_lens_border_line"] = state.show_lens_border_line;
   root["overlay_lens_border_color"] = { state.lens_border_color[0], state.lens_border_color[1],
                                         state.lens_border_color[2] };
@@ -3122,10 +3161,42 @@ bool DeserializeGuiStateJson(const std::string& json_str, GuiState& state) {
   state.horizon_alpha = root.value("overlay_horizon_alpha", GuiState{}.horizon_alpha);
   state.grid_alpha = root.value("overlay_grid_alpha", GuiState{}.grid_alpha);
   state.sun_circles_alpha = root.value("overlay_sun_circles_alpha", GuiState{}.sun_circles_alpha);
-  state.show_zenith_nadir_line = root.value("overlay_zenith_nadir_line", GuiState{}.show_zenith_nadir_line);
-  read_color3("overlay_zenith_nadir_color", state.zenith_nadir_color);
-  state.zenith_nadir_alpha = root.value("overlay_zenith_nadir_alpha", GuiState{}.zenith_nadir_alpha);
-  state.zenith_nadir_radius_px = root.value("overlay_zenith_nadir_radius_px", GuiState{}.zenith_nadir_radius_px);
+  // The reference-point markers, with the legacy zenith/nadir pair as the fallback source.
+  //
+  // WHICH SOURCE WINS is decided PER MARKER by whether this document carries that marker's own new
+  // key — not by a document-level "is this an old file" verdict. The finer grain is what makes a
+  // hand-edited or partially-migrated document behave: a file carrying only the new zenith keys
+  // still picks up nothing spurious for the sun, and a file carrying both gets the new value for
+  // the two the old keys could speak for. Everything else falls to the factory value, which is the
+  // same rule every key above follows.
+  {
+    const GuiState kFactory;
+    for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+      const std::string line_key = MarkerFieldKey(i, MarkerKeyPart::kLine);
+      const std::string color_key = MarkerFieldKey(i, MarkerKeyPart::kColor);
+      state.markers[i].show = root.value(line_key, kFactory.markers[i].show);
+      state.markers[i].label = root.value(MarkerFieldKey(i, MarkerKeyPart::kLabel), kFactory.markers[i].label);
+      std::copy(std::begin(kFactory.markers[i].color), std::end(kFactory.markers[i].color),
+                std::begin(state.markers[i].color));
+      read_color3(color_key.c_str(), state.markers[i].color);
+      // The legacy pair spoke for these two ids and no others, with ONE switch and ONE colour
+      // covering both — which is why the same two values land in both entries here. `label` has no
+      // legacy source at all (the old marker drew no name), so it keeps the factory false.
+      const bool legacy_applies =
+          (i == LUMICE_ANNOTATION_MARKER_ZENITH || i == LUMICE_ANNOTATION_MARKER_NADIR) && !root.contains(line_key);
+      if (legacy_applies) {
+        state.markers[i].show = root.value("overlay_zenith_nadir_line", kFactory.markers[i].show);
+      }
+      if ((i == LUMICE_ANNOTATION_MARKER_ZENITH || i == LUMICE_ANNOTATION_MARKER_NADIR) && !root.contains(color_key)) {
+        read_color3("overlay_zenith_nadir_color", state.markers[i].color);
+      }
+    }
+    state.markers_alpha =
+        root.value(kMarkersAlphaKey, root.value("overlay_zenith_nadir_alpha", kFactory.markers_alpha));
+    state.markers_radius_px =
+        root.value(kMarkersRadiusKey, root.value("overlay_zenith_nadir_radius_px", kFactory.markers_radius_px));
+    state.markers_section_open = root.value(kMarkersSectionOpenKey, kFactory.markers_section_open);
+  }
   state.show_lens_border_line = root.value("overlay_lens_border_line", GuiState{}.show_lens_border_line);
   read_color3("overlay_lens_border_color", state.lens_border_color);
   state.lens_border_alpha = root.value("overlay_lens_border_alpha", GuiState{}.lens_border_alpha);
@@ -3389,7 +3460,7 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
   // caller that imposes vp_w/vp_h is precisely the caller whose aspect need not match. Refresh
   // rather than Update because this is one frame, not a draw loop, so there is no run of frames to
   // debounce over. Its own cache, for the same reason: a different clock from the preview's.
-  if (params.overlay.show_sun_circles || params.overlay.show_grid || params.overlay.show_zenith_nadir ||
+  if (params.overlay.show_sun_circles || params.overlay.show_grid || AnyMarkerRequested(g_state) ||
       params.overlay.show_horizon) {
     static AnnotationOverlayCache export_overlay;
     export_overlay.Refresh(MakeAnnotationViewKey(AnnotationViewInputFor(g_state, g_state.renderer), vp.vp_w, vp.vp_h));
@@ -3424,12 +3495,18 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
       // they are SCREEN COORDINATES, so a position inherited from vp.params was measured against
       // the live preview's viewport and would put the ring at the wrong place on any export whose
       // canvas differs — not merely stretch it, as a rescaled mask does.
-      CanvasPointToShaderScreenPos(export_overlay.ZenithPoint(), vp.vp_w, vp.vp_h, params.overlay.zenith_screen_pos);
-      CanvasPointToShaderScreenPos(export_overlay.NadirPoint(), vp.vp_w, vp.vp_h, params.overlay.nadir_screen_pos);
-    } else if (params.overlay.show_zenith_nadir) {
-      // No result to place them from, and the inherited positions are the preview's. Switch the
-      // markers off rather than draw two rings at coordinates this canvas never produced.
-      params.overlay.show_zenith_nadir = false;
+      for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+        const AnnotationOverlayCache::Point p =
+            g_state.markers[i].show ? export_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
+        CanvasPointToShaderScreenPos(p, g_state.renderer.lens_type, vp.vp_w, vp.vp_h,
+                                     params.overlay.marker_screen_pos[i].data());
+      }
+    } else {
+      // No result to place them from, and the inherited positions are the preview's. Sentinel every
+      // slot rather than draw rings at coordinates this canvas never produced. Unconditional, where
+      // this used to be gated on the markers being on: writing the sentinel is what "off" MEANS in
+      // this struct, so the gate would only be an opportunity to leave a stale position behind.
+      params.overlay.marker_screen_pos = MakeAllSentinelMarkerPositions();
     }
   }
   auto rgba = RenderExportToRgba(renderer, params, vp.vp_w, vp.vp_h);

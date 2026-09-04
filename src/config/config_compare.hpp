@@ -98,13 +98,18 @@ inline bool operator==(const ZenithNadirParam& a, const ZenithNadirParam& b) {
          std::equal(std::begin(a.color_), std::end(a.color_), std::begin(b.color_));
 }
 
+inline bool operator==(const MarkerStyleParam& a, const MarkerStyleParam& b) {
+  return a.id_ == b.id_ && a.enabled_ == b.enabled_ &&
+         std::equal(std::begin(a.color_), std::end(a.color_), std::begin(b.color_));
+}
+
 inline bool operator==(const LensParam& a, const LensParam& b) {
   return a.type_ == b.type_ && a.fov_ == b.fov_;
 }
 
 inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
   // Bump this when adding fields to RenderConfig.
-  static_assert(sizeof(RenderConfig) == 192, "Update operator== when RenderConfig fields change");
+  static_assert(sizeof(RenderConfig) == 224, "Update operator== when RenderConfig fields change");
   return a.id_ == b.id_ && a.lens_ == b.lens_ &&
          std::equal(std::begin(a.lens_shift_), std::end(a.lens_shift_), std::begin(b.lens_shift_)) &&
          std::equal(std::begin(a.resolution_), std::end(a.resolution_), std::begin(b.resolution_)) &&
@@ -113,7 +118,9 @@ inline bool operator==(const RenderConfig& a, const RenderConfig& b) {
          std::equal(std::begin(a.ray_color_), std::end(a.ray_color_), std::begin(b.ray_color_)) &&
          a.intensity_factor_ == b.intensity_factor_ && a.overlap_ == b.overlap_ && a.ev_mode_ == b.ev_mode_ &&
          a.angular_dist_grid_ == b.angular_dist_grid_ && a.elevation_grid_ == b.elevation_grid_ &&
-         a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ && a.zenith_nadir_ == b.zenith_nadir_;
+         a.longitude_grid_ == b.longitude_grid_ && a.horizon_ == b.horizon_ && a.zenith_nadir_ == b.zenith_nadir_ &&
+         a.markers_ == b.markers_ && a.markers_opacity_ == b.markers_opacity_ &&
+         a.markers_radius_px_ == b.markers_radius_px_;
 }
 
 // ---- Light config ----

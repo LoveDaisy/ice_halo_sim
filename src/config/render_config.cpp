@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <nlohmann/json.hpp>
+#include <string>
 
 #include "config/config_compare.hpp"
 #include "core/math.hpp"
@@ -78,6 +80,78 @@ void from_json(const nlohmann::json& j, ZenithNadirParam& z) {
   if (j.contains("color")) {
     j.at("color").get_to(z.color_);
   }
+}
+
+
+// ========== MarkerStyleParam ==========
+namespace {
+
+// The id spellings, indexed by MarkerRefId. One table for both directions, so the writer and the
+// reader cannot drift into two vocabularies.
+//
+// The words are the annotation layer's own (annotation::MarkerId), lowercased: a persisted schema
+// that renamed them would give one concept two names across the C API boundary, which is the defect
+// `longitude` vs `azimuth` was already fixed for once.
+constexpr const char* kMarkerIdNames[] = {
+  "zenith", "nadir", "sun", "subsun", "anthelion", "antisolar",
+};
+constexpr int kMarkerIdNameCount = static_cast<int>(sizeof(kMarkerIdNames) / sizeof(kMarkerIdNames[0]));
+
+}  // namespace
+
+void to_json(nlohmann::json& j, const MarkerStyleParam& m) {
+  const auto idx = static_cast<int>(m.id_);
+  // Defensive, not expected: every MarkerRefId value has a name. An id outside the table would
+  // otherwise index out of bounds while serializing a struct the caller built in C++ without going
+  // through any validation.
+  j["id"] = (idx >= 0 && idx < kMarkerIdNameCount) ? kMarkerIdNames[idx] : kMarkerIdNames[0];
+  j["enabled"] = m.enabled_;
+  j["color"] = m.color_;
+}
+
+// "id" is the one MANDATORY key — unlike ZenithNadirParam, where every key is optional because the
+// struct's defaults already describe a complete marker. Here they do not: an entry with no id names
+// no direction, and defaulting it to the zenith would turn a malformed list into a plausible one.
+// `enabled` and `color` stay optional and keep the member defaults, as everywhere else in this file.
+void from_json(const nlohmann::json& j, MarkerStyleParam& m) {
+  constexpr int kErrCodeMissingKey = 403;
+  constexpr int kErrCodeInvalidValue = 404;
+
+  if (!j.contains("id")) {
+    throw nlohmann::detail::out_of_range::create(kErrCodeMissingKey, "grid.markers entry is missing key [id]", j);
+  }
+  const auto name = j.at("id").get<std::string>();
+  const auto* found = std::find(std::begin(kMarkerIdNames), std::end(kMarkerIdNames), name);
+  // Reject rather than fall back. NLOHMANN_JSON_SERIALIZE_ENUM, which every other enum in this file
+  // uses, would silently map an unrecognized string to the first entry — here that is the zenith,
+  // so a typo would draw a ring at a direction the author never named and report nothing.
+  if (found == std::end(kMarkerIdNames)) {
+    throw nlohmann::detail::out_of_range::create(kErrCodeInvalidValue, "unknown marker id [" + name + "]", j);
+  }
+  m.id_ = static_cast<MarkerRefId>(std::distance(std::begin(kMarkerIdNames), found));
+
+  if (j.contains("enabled")) {
+    j.at("enabled").get_to(m.enabled_);
+  }
+  if (j.contains("color")) {
+    j.at("color").get_to(m.color_);
+  }
+}
+
+bool HasDuplicateMarkerId(const std::vector<MarkerStyleParam>& markers, MarkerRefId* dup) {
+  // O(n^2) over a list whose validated length cannot exceed the six ids that exist. A set would
+  // cost an allocation to save fifteen integer comparisons.
+  for (size_t i = 0; i < markers.size(); ++i) {
+    for (size_t k = i + 1; k < markers.size(); ++k) {
+      if (markers[i].id_ == markers[k].id_) {
+        if (dup != nullptr) {
+          *dup = markers[i].id_;
+        }
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 
@@ -195,6 +269,12 @@ void to_json(nlohmann::json& j, const RenderConfig& r) {
   j["grid"].emplace("label", r.grid_label_);
   j["grid"].emplace("angular_dist_label", r.angular_dist_label_);
   j["grid"].emplace("zenith_nadir", r.zenith_nadir_);
+  // The marker family: the list, then its two family-wide appearance fields as SIBLING keys rather
+  // than as members of a wrapper object. Same shape as "horizon" / "horizon_label" and the rest of
+  // this block, i.e. every appearance knob the grid has is one key under "grid".
+  j["grid"].emplace("markers", r.markers_);
+  j["grid"].emplace("markers_opacity", r.markers_opacity_);
+  j["grid"].emplace("markers_radius_px", r.markers_radius_px_);
 }
 
 
@@ -210,7 +290,13 @@ bool NeedsRebuild(const RenderConfig& a, const RenderConfig& b) {
   // buffer it accumulates into, so a config that flips one reaches an existing consumer through
   // ResetWith() with no rebuild (which is what RebuildHorizonLabels and the two mask rebuilds are
   // re-run from there for).
-  static_assert(sizeof(RenderConfig) == 192, "Update NeedsRebuild when RenderConfig fields change");
+  // 192 -> 224 for the marker family: std::vector markers_ (24) + two floats (8), landing on
+  // exactly 32 with no new padding. All three are APPEARANCE, like zenith_nadir_ beside them: they
+  // change what is painted on top of the accumulated image and nothing about the buffer it
+  // accumulates into, so a config that edits them reaches an existing consumer through ResetWith()
+  // with no rebuild — which is why RebuildMarkerPoints() is called from there as well as from the
+  // constructor.
+  static_assert(sizeof(RenderConfig) == 224, "Update NeedsRebuild when RenderConfig fields change");
   // Compare layout-affecting fields only. Appearance fields (background, ray_color,
   // intensity_factor, ev_mode, grids) are handled by ResetWith() without rebuild.
 

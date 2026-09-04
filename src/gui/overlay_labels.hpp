@@ -25,16 +25,21 @@ struct OverlayLabel {
 // the sets built in app_panels.cpp choose between them by name rather than by literal.
 constexpr int kGroupGrid = 0;
 constexpr int kGroupSunCircles = 1;
+// The sky reference points' names. Its own group, not the circles': a marker's name sits beside a
+// single point rather than along a curve, and two DIFFERENT reference points that happen to project
+// close together must both stay named — suppressing one would say the sky has fewer named
+// directions than it does, which is the opposite of what this family is for.
+constexpr int kGroupMarkers = 2;
 
 // Turn core's label anchors into OverlayLabels the two draw paths already understand. Kept here
 // rather than in either caller because both of them need it and the conversion — canvas pixels to
 // the target draw list's space, plus the colour and group the collision pass reads — is the same
 // both times.
 //
-// NOT specific to one annotation family: all three — the horizon, the angular-distance circles and
-// the coordinate grid — arrive as core anchors and are drawn this way, differing only in the
-// appearance and the collision group the caller attaches. That is why the type is named for the
-// shape of the data rather than for its first consumer, and it is now the ONLY way a label reaches
+// NOT specific to one annotation family: the horizon, the angular-distance circles, the coordinate
+// grid and the reference-point markers all arrive as core anchors and are drawn this way, differing
+// only in the appearance and the collision group the caller attaches. That is why the type is
+// named for the shape of the data rather than for its first consumer, and it is now the ONLY way a label reaches
 // this file: the GUI's own curve walk (ComputeOverlayLabels) is gone with the last family that
 // needed it.
 //

@@ -11,6 +11,15 @@ namespace lumice::gui {
 
 inline constexpr float kOverlaySentinel = -9999.f;
 
+// The "no marker anywhere" position array. A function for the same reason GuiState's
+// MakeDefaultMarkers() is one: the value is six identical pairs, and a member initializer spelling
+// them out is six lines that say nothing the name does not.
+inline std::array<std::array<float, 2>, LUMICE_ANNOTATION_MARKER_COUNT> MakeAllSentinelMarkerPositions() {
+  std::array<std::array<float, 2>, LUMICE_ANNOTATION_MARKER_COUNT> out;
+  out.fill({ kOverlaySentinel, kOverlaySentinel });
+  return out;
+}
+
 // Source texture format. Dual-fisheye overlap parameters for sampling a
 // packed front/back hemisphere texture. Owned by the producer (GUI hard-codes
 // kDualFisheyeOverlap today; future: server/RawXyzResult may supply).
@@ -93,21 +102,27 @@ struct OverlayDecoration {
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
 
-  // Zenith / Nadir pixel-space ring marker.
-  // *_screen_pos: CPU-precomputed; center-origin pixel coords, y-up
-  // (matches shader's `pos = v_ndc * u_resolution * 0.5`). Sentinel
-  // (-9999, -9999) when the direction is offscreen / behind the camera
-  // / unsupported lens — shader compares distance and naturally skips it.
-  bool show_zenith_nadir = false;
-  float zenith_screen_pos[2] = { kOverlaySentinel, kOverlaySentinel };
-  float nadir_screen_pos[2] = { kOverlaySentinel, kOverlaySentinel };
-  float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
-  float zenith_nadir_alpha = 0.6f;
-  float zenith_nadir_radius_px = 8.0f;
+  // The sky reference points: pixel-space ring markers, one slot per core marker id.
+  //
+  // marker_screen_pos: CPU-precomputed; center-origin pixel coords, y-up (matches the shader's
+  // `pos = v_ndc * u_resolution * 0.5`). Sentinel (-9999, -9999) when the direction is offscreen /
+  // behind the camera / on an unsupported lens — the shader compares distance and naturally skips
+  // it.
+  //
+  // There is deliberately NO per-marker enable flag and no count beside these: the sentinel
+  // ALREADY expresses "do not draw this one", so a marker the user has switched off is written as
+  // one and needs no second switch. A count would additionally impose an ordering the id indexing
+  // exists to avoid.
+  std::array<std::array<float, 2>, LUMICE_ANNOTATION_MARKER_COUNT> marker_screen_pos = MakeAllSentinelMarkerPositions();
+  std::array<std::array<float, 3>, LUMICE_ANNOTATION_MARKER_COUNT> marker_color{};
+  // Family-wide, matching GuiState and LUMICE_RenderParam: colour tells the points apart, size and
+  // transparency say what KIND of annotation they are.
+  float markers_alpha = 0.6f;
+  float markers_radius_px = 8.0f;
 
   // Lens border: outline of the projection's valid image circle. The shader
   // derives the geometry itself from lens type / FOV / resolution (see
-  // overlayLensBorder), so unlike the zenith/nadir marker there is no
+  // overlayLensBorder), so unlike the reference-point markers there is no
   // CPU-precomputed screen position or radius here.
   bool show_lens_border = false;
   float lens_border_color[3] = { 0.3f, 0.7f, 1.0f };

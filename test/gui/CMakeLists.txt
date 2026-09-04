@@ -25,6 +25,7 @@ add_executable(gui_test
     functional/test_theme_coverage.cpp
     functional/test_theme_scan.cpp
     functional/test_overlay_controls.cpp
+    functional/test_marker_panel.cpp
     functional/test_lens_border.cpp
     functional/test_preview_viewport.cpp
     functional/test_background_main_ui_control.cpp

@@ -659,3 +659,97 @@ TEST(OverlayLabels, ACurveGrazingTheViewportEdgeDoesNotStackLabelsOnTopOfEachOth
   in.fov = 120.0f;
   EXPECT_LE(CountText(Compute(in, 512.0f, 512.0f), std::string("10") + kDeg), 4);
 }
+
+// ---- The marker family's placement when the target space is not the canvas ----
+//
+// WHY THIS EXISTS. Every other case in this file works at a target size equal to the canvas the
+// request named, which makes the canvas-to-target conversion the identity and hides whether it was
+// applied at all. The live preview does not: the annotation request is built at the framebuffer's
+// DEVICE pixel size while the labels are published in FBO-local LOGICAL POINTS, so on a HiDPI
+// display the two differ by the DPI scale. Both failure modes export_fbo_renderer.cpp's
+// RenderOverlayToFbo names are invisible on a 1x machine, and neither is a compile error:
+//
+//   * an anchor that is NOT converted sits at twice its distance from the viewport's top-left;
+//   * an offset added in the WRONG space moves a label by a distance that changes with the DPI.
+//
+// The markers are the family that can hit the second one, because theirs is the only anchor with a
+// second term added after the conversion: the name goes BELOW the ring, so the ring's radius —
+// GuiState::markers_radius_px, which the shader compares against a distance in the same device
+// pixels u_resolution is given (preview_renderer.cpp: u_markers_radius_px vs pos_pix) and which the
+// CLI writes as a device-pixel size too — has to be brought into the target space before it is
+// added to an anchor that already has been.
+//
+// The two arms are the SAME view at two DPIs: one canvas, targets of 1x and 0.5x its size. That is
+// what the preview does at dpi 1 and dpi 2, and it is what makes the assertions below independent
+// of the gap constant's value — a clearance measured in logical points must be the same number of
+// logical points in both, whatever that number is.
+TEST(OverlayLabels, AMarkerNameKeepsItsClearanceFromItsRingWhenTheTargetIsNotTheCanvas) {
+  constexpr int kCanvasW = 512;
+  constexpr int kCanvasH = 512;
+  // Dual fisheye equal-area at full sky: the one family that images all six directions at once, so
+  // no id drops out of the comparison for want of being on the canvas.
+  gui::AnnotationViewInput vin;
+  vin.lens_type = gui::kLensTypeDualFisheyeEqualArea;
+  vin.fov = 180.0f;
+  vin.visible = gui::kVisibleFull;
+  vin.overlap = gui::kDualFisheyeOverlap;
+  vin.sun_altitude_deg = 20.0f;
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    vin.marker_ids.push_back(i);
+  }
+  gui::AnnotationOverlayCache cache;
+  cache.Refresh(gui::MakeAnnotationViewKey(vin, kCanvasW, kCanvasH));
+  ASSERT_TRUE(cache.HasResult());
+
+  gui::GuiState state;
+  for (gui::MarkerAppearance& m : state.markers) {
+    m.label = true;
+  }
+  // Larger than the 8 px default so the clearance error a mis-scaled radius produces is far above
+  // any rounding in the conversion itself.
+  state.markers_radius_px = 32.0f;
+
+  // The canvas points the two arms are measured against, in the same order the builder emits sets:
+  // ascending id, skipping the ones this view does not image.
+  std::vector<gui::AnnotationOverlayCache::Point> points;
+  for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
+    if (cache.MarkerPoint(i).valid) {
+      points.push_back(cache.MarkerPoint(i));
+    }
+  }
+  ASSERT_FALSE(points.empty());
+
+  constexpr float kScale2x = 0.5f;  // target = canvas / 2, i.e. what dpi 2 hands the draw list
+  const auto at_1x =
+      gui::BuildMarkerLabelSets(cache, state, static_cast<float>(kCanvasW), static_cast<float>(kCanvasH));
+  const auto at_2x = gui::BuildMarkerLabelSets(cache, state, static_cast<float>(kCanvasW) * kScale2x,
+                                               static_cast<float>(kCanvasH) * kScale2x);
+  ASSERT_EQ(at_1x.size(), points.size());
+  ASSERT_EQ(at_2x.size(), points.size());
+
+  for (std::size_t k = 0; k < points.size(); ++k) {
+    if (at_1x[k].anchors.size() != 1u || at_2x[k].anchors.size() != 1u) {
+      ADD_FAILURE() << "marker set " << k << ": " << at_1x[k].anchors.size() << " / " << at_2x[k].anchors.size()
+                    << " anchors, expected exactly one each";
+      continue;
+    }
+    const float canvas_x = points[k].px;
+    const float canvas_y = points[k].py;
+
+    // (1) THE ANCHOR IS CONVERTED EXACTLY ONCE. x carries no offset of its own, so it reads the
+    // conversion alone: a builder that skipped it would answer canvas_x in both arms, which is the
+    // "twice the distance from the top-left corner" failure, and one that applied it twice would
+    // answer a quarter of it.
+    EXPECT_NEAR(at_1x[k].anchors[0].px, canvas_x, 1e-3f) << "marker set " << k;
+    EXPECT_NEAR(at_2x[k].anchors[0].px, canvas_x * kScale2x, 1e-3f) << "marker set " << k;
+
+    // (2) THE CLEARANCE IS THE SAME IN BOTH. Subtracting the converted centre and the converted
+    // ring radius leaves the gap between the ring's outer edge and the top of the name, which is a
+    // constant in logical points and must not depend on the DPI. A radius added without conversion
+    // shows up here as a difference of markers_radius_px * (1 - scale).
+    const float gap_1x = at_1x[k].anchors[0].py - canvas_y - state.markers_radius_px;
+    const float gap_2x = at_2x[k].anchors[0].py - canvas_y * kScale2x - state.markers_radius_px * kScale2x;
+    EXPECT_GT(gap_1x, 0.0f) << "marker set " << k;  // the name is below the ring, not on it
+    EXPECT_NEAR(gap_2x, gap_1x, 1e-3f) << "marker set " << k;
+  }
+}

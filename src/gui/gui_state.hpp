@@ -2,6 +2,7 @@
 #define LUMICE_GUI_STATE_HPP
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
@@ -1018,6 +1019,78 @@ inline bool AllEntriesDisabled(const Layer& layer) {
          std::all_of(layer.entries.begin(), layer.entries.end(), [](const EntryCard& e) { return !e.enabled; });
 }
 
+// ---- Sky reference-point markers ----
+//
+// One named direction's appearance in the GUI. WHAT the direction is lives in core's
+// LUMICE_ANNOTATION_MARKER_* id space, not here; this struct only carries what the GUI decides
+// about it, which is exactly the three questions the panel's row asks: draw the ring, draw the
+// name, and in what colour.
+//
+// Radius and opacity are absent for the same reason they are absent from LUMICE_MarkerStyle: they
+// are family-wide (GuiState::markers_alpha / markers_radius_px), because the family is read as a
+// family and colour is what tells its members apart.
+struct MarkerAppearance {
+  bool show = false;
+  bool label = false;
+  float color[3] = { 0.8f, 0.2f, 0.2f };
+};
+
+// The six factory appearances, in core-id order. A function rather than a brace initializer on the
+// field itself because the GuiState field-tier gate (scripts/check_policies.py) reads ONE LINE per
+// field, and a six-element aggregate initializer cannot be one line — `= MakeDefaultMarkers()` can,
+// and the gate documents that call-style form as supported. The colours are chosen to be
+// distinguishable from one another in a single frame, which is what the family's whole design rests
+// on: telling the points apart is what colour is for here (LUMICE_MarkerStyle says the same).
+inline std::array<MarkerAppearance, LUMICE_ANNOTATION_MARKER_COUNT> MakeDefaultMarkers() {
+  return { {
+      { false, false, { 0.85f, 0.25f, 0.25f } },  // Zenith    — the red the zenith/nadir pair had
+      { false, false, { 0.35f, 0.55f, 1.00f } },  // Nadir     — blue, the zenith's opposite
+      { false, false, { 1.00f, 0.85f, 0.20f } },  // Sun       — yellow
+      { false, false, { 0.55f, 0.85f, 1.00f } },  // Subsun    — pale cyan, the sun's reflection
+      { false, false, { 1.00f, 0.55f, 0.15f } },  // Anthelion — orange
+      { false, false, { 0.65f, 0.40f, 0.95f } },  // Antisolar — violet
+  } };
+}
+
+// The two name tables, both INDEXED BY THE CORE ID and pinned to it by the static_asserts below.
+// Two rather than one because the two audiences are different and must be allowed to diverge: the
+// display name is a user-facing string a translator or a designer may change at any time, the
+// serial name is part of the .lmc key path and changing it silently orphans every saved document.
+inline constexpr const char* kMarkerDisplayNames[LUMICE_ANNOTATION_MARKER_COUNT] = {
+  "Zenith", "Nadir", "Sun", "Subsun", "Anthelion", "Antisolar",
+};
+inline constexpr const char* kMarkerSerialNames[LUMICE_ANNOTATION_MARKER_COUNT] = {
+  "zenith", "nadir", "sun", "subsun", "anthelion", "antisolar",
+};
+static_assert(LUMICE_ANNOTATION_MARKER_ZENITH == 0 && LUMICE_ANNOTATION_MARKER_NADIR == 1 &&
+                  LUMICE_ANNOTATION_MARKER_SUN == 2 && LUMICE_ANNOTATION_MARKER_SUBSUN == 3 &&
+                  LUMICE_ANNOTATION_MARKER_ANTHELION == 4 && LUMICE_ANNOTATION_MARKER_ANTISOLAR == 5,
+              "kMarkerDisplayNames / kMarkerSerialNames / GuiState::markers are indexed by the core "
+              "marker id; reordering LUMICE_ANNOTATION_MARKER_* renames every row and every .lmc key");
+static_assert(sizeof(kMarkerDisplayNames) / sizeof(kMarkerDisplayNames[0]) == LUMICE_ANNOTATION_MARKER_COUNT,
+              "one display name per marker id");
+static_assert(sizeof(kMarkerSerialNames) / sizeof(kMarkerSerialNames[0]) == LUMICE_ANNOTATION_MARKER_COUNT,
+              "one serial name per marker id");
+
+// Which of a marker row's three serialized leaves a key names.
+enum class MarkerKeyPart { kLine, kLabel, kColor };
+
+// THE one place a per-marker serialization key is spelled. Every consumer — the writer and the
+// reader in file_io.cpp, the editor registry, the tests — calls this rather than writing
+// "overlay_marker_sun_color" out by hand, so a rename is one edit and the four sides cannot drift.
+// Not a constexpr table of 18 strings because the shape (family, name, part) is the thing worth
+// stating; a table would be the same 18 literals with the rule left implicit.
+inline std::string MarkerFieldKey(int marker_id, MarkerKeyPart part) {
+  const char* suffix = part == MarkerKeyPart::kLine ? "_line" : part == MarkerKeyPart::kLabel ? "_label" : "_color";
+  return std::string("overlay_marker_") + kMarkerSerialNames[marker_id] + suffix;
+}
+
+// The family-wide keys, spelled once for the same reason. These are plain constants rather than a
+// function because there is no per-marker axis to vary over.
+inline constexpr const char* kMarkersAlphaKey = "overlay_markers_alpha";
+inline constexpr const char* kMarkersRadiusKey = "overlay_markers_radius_px";
+inline constexpr const char* kMarkersSectionOpenKey = "overlay_markers_section_open";
+
 struct GuiState {
   // ID-pool model (restored from pre-card-redesign): EntryCard holds indices
   // into these pools. Editing a pool slot is observed by every entry sharing
@@ -1096,14 +1169,16 @@ struct GuiState {
   // label anchors core computes (AnnotationViewInputFor -> AnnotationOverlayCache -> the
   // Build*LabelSet family) and, on the export side, the three grid.*_label keys the CLI reads.
   //
-  // Tech-debt note (2026-04-29): now 19 flat
-  // overlay-related fields (5×color + 5×alpha + 8×bool + zenith_nadir_radius_px).
-  // The original note said "when a fourth overlay class is added, evaluate collapsing
-  // to a substruct (per-overlay { color, alpha, line, label })". Zenith/Nadir was the
-  // fourth and Lens Border is the fifth, so that trigger has now been crossed twice
-  // without the evaluation being done. It is deliberately still not done here (a
-  // different root cause than adding an overlay class), but the debt is now tracked
-  // in the backlog rather than resting on this counter alone.
+  // Tech-debt note: the flat fields below are 16 (4×color + 4×alpha + 7×bool +
+  // sun_circle_angles). The original note said "when a fourth overlay class is added, evaluate
+  // collapsing to a substruct (per-overlay { color, alpha, line, label })". That trigger has been
+  // crossed twice without the evaluation being done, and the debt is tracked in the backlog rather
+  // than resting on this counter alone.
+  // What the count no longer includes is the marker family: it WAS four more flat fields
+  // (show_zenith_nadir_line + colour + alpha + radius) and is now the substruct the note asks for
+  // — MarkerAppearance{show,label,color} in an array indexed by the core marker id. Six reference
+  // points forced the question the fourth and fifth overlay classes only raised, because six sets
+  // of three flat fields is eighteen names to write out at every one of the five consumers.
   bool show_horizon_line = false;
   bool show_horizon_label = false;
   bool show_grid_line = false;
@@ -1118,13 +1193,24 @@ struct GuiState {
   float grid_alpha = 0.3f;
   float sun_circles_alpha = 0.5f;
 
-  // Zenith / Nadir pixel-space ring marker (see task-gui-zenith-nadir-marker).
-  // Single toggle controls both zenith and nadir; radius is in pixels and stays
-  // visually constant across lens / FOV / zoom changes.
-  bool show_zenith_nadir_line = false;
-  float zenith_nadir_color[3] = { 0.8f, 0.2f, 0.2f };
-  float zenith_nadir_alpha = 0.6f;
-  float zenith_nadir_radius_px = 8.0f;
+  // The sky reference points: pixel-space ring markers at N named directions. Indexed BY THE CORE
+  // ID — markers[LUMICE_ANNOTATION_MARKER_SUN] is the sun's entry — which is what lets the request,
+  // the shader upload, the serializer and the panel all drive off one loop rather than six
+  // hand-written blocks. kMarkerDisplayNames / kMarkerSerialNames above are parallel to it and
+  // pinned to the same order by the static_asserts beside those tables.
+  //
+  // Radius and opacity are deliberately NOT per entry: they are family-wide (markers_alpha /
+  // markers_radius_px below), the same split LUMICE_MarkerStyle draws for the same reason — a set
+  // of reference points reads as a family, colour is what tells its members apart, and a ring at a
+  // different size reads as a different KIND of thing rather than as a different point.
+  std::array<MarkerAppearance, LUMICE_ANNOTATION_MARKER_COUNT> markers = MakeDefaultMarkers();
+  // Family-wide appearance. One pair for all six — see the markers[] comment above.
+  float markers_alpha = 0.6f;
+  float markers_radius_px = 8.0f;
+  // Whether the panel's "Reference Points" section is unfolded. Serialized like every other view
+  // preference so a document can carry the section already open, which is the state AC1's
+  // "non-default" arm needs to be constructible at all.
+  bool markers_section_open = false;
 
   // Lens border. Outlines the projection's own
   // valid image circle, which is otherwise pure black and indistinguishable from the
@@ -1414,6 +1500,30 @@ struct GuiState {
     last_pushed_display_state.reset();
   }
 };
+
+// ---- Sky reference-point marker predicates (single owner) ----
+//
+// "Is any marker asking for X" is answered here because three call sites ask it — the preview's
+// per-frame cache Update (app_panels.cpp), the off-screen export's own refresh (file_io.cpp) and
+// the label block — and each of them writing its own six-way disjunction is three chances for one
+// to be updated and the others not. That is the same drift the array replaced six named fields to
+// prevent, one level up.
+//
+// TWO predicates, not one, because the two questions are genuinely different: whether core has to
+// PROJECT anything, and whether any NAME has to be drawn. A marker with only its label switched on
+// needs the projection (a name is placed at a point) but draws no ring, so collapsing them would
+// make one of the two call sites wrong.
+//
+// There is deliberately no third, `AnyMarkerShown`: nothing in the product asks it. The panel's
+// per-row clipping notice reads that marker's own switch, and [All]/[None] assign rather than test.
+inline bool AnyMarkerLabelShown(const GuiState& s) {
+  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.label; });
+}
+// Whether core has to project ANY marker for this frame. Either switch counts, exactly like the
+// horizon's two: a user drawing only the names still needs the positions the names are placed at.
+inline bool AnyMarkerRequested(const GuiState& s) {
+  return std::any_of(s.markers.begin(), s.markers.end(), [](const MarkerAppearance& m) { return m.show || m.label; });
+}
 
 // ---- Display-side identity / numbering formatters (single owner) ----
 //

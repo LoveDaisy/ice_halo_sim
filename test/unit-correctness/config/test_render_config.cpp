@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "config/config_compare.hpp"
 #include "config/render_config.hpp"
@@ -380,6 +383,171 @@ TEST(RenderConfigZenithNadirTest, NeedsRebuild_TreatsTheMarkerAsAppearance) {
   b.zenith_nadir_.radius_px_ = 20.0f;
   b.zenith_nadir_.opacity_ = 0.9f;
   b.zenith_nadir_.color_[0] = 0.0f;
+  EXPECT_FALSE(lumice::NeedsRebuild(a, b));
+}
+
+// The reference-point markers (v4.25) — the generalization of zenith_nadir above to N named
+// directions with per-entry colour. Two properties carry most of the weight here, and neither is
+// visible from the struct alone: an unknown id must be REJECTED rather than silently resolved (the
+// enum-fallback trap the RenderConfigFrontTest cases below pin for `visible`), and the family's
+// two shared appearance values must be non-zero defaults for the same reason zenith_nadir's are.
+TEST(RenderConfigMarkersTest, ToJson_EmitsUnderGridMarkersWithSiblingFamilyKeys) {
+  auto cfg = MakeBaseline();
+  cfg.markers_.push_back({ lumice::MarkerRefId::kSun, true, { 1.0f, 0.9f, 0.2f } });
+  cfg.markers_.push_back({ lumice::MarkerRefId::kAntisolar, false, { 0.2f, 0.4f, 1.0f } });
+  cfg.markers_opacity_ = 0.35f;
+  cfg.markers_radius_px_ = 12.0f;
+
+  nlohmann::json j = cfg;
+
+  ASSERT_TRUE(j.contains("grid"));
+  ASSERT_TRUE(j["grid"].contains("markers"));
+  const auto& m = j["grid"]["markers"];
+  ASSERT_TRUE(m.is_array());
+  ASSERT_EQ(m.size(), 2u);
+  // The id is the annotation layer's own word, not a number: a persisted schema that spelled these
+  // as indices would break the moment an id was inserted rather than appended.
+  EXPECT_EQ(m[0]["id"].get<std::string>(), "sun");
+  EXPECT_TRUE(m[0]["enabled"].get<bool>());
+  EXPECT_NEAR(m[0]["color"][1].get<float>(), 0.9f, 1e-5f);
+  EXPECT_EQ(m[1]["id"].get<std::string>(), "antisolar");
+  EXPECT_FALSE(m[1]["enabled"].get<bool>());
+
+  // Family-wide, and SIBLING keys of the array rather than members of a wrapper object — same
+  // shape as every other appearance knob under "grid".
+  EXPECT_NEAR(j["grid"]["markers_opacity"].get<float>(), 0.35f, 1e-5f);
+  EXPECT_NEAR(j["grid"]["markers_radius_px"].get<float>(), 12.0f, 1e-5f);
+
+  std::vector<lumice::MarkerStyleParam> back;
+  m.get_to(back);
+  EXPECT_TRUE(back == cfg.markers_);
+}
+
+TEST(RenderConfigMarkersTest, DefaultIsAnEmptyListWithTheZenithNadirAppearanceValues) {
+  const lumice::RenderConfig cfg;
+  // Empty is what makes the family opt-in AND what the renderer reads as "absent" when deciding
+  // between this list and the legacy zenith_nadir block.
+  EXPECT_TRUE(cfg.markers_.empty());
+  // Non-zero, like ZenithNadirParam's: a decoder that value-initializes instead of seeding from
+  // this struct yields zero-radius fully transparent rings, i.e. a marker that draws nothing.
+  EXPECT_NEAR(cfg.markers_opacity_, 0.6f, 1e-5f);
+  EXPECT_NEAR(cfg.markers_radius_px_, 8.0f, 1e-5f);
+}
+
+TEST(RenderConfigMarkersTest, FromJson_EveryIdSpellingRoundTrips) {
+  // The whole id vocabulary in one case: a spelling that decodes to the wrong direction would draw
+  // a ring somewhere plausible, so each name is pinned to its enumerator by value.
+  const std::pair<const char*, lumice::MarkerRefId> kExpected[] = {
+    { "zenith", lumice::MarkerRefId::kZenith },
+    { "nadir", lumice::MarkerRefId::kNadir },
+    { "sun", lumice::MarkerRefId::kSun },
+    { "subsun", lumice::MarkerRefId::kSubsun },
+    { "anthelion", lumice::MarkerRefId::kAnthelion },
+    { "antisolar", lumice::MarkerRefId::kAntisolar },
+  };
+  for (const auto& [name, id] : kExpected) {
+    lumice::MarkerStyleParam m;
+    const nlohmann::json j = { { "id", name } };
+    j.get_to(m);
+    EXPECT_EQ(m.id_, id) << "id spelling [" << name << "] decoded to the wrong direction";
+    // Round-trips back to the same word, so the reader and the writer share one vocabulary.
+    const nlohmann::json out = m;
+    EXPECT_EQ(out["id"].get<std::string>(), name);
+  }
+}
+
+TEST(RenderConfigMarkersTest, FromJson_UnknownIdIsRejected) {
+  // The point of the whole hand-written codec. NLOHMANN_JSON_SERIALIZE_ENUM would map this to the
+  // FIRST entry (the zenith) and report nothing — the same silent-mapping defect
+  // doc/gui-state-governance.md records for "front" becoming "upper".
+  lumice::MarkerStyleParam m;
+  const nlohmann::json j = nlohmann::json::parse(R"({ "id": "sundog" })");
+  EXPECT_THROW(j.get_to(m), nlohmann::json::exception);
+  // And it is NOT left resolved to the zenith by a partial write before the throw.
+  EXPECT_EQ(m.id_, lumice::MarkerRefId::kZenith) << "member default, not a decoded value";
+}
+
+TEST(RenderConfigMarkersTest, FromJson_MissingIdIsRejected) {
+  // Unlike ZenithNadirParam, where every key is optional: there, the defaults describe a complete
+  // marker; here, an entry with no id names no direction at all.
+  lumice::MarkerStyleParam m;
+  const nlohmann::json j = nlohmann::json::parse(R"({ "enabled": true })");
+  EXPECT_THROW(j.get_to(m), nlohmann::json::exception);
+}
+
+TEST(RenderConfigMarkersTest, FromJson_PartialEntryKeepsTheMemberDefaults) {
+  // `id` is mandatory, the rest are not: an entry that gives only the id keeps the struct's colour
+  // and its (off) enabled state, exactly as ZenithNadirParam's partial-object rule works.
+  lumice::MarkerStyleParam m;
+  const nlohmann::json j = nlohmann::json::parse(R"({ "id": "subsun" })");
+  j.get_to(m);
+  EXPECT_EQ(m.id_, lumice::MarkerRefId::kSubsun);
+  EXPECT_FALSE(m.enabled_);
+  EXPECT_NEAR(m.color_[0], 0.8f, 1e-5f);
+  EXPECT_NEAR(m.color_[1], 0.2f, 1e-5f);
+}
+
+TEST(RenderConfigMarkersTest, HasDuplicateMarkerId_DetectsRepeatsAndReportsWhich) {
+  std::vector<lumice::MarkerStyleParam> unique = {
+    { lumice::MarkerRefId::kZenith, true, { 1.0f, 0.0f, 0.0f } },
+    { lumice::MarkerRefId::kSun, true, { 0.0f, 1.0f, 0.0f } },
+  };
+  lumice::MarkerRefId dup = lumice::MarkerRefId::kNadir;
+  EXPECT_FALSE(lumice::HasDuplicateMarkerId(unique, &dup));
+
+  // Empty and single-entry lists have nothing to repeat — the boundary the loop bounds must get
+  // right, since an off-by-one there would report every one-entry list as a duplicate.
+  EXPECT_FALSE(lumice::HasDuplicateMarkerId({}, &dup));
+  EXPECT_FALSE(lumice::HasDuplicateMarkerId({ unique[0] }, &dup));
+
+  // Differing colours, same id: still a duplicate. That is the case worth pinning, because it is
+  // the one where "keep the last" would look like a reasonable merge rule.
+  std::vector<lumice::MarkerStyleParam> repeated = {
+    { lumice::MarkerRefId::kSun, true, { 1.0f, 0.0f, 0.0f } },
+    { lumice::MarkerRefId::kNadir, true, { 0.0f, 1.0f, 0.0f } },
+    { lumice::MarkerRefId::kSun, false, { 0.0f, 0.0f, 1.0f } },
+  };
+  EXPECT_TRUE(lumice::HasDuplicateMarkerId(repeated, &dup));
+  EXPECT_EQ(dup, lumice::MarkerRefId::kSun);
+
+  // The out-parameter is optional.
+  EXPECT_TRUE(lumice::HasDuplicateMarkerId(repeated, nullptr));
+}
+
+TEST(RenderConfigMarkersTest, OperatorEq_ComparesEveryMarkerField) {
+  auto a = MakeBaseline();
+  a.markers_.push_back({ lumice::MarkerRefId::kSun, true, { 1.0f, 0.9f, 0.2f } });
+  auto b = a;
+  EXPECT_TRUE(a == b);
+
+  b = a;
+  b.markers_[0].id_ = lumice::MarkerRefId::kSubsun;
+  EXPECT_FALSE(a == b);
+  b = a;
+  b.markers_[0].enabled_ = false;
+  EXPECT_FALSE(a == b);
+  b = a;
+  b.markers_[0].color_[2] = 0.5f;
+  EXPECT_FALSE(a == b);
+  b = a;
+  b.markers_.clear();
+  EXPECT_FALSE(a == b);
+  b = a;
+  b.markers_opacity_ = 0.1f;
+  EXPECT_FALSE(a == b) << "family opacity is part of the config's identity, not a display-only extra";
+  b = a;
+  b.markers_radius_px_ = 3.0f;
+  EXPECT_FALSE(a == b);
+}
+
+TEST(RenderConfigMarkersTest, NeedsRebuild_TreatsTheMarkersAsAppearance) {
+  // Same classification as zenith_nadir: none of these changes which pixel images which direction,
+  // so a consumer must be REUSED across the change (ResetWith), not rebuilt.
+  auto a = MakeBaseline();
+  auto b = MakeBaseline();
+  b.markers_.push_back({ lumice::MarkerRefId::kAnthelion, true, { 0.0f, 1.0f, 1.0f } });
+  b.markers_opacity_ = 0.9f;
+  b.markers_radius_px_ = 20.0f;
   EXPECT_FALSE(lumice::NeedsRebuild(a, b));
 }
 

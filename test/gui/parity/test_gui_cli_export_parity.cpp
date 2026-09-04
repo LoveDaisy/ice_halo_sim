@@ -57,14 +57,16 @@
 //   angular_dist   | on, {22, 46} deg        |  25.73 | on, {22, 46} deg          |  26.89
 //   elevation      | on, 10 deg step         |  24.72 | on, 30 deg step           |    n/a
 //   longitude      | on, 10 deg step         |  26.59 | on, 30 deg step           |  24.07
-//   zenith_nadir   | on, zenith imaged       |    n/a | on, both imaged           |    n/a
+//   markers        | all six, zenith imaged  |    n/a | all six, all imaged       |    n/a
 //
-// The zenith_nadir row's two "n/a"s are MEASURED, and they are a statement about the metric rather
+// The markers row's two "n/a"s are MEASURED, and they are a statement about the metric rather
 // than about the field. A ring of the default 8 px radius covers roughly 150 pixels; deleting the
 // CLI's nadir ring outright moved the full-sky scene by 0.02 dB, and UPWARD — the ring's presence
 // costs a little parity (see below), so removing it reads as an improvement. A whole-frame PSNR
 // cannot see this field, and the honest response is to say so rather than to pick a threshold that
-// pretends otherwise.
+// pretends otherwise. Growing the family from two rings to six did not change that: it moved both
+// scenes DOWN by about 0.4 dB (the per-ring edge cost, four more times over), which is a shift of
+// the baseline rather than a sensitivity the metric acquired.
 //
 // Enlarging the rings until it could see them was tried and rejected on the measurement: at radius
 // 60 / 30 the full-sky scene falls from 27.62 to 27.09 dB, which is BELOW its threshold and within
@@ -77,11 +79,18 @@
 // action because a ring's edge is a fixed fraction of a ring rather than a removable alpha term.
 //
 // So what the markers are covered BY here is the export encoding, not the pixels: the fixture
-// asserts that the exported document carries grid.zenith_nadir.enabled (ParseExportedRenderInfo),
-// which is the half of the path that lives in BuildScene's export arm and the half that a
-// regression would silently drop. Where the rings LAND is pinned by
-// test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp, against the GUI's own former
-// projection, at a resolution this metric does not have.
+// asserts that the exported document lists all six grid.markers entries and that their `enabled`
+// follows the scene's switch (ParseExportedRenderInfo), which is the half of the path that lives in
+// BuildScene's export arm and the half that a regression would silently drop. Where the rings LAND
+// is pinned by test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp (against the GUI's
+// own former projection, at a resolution this metric does not have) and, for the four sun-relative
+// members that projection never covered, by test/gui/functional/test_marker_panel.cpp, which reads
+// each ring's colour off a rendered frame.
+//
+// Why all six here rather than a representative pair: the four sun-relative directions are the only
+// annotation in this table whose position depends on a document field OTHER than the view. Exporting
+// them exercises the one thing the two-marker version could not — that the child process places them
+// where the preview did, from the sun the document names.
 //
 // The angular_dist row is broken two ways rather than one, because the two shapes it can fail in
 // are independent and the weaker one sets the threshold. Shifting every circle by ONE degree in
@@ -115,7 +124,7 @@
 // "n/a" means the break does not move that scene, and in every case for a stated reason rather
 // than a gap: the full-sky lens family ignores fov and zeroes the three view angles, so a break in
 // those cannot show there; `visible` and `lens_type` are broken TO the value that scene already
-// holds; and the zenith_nadir cells are discussed above. Each field is therefore live in at least one
+// holds; and the markers cells are discussed above. Each field is therefore live in at least one
 // column, and the two columns between them cover both sides of every branch the export arm has —
 // single lens vs the full-sky family, an aspect preset that names a ratio vs the two that name
 // none and fall back to 2:1 — rather than nine unrelated checkmarks.
@@ -152,13 +161,14 @@
 //     therefore the signal, and the thresholds below are set against the measured breaks.
 //
 //     The zenith/nadir markers left the list the same way and are on in both scenes, but they are
-//     the member that does NOT raise the figure: measured at the default radius, switching them on
-//     costs the full-sky scene 0.08 dB and leaves the single-lens scene where it was. Both arms put
-//     the ring in the same place — that is core's one answer, read twice — and what the 0.08 dB
-//     buys is the difference between an antialiased ring edge and a hard one. It is a fixed,
-//     understood cost carried on purpose so the export path runs end to end here; see the
-//     zenith_nadir row in the field table for why the alternative (a ring big enough for the metric
-//     to see) was measured and rejected.
+//     the member that does NOT raise the figure: measured at the default radius, switching the two
+//     legacy rings on cost the full-sky scene 0.08 dB and left the single-lens scene where it was,
+//     and growing the family to six cost about 0.4 dB more on both. Both arms put every ring in the
+//     same place — that is core's one answer, read twice — and what the cost buys is the difference
+//     between an antialiased ring edge and a hard one, once per ring. It is a fixed, understood
+//     cost carried on purpose so the export path runs end to end here; see the markers row in the
+//     field table for why the alternative (a ring big enough for the metric to see) was measured
+//     and rejected.
 //   * The colour space an overlay line is composited in, which the two arms genuinely disagree
 //     about. Measured, excluded on purpose, and neutralised rather than tolerated — see the
 //     GRID OPACITY note above the field table for the numbers and the mechanism.
@@ -179,7 +189,7 @@
 //     it is a question about a JSON field, and test_scene_commit_chain.cpp asks it as one
 //     (TheExportIntentDescribesTheDocumentsView, with the switch off). What this file adds on top is
 //     the ON half of the same claim, read out of the document the child process actually reads —
-//     see info.horizon below, which mirrors info.zenith_nadir.
+//     see info.horizon below, which mirrors info.markers_listed / info.markers_enabled.
 //   * The single-lens fisheye domain past theta = 90 degrees. This USED to be a real and large
 //     exclusion — the preview shader kept inverting toward the frame corners while core stopped at
 //     the equator, and a 4:3 frame at fov 150 measured 25% of its pixels lit by the GUI and black
@@ -265,11 +275,18 @@ struct ParityScene {
   // both arms build it from one core call, so it is two readings of one curve rather than two
   // implementations. See the exclusion note above.
   bool show_grid;
-  // The zenith / nadir ring markers, on in both scenes and the newest member of the "two readings
-  // of one call" family: both arms take the two points from LUMICE_ComputeAnnotationOverlay and
-  // draw a ring of the config's radius around each. Unlike the three line families this one is a
-  // PAIR, and the two halves are independent — which is what the single-sided break below tests.
-  bool show_zenith_nadir;
+  // The sky reference-point ring markers, on in both scenes and the newest member of the "two
+  // readings of one call" family: both arms take the points from LUMICE_ComputeAnnotationOverlay
+  // and draw a ring of the config's radius around each. Unlike the three line families this one is
+  // a SET of six independent members, each with its own colour — which is what the encoding
+  // assertion below reads, since the pixels cannot (see the markers row in the field table).
+  //
+  // ALL SIX rather than a representative subset: four of them (sun, subsun, anthelion, antisolar)
+  // are defined RELATIVE TO THE SUN, so they are the only rows in this table whose position depends
+  // on a field of the document other than the view — and the export has to carry that field for the
+  // child process to place them where the preview did. A subset that left them out would leave the
+  // whole sun-relative half of the id space unexercised end to end.
+  bool show_markers;
   // Ray budget, in millions. Must be a dyadic fraction so ExpectedSimRayNum's truncation and
   // rounding agree — see its note in test_gui_shared.hpp.
   float ray_num_millions;
@@ -435,11 +452,18 @@ const ParityScene kScenes[] = {
   // the 10 sigma bar caps the threshold at 27.21 and the break floors it at 26.46. The margins
   // are smaller in dB than this file's other rows carry and larger in sigma; sigma is what the
   // stated rule is written in, and this row's sigma is a third of what it was.
+  //
+  // RE-MEASURED when the marker family grew from the zenith/nadir pair to all six reference points:
+  // mean 27.402 sigma 0.0303 (N=5, range 27.36-27.44). Threshold unchanged at 27.0: 13.3 sigma
+  // below the mean, and 0.61 dB above this scene's smallest break, re-measured in the same session
+  // at 26.39 dB (the CLI drawing only the first of two angular_dist lines). Both bounds hold with
+  // room, so this row needed no move — unlike its full-sky neighbour below, whose 27.2 had become
+  // too tight against the same shift.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
+   /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.0, /*expect_w=*/512, /*expect_h=*/683},
   // mean 27.602 sigma 0.0157 (N=6, range 27.58-27.62). Threshold 27.2: 25 sigma below the mean and
   // 0.31 dB above the smallest break this scene owns — the CLI drawing only the first of two
@@ -475,12 +499,25 @@ const ParityScene kScenes[] = {
   // Threshold unchanged at 27.2: 19 sigma below the mean, 0.47 dB below the worst honest run, and
   // still above the angular_dist single-line break, re-measured here at 26.89 / 26.97 dB (unmoved
   // — it is an annotation break, and this row's exposure barely shifted).
+  //
+  // RE-MEASURED when the marker family grew from the zenith/nadir pair to all six reference points:
+  // mean 27.366 sigma 0.0261 (N=5, range 27.34-27.40), DOWN 0.35 dB. Four more rings, each paying
+  // the same antialiased-vs-hard edge the first two did — a shift of the baseline, not a
+  // sensitivity gained. THRESHOLD LOWERED 27.2 -> 27.1, and the arithmetic is why: at 27.2 the gate
+  // sat 6.4 sigma below the new mean, inside this file's own 10 sigma bar, so a run at the low end
+  // of ordinary noise would have gone red for nothing. The window is [break, mean - 10 sigma] =
+  // [26.68, 27.105]; 27.1 takes the top of it, which keeps the gate as tight as the noise permits
+  // and still leaves 0.42 dB above the break.
+  //
+  // The break was RE-MEASURED, not scaled from the old number: the CLI arm was fed an export whose
+  // grid.angular_dist had been truncated to its first entry, and this scene landed at 26.68 dB
+  // (against 26.89 before the family grew). Its neighbour above measured 26.39 in the same run.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/1024, /*expect_h=*/512},
+   /*show_grid=*/true, /*show_markers=*/true,
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.1, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
   // — which is what makes a drop here readable as the Jacobian rather than as some other field.
@@ -575,7 +612,7 @@ const ParityScene kScenes[] = {
    lumice::gui::kLensTypeLinear, 120.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
    gui::AspectPreset::k4x3, /*aspect_portrait=*/true, /*show_horizon=*/true, /*show_sun_circles=*/true,
-   /*show_grid=*/true, /*show_zenith_nadir=*/true,
+   /*show_grid=*/true, /*show_markers=*/true,
    /*ray_num_millions=*/16.0f, /*psnr_threshold=*/34.0, /*expect_w=*/512, /*expect_h=*/683},
 };
 // clang-format on
@@ -618,9 +655,14 @@ struct ExportedRenderInfo {
   int width = 0;
   int height = 0;
   int renderer_id = -1;
-  // Whether the exported document asks the CLI for the zenith / nadir markers at all. Read from
-  // the document rather than from GuiState because that is what the child process will read.
-  bool zenith_nadir = false;
+  // What the exported document asks the CLI to draw for the marker family. Read from the document
+  // rather than from GuiState because that is what the child process will read.
+  //
+  // Two numbers, not one bool: the GUI always writes all six entries and expresses the switch as
+  // each entry's `enabled` (file_io.cpp BuildScene says why), so "the family is on" is a COUNT and
+  // a list that lost an entry is a different failure from a list whose entries all went false.
+  int markers_listed = 0;
+  int markers_enabled = 0;
   // Whether it asks for the celestial horizon, read from the same place and for the same reason.
   // This one has a recorded incident behind it: the export arm once wrote the INVERSE of the
   // switch, so both directions are worth a check. The OFF direction is asked in
@@ -643,8 +685,13 @@ ExportedRenderInfo ParseExportedRenderInfo(const std::string& json_str) {
   info.width = jr["resolution"][0].get<int>();
   info.height = jr["resolution"][1].get<int>();
   info.renderer_id = jr.value("id", 0);
-  if (jr.contains("grid") && jr["grid"].contains("zenith_nadir")) {
-    info.zenith_nadir = jr["grid"]["zenith_nadir"].value("enabled", false);
+  if (jr.contains("grid") && jr["grid"].contains("markers") && jr["grid"]["markers"].is_array()) {
+    for (const auto& m : jr["grid"]["markers"]) {
+      info.markers_listed++;
+      if (m.value("enabled", false)) {
+        info.markers_enabled++;
+      }
+    }
   }
   if (jr.contains("grid")) {
     info.horizon = jr["grid"].value("horizon", false);
@@ -720,7 +767,9 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       gui::g_state.show_horizon_line = scene.show_horizon;
       gui::g_state.show_sun_circles_line = scene.show_sun_circles;
       gui::g_state.show_grid_line = scene.show_grid;
-      gui::g_state.show_zenith_nadir_line = scene.show_zenith_nadir;
+      for (gui::MarkerAppearance& m : gui::g_state.markers) {
+        m.show = scene.show_markers;
+      }
       // FULL OPACITY, deliberately, and not the 0.3 a user gets. The two arms composite an overlay
       // line in different colour spaces — the CLI blends it into radiance before the transfer curve
       // (server/render.cpp PostSnapshot), the preview shader after it (overlayAuxLines runs on the
@@ -734,7 +783,7 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       // The markers take the same override for the same reason, and they need it more than the
       // lines do: a ring is a handful of pixels, so a per-pixel byte difference on every one of
       // them is most of what the marker contributes to the frame at all.
-      gui::g_state.zenith_nadir_alpha = 1.0f;
+      gui::g_state.markers_alpha = 1.0f;
       // The horizon is the one line that CANNOT take that override, and the reason is a decision
       // rather than an oversight: core has no per-annotation appearance fields for it (unlike
       // GridLineParam) and paints it from a file-scope constant, kOutlineAlpha = 0.6 in
@@ -796,7 +845,10 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       IM_CHECK(info.ok);
       IM_CHECK_EQ(info.width, scene.expect_w);
       IM_CHECK_EQ(info.height, scene.expect_h);
-      IM_CHECK_EQ(info.zenith_nadir, scene.show_zenith_nadir);
+      // Six entries always, regardless of the switch — the constant-shape export BuildScene argues
+      // for. Their `enabled` is what the switch moves.
+      IM_CHECK_EQ(info.markers_listed, LUMICE_ANNOTATION_MARKER_COUNT);
+      IM_CHECK_EQ(info.markers_enabled, scene.show_markers ? LUMICE_ANNOTATION_MARKER_COUNT : 0);
       IM_CHECK_EQ(info.horizon, scene.show_horizon);
 
       const std::filesystem::path scratch_dir =
@@ -828,10 +880,27 @@ void RegisterExportParityTests(ImGuiTestEngine* engine) {
       // said which of the two arms had drifted.
       IM_CHECK_EQ(vp.params.overlay.show_sun_circles, scene.show_sun_circles);
       IM_CHECK_EQ(vp.params.overlay.show_grid, scene.show_grid);
-      IM_CHECK_EQ(vp.params.overlay.show_zenith_nadir, scene.show_zenith_nadir);
+      // The preview arm's own reading of the same switch. There is no enable flag in this struct —
+      // a marker that is off is written as the sentinel position — so the check is that every slot
+      // did or did not receive a real coordinate. `>=` and not `==` on the count: a marker whose
+      // direction this view does not image is ALSO written as the sentinel, legitimately, so the
+      // assertion is that the family reached the shader at all, not that all six landed.
+      {
+        int placed = 0;
+        for (const auto& pos : vp.params.overlay.marker_screen_pos) {
+          if (pos[0] != gui::kOverlaySentinel || pos[1] != gui::kOverlaySentinel) {
+            placed++;
+          }
+        }
+        if (scene.show_markers) {
+          IM_CHECK_GT(placed, 0);
+        } else {
+          IM_CHECK_EQ(placed, 0);
+        }
+      }
       IM_CHECK_EQ(vp.params.overlay.show_horizon, scene.show_horizon);
       IM_CHECK_EQ(vp.params.overlay.grid_alpha, 1.0f);
-      IM_CHECK_EQ(vp.params.overlay.zenith_nadir_alpha, 1.0f);
+      IM_CHECK_EQ(vp.params.overlay.markers_alpha, 1.0f);
       IM_CHECK_EQ(vp.params.overlay.sun_circles_alpha, gui::g_state.sun_circles_alpha);
       if (scene.show_sun_circles) {
         IM_CHECK(vp.params.overlay.angular_dist_mask != nullptr);

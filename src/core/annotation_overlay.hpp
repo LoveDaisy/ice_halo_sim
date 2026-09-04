@@ -70,6 +70,27 @@ enum LabelKind : int {
   kLabelAngularDist = 3,
 };
 
+// A named reference direction that is reported as a POINT on the canvas: it gets a screen position
+// and a validity flag, and nothing else (no mask, no text — a marker's glyph is the consumer's
+// vocabulary, not core's).
+//
+// Every id here is a direction the sky itself defines, either absolutely (the two poles) or
+// relative to the sun. That is the membership rule: a direction earns an id when asking "where does
+// it land on this canvas" is meaningful. `sun_horizon` — the sun's azimuth carried down to the
+// horizon — deliberately does NOT appear below; see SunHorizonDir for why.
+//
+// The numeric values are part of the C API surface (LUMICE_ANNOTATION_MARKER_*) and are pinned to
+// it by static_assert at the one place that converts between them, c_api.cpp's ReadMarkerIdList.
+enum MarkerId : int {
+  kMarkerZenith = 0,
+  kMarkerNadir = 1,
+  kMarkerSun = 2,
+  kMarkerSubsun = 3,
+  kMarkerAnthelion = 4,
+  kMarkerAntisolar = 5,
+  kMarkerCount = 6,
+};
+
 struct Label {
   float px = 0.0f;
   float py = 0.0f;
@@ -101,7 +122,17 @@ struct Request {
 
   // Report where zenith / nadir land. Points, not curves: they carry no mask and no text (the
   // marker's appearance, glyph included, belongs to the consumer).
+  //
+  // The legacy switch, kept because it is a published field. It is NOT a second implementation of
+  // `markers` below: both go through one sampler (ComputeOverlay's SampleMarkerPoint), so
+  // `zenith_nadir = true` and `markers = {kMarkerZenith, kMarkerNadir}` return the same two points
+  // by construction rather than by agreement. The two are independent — setting one says nothing
+  // about the other — so a caller may use either, or both.
   bool zenith_nadir = false;
+
+  // Named reference directions to report canvas positions for. Overlay::markers comes back with
+  // exactly this many entries, in this order. Duplicates are allowed and simply reported twice.
+  std::vector<MarkerId> markers;
 
   // Skip the curve walk entirely. The masks alone are ~4x cheaper than masks + anchors, and a
   // consumer that draws no text has no use for the anchors.
@@ -134,6 +165,10 @@ struct Overlay {
   CanvasPoint zenith;
   CanvasPoint nadir;
 
+  // Parallel to Request::markers: markers[i] is where markers[i] of the request landed. Empty when
+  // none were asked for.
+  std::vector<CanvasPoint> markers;
+
   std::vector<Label> labels;
 };
 
@@ -151,6 +186,14 @@ inline constexpr float kLabelHemisphereToleranceDeg = 0.5f;
 // above — the two implementations have to agree about which samples are in.
 inline constexpr float kFrontEps = 0.01f;
 
+// Below this horizontal length SunHorizonDir treats the sun as being at a pole and falls back
+// (see its comment). Measured, not chosen round: the horizontal length is |cos(altitude)|, which
+// in float reads 4.4e-8 at exactly +/-90 deg (pure residue of cos, carrying no azimuth), 1.7e-5 at
+// +/-89.999 deg and 1.7e-4 at +/-89.99 deg. 1e-6 sits an order of magnitude clear of both sides:
+// 23x above the residue it must reject, 17x below the smallest altitude whose azimuth is still
+// real. It also guards a true division by zero — a caller may pass exactly (0, 0, -1).
+inline constexpr float kSunHorizonDegenerateEps = 1e-6f;
+
 // The world direction of the sun, in the same convention every other direction in this file uses:
 // the direction light TRAVELS, not the direction a viewer points to look at it. `out` gets a unit
 // vector suitable for Request::reference_dir.
@@ -166,6 +209,43 @@ inline constexpr float kFrontEps = 0.01f;
 // Getting the sign wrong would not be subtle: an angular-distance circle of radius r around -v is
 // a circle of radius 180-r around v, so a 22-degree halo would come out as a 158-degree ring.
 void SunWorldDir(const SunParam& sun, float* out);
+
+// The world direction a marker id names, in the same convention SunWorldDir returns and
+// Request::reference_dir carries: the direction light TRAVELS, altitude = asin(-z). The zenith is
+// therefore z = -1, NOT z = +1.
+//
+// That sign is the one thing in this file worth stating twice, because the SAME English word means
+// the opposite z here and in doc/coordinate-convention.md: the crystal-orientation sampler puts +z
+// at the zenith, this module puts -z there. They are different coordinate systems that happen to
+// share the vocabulary, so "zenith is +z" is true of one of them and a defect in the other. The
+// authority for THIS one is the sun convention SunWorldDir documents above, and the equivalence
+// oracle in test/golden-analytic/core/test_annotation_marker_equivalence.cpp pins it mechanically.
+//
+// `sun_dir` must be a unit vector (SunWorldDir's output, or a normalized Request::reference_dir);
+// the two pole ids ignore it entirely, the other four are reflections of it. `out` gets a unit
+// vector. An id outside the enum yields the zenith rather than an uninitialized vector — core does
+// not assume its C++ callers validated the id the way the C API bridge does.
+void ResolveMarkerDir(MarkerId id, const float sun_dir[3], float out[3]);
+
+// The sun's azimuth carried down to the horizon: the unit vector with the sun's horizontal
+// direction and zero altitude.
+//
+// This is deliberately NOT a MarkerId, and the split is the point rather than an omission. A
+// MarkerId answers "where does this direction land on the canvas", which needs a projection, a
+// hemisphere policy and a `valid` verdict; a view preset answers "which way should the camera
+// point", which needs none of those. Giving sun_horizon an id would put a direction with no
+// landing-point semantics into a list whose whole contract is landing points, and leave "what does
+// requesting it in Request::markers do" undefined. A caller that wants this direction calls this
+// function; there is no seventh marker to look for.
+//
+// Degenerate near the poles, where the sun's horizontal component vanishes and its azimuth is
+// undefined: below kSunHorizonDegenerateEps the result falls back to world +x (azimuth 0). Fixed
+// rather than nearest-neighbour because there is no meaningful neighbour — measured at exactly
+// altitude 90 the float residue of cos() is NEGATIVE, so the recovered azimuth there is 180 degrees
+// away from the one at 89.999, i.e. the "nearest" direction flips sign at the pole. A fixed
+// fallback is discontinuous at one point by construction; a nearest-neighbour one would be
+// unpredictable across a whole neighbourhood of it.
+void SunHorizonDir(const float sun_dir[3], float out[3]);
 
 // The view snapshot as the RenderConfig the projection helpers take. `front` is carried across
 // too, so the conversion stays total, but this layer applies it itself (VisibleForLabel and the
