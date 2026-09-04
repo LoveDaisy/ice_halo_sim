@@ -153,6 +153,9 @@ TEST_F(RngTest, ClampUniformToIndexLeavesInteriorDrawsUnchanged) {
 }
 
 
+// Deliberately a bare TEST, not TEST_F(RngTest, ...) like its neighbours: a death
+// test forks, and running RngTest's fixture setup in the child would add unrelated
+// side effects to the one call being isolated here.
 TEST(ClampUniformToIndexDeathTest, ZeroNTripsFatalAbort) {
   // n == 0 has no correct answer: there is no subscript into an empty range. The
   // pre-guard body reached `n - 1` and underflowed it to SIZE_MAX, then returned
