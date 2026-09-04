@@ -57,7 +57,11 @@
 namespace {
 
 // Source texture / canvas size. Width = 2 * height is the dual-fisheye layout: two discs of
-// radius R = min(W/2, H)/2 = H/2 side by side, each exactly filling its half.
+// radius R = min(W/2, H)/2 = H/2 side by side, each exactly filling its half. These geometry
+// constants (and kDiscCx below) restate that layout by hand rather than deriving it from a
+// production function: the layout is a stable convention other cases already cover, and it is not
+// what this case is verifying. If it ever changes, nothing here goes red — the probes just land
+// somewhere else — so they have to be updated with it.
 constexpr int kTexW = 256;
 constexpr int kTexH = 128;
 constexpr int kDiscR = 64;  // min(kTexW/2, kTexH) / 2
@@ -86,6 +90,11 @@ constexpr double kMinCheckerContrastLsb = 150.0;
 // Measured 0 on both classes on both discs. 2 LSB of slack is for another driver's last bit in the
 // same trig chain; genuine drift across the disc would spread by tens, not by two.
 constexpr int kMaxParitySpreadLsb = 2;
+
+// Both numbers above were calibrated on one machine's GPU and have NOT been checked across GPUs or
+// drivers — this file's category does not run in CI (AGENTS.md), so no other renderer has ever
+// evaluated them. A first red on unfamiliar hardware is therefore worth measuring before it is
+// treated as a regression: read the reported contrast/spread against the values quoted above.
 
 // A render request marshalled to the frame loop: the upload and RenderExportToRgba both need the
 // thread that owns the GL context, which is the render thread and not the test coroutine. Same
