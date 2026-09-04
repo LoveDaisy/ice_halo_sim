@@ -88,6 +88,17 @@ PSNR_THRESHOLDS = {
     # 33.06 dB of the previous shoot, so the threshold rises rather than relaxes.
     "render_opts_01": 32.5,
     "dual_fisheye_ref_01": 25.8,
+    # zenith_nadir_marker_compat: the ONE config in this table that sets `grid.zenith_nadir` and
+    # nothing else marker-related, and it exists to be an unchanged picture rather than a new one.
+    # Its reference was shot from the code as it stood BEFORE the marker list (`grid.markers`)
+    # existed, so a later render that scores against it is evidence that generalizing the two
+    # hardcoded rings into an N-entry list left the legacy key's OUTPUT alone — which is a claim
+    # about pixels, not about a branch still being present in the source.
+    # dual_fisheye_equal_area at fov 360 with `visible: full` on purpose: it is the only lens shape
+    # that images both poles at once, so one frame carries both rings. Same calibration method as
+    # the rest of this table: 3 fresh CLI runs, threshold = min(PSNR_2vs1, PSNR_3vs1) - 3 dB
+    # floored to 0.5 dB precision (measured 27.19 / 27.45 dB).
+    "zenith_nadir_marker_compat_01": 24.0,
 }
 
 
