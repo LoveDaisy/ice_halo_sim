@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788519444227,
+  "lastUpdate": 1788519446204,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9560,50 +9560,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ec1879077f613c9bbfaabb3079281ef5164bb2de",
-          "message": "Merge pull request #203 from LoveDaisy/chore/reconciler-gate-wake-helper\n\nchore: harden reconciler include boundary + dedup wake path (scrum-353 T2 follow-up)",
-          "timestamp": "2026-07-16T08:44:05+08:00",
-          "tree_id": "b12a3a7a06d99002a3d740ef5c655ebef8581689",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ec1879077f613c9bbfaabb3079281ef5164bb2de"
-        },
-        "date": 1784163008246,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 84.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.3,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.4,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 98.6,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "c89c178f203a9956ee50c8af21c7f0300615d053",
           "message": "Merge pull request #204 from LoveDaisy/feat/color-degrade-gui-surfacing\n\nfeat(color-degrade-gui-surfacing): surface all 3 GPU color-degrade caps to GUI modal",
           "timestamp": "2026-07-16T11:53:31+08:00",
@@ -13918,6 +13874,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89.8,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ddc94c02faa23de01ef59b90d25f106843699744",
+          "message": "Merge pull request #302 from LoveDaisy/fix/preview-source-gather-half-texel\n\nfix(gui): 预览 shader 从 dual-EA 源纹理取样时多出的半个纹素",
+          "timestamp": "2026-09-04T18:44:53+08:00",
+          "tree_id": "5bbccc2a028e253d4dade882c65deb804b594261",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ddc94c02faa23de01ef59b90d25f106843699744"
+        },
+        "date": 1788519445690,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.1,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 93.7,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 94.4,
             "unit": "%"
           }
         ]
