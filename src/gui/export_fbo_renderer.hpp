@@ -74,6 +74,36 @@ void RenderPreviewFrameAndBlit(PreviewRenderer& renderer, const PreviewParams& p
                                int dst_h, const std::vector<CurveLabelSet>& curve_labels, float dpi_scale_x,
                                float dpi_scale_y);
 
+// Run the shared tail of the frame loop — the stretch both the production app (src/gui/main.cpp)
+// and the gui_test harness (test/gui/test_gui_main.cpp) execute identically, from clearing the
+// default framebuffer through submitting ImGui's draw data: set the GL viewport, clear, render and
+// blit the preview through RenderPreviewFrameAndBlit if one is active, then submit ImGui's draw
+// data via ImGui_ImplOpenGL3_RenderDrawData. Every step but the preview blit is UNCONDITIONAL —
+// the preview is one interior branch on `g_preview_vp.active`, not a precondition for calling
+// this: a caller with no preview still needs the clear and the draw-data submission.
+//
+// This is the ONLY place that sequence exists. It used to live twice, character for character,
+// kept in step by a comment in the harness copy saying it "matches real app's main.cpp". Adding
+// RenderPreviewFrameAndBlit (PR #304) had to reach both copies, and the second one was found by
+// hand, mid-change, because nothing would have reported missing it: had it been left out, gui_test
+// would have gone on passing while rendering its preview through a frame loop the app no longer
+// had, and every on-screen reference image would have been captured from that stale loop. A
+// comment cannot go red; a single implementation cannot be half-updated.
+//
+// Deliberately NOT folded in, both for the same reason — the two callers do these at DIFFERENT
+// points of their own frame, so folding them would silently reorder one of them:
+//   - ImGui::Render() — main.cpp queries the framebuffer size before its panels run and calls
+//     Render() after; test_gui_main.cpp calls Render() first and queries after. Each caller keeps
+//     its own call, immediately next to its own query, so neither ordering moves.
+//   - The display_w/display_h query itself — passed in as parameters rather than queried here. In
+//     main.cpp the query happens before the panels run, which matters: a panel can call
+//     glfwSetWindowSize() (aspect-ratio preset) mid-frame, and what glfwGetFramebufferSize()
+//     reports between that call and the next glfwPollEvents() is not guaranteed across backends.
+//
+// Reads global state: `g_preview` / `g_preview_vp`. Both callers already read that same pair here
+// today, so this adds no coupling that was not already on this code path.
+void RunSharedFrameRenderPass(int display_w, int display_h);
+
 // Release the persistent FBO held by RenderPreviewFrameAndBlit. Must be called on the GL thread
 // while the context is still current, next to the other renderer teardown calls.
 void DestroyPreviewFrameFbo();
