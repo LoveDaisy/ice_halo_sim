@@ -70,10 +70,11 @@ void WorldDirToAzEl(const float dir[3], float* az_deg, float* el_deg);
 // The whole preset: id + the sun's altitude (the only sun degree of freedom the GUI exposes) in,
 // camera angles out.
 //
-// Deliberately does NOT clamp. The bounds are a property of the LENS — Globe stops one degree short
+// Deliberately does NOT clamp: the bounds are a property of the LENS — Globe stops one degree short
 // of the pole where its view matrix degenerates — and they live in the field registry that also
-// bounds the Az/El sliders. Clamping here would be a second copy of them, free to drift, and would
-// hide from the caller that a clamp happened. The caller clamps with the slider's own constraint.
+// bounds the Az/El sliders, so a copy of them here would be free to drift. This is the raw
+// geometric answer; ResolveLookAtPose below is the one a panel calls, and it is where the
+// registry's own interval is applied.
 //
 // Returns false and leaves the outputs untouched if `id` is out of range or the C API rejects the
 // query; the caller writes nothing in that case rather than pointing the camera somewhere arbitrary.

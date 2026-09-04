@@ -1330,10 +1330,15 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
 
       // And picking one closes the menu — a preset is an action, not a mode, so the list must not
       // stay up waiting for a second choice.
+      //
+      // Searched from the root rather than from "//$FOCUSED". Pointing the ref at $FOCUSED once the
+      // popup has already gone resolves it to whatever window is focused instead, and leaves that
+      // window as the engine's idea of the ref for the cases that run after this one — measured:
+      // the three scene_controls cases that look their sliders up from the root then fail to find
+      // ##Altitude_input, in the full pool only. A menu entry that is gone is not findable from the
+      // root either, so the weaker-looking lookup is the same claim without the side effect.
       PickLookAt(ctx, "Sun");
-      ctx->SetRef("//$FOCUSED");
       IM_CHECK(!ctx->ItemExists("**/Anthelion"));
-      ctx->SetRef("");
     };
   }
 }
