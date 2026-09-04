@@ -21,6 +21,7 @@
 #include "config/crystal_config.hpp"  // core PrismCrystalParam + from_json, the sync-group canonical-form authority
 #include "config/filter_config.hpp"   // core FilterConfig + to_json, for emit isomorphism cross-check
 #include "config/raypath_color_config.hpp"  // core RaypathColorConfig + to_json, for color-class isomorphism
+#include "config/render_config.hpp"         // core RenderConfig, for the marker family's non-zero defaults
 #include "core/crystal.hpp"
 #include "core/def.hpp"
 #include "include/lumice.h"
@@ -812,6 +813,107 @@ TEST(ParseConfigApi, RendererLensTypeUnknownStringRejected) {
 TEST(ParseConfigApi, RendererVisibleUnknownStringRejected) {
   auto root = nlohmann::json::parse(MakeFullConfigJson());
   root["render"][0]["visible"] = "not_a_real_visibility";
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+
+// The reference-point marker list (v4.25), at the C API decoder specifically. The parity file
+// checks that CORE and this decoder agree; these check the ERROR CODE this one reports, which
+// parity cannot see — it only knows a document was refused, not by which stage or as what. Three
+// rejections and one acceptance, matching the four malformed-input shapes the schema defines.
+TEST(ParseConfigApi, RendererMarkersDefaultsToAnEmptyListWithCoreAppearanceValues) {
+  // MakeFullConfigJson carries no "grid" object at all, which is the state under test: a document
+  // that predates the field.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  ASSERT_FALSE(root["render"][0].contains("grid"));
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  ASSERT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  ASSERT_GE(config.renderer_count, 1);
+  // Opt-in: a document that never heard of the field asks for no marker.
+  EXPECT_EQ(config.renderers[0].markers_count, 0);
+  // And the two family values are core's non-zero defaults, not zeros — a decoder that
+  // value-initialized them would hand a caller zero-radius fully transparent rings.
+  const lumice::RenderConfig kDefaults;
+  EXPECT_FLOAT_EQ(config.renderers[0].markers_opacity, kDefaults.markers_opacity_);
+  EXPECT_FLOAT_EQ(config.renderers[0].markers_radius_px, kDefaults.markers_radius_px_);
+}
+
+TEST(ParseConfigApi, RendererMarkersRoundTripThroughTheStruct) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] =
+      nlohmann::json::array({ { { "id", "anthelion" }, { "enabled", true }, { "color", { 0.1f, 0.7f, 0.9f } } },
+                              { { "id", "nadir" }, { "enabled", false }, { "color", { 0.5f, 0.5f, 0.5f } } } });
+  root["render"][0]["grid"]["markers_opacity"] = 0.35f;
+  root["render"][0]["grid"]["markers_radius_px"] = 12.0f;
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  ASSERT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  ASSERT_GE(config.renderer_count, 1);
+  const LUMICE_RenderParam& r = config.renderers[0];
+  ASSERT_EQ(r.markers_count, 2);
+  // The id arrives as the LUMICE_ANNOTATION_MARKER_* value, i.e. the same id space the annotation
+  // request uses — one vocabulary across the API, not a second numbering for the renderer.
+  EXPECT_EQ(r.markers[0].id, LUMICE_ANNOTATION_MARKER_ANTHELION);
+  EXPECT_EQ(r.markers[0].enabled, 1);
+  EXPECT_FLOAT_EQ(r.markers[0].color[1], 0.7f);
+  EXPECT_EQ(r.markers[1].id, LUMICE_ANNOTATION_MARKER_NADIR);
+  EXPECT_EQ(r.markers[1].enabled, 0);
+  EXPECT_FLOAT_EQ(r.markers_opacity, 0.35f);
+  EXPECT_FLOAT_EQ(r.markers_radius_px, 12.0f);
+}
+
+TEST(ParseConfigApi, RendererMarkersEmptyArrayIsValid) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array();
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_OK);
+  EXPECT_EQ(config.renderers[0].markers_count, 0);
+}
+
+TEST(ParseConfigApi, RendererMarkersUnknownIdRejected) {
+  // INVALID_VALUE, not MISSING_FIELD: core's from_json throws with a non-403 id precisely so
+  // DecodeCoreField's 403-means-missing mapping does not misfile this as an absent key.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array({ { { "id", "sundog" } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_VALUE);
+}
+
+TEST(ParseConfigApi, RendererMarkersMissingIdRejectedAsMissingField) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::array({ { { "enabled", true } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_MISSING_FIELD);
+}
+
+TEST(ParseConfigApi, RendererMarkersDuplicateIdRejected) {
+  // INVALID_CONFIG rather than INVALID_VALUE, following this file's existing split: every
+  // individual value here is legal, and what is wrong is the shape of the collection they form.
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] =
+      nlohmann::json::array({ { { "id", "sun" }, { "color", { 1.0f, 0.0f, 0.0f } } },
+                              { { "id", "sun" }, { "color", { 0.0f, 0.0f, 1.0f } } } });
+
+  ConfigScratch config{};
+  ConfigScratchGuard config_guard(config);
+  EXPECT_EQ(ParseConfigString(root.dump().c_str(), &config), LUMICE_ERR_INVALID_CONFIG);
+}
+
+TEST(ParseConfigApi, RendererMarkersNonArrayRejected) {
+  auto root = nlohmann::json::parse(MakeFullConfigJson());
+  root["render"][0]["grid"]["markers"] = nlohmann::json::object({ { "id", "sun" } });
 
   ConfigScratch config{};
   ConfigScratchGuard config_guard(config);
@@ -2516,6 +2618,11 @@ TEST(StructFilterParse, IllegalEntryExitValuePassesThroughLikeCore) {
 
 // AC4: LUMICE_API_VERSION exists and is usable in a caller static_assert.
 static_assert(LUMICE_API_VERSION >= 412, "LUMICE_API_VERSION regressed below v4.12");
+// The floor a caller of the marker family needs. Written as a second line rather than by raising
+// the one above, which pins a different promise (the macro is usable at all, since v4.12) — this
+// one says LUMICE_RenderParam::markers exists, and a build where it does not must not compile the
+// cases that set it.
+static_assert(LUMICE_API_VERSION >= 425, "LUMICE_RenderParam::markers requires the v4.25 header");
 
 namespace {
 // struct -> JSON (ConfigToJson) -> struct (ParseConfigString). Returns the

@@ -578,6 +578,37 @@ static std::vector<ns::GridLineParam> GridLinesToCore(const LUMICE_GridLine* lin
   return out;
 }
 
+// Is `id` one of the LUMICE_ANNOTATION_MARKER_* values? Shared by every place that accepts an id
+// from a caller — the renderer's markers[] on both the encode and the decode side, and
+// ReadMarkerIdList for the annotation request. One predicate, so a seventh id cannot be admitted by
+// one entry point and rejected by another.
+//
+// The check is not redundant with core's own handling: annotation::ResolveMarkerDir answers an
+// unknown id with the zenith rather than an error, deliberately (core does not assume its C++
+// callers validated). Turning a caller's bad id into a REPORTED error instead of a silent fallback
+// is this boundary's job.
+static bool IsValidMarkerId(int id) {
+  return id >= 0 && id < LUMICE_ANNOTATION_MARKER_COUNT;
+}
+
+// Copy `count` C marker entries into the core vector form, so nlohmann's to_json(MarkerStyleParam)
+// owns the wire shape — the id SPELLING in particular, which then has one table in the tree.
+// Twin of GridLinesToCore above.
+static std::vector<ns::MarkerStyleParam> MarkerStylesToCore(const LUMICE_MarkerStyle* markers, int count) {
+  std::vector<ns::MarkerStyleParam> out;
+  out.reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; i++) {
+    ns::MarkerStyleParam m;
+    m.id_ = static_cast<ns::MarkerRefId>(markers[i].id);
+    m.enabled_ = markers[i].enabled != 0;
+    m.color_[0] = markers[i].color[0];
+    m.color_[1] = markers[i].color[1];
+    m.color_[2] = markers[i].color[2];
+    out.push_back(m);
+  }
+  return out;
+}
+
 // Full renderer object. Every field of the C struct is written verbatim; the numeric encodings
 // (lens f<->fov trigonometry, grid-line defaults) come from core's to_json overloads rather than
 // being re-derived here, so there is exactly one implementation of each formula.
@@ -593,6 +624,27 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
         "LUMICE_RenderParam grid count out of range: angular_dist=" + std::to_string(r.angular_dist_count) +
         ", elevation=" + std::to_string(r.elevation_grid_count) +
         ", longitude=" + std::to_string(r.longitude_grid_count));
+  }
+  // Same check for the marker list, and for the same reason the grid counts are checked here: this
+  // is the single place that dereferences markers[], and ConfigToJson accepts a caller-assembled
+  // struct with no bounds pass of its own. The per-entry id range is checked too — an out-of-range
+  // id would index MarkerStyleParam's name table, and core's to_json clamps rather than reports.
+  if (r.markers_count < 0 || r.markers_count > LUMICE_MAX_CONFIG_MARKERS) {
+    throw std::invalid_argument("LUMICE_RenderParam markers_count out of range: " + std::to_string(r.markers_count));
+  }
+  for (int i = 0; i < r.markers_count; i++) {
+    if (!IsValidMarkerId(r.markers[i].id)) {
+      throw std::invalid_argument("LUMICE_RenderParam markers[" + std::to_string(i) +
+                                  "].id out of range: " + std::to_string(r.markers[i].id));
+    }
+  }
+  {
+    const std::vector<ns::MarkerStyleParam> core_markers = MarkerStylesToCore(r.markers, r.markers_count);
+    ns::MarkerRefId dup{};
+    if (ns::HasDuplicateMarkerId(core_markers, &dup)) {
+      throw std::invalid_argument("LUMICE_RenderParam markers[] names the same id twice: " +
+                                  std::to_string(static_cast<int>(dup)));
+    }
   }
   nlohmann::json jr;
   jr["id"] = id;
@@ -630,6 +682,12 @@ static nlohmann::json RendererToJson(const LUMICE_RenderParam& r, int id) {
   zn.color_[1] = r.zenith_nadir_color[1];
   zn.color_[2] = r.zenith_nadir_color[2];
   jr["grid"]["zenith_nadir"] = zn;
+  // The marker family, through core's own to_json for the same reason everything else here is: the
+  // key names and the id spellings then have exactly one implementation, which is what
+  // test_json_parser_parity.cpp compares this decoder against.
+  jr["grid"]["markers"] = MarkerStylesToCore(r.markers, r.markers_count);
+  jr["grid"]["markers_opacity"] = r.markers_opacity;
+  jr["grid"]["markers_radius_px"] = r.markers_radius_px;
   return jr;
 }
 
@@ -2270,6 +2328,48 @@ static LUMICE_ErrorCode JsonToGridLines(const nlohmann::json& arr_j, LUMICE_Grid
   return LUMICE_OK;
 }
 
+// Decode "grid.markers" into the fixed-capacity C array. Twin of JsonToGridLines above, with two
+// rules that array does not have, both of them "reject" rather than "repair":
+//   - an unknown id string is refused by core's MarkerStyleParam::from_json, which throws rather
+//     than falling back the way NLOHMANN_JSON_SERIALIZE_ENUM would; DecodeCoreField turns that into
+//     LUMICE_ERR_INVALID_VALUE;
+//   - a duplicate id is refused here, through the SAME HasDuplicateMarkerId config_manager.cpp
+//     calls, so the two decoders cannot drift into two answers.
+static LUMICE_ErrorCode JsonToMarkerStyles(const nlohmann::json& arr_j, LUMICE_MarkerStyle* out, int* out_count) {
+  if (!arr_j.is_array()) {
+    return LUMICE_ERR_INVALID_VALUE;
+  }
+  // Length first, so an over-long list is one comparison rather than six decodes. It is nearly
+  // unreachable given the duplicate rule below — with only six legal ids, a seventh entry must
+  // repeat one — but "nearly" is doing work that a bounds check should not have to delegate.
+  if (static_cast<int>(arr_j.size()) > LUMICE_MAX_CONFIG_MARKERS) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  std::vector<ns::MarkerStyleParam> core_markers;
+  core_markers.reserve(arr_j.size());
+  for (const auto& entry : arr_j) {
+    ns::MarkerStyleParam m;
+    const LUMICE_ErrorCode err = DecodeCoreField(entry, m);
+    if (err != LUMICE_OK) {
+      return err;
+    }
+    core_markers.push_back(m);
+  }
+  ns::MarkerRefId dup{};
+  if (ns::HasDuplicateMarkerId(core_markers, &dup)) {
+    return LUMICE_ERR_INVALID_CONFIG;
+  }
+  *out_count = static_cast<int>(core_markers.size());
+  for (int k = 0; k < *out_count; k++) {
+    out[k].id = static_cast<int>(core_markers[k].id_);
+    out[k].enabled = core_markers[k].enabled_ ? 1 : 0;
+    out[k].color[0] = core_markers[k].color_[0];
+    out[k].color[1] = core_markers[k].color_[1];
+    out[k].color[2] = core_markers[k].color_[2];
+  }
+  return LUMICE_OK;
+}
+
 static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, ConfigScratch* out) {
   const int render_count = static_cast<int>(render_arr.size());
   if (render_count > LUMICE_MAX_CONFIG_RENDERERS) {
@@ -2436,6 +2536,16 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
       std::copy(std::begin(kZenithNadirDefaults.color_), std::end(kZenithNadirDefaults.color_),
                 std::begin(r.zenith_nadir_color));
     }
+    // The marker family's defaults, same rule and same reason as the block above: taken from core's
+    // struct rather than spelled again here, and written BEFORE the "grid" branch so a document
+    // with no key at all lands where ParseRenderConfig leaves it. Two of the three are non-zero, so
+    // zeroing them instead would be a real divergence between the two decoders.
+    {
+      const ns::RenderConfig kRenderDefaults;
+      r.markers_count = 0;
+      r.markers_opacity = kRenderDefaults.markers_opacity_;
+      r.markers_radius_px = kRenderDefaults.markers_radius_px_;
+    }
     if (rj.contains("grid")) {
       const auto& gj = rj.at("grid");
       if (!gj.is_object()) {
@@ -2513,6 +2623,26 @@ static LUMICE_ErrorCode JsonToRenderers(const nlohmann::json& render_arr, Config
         r.zenith_nadir_radius_px = zn.radius_px_;
         r.zenith_nadir_opacity = zn.opacity_;
         std::copy(std::begin(zn.color_), std::end(zn.color_), std::begin(r.zenith_nadir_color));
+      }
+      if (gj.contains("markers")) {
+        const LUMICE_ErrorCode err = JsonToMarkerStyles(gj.at("markers"), r.markers, &r.markers_count);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
+      // The two family-wide appearance keys, siblings of the array rather than members of it —
+      // the shape core's to_json writes, which is what test_json_parser_parity.cpp compares.
+      if (gj.contains("markers_opacity")) {
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_opacity"), r.markers_opacity);
+        if (err != LUMICE_OK) {
+          return err;
+        }
+      }
+      if (gj.contains("markers_radius_px")) {
+        const LUMICE_ErrorCode err = DecodeCoreField(gj.at("markers_radius_px"), r.markers_radius_px);
+        if (err != LUMICE_OK) {
+          return err;
+        }
       }
     }
   }
@@ -3390,7 +3520,7 @@ bool ReadMarkerIdList(const int* data, int count, std::vector<lumice::annotation
   out->clear();
   out->reserve(static_cast<size_t>(count));
   for (int i = 0; i < count; ++i) {
-    if (data[i] < 0 || data[i] >= LUMICE_ANNOTATION_MARKER_COUNT) {
+    if (!IsValidMarkerId(data[i])) {
       *err = LUMICE_ERR_INVALID_VALUE;
       return false;
     }

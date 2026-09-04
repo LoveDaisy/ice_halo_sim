@@ -883,6 +883,116 @@ TEST(JsonParserParity, GridZenithNadirOmittedLeavesBothParsersOnTheDefaults) {
   EXPECT_TRUE(p.core.renderers_.begin()->second.zenith_nadir_ == kDefaults);
 }
 
+// --- render.grid.markers: the reference-point marker list (v4.25) ---
+//
+// Structurally blind in the corpus for the same reason grid.zenith_nadir is — no shipped config
+// carried the key when it was added. What makes this family need more than the present/absent pair
+// is that three of its rules are REJECTIONS (unknown id, missing id, duplicate id), and a rejection
+// only counts if BOTH parsers make it: a decoder that accepted where the other refused would let a
+// document load through one entry point and fail through the other.
+
+TEST(JsonParserParity, GridMarkersSurviveBothParsers) {
+  const std::string text = WrapRenderWithGrid(
+      R"({ "markers": [ { "id": "sun", "enabled": true, "color": [1.0, 0.9, 0.2] },
+                        { "id": "antisolar", "enabled": false, "color": [0.2, 0.4, 1.0] } ],
+           "markers_opacity": 0.35, "markers_radius_px": 12.0 })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  ASSERT_EQ(p.via_capi.renderers_.size(), 1u);
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+
+  ASSERT_EQ(renderer.markers_.size(), 2u);
+  // Order preserved: the list is the config's own, not a set the decoder sorted.
+  EXPECT_EQ(renderer.markers_[0].id_, lumice::MarkerRefId::kSun);
+  EXPECT_TRUE(renderer.markers_[0].enabled_);
+  EXPECT_FLOAT_EQ(renderer.markers_[0].color_[1], 0.9f);
+  EXPECT_EQ(renderer.markers_[1].id_, lumice::MarkerRefId::kAntisolar);
+  EXPECT_FALSE(renderer.markers_[1].enabled_);
+  EXPECT_FLOAT_EQ(renderer.markers_opacity_, 0.35f);
+  EXPECT_FLOAT_EQ(renderer.markers_radius_px_, 12.0f);
+
+  // The whole renderer, which is what a missed branch on either side actually breaks.
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridMarkersPartialEntryAgreesOnTheOmittedDefaults) {
+  // The state the present/absent pair cannot reach: an entry that names only its id. Core's
+  // from_json leaves the member defaults (off, {0.8, 0.2, 0.2}); a C API decoder that reset the
+  // struct first would answer black, and the two parsers would disagree about a loaded config.
+  const std::string text = WrapRenderWithGrid(R"({ "markers": [ { "id": "subsun" } ] })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const auto& renderer = p.via_capi.renderers_.begin()->second;
+  ASSERT_EQ(renderer.markers_.size(), 1u);
+  EXPECT_EQ(renderer.markers_[0].id_, lumice::MarkerRefId::kSubsun);
+  EXPECT_FALSE(renderer.markers_[0].enabled_);
+  EXPECT_FLOAT_EQ(renderer.markers_[0].color_[0], 0.8f);
+  // And the family keys, omitted here, keep RenderConfig's non-zero defaults on both sides.
+  EXPECT_FLOAT_EQ(renderer.markers_opacity_, 0.6f);
+  EXPECT_FLOAT_EQ(renderer.markers_radius_px_, 8.0f);
+  EXPECT_TRUE(renderer == p.core.renderers_.begin()->second);
+}
+
+TEST(JsonParserParity, GridMarkersOmittedLeavesBothParsersOnTheDefaults) {
+  const std::string text = Document(kCrystalBlock, kFilterBlock, kMinimalSceneBlock, kMinimalRenderBlock);
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  const lumice::RenderConfig kDefaults;
+  for (const auto* m : { &p.via_capi, &p.core }) {
+    const auto& renderer = m->renderers_.begin()->second;
+    EXPECT_TRUE(renderer.markers_.empty());
+    EXPECT_FLOAT_EQ(renderer.markers_opacity_, kDefaults.markers_opacity_);
+    EXPECT_FLOAT_EQ(renderer.markers_radius_px_, kDefaults.markers_radius_px_);
+  }
+}
+
+TEST(JsonParserParity, GridMarkersEmptyArrayIsAcceptedByBothParsers) {
+  // Legal, and it means "draw nothing" rather than being an error — the only one of the four
+  // malformed-input shapes AC4 names that is NOT a rejection.
+  const std::string text = WrapRenderWithGrid(R"({ "markers": [] })");
+  BothParsed p;
+  ASSERT_TRUE(ParseWithBoth(text, &p));
+  EXPECT_TRUE(p.via_capi.renderers_.begin()->second.markers_.empty());
+  EXPECT_TRUE(p.core.renderers_.begin()->second.markers_.empty());
+}
+
+TEST(JsonParserParity, GridMarkersUnknownIdRejectedByBothParsers) {
+  // The rule the whole hand-written codec exists for. NLOHMANN_JSON_SERIALIZE_ENUM would map this
+  // to the FIRST table entry — the zenith — and report nothing, which is the same silent-mapping
+  // defect doc/gui-state-governance.md records for "front" becoming "upper".
+  const std::string text = WrapRenderWithGrid(R"({ "markers": [ { "id": "sundog" } ] })");
+  const auto core = ParseWithCore(text);
+  EXPECT_FALSE(core.ok) << "core must refuse an id it does not know";
+  EXPECT_NE(core.error.find("sundog"), std::string::npos) << "the message must name the offending id: " << core.error;
+  EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
+TEST(JsonParserParity, GridMarkersMissingIdRejectedByBothParsers) {
+  // Unlike zenith_nadir, where every key is optional: there the defaults describe a complete
+  // marker, here an entry with no id names no direction at all.
+  const std::string text = WrapRenderWithGrid(R"({ "markers": [ { "enabled": true } ] })");
+  EXPECT_FALSE(ParseWithCore(text).ok);
+  EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
+TEST(JsonParserParity, GridMarkersDuplicateIdRejectedByBothParsers) {
+  // An ARRAY-level rule, so it cannot live in the per-entry from_json. Both decoders call the same
+  // HasDuplicateMarkerId rather than each implementing the check — which is what this case would
+  // catch drifting apart, since a duplicate is exactly the input two independent implementations
+  // would be most likely to answer differently.
+  const std::string text = WrapRenderWithGrid(
+      R"({ "markers": [ { "id": "sun", "color": [1, 0, 0] }, { "id": "sun", "color": [0, 0, 1] } ] })");
+  const auto core = ParseWithCore(text);
+  EXPECT_FALSE(core.ok) << "core must refuse a list that names one marker twice";
+  EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
+TEST(JsonParserParity, GridMarkersNonArrayRejectedByBothParsers) {
+  const std::string text = WrapRenderWithGrid(R"({ "markers": { "id": "sun" } })");
+  EXPECT_FALSE(ParseWithCore(text).ok);
+  EXPECT_FALSE(CapiAcceptsEndToEnd(text));
+}
+
 // --- render.front: the second clip dimension (v4.20) ---
 //
 // Its own top-level key, deliberately not a fourth "visible" enumerator. The negative half of that
