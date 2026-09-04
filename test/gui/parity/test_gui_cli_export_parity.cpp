@@ -57,14 +57,16 @@
 //   angular_dist   | on, {22, 46} deg        |  25.73 | on, {22, 46} deg          |  26.89
 //   elevation      | on, 10 deg step         |  24.72 | on, 30 deg step           |    n/a
 //   longitude      | on, 10 deg step         |  26.59 | on, 30 deg step           |  24.07
-//   zenith_nadir   | on, zenith imaged       |    n/a | on, both imaged           |    n/a
+//   markers        | all six, zenith imaged  |    n/a | all six, all imaged       |    n/a
 //
-// The zenith_nadir row's two "n/a"s are MEASURED, and they are a statement about the metric rather
+// The markers row's two "n/a"s are MEASURED, and they are a statement about the metric rather
 // than about the field. A ring of the default 8 px radius covers roughly 150 pixels; deleting the
 // CLI's nadir ring outright moved the full-sky scene by 0.02 dB, and UPWARD — the ring's presence
 // costs a little parity (see below), so removing it reads as an improvement. A whole-frame PSNR
 // cannot see this field, and the honest response is to say so rather than to pick a threshold that
-// pretends otherwise.
+// pretends otherwise. Growing the family from two rings to six did not change that: it moved both
+// scenes DOWN by about 0.4 dB (the per-ring edge cost, four more times over), which is a shift of
+// the baseline rather than a sensitivity the metric acquired.
 //
 // Enlarging the rings until it could see them was tried and rejected on the measurement: at radius
 // 60 / 30 the full-sky scene falls from 27.62 to 27.09 dB, which is BELOW its threshold and within
@@ -77,11 +79,18 @@
 // action because a ring's edge is a fixed fraction of a ring rather than a removable alpha term.
 //
 // So what the markers are covered BY here is the export encoding, not the pixels: the fixture
-// asserts that the exported document carries grid.zenith_nadir.enabled (ParseExportedRenderInfo),
-// which is the half of the path that lives in BuildScene's export arm and the half that a
-// regression would silently drop. Where the rings LAND is pinned by
-// test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp, against the GUI's own former
-// projection, at a resolution this metric does not have.
+// asserts that the exported document lists all six grid.markers entries and that their `enabled`
+// follows the scene's switch (ParseExportedRenderInfo), which is the half of the path that lives in
+// BuildScene's export arm and the half that a regression would silently drop. Where the rings LAND
+// is pinned by test/unit-correctness/gui/test_annotation_overlay_gui_parity.cpp (against the GUI's
+// own former projection, at a resolution this metric does not have) and, for the four sun-relative
+// members that projection never covered, by test/gui/functional/test_marker_panel.cpp, which reads
+// each ring's colour off a rendered frame.
+//
+// Why all six here rather than a representative pair: the four sun-relative directions are the only
+// annotation in this table whose position depends on a document field OTHER than the view. Exporting
+// them exercises the one thing the two-marker version could not — that the child process places them
+// where the preview did, from the sun the document names.
 //
 // The angular_dist row is broken two ways rather than one, because the two shapes it can fail in
 // are independent and the weaker one sets the threshold. Shifting every circle by ONE degree in
@@ -115,7 +124,7 @@
 // "n/a" means the break does not move that scene, and in every case for a stated reason rather
 // than a gap: the full-sky lens family ignores fov and zeroes the three view angles, so a break in
 // those cannot show there; `visible` and `lens_type` are broken TO the value that scene already
-// holds; and the zenith_nadir cells are discussed above. Each field is therefore live in at least one
+// holds; and the markers cells are discussed above. Each field is therefore live in at least one
 // column, and the two columns between them cover both sides of every branch the export arm has —
 // single lens vs the full-sky family, an aspect preset that names a ratio vs the two that name
 // none and fall back to 2:1 — rather than nine unrelated checkmarks.
@@ -152,13 +161,14 @@
 //     therefore the signal, and the thresholds below are set against the measured breaks.
 //
 //     The zenith/nadir markers left the list the same way and are on in both scenes, but they are
-//     the member that does NOT raise the figure: measured at the default radius, switching them on
-//     costs the full-sky scene 0.08 dB and leaves the single-lens scene where it was. Both arms put
-//     the ring in the same place — that is core's one answer, read twice — and what the 0.08 dB
-//     buys is the difference between an antialiased ring edge and a hard one. It is a fixed,
-//     understood cost carried on purpose so the export path runs end to end here; see the
-//     zenith_nadir row in the field table for why the alternative (a ring big enough for the metric
-//     to see) was measured and rejected.
+//     the member that does NOT raise the figure: measured at the default radius, switching the two
+//     legacy rings on cost the full-sky scene 0.08 dB and left the single-lens scene where it was,
+//     and growing the family to six cost about 0.4 dB more on both. Both arms put every ring in the
+//     same place — that is core's one answer, read twice — and what the cost buys is the difference
+//     between an antialiased ring edge and a hard one, once per ring. It is a fixed, understood
+//     cost carried on purpose so the export path runs end to end here; see the markers row in the
+//     field table for why the alternative (a ring big enough for the metric to see) was measured
+//     and rejected.
 //   * The colour space an overlay line is composited in, which the two arms genuinely disagree
 //     about. Measured, excluded on purpose, and neutralised rather than tolerated — see the
 //     GRID OPACITY note above the field table for the numbers and the mechanism.
@@ -179,7 +189,7 @@
 //     it is a question about a JSON field, and test_scene_commit_chain.cpp asks it as one
 //     (TheExportIntentDescribesTheDocumentsView, with the switch off). What this file adds on top is
 //     the ON half of the same claim, read out of the document the child process actually reads —
-//     see info.horizon below, which mirrors info.zenith_nadir.
+//     see info.horizon below, which mirrors info.markers_listed / info.markers_enabled.
 //   * The single-lens fisheye domain past theta = 90 degrees. This USED to be a real and large
 //     exclusion — the preview shader kept inverting toward the frame corners while core stopped at
 //     the equator, and a 4:3 frame at fov 150 measured 25% of its pixels lit by the GUI and black
@@ -442,6 +452,13 @@ const ParityScene kScenes[] = {
   // the 10 sigma bar caps the threshold at 27.21 and the break floors it at 26.46. The margins
   // are smaller in dB than this file's other rows carry and larger in sigma; sigma is what the
   // stated rule is written in, and this row's sigma is a third of what it was.
+  //
+  // RE-MEASURED when the marker family grew from the zenith/nadir pair to all six reference points:
+  // mean 27.402 sigma 0.0303 (N=5, range 27.36-27.44). Threshold unchanged at 27.0: 13.3 sigma
+  // below the mean, and 0.61 dB above this scene's smallest break, re-measured in the same session
+  // at 26.39 dB (the CLI drawing only the first of two angular_dist lines). Both bounds hold with
+  // room, so this row needed no move — unlike its full-sky neighbour below, whose 27.2 had become
+  // too tight against the same shift.
   {"single_lens_angled",
    lumice::gui::kLensTypeFisheyeEqualArea, 96.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleUpper,
    /*background_srgb=*/{ 0.10f, 0.16f, 0.28f },
@@ -482,12 +499,25 @@ const ParityScene kScenes[] = {
   // Threshold unchanged at 27.2: 19 sigma below the mean, 0.47 dB below the worst honest run, and
   // still above the angular_dist single-line break, re-measured here at 26.89 / 26.97 dB (unmoved
   // — it is an annotation break, and this row's exposure barely shifted).
+  //
+  // RE-MEASURED when the marker family grew from the zenith/nadir pair to all six reference points:
+  // mean 27.366 sigma 0.0261 (N=5, range 27.34-27.40), DOWN 0.35 dB. Four more rings, each paying
+  // the same antialiased-vs-hard edge the first two did — a shift of the baseline, not a
+  // sensitivity gained. THRESHOLD LOWERED 27.2 -> 27.1, and the arithmetic is why: at 27.2 the gate
+  // sat 6.4 sigma below the new mean, inside this file's own 10 sigma bar, so a run at the low end
+  // of ordinary noise would have gone red for nothing. The window is [break, mean - 10 sigma] =
+  // [26.68, 27.105]; 27.1 takes the top of it, which keeps the gate as tight as the noise permits
+  // and still leaves 0.42 dB above the break.
+  //
+  // The break was RE-MEASURED, not scaled from the old number: the CLI arm was fed an export whose
+  // grid.angular_dist had been truncated to its first entry, and this scene landed at 26.68 dB
+  // (against 26.89 before the family grew). Its neighbour above measured 26.39 in the same run.
   {"full_sky_dual_fisheye",
    lumice::gui::kLensTypeDualFisheyeEqualArea, 180.0f, 25.0f, 30.0f, 15.0f, lumice::gui::kVisibleFull,
    /*background_srgb=*/{ 0.28f, 0.14f, 0.10f },
    gui::AspectPreset::kFree, /*aspect_portrait=*/false, /*show_horizon=*/true, /*show_sun_circles=*/true,
    /*show_grid=*/true, /*show_markers=*/true,
-   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.2, /*expect_w=*/1024, /*expect_h=*/512},
+   /*ray_num_millions=*/16.0f, /*psnr_threshold=*/27.1, /*expect_w=*/1024, /*expect_h=*/512},
   // The projection-family scene. Every field except lens_type and fov is copied verbatim from
   // single_lens_angled, so the difference between the two rows is the projection and nothing else
   // — which is what makes a drop here readable as the Jacobian rather than as some other field.
