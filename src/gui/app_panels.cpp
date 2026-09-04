@@ -969,7 +969,12 @@ void RenderMarkersSection() {
   // steps, so the value read back is the post-click one and the field follows the user rather than
   // fighting them.
   ImGui::SetNextItemOpen(g_state.markers_section_open, ImGuiCond_Always);
-  const bool section_open = ImGui::CollapsingHeader("Reference Points##markers");
+  // AllowOverlap, and it is load-bearing rather than defensive: a CollapsingHeader spans the full
+  // content width, and ImGui gives hover to the FIRST item that claims it in a frame — so without
+  // this the header swallows every click aimed at the three buttons drawn on top of it, which
+  // still LOOK and hit-test as present. The failure is invisible from a rendered frame; what
+  // catches it is a test that clicks them (test_overlay_controls.cpp).
+  const bool section_open = ImGui::CollapsingHeader("Reference Points##markers", ImGuiTreeNodeFlags_AllowOverlap);
   g_state.markers_section_open = section_open;
 
   // [All] / [None] / [...] drawn ON the header's own row, right-aligned. Deliberately NOT a
