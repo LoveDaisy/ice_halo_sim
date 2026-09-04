@@ -199,7 +199,13 @@ vec2 dualFisheyeToUV(vec2 xy_norm, bool is_upper) {
     pixel = vec2( xy_norm.y * R + tex_res.x * 0.5 + R,
                   xy_norm.x * R + tex_res.y * 0.5);
   }
-  return (pixel + 0.5) / tex_res;  // +0.5: align with OpenGL texel center convention
+  // `pixel` is in core's binning convention (ProjectExitToPixel takes floor of it), so texel `px`
+  // owns [px, px+1) and its centre is px + 0.5 — see doc/coordinate-convention.md §11. GL's own
+  // addressing is stated in exactly those terms: `uv * tex_res` = px + 0.5 hits the centre of
+  // texel px. So the conversion is the plain division and nothing else. Adding 0.5 here applies
+  // the same half-texel centring a SECOND time, which does not read a different texel — it moves
+  // every fragment onto a texel corner and turns every sample into a 2x2 bilinear average.
+  return pixel / tex_res;
 }
 
 // Convert world direction to dual equal-area fisheye UV (single hemisphere, no blend).

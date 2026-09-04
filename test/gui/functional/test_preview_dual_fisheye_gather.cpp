@@ -73,10 +73,19 @@ constexpr float kBrightXyz[3] = { 0.9505f, 1.0f, 1.089f };
 constexpr float kDarkXyz[3] = { 0.0f, 0.0f, 0.0f };
 constexpr float kIntensityScale = 0.5f;  // renders the bright texel around byte 188, off both rails
 
-// MEASUREMENT PASS placeholders — replaced with calibrated values once the frame has been read on
-// a real GPU. Deliberately impossible so both reports fire and print what was actually measured.
-constexpr double kMinCheckerContrastLsb = 1000.0;
-constexpr int kMaxParitySpreadLsb = -1;
+// Both thresholds are placed against MEASURED values, not against the defect they were written
+// for. On this tree's GPU the sharp frame reads exactly 188 / 0 with a spread of 0 in each parity
+// class, and the half-texel frame reads a flat 137 everywhere (the 2x2 mean of the same two
+// colours) — so the contrast the case is separating is 188 against 0.
+//
+// A sampling point offset by `a` texels in both axes scales the checkerboard contrast by
+// (1 - 2a)^2, so 150 LSB (80% of sharp) is the point below which an offset of roughly 0.05 texel
+// or more is reported. That is a long way above anything float noise in the asin/atan chain can
+// produce (offsets there are ~1e-6 texels) and a long way below the whole defect this guards.
+constexpr double kMinCheckerContrastLsb = 150.0;
+// Measured 0 on both classes on both discs. 2 LSB of slack is for another driver's last bit in the
+// same trig chain; genuine drift across the disc would spread by tens, not by two.
+constexpr int kMaxParitySpreadLsb = 2;
 
 // A render request marshalled to the frame loop: the upload and RenderExportToRgba both need the
 // thread that owns the GL context, which is the render thread and not the test coroutine. Same
