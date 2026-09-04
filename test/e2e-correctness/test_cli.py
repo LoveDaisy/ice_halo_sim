@@ -353,3 +353,134 @@ class TestAxisSlotTypeRequired(LumiceTestCase):
         self.assertIn("crystal[id=1]", combined, "must name the offending crystal" + context)
         self.assertIn("zenith", combined, "must name the missing slot" + context)
         self.assertIn("omit `axis`", combined, "must say how to opt out of `axis`" + context)
+
+
+class TestBenchmarkIsaField(LumiceTestCase):
+    """`--benchmark`'s JSON must say which ISA tier the binary was compiled for.
+
+    Why the key exists at all: a Release build takes `-march=native` unless
+    `-DLUMICE_NATIVE_ARCH=OFF` is passed, local `scripts/build.sh` does not pass it,
+    every release and CI job does, and MSVC has no equivalent flag wired up. So a
+    throughput number recorded off a local build is not the shipped binary's number,
+    and a Windows-vs-other comparison of two local builds is ISA-asymmetric by
+    default. The `isa` key makes an already-recorded number answer that on its own.
+
+    Why this test is not "run it and read the output": the cross-check below reads
+    `CMakeCache.txt`, which CMake writes at configure time. That is a different
+    producer from the `LUMICE_NATIVE_ARCH_ACTIVE` macro → `#if` → JSON path being
+    checked, so the two do not share a failure mode: if the generator expression
+    gating the macro were written wrong (inverted, or missing one of its two
+    conjuncts), the cache would still hold what CMake actually consumed and this
+    would go red.
+    """
+
+    _ISA_VALUES = {"native", "baseline"}
+
+    def _run_benchmark(self):
+        """Run `--benchmark` on the shared bench config with a ray budget small
+        enough for the fast leg, and return the parsed `[BENCHMARK]` lines."""
+        cfg = json.loads((CONFIGS_DIR / "bench_light_single_ms.json").read_text())
+        cfg["scene"]["ray_num"] = 200000
+        tmp_cfg = Path(self.output_dir) / "bench_isa.json"
+        tmp_cfg.write_text(json.dumps(cfg))
+
+        result = self.run_lumice(["--benchmark", "-f", str(tmp_cfg), "-o", self.output_dir])
+        context = f"\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        self.assertEqual(result.returncode, 0, "benchmark run failed" + context)
+
+        rows = [
+            json.loads(line.split("[BENCHMARK]", 1)[1].strip())
+            for line in result.stdout.splitlines()
+            if "[BENCHMARK]" in line
+        ]
+        self.assertTrue(rows, "no [BENCHMARK] line was emitted" + context)
+        return rows
+
+    def _find_cmake_cache(self) -> Path | None:
+        """Locate the CMakeCache.txt belonging to the binary under test.
+
+        Two layouts exist in this repo and both are covered: `scripts/build.sh`
+        installs to `build/cmake_install/<flavor>/` and configures in
+        `build/cmake_build/<flavor>/`; CI configures with `cmake -S . -B build` and
+        (for the shared-lib leg) points $LUMICE_BIN into the build tree. The
+        flavor-derived candidate is tried FIRST on purpose — walking up from an
+        installed binary would otherwise reach a `build/CMakeCache.txt` left behind
+        by an unrelated plain-cmake configure and cross-check against the wrong one.
+        """
+        binary = Path(self.lumice_bin).resolve()
+        root = get_project_root().resolve()
+
+        candidates = []
+        parts = binary.parts
+        if "cmake_install" in parts:
+            flavor = parts[parts.index("cmake_install") + 1]
+            candidates.append(root / "build" / "cmake_build" / flavor / "CMakeCache.txt")
+        candidates.extend(parent / "CMakeCache.txt" for parent in binary.parents)
+        candidates.append(root / "build" / "CMakeCache.txt")
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        return None
+
+    @staticmethod
+    def _read_cache_entry(cache_text: str, key: str) -> str | None:
+        """Read one `KEY:TYPE=VALUE` line out of CMakeCache.txt's flat text format."""
+        for line in cache_text.splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.split(":", 1)[0] == key:
+                return value.strip()
+        return None
+
+    def test_isa_key_is_present_and_well_formed(self):
+        """Schema layer — runs unconditionally, independent of any build layout."""
+        for row in self._run_benchmark():
+            self.assertIn("isa", row, f"[BENCHMARK] row lacks the isa key: {row}")
+            self.assertIn(
+                row["isa"],
+                self._ISA_VALUES,
+                f"isa={row['isa']!r} is outside {sorted(self._ISA_VALUES)}: {row}",
+            )
+
+    def test_isa_key_matches_the_configure_time_record(self):
+        """Cross-check layer — the `isa` value against CMake's own configure record."""
+        cache_path = self._find_cmake_cache()
+        if cache_path is None:
+            self.skipTest(
+                "no CMakeCache.txt found for this binary — cross-check skipped, "
+                "schema assertions still cover the key (see the other test here)"
+            )
+        cache_text = cache_path.read_text()
+
+        native_arch = self._read_cache_entry(cache_text, "LUMICE_NATIVE_ARCH")
+        build_type = self._read_cache_entry(cache_text, "CMAKE_BUILD_TYPE")
+        compiler_id = self._read_cache_entry(cache_text, "LUMICE_COMPILER_ID_SNAPSHOT")
+        missing = [
+            name
+            for name, value in (
+                ("LUMICE_NATIVE_ARCH", native_arch),
+                ("CMAKE_BUILD_TYPE", build_type),
+                ("LUMICE_COMPILER_ID_SNAPSHOT", compiler_id),
+            )
+            if value is None
+        ]
+        if missing:
+            # A build tree configured before LUMICE_COMPILER_ID_SNAPSHOT existed, or a
+            # multi-config generator with no single CMAKE_BUILD_TYPE. Say so rather
+            # than raising KeyError or inventing an expectation.
+            self.skipTest(f"{cache_path} lacks {', '.join(missing)} — cross-check skipped")
+
+        native_on = native_arch.upper() in ("ON", "1", "TRUE", "YES", "Y")
+        expected = (
+            "native"
+            if (native_on and build_type == "Release" and compiler_id != "MSVC")
+            else "baseline"
+        )
+        for row in self._run_benchmark():
+            self.assertEqual(
+                row["isa"],
+                expected,
+                f"isa={row['isa']!r} but {cache_path} records "
+                f"LUMICE_NATIVE_ARCH={native_arch}, CMAKE_BUILD_TYPE={build_type}, "
+                f"LUMICE_COMPILER_ID_SNAPSHOT={compiler_id} (expected {expected!r})",
+            )
