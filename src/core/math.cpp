@@ -416,6 +416,22 @@ float RandomNumberGenerator::GetUniform() {
 }
 
 
+namespace detail {
+
+size_t ClampUniformToIndex(float u, size_t n) {
+  assert(n > 0);
+  const size_t j = static_cast<size_t>(u * static_cast<float>(n));
+  return j >= n ? n - 1 : j;
+}
+
+}  // namespace detail
+
+
+size_t RandomNumberGenerator::GetUniformIndex(size_t n) {
+  return detail::ClampUniformToIndex(GetUniform(), n);
+}
+
+
 float RandomNumberGenerator::Get(Distribution dist) {
   switch (dist.type) {
     case DistributionType::kUniform:
