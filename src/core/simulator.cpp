@@ -813,7 +813,13 @@ Simulator::Simulator(Simulator&& other) noexcept
       stop_(other.stop_.load()), idle_(other.idle_.load()), seed_(other.seed_), effective_seed_(other.effective_seed_),
       all_data_observer_(other.all_data_observer_), all_data_observer_ctx_(other.all_data_observer_ctx_),
       rng_(other.rng_), logger_(std::move(other.logger_)),
-      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {}
+      preferred_backend_(other.preferred_backend_.load(std::memory_order_acquire)) {
+  // The observer is a raw function pointer plus a context that the test owns (typically a stack
+  // object in the test body). Leaving it live on the moved-from object would let a later Run() on
+  // that object call back into a context the mover has taken over.
+  other.all_data_observer_ = nullptr;
+  other.all_data_observer_ctx_ = nullptr;
+}
 
 Simulator& Simulator::operator=(Simulator&& other) noexcept {
   if (this == &other) {
@@ -828,6 +834,8 @@ Simulator& Simulator::operator=(Simulator&& other) noexcept {
   effective_seed_ = other.effective_seed_;
   all_data_observer_ = other.all_data_observer_;
   all_data_observer_ctx_ = other.all_data_observer_ctx_;
+  other.all_data_observer_ = nullptr;
+  other.all_data_observer_ctx_ = nullptr;
   rng_ = other.rng_;
   logger_ = std::move(other.logger_);
   preferred_backend_.store(other.preferred_backend_.load(std::memory_order_acquire), std::memory_order_release);
