@@ -125,12 +125,16 @@
 |---|----------|------|------|
 | ① 单例文档默认 | `FieldTier::kStructSoft` 中的单例字段（`sun` / `sim` / `renderer`） | 进覆盖文件的 GuiState 半区 |
 | ② 预设库 | 内置 axis 预设表每一行可调的 zenith std（该值不是 `GuiState` 的顶层字段，落地时机与运行时形态见 8.7） | 进覆盖文件独立的 `presets` 子树，不占用 GuiState 半区的键名空间 |
-| ③ app 偏好 | `FieldTier::kView` 中未被 `SerializeGuiStateJson` 序列化的那批（日志级别三件套 / 日志面板展开态 / 左侧面板折叠态），以及 `FieldTier::kStructSoft` 但 `auto_diff_excluded=true` 的字段（如渲染后端选择） | 一期不提供个人默认——这批字段的共同点是"不进文档"，归属清楚，故一期排除不留半拉工程；有具体诉求再评估 |
+| ③ app 偏好 | `FieldTier::kView` 中未被 `SerializeGuiStateJson` 序列化的那批（日志级别三件套 / 日志面板展开态 / 左侧面板折叠态），以及 `use_gpu_backend`（渲染后端选择） | **部分解禁**：`use_gpu_backend` 经覆盖文件独立的第三个根键 `app` 落地为个人默认（形态与 ② 同构，面板里是第二个注册式区，见 8.3），在 `kFieldTierTable` 上由自己的 `app_preference_eligible` 位登记；其余成员仍然排除——它们没有存储通道，`ResolveDefaultEligibility` 对它们仍返回 `kAppPreference`。工厂默认不变（`use_gpu_backend = false`，理由见 `gui_state.hpp` 该字段处的注释）|
 | ④ 集合区 | `FieldTier::kStructHard` 的成员，以及 `kStructSoft` 里被 `kCollectionFields`（`user_defaults.hpp:64`）标记的容器：晶体 / layer / filter / 染色规则 | 排除。这些容器在序列化后的 key path 里携带文档局部下标（如某个数组的第几项），脱离具体文档后这个下标没有意义 |
 
 ### 8.2 资格判定：从档位表派生，不手写第二份清单
 
 `ResolveDefaultEligibility()`（`user_defaults.hpp:105`）以字段名为输入，在 `kDerivedFieldsExcludeList`（`gui_state_tiers.hpp:128`）与 `kFieldTierTable`（`gui_state_tiers.hpp:48`）这一"治理并集"里查找，返回 `kEligible` / `kIneligible`（附一个具体原因）/ `kUnregistered`（后者只应在字段名打错或漏注册时出现，从不是合法结果）。判定完全由已有的、被 `scripts/check_policies.py` 强制"每个 `GuiState` 顶层字段恰好登记一处"的档位表推导，本层没有再引入任何手写字段名列表——新增一个 `GuiState` 字段时，它的默认值资格随档位表的登记自动确定，不需要在这里同步第二处。
+
+⚠️ **两个 bit 各答一个问题，不得互相借用。** `ResolveDefaultEligibility` 曾在 `kStructSoft` 分支上读 `auto_diff_excluded` 来把 `use_gpu_backend` 判为不可默认——那是**代理量**：`auto_diff_excluded` 回答的是"`ReconcileGuiEffects` 要不要从这个字段自动派生效果"，与"这个字段能不能存成个人默认"无关，两者的成员集合当时恰好重合而已（一个登记在别的档位上的 app 偏好会从它下面径直走过去）。现在两个问题分居 `FieldTierEntry` 的两个位：`auto_diff_excluded` 只管 reconciler；`app_preference_eligible` 只回答"这个字段有没有属于自己的个人默认通道（`app` 根键）"。`ResolveDefaultEligibility` 不再读前者，而后者的读者是把 `ResetIneligibleScalarFields()` 钉在档位表上的那道覆盖闸（`kIneligibleScalarResetFieldCount`）。
+
+`ResolveDefaultEligibility` 的返回值回答**能不能**存，不回答**存在文件的哪一半**——通道由字段自己那一行的 `app_preference_eligible` 决定，没有任何写入路径去消费这个返回值来选通道。
 
 ### 8.3 行的存在性是生成式，行的编辑器是注册式（分工写死，否则后人会读成 D3 被推翻）
 
@@ -140,6 +144,8 @@
 - **行的编辑器 = 注册式。** 一行画成滑条还是取色器、定义域是什么、当前是否可编辑，来自一张显式登记表（`FieldEditorEntry`，`field_editor_registry.hpp:111`），以**序列化键路径**（如 `"overlay_grid_color"`）而非 C++ 字段名（`grid_color`）为键——42 个可编辑叶子里有 18 个两者不同名。控件的形状不能从一个 JSON 叶子反推：`"0.3"` 说不出它是 `[0,1]` 里的 alpha、一个概率，还是一个角度。查表用 `FindFieldEditor()`（`field_editor_registry.hpp:126`），未注册返回 `nullptr`——这是设计好的合法答案，面板把它渲染成**只读**并在视觉上说明原因，而不是退化成一个通用输入框（后者会接受真实控件本会拒绝的值，比什么都不显示更有害）。
 
   405 的 D3（"编辑器只能注册，不能从 JSON 叶子派生"）**没有被推翻**：它一直管的是编辑器这一半，这次重构只是新增了存在性那一半的生成式做法，并第一次把两者在同一份文档里并列写清楚——不写清楚的代价，是后人看见"存在性是生成的"就顺势以为"编辑器现在也可以是生成的"。
+
+- **注册式的区域现在有两个，`presets` 与 `app`，两者对生成式 walk 都是隐形的。** 面板里除了 §2 那张生成式的设置列表，还有两块**不由 walk 产出**的区域：§1 预设库（`presets` 根键，命名空间 ②）与 §app 应用偏好（`app` 根键，命名空间 ③）。它们隐形的机制是同一条，且是结构性的而非约定：`SerializeGuiStateJson` 从不产出这两个根键，`BuildDefaultDiffRows` 遍历的正是那份序列化输出的键集合，因此这两棵子树没有机会成为一行。反过来说，**存在这两个根键下的字段，只能经它们各自的 `ReadXFromDoc` / `WriteXToDoc` / `EraseXFromDoc` 原语读写**——这也是"文档半区绝不能决定 `use_gpu_backend`"从一条纪律变成一条机制的地方。
 
   这张注册表也是主 UI 与面板收敛到"同一份权威"的落地方式：主 UI 里所有绑定到已注册字段的滑条调用点（`app_panels.cpp` 的 View / Display / Overlay 与 `panels.cpp` 的 Sun / Simulation，共 16 处）都改读同一个 `ConstraintFor()`（`field_editor_registry.hpp:137`），不再各自持有一份边界字面量——改一处，主 UI 与面板同时移动（`main-ui-constraint-registry` / 408.8 落地；其 AC3 的红态探针证明了这一点：故意改错某个约束的边界，主 UI 与表格单元格在同一次改动、同一帧一起偏移）。
 
@@ -196,6 +202,16 @@
 
 - **`schema_version` 与 `defaults_schema_version` 是两个键，不是一个。** 前者是 `SerializeGuiStateJson` 的输出里本来就有的根键（因此被 `kDiffEngineExcludedRootKeys` 排除在 diff 行之外），后者是覆盖文件自己的。同名复用会让同一份合并文档里一个键承载两种含义，打开文件的人无从区分。另外，`ApplyUserDefaultsOverlay` 的 merge 是 `merge_patch`，磁盘文档里任何与工厂文档同名的根键都会覆盖合并结果里的那个（值为 `null` 时更是直接**删除**该键）——所以 `BuildMergedOverlayDocument` 在 merge 之后无条件把 `schema_version` 回写成当前构建值：喂给反序列化器的那份文档描述的是**它自己**，不是它读过的文件。今天无害（反序列化器不读它），它咬人的那天正是版本号开始被用上的那天。
 - **"只含一个版本戳"必须继续读作"没有个人默认值"。** 用户把所有默认值都改回出厂值后，文件从 `{}` 变成只剩这一个键。任何回答"这个用户有没有个人默认值"的判断都不得因此翻面——今天这样的判断只有 `ApplyUserDefaultsOverlay` 的早退一处，它按键名忽略版本戳。
+
+### 8.10 用户配置只由**显式 Save** 写入——本仓库没有任何"记住上次选择"的粘滞机制
+
+这条模型事实此前散落在三处代码注释里，从未整体写下来过，导致每次讨论"某个开关能不能记住"时都要重新推一遍。落盘为一句话：
+
+- **写入方唯一，且只在用户按下 Save 时执行。** `WriteUserDefaultsFile` 的唯一调用者是 `WriteActiveOverlayDoc`，后者的唯一生产调用点是 `Settings` 面板的 `CommitCopy()`（即 Save 按钮）。这条单点约束由 `scripts/check_policies.py` 的 `user-defaults-single-write-path` 机械守着，不是靠纪律。
+- **ImGui 自己的持久化被主动关闭。** `src/gui/main.cpp` 把 `io.IniFilename` 置空，所以窗口位置、折叠态、表格列宽这些 ImGui 默认会写进 `imgui.ini` 的东西一律不落盘。
+- ⇒ **没有任何 GUI 开关会因为"你上次是这么选的"而自己被记住。** 一个开关要变成个人默认，必须有人为它建一条显式通道（命名空间 ①/②/③ 之一），并让用户在面板里按下 Save。
+
+这不是缺陷，是有意的：粘滞会让"这台机器为什么和那台机器表现不一样"变成一个没有痕迹可查的问题——与 `doc/env-var-policy.md` 拒绝用环境变量承载用户可见行为开关，是同一条理由。新增一个"记住这个选择"的诉求时，答案永远是"给它一条显式通道 + 面板里的一行"，不是"在某处偷偷写下来"。
 
 ---
 

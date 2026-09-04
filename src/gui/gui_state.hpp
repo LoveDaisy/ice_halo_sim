@@ -1229,7 +1229,28 @@ struct GuiState {
   // Request a GPU trace backend (Metal on Apple, CUDA on NVIDIA). Toggling this
   // reconstructs the server on the next DoRun via MaybeReconstructServerForBackend
   // (backend is a construction-time topology property: CPU N-worker vs GPU single
-  // engine), so the accumulated image resets on toggle. UI-only, session-only.
+  // engine), so the accumulated image resets on toggle. UI-only: not serialized into a
+  // document (.lmc) and not in the Revert baseline (ConfigSnapshot).
+  //
+  // WHY THE FACTORY VALUE IS false, i.e. why a fresh install simulates on the legacy CPU path
+  // even on a machine with a perfectly good GPU. This is a settled decision, recorded here
+  // because it had been re-argued from scratch more than once with nothing written down:
+  //   1. Correctness baseline. This program traced on the CPU for eight years before a GPU
+  //      backend existed (first commit 473ef759, 2018-02-23; the TraceBackend seam and the first
+  //      device backend arrived in 6b10ba43 / 6cb5857e, 2026-06-04), so every correctness
+  //      standard the project has is stated against that path. doc/gpu-single-engine-
+  //      implementation.md §3 says the same thing from the GPU side: legacy is ground truth.
+  //   2. Division of labour, and the one a user feels. The GPU path is for high-quality output
+  //      at large ray counts; the CPU path is for ADJUSTING — dragging a slider, retrying a sun
+  //      elevation. A GPU batch is enormous, so its response to a parameter change lags; on the
+  //      CPU it does not. Whichever path a first-run user is dropped into is the one they form
+  //      their impression of the program's responsiveness from.
+  //   3. Interface philosophy. The default trace path is not flipped implicitly.
+  // Reason 3 is what this field's PERSONAL DEFAULT does not violate: a user who ticks the box in
+  // the Settings panel and saves has made exactly the explicit choice reason 3 asks for, and
+  // storing it is honouring that choice rather than the program making one for them. The stored
+  // value lives under the override file's `app` root key — never the document half — see
+  // user_defaults.hpp's app-preferences block and doc/gui-state-governance.md §8.
   bool use_gpu_backend = false;
 
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
