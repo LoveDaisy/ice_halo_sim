@@ -617,7 +617,6 @@ void RegisterLensBorderTests(ImGuiTestEngine* engine);
 void RegisterAngularDistCircleTests(ImGuiTestEngine* engine);
 void RegisterPreviewViewportTests(ImGuiTestEngine* engine);
 void RegisterPerfTests(ImGuiTestEngine* engine);
-void RegisterOverlayLabelTests(ImGuiTestEngine* engine);
 void RegisterFaceNumberOverlayTests(ImGuiTestEngine* engine);
 void RegisterRunLifecycleTests(ImGuiTestEngine* engine);
 void RegisterStatusBarTests(ImGuiTestEngine* engine);

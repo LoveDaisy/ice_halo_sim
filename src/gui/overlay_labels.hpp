@@ -9,11 +9,9 @@
 namespace lumice::gui {
 
 struct OverlayLabel {
-  // Draw list screen coordinates. With ImGuiConfigFlags_ViewportsEnable enabled
-  // (gui-polish-v15), these are absolute OS screen coordinates; the caller of AppendCurveLabels
-  // owns the conversion from window-local to screen space.
-  // For self-owned ImDrawList targets (e.g. export_fbo_renderer rendering to an
-  // off-screen FBO), the caller passes a (0, 0) origin and these stay in FBO space.
+  // Draw list coordinates, in logical points. Both drawing consumers are self-owned ImDrawLists
+  // targeting an off-screen FBO (export_fbo_renderer.cpp), so the caller of AppendCurveLabels
+  // passes a (0, 0) origin and these stay in FBO-local space.
   float screen_x, screen_y;
   std::string text;
   ImU32 color;
@@ -65,27 +63,22 @@ struct CurveLabelSet {
 };
 void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_screen_y, std::vector<OverlayLabel>& out);
 
-// Draw labels using the current ImGui window's draw list (so modals/popups correctly
-// occlude the labels), with collision avoidance. Caller must invoke this inside an
-// active ImGui::Begin/End pair.
+// Append overlay labels to an ImDrawList, with collision avoidance. THE one drawing path: both the
+// on-screen preview and the PNG export reach it through export_fbo_renderer.cpp, which owns a
+// self-allocated list targeting the preview/export FBO. There is no second path that draws onto an
+// ImGui window's draw list any more — that is what makes "the screenshot shows what the screen
+// shows" a property of the structure rather than of two implementations kept in step.
 //
-// `vp_screen_*` is the viewport rect the anchors were converted into — absolute OS screen space
-// for ImGui::GetWindowDrawList() under ImGuiConfigFlags_ViewportsEnable, FBO-local space starting
-// at (0, 0) for a self-owned draw list. Each label's rendered text bounding box is clamped at
-// least 2 px inside each viewport edge (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so
-// labels never straddle the viewport edge.
+// `vp_screen_*` is the viewport rect the anchors live in: FBO-local, starting at (0, 0), in LOGICAL
+// POINTS (the space a draw list works in; the DPI is applied once by the backend, see
+// RenderOverlayToFbo). Each label's rendered text bounding box is clamped at least 2 px inside each
+// viewport edge (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so labels never straddle the
+// viewport edge.
 //
 // This clamp is unconditional (all lens types, all visible modes) and is the GUI's alone: the CLI
 // renderer draws core's raw anchors with no clamp and no collision pass, so a label near the rim
 // can sit a few pixels differently in the two. Where the two agree is WHICH labels appear and
 // where the curve puts them, which is what moving the walk into core bought.
-void DrawOverlayLabels(const std::vector<OverlayLabel>& labels, float vp_screen_x, float vp_screen_y, float vp_screen_w,
-                       float vp_screen_h);
-
-// Append overlay labels to an arbitrary ImDrawList (with collision avoidance).
-// Used by DrawOverlayLabels for the preview window's draw list and by
-// export_fbo_renderer for a self-owned list targeting an off-screen FBO.
-// `vp_screen_*` semantics match DrawOverlayLabels.
 void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels, float vp_screen_x,
                              float vp_screen_y, float vp_screen_w, float vp_screen_h);
 

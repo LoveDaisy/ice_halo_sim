@@ -1,9 +1,10 @@
 // The numbers written along the preview's coordinate grid: which ones appear, and where.
 //
 // Every case here describes a view, runs the production label pipeline and reads the labels back —
-// no ImGui context, no draw list. The one sibling that stays in
-// test/gui/functional/test_gui_overlay_labels.cpp is modal_does_not_leak_to_foreground, because what
-// it asserts is which DRAW LIST the labels land in.
+// no ImGui context, no draw list. There is no longer a frame-needing sibling: the labels are no
+// longer drawn onto an ImGui window's draw list at all, but rasterized into the preview's own FBO
+// alongside the overlay lines (RenderPreviewFrameAndBlit, export_fbo_renderer.cpp), so "which draw
+// list do they land in" is not a question the code can answer differently any more.
 //
 // WHERE THESE LABELS COME FROM NOW. They used to be walked by ComputeOverlayLabels in this
 // process; they are walked by core's annotation layer instead, reach the GUI as anchors through
