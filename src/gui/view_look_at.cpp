@@ -28,10 +28,9 @@ const char* LookAtDisplayName(LookAtId id) {
 
 void WorldDirToAzEl(const float dir[3], float* az_deg, float* el_deg) {
   const float len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
-  // A zero vector has no direction to report. Answering (0, 0) keeps the outputs finite — the whole
-  // reason a caller reads them is to write them into a camera angle — and matches what the formula
-  // below would give for the +x direction, which is where every other degenerate case in this
-  // family lands.
+  // A zero vector names no direction. Scaling by 0 leaves it at the origin, which falls into the
+  // pole branch below and comes out as (0, 0) — finite, which is the property that matters, since
+  // the only reason a caller reads these is to write them into a camera angle.
   const float inv = (len > 0.0f) ? (1.0f / len) : 0.0f;
   const float x = dir[0] * inv;
   const float y = dir[1] * inv;

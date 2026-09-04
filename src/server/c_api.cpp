@@ -3659,9 +3659,9 @@ void LUMICE_ReleaseAnnotationOverlay(LUMICE_AnnotationOverlay* overlay) {
 }
 
 
-// Normalize `in` into `out`, or report that it has no direction to give. Shared by the two
-// direction queries below so "a caller may pass an unnormalized sun_dir" is honoured once rather
-// than in each. A zero-length vector is not an error here: it is handed to core as-is, whose two
+// Normalize `in` into `out`. Shared by the two direction queries below so "a caller may pass an
+// unnormalized sun_dir" is honoured in one place rather than in each of them.
+// A zero-length vector is not an error here: it is handed to core as-is, whose two
 // pole ids ignore it and whose sun-relative ones reflect it, and SunHorizonDir's own degenerate
 // branch catches it — the same answer a near-pole sun gets.
 static void NormalizeSunDir(const float in[3], float out[3]) {
