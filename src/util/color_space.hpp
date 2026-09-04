@@ -51,7 +51,14 @@ void XyzToLinearRgb(const float xyz[3], float rgb[3]);
 // XyzToSrgbUint8 about 48% slower (1024x1024, realistic halo content, 22.3 -> 33.0 ms measured),
 // and that per-pixel gamma is on the server's per-drain snapshot render — a path whose cost has
 // been diagnosed as catastrophic once already (test/regression-sentinel/
-// test_benchmark_infinite_no_hang.py). It is not on the ray-throughput path, and nothing cheaper
+// test_benchmark_infinite_no_hang.py). Against the end-to-end denominator that sensitivity is
+// about, though, it does not surface: the same CLI run (1024x1024 equal-area, grid overlays, one
+// render, image written) measured 1132.9 ms before and 1134.7 ms after — +1.8 ms, 0.15%, inside
+// the 7 ms run-to-run spread, A/B'd by swapping only this header and confirming the two binaries
+// differ. What that number does NOT cover, and is left standing as a known limit: the GUI's
+// per-snapshot CPU texture update goes through the bulk XyzToSrgbUint8 above rather than this
+// render path, so it carries the isolated +10.7 ms per snapshot, on a clock decoupled from the
+// display's. It is not on the ray-throughput path, and nothing cheaper
 // works: keeping this direction in float and snapping the other onto its exact inverse was tried
 // and measured, and cannot close the trip (the analytic starting point is already several ULPs out
 // on exactly the inputs at issue, so no bounded neighbourhood search finds the right float). If
