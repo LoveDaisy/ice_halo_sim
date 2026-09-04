@@ -1,0 +1,89 @@
+{
+  "crystal": [
+    {
+      "id": 1,
+      "type": "prism",
+      "shape": {
+        "height": 1.2
+      },
+      "axis": {
+        "zenith": {
+          "type": "uniform",
+          "mean": 90,
+          "std": 360
+        },
+        "azimuth": {
+          "type": "uniform",
+          "mean": 0,
+          "std": 360
+        }
+      }
+    }
+  ],
+  "filter": [],
+  "scene": {
+    "light_source": {
+      "type": "sun",
+      "altitude": 25.0,
+      "spectrum": [
+        {
+          "wavelength": 550,
+          "weight": 1.0
+        }
+      ]
+    },
+    "ray_num": 2000000,
+    "max_hits": 7,
+    "scattering": [
+      {
+        "prob": 0.0,
+        "entries": [
+          {
+            "crystal": 1,
+            "proportion": 10
+          }
+        ]
+      }
+    ]
+  },
+  "render": [
+    {
+      "ev_mode": "absolute",
+      "id": 1,
+      "lens": {
+        "type": "dual_fisheye_equal_area",
+        "fov": 360
+      },
+      "resolution": [
+        512,
+        256
+      ],
+      "view": {
+        "elevation": 20
+      },
+      "visible": "full",
+      "background": [
+        0.02,
+        0.02,
+        0.05
+      ],
+      "ray_color": [
+        1,
+        1,
+        1
+      ],
+      "grid": {
+        "markers_opacity": 0.85,
+        "markers_radius_px": 9.0,
+        "markers": [
+          { "id": "zenith",    "enabled": true, "color": [1.0, 1.0, 1.0] },
+          { "id": "nadir",     "enabled": true, "color": [0.4, 0.4, 0.4] },
+          { "id": "sun",       "enabled": true, "color": [1.0, 0.85, 0.1] },
+          { "id": "subsun",    "enabled": true, "color": [1.0, 0.35, 0.0] },
+          { "id": "anthelion", "enabled": true, "color": [0.2, 0.6, 1.0] },
+          { "id": "antisolar", "enabled": true, "color": [0.6, 0.2, 1.0] }
+        ]
+      }
+    }
+  ]
+}
