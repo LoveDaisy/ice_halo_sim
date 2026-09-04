@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788527142169,
+  "lastUpdate": 1788527144482,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,50 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "ab7aa0b509b61ae45afbf6b3f6fb7846507c53b1",
-          "message": "Merge pull request #205 from LoveDaisy/chore/policy-gates\n\nchore(policy-gates): fix the bench compile rot and gate working-note references",
-          "timestamp": "2026-07-17T07:52:34+08:00",
-          "tree_id": "c40692428310e7ecfc1ae1acafbfeb140902be36",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/ab7aa0b509b61ae45afbf6b3f6fb7846507c53b1"
-        },
-        "date": 1784246401143,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.2,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "a610dbde93b0957805c532933a5bde34fabc21a2",
           "message": "Merge pull request #206 from LoveDaisy/fix/degenerate-geometry\n\nfix(core): random face_distance SIGSEGV — scale-relative vertex dedup + non-manifold rejection",
           "timestamp": "2026-07-17T15:08:47+08:00",
@@ -13906,6 +13862,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 90.2,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1271f2699d6339b658ee96d3cf0502055c2b034a",
+          "message": "Merge pull request #304 from LoveDaisy/fix/gui-preview-single-render-path\n\nfix(gui): 预览与 Screenshot 导出收敛到单一离屏 FBO 渲染路径",
+          "timestamp": "2026-09-04T20:53:45+08:00",
+          "tree_id": "1ea3fd858b1979513692e7dd728217e33f1635d7",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1271f2699d6339b658ee96d3cf0502055c2b034a"
+        },
+        "date": 1788527143942,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.3,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.7,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 95.7,
             "unit": "%"
           }
         ]
