@@ -595,6 +595,7 @@ int main(int argc, char** argv) {
   RegisterShellChromeTests(engine);
   RegisterLogPanelTests(engine);
   RegisterOverlayControlTests(engine);
+  RegisterMarkerPanelTests(engine);
   RegisterLensBorderTests(engine);
   RegisterAngularDistCircleTests(engine);
   RegisterPreviewViewportTests(engine);

@@ -3498,7 +3498,8 @@ bool ExportPreviewPng(const std::filesystem::path& path, PreviewRenderer& render
       for (int i = 0; i < LUMICE_ANNOTATION_MARKER_COUNT; ++i) {
         const AnnotationOverlayCache::Point p =
             g_state.markers[i].show ? export_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
-        CanvasPointToShaderScreenPos(p, vp.vp_w, vp.vp_h, params.overlay.marker_screen_pos[i].data());
+        CanvasPointToShaderScreenPos(p, g_state.renderer.lens_type, vp.vp_w, vp.vp_h,
+                                     params.overlay.marker_screen_pos[i].data());
       }
     } else {
       // No result to place them from, and the inherited positions are the preview's. Sentinel every

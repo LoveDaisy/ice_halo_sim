@@ -205,13 +205,27 @@ AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput&
 // (annotation_overlay.hpp), the shader's is the canvas centre with y UP (`pos = v_ndc *
 // u_resolution * 0.5`, preview_renderer.cpp). So a translation AND a y flip, not just one.
 //
+// EXCEPT FOR THE FULL-SKY FAMILY, which is why `lens_type` is a parameter and not a default. The
+// shader hands overlayAuxLines `pos_ovl`, not `pos`, and for the core-pixel-inverse lenses
+// (kFullSkyLensTypes: the three dual fisheyes, rectangular, dual orthographic) `pos_ovl` is
+// `vec2(pos.x, -pos.y)` — that flip exists so the GUI's picture matches the CLI's, which inverts
+// core's y-DOWN pixel layout. So in the overlay's own space those five lenses are y-DOWN and the
+// second flip must not be applied. overlay_labels.cpp's CPU mirror of the shader already carries
+// the same branch, in the same three places, for the same reason.
+//
+// This was invisible for as long as the family had exactly two members: on a full-sky lens the
+// zenith and the nadir both land on the canvas's horizontal centre line, where py == h/2 and the
+// flip is the identity. It becomes visible the moment a marker sits off that line — on rectangular
+// it always did, and the sun-relative four do on every lens.
+//
 // A point that missed becomes the sentinel the shader's distance test already rejects, which is
 // what stops an unimaged marker from drawing a ring at the canvas corner.
 //
 // One owner because there are two callers — the live preview and the off-screen export — and they
 // pass DIFFERENT canvas sizes. A second copy of a formula that is only correct relative to the
 // size it was given is exactly the kind of duplicate this task exists to remove.
-void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int canvas_w, int canvas_h, float out[2]);
+void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int lens_type, int canvas_w, int canvas_h,
+                                  float out[2]);
 
 // The world direction of the sun as the GUI means it, matching core's annotation::SunWorldDir at
 // azimuth 0 — which is every case the GUI has, since it exposes no sun azimuth control. Shared so

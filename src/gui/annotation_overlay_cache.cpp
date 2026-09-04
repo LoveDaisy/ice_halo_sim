@@ -93,14 +93,20 @@ AnnotationOverlayCache::ViewKey MakeAnnotationViewKey(const AnnotationViewInput&
   return key;
 }
 
-void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int canvas_w, int canvas_h, float out[2]) {
+void CanvasPointToShaderScreenPos(const AnnotationOverlayCache::Point& p, int lens_type, int canvas_w, int canvas_h,
+                                  float out[2]) {
   if (!p.valid || canvas_w <= 0 || canvas_h <= 0) {
     out[0] = kOverlaySentinel;
     out[1] = kOverlaySentinel;
     return;
   }
   out[0] = p.px - static_cast<float>(canvas_w) * 0.5f;
-  out[1] = static_cast<float>(canvas_h) * 0.5f - p.py;
+  // kFullSkyLensTypes is exactly the set whose shader branch hands overlayAuxLines a y-DOWN
+  // `pos_ovl` — see the header. Reusing that predicate rather than restating the five ids keeps the
+  // classification in one place; the shader's own list and this one are then two readings of one
+  // fact instead of two lists.
+  const float centred_y = p.py - static_cast<float>(canvas_h) * 0.5f;
+  out[1] = LensIsFullSky(lens_type) ? centred_y : -centred_y;
 }
 
 void AnnotationOverlayCache::Recompute(const ViewKey& key) {

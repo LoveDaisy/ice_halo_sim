@@ -540,8 +540,8 @@ void RegisterLensProjectionTests(ImGuiTestEngine* engine) {
           // other four stay at the sentinel position and draw nothing.
           for (int id : { LUMICE_ANNOTATION_MARKER_ZENITH, LUMICE_ANNOTATION_MARKER_NADIR }) {
             vp.params.overlay.marker_color[id] = { 0.8f, 0.2f, 0.2f };
-            gui::CanvasPointToShaderScreenPos(marker_overlay.MarkerPoint(id), vp.vp_w, vp.vp_h,
-                                              vp.params.overlay.marker_screen_pos[id].data());
+            gui::CanvasPointToShaderScreenPos(marker_overlay.MarkerPoint(id), vp.params.view_proj.lens_type, vp.vp_w,
+                                              vp.vp_h, vp.params.overlay.marker_screen_pos[id].data());
           }
         }
         if (scene.overlay_grid) {

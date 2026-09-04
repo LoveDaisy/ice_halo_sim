@@ -1751,7 +1751,8 @@ void RenderPreviewPanel(GLFWwindow* window, float window_width, float window_hei
       // LABEL on is in the request (its name needs an anchor) but must draw no ring.
       const AnnotationOverlayCache::Point p =
           g_state.markers[i].show ? g_annotation_overlay.MarkerPoint(i) : AnnotationOverlayCache::Point{};
-      CanvasPointToShaderScreenPos(p, g_preview_vp.vp_w, g_preview_vp.vp_h, pp.overlay.marker_screen_pos[i].data());
+      CanvasPointToShaderScreenPos(p, rc.lens_type, g_preview_vp.vp_w, g_preview_vp.vp_h,
+                                   pp.overlay.marker_screen_pos[i].data());
     }
 
     // Overlay labels at viewport edges. All three families' anchors come from core, through the one

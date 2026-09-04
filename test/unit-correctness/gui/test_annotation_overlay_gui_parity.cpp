@@ -552,8 +552,8 @@ void CoreMarkers(const lumice::gui::ViewProjection& vp, int w, int h, MarkerPos*
   ASSERT_TRUE(cache.HasResult()) << "core produced no overlay for this view";
   float zp[2];
   float np[2];
-  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH), w, h, zp);
-  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_NADIR), w, h, np);
+  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_ZENITH), vp.lens_type, w, h, zp);
+  lumice::gui::CanvasPointToShaderScreenPos(cache.MarkerPoint(LUMICE_ANNOTATION_MARKER_NADIR), vp.lens_type, w, h, np);
   *zenith = FromShaderPair(zp);
   *nadir = FromShaderPair(np);
 }
