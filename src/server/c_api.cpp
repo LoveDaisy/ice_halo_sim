@@ -591,6 +591,14 @@ static bool IsValidMarkerId(int id) {
   return id >= 0 && id < LUMICE_ANNOTATION_MARKER_COUNT;
 }
 
+// LUMICE_MAX_CONFIG_MARKERS is spelled as a literal 6 in the header, because the id-count macro is
+// defined further down the file than the renderer struct that needs it and the preprocessor reads
+// top to bottom. That literal is not a second opinion about how many ids there are: the renderer's
+// array is EXACTLY the id space, since duplicates are rejected. This is the line that makes adding
+// a seventh id to one side a compile error rather than a list that silently cannot hold them all.
+static_assert(LUMICE_MAX_CONFIG_MARKERS == LUMICE_ANNOTATION_MARKER_COUNT,
+              "LUMICE_RenderParam::markers must have room for exactly the marker id space");
+
 // Copy `count` C marker entries into the core vector form, so nlohmann's to_json(MarkerStyleParam)
 // owns the wire shape — the id SPELLING in particular, which then has one table in the tree.
 // Twin of GridLinesToCore above.
