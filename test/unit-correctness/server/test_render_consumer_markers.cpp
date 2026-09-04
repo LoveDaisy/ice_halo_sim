@@ -230,8 +230,12 @@ TEST(RenderConsumerMarkers, LegacyPairAndTheEquivalentListPaintIdenticalBytes) {
   // one. This is the assertion that fails if the two paths ever stop being one blend loop over a
   // list: a second clamp, a colour converted at a different point, the two rings composited in the
   // other order.
+  // Neither value may coincide with the OTHER family's default (radius 8, opacity 0.6): if it did,
+  // a branch that read config_.markers_opacity_ where it meant config_.zenith_nadir_.opacity_ would
+  // produce the same bytes anyway and this case would pass while cross-reading. Measured — that
+  // exact mistake was injected on purpose here, and with kOpacity at 0.6 it did not show.
   constexpr float kRadius = 11.0f;
-  constexpr float kOpacity = 0.6f;
+  constexpr float kOpacity = 0.45f;
   constexpr float kColor[3] = { 0.8f, 0.2f, 0.2f };
 
   RenderConfig legacy = MakeFullSkyConfig();
@@ -239,6 +243,11 @@ TEST(RenderConsumerMarkers, LegacyPairAndTheEquivalentListPaintIdenticalBytes) {
   legacy.zenith_nadir_.radius_px_ = kRadius;
   legacy.zenith_nadir_.opacity_ = kOpacity;
   std::copy(std::begin(kColor), std::end(kColor), std::begin(legacy.zenith_nadir_.color_));
+
+  ASSERT_NE(kOpacity, RenderConfig{}.markers_opacity_);
+  ASSERT_NE(kRadius, RenderConfig{}.markers_radius_px_);
+  ASSERT_NE(kOpacity, ZenithNadirParam{}.opacity_);
+  ASSERT_NE(kRadius, ZenithNadirParam{}.radius_px_);
 
   RenderConfig listed = MakeFullSkyConfig();
   listed.markers_radius_px_ = kRadius;
