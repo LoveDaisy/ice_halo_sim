@@ -531,6 +531,19 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       result["active_sec"] = std::round(active_sec * 1000.0) / 1000.0;
       result["rays_per_sec"] = std::round(rays_per_sec * 10.0) / 10.0;
       result["rate_basis"] = rate_basis;
+      // ISA tier this binary was actually compiled for, so a recorded [BENCHMARK] line
+      // answers "which build was this measured on?" without anyone having to still have
+      // the configure log. "native" means -march=native was compiled in (local default);
+      // "baseline" is what release and CI ship, and is the only tier comparable across
+      // platforms — MSVC has no equivalent flag, so a Windows-vs-other A/B taken on
+      // "native" numbers is not measuring what it looks like it is measuring. The macro
+      // is defined by CMakeLists.txt's LUMICE_NATIVE_ARCH_ACTIVE_COND, which gates the
+      // -march=native flag itself; see doc/performance-testing.md.
+#if defined(LUMICE_NATIVE_ARCH_ACTIVE)
+      result["isa"] = "native";
+#else
+      result["isa"] = "baseline";
+#endif
       if (drain_count_mode) {
         result["n_drains_in_window"] = n_drains_in_window;
         result["window_sec"] = std::round(window_sec * 1000.0) / 1000.0;

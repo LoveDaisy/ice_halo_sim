@@ -59,6 +59,41 @@ if(MSVC)
   set(CMAKE_DEBUG_POSTFIX "d")
 endif()
 
+# Make the local-build-vs-shipped-binary ISA gap visible at configure time. Local
+# scripts/build.sh does not pass LUMICE_NATIVE_ARCH and therefore takes the ON default,
+# while release.yml and every ci.yml job pass -DLUMICE_NATIVE_ARCH=OFF explicitly. That
+# default is deliberate (a developer machine should build for itself and run fast); what
+# it must not do is stay invisible at the point where someone reads a throughput number
+# off this build and compares it with another platform. See doc/performance-testing.md,
+# section "Local builds are not the shipped binary".
+# Deliberately conditional wording ("would apply"): this message runs once at configure
+# time, whereas the -march=native gate below adds $<CONFIG:Release> and is only resolved
+# per-configuration at generate/build time, so an assertive phrasing would be wrong for a
+# Debug build with the option ON.
+if(MSVC)
+  message(STATUS "LUMICE_NATIVE_ARCH: not applicable to MSVC (no equivalent flag is wired "
+                 "up); this build already matches the release ISA baseline.")
+elseif(LUMICE_NATIVE_ARCH)
+  message(STATUS "LUMICE_NATIVE_ARCH=ON (local default): a Release build would apply "
+                 "-march=native, so its binary is NOT the one release ships. Fine for local "
+                 "iteration; take any cross-platform or externally quoted throughput number "
+                 "with -DLUMICE_NATIVE_ARCH=OFF instead. See doc/performance-testing.md.")
+else()
+  message(STATUS "LUMICE_NATIVE_ARCH=OFF: this build matches the release ISA baseline.")
+endif()
+
+# Persist the compiler id into CMakeCache.txt for test tooling that has to answer "was
+# -march=native actually compiled into this binary?" from a source independent of the
+# C++ macro path it is checking. CMake itself keeps CMAKE_CXX_COMPILER_ID only in
+# CMakeFiles/<cmake-version>/CMakeCXXCompiler.cmake, whose per-version directory name is
+# an internal layout detail; this snapshot is a plain cache entry instead.
+# MUST stay outside any if(MSVC)/if(NOT MSVC) branch: the value is equally needed on
+# MSVC (where it reads "MSVC"), and burying it in one branch would silently downgrade
+# that cross-check to a skip on the platforms it did not run on.
+set(LUMICE_COMPILER_ID_SNAPSHOT "${CMAKE_CXX_COMPILER_ID}" CACHE STRING
+    "Snapshot of CMAKE_CXX_COMPILER_ID at configure time (read by test tooling)." FORCE)
+mark_as_advanced(LUMICE_COMPILER_ID_SNAPSHOT)
+
 # MinGW: statically link GCC runtime (libgcc, libstdc++, libwinpthread) so the
 # distributed .exe is self-contained and doesn't require MinGW DLLs on the target machine.
 if(MINGW)
@@ -685,10 +720,25 @@ if(NOT MSVC)
   # Debug 构建不设置此标志，所有符号均可见，便于调试。
   # NOTE: 当前仅支持 GCC/Clang。若需支持 MSVC 共享库，需将 pragma 改为
   # LUMICE_API 宏（__declspec(dllexport/dllimport)），参见 lumice.h 中的注释。
+  # Single source of truth for "this compile actually applies -march=native". Both the
+  # compile-option gate below and the LUMICE_NATIVE_ARCH_ACTIVE macro that reports the ISA
+  # tier in --benchmark output reference this one variable, so the flag and the number's
+  # provenance cannot independently drift out of sync. (Its inner $<CONFIG:Release> is
+  # redundant with the outer $<$<CONFIG:Release>:...> wrapper below; that redundancy is the
+  # price of the two gates being literally the same expression.)
+  set(LUMICE_NATIVE_ARCH_ACTIVE_COND "$<AND:$<CONFIG:Release>,$<BOOL:${LUMICE_NATIVE_ARCH}>>")
+
   target_compile_options(lumice_obj PRIVATE
     $<$<CONFIG:Debug>:-O0 -g -ggdb>
-    $<$<CONFIG:Release>:$<$<BOOL:${LUMICE_NATIVE_ARCH}>:-march=native> -ffunction-sections -fdata-sections -fvisibility=hidden>
+    $<$<CONFIG:Release>:$<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:-march=native> -ffunction-sections -fdata-sections -fvisibility=hidden>
     $<$<CONFIG:MinSizeRel>:-ffunction-sections -fdata-sections -fvisibility=hidden>)
+
+  # PUBLIC, not PRIVATE: src/main.cpp is not part of lumice_obj — it reaches this macro
+  # through Lumice --PRIVATE--> lumice --PUBLIC--> lumice_obj, the same two-hop usage
+  # requirement chain LUMICE_CUDA_ENABLED already relies on above. No MSVC counterpart is
+  # needed: the macro should never be defined there, and #if defined() gives that for free.
+  target_compile_definitions(lumice_obj PUBLIC
+    $<${LUMICE_NATIVE_ARCH_ACTIVE_COND}:LUMICE_NATIVE_ARCH_ACTIVE=1>)
 endif()
 
 # Library target — static or shared per BUILD_SHARED_LIBS; reuses lumice_obj objects.
