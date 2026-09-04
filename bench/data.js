@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788546559039,
+  "lastUpdate": 1788546561211,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,50 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "a610dbde93b0957805c532933a5bde34fabc21a2",
-          "message": "Merge pull request #206 from LoveDaisy/fix/degenerate-geometry\n\nfix(core): random face_distance SIGSEGV — scale-relative vertex dedup + non-manifold rejection",
-          "timestamp": "2026-07-17T15:08:47+08:00",
-          "tree_id": "771c0d3b33012a43a90f8696bf92c5510957945e",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/a610dbde93b0957805c532933a5bde34fabc21a2"
-        },
-        "date": 1784272570525,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 88.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.9,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 94.8,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "489bfb6288808f55579d34cc8361b00fd84d8fb0",
           "message": "Merge pull request #207 from LoveDaisy/docs/geom-clock-and-benchmark-caveats\n\ndocs: correct two measurement caveats found while calibrating the geometry clock",
           "timestamp": "2026-07-17T18:00:16+08:00",
@@ -13901,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Ubuntu x86_64",
             "value": 95.7,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61328fbedb7c6acfaf163c040563f24285d52ff2",
+          "message": "Merge pull request #305 from LoveDaisy/feat/sky-reference-points\n\nfeat(gui,core): 天空参考点标记六点泛化 + Look At 视角预设，共享 core 单源方向表",
+          "timestamp": "2026-09-05T02:15:06+08:00",
+          "tree_id": "66f5811bd94711b21e96cefdfa28e8d5b7dcf841",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/61328fbedb7c6acfaf163c040563f24285d52ff2"
+        },
+        "date": 1788546560712,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 71.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.4,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 90.3,
             "unit": "%"
           }
         ]
