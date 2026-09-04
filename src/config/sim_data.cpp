@@ -204,6 +204,25 @@ void RayBuffer::ComponentFanOut(const RayBuffer& src, size_t src_idx, size_t dst
 }
 
 void RayBuffer::SwapRay(size_t i, size_t j) {
+  // Deliberately `capacity_`, not `size_` — adjudicated by task 490.2 rather
+  // than left as an accident. Every physical-array accessor on this class
+  // (SetComponent, ComponentFanOut, RecorderAt; operator[] asserts nothing at
+  // all) bounds-checks against capacity_, because the class permits writing
+  // past size_ while still inside the allocation — the hit loop fills dst0/dst1
+  // before growing size_. So these asserts guard "did we leave the allocation",
+  // and tightening only this one to size_ would put SwapRay out of step with
+  // its siblings for no gain that is actually collected: an assert is a no-op
+  // in Release, so it was never what protected the shuffle callers.
+  //
+  // What does protect them is that both Fisher-Yates call sites
+  // (simulator.cpp, cpu_trace_backend.cpp) now derive j through
+  // RandomNumberGenerator::GetUniformIndex, whose `>=` clamp makes j < size_
+  // structurally unreachable-to-violate rather than assert-dependent. Before
+  // 490.2 they computed `(size_t)(GetUniform() * (size_ - i)) + i`, which on
+  // libc++'s exact-1.0f draws yielded j == size_ — a live slot swap with a
+  // stale one, silent in Release AND in Debug, precisely because this assert
+  // compares capacity_. That is the defect; the fix belongs at the index
+  // source, not here.
   assert(i < capacity_);
   assert(j < capacity_);
   if (i == j) {

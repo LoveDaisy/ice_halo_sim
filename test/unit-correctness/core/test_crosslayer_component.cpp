@@ -228,7 +228,7 @@ TEST(CrossLayerShuffle, ContinuationNaiveSwapDecorrelatesComponentMask) {
   RandomNumberGenerator rng(42);
   bool any_moved = false;
   for (size_t i = 0; i < buf.size_; i++) {
-    size_t j = static_cast<size_t>(rng.GetUniform() * (buf.size_ - i)) + i;
+    size_t j = rng.GetUniformIndex(buf.size_ - i) + i;
     // EXACT operation the pre-331.3 production shuffle performed.
     std::swap(buf.rays_[i], buf.rays_[j]);
     if (i != j) {
@@ -257,7 +257,7 @@ TEST(CrossLayerShuffle, ContinuationShuffleWithSwapRayPreservesComponentMask) {
   RandomNumberGenerator rng(42);
   bool any_moved = false;
   for (size_t i = 0; i < buf.size_; i++) {
-    size_t j = static_cast<size_t>(rng.GetUniform() * (buf.size_ - i)) + i;
+    size_t j = rng.GetUniformIndex(buf.size_ - i) + i;
     buf.SwapRay(i, j);  // production shuffle after task-331.3
     if (i != j) {
       any_moved = true;

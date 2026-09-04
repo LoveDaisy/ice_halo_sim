@@ -484,7 +484,7 @@ RootRaySource CpuTraceBackend::Recombine(LayerHandlePtr handle, const RecombineS
     // std::swap(buf[i],buf[j]) swaps only rays_ and would decorrelate the
     // cross-layer OR-accumulated mask from its ray. RNG draws are unchanged.
     for (size_t i = 0; i < continuation_buf_.size_; i++) {
-      size_t j = static_cast<size_t>(rng_.GetUniform() * (continuation_buf_.size_ - i)) + i;
+      size_t j = rng_.GetUniformIndex(continuation_buf_.size_ - i) + i;
       continuation_buf_.SwapRay(i, j);
     }
   }

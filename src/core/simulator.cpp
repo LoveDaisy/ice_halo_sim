@@ -1356,7 +1356,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     // parallel components_ array behind and decorrelate the cross-layer mask
     // (task-331.3). RNG draw order is unchanged (SwapRay draws nothing).
     for (size_t i = 0; i < init_data[0].size_; i++) {
-      size_t j = static_cast<size_t>(rng_.GetUniform() * (init_data[0].size_ - i)) + i;
+      size_t j = rng_.GetUniformIndex(init_data[0].size_ - i) + i;
       init_data[0].SwapRay(i, j);
     }
 
