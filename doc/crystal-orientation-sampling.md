@@ -264,14 +264,14 @@ Laplacian:
 | Zigzag | cos(max(\|μ\| − A, 0)°) | full amplitude |
 | Laplacian | cos(max(\|μ\| − 5b, 0)°) | 99.3% |
 
-Per-type proposal generation:
+**Path: Deterministic.** No sampling needed (this is today's `kNoRandom`).
+
+Per-type proposal generation (Rayleigh and Deterministic need none):
 
 - **Gaussian:** Normal variate × σ + μ. O(1) per proposal.
 - **Zigzag:** θ = |A · sin(2πU) + B|, U ~ Uniform(0,1). O(1).
 - **Laplacian:** Inverse CDF: θ = μ − b · sign(U−0.5) · ln(1−2|U−0.5|). O(1).
 - **Uniform:** Draw from [μ − w/2, μ + w/2]. O(1).
-
-**Path: Deterministic.** No sampling needed (this is today's `kNoRandom`).
 
 Measured acceptance rates for the rejection path:
 
