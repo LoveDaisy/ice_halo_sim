@@ -1,5 +1,6 @@
 #include "gui/export_fbo_renderer.hpp"
 
+#include "gui/app.hpp"
 #include "gui/gl_capture.hpp"
 #include "gui/gl_common.h"
 #include "gui/gui_logger.hpp"
@@ -241,6 +242,26 @@ void RenderPreviewFrameAndBlit(PreviewRenderer& renderer, const PreviewParams& p
   glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
   glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
   glClearColor(prev_clear_color[0], prev_clear_color[1], prev_clear_color[2], prev_clear_color[3]);
+}
+
+void RunSharedFrameRenderPass(int display_w, int display_h) {
+  glViewport(0, 0, display_w, display_h);
+  glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  // Render the preview before the ImGui overlay: image, overlay lines and overlay labels into an
+  // off-screen FBO, then blitted back onto this viewport rect. The FBO is the same render core
+  // the Screenshot export reads back, which is what makes the two agree by construction rather
+  // than by two paths being kept in step. Position in the sequence is unchanged, so ImGui's draw
+  // data still lands on top and modals still occlude the preview — labels included, now for the
+  // same reason the lines already were.
+  if (g_preview_vp.active) {
+    RenderPreviewFrameAndBlit(g_preview, g_preview_vp.params, g_preview_vp.vp_x, g_preview_vp.vp_y, g_preview_vp.vp_w,
+                              g_preview_vp.vp_h, g_preview_vp.curve_labels, g_preview_vp.dpi_scale_x,
+                              g_preview_vp.dpi_scale_y);
+  }
+
+  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
 void DestroyPreviewFrameFbo() {

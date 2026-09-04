@@ -743,23 +743,13 @@ int main(int argc, char** argv) {
     int display_w = 0;
     int display_h = 0;
     glfwGetFramebufferSize(window, &display_w, &display_h);
-    glViewport(0, 0, display_w, display_h);
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    // Render the preview before the ImGui overlay (matches real app's main.cpp): image, overlay
-    // lines and overlay labels into an off-screen FBO, blitted back onto the viewport rect. This
-    // harness must stay on the SAME call as production — it is where the on-screen reference-image
-    // groups and every full-frame capture get their pixels, so a divergence here would test a
-    // frame loop the app does not have.
-    if (gui::g_preview_vp.active) {
-      gui::RenderPreviewFrameAndBlit(gui::g_preview, gui::g_preview_vp.params, gui::g_preview_vp.vp_x,
-                                     gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h,
-                                     gui::g_preview_vp.curve_labels, gui::g_preview_vp.dpi_scale_x,
-                                     gui::g_preview_vp.dpi_scale_y);
-    }
-
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    // Viewport/clear, the preview render+blit, and ImGui's draw-data submission run through the
+    // production function (src/gui/export_fbo_renderer.cpp) rather than through a copy of it here.
+    // That is the point: this harness is where the on-screen reference-image groups and every
+    // full-frame capture get their pixels, so any divergence from the app's own frame loop would
+    // mean testing a frame loop the app does not have — and a copy kept in step by a comment is
+    // exactly how the preview call once ended up in only one of the two.
+    gui::RunSharedFrameRenderPass(display_w, display_h);
 
     // Left-panel default-framebuffer capture hook (task-left-panel-visual-regression).
     // Must run AFTER ImGui_ImplOpenGL3_RenderDrawData and BEFORE glfwSwapBuffers,

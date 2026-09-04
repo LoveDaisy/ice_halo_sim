@@ -394,26 +394,12 @@ int main(int argc, char** argv) {
     // T1-T4 migration; see gui_state_reconcile.hpp for the field participation set.
     gui::ApplyGuiEffects(gui::g_state, gui::g_server, gui::ReconcileGuiEffects(gui::g_state));
 
-    // Rendering
+    // Rendering. Everything from the viewport/clear through submitting ImGui's draw data lives in
+    // RunSharedFrameRenderPass, which gui_test's frame loop calls too — that sequence has exactly
+    // one implementation, so it cannot drift between the app and the harness. ImGui::Render() and
+    // the display_w/display_h query above stay here on purpose (see the function's doc comment).
     ImGui::Render();
-    glViewport(0, 0, display_w, display_h);
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    // Render the preview before the ImGui overlay: image, overlay lines and overlay labels into an
-    // off-screen FBO, then blitted back onto this viewport rect. The FBO is the same render core
-    // the Screenshot export reads back, which is what makes the two agree by construction rather
-    // than by two paths being kept in step. Position in the sequence is unchanged, so ImGui's draw
-    // data still lands on top and modals still occlude the preview — labels included, now for the
-    // same reason the lines already were.
-    if (gui::g_preview_vp.active) {
-      gui::RenderPreviewFrameAndBlit(gui::g_preview, gui::g_preview_vp.params, gui::g_preview_vp.vp_x,
-                                     gui::g_preview_vp.vp_y, gui::g_preview_vp.vp_w, gui::g_preview_vp.vp_h,
-                                     gui::g_preview_vp.curve_labels, gui::g_preview_vp.dpi_scale_x,
-                                     gui::g_preview_vp.dpi_scale_y);
-    }
-
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    gui::RunSharedFrameRenderPass(display_w, display_h);
 
     // Update and render additional platform windows (multi-viewport).
     // Must save/restore current GL context because RenderPlatformWindowsDefault
