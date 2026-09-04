@@ -353,6 +353,35 @@ struct ParityScene {
 // fov below 180 can put the corner outside the shared domain. Re-derive this if the lens is ever
 // changed; do not carry the sentence over.
 //
+// RE-MEASURED, ALL THREE, when the preview shader stopped adding a second half-texel offset while
+// gathering from the dual-fisheye source texture (src/gui/preview_renderer.cpp dualFisheyeToUV;
+// doc/coordinate-convention.md §11). This fixture sees that change from both sides at once, and
+// the two sides pull opposite ways, so the reading is stated rather than filed as drift. Measured
+// as N=6 full-suite runs after against a matched run before, same machine, one binary per arm
+// with the two hashes checked apart:
+//
+//   scene                     before    after (N=6, sd)      shift
+//   single_lens_angled        27.54     27.688  (0.0211)     +0.15
+//   full_sky_dual_fisheye     27.74     27.597  (0.0189)     -0.14
+//   single_lens_rectilinear   35.20     35.462  (0.0167)     +0.26
+//
+// The two single-lens rows MAGNIFY the source texture into their frame, so half a source texel is
+// several canvas pixels of misregistration against the CLI's independently binned image — removing
+// it is a straight improvement. `full_sky_dual_fisheye` resamples the same dual-equal-area layout
+// at near 1:1, where that misregistration is only half a canvas pixel, and there the blur was
+// doing something else: averaging 2x2 suppressed the GUI arm's OWN Monte-Carlo noise, and since
+// the two arms are independent simulations, quieting one of them lowers the difference energy this
+// PSNR is computed from. That row therefore reads 0.14 dB WORSE now, and it is the fixture losing
+// a flattery rather than the change costing anything — which is the metric-masks-bugs shape this
+// repo's parity discipline names, seen from the side where the mask is being removed.
+//
+// NO THRESHOLD MOVED, and that is this file's own rule applied rather than a decision to leave
+// them loose. Two means moved AWAY from their thresholds, which is the case the rows below already
+// answer with "threshold unchanged"; the third moved 0.14 dB TOWARD its own and still stands
+// 0.40 dB / 15 sigma clear of it and above the 26.89 dB break it is placed against. Nothing here
+// reaches the bar the paragraph below sets for MOVING a number — N=6 is, in this file's own words,
+// enough to place a 10 sigma gate and not enough to argue about a 2 sigma one.
+//
 // THRESHOLDS. Calibrated, not chosen: N=12 full runs of this category on an otherwise idle
 // machine, per-scene mean and population sigma recorded on each row. Sigma is an order of
 // magnitude smaller than the visual-regression suites' because neither side of this comparison is

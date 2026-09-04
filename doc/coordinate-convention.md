@@ -539,9 +539,48 @@ under the old `+ 0.5` binning that category error was hidden, because the index
 happened to be a *round* of the continuous coordinate and the residual was a
 symmetric half pixel.
 
+**A THIRD pairing: the GUI's source-texture gather.** The two bullets above are
+the two directions of one mapping over the *render* domain — the frame being
+produced. There is a third place the same convention is load-bearing, and it is
+easy to miss because it is neither a forward nor an inverse of the target lens:
+the GUI preview re-projects an all-sky **source texture** that core produced by
+this same binning, so the shader must also read that texture in this convention.
+That read is `dualFisheyeToUV` in `src/gui/preview_renderer.cpp`, and the rule
+there is `uv = pixel / tex_res` — the plain division, with **no** `+ 0.5`.
+
+The reason is that GL's own texture addressing is already stated in these terms:
+a sample at `uv * tex_res == px + 0.5` lands on the centre of texel `px`, which
+is the same sentence as the convention above. So handing GL a coordinate already
+expressed in core's binning convention is all that is required, and adding half a
+texel first applies the centring **twice**. The failure that produces is not
+"reads the wrong texel" — it moves every fragment onto a texel corner, so every
+sample comes back a 2×2 bilinear average. Whole-frame softening is invisible
+without something to compare against, but a dual-fisheye source has one: the two
+discs map `y_norm` to `fx` with opposite signs, so one shared pixel offset becomes
+two *opposite* sky directions, and the ±5° equator overlap band blends two
+different patches of sky into a smear along the horizon. Commit `4d9e3643` wrote
+that `+ 0.5` correctly against the old `floor(v + 0.5)` binning; commit `f1bf1e9e`
+changed the binning and updated the render-domain pair above without this third
+one, which is how the two sides came to disagree.
+
 **Regression guard.** Exact-equality round trips over the forward and the mask's
 own inverse, in `test/golden-analytic/core/test_visible_mask.cpp`
 (`GlobeInverse.RoundTripsAgainstTheForwardGlobeBranch` and
 `RectangularInverse.RoundTripsAgainstTheForwardRectangularBranch`). They demand
 the recovered pixel back, with no tolerance, which is what makes any reappearance
 of a half-pixel offset a red rather than a slack absorbed silently.
+
+The third pairing has its own guard, in
+`test/gui/functional/test_preview_dual_fisheye_gather.cpp`. It cannot be a
+round trip in C++ — the gather lives in GLSL, and a mirrored copy of the formula
+in a test would only assert against itself. Instead it renders the real shader
+with the source format's `r_scale` set to 1, which makes the display-side inverse
+and the gather-side forward the same projection at the same scale and collapses
+the chain to an identity: canvas pixel `(col, row)` must read source texel
+`(col, row)`. A one-texel checkerboard then measures the convention directly —
+sharp means each fragment read a single texel, and a collapse to flat mid-grey
+means it averaged a 2×2 block. Note its scope: it detects a **systematic offset**
+shared by every pixel, which is what a convention mismatch is. A projection error
+that relocated content without softening it (a rotation, a mirrored disc) keeps
+the checkerboard sharp and passes here; those are covered by the `lens_proj`
+reference images and `test_visible_mask_gui_parity.cpp`.
