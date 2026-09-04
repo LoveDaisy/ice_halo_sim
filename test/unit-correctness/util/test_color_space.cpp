@@ -183,6 +183,21 @@ TEST(ColorSpace, GammaRoundTripIsBitExact) {
     samples.push_back(seam);
     seam = std::nextafter(seam, 1.0f);
   }
+  // The reverse direction's seam is somewhere else entirely, and the vector feeds both loops
+  // below, so it needs walking too: LinearToSrgb branches on kSrgbCurveCutoffLinear = 0.0031308 in
+  // LINEAR space, an order of magnitude away from the 0.0404 sRGB-space seam above. Without this
+  // walk the encode/decode/encode direction meets its own branch boundary only at the 5e-5 stride
+  // of the sweep — coarse enough to step straight over a mismatched pair of predicates.
+  float linear_seam = std::nextafter(kSrgbCurveCutoffLinear, 0.0f);
+  for (int i = 0; i < 2000; i++) {
+    samples.push_back(linear_seam);
+    linear_seam = std::nextafter(linear_seam, 0.0f);
+  }
+  linear_seam = kSrgbCurveCutoffLinear;
+  for (int i = 0; i < 2000; i++) {
+    samples.push_back(linear_seam);
+    linear_seam = std::nextafter(linear_seam, 1.0f);
+  }
   // The two values that were actually red on CI (test/e2e/configs/reference_point_markers.json and
   // zenith_nadir_marker_compat.json both carry background [0.02, 0.02, 0.05]).
   samples.push_back(0.02f);

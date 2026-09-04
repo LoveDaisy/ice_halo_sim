@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "config/config_compare.hpp"
@@ -285,6 +286,10 @@ void AddFloatArray(const char* name, const float* a, const float* b, int n, std:
 
 template <typename T>
 void AddScalar(const char* name, const T& a, const T& b, std::string* out) {
+  // The long long cast below truncates, so a float routed through here would print its difference
+  // away — the exact failure this whole diff exists to stop. Integers and enums only; floats go
+  // through AddFloat, which prints the bit pattern beside the decimal.
+  static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "float fields must go through AddFloat");
   if (a == b) {
     return;
   }
@@ -330,6 +335,11 @@ void AddMarkers(const std::vector<lumice::MarkerStyleParam>& a, const std::vecto
 // A field added to GridLineParam or MarkerStyleParam would leave the 224 untouched and go silently
 // unreported by AddGridLines / AddMarkers below — which is exactly the class of blind spot this
 // whole diff exists to close — so each nested element type carries its own assert.
+//
+// What no sizeof sentinel catches, on any of the three types: a field REPLACED by another of the
+// same width, or two same-width fields reordered. The size does not move, so the assert stays
+// quiet while the enumeration below silently reads the wrong member. These sentinels cover growth
+// and shrinkage only.
 std::string FieldDiff(const lumice::RenderConfig& a, const lumice::RenderConfig& b) {
   static_assert(sizeof(lumice::RenderConfig) == 224, "Update FieldDiff when RenderConfig fields change");
   static_assert(sizeof(lumice::GridLineParam) == 24, "Update AddGridLines when GridLineParam fields change");
