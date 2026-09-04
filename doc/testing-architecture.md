@@ -931,13 +931,23 @@ false confidence on exactly the inputs it was supposed to catch.
 
 `test/gui/parity/` holds the one shape of GUI test whose oracle is neither a committed image nor a
 widget outcome: **the same document rendered twice, by two different production paths, compared to
-each other**. Today its single member is `test_gui_cli_export_parity.cpp`, which renders a document
-through the GUI's own per-frame `PreviewParams` assembly and, in a child process, through the
-`Lumice` CLI fed by `BuildExportJsonOrWarn`'s output — making "what the GUI shows is what the
-exported config renders" a proposition that can go red.
+each other**. It has two members today, and they sit at different points of the same seam:
 
-Three things about it generalize to any future member, and are the reason it is a tag of its own
-rather than more files under `visual/`:
+- `test_gui_cli_export_parity.cpp` renders a document through the GUI's own per-frame
+  `PreviewParams` assembly and, in a child process, through the `Lumice` CLI fed by
+  `BuildExportJsonOrWarn`'s output — making "what the GUI shows is what the exported config
+  renders" a proposition that can go red.
+- `test_gui_preview_export_parity.cpp` stays inside one process and one frame: it reads the
+  on-screen blit (`RenderPreviewFrameAndBlit`) back off the default framebuffer through the
+  `g_fullframe_capture` sub-region hook and compares it against `RenderExportToRgba` fed **that
+  frame's own** published `params`, `curve_labels` and DPI — making "the Screenshot writes the
+  pixels the screen is showing" a proposition that can go red. PR #304 collapsed those two paths
+  onto one render core (`RenderFrameContentToBoundFbo`); nothing was asserting the collapse until
+  this case, because the sibling in `functional/test_export.cpp` compares the export path against
+  *itself*. Point 2 below is where the two members differ most.
+
+Three things about the tag generalize to any future member, and are the reason it is a tag of its
+own rather than more files under `visual/`:
 
 1. **No committed asset, so no regen group.** `visual/` exists to compare against a tracked
    reference `.jpg`, which is what `scripts/regen_gui_test_refs.py`'s `GROUPS` registry
@@ -953,13 +963,32 @@ rather than more files under `visual/`:
    is **the smallest break the scene must catch**: place the threshold in the gap between the worst
    honest run and that break, and keep at least 10 sigma on the honest side. Both numbers have to
    be measured, and the second one is measured by breaking each field on purpose, one at a time.
+   Run that rule far enough and it can land on **no dB figure at all**. Where the two arms share a
+   process and consume ONE snapshot of one frame's inputs, they run identical GL work on identical
+   data and the honest sigma is not small — it is zero, so the bar is byte-exact and any nonzero
+   difference is a real divergence. `test_gui_preview_export_parity.cpp` is that case, and the cost
+   of settling for a threshold there is measured rather than asserted: making its export arm skip
+   the label layer — the shape of a defect PR #304 actually fixed — moves 1,362 of its 820,800
+   pixels, a whole-frame PSNR of 44.75 dB. That is above `visual/`'s 40 dB deterministic floor and
+   far above this tag's own 25.5 / 26.0 dB, so every threshold calibrated elsewhere in this tree
+   would have stayed green on it. Averaging over the frame is what hides a small break; when the
+   comparison admits an exact answer, take it.
 3. **A parity comparison inherits every divergence between the two paths, not only the one under
-   test.** The export-parity fixture's scene design is dictated by three that were measured rather
-   than assumed — the CLI bakes a projection's solid-angle Jacobian into its pixels while the GUI
-   resamples an equal-area texture and does not (so only equal-area scenes are comparable); the
+   test.** The CLI export-parity fixture's scene design is dictated by three that were measured
+   rather than assumed — the CLI bakes a projection's solid-angle Jacobian into its pixels while the
+   GUI resamples an equal-area texture and does not (so only equal-area scenes are comparable); the
    preview shader keeps inverting past a single fisheye's image circle where core stops; and
    relative-EV self-anchoring uses a different pixel population on each side. A new parity case
    should expect to spend most of its design effort here, and to state what it found.
+   The same-process member found its own, of a different kind — not a divergence between the paths
+   but a **blindness in the scene**: built on the shared 8-bit `InitSynthTexture()` /
+   `UploadTexture()` pair, it lands in `PreviewRenderer::TextureMode::kSrgbComposited`, whose
+   shader branch takes the stored bytes as the finished picture and applies no `u_intensity_scale`,
+   no sky and no relative illumination. Holding one break fixed (the export arm's
+   `exposure.intensity_scale` 5% off the screen's) and changing only the texture: 0 of 820,800
+   pixels move on that path, 820,779 of 820,800 on `UploadXyzTexture`, which is what the product
+   feeds the preview from a live run. A parity scene has to be built out of the mode the product
+   uses, or it will agree with itself about fields the shader never read.
 
 **Starting the CLI from a test binary.** This fixture is the first place in the tree where a test
 starts another of the repo's binaries as a child process. The mechanics, should a second one want
@@ -1319,28 +1348,36 @@ things follow, and they are the practical output of this whole section:
 ### §7.5 Where the `parity` tag runs, and why not in CI
 
 §4.10 introduces `test/gui/parity/`; this is the platform-reach half of it, stated once here and
-pointed at from the other two places that describe it (`AGENTS.md`, and the fixture's own header
-comment in `test/gui/parity/test_gui_cli_export_parity.cpp`).
+pointed at from the other places that describe it (`AGENTS.md`, and each fixture's own header
+comment under `test/gui/parity/`).
 
 **Where it runs today.** Nowhere in CI, and this is a mechanical fact of `.github/workflows/ci.yml`,
 not an inference: the single step that executes `gui_test` runs
 `xvfb-run -a … gui_test --fixed-dt --filter "modal_layout,defaults_panel_layout" --no-user-config`
-inside the `Ubuntu x86_64` leg — a positive filter naming two categories, of which `parity` is not
-one — and the three `E2E Slow` legs configure with `-DBUILD_TEST=OFF -DBUILD_GUI=OFF`, so they do
-not have the binary at all. Where it does run is a developer machine with a working GL context:
-`scripts/build.sh`'s correctness pool selects by a negative filter, so the category is included by
-default and `./scripts/test.sh {quick,full,pr}` executes it. Read that as §7.2's last paragraph
-applied to one tag: **a green CI is not evidence about this fixture.**
+inside the `Ubuntu x86_64` leg — a positive filter naming two categories, and neither of the tag's
+own two (`export_parity`, `preview_export_parity`) is among them — and the three `E2E Slow` legs
+configure with `-DBUILD_TEST=OFF -DBUILD_GUI=OFF`, so they do not have the binary at all. Where it
+does run is a developer machine with a working GL context: `scripts/build.sh`'s correctness pool
+selects by a negative filter, so both categories are included by default and
+`./scripts/test.sh {quick,full,pr}` executes them. Read that as §7.2's last paragraph
+applied to one tag: **a green CI is not evidence about these fixtures.**
 
-**Why it is not enabled under llvmpipe today.** Not because of cost. The fixture asserts an *exact*
+**Why it is not enabled under llvmpipe today.** Not because of cost, and the blocker belongs to one
+member rather than to the tag. `export_parity` asserts an *exact*
 equality on the simulated ray count, through the shared `ExpectedSimRayNum()` helper in
 `test/gui/test_gui_shared.hpp` — structurally the same assertion shape as `lens_proj`, which §4.6
 excludes from the CI filter because that count comes up short under the software rasterizer for an
-upstream reason that is still unfixed. Enabling `parity` there would re-import that known defect as
-a red in a required check. For scale, the cost if it were enabled is not the blocker either: the
-`parity` filter takes 24.6s on the 12-core machine of §7.1, which extrapolates to roughly 70–90s on
+upstream reason that is still unfixed. Enabling that category there would re-import the known defect
+as a red in a required check. `preview_export_parity` runs no simulation at all (it uploads a
+synthetic XYZ texture) and so does not inherit that blocker — but it does rest on byte-exact
+equality between two GL renders, which has never been evaluated under llvmpipe, so widening the
+filter to it is a measurement someone still has to take rather than a free win. For scale, the cost
+if `export_parity` were enabled is not the blocker either: its
+filter takes 24.6s on the 12-core machine of §7.1, which extrapolates to roughly 70–90s on
 a 4-vCPU runner — **an extrapolation, not a measurement** — and it would land inside the
 `Ubuntu x86_64` leg, which sits at 635s — 105s below the `Windows MSVC` ceiling — so by §7.1's
 fact 1 it would still cost close to zero wall clock. The blocker is the known red, so the sequence
 is: close the upstream ray-count shortfall first, re-measure on a real runner, then widen the
-filter. Widening it is a measurement, not an edit.
+filter. Widening it is a measurement, not an edit. (`preview_export_parity` costs 0.2s wall on that
+same machine, process start included — it waits for no run — so its own cost never enters this
+question.)

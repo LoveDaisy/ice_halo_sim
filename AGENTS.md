@@ -209,25 +209,35 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
   is wrong and the rule changes — in the script, never per case.
 - `test/gui/parity/` is a fourth `gui_test` tag beside `functional/`, `visual/` and
   `responsiveness/`, and the one whose oracle is neither a committed image nor a widget outcome:
-  **the same document rendered twice by two production paths and compared to each other**. Its
-  member today, `test_gui_cli_export_parity.cpp`, renders through the GUI's own per-frame
+  **the same document rendered twice by two production paths and compared to each other**. Two
+  members today. `test_gui_cli_export_parity.cpp` renders through the GUI's own per-frame
   `PreviewParams` assembly and — in a child process, the first time this tree starts one of its
   own binaries from a test — through the `Lumice` CLI fed by `BuildExportJsonOrWarn`'s output, so
-  "what the GUI shows is what the exported config renders" can go red. Three consequences worth
-  knowing before adding to it: it owns no reference asset and must never enter
-  `scripts/regen_gui_test_refs.py`'s `GROUPS`; its thresholds are placed against **the smallest
+  "what the GUI shows is what the exported config renders" can go red.
+  `test_gui_preview_export_parity.cpp` compares the two arms one step earlier and inside one
+  process: the on-screen blit (`RenderPreviewFrameAndBlit`) read back off the default framebuffer,
+  against `RenderExportToRgba` fed the same frame's published `params` / `curve_labels`, so "the
+  Screenshot writes the pixels the screen is showing" can go red. Three consequences worth
+  knowing before adding to it: a member owns no reference asset and must never enter
+  `scripts/regen_gui_test_refs.py`'s `GROUPS`; its threshold is placed against **the smallest
   break the scene must catch** (measured by breaking each field on purpose) rather than against
   `visual/`'s cross-machine 1.0 dB floor, which does not apply when both images are made in the
-  same run; and a parity comparison inherits every divergence between the two paths, so its scene
-  design is constrained by measured facts (only equal-area projections are comparable, since the
-  CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of an equal-area texture
-  does not) rather than by preference. `doc/testing-architecture.md` §4.10 has the full statement,
+  same run — and where the two paths share a process and one snapshot of inputs, that smallest
+  break puts the bar at **byte-exact** rather than at any dB figure at all (skipping the export's
+  label layer, the shape of a real past defect, measures 44.75 dB, i.e. above `visual/`'s 40 dB
+  deterministic floor: every calibrated threshold in this tree would have stayed green on it);
+  and a parity comparison inherits every divergence between the two paths, so its scene
+  design is constrained by measured facts (only equal-area projections are comparable across the
+  CLI seam, since the CLI bakes the projection's solid-angle Jacobian and the GUI's resampling of
+  an equal-area texture does not; and a scene built on the 8-bit `UploadTexture` path is blind to
+  exposure, sky and vignetting divergence, because that texture mode's shader branch reads none of
+  them) rather than by preference. `doc/testing-architecture.md` §4.10 has the full statement,
   including the CMake shape a second child-process test would need. A fourth thing, easiest of all
   to get wrong because it is invisible from a green pipeline: **no CI job runs this tag today**.
   The one leg that executes `gui_test` names a positive filter of two reference groups that does
   not include it, and the `E2E Slow` legs build with `-DBUILD_GUI=OFF` and have no such binary, so
-  `./scripts/test.sh {quick,full,pr}` on a machine with a GL context is the only place this fixture
-  is ever evaluated. `doc/testing-architecture.md` §7.5 has the mechanism, the measured cost of
+  `./scripts/test.sh {quick,full,pr}` on a machine with a GL context is the only place either
+  fixture is ever evaluated. `doc/testing-architecture.md` §7.5 has the mechanism, the measured cost of
   enabling it, and why the llvmpipe leg is not currently the right home for it.
 - `scripts/check_loop_fatal_asserts.py` is a **fourth** diff-scoped entry point, alongside
   `check_policies.py`, `check_new_refs.py`, and `check_new_gui_tests.py` above (same "checker is
