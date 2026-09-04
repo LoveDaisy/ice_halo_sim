@@ -26,7 +26,10 @@
 - **un-skip 闸**：CUDA parity pytest 用 `pytest.mark.skipif(platform in (Linux,Windows) and
   os.environ["LUMICE_HAS_CUDA"]=="1")`。**必须设 `LUMICE_HAS_CUDA=1`** 才会跑（不是
   `LUMICE_CUDA_ENABLED`——那个是 runtime 路由用的，**两个都要设**）。
-- **CApiRunner 找 lib**：`LUMICE_LIB` 指向 shared lib（`.so`/`.dll`），cudart 需与之同目录或在 PATH。
+- **CApiRunner 找 lib**：`LUMICE_LIB` 指向 shared lib（`.so`/`.dll`），cudart 需与之**同目录**。
+  ⚠️ **仅 Linux 上"或在 PATH（`LD_LIBRARY_PATH`）"成立——Windows 不成立**：Python 3.8+ 起
+  `ctypes.CDLL` 在 Windows 上不再搜索 `PATH`（改为显式 `add_dll_directory`），把 CUDA `bin`
+  塞进 `PATH` 并不能让 `cudart64_12.dll` 被加载；Windows 侧实测可行的做法见 §3。
 - **parity battery 三文件**：`test/parity-cross-backend/backend/test_cuda_{exit_seam,filter,multi_ms}_parity.py`。
 - **别信 subprocess 自报**：读 build EXIT、grep 告警、亲看 pytest 计数（`N passed`）。
   ⚠️ 管道会吃掉退出码——`cmd | tail` 的 `$?` 是 `tail` 的。要么读前台命令的 `$?`，
@@ -155,12 +158,16 @@
   set LUMICE_HAS_CUDA=1
   set LUMICE_CUDA_ENABLED=1
   set LUMICE_LIB=<仓库>\build\Release\shared\bin\lumice.dll
-  set PATH=<仓库>\build\Release\shared\bin;<CUDA>\bin;%PATH%
+  copy <CUDA>\bin\cudart64_12.dll <仓库>\build\Release\shared\bin\
   set PYTHONUTF8=1
   python.exe -m pytest -v -m slow test\parity-cross-backend\backend\test_cuda_exit_seam_parity.py ^
     test\parity-cross-backend\backend\test_cuda_filter_parity.py ^
     test\parity-cross-backend\backend\test_cuda_multi_ms_parity.py
   ```
+  - ⚠️ **不要**把 CUDA `bin` 塞进 `PATH` 期待 `LUMICE_LIB` 能带出 `cudart64_12.dll`——
+    Python 3.8+ 起 `ctypes.CDLL` 在 Windows 上不再搜索 `PATH`（见 §1）。实测可行做法是把
+    `cudart64_12.dll` **复制到被加载的 dll 同目录**（即 `LUMICE_LIB` 所在目录）；照此做之后
+    CUDA parity battery 在 Windows 上第一次真正跑通。
   - ⚠️ **`set PYTHONUTF8=1` 必带**：中文 Windows 控制台默认 GBK codec，parity 测试的
     docstring/traceback 若含非 ASCII 字符（数学符号、破折号），pytest 渲染输出时会
     `UnicodeEncodeError` 崩掉 —— parity 已算完但断言未执行，**假失败遮蔽真结果**。
@@ -176,7 +183,8 @@
 1. 本机改代码 + Mac build/单测/Metal parity（`./scripts/build.sh -tj release`）。
 2. 同步到 CUDA 参照机（Linux rsync / Windows tarball）。
 3. 各自 build，**逐个查 EXIT 码 + grep 告警**。
-4. Linux 参照机跑 CUDA parity battery（10/10）；Windows 侧在上述限制解除前只验编译。
+4. Linux 参照机跑 CUDA parity battery（10/10）；Windows 侧同一 battery 已实测跑通
+   （`pytest` 报 `11 passed`），前提是应用了 §3 的 DLL 同目录做法——不是只验编译。
 5.（按需）CLI 冒烟核路由与 `Stats`、染色密度门。
 6. commit + push + PR，CI 的 `windows-cuda-compile` job 再兜一层 Windows 编译。
 

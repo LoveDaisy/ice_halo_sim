@@ -142,48 +142,88 @@ Without this, sampling overconcentrates at the poles where sin(θ) → 0.
 
 ### 4.2 Sampling Paths
 
-Three paths are selected automatically:
+`lat_path::SelectLatPath` (`src/core/shared/lat_path_selection.hpp`) is the
+single source for path selection, shared by the CPU sampler
+(`math.cpp::SampleSphericalPointsSph`) and both GPU backends. It resolves one
+of four paths:
 
-**Path 1: Rayleigh (colatitude < 0.5°).** Near a pole, the Jacobian and
-Gaussian combine to give a Rayleigh distribution in the tangent plane.
-The sampler draws 2D Gaussian samples, producing correct spherical density
-without rejection. Exact, O(1) per sample.
+**Path 1: Full-sphere (`kFullSphere`).** Triggered when the axis distribution
+is a full-sphere uniform (`AxisDistribution::IsFullSphereUniform()`: azimuth
+and latitude are both a full 360° `uniform`, with roll rotationally
+symmetric). Latitude is sampled directly with the area measure —
+θ = asin(u), u ~ U(-1,1) — giving the uniform-on-sphere distribution with no
+rejection. Exact, O(1).
 
-**Path 2: Generic rejection.** For Gaussian (non-Rayleigh), zigzag, and
-Laplacian:
+**Path 2: Deterministic (`kNoRandom`).** Triggered when the latitude
+distribution type is `kNoRandom` (a scalar `"zenith"` value in JSON). No
+sampling — every crystal gets the same angle.
 
-1. Draw proposal θ from the base distribution.
-2. Accept with probability cos(φ)/M, where φ is the latitude after
-   `NormalizeLatitude` wrapping, and M is an envelope constant.
+**Path 3: Legacy Gaussian (`kGaussLegacy`).** Triggered when the latitude
+distribution type is `kGaussianLegacy` (`"gauss_legacy"` in JSON). This
+intentionally skips the sin(θ) area-measure weight described in §4.1 — kept
+only to reproduce simulation results predating the Jacobian fix (§5.1), not
+a recommended type for new configs.
 
-Envelope constants from `ComputeJacobianEnvelope()`:
+**Path 4: Unified LUT (`kLutInverseCdf`).** Every other non-degenerate type —
+`kGaussian`, `kLaplacian`, `kUniform`, `kZigzag` — routes here. One
+precomputed inverse-CDF lookup table replaces what used to be three separate
+per-distribution samplers (Rayleigh / generic-rejection / deterministic —
+retired in 330.3, see §5.2). Described in §4.3.
 
-| Type | Envelope M | Coverage |
-|------|-----------|----------|
-| Gaussian | cos(max(\|μ\| − 3σ, 0)°) | 99.7% |
-| Zigzag | cos(max(\|μ\| − A, 0)°) | full amplitude |
-| Laplacian | cos(max(\|μ\| − 5b, 0)°) | 99.3% |
+These four paths are the complete taxonomy: there is no longer a near-pole
+vs. off-pole split, and no rejection loop anywhere in this list (see
+`doc/near-pole-area-measure-sampling.md` for the removal record).
 
-**Path 3: Deterministic.** No sampling needed.
+### 4.3 The Unified Inverse-CDF LUT (`kLutInverseCdf`)
 
-### 4.3 Per-Type Proposal Generation
+Build (host-side, once per axis distribution — `lat_lut.cpp::BuildLatLut`,
+memoized by `GetSharedLatLut` across CPU worker threads and both GPU
+backends, never rebuilt per ray):
 
-- **Gaussian:** Normal variate × σ + μ. O(1) per proposal.
-- **Zigzag:** θ = |A · sin(2πU) + B|, U ~ Uniform(0,1). O(1).
-- **Laplacian:** Inverse CDF: θ = μ − b · sign(U−0.5) · ln(1−2|U−0.5|). O(1).
-- **Uniform:** Draw from [μ − w/2, μ + w/2]. O(1).
+- A deterministic quadrature evaluates the exact per-family proposal
+  density, folded through the same `normalize_latitude` wrap the sampler
+  itself uses, and weighted by sin(θ) — the spherical area Jacobian from
+  §4.1 — producing `LatLut::kNodes = 257` uniformly-spaced colatitude nodes
+  with a strictly-increasing CDF.
+- A per-bin `flip_prob` records the probability that a sample in that bin
+  crosses the pole and needs its azimuth/roll flipped by π, so the near-pole
+  proposal stays symmetric.
 
-All proposals pass through the Jacobian rejection step (Path 2).
+Sample (one uniform draw, no rejection loop):
 
-### 4.4 Acceptance Rates
+1. Draw ξ ~ U(0,1).
+2. `invert_lat_lut` resolves ξ against the CDF with a fixed 8-step binary
+   search plus linear interpolation (256 intervals = 2⁸, so the search cost
+   is constant).
+3. Look up `flip_prob` for the resolved bin and flip azimuth/roll by π with
+   that probability.
 
-- Near equator (zenith ≈ 90°): ~100% (cos φ ≈ 1)
-- Mid-latitude (zenith ≈ 45°): ~70–80%
-- Near pole (zenith ≈ 5°): ~30–40%
-- Zigzag/Laplacian: similar rates, governed by the same cos(φ)/M formula
+This path is rejection-free: the `rejection_m` field on `LatPathDecision`
+(and the frozen device wire struct that mirrors it) is a constant `1.0` on
+every one of the four paths. Accuracy is governed by node count rather than
+by an envelope constant — the lookup is exact up to node-resolution error,
+not an approximation with a rejection tail.
+
+### 4.4 Complexity
+
+All four paths are O(1) per sample; none loops. What differs is what
+"exact" means for each:
+
+| Path | Cost | Exactness |
+|------|------|-----------|
+| `kFullSphere` | one `asin` | exact (closed form) |
+| `kNoRandom` | none | exact (no distribution) |
+| `kGaussLegacy` | one Gaussian draw | intentionally NOT area-corrected — reproduces pre-fix legacy behavior |
+| `kLutInverseCdf` | one uniform draw + fixed 8-step binary search | exact up to `LatLut` node resolution (257 nodes) |
+
+There is no acceptance-rate concept left to report: the per-distribution
+rejection loop this table used to describe (§5.2), and the near-pole
+acceptance-rate collapse that motivated replacing it, are both gone.
 
 
 ## 5. Historical Context
+
+### 5.1 Missing Jacobian Correction (pre-fix)
 
 The original implementation sampled zenith directly from the distribution
 without the sin(θ) Jacobian correction. The error magnitude depends on
@@ -196,8 +236,53 @@ the mean zenith:
 | 10° | 5.8× | Plate halos near vertical |
 | 0° | ∞ | Perfectly oriented plates |
 
-The fix was implemented during explore-zenith-sampling (2026-04), which
-also evaluated and rejected vMF, Matrix Fisher, and Bingham distributions.
+The fix was implemented in 2026-04, alongside an evaluation that considered
+and rejected vMF, Matrix Fisher, and Bingham distributions as alternatives.
+
+### 5.2 Retired Per-Distribution Envelope/Rejection Architecture (pre-330.3)
+
+Between the Jacobian fix (§5.1) and 330.3, the non-degenerate distributions
+were served by three separate per-distribution paths instead of the single
+LUT in §4.3 (full record: `doc/near-pole-area-measure-sampling.md`):
+
+**Path: Rayleigh (colatitude < 0.5°).** Near a pole, the Jacobian and
+Gaussian combine to give a Rayleigh distribution in the tangent plane.
+The sampler drew 2D Gaussian samples, producing correct spherical density
+without rejection. Exact, O(1) per sample.
+
+**Path: Generic rejection.** For Gaussian (non-Rayleigh), zigzag, and
+Laplacian:
+
+1. Draw proposal θ from the base distribution.
+2. Accept with probability cos(φ)/M, where φ is the latitude after
+   `NormalizeLatitude` wrapping, and M is an envelope constant from
+   `ComputeJacobianEnvelope()`:
+
+| Type | Envelope M | Coverage |
+|------|-----------|----------|
+| Gaussian | cos(max(\|μ\| − 3σ, 0)°) | 99.7% |
+| Zigzag | cos(max(\|μ\| − A, 0)°) | full amplitude |
+| Laplacian | cos(max(\|μ\| − 5b, 0)°) | 99.3% |
+
+Per-type proposal generation:
+
+- **Gaussian:** Normal variate × σ + μ. O(1) per proposal.
+- **Zigzag:** θ = |A · sin(2πU) + B|, U ~ Uniform(0,1). O(1).
+- **Laplacian:** Inverse CDF: θ = μ − b · sign(U−0.5) · ln(1−2|U−0.5|). O(1).
+- **Uniform:** Draw from [μ − w/2, μ + w/2]. O(1).
+
+**Path: Deterministic.** No sampling needed (this is today's `kNoRandom`).
+
+Measured acceptance rates for the rejection path:
+
+- Near equator (zenith ≈ 90°): ~100% (cos φ ≈ 1)
+- Mid-latitude (zenith ≈ 45°): ~70–80%
+- Near pole (zenith ≈ 5°): ~30–40%
+- Zigzag/Laplacian: similar rates, governed by the same cos(φ)/M formula
+
+The near-pole acceptance-rate collapse was the reason this architecture was
+replaced by the unified LUT in §4.3 — see `doc/near-pole-area-measure-sampling.md`
+for the full design rationale and removal record.
 
 
 ## 6. References
