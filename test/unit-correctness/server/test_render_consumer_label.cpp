@@ -422,6 +422,11 @@ TEST(RenderConsumerLabel, ARimLabelIsPaintedWholeRatherThanCroppedAtTheCanvasEdg
                                      "exercises the clamp, so the assertion below would hold either way";
   ASSERT_GT(expected_ink, 0) << "the labels rasterized to nothing";
 
+  // Precondition of comparing a SUM against a UNION: no two labels' glyph bounding boxes may
+  // overlap in this scene. `expected_ink` adds each label's ink count, while DifferingPixels
+  // counts changed pixels once. The current MakeRimLabelConfig() angular spacing keeps them
+  // apart; tightening that spacing until two glyph runs touch would make this assertion fail on
+  // a correct renderer, so re-check this line before changing the config's label density.
   EXPECT_EQ(DifferingPixels(img_off, img_on), expected_ink)
       << "the glyphs' " << expected_ink << " covered pixels did not all reach the image: a rim label was composited "
       << "from its raw anchor and cropped by the canvas bounds instead of being pushed inside them";

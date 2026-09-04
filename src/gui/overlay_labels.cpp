@@ -479,6 +479,14 @@ void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float 
 // calls too; core cannot see ImVec2, which is the whole reason this unpacking layer exists rather
 // than a second copy of the arithmetic. Same operation as lumice::ClampLabelPosToViewport, only in
 // the types a draw list speaks.
+//
+// The shared name is deliberate, not an oversight: the two are meant to read as one rule and its
+// type adapter, so the paired tests can assert "the wrapper is only a wrapper" without the reader
+// having to hold two names in their head. The cost is that a bare symbol search finds both, so a
+// call site must be read with its namespace qualifier — every one of them writes `lumice::` or
+// `detail::` explicitly for that reason. If a third caller ever appears, re-weigh that trade:
+// paired readability was worth more than symbol uniqueness at two call sites, not necessarily at
+// more.
 ImVec2 ClampLabelPosToViewport(ImVec2 pos, ImVec2 text_size, float vp_x, float vp_y, float vp_w, float vp_h) {
   const LabelPos clamped = lumice::ClampLabelPosToViewport(
       LabelPos{ pos.x, pos.y }, LabelSize{ text_size.x, text_size.y }, LabelViewport{ vp_x, vp_y, vp_w, vp_h });
