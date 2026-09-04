@@ -6,6 +6,7 @@
 
 #include "gui/gui_constants.hpp"
 #include "gui/preview_renderer.hpp"
+#include "util/label_viewport_clamp.hpp"
 
 namespace lumice::gui {
 namespace {
@@ -473,27 +474,15 @@ void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float 
   }
 }
 
+// The GUI's ImVec2-shaped entry to the shared clamp. The rule itself — the inset and the
+// degenerate-viewport fallback — lives in util/label_viewport_clamp.hpp, which the CLI compositor
+// calls too; core cannot see ImVec2, which is the whole reason this unpacking layer exists rather
+// than a second copy of the arithmetic. Same operation as lumice::ClampLabelPosToViewport, only in
+// the types a draw list speaks.
 ImVec2 ClampLabelPosToViewport(ImVec2 pos, ImVec2 text_size, float vp_x, float vp_y, float vp_w, float vp_h) {
-  // kViewportInsetPx is a small visual padding (in screen-space pixels) keeping the
-  // text glyph rect away from the absolute viewport edge — guards against the
-  // half-pixel anti-aliasing fringe and the panel border 1 px line. 2 px is a
-  // visual-padding heuristic, not a precise geometric boundary; revisit if a
-  // future HiDPI-aware UI pass requires resolution-scaled padding.
-  constexpr float kViewportInsetPx = 2.0f;
-
-  // Only clamp if the viewport actually has room for the text + 2×inset. If
-  // the viewport is narrower / shorter than that (extreme corner case for
-  // panel collapse / tiny export targets), fall back to the original pos so
-  // the legacy "centered on label anchor" behaviour is preserved.
-  if (vp_w > text_size.x + 2.0f * kViewportInsetPx) {
-    pos.x = std::max(pos.x, vp_x + kViewportInsetPx);
-    pos.x = std::min(pos.x, vp_x + vp_w - text_size.x - kViewportInsetPx);
-  }
-  if (vp_h > text_size.y + 2.0f * kViewportInsetPx) {
-    pos.y = std::max(pos.y, vp_y + kViewportInsetPx);
-    pos.y = std::min(pos.y, vp_y + vp_h - text_size.y - kViewportInsetPx);
-  }
-  return pos;
+  const LabelPos clamped = lumice::ClampLabelPosToViewport(
+      LabelPos{ pos.x, pos.y }, LabelSize{ text_size.x, text_size.y }, LabelViewport{ vp_x, vp_y, vp_w, vp_h });
+  return ImVec2(clamped.x, clamped.y);
 }
 
 }  // namespace detail

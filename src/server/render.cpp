@@ -24,6 +24,7 @@
 #include "core/shared/projection_shared.h"
 #include "util/color_data.hpp"
 #include "util/color_space.hpp"
+#include "util/label_viewport_clamp.hpp"
 
 
 namespace lumice {
@@ -1001,8 +1002,20 @@ void RenderConsumer::PaintLabels() {
     }
     // The anchor is core's canvas pixel, rounded to the grid the glyphs were rasterized on; the
     // bitmap's offsets carry the centring (annotation_font.hpp).
-    const int left = static_cast<int>(std::lround(draw.label->px)) + ink.offset_x;
-    const int top = static_cast<int>(std::lround(draw.label->py)) + ink.offset_y;
+    const int left_raw = static_cast<int>(std::lround(draw.label->px)) + ink.offset_x;
+    const int top_raw = static_cast<int>(std::lround(draw.label->py)) + ink.offset_y;
+    // Then push that rect inside the canvas, by the same rule and the same code the GUI's drawer
+    // uses (util/label_viewport_clamp.hpp). An anchor is placed where its curve ENTERS the visible
+    // region, which on a narrow field of view is the frame edge — so without this the glyph run
+    // straddles the edge and the loop below silently drops the half that fell off. A label that
+    // was already clear of the edges is returned unchanged, which is why this affects only the
+    // rim: `left == left_raw` and `top == top_raw` everywhere else.
+    const LabelPos placed = ClampLabelPosToViewport(
+        LabelPos{ static_cast<float>(left_raw), static_cast<float>(top_raw) },
+        LabelSize{ static_cast<float>(ink.width), static_cast<float>(ink.height) },
+        LabelViewport{ 0.0f, 0.0f, static_cast<float>(width_px), static_cast<float>(height_px) });
+    const int left = static_cast<int>(std::lround(placed.x));
+    const int top = static_cast<int>(std::lround(placed.y));
     for (int row = 0; row < ink.height; ++row) {
       const int y = top + row;
       if (y < 0 || y >= height_px) {
