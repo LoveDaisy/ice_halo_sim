@@ -40,6 +40,7 @@ add_executable(gui_test
     visual/test_gui_modal_layout.cpp
     visual/test_gui_defaults_panel.cpp
     parity/test_gui_cli_export_parity.cpp
+    parity/test_gui_preview_export_parity.cpp
     responsiveness/test_gui_perf.cpp
     test_screenshot.cpp
     ${IMGUI_TE_DIR}/imgui_te_engine.cpp
