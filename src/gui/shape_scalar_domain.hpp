@@ -23,9 +23,10 @@
 
 #include <cassert>
 
-#include "gui/panels.hpp"          // SliderScale
-#include "gui/slider_mapping.hpp"  // kLogLinearX0 -- the kLogLinear rows' domain requirement
-#include "include/lumice.h"        // LUMICE_SHAPE_SCALAR_*
+#include "gui/panels.hpp"               // SliderScale
+#include "gui/slider_format_rules.hpp"  // FormatIsFineEnough -- the fmt/scale pairing gate
+#include "gui/slider_mapping.hpp"       // kLogLinearX0 -- the kLogLinear rows' domain requirement
+#include "include/lumice.h"             // LUMICE_SHAPE_SCALAR_*
 
 namespace lumice::gui {
 
@@ -97,6 +98,33 @@ constexpr bool AllLogLinearRowsLieInTheMappingsDomain() {
 }
 static_assert(AllLogLinearRowsLieInTheMappingsDomain(),
               "a kLogLinear row must satisfy 0 <= min_value < kLogLinearX0 < max_value");
+
+// The format each row declares must be at least as fine as the row's own mapping demands, or the
+// slider's readout freezes over a stretch of travel (slider_format_rules.hpp states the criterion
+// and its honest boundary). Checked here rather than at the call sites because this table is
+// TOTAL over the enum -- the static_assert above pins one row per LUMICE_SHAPE_SCALAR_* slot, so a
+// slot added later cannot reach a slider without passing through this loop. That is the whole
+// difference between this and the enumerated test it supplements: a test covers the rows someone
+// remembered to list, this covers the rows that exist.
+//
+// Every row here is worth covering for the same reason, and it is not "it is the whole table": all
+// ten are geometry parameters the user drags to a value core then builds a crystal from, on a table
+// whose two kLogLinear rows are exactly where the mismatch has already bitten once -- the prism
+// height rendered "%.2f" against a relatively-quantizing law, twenty pixels of dead travel at the
+// measured width. The six face rows and the two wedge fractions share the table, the widget and the
+// modal with those two; excluding them would mean asserting that the next row to be edited will not
+// be one of them.
+constexpr bool AllRowsHaveFormatFineEnoughForTheirMapping() {
+  for (const ShapeScalarDomain& d : kShapeScalarDomains) {
+    if (!slider_format::FormatIsFineEnough(d.fmt, d.scale, d.min_value, d.max_value)) {
+      return false;
+    }
+  }
+  return true;
+}
+static_assert(AllRowsHaveFormatFineEnoughForTheirMapping(),
+              "a shape scalar's display format is coarser than its slider's mapping resolves: the "
+              "readout would freeze over part of the travel (see gui/slider_format_rules.hpp)");
 
 // The domain for `scalar_id`. Total over the enum; out-of-range ids are a programming error the
 // caller cannot recover from, so this asserts rather than substituting a domain (a wrong band on

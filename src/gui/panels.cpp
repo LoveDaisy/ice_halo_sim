@@ -19,6 +19,7 @@
 #include "gui/raypath_segments.hpp"  // FormatSummandText (non-degenerate SoP summary)
 #include "gui/semantic_colors.hpp"
 #include "gui/shape_scalar_domain.hpp"
+#include "gui/slider_format_rules.hpp"
 #include "gui/slider_mapping.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
@@ -629,23 +630,58 @@ bool RenderAxisDist(const char* label, AxisDist& axis, float mean_min, float mea
 
   changed |= SliderWithInput("Mean", &axis.mean, mean_min, mean_max);
 
+  // The spread control, whose label and band follow the distribution. Each arm spells its band and
+  // its format ONCE, as named constants, and hands the same tokens to the gate and to the widget --
+  // so the thing asserted about is the thing rendered. A second table listing what these call sites
+  // "should" use would be the shape this repo already paid for once: the shape-scalar domains lived
+  // as prose beside their call sites for exactly as long as it took the two to disagree.
+  //
+  // These four are covered because they are where the mismatch lives: a kSqrt slider quantizes
+  // neither by a constant amount nor by a constant fraction, and all four were paired with "%.1f",
+  // which at the measured 179 px width already froze for 3 (Std, Range) to 5 (Amplitude, Scale)
+  // pixels of drag. "%.3g" is the coarsest format the gate accepts for them -- see
+  // slider_format_rules.hpp for the criterion, and note that the low end of the travel is where the
+  // digits go: the first pixel of Amplitude reads 0.000312 rather than 0.0.
   switch (axis.type) {
     case AxisDistType::kGauss:
     case AxisDistType::kGaussLegacy:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
+    default: {
+      constexpr float kStdMin = 0.0f;
+      constexpr float kStdMax = 180.0f;
+      constexpr const char* kStdFmt = "%.3g";
+      static_assert(slider_format::FormatIsFineEnough(kStdFmt, SliderScale::kSqrt, kStdMin, kStdMax),
+                    "the Std slider's format is coarser than its kSqrt mapping resolves");
+      changed |= SliderWithInput("Std", &axis.std, kStdMin, kStdMax, kStdFmt, SliderScale::kSqrt);
       break;
-    case AxisDistType::kUniform:
-      changed |= SliderWithInput("Range", &axis.std, 0.0f, 360.0f, "%.1f", SliderScale::kSqrt);
+    }
+    case AxisDistType::kUniform: {
+      constexpr float kRangeMin = 0.0f;
+      constexpr float kRangeMax = 360.0f;
+      constexpr const char* kRangeFmt = "%.3g";
+      static_assert(slider_format::FormatIsFineEnough(kRangeFmt, SliderScale::kSqrt, kRangeMin, kRangeMax),
+                    "the Range slider's format is coarser than its kSqrt mapping resolves");
+      changed |= SliderWithInput("Range", &axis.std, kRangeMin, kRangeMax, kRangeFmt, SliderScale::kSqrt);
       break;
-    case AxisDistType::kZigzag:
-      changed |= SliderWithInput("Amplitude", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+    }
+    case AxisDistType::kZigzag: {
+      constexpr float kAmplitudeMin = 0.0f;
+      constexpr float kAmplitudeMax = 90.0f;
+      constexpr const char* kAmplitudeFmt = "%.3g";
+      static_assert(slider_format::FormatIsFineEnough(kAmplitudeFmt, SliderScale::kSqrt, kAmplitudeMin, kAmplitudeMax),
+                    "the Amplitude slider's format is coarser than its kSqrt mapping resolves");
+      changed |=
+          SliderWithInput("Amplitude", &axis.std, kAmplitudeMin, kAmplitudeMax, kAmplitudeFmt, SliderScale::kSqrt);
       break;
-    case AxisDistType::kLaplacian:
-      changed |= SliderWithInput("Scale", &axis.std, 0.0f, 90.0f, "%.1f", SliderScale::kSqrt);
+    }
+    case AxisDistType::kLaplacian: {
+      constexpr float kScaleMin = 0.0f;
+      constexpr float kScaleMax = 90.0f;
+      constexpr const char* kScaleFmt = "%.3g";
+      static_assert(slider_format::FormatIsFineEnough(kScaleFmt, SliderScale::kSqrt, kScaleMin, kScaleMax),
+                    "the Scale slider's format is coarser than its kSqrt mapping resolves");
+      changed |= SliderWithInput("Scale", &axis.std, kScaleMin, kScaleMax, kScaleFmt, SliderScale::kSqrt);
       break;
-    default:
-      changed |= SliderWithInput("Std", &axis.std, 0.0f, 180.0f, "%.1f", SliderScale::kSqrt);
-      break;
+    }
   }
 
   ImGui::PopID();

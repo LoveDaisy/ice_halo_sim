@@ -27,6 +27,7 @@
 #include "gui/gui_constants.hpp"
 #include "gui/shape_scalar_domain.hpp"
 #include "gui/sim_state_rules.hpp"
+#include "gui/slider_format_rules.hpp"
 #include "gui/slider_mapping.hpp"
 #include "gui/sun_circle_rules.hpp"
 #include "gui/window_sizing.hpp"
@@ -549,19 +550,26 @@ TEST(SliderMapping, TheHybridLawHonoursWhateverFloorItIsGiven) {
 // "%.Nf" quantizes ABSOLUTELY: it can tell values apart when they differ by more than a fixed
 // step. "%.Ng" quantizes RELATIVELY: by more than a fixed fraction of the value. A kLinear slider
 // moves the value by a constant amount per pixel of travel; kLog and kLogLinear (above its switch
-// point) move it by a constant fraction per pixel. Pair a relative slider with an absolute format
-// and the low decades render as a run of identical strings: the handle moves and the number does
-// not, which is indistinguishable from a frozen control.
+// point) move it by a constant fraction per pixel. Pair a format that is too coarse for the law
+// and a stretch of travel renders as a run of identical strings: the handle moves and the number
+// does not, which is indistinguishable from a frozen control.
 //
-// The assertion below is deliberately about MARGIN rather than about today's state. A row can be
-// one pixel of extra slider width away from breaking and still pass a "no collisions right now"
-// check, looking exactly like a row with twenty times the headroom.
-
-// The widest a Value-column slider gets: measured with the crystal edit modal's own layout, from
-// the item rectangle ImGui gave the slider -- 179 px in the horizontal (820 px) modal and 127 px in
-// the vertical (420 px) one. The slider does NOT span the modal: it lives in the single stretch
-// column of a five-column property table, alongside four fixed-width cells.
-constexpr int kMeasuredMaxSliderWidthPx = 179;
+// WHAT IS ASSERTED, AND WHY IT IS NOT "no two adjacent pixels agree". That earlier criterion
+// counted collisions, and collisions rank these rows almost backwards: at the measured width the
+// sun-diameter row scored 130 collisions with a maxrun of 4, the six `*_alpha` rows 79 collisions
+// at a maxrun of 2 (a single repeated pixel, which nobody can perceive), while the worst row ever
+// found here -- the prism height under its old "%.2f" -- scored only 57 collisions at a maxrun of
+// 20. The quantity a reader actually experiences is the RUN: how far the handle travels with the
+// number standing still. So the assertion is `maxrun <= kPairingGateSlackPx`, and the tolerance is
+// a named constant in gui/slider_format_rules.hpp rather than a hardcoded zero, because zero is
+// merely its strictest setting and not an obviously right one.
+//
+// This runtime scan and the compile-time gate in gui/slider_format_rules.hpp are complements, not
+// duplicates. The gate is TOTAL over the tables it sits on, so a row added later cannot escape it
+// by not being listed here; but it answers only yes/no, and its bound is sufficient rather than
+// necessary. This scan covers only the rows written below, but it MEASURES -- it is where the
+// number that says how bad a mismatch is comes from, and it is the oracle the gate is checked
+// against further down.
 
 // The travel model is one sample per pixel. ImGui's actual position resolution is 1/(w - grab_w),
 // i.e. COARSER than this, so a row that resolves every pixel here resolves every position ImGui can
@@ -572,7 +580,6 @@ struct NonlinearRow {
   float max_value;
   const char* fmt;
   SliderScale scale;
-  bool excluded;
 };
 
 float NormToValueForRow(const NonlinearRow& row, float norm) {
@@ -591,68 +598,172 @@ float NormToValueForRow(const NonlinearRow& row, float norm) {
   return row.min_value + (row.max_value - row.min_value) * norm;
 }
 
-// The number of adjacent pixel pairs that format to the same string over the whole travel.
-int CountAdjacentPixelCollisions(const NonlinearRow& row, int width_px) {
+// The longest stretch of consecutive pixels over the whole travel that format to the same string,
+// i.e. the dead travel in pixels. 1 means every pixel of drag changes the readout.
+int LongestIdenticalReadoutRun(const NonlinearRow& row, int width_px) {
   char prev[64] = { 0 };
   char cur[64] = { 0 };
-  int collisions = 0;
+  int longest = 0;
+  int run = 0;
   for (int i = 0; i <= width_px; ++i) {
     const float norm = static_cast<float>(i) / static_cast<float>(width_px);
     std::snprintf(cur, sizeof(cur), row.fmt, NormToValueForRow(row, norm));
-    if (i > 0 && std::strcmp(cur, prev) == 0) {
-      ++collisions;
-    }
+    run = (i > 0 && std::strcmp(cur, prev) == 0) ? run + 1 : 1;
+    longest = std::max(longest, run);
     std::memcpy(prev, cur, sizeof(prev));
   }
-  return collisions;
+  return longest;
 }
 
-TEST(ShapeScalarDomain, EveryNonlinearRowResolvesEveryPixelOfItsSliderWithMargin) {
+TEST(ShapeScalarDomain, EveryPairedRowChangesItsReadoutWithinTheToleratedDrag) {
   const ShapeScalarDomain& height = ShapeScalarDomainFor(LUMICE_SHAPE_SCALAR_HEIGHT);
   const ShapeScalarDomain& prism_h = ShapeScalarDomainFor(LUMICE_SHAPE_SCALAR_PRISM_H);
+  // The two shape-table rows are read from the table; the five call-site rows below are written out
+  // independently, the same way kExpected[] above is written out rather than read from the table it
+  // checks. Their production spellings are function-local constants inside RenderAxisDist
+  // (panels.cpp) and the sun.diameter registration (field_editor_registry.cpp), which no other
+  // translation unit can see -- and even if they could, a scan that sourced its inputs from the
+  // thing under test would agree with it by construction. A divergence here is therefore a real
+  // signal, not a missed sync: it means one of the two sides moved.
+  //
+  // The kSqrt rows are LISTED rather than excluded, which is the change this makes to the earlier
+  // shape of this test. They used to be skipped on the argument that a kSqrt slider's step is
+  // neither a constant amount nor a constant fraction, so "pick the format that matches the law"
+  // had no answer for them. The premise was right and the conclusion was not: a format does not
+  // have to MATCH the law, it has to be at least as fine as the law's smallest step, and kSqrt's
+  // smallest step -- absolute or relative -- is a finite positive number like everyone else's.
   const NonlinearRow kRows[] = {
-    { "Height", height.min_value, height.max_value, height.fmt, height.scale, false },
-    { "Prism H", prism_h.min_value, prism_h.max_value, prism_h.fmt, prism_h.scale, false },
-    // The crystal axis orientation sliders (app_panels.cpp), listed rather than omitted so the
-    // boundary of this assertion is visible where the assertion is. They are excluded on a
-    // mechanism, not on a name: a kSqrt slider's step per pixel is proportional to the square root
-    // of the value, which is neither a constant amount nor a constant fraction, so neither family
-    // of format matches it and "pick the format that matches the law" has no answer to give here
-    // yet. Their domains are spelled at their call sites.
-    { "Std", 0.0f, 180.0f, "%.1f", SliderScale::kSqrt, true },
-    { "Range", 0.0f, 360.0f, "%.1f", SliderScale::kSqrt, true },
-    { "Amplitude", 0.0f, 90.0f, "%.1f", SliderScale::kSqrt, true },
-    { "Scale", 0.0f, 90.0f, "%.1f", SliderScale::kSqrt, true },
+    { "Height", height.min_value, height.max_value, height.fmt, height.scale },
+    { "Prism H", prism_h.min_value, prism_h.max_value, prism_h.fmt, prism_h.scale },
+    { "Std", 0.0f, 180.0f, "%.3g", SliderScale::kSqrt },
+    { "Range", 0.0f, 360.0f, "%.3g", SliderScale::kSqrt },
+    { "Amplitude", 0.0f, 90.0f, "%.3g", SliderScale::kSqrt },
+    { "Scale", 0.0f, 90.0f, "%.3g", SliderScale::kSqrt },
+    { "sun.diameter", 0.1f, 5.0f, "%.2f", SliderScale::kLinear },
   };
 
   for (const NonlinearRow& row : kRows) {
-    // The exclusion is derived from the row's law, not from its name: this is what stops a row
-    // from being quietly parked outside the assertion by adding a flag to it.
-    EXPECT_EQ(row.excluded, row.scale == SliderScale::kSqrt) << row.name;
-    if (row.excluded) {
-      continue;
-    }
-    // Today's width, then two and three times it. The multiples are the point: collisions appear
-    // as the slider gets WIDER (more pixels over the same range means a smaller step per pixel),
-    // never disappear, so zero collisions at 3x the measured width means the width at which this
-    // row would first break is beyond 3x -- a margin, not a coin flip. A row that only clears the
-    // 1x check is one layout change away from a frozen readout and would be indistinguishable, in
-    // a green run, from a row with room to spare.
+    // Today's width, then two and three times it. The multiples are the point: runs get LONGER as
+    // the slider gets wider (more pixels over the same range means a smaller step per pixel), never
+    // shorter, so clearing the tolerance at 3x the measured width means the width at which this row
+    // would first exceed it is beyond 3x -- a margin, not a coin flip. A row that only clears the
+    // 1x check is one layout change away from a frozen readout and would be indistinguishable, in a
+    // green run, from a row with room to spare.
     //
-    // 3x is a deliberately temporary threshold, not a derived one, and it has a known coverage
-    // gap: substituting the measured 179 px width gives a threshold of 537 px, and a %.4f-format
-    // row's first pixel collision was measured at 675 px -- inside the 3x margin, so this gate
-    // would not have caught that mismatch (>=4x would). The gap is accepted here rather than
-    // closed by raising the multiple, because the multiple itself is a stand-in for a quantity a
-    // follow-up is expected to derive directly (a format's distinguishable precision vs. the
-    // mapping's per-pixel relative step), and fitting the constant to today's one known bad row
-    // buys a defense that is retired as soon as that quantity lands.
+    // Note for anyone re-deriving the red state this replaced: a mismatch does not have to show at
+    // every width. Under the old "%.1f", Std and Range measured a maxrun of 3 at 1x -- inside the
+    // tolerance -- and 9 and 7 at 3x. Failing at the widest bucket only is the ordinary shape of
+    // this defect, not a sign that the measurement is wrong.
     for (int multiple : { 1, 2, 3 }) {
-      const int width = kMeasuredMaxSliderWidthPx * multiple;
-      EXPECT_EQ(CountAdjacentPixelCollisions(row, width), 0)
+      const int width = slider_format::kMeasuredMaxSliderWidthPx * multiple;
+      EXPECT_LE(LongestIdenticalReadoutRun(row, width), slider_format::kPairingGateSlackPx)
           << row.name << " at " << multiple << "x the measured slider width (" << width << " px)";
     }
   }
+}
+
+// ---- The compile-time gate, checked against the scan above ----
+//
+// FormatIsFineEnough is what makes the pairing rule total over the tables it guards, so it is the
+// piece whose being WRONG would be silent: a bound that answered true for everything would compile
+// exactly as cleanly as a correct one. These tests exist to deny it that.
+
+TEST(SliderFormatGate, AFormatSpellingItCannotReadIsRejectedRatherThanAssumedFine) {
+  // The parser handles "%.Nf" and "%.Ng" and nothing else. An unreadable spelling must fail the
+  // gate, not slip past it: the gate's job is to be impossible to satisfy by accident.
+  using slider_format::FormatIsFineEnough;
+  EXPECT_FALSE(FormatIsFineEnough("%f", SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_FALSE(FormatIsFineEnough("%.3", SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_FALSE(FormatIsFineEnough("%.3e", SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_FALSE(FormatIsFineEnough("%.3f mm", SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_FALSE(FormatIsFineEnough("", SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_FALSE(FormatIsFineEnough(nullptr, SliderScale::kLinear, 0.0f, 1.0f));
+  EXPECT_TRUE(FormatIsFineEnough("%.3f", SliderScale::kLinear, 0.0f, 1.0f));
+}
+
+TEST(SliderFormatGate, EveryLawHasABoundThatCanSayNo) {
+  // One law per row of the mapping table, each with a format it must accept and a format it must
+  // refuse. The refusals are what matter: a branch that returned true unconditionally would pass
+  // the acceptance half and is only caught here.
+  //
+  // kLog is included even though no row of either guarded table uses it today -- the one production
+  // kLog slider (bg_scale, in a registry whose domains are mostly runtime closures) is outside the
+  // gate's reach. Without this case "the gate covers four laws" would rest on the branch existing
+  // rather than on the branch working. Its band is bg_scale's own, so the case is a statement about
+  // a slider that exists: under "%.2f" that slider stands still for 30 pixels at the gate width.
+  using slider_format::FormatIsFineEnough;
+  struct Case {
+    const char* name;
+    SliderScale scale;
+    float min_value;
+    float max_value;
+    const char* fine_enough;
+    const char* too_coarse;
+  };
+  const Case kCases[] = {
+    { "kLinear", SliderScale::kLinear, 0.0f, 1.0f, "%.3f", "%.1f" },
+    { "kSqrt", SliderScale::kSqrt, 0.0f, 90.0f, "%.3g", "%.1f" },
+    { "kLog", SliderScale::kLog, 0.2f, 5.0f, "%.3g", "%.2f" },
+    { "kLogLinear", SliderScale::kLogLinear, 1e-4f, 100.0f, "%.4g", "%.2f" },
+  };
+  for (const Case& c : kCases) {
+    EXPECT_TRUE(FormatIsFineEnough(c.fine_enough, c.scale, c.min_value, c.max_value)) << c.name;
+    EXPECT_FALSE(FormatIsFineEnough(c.too_coarse, c.scale, c.min_value, c.max_value)) << c.name;
+  }
+}
+
+TEST(SliderFormatGate, NothingTheBoundAcceptsMeasuresFrozen) {
+  // The gate against its oracle, over every (law, band, format) combination below. The claim being
+  // pinned is one-sided ON PURPOSE:
+  //
+  //   accepted  => the scan measures a run within tolerance   <- asserted; a violation is a MISS,
+  //                                                              i.e. the gate waving through a
+  //                                                              defect, which is the failure mode
+  //                                                              that matters
+  //   rejected  => nothing is claimed                         <- the bound is sufficient, not
+  //                                                              necessary, so it may refuse a
+  //                                                              format that would have measured
+  //                                                              fine (kSqrt rows and "%.Ng" on a
+  //                                                              band that does not begin just
+  //                                                              above a power of ten)
+  //
+  // The counts below are reported so the second line stays honest: if a change ever made the bound
+  // reject everything, every assertion here would still pass, and only `accepted` collapsing to a
+  // handful would show it.
+  const NonlinearRow kBands[] = {
+    { "Height", 1e-4f, 100.0f, "", SliderScale::kLogLinear },
+    { "Prism H", 0.0f, 100.0f, "", SliderScale::kLogLinear },
+    { "Upper H", 0.0f, 1.0f, "", SliderScale::kLinear },
+    { "Face", 0.0f, 2.0f, "", SliderScale::kLinear },
+    { "sun.diameter", 0.1f, 5.0f, "", SliderScale::kLinear },
+    { "ray_num_millions", 0.1f, 100.0f, "", SliderScale::kLinear },
+    { "Std", 0.0f, 180.0f, "", SliderScale::kSqrt },
+    { "Range", 0.0f, 360.0f, "", SliderScale::kSqrt },
+    { "Amplitude", 0.0f, 90.0f, "", SliderScale::kSqrt },
+    { "bg_scale", 0.2f, 5.0f, "", SliderScale::kLog },
+    { "wide log", 0.01f, 100.0f, "", SliderScale::kLog },
+  };
+  const char* kFormats[] = { "%.1f", "%.2f", "%.3f", "%.4f", "%.5f", "%.1g", "%.2g", "%.3g", "%.4g", "%.5g" };
+  int accepted = 0;
+  int rejected_but_measures_fine = 0;
+  for (const NonlinearRow& band : kBands) {
+    for (const char* fmt : kFormats) {
+      const NonlinearRow row = { band.name, band.min_value, band.max_value, fmt, band.scale };
+      const int run = LongestIdenticalReadoutRun(row, slider_format::kPairingGateWidthPx);
+      if (slider_format::FormatIsFineEnough(fmt, row.scale, row.min_value, row.max_value)) {
+        ++accepted;
+        EXPECT_LE(run, slider_format::kPairingGateSlackPx) << band.name << " " << fmt;
+      } else if (run <= slider_format::kPairingGateSlackPx) {
+        ++rejected_but_measures_fine;
+      }
+    }
+  }
+  EXPECT_GT(accepted, 40) << "the bound accepts too little for this to have tested anything";
+  // Today's conservatism, pinned as a fact rather than as a target: three combinations measure fine
+  // and are refused anyway. Both directions of a change to this number are worth a look -- upward
+  // means the bound got looser in the honest direction but demands more digits, downward means it
+  // got tighter and the MISS assertions above are carrying more weight than they used to.
+  EXPECT_LE(rejected_but_measures_fine, 8) << "the bound became far more conservative than measured";
 }
 
 using lumice::gui::AspectFitResult;
