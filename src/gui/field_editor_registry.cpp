@@ -7,6 +7,7 @@
 #include "gui/app.hpp"
 #include "gui/gui_constants.hpp"
 #include "gui/panels.hpp"
+#include "gui/slider_format_rules.hpp"
 #include "gui/theme.hpp"
 #include "imgui.h"
 #include "include/lumice.h"
@@ -424,8 +425,28 @@ const std::unordered_map<std::string, FieldEditorEntry>& Registry() {
     // ---- sun ----
     map.emplace("sun.altitude",
                 FloatField([](GuiState& s) { return &s.sun.altitude; }, FixedDomain(-90.0f, 90.0f), "%.1f"));
-    map.emplace("sun.diameter",
-                FloatField([](GuiState& s) { return &s.sun.diameter; }, FixedDomain(0.1f, 5.0f), "%.1f"));
+    // The one row in this registry the pairing gate covers, and it is here on evidence rather than
+    // on principle: swept at the measured 179 px slider width, this domain under "%.1f" froze for 4
+    // pixels of drag -- the same order as the axis spread sliders, and nobody had noticed. Band and
+    // format are named once and handed to both the gate and the field, so the assertion cannot
+    // drift away from what renders.
+    //
+    // "%.2f" and not the "%.3g" its axis siblings took: this slider is kLinear, so it quantizes by
+    // a constant AMOUNT per pixel and an absolute format is the family that matches it -- putting a
+    // relative format on it would be the same mismatch as the defect, in the other direction. The
+    // rest of this registry is out of the gate's reach for a structural reason, not an oversight:
+    // most of its domains are FloatDomainFn closures over live GuiState (renderer.fov and friends),
+    // so their bounds are not constant expressions and no static_assert can read them.
+    {
+      constexpr float kSunDiameterMin = 0.1f;
+      constexpr float kSunDiameterMax = 5.0f;
+      constexpr const char* kSunDiameterFmt = "%.2f";
+      static_assert(
+          slider_format::FormatIsFineEnough(kSunDiameterFmt, SliderScale::kLinear, kSunDiameterMin, kSunDiameterMax),
+          "the sun diameter slider's format is coarser than its linear mapping resolves");
+      map.emplace("sun.diameter", FloatField([](GuiState& s) { return &s.sun.diameter; },
+                                             FixedDomain(kSunDiameterMin, kSunDiameterMax), kSunDiameterFmt));
+    }
     map.emplace("sun.spectrum", SpectrumField());
 
     // ---- sim ----
