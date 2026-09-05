@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788595945730,
+  "lastUpdate": 1788595948228,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9536,50 +9536,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "4057ce13d077863ae1027d799f1fe8d4c8fe1cb0",
-          "message": "Merge pull request #214 from LoveDaisy/feat/geometry-closed-form-representation\n\nfeat(geometry): closed-form hex crystal representation (scrum-386)",
-          "timestamp": "2026-07-21T13:25:10+08:00",
-          "tree_id": "03e5310167743bc37a0d3c76b1b4600e8b4983c0",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/4057ce13d077863ae1027d799f1fe8d4c8fe1cb0"
-        },
-        "date": 1784611975950,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 83.1,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 98,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.1,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 95,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "0244b5f169af36f52d1fbfcf83ea3ca4df809f12",
           "message": "Merge pull request #215 from LoveDaisy/feat/geometry-exact-domain-audit\n\ngeometry exactness: symbolic-a1 exact oracle (drop __int128) + pyramid apex bug fix + 3-platform verify",
           "timestamp": "2026-07-22T15:28:14+08:00",
@@ -13889,6 +13845,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 88.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5015321af574f4bc5efa1787fa3feefc87a835b",
+          "message": "Merge pull request #312 from LoveDaisy/fix/benchmark-steady-window-outlier\n\nfix(bench): active_short 不得拿 IDLE 检测延迟当分母（14-29x 野值的根因）",
+          "timestamp": "2026-09-05T15:59:52+08:00",
+          "tree_id": "e502d8ac59d36d9acdffade736d7bf32b619fa08",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f5015321af574f4bc5efa1787fa3feefc87a835b"
+        },
+        "date": 1788595947438,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 84.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 100.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.3,
             "unit": "%"
           }
         ]
