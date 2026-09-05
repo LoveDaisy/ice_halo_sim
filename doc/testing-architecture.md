@@ -277,7 +277,7 @@ after measuring its detection power at zero. Its assertion was a 30-second wall-
 and that one number was serving two jobs with opposite requirements: a hang backstop, which wants
 to be wide, and a regression threshold, which wants to be tight. With the defect put back, the
 tax landed in the poll thread's existing `sleep_for` slack — CPU wall time moved 1.01× (3.54 →
-3.59 s) and Metal 0.88× (0.78 → 0.68 s), so the clock the gate watched never saw it — while the
+3.59 s) and Metal 0.87× (0.78 → 0.68 s), so the clock the gate watched never saw it — while the
 wide end of the same number produced two false reds in one day under `pytest -n auto`. A single
 constant asked to be both wide and tight is the tell worth recognizing early; it is how a
 third-row oracle ends up with a margin that no longer bounds anything.
