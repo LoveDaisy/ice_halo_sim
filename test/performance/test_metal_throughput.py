@@ -137,6 +137,10 @@ def _run_benchmark(config_name: str, metal: bool) -> dict:
                 multi_basis = str(data.get("rate_basis", "?"))
             elif data.get("mode") == "single":
                 single_rps = float(data["rays_per_sec"])
+                # No `single_basis` counterpart: nothing here consumes it (the C2
+                # sentinel below only ratios `multi_rps`), so it is omitted rather
+                # than added speculatively. Add it the same way if a future gate
+                # needs the single-pass basis too.
     return {
         "multi_rps": multi_rps,
         "single_rps": single_rps,

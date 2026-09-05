@@ -500,6 +500,10 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       const char* rate_basis = "wall_fallback";
       double window_sec = 0.0;
       LUMICE_RayCount window_rays = 0;
+      // Shared by `active_short` and `wall_fallback`: both degrade to a wall-clock
+      // lower bound (see the `active_short` branch comment below for why). Computed
+      // once so the two branches cannot silently diverge if only one is edited later.
+      const double wall_bounded_rate = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
       if (drain_count_mode) {
         if (window_closed && t_final_drain > t_first_drain && rays_at_final_drain > rays_at_first_drain) {
           window_sec = std::chrono::duration<double>(t_final_drain - t_first_drain).count();
@@ -525,10 +529,10 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         // (`active_short` = exactly one counter publish observed; `wall_fallback` = no
         // usable active window at all), and merging them would change the rate_basis
         // value set for no gain.
-        rays_per_sec = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
+        rays_per_sec = wall_bounded_rate;
         rate_basis = "active_short";
       } else {
-        rays_per_sec = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
+        rays_per_sec = wall_bounded_rate;
         rate_basis = "wall_fallback";
       }
 

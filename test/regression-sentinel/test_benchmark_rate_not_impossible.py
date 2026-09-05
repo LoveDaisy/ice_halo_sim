@@ -54,6 +54,7 @@ import subprocess
 import pytest
 
 from test.e2e.runner import find_lumice_binary, get_project_root
+from test.performance.test_metal_throughput import _HEAVY_CONFIGS
 
 pytestmark = pytest.mark.skipif(
     platform.system() != "Darwin", reason="the coarse-drain-quantum path needs Metal (macOS)"
@@ -62,9 +63,10 @@ pytestmark = pytest.mark.skipif(
 _CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 # Below the 2,097,152-ray Metal drain quantum, which is what makes the window
-# degenerate. Same two scenes the throughput gate uses, so the two agree on what
+# degenerate. Reuses the throughput gate's own `_HEAVY_CONFIGS` (rather than a
+# second hardcoded list) so the two tests cannot silently drift apart on what
 # they are measuring.
-_CONFIGS = ["ms_multi_crystal_complex_filter", "ms_multi_crystal_filtered_bd"]
+_CONFIGS = _HEAVY_CONFIGS
 
 # P(no active_short sample in _RUNS) = 0.96**25 ~ 36% at the low end of the
 # measured 4-8% rate, per config; with two configs a total miss is ~13%. Each run
@@ -77,7 +79,7 @@ _MAX_WORK_RATIO = 3.0
 _TIMEOUT = 120
 
 
-def _benchmark_rows(config_name: str) -> list[dict]:
+def _benchmark_rows(config_name: str, out_dir: str) -> list[dict]:
     """One `--benchmark` invocation on Metal; return its parsed [BENCHMARK] rows."""
     env = dict(os.environ)
     env["LUMICE_TRACE_BACKEND"] = "metal"
@@ -88,7 +90,7 @@ def _benchmark_rows(config_name: str) -> list[dict]:
             "-f",
             str(_CONFIGS_DIR / f"{config_name}.json"),
             "-o",
-            "/tmp",
+            out_dir,
         ],
         capture_output=True,
         text=True,
@@ -105,12 +107,12 @@ def _benchmark_rows(config_name: str) -> list[dict]:
 
 @pytest.mark.slow
 @pytest.mark.parametrize("config_name", _CONFIGS)
-def test_reported_rate_is_physically_possible(config_name: str) -> None:
+def test_reported_rate_is_physically_possible(config_name: str, tmp_path) -> None:
     seen_basis: dict[str, int] = {}
     worst = None  # (work_ratio, row) over every sample, reported either way.
 
     for _ in range(_RUNS):
-        for row in _benchmark_rows(config_name):
+        for row in _benchmark_rows(config_name, str(tmp_path)):
             basis = str(row.get("rate_basis", "?"))
             seen_basis[basis] = seen_basis.get(basis, 0) + 1
             wall_sec = float(row["wall_sec"])
