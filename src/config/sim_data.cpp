@@ -7,6 +7,8 @@
 #include <cstring>
 #include <type_traits>
 
+#include "util/fatal.hpp"
+
 namespace lumice {
 
 // Guard: if SimData gains new fields, sizeof changes and this fires,
@@ -162,6 +164,25 @@ void RayBuffer::DupOverflowSlot(const RayBuffer& src, size_t dst_idx) {
   }
   // rec.overflow_idx_ currently still points into src's arena (just memcpy'd in).
   uint16_t src_slot = rec.overflow_idx_;
+  // Release-judgable ownership gate. This function is the single consumer of the
+  // "the recorder just copied in indexes into `src`'s arena" precondition (all
+  // three call paths — RecorderFanOut and the two EmplaceBack overloads — funnel
+  // here), so the check lives here rather than being restated at each call site.
+  // Before this gate the precondition was a comment only, and a violation read a
+  // wild pointer: `nullptr + slot * kMaxHits` when src never allocated an arena,
+  // or past the arena's populated prefix when the index is stale/garbage. Both
+  // are silent in Release and surface far from their cause — the second time this
+  // exact shape produced a crash (the first was the max_hits>kInlineCap
+  // null-deref this function's header comment records). Trapping here turns the
+  // whole class into a named abort at the moment of violation.
+  if (src.overflow_arena_ == nullptr || src_slot >= src.overflow_used_) {
+    FatalAbort(
+        "RayBuffer::DupOverflowSlot: recorder %zu claims overflow slot %u that src does not own "
+        "(src.overflow_arena_=%s, src.overflow_used_=%u, src.overflow_cap_=%u, dst capacity_=%zu, dst size_=%zu). "
+        "The recorder was not memcpy'd from src, or src's recorders_ were corrupted by an out-of-bounds write.",
+        dst_idx, static_cast<unsigned>(src_slot), src.overflow_arena_ == nullptr ? "null" : "non-null",
+        static_cast<unsigned>(src.overflow_used_), static_cast<unsigned>(src.overflow_cap_), capacity_, size_);
+  }
   uint16_t new_slot = AllocOverflowSlot();
   std::memcpy(overflow_arena_.get() + static_cast<size_t>(new_slot) * kMaxHits,
               src.overflow_arena_.get() + static_cast<size_t>(src_slot) * kMaxHits, kMaxHits);
