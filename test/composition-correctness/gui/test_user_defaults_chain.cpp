@@ -427,5 +427,61 @@ TEST_F(UserDefaultsChain, EveryLensTypeSurvivesTheUserDefaultsRoundTrip) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The GPU-backend preference: stored, then read back by the next launch.
+//
+// The closed loop this feature IS. MakeNewDocumentState is what startup, DoNew() and DoOpen()'s
+// import all call, so calling it after writing the file is "restart the process and make a new
+// document" as far as this chain is concerned — there is no other path a new document arrives by.
+//
+// Both values are exercised, not just `true`: "stored false" and "stored nothing" are different
+// states of the file that happen to produce the same GuiState today, and a reader that collapsed
+// them would pass a true-only test.
+TEST_F(UserDefaultsChain, TheGpuBackendPreferenceSurvivesIntoTheNextNewDocument) {
+  const std::filesystem::path& dir = UseFreshConfigDir("app_use_gpu");
+
+  EXPECT_FALSE(MakeNewDocumentState(dir).use_gpu_backend) << "nothing stored means the factory value";
+
+  nlohmann::json doc = nlohmann::json::object();
+  WriteUseGpuBackendToDoc(doc, true);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+
+  // The ORDER assertion. ResetIneligibleScalarFields runs unconditionally on this path and puts
+  // the field back to `false`; only if the app-preferences read runs AFTER it does the stored
+  // value survive. Reversed, this is the one assertion in the suite that goes red — everything
+  // else about the file would still be true.
+  EXPECT_TRUE(MakeNewDocumentState(dir).use_gpu_backend) << "the stored preference did not reach a new document";
+
+  WriteUseGpuBackendToDoc(doc, false);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_FALSE(MakeNewDocumentState(dir).use_gpu_backend);
+
+  EraseUseGpuBackendFromDoc(doc);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_FALSE(MakeNewDocumentState(dir).use_gpu_backend) << "erasing it returns the field to the factory value";
+
+  EXPECT_EQ(TakeUserDefaultsDowngradeCount(), 0) << "none of the above is a degradation";
+}
+
+// The same name in the file's two halves addresses two different things, and only one of them
+// decides the field. Stated from the `app` key's side; test_user_defaults.cpp's
+// ac3_ineligible_keys_cannot_be_smuggled_in states the other half. Together they are what stops an
+// implementation that reads the wrong location from passing: each alone is satisfied by one.
+TEST_F(UserDefaultsChain, OnlyTheAppRootKeyDecidesTheGpuBackendPreference) {
+  const std::filesystem::path& dir = UseFreshConfigDir("app_use_gpu_top_level");
+
+  nlohmann::json doc = nlohmann::json::object();
+  doc["use_gpu_backend"] = true;  // the document half — inert by construction
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_FALSE(MakeNewDocumentState(dir).use_gpu_backend) << "the document half must not decide this field";
+
+  // Both present and DISAGREEING: the app key wins, which is the only reading under which the
+  // top-level key is genuinely inert rather than merely redundant.
+  doc["use_gpu_backend"] = false;
+  WriteUseGpuBackendToDoc(doc, true);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_TRUE(MakeNewDocumentState(dir).use_gpu_backend);
+}
+
 }  // namespace
 }  // namespace lumice::gui

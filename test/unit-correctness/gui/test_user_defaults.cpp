@@ -332,6 +332,10 @@ TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   EXPECT_TRUE(gui::WriteUserDefaultsFile(dir, doc));
 
   const gui::GuiState state = gui::MakeNewDocumentState(dir);
+  // The TOP-LEVEL key stays inert. This field does have a legitimate personal-default channel —
+  // the `app` root key, covered by AppPreferencesRoundTripThroughTheAppRootKey below and by the
+  // composition chain — and the two assertions are the two halves of one proposition: exactly one
+  // of the two places this name can appear in the file decides the field.
   EXPECT_EQ(state.use_gpu_backend, gui::GuiState{}.use_gpu_backend);
   // Seeded contents only: exactly one layer with one entry, one crystal, no filters, no colours.
   EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
@@ -339,6 +343,73 @@ TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   EXPECT_EQ(state.crystals.size(), static_cast<size_t>(1));
   EXPECT_EQ(state.filters.size(), static_cast<size_t>(0));
   EXPECT_EQ(state.raypath_color.size(), static_cast<size_t>(0));
+}
+
+// The `app` root key: read / write / erase, and — the part that is easy to get backwards — that it
+// is a DIFFERENT place in the file from the top-level key of the same name. The pair of assertions
+// about those two locations is the point of the case: an implementation that wrote the top-level
+// key would pass a naive round-trip through its own reader and fail here.
+TEST_F(UserDefaults, AppPreferencesRoundTripThroughTheAppRootKey) {
+  json doc = json::object();
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(doc).has_value()) << "an empty document stores nothing";
+
+  gui::WriteUseGpuBackendToDoc(doc, true);
+  ASSERT_TRUE(gui::ReadUseGpuBackendFromDoc(doc).has_value());
+  EXPECT_TRUE(*gui::ReadUseGpuBackendFromDoc(doc));
+  EXPECT_TRUE(doc.contains("app"));
+  EXPECT_TRUE(doc["app"].contains("use_gpu_backend"));
+  EXPECT_FALSE(doc.contains("use_gpu_backend")) << "the value must NOT land at the document half's top level";
+
+  gui::WriteUseGpuBackendToDoc(doc, false);
+  ASSERT_TRUE(gui::ReadUseGpuBackendFromDoc(doc).has_value());
+  EXPECT_FALSE(*gui::ReadUseGpuBackendFromDoc(doc)) << "false is a stored value, not an absent one";
+
+  // Erase prunes the parent it empties, like the preset library's erase: a file opened by hand
+  // must not accumulate `"app": {}` skeletons.
+  gui::EraseUseGpuBackendFromDoc(doc);
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(doc).has_value());
+  EXPECT_FALSE(doc.contains("app"));
+
+  // A sibling key under `app` keeps the parent alive — the prune must be conditional, not a
+  // wholesale erase of the section. (Nothing writes such a key today; this pins the shape the
+  // section is meant to grow into.)
+  doc["app"]["something_else"] = 1;
+  gui::WriteUseGpuBackendToDoc(doc, true);
+  gui::EraseUseGpuBackendFromDoc(doc);
+  EXPECT_TRUE(doc.contains("app"));
+  EXPECT_TRUE(doc["app"].contains("something_else"));
+}
+
+// The file is user-editable, so every malformed shape has to read as "nothing stored" rather than
+// throw. Each arm is a different node of the path being the wrong type, because they fail in
+// different places in the reader.
+TEST_F(UserDefaults, AMalformedAppSectionReadsAsNothingStored) {
+  json not_an_object = json::array();
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(not_an_object).has_value());
+
+  json app_not_an_object = json::object();
+  app_not_an_object["app"] = "yes";
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(app_not_an_object).has_value());
+
+  json value_not_a_bool = json::object();
+  value_not_a_bool["app"]["use_gpu_backend"] = "true";
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(value_not_a_bool).has_value());
+
+  json value_is_a_number = json::object();
+  value_is_a_number["app"]["use_gpu_backend"] = 1;
+  EXPECT_FALSE(gui::ReadUseGpuBackendFromDoc(value_is_a_number).has_value())
+      << "JSON 1 is not JSON true; a number here is a hand-edit, not a value";
+
+  // A type error in the app half costs the app half and nothing else — no downgrade is counted
+  // and, unlike the document half, no other section is discarded over it.
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+
+  // The write path normalizes a malformed root instead of leaving it for the caller to write back.
+  json bad_root = json::array();
+  gui::WriteUseGpuBackendToDoc(bad_root, true);
+  EXPECT_TRUE(bad_root.is_object());
+  ASSERT_TRUE(gui::ReadUseGpuBackendFromDoc(bad_root).has_value());
+  EXPECT_TRUE(*gui::ReadUseGpuBackendFromDoc(bad_root));
 }
 
 // --no-user-config and --user-config <empty dir> must be the same document. Both are "the
@@ -358,6 +429,12 @@ TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
     empty_explicit = gui::MakeNewDocumentState();
   }
   EXPECT_TRUE(SerializesIdentically(disabled, empty_explicit));
+  // Asserted separately because SerializesIdentically cannot see this field: use_gpu_backend has no
+  // key in SerializeGuiStateJson's output at all (its channel is the `app` root key), so the
+  // comparison above is blind to it and would stay green if the app-preferences path started
+  // handing out a non-factory value on a route where the user has stored nothing.
+  EXPECT_FALSE(disabled.use_gpu_backend);
+  EXPECT_FALSE(empty_explicit.use_gpu_backend);
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
 
   // ...and the comparison above is not vacuous: the SAME directory holding a real override
@@ -383,6 +460,7 @@ TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
     disabled_again = gui::MakeNewDocumentState();
   }
   EXPECT_TRUE(SerializesIdentically(disabled, disabled_again));
+  EXPECT_FALSE(disabled_again.use_gpu_backend);
 
   // Last, the harness's own baseline, asserted from inside the harness with NO guard in force.
   // This binary installs kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp;

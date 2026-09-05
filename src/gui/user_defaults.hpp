@@ -55,9 +55,12 @@ enum class IneligibleReason {
   kCollection,      // namespace 4: crystals / layers / filters / raypath_color — a key path into
                     // these contains a document-local index, which is meaningless as a default
   kNotSerialized,   // in no persisted schema at all (FieldTier::kDisplay)
-  kAppPreference,   // an application preference (log levels, backend choice) rather than
-                    // anything the document expresses; a defaults system for these is a
-                    // separate feature and none is offered yet
+  kAppPreference,   // an application preference (the log-level trio, the log panel's open state,
+                    // the left panel's collapsed state) rather than anything the document
+                    // expresses, and with no storage channel of its own yet. NOT the verdict for
+                    // an app preference that HAS one: use_gpu_backend is stored under the `app`
+                    // root key and is therefore kEligible — see kFieldTierTable's
+                    // app_preference_eligible bit.
 };
 
 // Fields the user override file must never be able to fill in, keyed by the mechanism that
@@ -121,12 +124,13 @@ inline EligibilityVerdict ResolveDefaultEligibility(std::string_view field_name)
         if (user_defaults_detail::Contains(kCollectionFields, field_name)) {
           return { DefaultEligibility::kIneligible, IneligibleReason::kCollection };
         }
-        if (entry.auto_diff_excluded) {
-          // Currently only use_gpu_backend: registered kStructSoft for governance coverage but
-          // deliberately outside the Revert baseline. It is an app preference (namespace 3).
-          return { DefaultEligibility::kIneligible, IneligibleReason::kAppPreference };
-        }
-        // sun / sim / renderer — the singleton document config (namespace 1).
+        // sun / sim / renderer — the singleton document config (namespace 1) — and
+        // use_gpu_backend, whose channel is the `app` root key (namespace 3) instead. This
+        // verdict says WHETHER the field may be a personal default, not THROUGH WHICH half of
+        // the override file: nothing consumes it to route a write, and a field's channel is
+        // registered on its kFieldTierTable row (app_preference_eligible). It used to read
+        // `auto_diff_excluded` here to hold use_gpu_backend back, which was a proxy for a
+        // question that bit does not answer — that is the coupling this branch no longer has.
         return { DefaultEligibility::kEligible, IneligibleReason::kNone };
       case FieldTier::kDisplay:
         // Currently only raypath_color_mode. Neither SerializeGuiStateJson nor
@@ -163,11 +167,16 @@ inline const char* IneligibleReasonLabel(IneligibleReason reason) {
 }
 
 // Number of fields ResetIneligibleScalarFields() (user_defaults.cpp) explicitly restores to
-// their factory value after an overlay is applied. Those are the ineligible fields that are
-// nonetheless structurally ordinary serializable scalars, i.e. a hand-edited override file
-// COULD smuggle them in. Predicate: tier == kStructSoft && auto_diff_excluded.
+// their factory value after the DOCUMENT half of an overlay is applied. Those are the fields the
+// document half must never decide, but which are nonetheless structurally ordinary serializable
+// scalars — i.e. a hand-edited override file could put one at the top level and have the
+// deserializer read it. Predicate: app_preference_eligible, the bit that says a field's only
+// legitimate default channel is the `app` root key.
 // A coverage assertion in the AC1 test ties this constant to that predicate's population, so
 // adding another such field turns the test red instead of silently leaving a hole.
+// The predicate used to be `tier == kStructSoft && auto_diff_excluded`, which named the same one
+// field for a reason unrelated to defaults; a second app preference registered under any other
+// tier would have slipped straight past it.
 inline constexpr std::size_t kIneligibleScalarResetFieldCount = 1;
 
 // --------------------------------------------------------------------------------------------------
@@ -526,6 +535,61 @@ std::vector<std::string> TakeUserDefaultsDowngradeNotices();
 // THE way another translation unit contributes to this channel — defaults_diff.cpp writes here
 // rather than reaching for a counter of its own, so a user sees one list, not two.
 void NoteUserDefaultsDowngrade(std::string notice);
+
+// --------------------------------------------------------------------------------------------------
+// The app-preferences half of an override DOCUMENT (namespace 3), with no IO.
+//
+// A THIRD root key, `app`, beside the GuiState half and `presets`. Structurally a sibling of the
+// preset library and for the same reason: SerializeGuiStateJson / DeserializeGuiStateJson never
+// emit or read this key, BuildMergedOverlayDocument's merge_patch is inert on it, and
+// BuildDefaultDiffRows' generative walk — which enumerates the keys SerializeGuiStateJson produces
+// — cannot see it. So a field stored here is reachable ONLY through the functions below, which is
+// what makes "the document half must never decide use_gpu_backend" a structural fact rather than a
+// rule someone has to keep.
+//
+// One field today, deliberately: `use_gpu_backend`. The other namespace-3 members
+// (kUnserializedViewFields) stay excluded, and this is not a general per-field registry — the shape
+// leaves room for a second member without pre-building a mechanism for one that does not exist.
+//
+// The read is tolerant because the file is user-editable: a missing key, a non-object `app`, or a
+// non-bool value all read as nullopt, i.e. "nothing stored", and NO downgrade is counted. That is
+// the one place this half deliberately diverges from the document half's "one field-level type
+// error discards the whole overlay": `app` is independent of the document half, so a typo in it
+// must not cost the user their document defaults, nor vice versa.
+std::optional<bool> ReadUseGpuBackendFromDoc(const nlohmann::json& doc);
+void WriteUseGpuBackendToDoc(nlohmann::json& doc, bool value);
+// Prunes the parents it empties, like EraseAxisPresetZenithStdFromDoc, so a file opened by hand
+// does not accumulate an empty `"app": {}` skeleton.
+//
+// No production caller today — the panel writes both states explicitly rather than erasing, so
+// "saved false" and "never saved" stay distinguishable in the file. This is kept for symmetry with
+// the read/write/erase trio the presets namespace already has, and as the channel a second member
+// of this namespace would need. It is neither dead code to delete on sight nor a call site someone
+// forgot to add.
+void EraseUseGpuBackendFromDoc(nlohmann::json& doc);
+
+// Apply the app-preferences half of `doc` to `state`: each stored field is assigned, each absent
+// one leaves `state` untouched (so an overlay with no `app` key yields the factory value).
+void ApplyAppPreferencesOverride(GuiState& state, const nlohmann::json& doc);
+
+// The two steps that decide this field, in the one order that is correct, in one function body.
+//
+// It exists so the order is enforced by control flow instead of by two call sites agreeing to
+// remember it: ResetIneligibleScalarFields re-asserts unconditionally that namespace 1 (the
+// document half) may not decide these fields, and ApplyAppPreferencesOverride then lets namespace
+// 3 — their only legitimate source — override the just-reset factory value. Reversed, the reset
+// would wipe the personal default that had just been applied, and the feature would be silently
+// dead while every other assertion about the file stayed green.
+//
+// `has_dir` false means there is no readable config directory: the reset still runs (it is not
+// optional), and the app half is left alone — `state` keeps its factory value.
+//
+// This is the ONLY call site of ResetIneligibleScalarFields, verified rather than assumed
+// (`grep -rn ResetIneligibleScalarFields src/ test/`; every other hit is prose, not a call). A new
+// caller that needs the reset must go through this function rather than reaching for it directly,
+// even one that has no interest in the app-preferences half — that is what keeps "namespace 1
+// cannot decide this field" a property of the code rather than of the current call graph.
+void ResetIneligibleScalarsThenApplyAppOverride(GuiState& state, const nlohmann::json& doc, bool has_dir);
 
 // Build the GuiState for a NEW document: factory defaults, plus the user's personal defaults,
 // plus the standard seed contents. This is the ONLY place personal defaults enter a GuiState

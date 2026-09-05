@@ -1162,6 +1162,91 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
+    // §app: the GPU-backend preference, from the click to the file to the next new document. The
+    // one place the whole feature is observable end to end through the UI a user actually has.
+    //
+    // The section folds are driven FIRST, and that is the point of doing it rather than clicking
+    // the checkbox straight away: this row is drawn above two CollapsingHeaders, each of which
+    // spans the full window width and takes hover before anything drawn near it. A row that had
+    // ended up inside either header's reach would still look right in a screenshot and would still
+    // pass a case that only ever clicked it on an untouched panel.
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "defaults_panel", "the_gpu_backend_preference_is_stored_and_reaches_the_next_new");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_app_use_gpu");
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+
+      const char* kAppCheckbox = "**/###defaults_app_use_gpu";
+      IM_CHECK(ctx->ItemExists(kAppCheckbox));
+      IM_CHECK(!ctx->ItemIsChecked(kAppCheckbox));
+
+      // Both neighbouring headers, both ways round, and the row survives each: neither state of
+      // either fold may swallow it.
+      ctx->ItemClick("**/###defaults_presets");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(kAppCheckbox));
+      ctx->ItemClick("**/###defaults_settings");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(kAppCheckbox));
+
+      ctx->ItemClick(kAppCheckbox);
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemIsChecked(kAppCheckbox));
+      // Still an editor: nothing has reached disk yet, and the live document is untouched.
+      IM_CHECK(!ReadOverlayFile(panel.dir()).contains("app"));
+      IM_CHECK(!gui::g_state.use_gpu_backend);
+
+      SaveDefaultsPanel(ctx);
+      const json saved = ReadOverlayFile(panel.dir());
+      IM_CHECK(saved.contains("app"));
+      IM_CHECK(saved["app"].contains("use_gpu_backend"));
+      IM_CHECK_EQ(saved["app"]["use_gpu_backend"].get<bool>(), true);
+      // The document half is NOT where it landed — the two halves of that proposition are asserted
+      // together because either alone is satisfied by writing to the wrong one.
+      IM_CHECK(!saved.contains("use_gpu_backend"));
+      // Saving a default must not change the open document.
+      IM_CHECK(!gui::g_state.use_gpu_backend);
+
+      // ...and that file is what a new document actually starts from.
+      IM_CHECK(gui::MakeNewDocumentState().use_gpu_backend);
+
+      // Unchecking is an edit like any other: it is stored, and it takes a Save to land.
+      ctx->ItemClick(kAppCheckbox);
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemIsChecked("**/###defaults_app_use_gpu") == false);
+      IM_CHECK_EQ(ReadOverlayFile(panel.dir())["app"]["use_gpu_backend"].get<bool>(), true);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadOverlayFile(panel.dir())["app"]["use_gpu_backend"].get<bool>(), false);
+      IM_CHECK(!gui::MakeNewDocumentState().use_gpu_backend);
+    };
+  }
+
+  {
+    // Closing without saving discards this row like every other edit. Stated for §app on its own
+    // because its control writes g_copy_doc DIRECTLY (as §1's preset cells do) instead of going
+    // through the checkbox set §2's rows use — the two paths reach the copy differently and only
+    // one of them is covered by the existing discard case.
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "defaults_panel", "an_app_preference_closed_without_saving_reaches_no_file");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_app_use_gpu_discard");
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+
+      ctx->ItemClick("**/###defaults_app_use_gpu");
+      ctx->Yield(2);
+      IM_CHECK(ctx->ItemIsChecked("**/###defaults_app_use_gpu"));
+
+      panel.Close();
+      IM_CHECK(!ReadOverlayFile(panel.dir()).contains("app"));
+      IM_CHECK(!gui::MakeNewDocumentState().use_gpu_backend);
+
+      // Re-opening starts from the file again, not from the discarded copy.
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+      IM_CHECK(!ctx->ItemIsChecked("**/###defaults_app_use_gpu"));
+    };
+  }
+
+  {
     // Save writes the checked rows and REMOVES the unchecked ones, in one pass, and what it wrote
     // is what a new document actually reads. Two edited keys, exactly one of them un-checked, so
     // the case distinguishes "wrote everything" from "wrote what was asked".

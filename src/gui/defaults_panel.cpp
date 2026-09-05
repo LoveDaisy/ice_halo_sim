@@ -361,6 +361,47 @@ bool CommitCopy(const GuiState& state) {
   return true;
 }
 
+// §app — application preferences (namespace 3), the one region of this panel that is neither a
+// generated row nor a preset.
+//
+// A fixed single line rather than a third CollapsingHeader: it holds ONE control, and a section
+// that is taller folded than unfolded is a fold nobody would use. Drawn ABOVE both collapsible
+// sections on purpose — every height budget below reads GetContentRegionAvail() after this point,
+// so the row costs the two sections what it occupies and needs no arithmetic of its own.
+//
+// The control is stateless: g_copy_doc IS the state, read fresh each frame and written on click.
+// There is deliberately no TU-local mirror of it to keep in step with the copy, to freeze at open
+// time, or to clear in ResetDefaultsPanelTestState.
+//
+// The checkbox means WHAT NEW DOCUMENTS START WITH — not "this key is in my defaults", which is
+// what every checkbox in §2 means. That is why it is labelled as a sentence about new documents,
+// sits outside the settings table, and says the current window's value beside it: a bare "Use GPU"
+// here would be the same widget shape as §2's rows carrying a different meaning.
+void RenderAppPreferences(const GuiState& state) {
+  ImGui::TextUnformatted("Application preferences");
+
+  bool checked = ReadUseGpuBackendFromDoc(g_copy_doc).value_or(GuiState{}.use_gpu_backend);
+  if (Checkbox("New documents start with the GPU backend###defaults_app_use_gpu", &checked)) {
+    // Both states are written explicitly rather than "true writes, false erases". "Stored false"
+    // and "stored nothing" resolve to the same document today only because the factory value is
+    // false; recording the user's answer means it stays their answer if that ever moves.
+    WriteUseGpuBackendToDoc(g_copy_doc, checked);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "Whether a NEW document starts with GPU simulation selected. This is the stored preference, "
+        "not the Use GPU switch in the main window — changing it here does not touch the current "
+        "document, and it takes effect on the next new document. The GPU falls back to the CPU on a "
+        "machine that has none.");
+  }
+
+  // The main window's CURRENT value, so the user can tell what they are about to store from what
+  // they are running right now. The two are independent by design: this panel is an editor of the
+  // defaults file, not a second control over the live document.
+  ImGui::SameLine();
+  ImGui::TextDisabled("(this window: %s)", state.use_gpu_backend ? "on" : "off");
+}
+
 // Section header whose open state is forced only on the frame an entry point requested it.
 bool SectionHeader(const char* label, DefaultsPanelSection section, bool open_when_pending) {
   if (g_pending_initial_section.has_value()) {
@@ -937,6 +978,9 @@ void RenderDefaultsPanel(GuiState& state) {
   ImGui::TextWrapped(
       "These are the settings a NEW document starts from. Adopting a change writes it to your "
       "personal defaults file; opening an existing file always uses the values in that file.");
+  ImGui::Separator();
+
+  RenderAppPreferences(state);
   ImGui::Separator();
 
   RenderListControls();

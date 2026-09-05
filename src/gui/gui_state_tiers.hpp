@@ -19,6 +19,17 @@
 // scrum's later task (raypath_color migration) splits ColorClassConfig into structural + display
 // sub-structs. Until then the field keeps its existing MarkStructHardDirty call sites.
 //
+// The `app_preference_eligible` bit answers a DIFFERENT question, and the two are kept in separate
+// bits precisely because they were once read off the same one: "does this field have a legitimate
+// personal-default channel of its own, outside the document half of the override file?" An entry
+// with this bit set is stored under the override file's `app` root key — a sibling of `presets`
+// that neither SerializeGuiStateJson nor DeserializeGuiStateJson ever touches — and must therefore
+// be reset out of anything the document half applied (ResetIneligibleScalarFields,
+// user_defaults.cpp) before that channel is read. Currently the sole use is `use_gpu_backend`.
+// Reading `auto_diff_excluded` for this instead is a proxy quantity: the two populations coincide
+// today by accident, and the reconciler's question has nothing to do with where a default is
+// stored.
+//
 // `kDerivedFieldsExcludeList` is a separate registry for fields that are outputs / runtime-derived
 // state (sim_state, epoch bookkeeping, stats readbacks, auto-EV runtime, etc.) — they are NOT
 // governed by a tier because the reconciler must not touch them.
@@ -42,6 +53,17 @@ struct FieldTierEntry {
   const char* name;
   FieldTier tier;
   bool auto_diff_excluded;
+  // Trailing + default-initialized so every existing row keeps its three-element aggregate
+  // initializer; only a row that answers "yes" spells the fourth value out.
+  //
+  // Setting this to true REGISTERS a field and turns on the coverage assertion; it does not wire
+  // one up. Nothing walks this table to drive behaviour — ResetIneligibleScalarFields() and
+  // ApplyAppPreferencesOverride() (user_defaults.cpp) each name their field by hand. So adding the
+  // second member of this namespace means three edits, not one: this bit, a line in each of those
+  // two functions. That is the deliberate cost of not building a general registry for a
+  // single-member set; the coverage test is what makes forgetting the other two edits go red
+  // rather than silent.
+  bool app_preference_eligible = false;
 };
 
 // clang-format off
@@ -60,11 +82,16 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     // third one is the signal to stop and give sub-field tiers a registry of their own rather than
     // adding a third prose entry — and to notice that the gate below cannot see any of them.
     { "renderer",                   FieldTier::kStructSoft, false },
-    // use_gpu_backend: registered kStructSoft for governance coverage, but NOT in ConfigSnapshot's
-    // From/ApplyTo (view/session field intentionally excluded from Revert baseline). No baseline →
-    // no diff possible; legacy DIRTY_IF wrapper (panels.cpp:1067) drives dirty. See SUMMARY.md AC1
-    // for the second predicted exception found during M2 implementation (per plan §7 risk 5 门槛).
-    { "use_gpu_backend",            FieldTier::kStructSoft, true  },
+    // use_gpu_backend. Two independent bits, for two unrelated reasons:
+    //   auto_diff_excluded=true      — it is NOT in ConfigSnapshot's From/ApplyTo (a view/session
+    //                                  field deliberately outside the Revert baseline), so there is
+    //                                  no baseline to diff against; the legacy DIRTY_IF wrapper in
+    //                                  panels.cpp drives dirty for it instead.
+    //   app_preference_eligible=true — the user CAN store this one as a personal default, but only
+    //                                  through the override file's `app` root key, never through
+    //                                  the document half. See user_defaults.hpp's app-preferences
+    //                                  block and doc/gui-state-governance.md §8.
+    { "use_gpu_backend",            FieldTier::kStructSoft, true, true },
 
     // ==== T-struct·hard: re-sim + display clear + epoch floor bump ==============================
     { "filters",                    FieldTier::kStructHard, false },

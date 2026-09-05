@@ -117,6 +117,9 @@
 ## 3. 设计原则（硬约束）
 
 - **legacy = ground truth；当前 Metal 代码至多作参考，不照搬**（owner 定调：可推翻重写，别过早陷入"修当前实现"的局部陷阱）。
+  这条同时是 **GUI 工厂默认走 legacy CPU** 的第一条理由——两者是同一件事的两面。另外两条理由
+  （用途分工：GPU 适合大光线量的高质量输出、CPU 适合拖滑杆式的快速调整；以及"不隐式翻转默认链路"
+  的接口哲学）连同这条，一起落在 `src/gui/gui_state.hpp` 的 `use_gpu_backend` 字段注释里。
 - **统计等价验收**（seam-design §3.6），度量用 **raw-XYZ parity**（`GetRawXyzResults` block-mean corr，避开 sRGB tonemap 失真；**2026-08-10 注**：该 getter 已于 v4.15 净删，今天的等价读法是 `LUMICE_AcquireResultFrame` + `LUMICE_FrameGetRawXyz`，度量本身不变），覆盖单/多 MS × 有/无 filter，对 legacy。
 - **device 续传 gate 融进 kernel 逐跳 emit**（非"把 host hop 搬上 device"）：每 emit 一条离开光线（此刻 `path[]`=路径至今在寄存器）当场 device prob+filter → 续传写 continuation buffer / 输出写 exit buffer / fail 丢。三重收益：①逐位对齐 legacy `CollectData`（它就是逐跳对每条离开光线用"路径至今"判 filter，simulator.cpp:426）；②**天然修掉 §2.4 的 +16% bug**（其根因正是解耦的 host 重建；inline 用寄存器路径至今，单 MS exit 已证此 path 对 → correct-by-construction）；③E4 证融入零额外代价。
 - **frame-transit 落点（C3，2026-06-14 精化）**：emit gate 只融 **prob + filter**——它们依赖"路径至今"，必须在离开那跳、寄存器里做。**frame-transit（重采下一层晶体取向 `InitRay_rot` + `ApplyInverse` + 重采入射点/面 `InitRay_p_fid`）不依赖路径、依赖\*下一层晶体几何\*，放到\*下一层 dispatch 的 kernel 入口\***（该 dispatch 已绑定自己那块晶体）。**为什么不塞进 emit gate**：多晶体场景（Scrum 1 验收 config 即 7 晶体）下，若 frame-transit 在 emit 那跳做，gate 就需要下一层全部晶体几何池 + per-ray 选择 = 把 concern #5 几何池提前拽进 Scrum 1，与"几何池留 Scrum 2"自相矛盾。切在 ingest 则：emit gate 保持 path-local、几何池干净留 Scrum 2、per-ray 下一层晶体路由变成层间 compaction 的一步（wavefront Recombine 本就该建模）。**此边界须在 Scrum 1 设计期钉死，否则实现中途会撞"多晶体 gate 做不了 device frame-transit"。**
