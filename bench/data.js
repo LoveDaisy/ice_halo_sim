@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788594959351,
+  "lastUpdate": 1788594961770,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,50 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "163ff642d86a80c43b8197a2ba57a5016cd6d6a7",
-          "message": "Merge pull request #213 from LoveDaisy/feat/geometry-pool-and-topology-reuse\n\nfeat(geometry-perf): per-ray K-shape pool on both GPU backends + geometry representation diagnosis",
-          "timestamp": "2026-07-20T11:37:25+08:00",
-          "tree_id": "099175e5599952910c54ce6d8ff31717f756c00f",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/163ff642d86a80c43b8197a2ba57a5016cd6d6a7"
-        },
-        "date": 1784519100054,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 78.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 98.8,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 97.5,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 92.1,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "4057ce13d077863ae1027d799f1fe8d4c8fe1cb0",
           "message": "Merge pull request #214 from LoveDaisy/feat/geometry-closed-form-representation\n\nfeat(geometry): closed-form hex crystal representation (scrum-386)",
           "timestamp": "2026-07-21T13:25:10+08:00",
@@ -13901,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 89,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f1822e52c6d59ab2c203aa7ef388cb2b50f4e2df",
+          "message": "Merge pull request #311 from LoveDaisy/feat/gpu-backend-user-preference\n\nfeat(gui): \"Use GPU\" 可存为个人默认（覆盖文件新增 app 根键），工厂默认仍是 CPU",
+          "timestamp": "2026-09-05T15:44:47+08:00",
+          "tree_id": "b61f1340307f90b27cb42c9f0d3c8a930fc8a63c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f1822e52c6d59ab2c203aa7ef388cb2b50f4e2df"
+        },
+        "date": 1788594960911,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 82.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.6,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 96.2,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 88.4,
             "unit": "%"
           }
         ]
