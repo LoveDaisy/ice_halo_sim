@@ -200,10 +200,12 @@ class Simulator {
   // never chosen for sampling quality. 1 = a fresh shape per ray (the oracle).
   // Resolved from env at Run() entry.
   //
-  // SAFE RANGE [1, 64] -- values >= 128 corrupt the heap, because this doubles as
-  // the ray-batch stride and SimulateOneWavelength's buffers only hold
-  // ray_num*2 == 256 for a 128-ray SimBatch. See env_knobs.hpp GeomClock() for
-  // the measured exit codes and the full mechanism before raising it.
+  // This doubles as the ray-batch stride. It used to carry a heap-corruption
+  // ceiling at the SimBatch size for that reason; ResetHitLoopBuffers removed it
+  // by sizing the hit-loop buffer pair against buffer_data[0]'s capacity instead
+  // of against the batch. Values past the dispatch granularity are now a no-op
+  // rather than unsafe -- see env_knobs.hpp GeomClock() for the before/after
+  // measurement and why raising this alone stops having an effect.
   size_t geom_clock_ = kSmallBatchRayNum;
   // Deterministic half of the reported crystal-geometry count for the config
   // currently in hand — a pure function of that config (see

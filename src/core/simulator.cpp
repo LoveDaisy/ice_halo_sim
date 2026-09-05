@@ -615,6 +615,12 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 // 2 * capacity_ - 2 slots, which twice buffer_data[0]'s capacity covers with two
 // slots to spare. The relationship holds regardless of how many extra normal
 // children a hit produces, and no ray is dropped to achieve it.
+//
+// This is the same bound, for the same reason, that CpuTraceBackend already
+// applies to its own workspace pair (`workspace[1].Reset(layer_ray_num * 4)` in
+// cpu_trace_backend.cpp, whose comment records the ASan-diagnosed
+// heap-buffer-overflow that *2 caused there). That path was fixed and this one
+// was not — keep the two in step if either changes.
 void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num) {
   buffer_data[0].Reset(ray_num * 2);
   // Read the capacity back rather than recomputing `ray_num * 2`: Reset is
