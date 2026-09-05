@@ -23,11 +23,15 @@
 // finishes and the preview stays blank; a warning re-opens on every 70 ms commit while a slider is
 // dragged and the window stops responding.
 
+#include <algorithm>
 #include <chrono>
+#include <memory>
 #include <string>
 
 #include "IconsFontAwesome6.h"
 #include "gui/gui_constants.hpp"  // kIdleHeartbeatIntervalMs — the completed run's slow poll interval
+#include "gui/gui_logger.hpp"
+#include "gui/log_sink.hpp"
 #include "gui/server_poller.hpp"
 #include "test_gui_shared.hpp"
 
@@ -102,6 +106,44 @@ struct ScopedRunBaseline {
     gui::g_state.display_epoch_floor = 0;
     gui::g_state.dirty = false;
   }
+};
+
+// Counts server reconstructions by reading the line the reconstruction function logs, which is the
+// only signal of "a rebuild happened" that does not rest on an allocator promise nobody made.
+//
+// It installs its own sink rather than reading g_imgui_log_sink: that one may be absent (gui_logger
+// builds it, but nothing here guarantees the order) and, if present, carries every other case's
+// output, so a count off it would be a count of whatever ran before.
+struct ScopedReconstructionLog {
+  ScopedReconstructionLog() : sink(std::make_shared<gui::ImGuiLogSink>()) {
+    gui::GetGuiLogger().sinks().push_back(sink);
+    previous_level = gui::GetGuiLogger().level();
+    if (previous_level > spdlog::level::info) {
+      gui::GetGuiLogger().set_level(spdlog::level::info);  // the line is logged at INFO
+    }
+  }
+
+  ~ScopedReconstructionLog() {
+    auto& sinks = gui::GetGuiLogger().sinks();
+    sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+    gui::GetGuiLogger().set_level(previous_level);
+  }
+
+  ScopedReconstructionLog(const ScopedReconstructionLog&) = delete;
+  ScopedReconstructionLog& operator=(const ScopedReconstructionLog&) = delete;
+
+  int ReconstructionCount() const {
+    int count = 0;
+    sink->ForEachEntry([&count](size_t, const gui::LogEntry& entry) {
+      if (entry.message.find("Reconstructing server") != std::string::npos) {
+        ++count;
+      }
+    });
+    return count;
+  }
+
+  std::shared_ptr<gui::ImGuiLogSink> sink;
+  spdlog::level::level_enum previous_level = spdlog::level::info;
 };
 
 // Smallest scene that still produces a real frame: the lowest simulation resolution and a finite
@@ -512,7 +554,13 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
   // The worker count is a construction-time server property, so changing it has to reach the
   // backend the only way such a property can: by rebuilding the server. This case is the GUI half
   // of the CLI's --workers evidence (test_cli.py's TestWorkerCount) — there is no stdout to grep
-  // here, so the observation point is the tracker the reconstruction function publishes.
+  // here, so the two observation points are the tracker the reconstruction publishes (which reads
+  // BACK from the LUMICE_ServerConfig it filled, not from the request) and the log line it emits.
+  //
+  // The log sink rather than pointer identity is what says "a rebuild happened". `g_server != old`
+  // is unsound in both directions: the allocator is free to hand the new server the address the
+  // destroyed one just released, so a real rebuild can leave the pointer equal — observed, not
+  // theorised, while calibrating this case against a deliberately broken build.
   //
   // Registered here rather than in test_scene_controls.cpp, where the "Use GPU" toggle's widget
   // case lives: that case has no live server, and a reconstruction assertion needs one. This file
@@ -527,20 +575,19 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     gui::g_state.use_gpu_backend = false;
     IM_CHECK_EQ(gui::g_server_worker_count, 0);  // the fixture's fresh LUMICE_CreateServer default
 
-    LUMICE_Server* const before = gui::g_server;
+    const ScopedReconstructionLog log;
     gui::g_state.worker_count = 2;
     gui::DoRun(/*user_initiated=*/true);
     ctx->Yield(2);
     IM_CHECK_EQ(gui::g_server_worker_count, 2);
-    IM_CHECK(gui::g_server != before);  // a genuine rebuild, not just a tracker write
+    IM_CHECK_EQ(log.ReconstructionCount(), 1);
 
     // ...and the same value on the next run does NOT rebuild: the comparison is against what the
     // live server was built with, not "has anyone touched this field". Without this arm, a
     // reconstruction function that rebuilt unconditionally would pass everything above.
-    LUMICE_Server* const after_first = gui::g_server;
     gui::DoRun(/*user_initiated=*/true);
     ctx->Yield(2);
-    IM_CHECK_EQ(gui::g_server, after_first);
+    IM_CHECK_EQ(log.ReconstructionCount(), 1);
     IM_CHECK_EQ(gui::g_server_worker_count, 2);
   };
 

@@ -1028,7 +1028,11 @@ bool MaybeReconstructServerForConstructionProperties() {
   cfg.preferred_backend = want_gpu ? ResolveGpuBackend() : LUMICE_BACKEND_CPU;
   g_server = LUMICE_CreateServerEx(&cfg);
   g_server_is_gpu = want_gpu;
-  g_server_worker_count = want_workers;
+  // Read back from the config that was actually handed to the constructor, not from want_workers.
+  // The two are the same expression today; assigning the request would make this tracker agree
+  // with the request even if the line above stopped passing it on, which is precisely the defect
+  // the tracker is here to make observable.
+  g_server_worker_count = cfg.num_workers;
 
   // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
   LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
