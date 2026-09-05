@@ -67,11 +67,13 @@ Options:
                      'auto' and 'cpu' both select the CPU route today; 'metal'
                      falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
                      env var, if set, still overrides this (debug/CI only).
-  --workers <N>      Number of CPU simulation worker threads (default: one per
-                     physical core). Machine-dependent, so it is a command-line
-                     switch rather than a config-file field: a config travels
-                     between machines and a worker count should not travel with it.
-                     Ignored on a GPU route (single engine) and in --benchmark mode.
+  --workers <N>      Number of CPU simulation worker threads (default: automatic —
+                     one per physical core, capped at a ceiling above which no
+                     machine measured ran faster; an explicit N is never capped).
+                     Machine-dependent, so it is a command-line switch rather than
+                     a config-file field: a config travels between machines and a
+                     worker count should not travel with it. Ignored on a GPU route
+                     (single engine) and in --benchmark mode.
   --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy
                      CPU route runs a dual pass (single-worker + multi-worker → per-core
                      and parallel-efficiency data); a GPU route is single-engine, so it
@@ -85,7 +87,7 @@ Notes:
 
 - `-f` is the only required flag. Without it, Lumice exits non-zero with a usage hint.
 - `--format png` switches to lossless PNG; `--quality` is ignored in that case.
-- `--workers <N>` overrides the default one-worker-per-physical-core. It is a switch rather than a config field on purpose: a worker count describes the machine, and a config file travels between machines. An illegal value (`0`, negative, non-numeric) exits non-zero rather than falling back to the default.
+- `--workers <N>` overrides the automatic worker count (one per physical core, capped at a measured ceiling; the cap applies to the automatic value only, never to an `N` you name). It is a switch rather than a config field on purpose: a worker count describes the machine, and a config file travels between machines. An illegal value (`0`, negative, non-numeric) exits non-zero rather than falling back to the default.
 - `--benchmark` is for performance regression testing — see [`../performance-testing.md`](../performance-testing.md). It is **not** how you run a normal simulation.
 
 ## 5. Performance expectations

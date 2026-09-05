@@ -159,6 +159,27 @@ class ServerImpl {
   // optimum is unchanged; not re-measured here).
   static constexpr size_t kDefaultCudaDispatchRayNum = 262144;
 
+  // Upper bound on the AUTOMATIC worker count only (num_workers == 0). An explicit
+  // num_workers > 0 is honoured verbatim, above this value included — a caller who
+  // names a number has said something this constant has no standing to overrule.
+  //
+  // Where the number comes from, and what it is not: it is not derived from any
+  // mechanism. It is the empirical lower edge of a plateau — across 2 CPUs
+  // (16-core x86 and a 12-core arm64), 3 operating systems (Linux/WSL2, native
+  // Windows, macOS) and 2 scene families (single- and multi-scattering), raising the
+  // worker count above 10 never once produced more throughput, while running at the
+  // full physical core count cost up to 33% of it on the 16-core box. The measured
+  // peak sat at 10 on BOTH machines despite their different core counts, which is why
+  // this is an absolute constant rather than a fraction of PhysicalCoreCount().
+  //
+  // Honest boundary: the sample is 2 CPUs. A machine that genuinely scales past 10
+  // workers would be left throughput on the table by this default — no such machine
+  // was observed, but none was ruled out either. Such a machine's escape hatch is the
+  // explicit path above (CLI --workers N, or the GUI's app-level worker preference),
+  // and the CLI's --benchmark mode:multi pass still reports the full-core figure, so
+  // the comparison that would reveal it stays available.
+  static constexpr int kMaxDefaultWorkerCount = 10;
+
   void ConsumeData();
   void GenerateScene();
   // Publish drained_epoch_ if the current epoch is fully consumed.
@@ -469,7 +490,7 @@ ServerImpl::ServerImpl(int num_workers, uint32_t sim_seed, BackendKind preferred
   if (gpu_route) {
     worker_count = 1;  // GPU route: single engine (task-268.7; CUDA joined 296.6)
   } else {
-    worker_count = num_workers > 0 ? num_workers : PhysicalCoreCount();
+    worker_count = num_workers > 0 ? num_workers : std::min(PhysicalCoreCount(), kMaxDefaultWorkerCount);
     if (sim_seed != 0) {
       worker_count = 1;  // deterministic CPU contract: fixed seed → single worker
     }

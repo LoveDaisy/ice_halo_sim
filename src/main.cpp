@@ -209,11 +209,13 @@ void PrintUsage(const char* prog_name) {
             << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
             << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
             << "                     env var, if set, still overrides this (debug/CI only).\n"
-            << "  --workers <N>      Number of CPU simulation worker threads (default: one per\n"
-            << "                     physical core). Machine-dependent, so it is a command-line\n"
-            << "                     switch rather than a config-file field: a config travels\n"
-            << "                     between machines and a worker count should not travel with it.\n"
-            << "                     Ignored on a GPU route (single engine) and in --benchmark mode.\n"
+            << "  --workers <N>      Number of CPU simulation worker threads (default: automatic —\n"
+            << "                     one per physical core, capped at a ceiling above which no\n"
+            << "                     machine measured ran faster; an explicit N is never capped).\n"
+            << "                     Machine-dependent, so it is a command-line switch rather than\n"
+            << "                     a config-file field: a config travels between machines and a\n"
+            << "                     worker count should not travel with it. Ignored on a GPU route\n"
+            << "                     (single engine) and in --benchmark mode.\n"
             << "  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy\n"
             << "                     CPU route runs a dual pass (single-worker + multi-worker → per-core\n"
             << "                     and parallel-efficiency data); a GPU route is single-engine, so it\n"
@@ -625,7 +627,8 @@ int main(int argc, char** argv) {
   bool benchmark_mode = false;
   int preferred_backend = LUMICE_BACKEND_CPU;
   // 0 = "not specified" — the same value LUMICE_ServerConfig::num_workers already uses to mean
-  // "one worker per physical core", so no separate was-it-set flag is needed.
+  // "let the server pick" (one per physical core, capped), so no separate was-it-set flag is
+  // needed.
   int cli_workers = 0;
   auto log_level = LUMICE_LOG_INFO;
 
@@ -787,6 +790,12 @@ int main(int argc, char** argv) {
     // is defined against. So --workers is ignored here — said out loud rather than swallowed, the
     // same way the --backend fallbacks above announce their substitution. The value is still
     // validated in the parse loop above; being ignored in this mode does not relax AC1.
+    //
+    // Note this is an EXPLICIT worker count (num_workers > 0), so it deliberately escapes the cap
+    // the automatic default is subject to (kMaxDefaultWorkerCount, server.cpp). On a machine with
+    // more physical cores than that cap, "multi" therefore no longer reports the throughput the
+    // shipping default produces: it reports full-core parallel efficiency, which is what this
+    // pass is FOR. doc/performance-testing.md says the same thing to whoever reads the number.
     if (cli_workers != 0) {
       std::cerr << "Warning: --workers is ignored in --benchmark mode; the single/multi passes use "
                    "their own fixed worker counts by design.\n";
@@ -815,8 +824,9 @@ int main(int argc, char** argv) {
     // (kept labelled "multi" for output continuity) and skip the meaningless warmup
     // pass. Only the legacy CPU route keeps the genuine dual-pass: "single" = 1
     // worker (per-core efficiency), "multi" = PhysicalCoreCount() workers (real
-    // parallelism). LUMICE_WillUseGpuRoute is env-aware (LUMICE_TRACE_BACKEND wins
-    // over --backend), so this matches how bench_throughput.py selects a GPU run.
+    // parallelism — full-core, which is above the shipping default's cap on a
+    // machine with many cores; see the note at the top of this branch). LUMICE_WillUseGpuRoute is env-aware
+    // (LUMICE_TRACE_BACKEND wins over --backend), so this matches how bench_throughput.py selects a GPU run.
     bool gpu_route = LUMICE_WillUseGpuRoute(preferred_backend) != 0;
 
     if (!gpu_route) {
@@ -846,7 +856,8 @@ int main(int argc, char** argv) {
     }
 
     // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()
-    // workers (parallel); GPU = the single engine (the representative steady figure).
+    // workers (parallel — explicit, so uncapped: this is the parallel-efficiency figure,
+    // not the shipping default); GPU = the single engine (the representative steady figure).
     int multi_workers = gpu_route ? 1 : lumice::PhysicalCoreCount();
     RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level, preferred_backend);
 
@@ -860,7 +871,7 @@ int main(int argc, char** argv) {
 
   LUMICE_ServerConfig server_config{};
   server_config.preferred_backend = preferred_backend;
-  server_config.num_workers = cli_workers;  // 0 = one worker per physical core (server.cpp)
+  server_config.num_workers = cli_workers;  // 0 = automatic: one per physical core, capped (server.cpp)
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 

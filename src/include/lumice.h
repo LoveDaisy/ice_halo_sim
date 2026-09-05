@@ -446,7 +446,10 @@ typedef struct LUMICE_StatsResult_ {
 
 // =============== Server Configuration ===============
 typedef struct LUMICE_ServerConfig_ {
-  int num_workers;        // CPU route only: worker count (0 = PhysicalCoreCount()).
+  int num_workers;        // CPU route only: worker count (0 = automatic: the physical core
+                          // count, capped — see kMaxDefaultWorkerCount in server.cpp for the
+                          // value and the measurements behind it). A value > 0 is honoured
+                          // verbatim and is NOT subject to that cap.
                           // Ignored on the GPU/Metal route (always one engine, task-268.7).
   unsigned int sim_seed;  // Deterministic seed for the worker RNG. 0 = random (default).
   int preferred_backend;  // LUMICE_BACKEND_CPU (0, multi-worker), LUMICE_BACKEND_METAL

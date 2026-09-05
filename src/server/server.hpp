@@ -322,7 +322,9 @@ class Server {
 
   /**
    * @brief Construct a new Server
-   * @param num_workers CPU route only: worker count (0 = PhysicalCoreCount()).
+   * @param num_workers CPU route only: worker count (0 = automatic: the physical core count,
+   *        capped — see kMaxDefaultWorkerCount in server.cpp). A value > 0 is honoured verbatim,
+   *        above that cap included.
    *        Ignored on the GPU/Metal route, which is always a single engine
    *        (task-268.7). The route is fixed at construction (see preferred_backend).
    * @param sim_seed Deterministic RNG seed. 0 = random; non-zero clamps CPU route to 1 worker.

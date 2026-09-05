@@ -1253,9 +1253,9 @@ struct GuiState {
   // user_defaults.hpp's app-preferences block and doc/gui-state-governance.md §8.
   bool use_gpu_backend = false;
 
-  // Number of CPU simulation workers a NEW server is constructed with. 0 = one per physical core
-  // (LUMICE_ServerConfig::num_workers's own meaning for 0, server.cpp — deliberately the same
-  // convention rather than a second answer to "what does 0 mean here"). Like use_gpu_backend this
+  // Number of CPU simulation workers a NEW server is constructed with. 0 = automatic: one per
+  // physical core, capped (LUMICE_ServerConfig::num_workers's own meaning for 0, server.cpp —
+  // deliberately the same convention rather than a second answer to "what does 0 mean here"). Like use_gpu_backend this
   // is a construction-time property, so changing it reconstructs the server on the next DoRun via
   // MaybeReconstructServerForConstructionProperties; the GPU route is a single engine and ignores
   // it. UI-only: not serialized into a document (.lmc) and not in the Revert baseline
@@ -1270,9 +1270,11 @@ struct GuiState {
   // one use_gpu_backend uses, where a value stays on the machine that chose it. See
   // user_defaults.hpp's app-preferences block and doc/gui-state-governance.md §8.
   //
-  // No upper bound is enforced here. The empirical cap for this machine class is the subject of
-  // separate work; inventing an unmeasured one at the entry point would be a number nobody can
-  // defend. Oversubscribing threads is slow, not unsafe.
+  // No upper bound is enforced here, and that stays true now that the AUTOMATIC value has a
+  // measured one (kMaxDefaultWorkerCount, server.cpp): the cap answers "what should the program
+  // pick when nobody said", and a number typed into the Settings panel is somebody saying.
+  // Clamping it here would also put a second copy of that constant in a second file, where the
+  // two would drift. Oversubscribing threads is slow, not unsafe.
   int worker_count = 0;
 
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).

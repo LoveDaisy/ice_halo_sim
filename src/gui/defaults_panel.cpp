@@ -412,9 +412,12 @@ void RenderAppPreferences(const GuiState& state) {
   // environment variables would simply have found a different carrier. See gui_state.hpp's
   // worker_count comment and doc/gui-state-governance.md §8.
   //
-  // No upper bound: what a sensible ceiling would be on a given machine class has not been
-  // measured, and a number invented here is one nobody could defend. Oversubscribing threads is
-  // slow, not unsafe. The lower clamp is semantic, not a guess — negative is not a worker count.
+  // No upper bound. A ceiling HAS since been measured, but it caps the automatic value only
+  // (kMaxDefaultWorkerCount, server.cpp): it answers "what should the program pick when nobody
+  // said", and a number typed into this box is somebody saying. Clamping here would also put a
+  // second copy of that constant in a second file, where the two would drift. Oversubscribing
+  // threads is slow, not unsafe. The lower clamp is semantic, not a guess — negative is not a
+  // worker count.
   int workers = ReadWorkerCountFromDoc(g_copy_doc).value_or(GuiState{}.worker_count);
   // InputInt draws its label to the RIGHT of the box and, left to itself, takes CalcItemWidth() —
   // most of the window — which pushes both the label and the "(this window: N)" note off the right
@@ -428,8 +431,10 @@ void RenderAppPreferences(const GuiState& state) {
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
-        "How many CPU worker threads a NEW document's simulation runs on. 0 means one per physical "
-        "core. This is the stored preference — changing it here does not touch the current "
+        "How many CPU worker threads a NEW document's simulation runs on. 0 means automatic: one "
+        "per physical core, up to a measured ceiling above which no machine tested ran faster. A "
+        "number you type here is used as-is, ceiling included. This is the stored preference — "
+        "changing it here does not touch the current "
         "document, and it takes effect on the next new document. The GPU route is a single engine "
         "and ignores it.");
   }

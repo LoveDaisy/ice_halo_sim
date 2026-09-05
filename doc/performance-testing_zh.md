@@ -151,8 +151,10 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 偏低说明存在锁竞争、内存带宽饱和或调度开销。**仅对 legacy CPU 路线有意义**——见下方 GPU caveat。
 
 > **⚠️ GPU 后端是单引擎——不存在 "single" vs "multi" 并行。** GPU 路线（Metal / CUDA）无条件
-> `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（`worker_count =
-> PhysicalCoreCount()`）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
+> `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（默认
+> `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`；`--benchmark` 的 `multi` 趟
+> 显式请求满核，因此不受该上限约束——在核数高于上限的机器上，它量的是满核并行效率，不再等于出厂
+> 默认会跑出来的吞吐）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
 > 非并行），**`--benchmark` 对 GPU 路线塌成 ONE 稳态趟**（label `mode="multi"`）、跳过暖机趟；
 > legacy CPU 路线保留真双趟。路线检测是 env-aware 的（`LUMICE_WillUseGpuRoute` 认 `LUMICE_TRACE_BACKEND`，
 > 故 env 选的 GPU run 也塌）。读 GPU 结果时：

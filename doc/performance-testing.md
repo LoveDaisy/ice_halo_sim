@@ -87,10 +87,20 @@ The legacy CPU route runs a dual pass and prints one JSON per pass:
 `"mode":"single","workers":1` and `"mode":"multi","workers":N`. A GPU route is a single engine and
 prints one line only (`workers:1`).
 
-**The legacy CPU product path is `worker_count = PhysicalCoreCount()`** (`ServerImpl::ServerImpl`,
-`server.cpp:444`; only a fixed seed or a GPU route forces 1). So `mode:single` is a
-per-core/parallel-efficiency diagnostic — **it is not the shipping configuration**, and a
-`grep '"single"'` that looks right will quietly measure a config nobody runs.
+**The legacy CPU product path is `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`**
+(`ServerImpl::ServerImpl`, `src/server/server.cpp`; only a fixed seed or a GPU route forces 1, and an
+explicit `--workers N` / GUI worker preference overrides the whole expression, cap included). So
+`mode:single` is a per-core/parallel-efficiency diagnostic — **it is not the shipping
+configuration**, and a `grep '"single"'` that looks right will quietly measure a config nobody runs.
+
+**Neither is `mode:multi`, on a machine with more physical cores than that cap.** The `multi` pass
+asks for `PhysicalCoreCount()` workers explicitly, which is exactly why it escapes the cap: it is
+the denominator parallel efficiency is defined against. Read it as "how well does this box scale to
+all its cores", not as "what a user gets" — the two coincided before the default was capped, and on
+a high-core-count box they no longer do. When you want the shipping number, run a normal (non
+`--benchmark`) simulation, or pass `--workers` the capped value and read that. When you want to know
+whether the cap is costing this particular machine throughput, `mode:multi` is precisely the
+measurement that tells you.
 
 This is not a small correction — **effects can invert between the two passes**. Measured, tracing
 identical work (`face_distance` fixed, so zero construction), 20M rays:
@@ -285,7 +295,9 @@ scheduling overhead. **Meaningful for the legacy CPU route only** — see the GP
 
 > **⚠️ GPU backends are single-engine — there is no "single" vs "multi" parallelism.** The GPU
 > route (Metal / CUDA) runs `worker_count=1` unconditionally (`server.cpp:284`); only the legacy
-> CPU route is genuinely multi-worker (`worker_count = PhysicalCoreCount()`). Because a GPU
+> CPU route is genuinely multi-worker (`worker_count = min(PhysicalCoreCount(),
+> kMaxDefaultWorkerCount)` by default; the `multi` benchmark pass asks for full cores explicitly and
+> is therefore uncapped — see §A). Because a GPU
 > "single" and "multi" pass would both run on the same one engine (differing only by warmup +
 > ray-count, not parallelism), **`--benchmark` collapses the GPU route to ONE steady pass**
 > (labelled `mode="multi"`) and skips the warmup pass; the legacy CPU route keeps the genuine

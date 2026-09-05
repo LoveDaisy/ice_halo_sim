@@ -67,11 +67,13 @@ Options:
                      'auto' and 'cpu' both select the CPU route today; 'metal'
                      falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
                      env var, if set, still overrides this (debug/CI only).
-  --workers <N>      Number of CPU simulation worker threads (default: one per
-                     physical core). Machine-dependent, so it is a command-line
-                     switch rather than a config-file field: a config travels
-                     between machines and a worker count should not travel with it.
-                     Ignored on a GPU route (single engine) and in --benchmark mode.
+  --workers <N>      Number of CPU simulation worker threads (default: automatic —
+                     one per physical core, capped at a ceiling above which no
+                     machine measured ran faster; an explicit N is never capped).
+                     Machine-dependent, so it is a command-line switch rather than
+                     a config-file field: a config travels between machines and a
+                     worker count should not travel with it. Ignored on a GPU route
+                     (single engine) and in --benchmark mode.
   --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy
                      CPU route runs a dual pass (single-worker + multi-worker → per-core
                      and parallel-efficiency data); a GPU route is single-engine, so it
@@ -85,7 +87,7 @@ Options:
 
 - `-f` 是唯一必需 flag。不带它会以非零退出并打印 usage 提示。
 - `--format png` 切到无损 PNG，此时 `--quality` 被忽略。
-- `--workers <N>` 覆盖「每个物理核一个 worker」这个默认值。它是命令行开关而不是 config 字段，是有意的：worker 数描述的是**机器**，而 config 文件会在机器之间流转。非法值（`0` / 负数 / 非数字）以非零退出，不静默回退到默认值。
+- `--workers <N>` 覆盖自动 worker 数（每个物理核一个，但有一个实测上限；该上限只作用于自动值，你显式给出的 `N` 永远不受它约束）。它是命令行开关而不是 config 字段，是有意的：worker 数描述的是**机器**，而 config 文件会在机器之间流转。非法值（`0` / 负数 / 非数字）以非零退出，不静默回退到默认值。
 - `--benchmark` 用于性能回归测试 — 详见 [`../performance-testing_zh.md`](../performance-testing_zh.md)，**不是**普通模拟用法。
 
 ## 5. 性能预期

@@ -398,7 +398,7 @@ TEST_F(UserDefaults, WorkerCountRoundTripThroughTheAppRootKey) {
   EXPECT_TRUE(doc["app"].contains("worker_count"));
   EXPECT_FALSE(doc.contains("worker_count")) << "the value must NOT land at the document half's top level";
 
-  // 0 is the factory value AND a legal stored answer ("one per physical core, explicitly"). The two
+  // 0 is the factory value AND a legal stored answer ("let the program pick, explicitly"). The two
   // resolve alike only while the factory value stays where it is, which is why the write path
   // records it rather than treating it as an erase — same argument as `false` above.
   gui::WriteWorkerCountToDoc(doc, 0);
