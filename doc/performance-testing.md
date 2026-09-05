@@ -172,6 +172,50 @@ discipline:
    after the fact — the fix is rule 3's `ray_num` floor, large enough that the run reliably
    spans multiple poll intervals and lands on `steady` instead.
 
+## ⚠️ A local build is not the shipped binary: `-march=native` is on by default here and off everywhere else
+
+This one is not about *which* number `--benchmark` reports; it is about *which binary* produced
+it. It has already cost one cross-platform conclusion, which was written down and acted on
+before the cause was found.
+
+**Mechanism.** `option(LUMICE_NATIVE_ARCH ... ON)` (`CMakeLists.txt:43`) expands to
+`-march=native` for Release builds on GCC/Clang (`CMakeLists.txt:733`). Three facts about who
+passes it:
+
+- **Local**: `scripts/build.sh` does not pass the option at all, so every local build takes the
+  `ON` default. That default is deliberate — a developer machine should build for itself.
+- **Shipped**: `.github/workflows/release.yml:135` and all seven configure steps in
+  `.github/workflows/ci.yml` pass `-DLUMICE_NATIVE_ARCH=OFF` explicitly. What ships, and what CI
+  measures, is the baseline ISA.
+- **MSVC**: the option is only read inside the `if(NOT MSVC)` branch, so a Windows/MSVC build has
+  no equivalent to turn on. It is *structurally* incapable of being on the local side of this gap.
+
+**Consequence.** A throughput number taken from a local non-MSVC build is systematically
+optimistic relative to the binary that ships (measured on this codebase, Zen 5 / GCC 13.3:
+1.9–2.3×). Worse, a Windows-vs-anything A/B run on two default local builds compares a
+native-ISA binary against a baseline-ISA one, and nothing anywhere warns you: both builds
+succeed, both print plausible numbers, and the ratio between them is partly an artifact of a
+compiler flag rather than of whatever you were trying to measure.
+
+**Rules.**
+
+1. **Any number that leaves your machine — a cross-platform comparison, a figure quoted in an
+   issue, a doc, or a review — must be taken with `-DLUMICE_NATIVE_ARCH=OFF`.** That is the
+   configuration release and CI use, and the only one comparable across platforms.
+2. **Day-to-day local iteration can keep the `ON` default.** This is not a rule against
+   `-march=native`; it is a rule about where the resulting number is allowed to travel. A
+   before/after A/B of your own change, taken on the same machine with the same setting on both
+   arms, is unaffected.
+3. **Read the `isa` key rather than trying to remember.** Every `[BENCHMARK]` line carries
+   `"isa": "native"` or `"isa": "baseline"` (`src/main.cpp`, `RunBenchmarkPass`, gated by the
+   `LUMICE_NATIVE_ARCH_ACTIVE` macro that `CMakeLists.txt`'s `LUMICE_NATIVE_ARCH_ACTIVE_COND`
+   defines from the same condition as the `-march=native` flag itself). An old log therefore
+   answers "which build was this?" on its own, with no configure log needed. `baseline` is the
+   comparable tier; two rows may only be compared with each other when their `isa` values match.
+4. **Watch the configure line.** Every `cmake` configure prints one `-- LUMICE_NATIVE_ARCH=...`
+   status line saying which tier this build tree is on.
+
+
 ## 1. CLI Pipeline Benchmark
 
 Pure pipeline throughput test without GUI, VSync, or display overhead.
@@ -187,8 +231,8 @@ efficiency, followed by a multi-worker pass for parallel throughput. Two JSON li
 output:
 
 ```
-[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.51, "setup_sec": 0.01, "active_sec": 8.5, "rays_per_sec": 235294.1, "rate_basis": "steady"}
-[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 0.6, "setup_sec": 0.02, "active_sec": 0.58, "rays_per_sec": 17241379.3, "rate_basis": "steady"}
+[BENCHMARK] {"mode": "single", "workers": 1, "cores": 8, "rays": 2000000, "wall_sec": 8.51, "setup_sec": 0.01, "active_sec": 8.5, "rays_per_sec": 235294.1, "rate_basis": "steady", "isa": "native"}
+[BENCHMARK] {"mode": "multi", "workers": 8, "cores": 8, "rays": 10000000, "wall_sec": 0.6, "setup_sec": 0.02, "active_sec": 0.58, "rays_per_sec": 17241379.3, "rate_basis": "steady", "isa": "native"}
 ```
 
 `rays_per_sec` is the **steady trace rate** over `active_sec` (the window from
