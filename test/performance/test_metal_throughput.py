@@ -54,10 +54,22 @@ _HEAVY_CONFIGS = [
 ]
 
 # C2 sentinel floor: ratio below this = catastrophic regression / near-hang.
-# `rays_per_sec` is a SINGLE sample per run (no warm-up/median). Since
-# task-fix-throughput-bench-honesty the [BENCHMARK] rate is the steady trace
-# rate (setup excluded, 5ms poll), so it no longer deflates the fast Metal
-# backend.
+# `rays_per_sec` is a SINGLE sample per run (no warm-up/median).
+#
+# WHICH `rate_basis` THIS GATE ACTUALLY CONSUMES, measured rather than assumed:
+# the legacy arm reports `steady` on both configs, but the **Metal arm never
+# does**. `_HEAVY_CONFIGS` carry ray_num=2,000,000, which is below the Metal
+# drain quantum (2,097,152 = 64 batches * 32768 dispatch), so sim_ray_num is
+# published exactly once and no steady window exists — 240 runs gave
+# `wall_fallback` 96% / `active_short` 4%, `steady` zero times. The numerator is
+# therefore a wall-clock rate that still contains whatever setup the warm-up pass
+# did not absorb; measured ~13.0-13.5M vs the same scene's true steady rate of
+# ~13.9M at ray_num=20M, i.e. ~5% conservative. That is a ratio DEflation, so it
+# cannot manufacture a false green here — but the earlier `active_short` defect
+# could and did: that basis used to divide by IDLE-detection latency and reported
+# 266-390M rays/s on 4% of Metal runs, multiplying this ratio by ~20x with nothing
+# wrong. Fixed in `RunBenchmarkPass` (main.cpp), guarded by
+# test/regression-sentinel/test_benchmark_rate_not_impossible.py.
 #
 # THIS RATIO HAS A MOVING DENOMINATOR, and that has now bitten once. The floor
 # was 3.0, derived from a measured nominal of ~8-10x (bench_throughput.py
@@ -111,14 +123,26 @@ def _run_benchmark(config_name: str, metal: bool) -> dict:
     )
     fell_back = bool(_RE_FALLBACK.search(proc.stderr) or _RE_FALLBACK.search(proc.stdout))
     multi_rps = single_rps = 0.0
+    multi_basis = "?"
     for line in proc.stdout.splitlines():
         if "[BENCHMARK]" in line:
             data = json.loads(line.split("[BENCHMARK]", 1)[1].strip())
             if data.get("mode") == "multi":
                 multi_rps = float(data["rays_per_sec"])
+                # Reported, not asserted on: which basis each arm lands on is a
+                # property of the config's ray_num vs the backend's drain quantum
+                # (see the _SANITY_FLOOR comment), so pinning it would be pinning
+                # the gate's inputs. Printing it makes a future drift visible in
+                # the CI log instead of silent.
+                multi_basis = str(data.get("rate_basis", "?"))
             elif data.get("mode") == "single":
                 single_rps = float(data["rays_per_sec"])
-    return {"multi_rps": multi_rps, "single_rps": single_rps, "fell_back": fell_back}
+    return {
+        "multi_rps": multi_rps,
+        "single_rps": single_rps,
+        "fell_back": fell_back,
+        "multi_basis": multi_basis,
+    }
 
 
 @pytest.mark.slow
@@ -138,7 +162,8 @@ def test_metal_throughput_gate(config_name):
     print(
         f"[throughput] {config_name}: legacy_multi={legacy['multi_rps']:.0f} "
         f"metal_multi={metal['multi_rps']:.0f} ratio={ratio:.3f} "
-        f"(sanity>={_SANITY_FLOOR}, gate>={_GATE})"
+        f"(legacy_basis={legacy['multi_basis']}, metal_basis={metal['multi_basis']}; "
+        f"sanity>={_SANITY_FLOOR}, gate>={_GATE})"
     )
 
     # --- C2 sentinel: active gate, must pass on the landed engine today --------

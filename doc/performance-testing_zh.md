@@ -123,8 +123,11 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 ```
 
 `rays_per_sec` 是 `active_sec`（从首条光线追踪到 IDLE 的窗口）上的**稳态追踪率**，
-**不是** `rays / wall_sec`。`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）从分母
-剔除；`rate_basis` 记录产出该率的路径。这个 setup-剔除修复（task-fix-throughput-bench-honesty）
+**不是** `rays / wall_sec`——但这只在 `rate_basis` 为 `steady` 时成立，而这正是
+`rate_basis` 这个字段存在的意义。两个退化档（`wall_fallback` / `active_short`）都退回
+`rays / wall_sec`，此时该字段是含 setup 的**下界**，分母也不是 `active_sec`。
+`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）只在 `steady` 档从分母剔除；
+`rate_basis` 记录产出该率的路径。这条 setup-剔除规则
 对整个 run 只 ~0.2s 的快后端很重要——折进 setup 会把它们的 rays_per_sec 压低 >30%。
 
 **两套独立的 `rate_basis` 阶梯**（消费者/gate 按走的哪条路径判定，不按全集字符串相等判）：
