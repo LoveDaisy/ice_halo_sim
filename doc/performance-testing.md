@@ -865,18 +865,19 @@ scenes**:
 heavy scene's −15% — not a net win, just a different scene favored. The constant also doubles as
 the default commit granularity (`kCommitCap = env::CommitRayNum(logger_, kDefaultRayNum)`,
 `src/server/server.cpp:1324`), so raising it would coarsen the GUI snapshot cadence as a side
-effect: its reach is wider than CPU throughput alone. Note this makes the *worker count*, not the
-batch size, the knob worth touching on this route (see the capped default at
-`kMaxDefaultWorkerCount`, `src/server/server.cpp:181`).
+effect: its reach is wider than CPU throughput alone. (Pointer, not a finding of this sweep: the
+worker count sits on a separate axis from batch size and is capped independently at
+`kMaxDefaultWorkerCount`, `src/server/server.cpp:181`.)
 
 **The batch size has a hard floor below 40 rays, and the failure mode is a crash, not a slowdown.**
 `LUMICE_DISPATCH_RAY_NUM` ≤ 32 on the light scene family faults deterministically inside
 `RayBuffer::DupOverflowSlot` (`src/config/sim_data.cpp:158`), on both platforms: on x86/Linux
 every run at 8/16/24/32 died with SIGSEGV and every run at 40/48/64/96/128 was clean; on
 arm64/macOS 16 and 32 gave SIGSEGV and 8 gave an abort, again with ≥ 40 clean. The heavy scene
-runs fine at those same batch sizes (8/16/32/64 all green), so this floor is scene-dependent too. Today the user-facing exposure is zero
-(the default is 128 and nothing ships a smaller one), but any proposal to lower the batch is
-blocked by it, and a sweep that walks below 40 will die rather than report a number.
+runs fine at those same batch sizes (8/16/32/64 all green), so this floor is scene-dependent too.
+Today the user-facing exposure is zero (the default is 128 and nothing ships a smaller one), but
+any proposal to lower the batch is blocked by it, and a sweep that walks below 40 will die rather
+than report a number.
 
 **GPU device root-gen (scrum-260)**: on the GPU backends, root rays (orientation / direction /
 entry point) are generated on-device via a counter-based PCG stream keyed by

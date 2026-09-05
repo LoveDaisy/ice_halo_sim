@@ -582,8 +582,8 @@ push 到 `main` 的 benchmark 结果会通过
 **为什么 `kDefaultRayNum` 保持 128。** 改成 256 是拿轻场景的 +16% 去换重场景的 −15%，不是净胜，
 只是换一个被偏袒的场景。这个常数还兼任提交粒度的默认值（`kCommitCap =
 env::CommitRayNum(logger_, kDefaultRayNum)`，`src/server/server.cpp:1324`），抬高它会连带把 GUI
-快照节奏变粗：它的射程比纯 CPU 吞吐更宽。另请注意，这条路径上真正值得动的旋钮是 **worker 数**
-而不是批大小（见 `kMaxDefaultWorkerCount` 处的默认值上限，`src/server/server.cpp:181`）。
+快照节奏变粗：它的射程比纯 CPU 吞吐更宽。（补充指针，非本次扫描的结论：worker 数是与批大小
+独立的另一条轴，其默认值单独由 `kMaxDefaultWorkerCount` 封顶，`src/server/server.cpp:181`。）
 
 **批大小有一个 <40 光线的硬地板，且失效形态是崩溃而不是变慢。** `LUMICE_DISPATCH_RAY_NUM` ≤ 32
 在轻场景族上确定性地崩在 `RayBuffer::DupOverflowSlot` 内（`src/config/sim_data.cpp:158`），
