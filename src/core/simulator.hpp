@@ -249,6 +249,16 @@ class Simulator {
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
 
+// Single owner of the hit-loop buffer-pair capacity contract. The pair is a
+// producer/consumer ping-pong (buffer_data[0] holds a hit's input rays,
+// buffer_data[1] receives their two-child fan-out), so their sizes are NOT
+// independent: buffer_data[1] must absorb twice whatever buffer_data[0] can
+// hold. Sizing the two separately is what let a fan-out write past the end of
+// buffer_data[1] — see the definition in simulator.cpp for the full mechanism.
+//
+// Internal: exposed for unit testing; not part of the public C API.
+void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num);
+
 // Per-batch ray dispatcher: classifies each ray via derived predicates
 // (IsNormal() / IsOutgoing() / IsContinue() / IsTir()) and routes
 // IsContinue() rays into the next ms init buffer. Design A filter semantics:

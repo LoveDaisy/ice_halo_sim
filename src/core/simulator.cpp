@@ -612,9 +612,9 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 //
 // The bound below closes that: RayBuffer::EmplaceBack's `size_ + 1 < capacity_`
 // guard caps buffer_data[0].size_ at capacity_ - 1, so a fan-out needs at most
-// 2 * capacity_ - 2 slots, which `in_cap * 2` covers with room to spare. The
-// relationship holds regardless of how many extra normal children a hit
-// produces, and no ray is dropped to achieve it.
+// 2 * capacity_ - 2 slots, which twice buffer_data[0]'s capacity covers with two
+// slots to spare. The relationship holds regardless of how many extra normal
+// children a hit produces, and no ray is dropped to achieve it.
 void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num) {
   buffer_data[0].Reset(ray_num * 2);
   // Read the capacity back rather than recomputing `ray_num * 2`: Reset is

@@ -250,7 +250,7 @@
         }
       ]
     },
-    "ray_num": 20000,
+    "ray_num": 400000,
     "max_hits": 8,
     "scattering": [
       {
@@ -272,8 +272,8 @@
         "f": 14
       },
       "resolution": [
-        1920,
-        1080
+        320,
+        180
       ],
       "lens_shift": [
         0,

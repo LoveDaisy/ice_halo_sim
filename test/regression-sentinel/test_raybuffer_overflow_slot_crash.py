@@ -34,13 +34,26 @@ sizes could not tell "always crashes" apart from "crashes only in the
 zero-margin regime", which is the property being guarded.
 
 Scenario: `test/e2e/configs/repro_raybuffer_overflow_slot_crash.json` is the
-single-MS-layer scene from the original report (8 crystal definitions, 7 filter
-definitions, one scattering layer at prob 0, max_hits=8), reduced only in ray
-budget so the case stays in the fast pool. Note max_hits=8 is BELOW
-`RaypathRecorder::kInlineCap == 15`, so this scene legitimately never needs an
-overflow slot at all — every `HasOverflow()` seen here is corrupted state, which
-is what separates this defect from the max_hits>15 one guarded by
-test_max_hits_crash.py.
+single-MS-layer scene from the original report — its 8 crystal definitions, 7
+filter definitions, light source and one scattering layer (prob 0, max_hits=8)
+are carried over verbatim. Only two knobs were retuned, neither of which touches
+the trace loop the defect lives in: the ray budget (4e6 -> 4e5) and the render
+resolution (1920x1080 -> 320x180, which only shrinks the JPEG encode). Note
+max_hits=8 is BELOW `RaypathRecorder::kInlineCap == 15`, so this scene
+legitimately never needs an overflow slot at all — every `HasOverflow()` seen
+here is corrupted state, which is what separates this defect from the
+max_hits>15 one guarded by test_max_hits_crash.py.
+
+Honest boundary — this guard is probabilistic, not deterministic. The trigger is
+one ray behaving anomalously somewhere in the batch, and the binary exposes no
+seed knob, so the ray budget is the only dial on detection power. It was chosen
+by measurement against the pre-fix binary: at ray_num=1e5 the crash reproduced
+in only 4/8 to 7/8 runs per dispatch size, while at the ray_num=4e5 shipped here
+it reproduced 8/8 at every one of {8, 16, 24, 32} (32/32 overall). Post-fix each
+case runs in ~1.0s. The complementary deterministic half of this guard is
+`ResetHitLoopBuffers.*` in test/unit-correctness/core/test_simulator.cpp, which
+asserts the capacity contract directly and cannot flake; if you weaken this file,
+that one is what still has to hold.
 
 CPU-only by design: the crash lives in `Simulator::SimulateOneWavelength`, the
 legacy CPU trace loop. The GPU backends do not run that loop (they dispatch
@@ -54,6 +67,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 
 import pytest
 
@@ -70,13 +84,19 @@ def _run_with_dispatch_ray_num(dispatch_ray_num: int) -> subprocess.CompletedPro
     cfg = get_project_root() / "test" / "e2e" / "configs" / "repro_raybuffer_overflow_slot_crash.json"
     env = os.environ.copy()
     env["LUMICE_DISPATCH_RAY_NUM"] = str(dispatch_ray_num)
-    return subprocess.run(
-        [str(binary), "-f", str(cfg)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env=env,
-    )
+    # Run from a scratch directory: the config carries a render, so the binary
+    # writes img_01.jpg relative to the CWD. Without this the suite drops that
+    # file into whatever directory pytest was invoked from (the repo root, in
+    # practice).
+    with tempfile.TemporaryDirectory() as workdir:
+        return subprocess.run(
+            [str(binary), "-f", str(cfg)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+            cwd=workdir,
+        )
 
 
 @pytest.mark.parametrize("dispatch_ray_num", CRASHING_DISPATCH_SIZES + [CONTROL_DISPATCH_SIZE])
