@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788591148694,
+  "lastUpdate": 1788591151591,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -4782,54 +4782,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "f29881b3f101b6c06279e10954d789f5984d27bb",
-          "message": "Merge pull request #210 from LoveDaisy/chore/gbk-locale-parity-test-unicode\n\nfix(test): ASCII-ize parity test messages for GBK-locale Windows",
-          "timestamp": "2026-07-19T09:17:00+08:00",
-          "tree_id": "ec1b7089cc6b1d84ac772796a218885ef9dfbe58",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/f29881b3f101b6c06279e10954d789f5984d27bb"
-        },
-        "date": 1784424298837,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 1094052,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 1188377.1,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 775101.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 651496.4,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "abbef1227936e40b1753817142344886fae0de78",
           "message": "Merge pull request #209 from LoveDaisy/fix/cuda-unfreeze-geometry-randomization\n\nfix(cuda): unfreeze crystal-shape geometry randomization end-to-end",
           "timestamp": "2026-07-19T09:16:57+08:00",
@@ -9528,6 +9480,54 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 635446.8,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa044a6142525e887ef3e31b89027a953f00343b",
+          "message": "Merge pull request #308 from LoveDaisy/fix/clamp-uniform-zero-n\n\nfix(core): ClampUniformToIndex 的 n==0 前提由 assert 改为 FatalAbort 硬守卫",
+          "timestamp": "2026-09-05T14:40:02+08:00",
+          "tree_id": "b9b2c7baef1b585fa751319ac718c1a01132d770",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/fa044a6142525e887ef3e31b89027a953f00343b"
+        },
+        "date": 1788591151043,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 890579.3,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 1215507,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 822392.9,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 638937.6,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
           }
