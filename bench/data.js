@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788590063513,
+  "lastUpdate": 1788590066060,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,45 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "e22f9eea8e5d88a52b44452e88488b73c5bc9ec0",
-          "message": "Merge pull request #208 from LoveDaisy/fix/pyramid-geometry-crash-metal\n\nfix(core): pyramid + random face_distance Metal SIGSEGV (count/stride decouple)",
-          "timestamp": "2026-07-18T12:55:41+08:00",
-          "tree_id": "4664a91a1f187e7cb56fae546dfaa87d149d926c",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/e22f9eea8e5d88a52b44452e88488b73c5bc9ec0"
-        },
-        "date": 1784350992931,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "Ubuntu ARM64",
-            "value": 99.7,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 95.9,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "f29881b3f101b6c06279e10954d789f5984d27bb",
           "message": "Merge pull request #210 from LoveDaisy/chore/gbk-locale-parity-test-unicode\n\nfix(test): ASCII-ize parity test messages for GBK-locale Windows",
           "timestamp": "2026-07-19T09:17:00+08:00",
@@ -13896,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 93.1,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "distinct": true,
+          "id": "1f3a9c864ad290679f4f638c62e9bbf6be03a855",
+          "message": "Merge pull request #307 from LoveDaisy/fix/gui-test-harness-gates\n\ntest(gui): 闭合 gui_test 现场三处守卫可信度缺口——恒红闸 / 缺失的互比闸 / 注释纪律一致性",
+          "timestamp": "2026-09-05T14:15:53+08:00",
+          "tree_id": "2ca052b6512de4cebc819bec0838eb5723d8a739",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/1f3a9c864ad290679f4f638c62e9bbf6be03a855"
+        },
+        "date": 1788590065273,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 72.4,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.9,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 98.2,
             "unit": "%"
           }
         ]
