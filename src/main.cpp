@@ -500,6 +500,10 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
       const char* rate_basis = "wall_fallback";
       double window_sec = 0.0;
       LUMICE_RayCount window_rays = 0;
+      // Shared by `active_short` and `wall_fallback`: both degrade to a wall-clock
+      // lower bound (see the `active_short` branch comment below for why). Computed
+      // once so the two branches cannot silently diverge if only one is edited later.
+      const double wall_bounded_rate = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
       if (drain_count_mode) {
         if (window_closed && t_final_drain > t_first_drain && rays_at_final_drain > rays_at_first_drain) {
           window_sec = std::chrono::duration<double>(t_final_drain - t_first_drain).count();
@@ -514,10 +518,28 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
         rays_per_sec = static_cast<double>(r_end - rays_at_active_start) / active_sec;
         rate_basis = "steady";
       } else if (active_started && active_sec > 1e-4) {
-        rays_per_sec = static_cast<double>(r_end) / active_sec;
+        // Degenerate window: sim_ray_num was observed exactly ONCE (r_end ==
+        // rays_at_active_start), so there is no interior sample and `active_sec` measures
+        // IDLE-detection latency, not trace duration. On a GPU backend this is not
+        // hypothetical: sim_ray_num advances in whole drain quanta
+        // (kDefaultXyzDrainBatches * dispatch_size = 64 * 32768 = 2,097,152 rays with the
+        // Metal default), so a config whose entire ray_num is below one quantum publishes
+        // its counter exactly once, at the end — whether that publish shares a poll with
+        // the IDLE transition or precedes it by one is a race, which is why the same
+        // binary/config/machine alternated between `wall_fallback` and a measured 14-29x
+        // phantom rate at ~4% of runs when this branch divided by `active_sec` itself. Use
+        // the wall-clock denominator instead — it is a real duration that provably contains
+        // the whole trace, so the number is a conservative LOWER bound on the true rate
+        // rather than an unbounded upward fantasy. Same formula as `wall_fallback`, but
+        // the basis label is deliberately kept distinct: the two say different things
+        // (`active_short` = exactly one counter publish observed; `wall_fallback` = no
+        // usable active window at all), and merging them would change the rate_basis
+        // value set for no gain. See doc/performance-testing.md §C rule 5 for the full
+        // derivation (quantum value, 240-run measurement, short-window bias decay curve).
+        rays_per_sec = wall_bounded_rate;
         rate_basis = "active_short";
       } else {
-        rays_per_sec = wall_sec > 0 ? static_cast<double>(r_end) / wall_sec : 0.0;
+        rays_per_sec = wall_bounded_rate;
         rate_basis = "wall_fallback";
       }
 
@@ -564,16 +586,15 @@ void RunBenchmarkPass(const std::string& config_str, int num_workers, const char
                     << " rate_basis=wall_fallback — rays_per_sec includes one-time setup/context-init "
                     << "and is not a steady trace rate; do not use for perf comparison.\n";
         } else if (std::string_view(rate_basis) == "active_short") {
-          // active_short means the run's rays all landed in the single poll that first
-          // observed cur_rays > 0 (r_end == rays_at_active_start): active_sec is measuring
-          // IDLE-detection latency after that poll, not trace duration, so rays_per_sec can
-          // be off by orders of magnitude in either direction (measured on CUDA: a 10M-ray
-          // config reported 1.97 billion rays/s this way). Symmetric to the wall_fallback
-          // warning above — same remedy (a larger ray_num spanning multiple poll intervals).
+          // Mechanism: see the `active_short` branch comment above (where rate_basis is
+          // assigned) and doc/performance-testing.md §C rule 5. Not re-derived here so the
+          // two sites can't drift apart.
           std::cerr << "Warning: [BENCHMARK] mode=" << mode
-                    << " rate_basis=active_short — the run completed within a single poll "
-                    << "interval; active_sec is not a real trace duration and rays_per_sec "
-                    << "can be wildly wrong; do not use for perf comparison.\n";
+                    << " rate_basis=active_short — the run produced only a single "
+                    << "sim_ray_num observation (ray_num below one drain quantum), so no "
+                    << "steady window exists; rays_per_sec falls back to the wall-clock "
+                    << "denominator and includes setup — a lower bound, not a steady trace "
+                    << "rate; do not use for perf comparison.\n";
         }
         std::cout << "[BENCHMARK] " << result.dump() << "\n";
       }

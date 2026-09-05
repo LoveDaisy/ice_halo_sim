@@ -143,7 +143,7 @@ a "warm" run (init already paid by an earlier process) can measure a many-x cold
 is a **process-order artifact, not a property of the trace**. This mechanism was the source of
 the "stoch vs det 15.7×" cold/warm measurement artifact.
 
-Four defensive rules — the first is now enforced by the tool, the other three remain usage
+Five defensive rules — the first is now enforced by the tool, the rest remain usage
 discipline:
 
 1. **`--benchmark` runs one silent warm-up pass on the GPU route before the timed steady pass**
@@ -164,13 +164,33 @@ discipline:
    the reported pass falls through to `wall_fallback` or `active_short` (`src/main.cpp`
    `RunBenchmarkPass`, next to the `[BENCHMARK]` JSON emit) so neither can be missed silently.
    `active_short` fires when the whole run's rays land inside the single poll that first
-   observes `sim_ray_num > 0` — at that point `active_sec` is measuring IDLE-detection
-   latency after that poll, not real trace duration, and the resulting rate can be off by
-   orders of magnitude in either direction (measured on CUDA/RTX4060Ti: a 10M-ray config
-   reported `active_short` at 1.97 billion rays/s, ~30x the same hardware's real `steady`
-   rate). There is no cheap way to recover a trustworthy number from an `active_short` sample
-   after the fact — the fix is rule 3's `ray_num` floor, large enough that the run reliably
-   spans multiple poll intervals and lands on `steady` instead.
+   observes `sim_ray_num > 0`, so `active_sec` is measuring IDLE-detection latency after
+   that poll, not real trace duration. Its `rays_per_sec` therefore falls back to the
+   wall-clock denominator, the same one `wall_fallback` uses: setup-polluted and hence a
+   conservative **lower** bound, but bounded. It did not always: the branch used to divide
+   by `active_sec` itself, which made the published rate `ray_num / (k · poll_interval)` —
+   unbounded above as k → 1, and *only* ever biased upward, the direction a floor-style
+   gate cannot catch. Two measured instances: CUDA/RTX4060Ti reported 1.97 billion rays/s
+   on a 10M-ray config (~30× the same hardware's real `steady` rate), and mac/Metal
+   reported 266–390 M rays/s against a true 13.9 M rays/s on 4% of runs of the same
+   config (below). Rule 3's `ray_num` floor is still the remedy that gets you a *usable*
+   number; the change only stops the estimator from inventing one.
+
+5. **On a GPU backend, `ray_num` must exceed one drain quantum or the window has zero
+   interior samples.** `sim_ray_num` is published in whole drains of
+   `kDefaultXyzDrainBatches * dispatch_size` rays — **2,097,152** with the Metal default
+   dispatch of 32768 (`simulator.hpp` `kDefaultXyzDrainBatches` = 64). A config whose entire
+   `ray_num` is below that reads 0 at every poll and then publishes once, at the end: there
+   is no window to measure, and which basis you get is decided by a race between that publish
+   and the IDLE transition — same poll → `wall_fallback`, one poll apart → `active_short`.
+   Measured on mac/Metal with `ms_multi_crystal_complex_filter` at `ray_num=2,000,000`
+   (below the quantum): 240 black-box runs produced `steady` **zero** times. Raising
+   `ray_num` past the quantum restores interior samples and `steady` becomes reachable, but
+   is not yet trustworthy — at 2.5M/3M/4.5M rays (2–3 samples in the window) the same scene
+   measured up to +40%/+33%/+18% above its own median, decaying to the flat 13.9–14.0 M
+   rays/s that 20M and 200M report. This is rule 3's floor seen from the sampling side.
+   ⚠️ Measured on mac + Metal only; CUDA's default dispatch differs, so the quantum there is
+   a different number, not this one.
 
 ## ⚠️ A local build is not the shipped binary: `-march=native` is on by default here and off everywhere else
 
@@ -236,8 +256,12 @@ output:
 ```
 
 `rays_per_sec` is the **steady trace rate** over `active_sec` (the window from
-first traced ray to IDLE), NOT `rays / wall_sec`. `setup_sec` (server alloc +
-scene gen + first-dispatch latency) is excluded from the denominator;
+first traced ray to IDLE), NOT `rays / wall_sec` — but only on `rate_basis`
+`steady`, which is exactly what `rate_basis` is there to tell you. The
+degenerate bases (`wall_fallback`, `active_short`) both fall back to
+`rays / wall_sec`, so on those the field is a setup-polluted lower bound and
+`active_sec` is not its denominator. `setup_sec` (server alloc + scene gen +
+first-dispatch latency) is excluded from the denominator on `steady`;
 `rate_basis` records which path produced the rate. This setup-exclusion fix
 (task-fix-throughput-bench-honesty) matters for fast backends whose whole run is
 ~0.2s — folding setup in deflated their rays_per_sec by >30%.

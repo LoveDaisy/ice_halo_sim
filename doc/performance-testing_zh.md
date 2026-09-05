@@ -67,6 +67,13 @@ CLI 基准测试和 GUI 性能测试均支持日志级别选项。
 | `texture FPS` | GUI 性能测试 steady_state | 稳态纹理刷新率 |
 | `Consume profile` | CLI -v / GUI --log-level debug | 每批次 filter/proj/accum 分解 |
 
+> ⚠️ 英文版这里还有一整节**尚未翻译**的内容（`## ⚠️ Two ways \`--benchmark\` silently reports
+> a number that answers a different question`，含 §A 单线程/多线程口径混淆、§B GPU 短窗测的是
+> 时钟升频瞬态、§C GPU 冷启动初始化被折进分母，以及五条防御性规则——含本任务新测得的
+> "GPU 上 `ray_num` 必须超过 drain 量子" 这条机制）。这不是本次改动引入的缺口——该节在中文版
+> 里从一开始就不存在（不是"被删掉的规则 4/5"，是整节从未译过）；需要时请直接读英文版
+> `performance-testing.md` 对应小节。补齐翻译不在本任务范围内。
+
 ## ⚠️ 本地构建不是出货的那个二进制：`-march=native` 在这里默认开、在别处一律关
 
 这一条讲的不是 `--benchmark` 报的是*哪个*数字，而是这个数字出自*哪个二进制*。它已经害过一次
@@ -123,8 +130,11 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 ```
 
 `rays_per_sec` 是 `active_sec`（从首条光线追踪到 IDLE 的窗口）上的**稳态追踪率**，
-**不是** `rays / wall_sec`。`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）从分母
-剔除；`rate_basis` 记录产出该率的路径。这个 setup-剔除修复（task-fix-throughput-bench-honesty）
+**不是** `rays / wall_sec`——但这只在 `rate_basis` 为 `steady` 时成立，而这正是
+`rate_basis` 这个字段存在的意义。两个退化档（`wall_fallback` / `active_short`）都退回
+`rays / wall_sec`，此时该字段是含 setup 的**下界**，分母也不是 `active_sec`。
+`setup_sec`（server alloc + 场景生成 + 首 dispatch 延迟）只在 `steady` 档从分母剔除；
+`rate_basis` 记录产出该率的路径。这条 setup-剔除规则
 对整个 run 只 ~0.2s 的快后端很重要——折进 setup 会把它们的 rays_per_sec 压低 >30%。
 
 **两套独立的 `rate_basis` 阶梯**（消费者/gate 按走的哪条路径判定，不按全集字符串相等判）：
