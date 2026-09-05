@@ -364,19 +364,24 @@ bool CommitCopy(const GuiState& state) {
 // §app — application preferences (namespace 3), the one region of this panel that is neither a
 // generated row nor a preset.
 //
-// A fixed single line rather than a third CollapsingHeader: it holds ONE control, and a section
-// that is taller folded than unfolded is a fold nobody would use. Drawn ABOVE both collapsible
-// sections on purpose — every height budget below reads GetContentRegionAvail() after this point,
-// so the row costs the two sections what it occupies and needs no arithmetic of its own.
+// Fixed lines rather than a third CollapsingHeader: it holds two controls, and a section that is
+// taller folded than unfolded is a fold nobody would use. Drawn ABOVE both collapsible sections on
+// purpose — every height budget below reads GetContentRegionAvail() after this point, so the rows
+// need no arithmetic of their own.
+//
+// What they DO need is for the window to grow with them. What is left after this point is not
+// slack: the second control cost the preset library one row and put an already-expanded preset's
+// std input out of reach. So RenderDefaultsPanel's fixed window height carries a term for these
+// rows — adding a third control here means adding a row to that number too.
 //
 // The control is stateless: g_copy_doc IS the state, read fresh each frame and written on click.
 // There is deliberately no TU-local mirror of it to keep in step with the copy, to freeze at open
 // time, or to clear in ResetDefaultsPanelTestState.
 //
-// The checkbox means WHAT NEW DOCUMENTS START WITH — not "this key is in my defaults", which is
-// what every checkbox in §2 means. That is why it is labelled as a sentence about new documents,
-// sits outside the settings table, and says the current window's value beside it: a bare "Use GPU"
-// here would be the same widget shape as §2's rows carrying a different meaning.
+// Every control here means WHAT NEW DOCUMENTS START WITH — not "this key is in my defaults", which
+// is what every checkbox in §2 means. That is why each is labelled as a sentence about new
+// documents, sits outside the settings table, and says the current window's value beside it: a bare
+// "Use GPU" here would be the same widget shape as §2's rows carrying a different meaning.
 void RenderAppPreferences(const GuiState& state) {
   ImGui::TextUnformatted("Application preferences");
 
@@ -400,6 +405,36 @@ void RenderAppPreferences(const GuiState& state) {
   // defaults file, not a second control over the live document.
   ImGui::SameLine();
   ImGui::TextDisabled("(this window: %s)", state.use_gpu_backend ? "on" : "off");
+
+  // The worker count. Stored under the same `app` root key and for the same reason: it is a
+  // property of THIS MACHINE, not of the halo a document describes, so it must not travel inside a
+  // document to another machine — the silent per-machine drift doc/env-var-policy.md refuses from
+  // environment variables would simply have found a different carrier. See gui_state.hpp's
+  // worker_count comment and doc/gui-state-governance.md §8.
+  //
+  // No upper bound: what a sensible ceiling would be on a given machine class has not been
+  // measured, and a number invented here is one nobody could defend. Oversubscribing threads is
+  // slow, not unsafe. The lower clamp is semantic, not a guess — negative is not a worker count.
+  int workers = ReadWorkerCountFromDoc(g_copy_doc).value_or(GuiState{}.worker_count);
+  // InputInt draws its label to the RIGHT of the box and, left to itself, takes CalcItemWidth() —
+  // most of the window — which pushes both the label and the "(this window: N)" note off the right
+  // edge. Sized to the digits it has to hold plus the two stepper buttons instead.
+  ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+  if (ImGui::InputInt("New documents start with N simulation workers###defaults_app_worker_count", &workers)) {
+    if (workers < 0) {
+      workers = 0;
+    }
+    WriteWorkerCountToDoc(g_copy_doc, workers);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(
+        "How many CPU worker threads a NEW document's simulation runs on. 0 means one per physical "
+        "core. This is the stored preference — changing it here does not touch the current "
+        "document, and it takes effect on the next new document. The GPU route is a single engine "
+        "and ignores it.");
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(this window: %d)", state.worker_count);
 }
 
 // Section header whose open state is forced only on the frame an entry point requested it.
@@ -943,7 +978,15 @@ void RenderDefaultsPanel(GuiState& state) {
   // Fixed size on appearance rather than AlwaysAutoResize: the content is a table whose height is
   // a function of how many settings differ, and a modal that changes size with the diff would
   // make every visual-regression scene a different capture rectangle.
-  ImGui::SetNextWindowSize(ImVec2(760.0f, 560.0f), ImGuiCond_Appearing);
+  //
+  // 584 = the original 560 plus one control row (GetFrameHeight() + ItemSpacing.y = 15 + 2*3 + 3),
+  // added when §app gained its second control. The alternative was to let the new row take its
+  // height out of the two collapsible sections below, which is what the §app comment says fixed
+  // rows normally do — but that budget is not slack: shrinking the preset library by one row put
+  // an already-expanded preset's std input out of reach, which is a real loss of function for
+  // every user, not just for the case that caught it. A control added ABOVE the sections has to
+  // bring its own height with it.
+  ImGui::SetNextWindowSize(ImVec2(760.0f, 584.0f), ImGuiCond_Appearing);
   // Passing a p_open is what puts the X in the title bar. Re-initialized to true every frame on
   // purpose: it is not a state we keep, only the one-frame channel ImGui uses to report "the X was
   // pressed", read below and then thrown away.

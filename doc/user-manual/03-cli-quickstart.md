@@ -56,13 +56,26 @@ The complete set of flags as printed by `Lumice -h` (anchor source: `./build/cma
 ```text
 Usage: ./build/cmake_install/static/Lumice -f <config_file> [options]
 
+Lumice — simulate ice halos by tracing rays through ice crystals.
+
 Options:
   -f <file>          Specify the configuration file (required)
   -o <dir>           Output directory for rendered images (default: current directory)
   --format <fmt>     Output image format: jpg or png (default: jpg)
   --quality <1-100>  JPEG quality (default: 95, ignored for PNG)
-  --benchmark        Run dual-mode benchmark (single-worker + multi-worker)
-                     and emit two [BENCHMARK] JSON lines
+  --backend <name>   Trace backend: auto, cpu, metal, or cuda (default: auto).
+                     'auto' and 'cpu' both select the CPU route today; 'metal'
+                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND
+                     env var, if set, still overrides this (debug/CI only).
+  --workers <N>      Number of CPU simulation worker threads (default: one per
+                     physical core). Machine-dependent, so it is a command-line
+                     switch rather than a config-file field: a config travels
+                     between machines and a worker count should not travel with it.
+                     Ignored on a GPU route (single engine) and in --benchmark mode.
+  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy
+                     CPU route runs a dual pass (single-worker + multi-worker → per-core
+                     and parallel-efficiency data); a GPU route is single-engine, so it
+                     runs one steady pass only (single/multi would not be parallel)
   -v                 Verbose output (trace level logging)
   -d                 Debug output (debug level logging)
   -h                 Show this help message and exit
@@ -72,6 +85,7 @@ Notes:
 
 - `-f` is the only required flag. Without it, Lumice exits non-zero with a usage hint.
 - `--format png` switches to lossless PNG; `--quality` is ignored in that case.
+- `--workers <N>` overrides the default one-worker-per-physical-core. It is a switch rather than a config field on purpose: a worker count describes the machine, and a config file travels between machines. An illegal value (`0`, negative, non-numeric) exits non-zero rather than falling back to the default.
 - `--benchmark` is for performance regression testing — see [`../performance-testing.md`](../performance-testing.md). It is **not** how you run a normal simulation.
 
 ## 5. Performance expectations

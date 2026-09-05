@@ -1222,6 +1222,64 @@ void RegisterDefaultsPanelTests(ImGuiTestEngine* engine) {
   }
 
   {
+    // The worker-count row, the second §app control. Written out rather than folded into the case
+    // above because everything it shares with that one is shared by construction (same root key,
+    // same copy-model, same Save) while everything that can independently break is per-control: its
+    // own item id, its own read/write pair, and its own clamp.
+    //
+    // ItemInputValue rather than a click: an InputInt's value is typed, and the clamp only has
+    // something to do when a negative one arrives.
+    ImGuiTest* t =
+        IM_REGISTER_TEST(engine, "defaults_panel", "the_worker_count_preference_is_stored_and_reaches_the_next_new");
+    t->TestFunc = [](ImGuiTestContext* ctx) {
+      ScopedPanel panel(ctx, "panel_app_worker_count");
+      panel.OpenOn(gui::DefaultsPanelSection::kSettings);
+
+      const char* kWorkerInput = "**/###defaults_app_worker_count";
+      IM_CHECK(ctx->ItemExists(kWorkerInput));
+
+      // Both neighbouring headers, both ways round — same argument as the GPU row above: a control
+      // that had ended up inside either fold's reach would still look right in a screenshot.
+      ctx->ItemClick("**/###defaults_presets");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(kWorkerInput));
+      ctx->ItemClick("**/###defaults_settings");
+      ctx->Yield(3);
+      IM_CHECK(ctx->ItemExists(kWorkerInput));
+
+      ctx->ItemInputValue(kWorkerInput, 3);
+      ctx->Yield(2);
+      // Still an editor: nothing has reached disk yet, and the live document is untouched.
+      IM_CHECK(!ReadOverlayFile(panel.dir()).contains("app"));
+      IM_CHECK_EQ(gui::g_state.worker_count, 0);
+
+      SaveDefaultsPanel(ctx);
+      const json saved = ReadOverlayFile(panel.dir());
+      IM_CHECK(saved.contains("app"));
+      IM_CHECK(saved["app"].contains("worker_count"));
+      IM_CHECK_EQ(saved["app"]["worker_count"].get<int>(), 3);
+      // The document half is NOT where it landed — asserted together with the line above because
+      // either alone is satisfied by writing to the wrong one.
+      IM_CHECK(!saved.contains("worker_count"));
+      IM_CHECK_EQ(gui::g_state.worker_count, 0);
+
+      // ...and that file is what a new document actually starts from.
+      IM_CHECK_EQ(gui::MakeNewDocumentState().worker_count, 3);
+
+      // A negative count is not a count. The clamp is semantic, not a guessed bound — there is
+      // deliberately no upper one — so this is the only value the control refuses.
+      ctx->ItemInputValue(kWorkerInput, -4);
+      ctx->Yield(2);
+      SaveDefaultsPanel(ctx);
+      IM_CHECK_EQ(ReadOverlayFile(panel.dir())["app"]["worker_count"].get<int>(), 0);
+      IM_CHECK_EQ(gui::MakeNewDocumentState().worker_count, 0);
+
+      // The GPU row is untouched by all of this: two controls, one root key, no interference.
+      IM_CHECK(!ReadOverlayFile(panel.dir())["app"].contains("use_gpu_backend"));
+    };
+  }
+
+  {
     // Closing without saving discards this row like every other edit. Stated for §app on its own
     // because its control writes g_copy_doc DIRECTLY (as §1's preset cells do) instead of going
     // through the checkbox set §2's rows use — the two paths reach the copy differently and only
