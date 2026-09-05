@@ -208,6 +208,11 @@ void PrintUsage(const char* prog_name) {
             << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
             << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
             << "                     env var, if set, still overrides this (debug/CI only).\n"
+            << "  --workers <N>      Number of CPU simulation worker threads (default: one per\n"
+            << "                     physical core). Machine-dependent, so it is a command-line\n"
+            << "                     switch rather than a config-file field: a config travels\n"
+            << "                     between machines and a worker count should not travel with it.\n"
+            << "                     Ignored on a GPU route (single engine) and in --benchmark mode.\n"
             << "  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy\n"
             << "                     CPU route runs a dual pass (single-worker + multi-worker → per-core\n"
             << "                     and parallel-efficiency data); a GPU route is single-engine, so it\n"
@@ -222,6 +227,7 @@ void PrintUsage(const char* prog_name) {
             << "  " << prog_name << " -f config.json --format png\n"
             << "  " << prog_name << " -f config.json --quality 80\n"
             << "  " << prog_name << " -f config.json --backend metal\n"
+            << "  " << prog_name << " -f config.json --workers 4\n"
             << "  " << prog_name << " -f config.json --benchmark\n"
             << "  " << prog_name << " -f config.json -v\n";
 }
@@ -617,6 +623,9 @@ int main(int argc, char** argv) {
   int jpeg_quality = kDefaultJpegQuality;
   bool benchmark_mode = false;
   int preferred_backend = LUMICE_BACKEND_CPU;
+  // 0 = "not specified" — the same value LUMICE_ServerConfig::num_workers already uses to mean
+  // "one worker per physical core", so no separate was-it-set flag is needed.
+  int cli_workers = 0;
   auto log_level = LUMICE_LOG_INFO;
 
   for (int i = 1; i < argc; i++) {
@@ -677,6 +686,34 @@ int main(int argc, char** argv) {
         PrintUsage(argv[0]);
         return 1;
       }
+    } else if (arg == "--workers") {
+      if (++i >= argc) {
+        std::cerr << "Error: --workers requires an argument\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      // std::stoi stops at the first non-digit WITHOUT throwing, so "3abc" would parse as 3 and be
+      // silently accepted. The `pos == size` check is what makes a trailing-garbage argument an
+      // error rather than a value the user never typed.
+      const std::string workers_arg = argv[i];
+      std::size_t parsed_len = 0;
+      try {
+        cli_workers = std::stoi(workers_arg, &parsed_len);
+      } catch (const std::exception&) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (parsed_len != workers_arg.size()) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (cli_workers <= 0) {
+        std::cerr << "Error: --workers must be a positive integer, got " << cli_workers << "\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
     } else if (arg == "--benchmark") {
       benchmark_mode = true;
     } else if (arg == "-v") {
@@ -697,7 +734,7 @@ int main(int argc, char** argv) {
   // Re-parse file paths from wide-char command line for full Unicode support.
   // argv[i] on Windows uses ANSI codepage, which loses non-ASCII characters.
   // Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
-  // (--format, --quality) are safe as-is.
+  // (--format, --quality, --workers) are safe as-is.
   {
     int wargc = 0;
     wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
@@ -735,6 +772,16 @@ int main(int argc, char** argv) {
 
   // Benchmark mode: dual-pass (single-worker + multi-worker)
   if (benchmark_mode) {
+    // The benchmark's worker counts are part of its measurement methodology, not a default a user
+    // preference may override: the "single" pass is 1 worker BECAUSE that is what per-core
+    // efficiency means, and "multi" is PhysicalCoreCount() BECAUSE that is what the parallel figure
+    // is defined against. So --workers is ignored here — said out loud rather than swallowed, the
+    // same way the --backend fallbacks above announce their substitution. The value is still
+    // validated in the parse loop above; being ignored in this mode does not relax AC1.
+    if (cli_workers != 0) {
+      std::cerr << "Warning: --workers is ignored in --benchmark mode; the single/multi passes use "
+                   "their own fixed worker counts by design.\n";
+    }
     std::ifstream config_file(config_filename);
     if (!config_file.is_open()) {
       std::cerr << "Error: cannot open config file: " << config_filename.u8string() << "\n";
@@ -804,6 +851,7 @@ int main(int argc, char** argv) {
 
   LUMICE_ServerConfig server_config{};
   server_config.preferred_backend = preferred_backend;
+  server_config.num_workers = cli_workers;  // 0 = one worker per physical core (server.cpp)
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 
