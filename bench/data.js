@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788592959928,
+  "lastUpdate": 1788592962024,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
@@ -9548,50 +9548,6 @@ window.BENCHMARK_DATA = {
             "username": "web-flow"
           },
           "distinct": true,
-          "id": "d9d7ee2ff6accd887235198435abfedf87e4f1b2",
-          "message": "Merge pull request #212 from LoveDaisy/chore/fix-base\n\nChore/fix base",
-          "timestamp": "2026-07-19T10:15:27+08:00",
-          "tree_id": "63532f0f8cbe507abecaa438c81d729aee904549",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/d9d7ee2ff6accd887235198435abfedf87e4f1b2"
-        },
-        "date": 1784427803149,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 82.5,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 100.4,
-            "unit": "%"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 96.3,
-            "unit": "%"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 93.2,
-            "unit": "%"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
           "id": "163ff642d86a80c43b8197a2ba57a5016cd6d6a7",
           "message": "Merge pull request #213 from LoveDaisy/feat/geometry-pool-and-topology-reuse\n\nfeat(geometry-perf): per-ray K-shape pool on both GPU backends + geometry representation diagnosis",
           "timestamp": "2026-07-20T11:37:25+08:00",
@@ -13901,6 +13857,50 @@ window.BENCHMARK_DATA = {
           {
             "name": "Windows MSVC x86_64",
             "value": 96,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5aea061e953c620bfe6709bf6f2ce87103402f05",
+          "message": "Merge pull request #310 from LoveDaisy/fix/cli-label-viewport-clamp\n\nfix(cli): overlay label 视口 clamp 收敛为 GUI/CLI 共享的单一实现",
+          "timestamp": "2026-09-05T15:09:23+08:00",
+          "tree_id": "f073e0e74a8ffe5cbb3e2967c3330a884cb4279c",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/5aea061e953c620bfe6709bf6f2ce87103402f05"
+        },
+        "date": 1788592961402,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 87.2,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 99.8,
+            "unit": "%"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 94.8,
+            "unit": "%"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 89,
             "unit": "%"
           }
         ]
