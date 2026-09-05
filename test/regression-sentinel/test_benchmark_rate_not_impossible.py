@@ -24,9 +24,11 @@ The invariant asserted here is deliberately basis-agnostic and physical rather
 than a re-statement of the formula: **the rays the estimator claims per second,
 multiplied by the whole run's wall clock, cannot exceed the rays the run actually
 traced by more than a small factor.** Every honest basis lands near 1.0 (measured:
-`steady` 0.99-1.0 on legacy CPU and on Metal at 20M/200M rays; `wall_fallback`
-and `active_short` are exactly 1.0 by construction), while the defect scored ~20.
-`_MAX_WORK_RATIO` sits between them with room on both sides.
+`wall_fallback` and `active_short` are exactly 1.0 by construction — the only two
+bases `_HEAVY_CONFIGS` can reach, since their fixed ray_num stays below the drain
+quantum; `steady` measured 0.99-1.0 during the diagnosis with `ray_num` temporarily
+overridden to 20M/200M, a case THIS test's fixed configs never exercise), while the
+defect scored ~20. `_MAX_WORK_RATIO` sits between them with room on both sides.
 
 Scope, stated rather than implied: this is macOS + Metal only, because the defect
 needs a drain quantum coarse enough to swallow a whole run — legacy CPU publishes
