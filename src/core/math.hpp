@@ -226,7 +226,9 @@ namespace detail {
 //!   the C++ standard. Changing toolchain or platform does not make the clamp unnecessary; it
 //!   only changes which implementations reach it.
 //! @param u a draw from RandomNumberGenerator::GetUniform(); values outside [0, 1] are not expected
-//! @param n the exclusive upper bound; must be > 0
+//! @param n the exclusive upper bound; must be > 0. `n == 0` calls lumice::FatalAbort (it is a
+//!   hard guard, not an assert, so it holds under NDEBUG too): no subscript is correct for an
+//!   empty range, and the pre-guard body underflowed `n - 1` into SIZE_MAX and returned it.
 size_t ClampUniformToIndex(float u, size_t n);
 
 }  // namespace detail

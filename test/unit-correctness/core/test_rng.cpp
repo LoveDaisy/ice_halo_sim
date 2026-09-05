@@ -153,6 +153,25 @@ TEST_F(RngTest, ClampUniformToIndexLeavesInteriorDrawsUnchanged) {
 }
 
 
+// Deliberately a bare TEST, not TEST_F(RngTest, ...) like its neighbours: a death
+// test forks, and running RngTest's fixture setup in the child would add unrelated
+// side effects to the one call being isolated here.
+TEST(ClampUniformToIndexDeathTest, ZeroNTripsFatalAbort) {
+  // n == 0 has no correct answer: there is no subscript into an empty range. The
+  // pre-guard body reached `n - 1` and underflowed it to SIZE_MAX, then returned
+  // that as if it were an index — a defect that neither reports nor crashes, only
+  // subscripts somewhere semantically wrong. FatalAbort turns it into an immediate,
+  // visible failure.
+  //
+  // FatalAbort calls std::abort() unconditionally. Unlike an assert() it is NOT
+  // compiled out under NDEBUG, so this case runs identically in Debug and Release
+  // and needs no `#ifndef NDEBUG` split. The matcher pins the diagnostic text, not
+  // just the fact that the process died: fatal.hpp writes it to stderr and fflush()es
+  // before abort(), so a death test can see it.
+  EXPECT_DEATH(lumice::detail::ClampUniformToIndex(0.5f, 0u), "n must be > 0");
+}
+
+
 TEST_F(RngTest, GetUniformIndexConsumesExactlyOneDraw) {
   // The "RNG draw sequence is bit-unchanged" acceptance condition, at the unit
   // level: swapping a hand-written `(size_t)(GetUniform() * n)` for

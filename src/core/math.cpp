@@ -14,6 +14,7 @@
 #include "core/lat_lut.hpp"
 #include "core/shared/lat_path_selection.hpp"
 #include "core/shared/pcg_shared.h"
+#include "util/fatal.hpp"
 
 
 namespace lumice {
@@ -419,7 +420,14 @@ float RandomNumberGenerator::GetUniform() {
 namespace detail {
 
 size_t ClampUniformToIndex(float u, size_t n) {
-  assert(n > 0);
+  if (n == 0) {
+    // Deliberately not an assert: assert() is a no-op under NDEBUG, and there the
+    // `n - 1` below underflows to SIZE_MAX and is handed back as if it were a
+    // valid subscript. There is no index that is correct for an empty range, so
+    // returning any value at all only hides the caller's bug — this guard is the
+    // whole reason the single owner of this conversion exists.
+    FatalAbort("ClampUniformToIndex: n must be > 0 (got n == 0)");
+  }
   const size_t j = static_cast<size_t>(u * static_cast<float>(n));
   return j >= n ? n - 1 : j;
 }
