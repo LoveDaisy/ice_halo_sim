@@ -152,16 +152,27 @@ class TestWorkerCount(LumiceTestCase):
     already existed for the GPU single-engine assertion (296.6) and reports the
     number the server actually constructed rather than the number the CLI parsed.
 
-    On "not passing it leaves the old behaviour": the equality that establishes
-    that is structural, not statistical — ``server_config.num_workers`` is set
-    from a variable whose no-flag value is 0, and server.cpp's
-    ``num_workers > 0 ? num_workers : PhysicalCoreCount()`` guard is unchanged,
-    so the zero path reaches the same expression it always did. These tests
-    therefore pin the observable consequences (a default in the physically
-    possible range, stable across runs, and different from an explicitly
-    requested value) rather than re-deriving PhysicalCoreCount() in Python,
-    which would be a second authority free to drift from the first.
+    On the no-flag path: ``server_config.num_workers`` is set from a variable
+    whose no-flag value is 0, and server.cpp's
+    ``num_workers > 0 ? num_workers : min(PhysicalCoreCount(), cap)`` guard sends
+    that zero to the automatic branch. These tests therefore pin the observable
+    consequences (a default in the physically possible range, at or below the
+    cap, stable across runs, and different from an explicitly requested value)
+    rather than re-deriving PhysicalCoreCount() in Python, which would be a
+    second authority free to drift from the first.
+
+    The cap's own value is the one number these tests do restate from C++
+    (``EXPECTED_DEFAULT_CAP``). There is no way around that: the whole point of
+    the assertion is that the shipping default does not exceed a specific
+    number, and a test that read the number back out of the binary it is testing
+    would agree with any value the binary happened to hold. Changing the
+    constant is therefore meant to break this file — that is the alarm, not a
+    maintenance cost to be engineered away.
     """
+
+    # Mirrors kMaxDefaultWorkerCount in src/server/server.cpp. See the class
+    # docstring for why this is deliberately a second copy rather than a lookup.
+    EXPECTED_DEFAULT_CAP = 10
 
     WORKER_LINE = re.compile(r"worker_count=(\d+)")
 
@@ -188,13 +199,13 @@ class TestWorkerCount(LumiceTestCase):
         """--workers N must make the server run exactly N workers."""
         self.assertEqual(self._run_and_read_worker_count(["--workers", "2"]), 2)
 
-    def test_default_is_unchanged_and_differs_from_an_explicit_request(self):
-        """No flag → the machine default; and the flag demonstrably moves it.
+    def test_default_is_a_stable_machine_property_and_differs_from_a_request(self):
+        """No flag → a stable automatic count; and the flag demonstrably moves it.
 
-        The inequality is the red-state half of AC4: if --workers were silently
-        ignored, the explicit-2 run above and this one would report the same
-        number. Skipped on a machine whose default happens to be 2, where the
-        two arms are indistinguishable by construction.
+        The inequality is the red-state half of the explicit-override contract:
+        if --workers were silently ignored, the explicit-2 run above and this one
+        would report the same number. Skipped on a machine whose default happens
+        to be 2, where the two arms are indistinguishable by construction.
         """
         default_workers = self._run_and_read_worker_count([])
         self.assertGreaterEqual(default_workers, 1)
@@ -209,6 +220,52 @@ class TestWorkerCount(LumiceTestCase):
             )
         self.assertNotEqual(
             self._run_and_read_worker_count(["--workers", "2"]), default_workers
+        )
+
+    def test_default_never_exceeds_the_cap(self):
+        """The automatic worker count is capped, whatever the machine has.
+
+        DISCRIMINATING POWER DEPENDS ON THE HOST. On a machine with at most
+        EXPECTED_DEFAULT_CAP physical cores the inequality holds no matter what
+        the cap does, so this arm alone would pass on a build with the cap
+        deleted. The second assertion is the one that does not depend on the
+        host: on a machine with MORE cores than the cap, the default must be the
+        cap exactly — not merely below it — because that is the only value
+        min(cores, cap) can take. os.cpu_count() (logical CPUs) is an upper
+        bound on physical cores, so "logical CPUs > cap" is a sound-but-not-
+        complete detector of that case: it can fail to fire on a host with SMT
+        and few cores, but it never fires wrongly.
+        """
+        default_workers = self._run_and_read_worker_count([])
+        self.assertLessEqual(
+            default_workers,
+            self.EXPECTED_DEFAULT_CAP,
+            "the automatic worker count must not exceed the cap",
+        )
+        if (os.cpu_count() or 1) > self.EXPECTED_DEFAULT_CAP:
+            self.assertEqual(
+                default_workers,
+                self.EXPECTED_DEFAULT_CAP,
+                "on a machine with more cores than the cap the default IS the cap",
+            )
+
+    def test_explicit_workers_above_the_cap_is_not_capped(self):
+        """An explicit request above the cap is honoured verbatim.
+
+        The red-state half of "the cap bounds the automatic value only": if the
+        clamp were applied to the whole expression rather than to the no-flag
+        branch, this would come back as EXPECTED_DEFAULT_CAP instead. Asserting
+        equality rather than "> cap" is what makes that distinguishable.
+
+        The requested count deliberately exceeds the cap and may exceed the
+        host's core count; the assertion reads the number the server was
+        constructed with, not a throughput, so oversubscription does not affect
+        it.
+        """
+        requested = self.EXPECTED_DEFAULT_CAP + 1
+        self.assertEqual(
+            self._run_and_read_worker_count(["--workers", str(requested)]),
+            requested,
         )
 
     def test_non_positive_workers_is_rejected(self):
