@@ -55,6 +55,14 @@ struct FieldTierEntry {
   bool auto_diff_excluded;
   // Trailing + default-initialized so every existing row keeps its three-element aggregate
   // initializer; only a row that answers "yes" spells the fourth value out.
+  //
+  // Setting this to true REGISTERS a field and turns on the coverage assertion; it does not wire
+  // one up. Nothing walks this table to drive behaviour — ResetIneligibleScalarFields() and
+  // ApplyAppPreferencesOverride() (user_defaults.cpp) each name their field by hand. So adding the
+  // second member of this namespace means three edits, not one: this bit, a line in each of those
+  // two functions. That is the deliberate cost of not building a general registry for a
+  // single-member set; the coverage test is what makes forgetting the other two edits go red
+  // rather than silent.
   bool app_preference_eligible = false;
 };
 

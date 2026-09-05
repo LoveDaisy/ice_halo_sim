@@ -560,6 +560,12 @@ std::optional<bool> ReadUseGpuBackendFromDoc(const nlohmann::json& doc);
 void WriteUseGpuBackendToDoc(nlohmann::json& doc, bool value);
 // Prunes the parents it empties, like EraseAxisPresetZenithStdFromDoc, so a file opened by hand
 // does not accumulate an empty `"app": {}` skeleton.
+//
+// No production caller today — the panel writes both states explicitly rather than erasing, so
+// "saved false" and "never saved" stay distinguishable in the file. This is kept for symmetry with
+// the read/write/erase trio the presets namespace already has, and as the channel a second member
+// of this namespace would need. It is neither dead code to delete on sight nor a call site someone
+// forgot to add.
 void EraseUseGpuBackendFromDoc(nlohmann::json& doc);
 
 // Apply the app-preferences half of `doc` to `state`: each stored field is assigned, each absent

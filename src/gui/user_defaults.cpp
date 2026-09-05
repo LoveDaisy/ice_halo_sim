@@ -544,6 +544,13 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
   // Same normalization as WriteAxisPresetZenithStdToDoc: a malformed top-level document (hand-edited,
   // truncated, or a bare null/array) must become a valid empty object rather than being written back
   // to disk unchanged by the caller.
+  //
+  // Reachability, stated rather than implied: no production caller gets here. Every one of them
+  // passes the panel's working copy, which is either a document read from the override file or a
+  // fresh object, so it is an object by construction. The branch is reached only by the unit test
+  // that hands it a json::array() on purpose. It is kept because the normalization is the same
+  // shape the axis-preset writer already owes its callers, not because a real path was observed
+  // producing a non-object root.
   if (!doc.is_object()) {
     doc = nlohmann::json::object();
   }
