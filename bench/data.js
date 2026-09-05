@@ -1,56 +1,8 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788591153672,
+  "lastUpdate": 1788592054385,
   "repoUrl": "https://github.com/LoveDaisy/ice_halo_sim",
   "entries": {
     "Single-worker Throughput": [
-      {
-        "commit": {
-          "author": {
-            "email": "zhangjiajie043@gmail.com",
-            "name": "Jiajie Zhang",
-            "username": "LoveDaisy"
-          },
-          "committer": {
-            "email": "noreply@github.com",
-            "name": "GitHub",
-            "username": "web-flow"
-          },
-          "distinct": true,
-          "id": "abbef1227936e40b1753817142344886fae0de78",
-          "message": "Merge pull request #209 from LoveDaisy/fix/cuda-unfreeze-geometry-randomization\n\nfix(cuda): unfreeze crystal-shape geometry randomization end-to-end",
-          "timestamp": "2026-07-19T09:16:57+08:00",
-          "tree_id": "836469c0bb3baf78eec16a14d2eb5e42760849c3",
-          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/abbef1227936e40b1753817142344886fae0de78"
-        },
-        "date": 1784425807468,
-        "tool": "customBiggerIsBetter",
-        "benches": [
-          {
-            "name": "macOS ARM64",
-            "value": 481881.7,
-            "unit": "rays/sec",
-            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
-          },
-          {
-            "name": "Ubuntu ARM64",
-            "value": 595432.8,
-            "unit": "rays/sec",
-            "extra": "CPU: Neoverse-N2\\nCores: 4"
-          },
-          {
-            "name": "Ubuntu x86_64",
-            "value": 393219.1,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
-          },
-          {
-            "name": "Windows MSVC x86_64",
-            "value": 356458.5,
-            "unit": "rays/sec",
-            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
-          }
-        ]
-      },
       {
         "commit": {
           "author": {
@@ -4764,6 +4716,54 @@ window.BENCHMARK_DATA = {
             "value": 343380.4,
             "unit": "rays/sec",
             "extra": "CPU: AMD EPYC 9V74 80-Core Processor                \\nCores: 4"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "zhangjiajie043@gmail.com",
+            "name": "Jiajie Zhang",
+            "username": "LoveDaisy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92c4036ebd9dc10187397db16e7a435ba69af19b",
+          "message": "Merge pull request #309 from LoveDaisy/chore/native-arch-measurement-hygiene\n\nfeat(bench): 让「本地构建不是出货二进制」这件事在取数字的地方可见（ISA 出处）",
+          "timestamp": "2026-09-05T14:54:12+08:00",
+          "tree_id": "d6e704e339bd4d14891a0549aafe20bd3799c40e",
+          "url": "https://github.com/LoveDaisy/ice_halo_sim/commit/92c4036ebd9dc10187397db16e7a435ba69af19b"
+        },
+        "date": 1788592052582,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "macOS ARM64",
+            "value": 408206.5,
+            "unit": "rays/sec",
+            "extra": "CPU: Apple M1 (Virtual)\\nCores: 3"
+          },
+          {
+            "name": "Ubuntu ARM64",
+            "value": 609052.2,
+            "unit": "rays/sec",
+            "extra": "CPU: Neoverse-N2\\nCores: 4"
+          },
+          {
+            "name": "Ubuntu x86_64",
+            "value": 432363.3,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor\\nCores: 4"
+          },
+          {
+            "name": "Windows MSVC x86_64",
+            "value": 352473.7,
+            "unit": "rays/sec",
+            "extra": "CPU: AMD EPYC 7763 64-Core Processor                \\nCores: 4"
           }
         ]
       }
