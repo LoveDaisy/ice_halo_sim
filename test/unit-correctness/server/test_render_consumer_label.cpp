@@ -21,12 +21,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
 #include "config/color_class_table.hpp"
 #include "config/render_config.hpp"
 #include "config/sim_data.hpp"
+#include "core/annotation_font.hpp"
+#include "core/annotation_overlay.hpp"
 #include "server/render.hpp"
 #include "support/render_anchor.hpp"
 
@@ -320,6 +323,113 @@ TEST(RenderConsumerLabel, FlippingASwitchMidRunReachesTheImage) {
   EXPECT_FALSE(rc.ElevationLabelsForTest().empty());
   EXPECT_FALSE(rc.AngularDistLabelsForTest().empty());
   EXPECT_GT(DifferingPixels(img_off, img_on), 0) << "the switch flipped but the image did not change";
+}
+
+
+// ---- The viewport clamp, at the layer that has to be wired to it -------------------------------
+//
+// An anchor is placed where its curve ENTERS the visible region (core's annotation_overlay.cpp),
+// which on a bounded canvas is the frame edge itself — so a glyph run centred on one straddles that
+// edge as a matter of course, and the compositing loop above would drop whatever fell outside.
+// util/label_viewport_clamp.hpp is the rule that prevents it, shared with the GUI's drawer; what is
+// asserted here is that THIS renderer calls it, which the shared function's own unit test cannot
+// say.
+//
+// The judge is a pixel count rather than an eyeball: every pixel the rasterized glyph covers must
+// reach the image. Two things make the count exact — the scene paints nothing else where the labels
+// land (no grid lines at all, and the one ray goes to the zenith while the horizon sits at the
+// bottom of the frame), and sRGB's toe is steep enough that even a coverage of 1/255 moves the byte,
+// so "covered" and "differs from the no-label frame" are the same set.
+
+// The label config stripped to the horizon family alone: no grid lines to paint over the numbers,
+// and the horizon's own line switched off (which it may be while its labels are on — see the case
+// above). `el` chooses how far down the frame the horizon crosses, and with it whether its labels
+// land at the rim.
+RenderConfig MakeRimLabelConfig(float el_deg, bool labels_on = true) {
+  RenderConfig cfg;
+  cfg.id_ = 0;
+  cfg.lens_.type_ = LensParam::kLinear;
+  cfg.lens_.fov_ = 120.0f;
+  cfg.resolution_[0] = kW;
+  cfg.resolution_[1] = kH;
+  cfg.view_.el_ = el_deg;
+  cfg.visible_ = RenderConfig::kFull;
+  cfg.horizon_ = false;
+  cfg.horizon_label_ = labels_on;
+  return cfg;
+}
+
+// What render.cpp's compositing loop computes before the clamp: the glyph rect the raw anchor asks
+// for. Mirrors the two lines there (`lround(anchor) + ink.offset`) so this file can ask whether that
+// rect would have fallen off the canvas.
+struct RawGlyphRect {
+  int left = 0;
+  int top = 0;
+  int width = 0;
+  int height = 0;
+  int ink_pixels = 0;  // non-zero coverage cells, i.e. how many pixels the run must light
+
+  bool InsideCanvas() const { return left >= 0 && top >= 0 && left + width <= kW && top + height <= kH; }
+};
+
+RawGlyphRect RawRectOf(const annotation::Label& label) {
+  const annotation::TextBitmap ink = annotation::RasterizeLabel(label.text);
+  RawGlyphRect r;
+  r.left = static_cast<int>(std::lround(label.px)) + ink.offset_x;
+  r.top = static_cast<int>(std::lround(label.py)) + ink.offset_y;
+  r.width = ink.width;
+  r.height = ink.height;
+  for (const uint8_t c : ink.coverage) {
+    if (c != 0) {
+      ++r.ink_pixels;
+    }
+  }
+  return r;
+}
+
+TEST(RenderConsumerLabel, ARimLabelIsPaintedWholeRatherThanCroppedAtTheCanvasEdge) {
+  // 55 deg up puts the horizon low in a 120 deg frame, where its label anchors sit against the
+  // bottom edge. Asserted below rather than assumed: a view that drifted away from the rim would
+  // leave this case passing without the clamp, which is the one way it could go quietly useless.
+  const RenderConfig cfg = MakeRimLabelConfig(55.0f);
+
+  RenderConsumer off(MakeRimLabelConfig(55.0f, /*labels_on=*/false), ColorClassTable{}, MakeSun());
+  const std::vector<uint8_t> img_off = SnapshotOnce(&off);
+  ASSERT_EQ(img_off.size(), static_cast<size_t>(kTotalPix) * 3);
+  ASSERT_TRUE(HasAnyNonBlackPixel(img_off)) << "the reference frame is entirely black — see MakeRimLabelConfig";
+  ASSERT_TRUE(off.HorizonLabelsForTest().empty());
+
+  RenderConsumer on(cfg, ColorClassTable{}, MakeSun());
+  const std::vector<uint8_t> img_on = SnapshotOnce(&on);
+  ASSERT_EQ(img_on.size(), static_cast<size_t>(kTotalPix) * 3);
+
+  const std::vector<annotation::Label>& labels = on.HorizonLabelsForTest();
+  ASSERT_FALSE(labels.empty()) << "no horizon anchor was computed; there is nothing to clamp";
+
+  int expected_ink = 0;
+  int off_canvas_labels = 0;
+  for (const annotation::Label& label : labels) {
+    const RawGlyphRect raw = RawRectOf(label);
+    expected_ink += raw.ink_pixels;
+    if (!raw.InsideCanvas()) {
+      ++off_canvas_labels;
+    }
+  }
+  // The non-vacuity guard, and the mechanised form of this task's red state: at least one label's
+  // UNCLAMPED rect really does leave the canvas, so the count below can only come out right if the
+  // clamp ran. Without it this case would pass on a scene with no rim label in it at all.
+  ASSERT_GT(off_canvas_labels, 0) << "every anchor is already comfortably inside the canvas — this view no longer "
+                                     "exercises the clamp, so the assertion below would hold either way";
+  ASSERT_GT(expected_ink, 0) << "the labels rasterized to nothing";
+
+  // Precondition of comparing a SUM against a UNION: no two labels' glyph bounding boxes may
+  // overlap in this scene. `expected_ink` adds each label's ink count, while DifferingPixels
+  // counts changed pixels once. The current MakeRimLabelConfig() angular spacing keeps them
+  // apart; tightening that spacing until two glyph runs touch would make this assertion fail on
+  // a correct renderer, so re-check this line before changing the config's label density.
+  EXPECT_EQ(DifferingPixels(img_off, img_on), expected_ink)
+      << "the glyphs' " << expected_ink << " covered pixels did not all reach the image: a rim label was composited "
+      << "from its raw anchor and cropped by the canvas bounds instead of being pushed inside them";
 }
 
 }  // namespace

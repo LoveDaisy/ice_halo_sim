@@ -77,13 +77,14 @@ void AppendCurveLabels(const CurveLabelSet& set, float vp_screen_x, float vp_scr
 // `vp_screen_*` is the viewport rect the anchors live in: FBO-local, starting at (0, 0), in LOGICAL
 // POINTS (the space a draw list works in; the DPI is applied once by the backend, see
 // RenderOverlayToFbo). Each label's rendered text bounding box is clamped at least 2 px inside each
-// viewport edge (`kViewportInsetPx` in detail::ClampLabelPosToViewport) so labels never straddle the
-// viewport edge.
+// viewport edge (`kLabelViewportInsetPx`, util/label_viewport_clamp.hpp) so labels never straddle
+// the viewport edge.
 //
-// This clamp is unconditional (all lens types, all visible modes) and is the GUI's alone: the CLI
-// renderer draws core's raw anchors with no clamp and no collision pass, so a label near the rim
-// can sit a few pixels differently in the two. Where the two agree is WHICH labels appear and
-// where the curve puts them, which is what moving the walk into core bought.
+// This clamp is unconditional (all lens types, all visible modes) and is NOT the GUI's alone: the
+// CLI compositor (RenderConsumer::PaintLabels, src/server/render.cpp) calls the same shared
+// function on the same anchors, so a label at the rim lands in the same place in both. What is
+// still the GUI's alone is the COLLISION pass below — the CLI draws every label core hands it, so
+// two labels that crowd each other are dropped in the preview and overlap in a CLI render.
 void AppendOverlayToDrawList(ImDrawList* dl, const std::vector<OverlayLabel>& labels, float vp_screen_x,
                              float vp_screen_y, float vp_screen_w, float vp_screen_h);
 
@@ -138,7 +139,7 @@ void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float 
                                const float view_matrix[9], float* out_px, float* out_py, bool* out_valid);
 
 // Clamp a label's anchor position so the rendered text bounding box stays
-// inside the viewport rect with at least 2 px (`kViewportInsetPx`) margin
+// inside the viewport rect with at least 2 px (`kLabelViewportInsetPx`) margin
 // on each side.
 // `pos` is the desktop-relative top-left of the text glyph rect (caller has
 // already subtracted half of `text_size` from the label's center). The returned
@@ -146,6 +147,11 @@ void WorldDirToPixelForTesting(float wx, float wy, float wz, float res_x, float 
 // (and similarly for y), unless the viewport is too narrow to fit the text +
 // 2×inset — in that case the original pos is returned unchanged (rendering
 // degrades to "centered on label anchor", matching legacy behaviour).
+//
+// THE RULE ITSELF IS NOT HERE. This is the ImVec2-shaped entry to
+// `lumice::ClampLabelPosToViewport` (util/label_viewport_clamp.hpp), which the CLI
+// compositor calls too; core cannot see ImGui types, so unpacking is all this
+// layer does. Change the inset or the fallback there, not here.
 //
 // Pure function — exposed in detail:: for unit testing
 // (`overlay_labels/clamp_label_pos_*` tests).

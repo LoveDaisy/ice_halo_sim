@@ -96,6 +96,16 @@ CMake build tree is `build/cmake_build/<flavor>/` and compiler output lands in
 - Public API boundary: `src/gui/` code must only access core/config functionality
   through the C API (`src/include/lumice.h`). Direct `#include` of `core/` or `config/`
   headers from `src/gui/` is prohibited.
+  `src/util/` is deliberately outside that prohibition, and the exemption has a shape:
+  what may live there and be included from both sides is a **pure, stateless helper that
+  carries no simulation or configuration semantics** — `bit_utils.hpp`, `color_space.hpp`,
+  `label_viewport_clamp.hpp`. The gate exists so the GUI cannot reach into the engine's
+  data model and pin its layout by including it; a geometry function with no state does
+  not offer that reach, and forcing one through the C API would only mean the rule gets
+  written twice, once per side, which is the divergence the boundary is there to prevent.
+  So: a rule BOTH renderers must obey, expressible without a core or config type, belongs
+  in `src/util/`. Anything that needs to see a `RenderConfig`, a `SimData` or a crystal
+  does not, and still goes through the C API.
 - Environment variables: before adding any new `std::getenv`, apply the decision gate in
   `doc/env-var-policy.md`. User-facing behavior switches must go through CLI/config/API,
   not env vars (env causes silent per-machine drift). Env is fine for dev/experiment knobs
