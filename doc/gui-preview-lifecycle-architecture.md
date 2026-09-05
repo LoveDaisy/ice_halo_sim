@@ -280,7 +280,7 @@ CUDA 超大 batch 中途无法响应。第一性原理：
 >   `texture_serial` 不变 ⇒ 消费端不会重复上传。
 > - **`kPaused` 与 `kIdleHeartbeat` 必须是两个状态**。心跳引入前，「自暂停」与「不再碰
 >   `server_`」是同一件事，所以 `Stop()` 可以对自暂停态直接早退。加了心跳之后这是两个不同的事实：
->   `Stop()` 的调用方下一行就销毁服务器（`MaybeReconstructServerForBackend` 里
+>   `Stop()` 的调用方下一行就销毁服务器（`MaybeReconstructServerForConstructionProperties` 里
 >   `Stop()` → `LUMICE_DestroyServer`；`DoStop` 里 `Stop()` → `LUMICE_StopServer`），
 >   早退会留下真实 UAF 窗口。故 `Stop()` 现在把 `kIdleHeartbeat` 也收敛到 `kPaused` 并照旧等
 >   `active_`，而 `active_` 的语义相应扩大为「正在执行**任意一次** `PollOnce()`」。

@@ -248,7 +248,7 @@ void BeginRealServerScene(float ray_num_millions) {
   IM_CHECK_SILENT(gui::g_server != nullptr);
   // Deliberately CPU-only: the device-fused GPU path does not populate the raypath-color lanes,
   // so forcing GPU here would make every composite read below vacuous rather than wrong.
-  gui::g_server_is_gpu = false;
+  gui::ResetServerConstructionTrackers();
   gui::g_state = gui::InitDefaultState();
   gui::g_state.sim.infinite = false;
   gui::g_state.sim.ray_num_millions = ray_num_millions;
@@ -262,7 +262,7 @@ void EndRealServerScene() {
     LUMICE_DestroyServer(gui::g_server);
     gui::g_server = nullptr;
   }
-  gui::g_server_is_gpu = false;
+  gui::ResetServerConstructionTrackers();
   gui::g_state.run_intent = gui::RunIntent::kNone;
   gui::g_state.committed_epoch = 0;
   gui::g_state.display_epoch_floor = 0;

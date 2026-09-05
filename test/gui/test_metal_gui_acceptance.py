@@ -28,7 +28,7 @@ Why this is a *separate* gate from G1 (scrum-268.6 + task-fix-throughput-bench-h
 
 Drives the REAL product path: LUMICE_PERF_METAL=1 makes the perf harness toggle
 use_metal_backend so DoRun reconstructs into the single-engine Metal topology
-(MaybeReconstructServerForBackend) — NOT a SetPreferredBackend hack on an
+(MaybeReconstructServerForConstructionProperties) — NOT a SetPreferredBackend hack on an
 N-worker server. Baseline is legacy CPU (the GUI's real path); NEVER cpu_backend.
 
 Correctness is NOT re-tested here — it is already gated by the raw-XYZ parity

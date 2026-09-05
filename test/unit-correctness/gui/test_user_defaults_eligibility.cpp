@@ -51,7 +51,10 @@ namespace {
 // 72 since the Screenshot export stopped having an overlay gate of its own — the preview and the
 // export render one frame through one function, so what the PNG contains is decided by the Overlay
 // panel's per-family switches and there is no second flag to classify.
-constexpr std::size_t kExpectedGovernedFieldCount = 72;
+// 73 since worker_count joined use_gpu_backend under the `app` root key: it is the second
+// construction-time server property with a personal-default channel of its own, and eligible for
+// the same reason — a machine property that must not travel inside a document.
+constexpr std::size_t kExpectedGovernedFieldCount = 73;
 
 std::vector<std::string> AllGovernedFieldNames() {
   std::vector<std::string> names;
@@ -145,9 +148,11 @@ TEST(UserDefaultsEligibility, RepresentativeFieldsMapToTheDesignedVerdicts) {
     { "layers", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
     { "filters", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
     { "raypath_color", DefaultEligibility::kIneligible, IneligibleReason::kCollection },
-    // namespace 3 — app preferences. use_gpu_backend is the one member with a storage channel of
-    // its own (the `app` root key), so it is eligible; the rest still have nowhere to be stored.
+    // namespace 3 — app preferences. use_gpu_backend and worker_count are the two members with a
+    // storage channel of their own (the `app` root key), so they are eligible; the rest still have
+    // nowhere to be stored.
     { "use_gpu_backend", DefaultEligibility::kEligible, IneligibleReason::kNone },
+    { "worker_count", DefaultEligibility::kEligible, IneligibleReason::kNone },
     { "gui_log_level", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "core_log_level", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
     { "log_to_file", DefaultEligibility::kIneligible, IneligibleReason::kAppPreference },
@@ -178,9 +183,9 @@ TEST(UserDefaultsEligibility, IneligibleScalarResetCoversEveryAppPreferenceField
   // someone registers another such field without extending the reset, this fails instead of
   // leaving a silent hole.
   //
-  // The predicate used to be `tier == kStructSoft && auto_diff_excluded`. It named the same single
-  // field, but for a reason that has nothing to do with where a default is stored — an app
-  // preference registered under any other tier would have walked straight past it.
+  // The predicate used to be `tier == kStructSoft && auto_diff_excluded`. It named the same fields,
+  // but for a reason that has nothing to do with where a default is stored — an app preference
+  // registered under any other tier would have walked straight past it.
   //
   // Scope note (deliberate narrowing): a structurally DIFFERENT future category of "reachable from
   // the document half but not decidable by it" would not be caught here — extending the predicate

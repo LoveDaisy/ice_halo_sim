@@ -483,5 +483,73 @@ TEST_F(UserDefaultsChain, OnlyTheAppRootKeyDecidesTheGpuBackendPreference) {
   EXPECT_TRUE(MakeNewDocumentState(dir).use_gpu_backend);
 }
 
+// The worker-count half of the same chain. Written out rather than shared with the case above
+// because what is being tested is that a SECOND member of the namespace is wired end to end —
+// three functions, a reset line and an apply line, each of which could have been left out while
+// every assertion about the first member stayed green.
+TEST_F(UserDefaultsChain, TheWorkerCountPreferenceSurvivesIntoTheNextNewDocument) {
+  const std::filesystem::path& dir = UseFreshConfigDir("app_worker_count");
+
+  EXPECT_EQ(MakeNewDocumentState(dir).worker_count, 0) << "nothing stored means the factory value";
+
+  nlohmann::json doc = nlohmann::json::object();
+  WriteWorkerCountToDoc(doc, 4);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+
+  // Same ORDER assertion as the case above: ResetIneligibleScalarFields puts this back to 0
+  // unconditionally, so the stored 4 only survives if the app-preferences read runs after it.
+  EXPECT_EQ(MakeNewDocumentState(dir).worker_count, 4) << "the stored preference did not reach a new document";
+
+  EraseWorkerCountFromDoc(doc);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_EQ(MakeNewDocumentState(dir).worker_count, 0) << "erasing it returns the field to the factory value";
+
+  EXPECT_EQ(TakeUserDefaultsDowngradeCount(), 0) << "none of the above is a degradation";
+}
+
+// The two halves of the file, for the worker count. Same proposition as
+// OnlyTheAppRootKeyDecidesTheGpuBackendPreference, and it needs restating per field: the location
+// a value is read from is a property of each read function, not of the namespace.
+TEST_F(UserDefaultsChain, OnlyTheAppRootKeyDecidesTheWorkerCountPreference) {
+  const std::filesystem::path& dir = UseFreshConfigDir("app_worker_count_top_level");
+
+  nlohmann::json doc = nlohmann::json::object();
+  doc["worker_count"] = 4;  // the document half — inert by construction
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_EQ(MakeNewDocumentState(dir).worker_count, 0) << "the document half must not decide this field";
+
+  // Both present and disagreeing: the app key wins.
+  doc["worker_count"] = 4;
+  WriteWorkerCountToDoc(doc, 8);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  EXPECT_EQ(MakeNewDocumentState(dir).worker_count, 8);
+}
+
+// The two app-preference fields are stored side by side under one root key, so the case that
+// neither read function can be satisfied by is the one where both are present at once and the
+// values are told apart. Neither single-field case above can fail on a reader that returns the
+// sibling's value, because in each of them only one key exists.
+TEST_F(UserDefaultsChain, BothAppPreferencesReachTheSameNewDocumentIndependently) {
+  const std::filesystem::path& dir = UseFreshConfigDir("app_both_prefs");
+
+  nlohmann::json doc = nlohmann::json::object();
+  WriteUseGpuBackendToDoc(doc, true);
+  WriteWorkerCountToDoc(doc, 6);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+
+  const GuiState state = MakeNewDocumentState(dir);
+  EXPECT_TRUE(state.use_gpu_backend);
+  EXPECT_EQ(state.worker_count, 6);
+
+  // Removing one leaves the other standing — the shared parent is pruned only when it empties.
+  EraseUseGpuBackendFromDoc(doc);
+  ASSERT_TRUE(WriteUserDefaultsFile(dir, doc));
+  const GuiState after = MakeNewDocumentState(dir);
+  EXPECT_FALSE(after.use_gpu_backend);
+  EXPECT_EQ(after.worker_count, 6);
+
+  EXPECT_EQ(TakeUserDefaultsDowngradeCount(), 0);
+}
+
 }  // namespace
 }  // namespace lumice::gui

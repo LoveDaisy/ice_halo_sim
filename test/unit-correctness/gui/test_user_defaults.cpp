@@ -319,8 +319,9 @@ TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   const auto dir = FreshOverlayDir("ineligible");
 
   json doc;
-  // namespace 3: an ordinary serializable scalar the deserializer would happily read.
+  // namespace 3: ordinary serializable scalars the deserializer would happily read.
   doc["use_gpu_backend"] = true;
+  doc["worker_count"] = 8;
   // namespace 4: collections. A hand-edited file must not make New start with someone
   // else's scene. Bare-array wire form for raypath_color (DeserializeGuiStateJson accepts it
   // directly under that key; see file_io.cpp's parse block).
@@ -337,6 +338,7 @@ TEST_F(UserDefaults, ac3_ineligible_keys_cannot_be_smuggled_in) {
   // composition chain — and the two assertions are the two halves of one proposition: exactly one
   // of the two places this name can appear in the file decides the field.
   EXPECT_EQ(state.use_gpu_backend, gui::GuiState{}.use_gpu_backend);
+  EXPECT_EQ(state.worker_count, gui::GuiState{}.worker_count);
   // Seeded contents only: exactly one layer with one entry, one crystal, no filters, no colours.
   EXPECT_EQ(state.layers.size(), static_cast<size_t>(1));
   EXPECT_EQ(state.layers[0].entries.size(), static_cast<size_t>(1));
@@ -378,6 +380,77 @@ TEST_F(UserDefaults, AppPreferencesRoundTripThroughTheAppRootKey) {
   gui::EraseUseGpuBackendFromDoc(doc);
   EXPECT_TRUE(doc.contains("app"));
   EXPECT_TRUE(doc["app"].contains("something_else"));
+}
+
+// The second member of the `app` namespace, asserted on its own rather than folded into the case
+// above: the two fields share a root key but not a reader, so a trio that wrote the right key with
+// the wrong parent — or pruned `app` while a sibling still lived there — would pass every assertion
+// written about use_gpu_backend.
+TEST_F(UserDefaults, WorkerCountRoundTripThroughTheAppRootKey) {
+  json doc = json::object();
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(doc).has_value()) << "an empty document stores nothing";
+
+  gui::WriteWorkerCountToDoc(doc, 2);
+  ASSERT_TRUE(gui::ReadWorkerCountFromDoc(doc).has_value());
+  EXPECT_EQ(*gui::ReadWorkerCountFromDoc(doc), 2);
+  EXPECT_TRUE(doc.contains("app"));
+  EXPECT_TRUE(doc["app"].contains("worker_count"));
+  EXPECT_FALSE(doc.contains("worker_count")) << "the value must NOT land at the document half's top level";
+
+  // 0 is the factory value AND a legal stored answer ("one per physical core, explicitly"). The two
+  // resolve alike only while the factory value stays where it is, which is why the write path
+  // records it rather than treating it as an erase — same argument as `false` above.
+  gui::WriteWorkerCountToDoc(doc, 0);
+  ASSERT_TRUE(gui::ReadWorkerCountFromDoc(doc).has_value());
+  EXPECT_EQ(*gui::ReadWorkerCountFromDoc(doc), 0) << "0 is a stored value, not an absent one";
+
+  gui::EraseWorkerCountFromDoc(doc);
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(doc).has_value());
+  EXPECT_FALSE(doc.contains("app"));
+
+  // The two members are independent: erasing one must not take the other with it, and the parent
+  // survives as long as either is present. This is the sibling-key case the use_gpu_backend test
+  // could only state with an invented key, now stated with the real second member.
+  gui::WriteUseGpuBackendToDoc(doc, true);
+  gui::WriteWorkerCountToDoc(doc, 4);
+  gui::EraseWorkerCountFromDoc(doc);
+  EXPECT_TRUE(doc.contains("app"));
+  ASSERT_TRUE(gui::ReadUseGpuBackendFromDoc(doc).has_value());
+  EXPECT_TRUE(*gui::ReadUseGpuBackendFromDoc(doc));
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(doc).has_value());
+}
+
+// Same malformed-shape sweep as the bool field's, plus the arms only a numeric field has: a
+// non-integral number and a bool, both of which a naive is_number()/get<int>() reader would take.
+TEST_F(UserDefaults, AMalformedWorkerCountReadsAsNothingStored) {
+  json not_an_object = json::array();
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(not_an_object).has_value());
+
+  json app_not_an_object = json::object();
+  app_not_an_object["app"] = "4";
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(app_not_an_object).has_value());
+
+  json value_is_a_string = json::object();
+  value_is_a_string["app"]["worker_count"] = "4";
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_a_string).has_value());
+
+  json value_is_fractional = json::object();
+  value_is_fractional["app"]["worker_count"] = 1.5;
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_fractional).has_value())
+      << "a fractional worker count is a hand-edit, not a number to truncate";
+
+  json value_is_a_bool = json::object();
+  value_is_a_bool["app"]["worker_count"] = true;
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_a_bool).has_value());
+
+  // Same as the bool field: a type error here costs the app half nothing beyond itself.
+  EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
+
+  json bad_root = json::array();
+  gui::WriteWorkerCountToDoc(bad_root, 3);
+  EXPECT_TRUE(bad_root.is_object());
+  ASSERT_TRUE(gui::ReadWorkerCountFromDoc(bad_root).has_value());
+  EXPECT_EQ(*gui::ReadWorkerCountFromDoc(bad_root), 3);
 }
 
 // The file is user-editable, so every malformed shape has to read as "nothing stored" rather than
@@ -429,12 +502,15 @@ TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
     empty_explicit = gui::MakeNewDocumentState();
   }
   EXPECT_TRUE(SerializesIdentically(disabled, empty_explicit));
-  // Asserted separately because SerializesIdentically cannot see this field: use_gpu_backend has no
-  // key in SerializeGuiStateJson's output at all (its channel is the `app` root key), so the
-  // comparison above is blind to it and would stay green if the app-preferences path started
-  // handing out a non-factory value on a route where the user has stored nothing.
+  // Asserted separately because SerializesIdentically cannot see these fields: neither
+  // use_gpu_backend nor worker_count has a key in SerializeGuiStateJson's output at all (their
+  // channel is the `app` root key), so the comparison above is blind to them and would stay green
+  // if the app-preferences path started handing out a non-factory value on a route where the user
+  // has stored nothing.
   EXPECT_FALSE(disabled.use_gpu_backend);
   EXPECT_FALSE(empty_explicit.use_gpu_backend);
+  EXPECT_EQ(disabled.worker_count, 0);
+  EXPECT_EQ(empty_explicit.worker_count, 0);
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);
 
   // ...and the comparison above is not vacuous: the SAME directory holding a real override
@@ -461,6 +537,7 @@ TEST_F(UserDefaults, switch_disabled_equals_empty_explicit_dir) {
   }
   EXPECT_TRUE(SerializesIdentically(disabled, disabled_again));
   EXPECT_FALSE(disabled_again.use_gpu_backend);
+  EXPECT_EQ(disabled_again.worker_count, 0);
 
   // Last, the harness's own baseline, asserted from inside the harness with NO guard in force.
   // This binary installs kTestHarnessUserConfigDefault before any test runs (gui_unit_test_env.cpp;

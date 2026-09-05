@@ -947,7 +947,7 @@ void RegisterViewDisplayControlTests(ImGuiTestEngine* engine) {
       gui::g_server_poller.Stop();
       gui::g_server = LUMICE_CreateServer();
       IM_CHECK(gui::g_server != nullptr);
-      gui::g_server_is_gpu = false;
+      gui::ResetServerConstructionTrackers();
       gui::g_state = gui::InitDefaultState();
       gui::g_state.sim.infinite = false;
       gui::g_state.sim.ray_num_millions = 0.2f;

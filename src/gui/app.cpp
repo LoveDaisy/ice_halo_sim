@@ -40,10 +40,13 @@ CrystalRenderer g_crystal_renderer;
 ThumbnailCache g_thumbnail_cache;
 LUMICE_Server* g_server = nullptr;
 ServerPoller g_server_poller;
-// Tracks whether the live g_server was *constructed* for a GPU backend (not the
-// env-resolved actual). Startup uses LUMICE_CreateServer() → preferred_backend=CPU,
-// so this is false until the first GPU toggle. See MaybeReconstructServerForBackend.
+// The construction-time properties the live g_server was actually built with — the pair
+// MaybeReconstructServerForConstructionProperties compares the requested values against. Startup
+// uses LUMICE_CreateServer() → preferred_backend=CPU, num_workers=0, so these are the zero values
+// until the first change. Any code that creates g_server directly (bypassing the reconstruction
+// function) must put them back with ResetServerConstructionTrackers().
 bool g_server_is_gpu = false;
+int g_server_worker_count = 0;
 PreviewViewport g_preview_vp;
 
 // Async Stop plumbing (blueprint §5/§8, 1.6). DoStop offloads the blocking teardown sequence
@@ -69,7 +72,7 @@ std::future<void> g_stop_future;
 // future. Idempotent / cheap when no stop is pending. MUST be called before every path that
 // destroys or reconstructs g_server / g_server_poller, so the background thread can never touch a
 // freed server (R1 use-after-free guard): shutdown (main.cpp), DoRun top, and
-// MaybeReconstructServerForBackend.
+// MaybeReconstructServerForConstructionProperties.
 void JoinPendingStop() {
   if (g_stop_future.valid()) {
     g_stop_future.wait();
@@ -982,13 +985,15 @@ static int ResolveGpuBackend() {
 }
 
 // Reconstruct the server so its orchestration *topology* matches the requested
-// backend. Backend is a construction-time property — CPU is N-worker
-// queue-per-Simulator; the GPU route (Metal/CUDA) is a single engine with large
-// dispatch (task-268.7) — so it cannot be flipped on a live server
-// (SetPreferredBackend on an N-worker server would run GPU kernels inside the
-// 12-worker structure, the 0.58× anti-pattern this scrum removed). Toggling the
-// "Use GPU" checkbox therefore tears the server down and rebuilds it with the new
-// preferred_backend.
+// CONSTRUCTION-TIME properties. Two of them today, and the name says the category
+// rather than listing them, so a third does not force a third rename:
+//   - backend — CPU is N-worker queue-per-Simulator; the GPU route (Metal/CUDA) is a
+//     single engine with one large dispatch. It cannot be flipped on a live
+//     server (SetPreferredBackend on an N-worker server would run GPU kernels inside
+//     the 12-worker structure, the 0.58× anti-pattern this scrum removed).
+//   - worker count — ServerImpl builds its Simulator vector in its constructor
+//     (server.cpp), so the number of workers is fixed for the life of a server.
+// Changing either therefore tears the server down and rebuilds it.
 //
 // The accumulated image is intentionally discarded: CPU and GPU are
 // statistically-equivalent-but-not-identical sample streams, so mixing them in one
@@ -997,23 +1002,33 @@ static int ResolveGpuBackend() {
 //
 // Returns true iff the server was reconstructed; the caller must then force a full
 // consumer rebuild + fresh poller Start (the new server has no consumers).
-bool MaybeReconstructServerForBackend() {
-  bool want_gpu = g_state.use_gpu_backend;
-  if (want_gpu == g_server_is_gpu) {
-    return false;  // backend unchanged — keep the live server
+// See app.hpp for why this is a function and who has to call it.
+void ResetServerConstructionTrackers() {
+  g_server_is_gpu = false;
+  g_server_worker_count = 0;
+}
+
+bool MaybeReconstructServerForConstructionProperties() {
+  const bool want_gpu = g_state.use_gpu_backend;
+  const int want_workers = g_state.worker_count;
+  if (want_gpu == g_server_is_gpu && want_workers == g_server_worker_count) {
+    return false;  // construction-time properties unchanged — keep the live server
   }
-  GUI_LOG_INFO("[GUI] Backend toggle: reconstructing server ({} -> {})", g_server_is_gpu ? "GPU" : "CPU",
-               want_gpu ? "GPU" : "CPU");
+  GUI_LOG_INFO("[GUI] Reconstructing server (backend {} -> {}, workers {} -> {})", g_server_is_gpu ? "GPU" : "CPU",
+               want_gpu ? "GPU" : "CPU", g_server_worker_count, want_workers);
   JoinPendingStop();       // R1: a background stop may still hold this server — drain it before destroy
   g_server_poller.Stop();  // synchronous: worker confirmed no longer touching the old server
   LUMICE_DestroyServer(g_server);
 
   LUMICE_ServerConfig cfg{};
-  cfg.num_workers = 0;  // 0 = PhysicalCoreCount (CPU); ignored on the GPU single engine
-  cfg.sim_seed = 0;     // 0 = random — matches LUMICE_CreateServer() startup default
+  // The user's personal default (Settings §app), 0 = PhysicalCoreCount (CPU). Ignored on the GPU
+  // single engine, which is always one worker whatever this says.
+  cfg.num_workers = want_workers;
+  cfg.sim_seed = 0;  // 0 = random — matches LUMICE_CreateServer() startup default
   cfg.preferred_backend = want_gpu ? ResolveGpuBackend() : LUMICE_BACKEND_CPU;
   g_server = LUMICE_CreateServerEx(&cfg);
   g_server_is_gpu = want_gpu;
+  g_server_worker_count = want_workers;
 
   // Re-apply per-server settings that died with the old instance (cf. main.cpp startup).
   LUMICE_SetLogLevel(g_server, static_cast<LUMICE_LogLevel>(g_state.core_log_level));
@@ -1083,10 +1098,10 @@ bool DoRun(bool user_initiated) {
 
   auto run_start = std::chrono::steady_clock::now();
 
-  // Backend toggle reconstructs the server (per-backend orchestration topology).
+  // A change to a construction-time property (backend, worker count) reconstructs the server.
   // A reconstructed server has no consumers, so force the full-rebuild path below.
-  // No-op (returns false) when the GPU toggle is off / unchanged or unavailable.
-  bool backend_reconstructed = MaybeReconstructServerForBackend();
+  // No-op (returns false) when neither property has moved since the live server was built.
+  bool backend_reconstructed = MaybeReconstructServerForConstructionProperties();
 
   // Pre-check: will CommitConfig rebuild consumers (destroying old buffers)?
   // Only renderer layout changes (resolution/lens/view/visible/filter) trigger rebuild.
@@ -1171,7 +1186,7 @@ bool DoRun(bool user_initiated) {
   }
 
   // Backend preference is now a construction-time property of the server
-  // (see MaybeReconstructServerForBackend) — no per-DoRun SetPreferredBackend push.
+  // (see MaybeReconstructServerForConstructionProperties) — no per-DoRun SetPreferredBackend push.
 
   int reused = 0;
   LUMICE_ErrorCode err = LUMICE_CommitScene(g_server, scene.get(), &reused);

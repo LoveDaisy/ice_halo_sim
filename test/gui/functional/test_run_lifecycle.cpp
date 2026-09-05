@@ -55,7 +55,7 @@ struct ScopedRunScene {
     gui::JoinPendingStop();
     ResetTestState();
     gui::g_server = LUMICE_CreateServer();
-    gui::g_server_is_gpu = false;  // re-establish the backend-toggle detection invariant
+    gui::ResetServerConstructionTrackers();  // re-establish the construction-property detection invariant
   }
 
   ~ScopedRunScene() {
@@ -66,7 +66,7 @@ struct ScopedRunScene {
       LUMICE_DestroyServer(gui::g_server);
       gui::g_server = nullptr;
     }
-    gui::g_server_is_gpu = false;
+    gui::ResetServerConstructionTrackers();
     // The stop latch is the one field here that has no other owner: ResetTestState() rebuilds the
     // document through DoNew(), which zeroes the four GuiState fields below, but g_stop_inflight is
     // an app.cpp global that no reset touches. A case that leaves it set makes every later case's
@@ -481,7 +481,7 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK(scene.ok());
     SeedFiniteRun(0.5f);
 #if defined(__APPLE__)
-    // The one case that runs the real GPU route (MaybeReconstructServerForBackend → Metal single
+    // The one case that runs the real GPU route (MaybeReconstructServerForConstructionProperties → Metal single
     // engine): the completion edge is backend plumbing, and this is where a backend that never
     // reports COMPLETED would show up.
     gui::g_state.use_gpu_backend = true;
@@ -507,6 +507,41 @@ void RegisterRunLifecycleTests(ImGuiTestEngine* engine) {
     IM_CHECK_GT(gui::g_server_poller.HeartbeatTickCountForTest(), ticks_at_done);
     ctx->Yield();  // one more SyncFromPoller AFTER a heartbeat tick published
     IM_CHECK_EQ(static_cast<int>(gui::g_state.sim_state), static_cast<int>(SimState::kDone));
+  };
+
+  // The worker count is a construction-time server property, so changing it has to reach the
+  // backend the only way such a property can: by rebuilding the server. This case is the GUI half
+  // of the CLI's --workers evidence (test_cli.py's TestWorkerCount) — there is no stdout to grep
+  // here, so the observation point is the tracker the reconstruction function publishes.
+  //
+  // Registered here rather than in test_scene_controls.cpp, where the "Use GPU" toggle's widget
+  // case lives: that case has no live server, and a reconstruction assertion needs one. This file
+  // is where ScopedRunScene + DoRun exist.
+  ImGuiTest* t_workers = IM_REGISTER_TEST(engine, "run_lifecycle", "a_worker_count_change_reconstructs_the_server");
+  t_workers->TestFunc = [](ImGuiTestContext* ctx) {
+    ScopedRunScene scene;
+    IM_CHECK(scene.ok());
+    SeedFiniteRun(0.5f);
+    // The GPU route is a single engine whatever the worker count says, so it has nothing to
+    // reconstruct FOR and this case would assert on a value the backend ignores.
+    gui::g_state.use_gpu_backend = false;
+    IM_CHECK_EQ(gui::g_server_worker_count, 0);  // the fixture's fresh LUMICE_CreateServer default
+
+    LUMICE_Server* const before = gui::g_server;
+    gui::g_state.worker_count = 2;
+    gui::DoRun(/*user_initiated=*/true);
+    ctx->Yield(2);
+    IM_CHECK_EQ(gui::g_server_worker_count, 2);
+    IM_CHECK(gui::g_server != before);  // a genuine rebuild, not just a tracker write
+
+    // ...and the same value on the next run does NOT rebuild: the comparison is against what the
+    // live server was built with, not "has anyone touched this field". Without this arm, a
+    // reconstruction function that rebuilt unconditionally would pass everything above.
+    LUMICE_Server* const after_first = gui::g_server;
+    gui::DoRun(/*user_initiated=*/true);
+    ctx->Yield(2);
+    IM_CHECK_EQ(gui::g_server, after_first);
+    IM_CHECK_EQ(gui::g_server_worker_count, 2);
   };
 
   // Stop is non-blocking: it paints immediately and settles once the backend has drained.

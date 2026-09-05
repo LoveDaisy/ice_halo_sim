@@ -1901,7 +1901,7 @@ void RenderSceneControls(GuiState& state) {
 
   // GPU backend toggle (Metal on Apple, CUDA on NVIDIA). Marked dirty explicitly so
   // the next Apply/Run reconstructs the server for the chosen backend
-  // (MaybeReconstructServerForBackend in app.cpp) — CPU N-worker vs GPU single
+  // (MaybeReconstructServerForConstructionProperties in app.cpp) — CPU N-worker vs GPU single
   // engine are different orchestration topologies, so the server is rebuilt and the
   // accumulated image resets on toggle. Falls back to CPU silently if the active
   // config is not GPU-compatible.

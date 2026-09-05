@@ -25,7 +25,7 @@
 // with this bit set is stored under the override file's `app` root key — a sibling of `presets`
 // that neither SerializeGuiStateJson nor DeserializeGuiStateJson ever touches — and must therefore
 // be reset out of anything the document half applied (ResetIneligibleScalarFields,
-// user_defaults.cpp) before that channel is read. Currently the sole use is `use_gpu_backend`.
+// user_defaults.cpp) before that channel is read. Used by `use_gpu_backend` and `worker_count`.
 // Reading `auto_diff_excluded` for this instead is a proxy quantity: the two populations coincide
 // today by accident, and the reconciler's question has nothing to do with where a default is
 // stored.
@@ -58,11 +58,12 @@ struct FieldTierEntry {
   //
   // Setting this to true REGISTERS a field and turns on the coverage assertion; it does not wire
   // one up. Nothing walks this table to drive behaviour — ResetIneligibleScalarFields() and
-  // ApplyAppPreferencesOverride() (user_defaults.cpp) each name their field by hand. So adding the
-  // second member of this namespace means three edits, not one: this bit, a line in each of those
-  // two functions. That is the deliberate cost of not building a general registry for a
-  // single-member set; the coverage test is what makes forgetting the other two edits go red
-  // rather than silent.
+  // ApplyAppPreferencesOverride() (user_defaults.cpp) each name their field by hand. So adding a
+  // member of this namespace means three edits, not one: this bit, a line in each of those two
+  // functions. That is the deliberate cost of not building a general registry for a set this small;
+  // the coverage test is what makes forgetting the other two edits go red rather than silent. It
+  // held for the second member (`worker_count`) — reconsider a registry when a THIRD arrives, not
+  // before, since two hand-written pairs are still cheaper to read than a mechanism.
   bool app_preference_eligible = false;
 };
 
@@ -92,6 +93,12 @@ inline constexpr FieldTierEntry kFieldTierTable[] = {
     //                                  the document half. See user_defaults.hpp's app-preferences
     //                                  block and doc/gui-state-governance.md §8.
     { "use_gpu_backend",            FieldTier::kStructSoft, true, true },
+    // worker_count: the same two bits for the same two reasons as the row above — it is outside
+    // ConfigSnapshot (no Revert baseline to diff against), and its only legitimate default channel
+    // is the `app` root key. The pair is no longer a coincidence of one field: both members of this
+    // namespace are CONSTRUCTION-TIME server properties that describe the machine rather than the
+    // document, which is what "app preference" means here.
+    { "worker_count",               FieldTier::kStructSoft, true, true },
 
     // ==== T-struct·hard: re-sim + display clear + epoch floor bump ==============================
     { "filters",                    FieldTier::kStructHard, false },

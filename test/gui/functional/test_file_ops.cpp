@@ -709,7 +709,7 @@ void RegisterFileOpsTests(ImGuiTestEngine* engine) {
       // Give it one, without leaving the prompt.
       gui::g_server = LUMICE_CreateServer();
       IM_CHECK(gui::g_server != nullptr);
-      gui::g_server_is_gpu = false;
+      gui::ResetServerConstructionTrackers();
       ctx->Yield(2);
       IM_CHECK(!IsDisabled(ctx->ItemInfo("Save Modified Config/Run first")));
 

@@ -93,13 +93,13 @@ void StartPerfSimulation() {
 #if defined(__APPLE__)
   // Fresh CPU server (LUMICE_CreateServer's default) — re-establish the toggle-detection
   // invariant before any DoRun. Perf scenarios run sequentially in one binary, so a prior Metal
-  // reconstruction may have left g_server_is_gpu true.
-  gui::g_server_is_gpu = false;
+  // reconstruction may have left the construction-time trackers pointing at that server.
+  gui::ResetServerConstructionTrackers();
 
   // LUMICE_PERF_METAL=1 opts into Metal through the REAL product path: the flag is applied just
   // before each DoRun, never here, because the LUMICE_PERF_CONFIG branch below deserializes into
   // `state = GuiState{}` and would wipe an early assignment. DoRun then runs
-  // MaybeReconstructServerForBackend and rebuilds into the single-engine Metal topology —
+  // MaybeReconstructServerForConstructionProperties and rebuilds into the single-engine Metal topology —
   // exactly what the GUI checkbox does. (A retired route flipped a backend flag on this CPU
   // N-worker server instead, which ran Metal kernels under an orchestration topology built for
   // many CPU workers and measured 0.58x of the CPU baseline — slower than the thing it replaced.

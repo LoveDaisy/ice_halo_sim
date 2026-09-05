@@ -190,7 +190,7 @@ class ServerPoller {
   // it is no longer accessing the server. Safe to call multiple times.
   //
   // "No longer accessing the server" is load-bearing, not a nicety: callers destroy the server
-  // immediately afterwards (MaybeReconstructServerForBackend does Stop() then
+  // immediately afterwards (MaybeReconstructServerForConstructionProperties does Stop() then
   // LUMICE_DestroyServer; DoStop does Stop() then LUMICE_StopServer), so any worker still inside
   // PollOnce() after this returns is a use-after-free. Both non-terminal states quiesce here —
   // kRunning (full-speed loop) and kIdleHeartbeat (slow self-heal loop) — and the wait is on
