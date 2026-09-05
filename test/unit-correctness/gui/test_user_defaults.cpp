@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -442,6 +443,17 @@ TEST_F(UserDefaults, AMalformedWorkerCountReadsAsNothingStored) {
   json value_is_a_bool = json::object();
   value_is_a_bool["app"]["worker_count"] = true;
   EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_a_bool).has_value());
+
+  // A same-type-but-out-of-range integer (a hand-edited file, not a type mismatch): must not
+  // narrow into a sign-flipped or otherwise nonsensical int (code-review round 1, Minor 1).
+  json value_is_too_large = json::object();
+  value_is_too_large["app"]["worker_count"] = static_cast<std::int64_t>(99999999999LL);
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_too_large).has_value())
+      << "an out-of-int-range worker count must read as nothing stored, not a narrowed value";
+
+  json value_is_too_negative = json::object();
+  value_is_too_negative["app"]["worker_count"] = static_cast<std::int64_t>(-99999999999LL);
+  EXPECT_FALSE(gui::ReadWorkerCountFromDoc(value_is_too_negative).has_value());
 
   // Same as the bool field: a type error here costs the app half nothing beyond itself.
   EXPECT_EQ(gui::TakeUserDefaultsDowngradeCount(), 0);

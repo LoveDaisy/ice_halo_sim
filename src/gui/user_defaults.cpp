@@ -1,6 +1,7 @@
 #include "gui/user_defaults.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -639,7 +640,15 @@ std::optional<int> ReadWorkerCountFromDoc(const nlohmann::json& doc) {
   if (value == app->end() || !value->is_number_integer()) {
     return std::nullopt;
   }
-  return value->get<int>();
+  // A hand-edited file can carry an integer literal outside int's range (e.g. 99999999999).
+  // get<int>() on that is an implementation-defined narrowing conversion — it could come back as a
+  // sign-flipped negative or another out-of-range value instead of failing. Read as the widest
+  // integer type nlohmann exposes and reject anything that would not round-trip through int.
+  const auto wide = value->get<std::int64_t>();
+  if (wide < std::numeric_limits<int>::min() || wide > std::numeric_limits<int>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(wide);
 }
 
 void WriteWorkerCountToDoc(nlohmann::json& doc, int value) {

@@ -1,3 +1,4 @@
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -694,8 +695,16 @@ int main(int argc, char** argv) {
       }
       // std::stoi stops at the first non-digit WITHOUT throwing, so "3abc" would parse as 3 and be
       // silently accepted. The `pos == size` check is what makes a trailing-garbage argument an
-      // error rather than a value the user never typed.
+      // error rather than a value the user never typed. std::stoi also skips LEADING whitespace and
+      // accepts a leading '+'/'-' before parsing, so those two checks alone would let " 3" or "+3"
+      // through as if the user had typed a bare "3" — reject anything that doesn't start with a
+      // digit up front, since AC1 only ever wants a positive integer typed as one.
       const std::string workers_arg = argv[i];
+      if (workers_arg.empty() || !std::isdigit(static_cast<unsigned char>(workers_arg[0]))) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
       std::size_t parsed_len = 0;
       try {
         cli_workers = std::stoi(workers_arg, &parsed_len);

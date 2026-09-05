@@ -232,6 +232,20 @@ class TestWorkerCount(LumiceTestCase):
                 result.returncode, 0, f"--workers {val!r} should be rejected"
             )
 
+    def test_workers_leading_whitespace_or_sign_is_rejected(self):
+        """std::stoi skips leading whitespace and accepts a leading '+'/'-'.
+
+        The trailing-garbage check alone (``pos == size``) does not catch this:
+        " 3" and "+3" fully consume under std::stoi and would silently become 3
+        without an explicit leading-character check. Requiring the first
+        character to be a digit closes that gap (code-review round 1, Minor 2).
+        """
+        for val in [" 3", "+3"]:
+            result = self.run_lumice(["-f", "dummy.json", "--workers", val])
+            self.assertNotEqual(
+                result.returncode, 0, f"--workers {val!r} should be rejected"
+            )
+
     def test_workers_missing_value(self):
         """--workers as the last argument (missing value) should exit non-zero."""
         result = self.run_lumice(["-f", "dummy.json", "--workers"])
