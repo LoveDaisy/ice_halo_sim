@@ -174,7 +174,9 @@ constexpr int kBenchmarkSingleRays = 2'000'000;
 // only by "enough rays for the pipeline to actually reach a GPU dispatch under
 // the normal drain semantics". 100k is well above the ~64k-batch drain
 // granularity of every current backend and keeps the added warm-up wall-time
-// short so we do not push `test_benchmark_infinite_no_hang.py`'s 30s ceiling.
+// short — every GPU bench pass pays it, including the ones the e2e suites run
+// under a wall-clock timeout, so the warm-up must not be a measurable share of
+// a pass.
 constexpr int kBenchmarkGpuWarmupRays = 100'000;
 // Drain-count-driven measurement (task-gpu-bench-drain-aligned-rate): when the
 // bench config asks for scene.ray_num="infinite", RunBenchmarkPass measures the
@@ -775,10 +777,9 @@ int main(int argc, char** argv) {
       // `rays_per_sec` — this is the mechanism behind the "stoch vs det 15.7×"
       // cold/warm measurement artifact. Silent=true suppresses both the JSON
       // stdout line and the wall_fallback stderr warning so downstream parsers
-      // (bench_throughput.py, test_metal_throughput.py,
-      // test_benchmark_infinite_no_hang.py) see the same single `[BENCHMARK]`
-      // line they always did. The warm-up config clones the user's original
-      // scene (same crystals / renders / spectrum), only overriding
+      // (bench_throughput.py, test_metal_throughput.py) see the same single
+      // `[BENCHMARK]` line they always did. The warm-up config clones the
+      // user's original scene (same crystals / renders / spectrum), only overriding
       // scene.ray_num to a small finite value — this keeps warm-up wall-time
       // short (ray count is not what drives init cost) while still exercising
       // the real GPU dispatch path the steady pass will use.

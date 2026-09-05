@@ -50,9 +50,10 @@ void XyzToLinearRgb(const float xyz[3], float rgb[3]);
 // COST, since it is not zero and the denominator matters: double-precision pow makes
 // XyzToSrgbUint8 about 48% slower (1024x1024, realistic halo content, 22.3 -> 33.0 ms measured),
 // and that per-pixel gamma is on the server's per-drain snapshot render — a path whose cost has
-// been diagnosed as catastrophic once already (test/regression-sentinel/
-// test_benchmark_infinite_no_hang.py). Against the end-to-end denominator that sensitivity is
-// about, though, it does not surface: the same CLI run (1024x1024 equal-area, grid overlays, one
+// been diagnosed as catastrophic once already, when the `--benchmark` poll loop read sim_ray_num by
+// acquiring a result frame and so paid that render on every drain (see the comment above the
+// `LUMICE_GetSimRayCount` call in `src/main.cpp`). Against the end-to-end denominator that
+// sensitivity is about, though, it does not surface: the same CLI run (1024x1024 equal-area, grid overlays, one
 // render, image written) measured 1132.9 ms before and 1134.7 ms after — +1.8 ms, 0.15%, inside
 // the 7 ms run-to-run spread, A/B'd by swapping only this header and confirming the two binaries
 // differ. What that number does NOT cover, and is left standing as a known limit: the GUI's

@@ -245,6 +245,78 @@ naming convention / physical location**. Cadence values: `CI-fast` (every push, 
 - **Physical location**: target-state `test/regression-sentinel/`; current `test/e2e/`
   (`test_capi_sentinel_overflow.py`, `test_ms_filter_leak.py`, `test_errors.py`).
 
+#### §1.8.1 Detection power: which oracles can rot in silence
+
+A sentinel outlives the defect it guards, and nothing in the tree announces when it has stopped
+being able to see that defect. The decay is silent in both directions: the test still runs, still
+passes, and still reads in review as coverage. What decides whether a given sentinel is exposed
+to this is **the shape of its oracle** — specifically, whether the quantity being compared is
+pinned by construction, or free to drift along with the baseline.
+
+| Oracle shape | Can it lose detection power silently? | Why |
+|---|---|---|
+| A binary event — a crash, an exit code, `fell_back`, a color class present or absent | No | The event either happens or it does not. There is no margin for a drifting baseline to consume. |
+| Two live quantities compared against each other — an equality, a relative difference, a ratio that is 1.0 or 0 by construction when healthy | No | Both sides drift together, so the comparison is invariant to the drift that would otherwise erode it. |
+| A measured value against a hardcoded constant, where the healthy value is **not** pinned by construction | **Yes** | The baseline moves, the margin is eaten, and nothing reports it. The assertion keeps passing, right up to passing vacuously. |
+
+Only the third row needs anything written down, and **the discriminator is the anchoring of the
+measured quantity, not the syntax of the assertion**. `test_benchmark_rate_not_impossible.py`
+compares a measured value against a hardcoded constant (`work_ratio <= _MAX_WORK_RATIO`) and
+still belongs in the second row, because what it measures — rays claimed per second, times the
+run's wall clock, divided by the rays the run actually traced — is 1.0 by construction whenever
+the estimator is honest, and scored ~20 in the defect state. A faster machine or a rewritten
+backend does not move that number. The rear-hemisphere energy share in
+`test_full_sphere_roll_flip.py` (`_REAR_FRACTION_RANGE`) is the opposite case at identical
+syntax: an absolute physical fraction with nothing holding it in place, which the scene, the
+sampler or a crystal default can walk toward or away from the band on its own. Read the quantity,
+not the operator. (Test names here are illustrative of the shapes as of writing; the
+classification does not depend on these particular files surviving.)
+
+**The instance this is paid for.** Commit `f717a8f5` deleted a benchmark hang sentinel outright
+after measuring its detection power at zero. Its assertion was a 30-second wall-clock ceiling,
+and that one number was serving two jobs with opposite requirements: a hang backstop, which wants
+to be wide, and a regression threshold, which wants to be tight. With the defect put back, the
+tax landed in the poll thread's existing `sleep_for` slack — CPU wall time moved 1.01× (3.54 →
+3.59 s) and Metal 0.87× (0.78 → 0.68 s), so the clock the gate watched never saw it — while the
+wide end of the same number produced two false reds in one day under `pytest -n auto`. A single
+constant asked to be both wide and tight is the tell worth recognizing early; it is how a
+third-row oracle ends up with a margin that no longer bounds anything.
+
+**Confirming a suspicion.** Three scripts already do two-arm red-state verification and are the
+thing to reach for rather than reinvent: `scripts/verify_crash_sentinel_detection_power.sh` and
+`scripts/verify_pyramid_crash_sentinel_detection_power.sh` (both against sentinels in this layer),
+and `scripts/verify_apex_rescue_warning_detection_power.sh` (against the near-apex guards in
+`test/golden-analytic/core/test_closed_form_pyramid.cpp` and the degradation warning in
+`src/core/geo3d_closedform.cpp` — a different layer, same method). Each reverts the fix in an
+independent `git worktree`, never touching the caller's tree, and each builds from scratch rather
+than trusting an incremental "up to date" as evidence a rebuild happened — the two crash scripts
+force `rm -rf build/` and then refuse to proceed if the two arms' binaries share an md5, the third
+builds its arm in its own directory and hard-errors if the string it must patch is not found, so
+none of them can silently measure an unmodified tree. The crash scripts also report the red count
+with its statistical power stated (N=15 against a ~20% baseline crash rate puts P(0/15) at ~3.5%).
+They are **not** CI gates and must not be promoted into one: each
+says so in its own header, and the invocation they describe is manual, when a suspicion about a
+specific sentinel arises — after a refactor across the fix commits, or an environment change.
+Running them on a schedule would buy nothing and cost a clean rebuild each time.
+
+**What a new third-row sentinel owes.** When the assertion is a measured value against a
+hardcoded constant whose healthy value is not pinned by construction, record in the test itself
+what the healthy value actually measured and how much margin the constant leaves — not a bare
+number. Several sentinels in this layer already do exactly this and are worth copying:
+`test_relative_ev_breaks_additivity.py` states both the measured spread and the effect size it
+must not swallow, then makes the gap between the two the assertion; `test_full_sphere_roll_flip.py`
+and `test_absolute_energy_additivity.py` record measured spreads across several seeds against the
+defect-state values. This requirement is deliberately scoped to the third row only. The other two
+shapes get no new requirement, because the cost that justifies one has been demonstrated exactly
+once, in the commit above, and inventing a rule for shapes that have not failed would be paying
+for an imagined harm.
+
+**What this section does not claim.** The table is a way to judge a sentinel by reading its
+assertion; it is not a report that the sentinels in this layer have been audited. Only one
+sentinel here has had its detection power demonstrated by red-state reconstruction, and two more
+have the scripts above; anything else is inference from oracle shape, which is a weaker claim and
+should be read as one.
+
 ---
 
 ## §2 Subsystem dimension (layer-internal tag)
