@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Entries start at **v4.1.4**. Versions **v4.1.3 and earlier were written by hand at the time**,
+before the criteria below existed; their granularity may differ from what follows, and they are
+left as they were rather than rewritten to match.
+
+## Maintaining this file
+
+One entry per **user-perceptible** change, phrased as the effect on someone who upgrades — not
+as a transcription of the commit or PR title. The conventional-commit prefix is a weak prior,
+never the criterion: a `refactor:` that fixes a crash earns an entry, a `feat:` that only adds
+an internal helper does not.
+
+<details>
+<summary>The full rule (what earns an entry, granularity, breaking changes, sourcing)</summary>
+
+### What earns an entry
+
+A change earns an entry if at least one of these is true:
+
+- it changes what appears on screen, in a rendered image, in CLI/GUI output, or in a produced
+  file (`.lmc`, exported JSON, an image);
+- it changes the shape or behavior of the public C API (`src/include/lumice.h`) — a new
+  function, a changed signature, an ABI-affecting struct change, a semantic change to an
+  existing field;
+- it changes what a config file (JSON) accepts, means, or defaults to;
+- it changes what ships in a release artifact (binary linking, packaging, signing) in a way a
+  user could notice — a crash that no longer happens counts, a CI speedup does not;
+- it fixes a user-facing bug (crash, wrong pixels, a wrong number reported to the user), even
+  if the underlying commit is titled `refactor:` / `build:` / `test:`.
+
+**Excluded by default**: internal refactors with no observable behavior change, test-suite
+changes, CI pipeline changes, documentation-only changes, code comments, dependency bumps with
+no behavior change, and development/process tooling. The exclusion is a judgement that has to
+be *made*, not a gap: when a title does not itself say whether the change crosses one of the
+lines above — every title without a `feat`/`fix` prefix, and any ambiguous `feat`/`fix` title —
+**read the diff before deciding**.
+
+### Granularity
+
+Default is one PR, one entry. **Merge** several PRs into one entry when they are steps of the
+same user-visible change (a feature PR plus its same-cycle follow-up fixes, where the follow-up
+has no independent user effect). **Split** one PR into several entries when it bundles
+unrelated user-visible changes. The test is the same one as above: does splitting or merging
+change what a reader needs to know about one perceptible behavior?
+
+### Breaking changes
+
+A change to a default value, to a config-file semantic, or to the C API's ABI or behavior gets
+its own `### ⚠️ Breaking Changes` subsection inside that version, and states three things:
+what a user saw before, what they see now, and what they need to do about it.
+
+### Sourcing
+
+`gh release view <tag> --json body` lists a version's PRs but is **not authoritative on its
+own** — it has silently missed a merged PR at least once (v4.1.7 omits PR #24). Cross-check
+against git:
+
+```bash
+git log <prev_tag>..<tag> --oneline --grep='^Merge pull request #'   # PRs merged via merge commit
+git log <prev_tag>..<tag> --first-parent --no-merges                 # squashed PRs and direct commits
+```
+
+The second command is not redundant: dependabot bumps and admin-merged single-commit PRs land
+with no merge commit to grep for, and direct-to-main commits appear in no PR list at all.
+
+</details>
+
 ## [Unreleased]
 
 ### Added
@@ -74,9 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays 64 bytes and every existing field keeps its offset -- a caller compiled against the
   old header is unaffected, and one recompiled against the new one gains a field without
   relinking anything else.
-- **GUI custom discrete-spectrum editor** (task-323): the Sun panel Spectrum combo now
-  offers a "Custom..." entry that opens a wavelength/weight list editor. Custom spectra are
-  persisted in `.lmc` files and core JSON configs.
 
 ### Changed
 - **`render[].grid.outline` now defaults to `false`** (469.7). It defaulted to `true` for as long
@@ -137,40 +200,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (measured N-scaling slope: -1.026 landed-weight, -1.027 emitted-energy) -- an honest
   Monte-Carlo estimator property, not something this change introduces or fixes. See
   `doc/ev-pipeline-architecture.md` §7.4 before reporting it as a regression.
-- **`crystal_num` / `Stats: crystals=N` redefined** (no ABI change — same field name and
-  type): the value is now **how many distinct crystal geometries the run actually sampled**,
-  not how many crystal objects it built. A scene with no random shape distributions reports
-  exactly its (scattering layer × entry) count regardless of `ray_num`; give a shape a
-  distribution and the count rises with the geometries actually drawn. Previously the value
-  tracked the batch schedule instead of the scene — sweeping `LUMICE_DISPATCH_RAY_NUM` alone
-  moved it by two orders of magnitude, and a randomized scene reported the same number as its
-  fixed-shape twin. **Expect the reported number to drop sharply** for fixed-shape scenes
-  (e.g. 785 → 5 on a 5-population 20k-ray scene, or 60 → 5 on the default multi-worker CLI);
-  that is the fix, not a regression. The value is now independent of `num_workers` and of the
-  dispatch grain — the fixed-shape part of a scene is counted once from the committed config
-  rather than once per worker per batch — but remains non-comparable across backends (CPU
-  samples per ray-group, the GPU K-shape clock is off by default). See `doc/c_api.md` and the
-  contract block on `TraceBackend::GetLastBatchStochasticCrystalSampleCount`.
-- **Breaking config change (discrete spectra)**: `ray_num` now means the TOTAL number of
-  rays traced across ALL wavelengths (previously it was per-wavelength). The server derives
-  the per-wavelength budget via `ceil(ray_num / n_wavelengths)`. Externally hand-written
-  discrete-spectrum configs must multiply their old `ray_num` by the wavelength count to
-  preserve the previous total. Single-wavelength / illuminant configs are unaffected.
-- Adaptive Brightness no longer has an ON/OFF toggle. The simulator always uses the
-  F1 anchor lane introduced by scrum-221; the GUI Display panel now shows
-  `(+N.NN EV auto)` next to the manual EV slider with no checkbox. Filter switches
-  no longer jump the EV.
-- **Adaptive Brightness defaults updated**: EV anchor now uses the P99.5 percentile
-  (previously P99) and maps to `target_white = 135` (previously 200). These values
-  produce better perceptual balance across typical halo scenes.
-- **Anchor lane removed**: Adaptive Brightness now uses per-frame visible-framebuffer
-  self-P99.5 normalization. Filter-fail rays terminate immediately in `CollectData`
-  (Design A semantics). The EV scale may shift when toggling a filter, since the
-  P99.5 is computed over the current visible set. Filter early-kill is fully
-  restored: at `ms_prob=0.5` filter-on runs +74% faster than filter-off (multi-worker,
-  macOS); at `ms_prob=0.8` it is +114% faster. Under the prior F1 anchor lane this
-  speedup was lost because filter-failed rays still completed full multi-scattering
-  trajectories. See `scratchpad/task-remove-anchor-lane/bench/bench_results.md`.
 
 ### Removed
 - **Breaking ABI #4**: `LUMICE_RenderParam::opacity` removed, and `render[].opacity` is no longer
@@ -181,30 +210,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored). Note this is a DIFFERENT field from `LUMICE_GridLine::opacity`, which is untouched.
   The GUI's mirror of the same field (`renderer.opacity`, editable in the Settings panel and
   persisted in `.lmc`) is removed with it; a `.lmc` written by an older build still opens.
-- **Breaking ABI #3**: `LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity`
-  fields removed. Struct shrinks from 64 bytes to 56 bytes on 64-bit platforms.
-  Update all ctypes / FFI / C callers that reference these fields.
-  (#1 was the removal of `ab_mode` in task-remove-adaptive-brightness-on-mode;
-  #2 was the `anchor_p99_y` → `anchor_p995_y` rename in apply-new-defaults.)
-- `RaySeg::is_filter_dropped_` and `is_prior_filter_failed_` fields and the
-  `IsFilterDropped()` helper removed. `IsOutgoing()` simplified accordingly.
-- `SimData::anchor_d_` and `anchor_w_` fields removed (sizeof: 216 → 168 bytes on
-  Apple Silicon libc++).
-- `RenderConsumer` anchor accumulators (`anchor_internal_xyz_`, `anchor_snapshot_xyz_`,
-  `anchor_total_intensity_`, `anchor_snapshot_intensity_`, `anchor_p995_y_`) removed.
-- `test_partition_buffer_additivity` (`test/e2e/test_additivity.py`) and its 9 config
-  files removed; the additivity invariant only held under the anchor-lane normalization.
-- **Breaking ABI #2**: `LUMICE_RawXyzResult::anchor_p99_y` renamed to `anchor_p995_y`.
-  Update all ctypes / FFI / C callers that reference this field by name.
-  (ABI break #1 was the removal of `ab_mode` in task-remove-adaptive-brightness-on-mode.)
-- **Breaking ABI**: `LUMICE_RenderParam::ab_mode` field removed from the C API.
-  Callers should drop the assignment; behavior matches the prior OFF mode (F1).
-- `AdaptiveBrightnessMode` enum (`src/config/render_config.hpp`) removed.
-- `RenderConfig::ab_mode_`, `SimBatch::ab_mode_`, `GuiState::auto_ev_enabled`,
-  and the GUI-local `AdaptiveBrightnessMode` mirror enum removed.
-- `adaptive_brightness.mode` JSON config key is no longer parsed (nlohmann ignores
-  unknown keys silently, so old configs load without error but the field is a
-  no-op).
 
 ## [4.1.3] - 2026-03-17
 
