@@ -544,6 +544,321 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   numbers belonging to a different crystal and matched nothing. Each instance now carries its own,
   on both Metal and CUDA. An all-degenerate crystal pool is tolerated rather than asserted on.
 
+## [4.3.6] - 2026-07-16
+
+### Changed
+- **Filter clauses can go far larger** (#202). The OR-clause / AND-term ceiling for a raypath
+  filter's boolean expression — 16 / 8 on the host API, 8 on the GPU backends — is raised to 4096
+  for plain filtering (a scene that only narrows which rays render, with no coloring involved). A
+  scene that wants a large sum-of-products expression over many raypaths no longer has to fit it
+  under the old ceiling. The 64-class limit on `raypath_color`'s component mask is unchanged by
+  design — widening it would be an always-on cost paid by every scene, for a "more than 64
+  distinguishable colors" need nobody has asked for.
+- **A GPU color scene that exceeds an internal cap now says so in the GUI** (#204). Three
+  GPU-only limits — symmetry groups per slot, OR-summands per color predicate, and the number of
+  color classes — used to degrade silently, visible only in the log. All three now surface as a
+  warning in the GUI the moment a scene crosses them.
+
+### ⚠️ Breaking Changes
+- **`raypath_color`'s default composite mode changes from `dominant` to `painter`** (#199).
+  `dominant` picks one winning color class per pixel by brightness — a discontinuous choice that
+  flickers between classes wherever two classes' brightness is close, and can render a dim class's
+  contribution as pure black wherever a brighter class overlaps it. `painter` is redesigned as a
+  proper Porter-Duff alpha-over blend (`alpha = min(brightness, 1)`), which composites overlapping
+  classes smoothly instead of a hard winner-take-all.
+  **What to do**: a scene that depends on the old winner-take-all look should set `"mode":
+  "dominant"` explicitly; `dominant` itself is unchanged, and so is `additive`.
+- **`LUMICE_ComplexComposition` becomes a pointer-and-count** (#202), following the
+  `raypath_color` precedent from 4.3.5: the fixed-size sub-clause array is replaced by a
+  heap-allocated buffer managed through `Create`/`Release` calls, which is also what makes the
+  4096-clause ceiling above possible without inflating every config on the stack.
+  **What to do**: recompile against the new header; build a Complex filter's sub-clauses through
+  the new `Create`/`Release` API instead of a fixed-size array.
+
+### Fixed
+- **Changing the view, lens projection, or hemisphere no longer restarts the simulation** (#195).
+  Dragging the preview, switching between linear/fisheye/rectangular/globe, or flipping the
+  upper/lower-hemisphere crop are purely how the GUI reprojects an already-rendered frame — the
+  simulator always produces the same full-sky data — but a regression counted them as
+  "configuration changed," which popped the changed-config prompt and, in infinite-rays mode,
+  restarted the run on every commit interval.
+- **The Metal preview could look frozen while dragging a slider** (#197). Every commit rebuilt the
+  Metal pipeline state from scratch (~100-150ms), which took longer than the 70ms commit interval,
+  so a continuous drag kept restarting the simulator before its first batch of rays ever landed —
+  the ray count stayed at zero for the whole gesture. Metal's pipeline objects are now cached for
+  the process's lifetime, and a commit is deferred until the previous run's first batch has
+  actually produced rays (or a 250ms timeout, so a heavy scene doesn't stall the UI indefinitely).
+- **GPU-rendered colors could bleed into the next batch** (#198). On Metal and CUDA, a per-ray
+  color-class mask carried from one multi-scattering layer to the next was supposed to be cleared
+  at the start of every batch, but the clear was accidentally gated behind a test-only flag that
+  production rendering never set. A scene large enough to need more than one dispatch batch could
+  therefore have an earlier batch's colors leak into a later one's first layer, producing a
+  visibly different dominant color between the CPU and GPU backends on the same scene (observed up
+  to 7× off on one color class).
+
+## [4.3.5] - 2026-07-14
+
+### Added
+- **Per-raypath color classification** (#182, #184, #188, #190). Rays can now be classified into
+  named color classes and rendered with a distinct color per class, driven by a new
+  `raypath_color` config array and a GUI "Colors" window. Each class is defined by one or more
+  placement-scoped predicates — a single component, an OR of several, an AND across layers, or an
+  entire crystal via a `filter`-less reference — the same reference language `scene.scattering`
+  entries already use. Three composite modes are available (`dominant`, `additive`, `painter` —
+  see the default-mode change in 4.3.6), each with its own z-order and show/hide/solo visibility.
+  Matching respects the same physical symmetry (P/B/D) as an ordinary raypath filter, so a color
+  class covers a whole symmetry-equivalent family of raypaths rather than one literal orientation.
+  All three backends (CPU, Metal, CUDA) produce matching classifications and composites. Brightness
+  is read from one shared exposure anchor across every class — never normalized per class, which
+  would misrepresent relative brightness — with the colored composite boosted by one stop relative
+  to the full-spectrum image, since a single hue reads dimmer than a full spectrum at the same
+  radiance.
+  New C API: `LUMICE_ColorPredicate` (carries its own P/B/D symmetry), `LUMICE_SetRaypathColors` —
+  a display-time setter, so recoloring or reordering classes doesn't restart the simulation — and
+  `LUMICE_ConfigCreateColorClasses` / `_ReleaseColorClasses` (see the ABI note below).
+- **The GUI filter editor accepts the full filter grammar** (#177). The old editor could only
+  author a single raypath or an entry/exit pair; a filter mixing raypath types, ANDed conditions,
+  or several OR'd alternatives had to be hand-written in JSON. It is now a sum-of-products editor —
+  a list of OR'd rows, each an AND of factors (`3-5 & entry:2`) — that round-trips every shape the
+  config format accepts, including the `;` shorthand for several raypaths in one row.
+
+### ⚠️ Breaking Changes
+- **`LUMICE_Config` gains a `raypath_color` field** (#184). Because a color-class list can be
+  arbitrarily long, it is not stored inline — doing so once inflated `sizeof(LUMICE_Config)` to
+  467 KB during development, enough to overflow a small worker-thread stack. It is heap-allocated
+  instead, through `LUMICE_ConfigCreateColorClasses` / `LUMICE_ConfigReleaseColorClasses`, keeping
+  `sizeof(LUMICE_Config)` at 113 KB.
+  **What to do**: recompile against the new header. A config built through the struct API that
+  wants color classes now calls the `Create`/`Release` pair; one that never sets `raypath_color`
+  is unaffected.
+
+### Fixed
+- **A scene mixing a plate-axis crystal with any non-plate crystal rendered up to 20× slower**
+  (#178). The per-distribution orientation-sampling lookup table was memoized by a single-entry,
+  most-recent-only cache; a worker alternating between two crystals with different axis
+  distributions evicted and rebuilt the table on every single crystal — 250,000 times over in the
+  reported scene. It is now a shared, build-once cache keyed by distribution, used by all three
+  backends.
+- **The crystal preview thumbnail mislabeled faces and kept the wrong pose after switching
+  crystals** (#179). Face-normal vectors were left out of the preview's coordinate-frame
+  conversion, offsetting every front/back face decision by 90° from the label positions; and the
+  preview kept the previously-edited crystal's camera pose when a different crystal card was
+  opened, instead of resetting to that crystal's default view.
+- **A field being edited in the crystal/filter/axis modal could leak into a different entry**
+  (#180). Clicking a different crystal card while a text field was mid-edit relied on Dear ImGui's
+  per-widget-ID state, and different entries reused the same widget IDs — so an uncommitted edit
+  (a filter expression, a height) could replay into the newly opened entry instead of being
+  discarded.
+
+## [4.3.4] - 2026-07-06
+
+### Added
+- **GUI custom discrete-spectrum editor** (#168, #173). The Sun panel's Spectrum dropdown gains a
+  `Custom…` entry that opens a wavelength/weight table editor (add/remove rows, a preset seed, and
+  a Reset button back to that seed), so a discrete custom spectrum — previously only reachable by
+  hand-editing the config JSON — can be built and saved from the GUI. Round-trips through `.lmc`
+  files and core JSON configs. Incidentally fixes a pre-existing bug where importing a legacy
+  hand-written discrete-spectrum config silently dropped the spectrum on load.
+
+### Changed
+- **Multi-scattering layer `prob` footguns are now guarded in the GUI** (#169). Setting the
+  *last* layer's continuation probability above 0 silently discarded every ray that "continued"
+  past it — there is no next layer to receive them — and setting a *middle* layer's probability to
+  exactly 0 silently starved every layer after it. The last layer's slider now locks at 0 (with a
+  warning if a loaded config set it otherwise, so you can still change it back), a zero
+  middle-layer probability shows a warning instead of passing silently, and adding a new layer
+  promotes the old last layer's probability to a sane default (0.8) instead of leaving it at the
+  near-zero value a final layer would have had.
+- **Filters with multiple OR'd raypaths or several entry/exit conditions no longer stall the GUI
+  while dragging** (#172). Programmatic filter commits had two paths — a fast typed-struct path
+  and a slow, string-based JSON path — and any filter beyond a single plain raypath fell onto the
+  slow path, which could not tell the GUI a lightweight update was possible; every slider drag
+  forced a full filter rebuild that stalled the live preview. All GUI filter commits now go
+  through the fast path.
+- **Switching between the CPU and GPU backend and clicking Run no longer leaves the previous
+  backend's stale frame on screen** (#172).
+
+### ⚠️ Breaking Changes
+- **`ray_num` now means the total ray count across all wavelengths of a discrete spectrum, not
+  the count per wavelength** (#168). A discrete-spectrum scene now traces
+  `ceil(ray_num / N_wavelengths)` rays per wavelength; a single-wavelength or illuminant-spectrum
+  scene is unaffected (identity transform).
+  **What to do**: a hand-written discrete-spectrum config should multiply its existing `ray_num`
+  by its wavelength count to trace the same number of rays per wavelength as before.
+- **The C API's Complex filter now uses a flat reference encoding** (#172), changing
+  `LUMICE_FilterParam` into a 5-arm tagged union with its Complex arm's sub-clauses stored in an
+  independent pool.
+  **What to do**: recompile against the new header. A Complex filter built through the struct API
+  is now constructed through the new sub-clause pool rather than nesting `LUMICE_FilterParam`
+  values directly.
+
+### Fixed
+- **Crystal orientations near the poles could render with an incorrect color tint, and GPU
+  renders of near-pole-heavy scenes were slower than necessary** (#171). Near-pole orientation
+  sampling on the GPU backends rejected 15-86% of its proposals depending on the distribution
+  (worst on a uniform distribution), and an independent RNG-stream collision between wavelength
+  and orientation sampling tinted Laplacian-distributed light pillars green. Both are replaced by
+  an exact area-measure importance sampler that accepts ~99% of its proposals and uses an
+  independent RNG stream per axis.
+- **A crystal with a downward-pointing axis, sampled near the poles, could render as if it
+  pointed up** (#174). The near-pole sampler folded southern-hemisphere draws into the northern
+  hemisphere on the assumption that up and down were interchangeable, which is wrong for a crystal
+  whose orientation distribution is not itself up/down-symmetric. Orientation sampling near and
+  away from the poles is now unified into one exact sampler that preserves which hemisphere a draw
+  belongs to; common configurations (a symmetric distribution with full-circle azimuth) render
+  identically to before.
+
+## [4.3.3] - 2026-07-03
+
+### Changed
+- **The GPU backends accelerate all 11 render projections, not just 2** (#162). A CLI render
+  using a projection beyond the two the GPU backends originally supported silently fell back to
+  the CPU backend — correct output, but none of the GPU speedup. Every projection's forward math
+  is now one shared implementation used by the CPU, Metal, and CUDA backends alike, so
+  cross-backend results cannot drift and every projection reaches the GPU.
+- **The GPU backends stay fast at high preview resolutions** (#159). The GPU accumulator used to
+  be read back to the host on every simulation batch, which at the GUI's real 2048×1024 preview
+  size dominated the cost of a light scene. Readback is now decoupled onto its own cadence instead
+  of the trace clock. Measured on the same scene at 2048×1024: 1.4× (RTX 4060 Ti), 2.7× (GTX 1070
+  Ti), and ~3× (Apple Silicon) faster than before, and Metal's throughput is now nearly flat across
+  resolutions instead of falling off at higher ones.
+
+### Fixed
+- **The GUI preview could get stuck showing "Simulating" after a GPU run had actually finished**
+  (#167). The simulation's completion state was tracked in two duplicated, edge-triggered places
+  fed by torn reads of a shared mutable struct; a narrow race could leave the GUI never observing
+  the transition to done. Completion is now read from one authoritative, versioned backend state.
+- **The GUI preview's orientation didn't match a CLI render of the same config** (#165, #166).
+  Three independent issues compounded: the globe lens was mirrored left-right, the dual-fisheye
+  and rectangular lenses were flipped top-to-bottom, and azimuth's left/right handedness was
+  inconsistent between lens types. All three are now unified to a single convention — right =
+  increasing azimuth — matching the GUI's existing behavior and everyday expectation.
+  **Note for existing renders**: a CLI render using a single-lens projection (`linear` or a single
+  fisheye) now comes out mirrored left-right compared to before, since that was the half of the
+  inconsistency that lived on the CLI side; renders using `rectangular`, `dual_fisheye`, or `globe`
+  were already on the corrected convention and are unchanged.
+- **A GPU session could silently under-sample its rays after tracing more than about 4.3 billion
+  of them** (#164). The per-ray random-number stream was seeded from a ray index truncated to 32
+  bits on the GPU backends; once a session's cumulative ray count wrapped past 2³², two different
+  rays could draw from the identical stream.
+- **A GPU-rendered scene could report `crystals=0` in the CLI's stats line** (#158). The
+  diagnostic crystal count wasn't tracked on the exit-seam path Metal and CUDA use; it now reports
+  each backend's own notion of "how many crystals were involved" — deliberately not the same
+  number as the CPU backend, which counts per-batch instances where the GPU exit-seam counts
+  distinct crystal settings in the final layer.
+- **The `--benchmark` throughput number for a GPU backend could be wrong by up to 5×** (#160,
+  #161). The benchmark's timing window was tied to a coarse-grained progress counter that only
+  advanced once per readback drain; a short run could complete almost entirely inside what the
+  benchmark counted as "setup," under-reporting the true rate. It now runs a fixed number of
+  drains and measures only the steady-state ones in between.
+
+## [4.3.2] - 2026-07-01
+
+### Added
+- **CUDA GPU trace backend** (#147, #148, #152, #153, #154, #155, #157). Alongside the Metal
+  backend introduced in 4.3.0, ray tracing can now also run on the GPU via CUDA (NVIDIA GPUs, on
+  Windows and Linux). Enable it with `--backend cuda`, or via the GUI's GPU checkbox, which now
+  reads "Use Metal GPU" on a Mac and routes to CUDA on an NVIDIA GPU elsewhere (a new
+  `LUMICE_BACKEND_CUDA` constant, added backward-compatibly to the existing backend-selection
+  API). Falls back to the CPU backend automatically, with a diagnostic message, on a GPU that's
+  missing, has too old a compute capability, or is otherwise unusable. Windows release builds now
+  bundle the CUDA runtime (`cudart64_*.dll`) needed to run it. Measured throughput on a consumer
+  GPU (RTX 4060 Ti) reaches roughly 114M rays/s on a light scene, close to that hardware's
+  intrinsic kernel rate.
+
+### ⚠️ Breaking Changes
+- **Ray-count fields widen to a dedicated 64-bit type** (#149). `LUMICE_StatsResult`'s ray-count
+  fields and the config's `ray_num` change from `unsigned long` to a new `LUMICE_RayCount`
+  (`unsigned long long`, statically asserted to be at least 64 bits everywhere).
+  **What to do**: recompile against the new header. On every platform except Windows this is
+  source-compatible; the point of the change is Windows, where `unsigned long` is only 32 bits.
+
+### Fixed
+- **The GUI's ray-count display could roll over to zero past about 4.3 billion rays, on
+  Windows** (#149). `unsigned long` is 32 bits under Windows' data model (64 bits on Linux/macOS),
+  so a long-running session's ray counter silently wrapped. See the ABI change above.
+- **A rendered halo could show an incorrect stray bright spot 10-18° off the expected band, on
+  Windows only** (#156). When the platform's random-number generator happened to draw exactly
+  `0.0` — which only MSVC's implementation does, roughly once every 17 million draws — an
+  entry-face sampling routine left its output at whatever the caller had last set it to,
+  occasionally picking a face that faces away from the light. That ray then took a spurious
+  total-internal-reflection path instead of being absorbed, producing an off-band, out-of-place
+  bright pixel.
+
+## [4.3.1] - 2026-06-24
+
+### Added
+- **`--backend {auto,cpu,metal}` CLI flag** (#141). The GPU backend introduced in 4.3.0 could
+  previously only be selected through an environment variable or the GUI checkbox; the CLI now has
+  a first-class selector. `LUMICE_TRACE_BACKEND` remains as a loud, logged override for debugging
+  and CI.
+
+### Changed
+- **Overlay auxiliary lines are more complete and consistent on screen** (#142). The globe
+  projection now draws zenith/nadir markers, which it previously omitted; fisheye lenses no longer
+  clip markers that fall in the outer black border; grid line width stays a constant ~2px on
+  screen regardless of zoom instead of thickening as you zoom in; the grid's density now adapts
+  across seven steps as the field of view changes instead of thinning to one or two lines at high
+  zoom; and axis/coordinate labels are placed by a single rewritten algorithm that no longer
+  clusters at the projection's edges or drops labels entirely on the globe and dual-fisheye
+  lenses.
+
+### Fixed
+- **The Metal backend could crash the app on some macOS versions** (#139). macOS 26.5 shipped a
+  broken runtime shader compiler that silently produced an empty, non-functional shader library
+  instead of an error; combined with assertions that Release builds compile out, this reached an
+  unguarded Metal call and aborted the process. Shaders are now precompiled at build time and
+  loaded as binary data, bypassing the runtime compiler entirely (the old runtime-compile path
+  stays as a fallback on older macOS); and a broken compile can no longer crash the app — it falls
+  back to the CPU backend with a log message instead.
+- **A raypath filter or hit-path longer than 15 hits could crash the CPU backend, and was
+  silently truncated even when it didn't crash** (#140). Recording a ray's hit sequence past its
+  inline buffer's capacity required duplicating an overflow allocation that one code path forgot
+  to duplicate, leaving a dangling reference; and the hit-path record used to visualize a raypath
+  was capped at 15 hits regardless of the configured `max_hits`, silently dropping anything beyond
+  that. Both are fixed; the recorded path now always covers the full configured hit count.
+
+## [4.3.0] - 2026-06-21
+
+### Added
+- **Metal GPU trace backend** (#121, #122, #129, #131, #138). Ray tracing can now run on the GPU
+  via Metal, on any Mac with a Metal-capable GPU; the CPU backend remains the default everywhere.
+  Enable it with the `LUMICE_TRACE_BACKEND=metal` environment variable, or in the GUI via a "Use
+  Metal GPU" checkbox that only appears when a Metal device is actually available at runtime (not
+  merely compiled in) — a Mac without a usable GPU, or running under a VM/remote desktop without
+  one, never sees a checkbox that would crash it. Measured end-to-end throughput on Apple Silicon
+  is several times the CPU backend's, both for CLI rendering and the GUI's live preview; results
+  are statistically equivalent to the CPU backend across every tested scene. New C API:
+  `LUMICE_SetPreferredBackend` with `LUMICE_BACKEND_CPU`/`LUMICE_BACKEND_METAL` constants, and
+  `LUMICE_IsBackendAvailable` to query at runtime whether a given backend can actually be used.
+
+### Changed
+- **Multi-scattering and filtered scenes trace faster on the CPU** (#119). Reworking the per-ray
+  hit recorder into a small-buffer-optimized layout (paths up to 16 hits stored inline, longer
+  ones spilling to a per-batch arena) cut its memory footprint; measured +57.8% multi-worker
+  throughput on a filter-plus-multi-scattering scene, no change on a simple single-crystal scene.
+- **The default worker count is now the number of physical CPU cores, not
+  `hardware_concurrency - 2`** (#120). The simulator is memory-bound with a dedicated consumer
+  thread; the old default packed workers onto SMT/hyperthread siblings, contending for cache with
+  each other and starving the consumer — measured ~48% throughput loss on a common 8-core/16-thread
+  desktop. `num_workers` set explicitly is unaffected.
+
+### Fixed
+- **Some extreme crystal geometries rendered visibly wrong halo patterns** (#133, #135, #137). A
+  very flat pyramid (wedge angle near 90°) could grow a fictitious flat face where its cone should
+  have come to a point, which fed downstream face-numbering and made physically-distinct raypaths
+  (e.g. a straight-through pair and a genuinely refracted pair) render identically; a related but
+  independent face-numbering bug could make an entire raypath family go completely dark. Both
+  traced to the same class of cause — a face-grouping tolerance too coarse to tell two
+  nearly-parallel faces apart — fixed by picking each triangle's best-matching face instead of its
+  first adequate match, plus a guard against a zero-thickness crystal producing a NaN normal.
+- **The application could hang indefinitely when stopping a simulation** (#125). A worker-thread
+  shutdown signal and the condition variable it was supposed to wake could race: if the last
+  worker's "I'm done" notification landed in the narrow window while the stopping thread was about
+  to go to sleep, the notification was lost and the wait never woke up.
+- **The GUI could silently drop a complex filter on import**, rendering the scene as if no filter
+  were set at all (#131).
+
 ## [4.1.3] - 2026-03-17
 
 ### Fixed
