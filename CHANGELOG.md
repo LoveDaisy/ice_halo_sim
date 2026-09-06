@@ -158,8 +158,14 @@ it was thinking of and false of the C struct beside it.
   field selects between the participating-pixel self-anchor and the mono path's absolute scale,
   sharing one scalar rather than re-deriving it.
   **ABI**: `LUMICE_RenderParam` gains a trailing `int ev_mode` (`LUMICE_EV_MODE_RELATIVE` = 0,
-  `LUMICE_EV_MODE_ABSOLUTE` = 1). See Breaking Changes below for what selecting each mode does to
-  an existing config's brightness.
+  `LUMICE_EV_MODE_ABSOLUTE` = 1); `LUMICE_API_VERSION` moves 415 -> 416 (the same step also removes
+  `opacity`, below). See Breaking Changes below for what selecting each mode does to an existing
+  config's brightness.
+  The GUI's own auto-EV anchor calculation moves into core alongside this, as two new pure C API
+  functions with no ABI-breaking half: `LUMICE_ComputeP99Y` (the P99 statistic itself, with an
+  optional coarse-grid downsample) and `LUMICE_ComputeEvAuto` (the stops-and-clamp arithmetic on
+  top of it) — so the GUI and any other consumer share one implementation of the anchor instead of
+  each carrying their own copy.
 - **`LUMICE_RawXyzResult.emitted_energy`** (#287, C API, ABI addition): the total spectral energy
   the light source emitted into a snapshot — the quantity `absolute` mode normalizes by. A raw
   total, unlike the neighbouring per-pixel `snapshot_intensity`, and a different measurement, not a
@@ -167,14 +173,6 @@ it was thinking of and false of the C struct beside it.
   the renderer's own absolute scale as `intensity_factor * kNormScale * total_pixels /
   emitted_energy`. Occupies pre-existing alignment padding, so `sizeof(LUMICE_RawXyzResult)` is
   unchanged.
-- **`LUMICE_RawXyzResult.anchor_l99_sky` and `.axis_solid_angle`** (#299, C API, ABI additions):
-  the two quantities a consumer needs to reproduce the `relative`-mode scale itself —
-  `anchor_l99_sky` is the P99 radiance of the fixed full-sky reference buffer (identical on every
-  row of one call), and `axis_solid_angle` is the solid angle this renderer's own on-axis pixel
-  subtends: `scale = intensity_factor * TargetWhiteToLinear(135) / (axis_solid_angle *
-  anchor_l99_sky)`. `anchor_l99_sky` grows the struct (64 -> 72 bytes) — a caller that was not
-  recompiled hands the API a shorter buffer; `axis_solid_angle` then lands in the padding that
-  growth leaves behind, so it does not grow the struct a second time.
 - **Core-side annotation layer**: the CLI renderer can now draw every auxiliary line and marker the
   GUI preview draws, from one shared implementation instead of two (#292, #305). A `render[]` entry
   can ask for parallels (`grid.elevation`), meridians (`grid.longitude`, new), circles of angular
@@ -186,14 +184,32 @@ it was thinking of and false of the C struct beside it.
   matching `[Look At ▾]` view preset in the GUI's View group. All of this previously existed in the
   GUI only, or not at all in this generalized form; an exported config now reproduces it. New C API:
   `LUMICE_ComputeAnnotationOverlay` / `LUMICE_ReleaseAnnotationOverlay` (pure, side-effect-free
-  geometry and label anchors for one view) and `LUMICE_ResolveAnnotationMarkerDirection`.
+  geometry and label anchors for one view), `LUMICE_ResolveAnnotationMarkerDirection` (a named
+  marker as a world direction, for pointing the camera at it rather than finding its canvas
+  position), and `LUMICE_ResolveSunHorizonDirection` (the sun's azimuth carried down to the
+  horizon, for the same View-preset use).
   **ABI**: a series of `LUMICE_RenderParam` field additions across this arc — `elevation_grid`
   becoming rendered, `longitude_grid`, `zenith_nadir`, `front`, the three `*_label` switches, and
   `markers` / `markers_count` / `markers_opacity` / `markers_radius_px` — every one appended so
   existing fields keep their offsets, and every one opt-in: a zero-initialized struct draws none of
   them, matching what a config with no `grid` object already rendered. `zenith_nadir` and the
   `.lmc` `overlay_zenith_nadir_*` keys keep working unchanged; where both `zenith_nadir` and a
-  non-empty `markers` list are present, `markers` wins.
+  non-empty `markers` list are present, `markers` wins. `LUMICE_API_VERSION` moves 416 -> 421 for
+  the `render[]` fields above (#292); the marker generalization (#305) later resumes this same
+  counter at 423 (after the two `LUMICE_RawXyzResult` additions below take it there), moving it
+  423 -> 424 for the underlying named-direction table (`LUMICE_AnnotationMarkerPoint` and the
+  `LUMICE_ANNOTATION_MARKER_*` ids, all appended at each struct's physical end) and 424 -> 425 for
+  `markers[]` itself — 425 in total, matching `HEAD`.
+- **`LUMICE_RawXyzResult.anchor_l99_sky` and `.axis_solid_angle`** (#299, C API, ABI additions):
+  the two quantities a consumer needs to reproduce the `relative`-mode scale itself —
+  `anchor_l99_sky` is the P99 radiance of the fixed full-sky reference buffer (identical on every
+  row of one call), and `axis_solid_angle` is the solid angle this renderer's own on-axis pixel
+  subtends: `scale = intensity_factor * TargetWhiteToLinear(135) / (axis_solid_angle *
+  anchor_l99_sky)`. `anchor_l99_sky` grows the struct (64 -> 72 bytes) — a caller that was not
+  recompiled hands the API a shorter buffer; `axis_solid_angle` then lands in the padding that
+  growth leaves behind, so it does not grow the struct a second time. `LUMICE_API_VERSION` moves
+  421 -> 422 for the first field, 422 -> 423 for the second (the annotation-layer entry above
+  continues the count from here to 425).
 - **CLI `--workers N`**, and a matching GUI personal default (#314). Both front ends previously left
   worker count at its zero-initialized automatic default; `--workers` now lets a user pick it
   explicitly (rejected outright, not silently clamped, if it is not a positive integer), and the
@@ -223,7 +239,8 @@ it was thinking of and false of the C struct beside it.
 ### ⚠️ Breaking Changes
 - **`LUMICE_RenderParam::opacity` is removed** (#286). `render[].opacity` is no longer parsed from
   JSON either. The field had no drawing consumer anywhere in the tree since the first commit —
-  setting it changed nothing — and had no GUI counterpart.
+  setting it changed nothing — and had no GUI counterpart. `LUMICE_API_VERSION` moves 415 -> 416,
+  the same step that adds `ev_mode` above.
   **What to do**: drop the assignment from C/FFI callers and recompile; an existing JSON config
   that still sets `"opacity"` keeps loading (unknown keys are ignored). This is a different field
   from `LUMICE_GridLine::opacity`, which is untouched. The GUI's own mirror of the field
@@ -265,6 +282,8 @@ it was thinking of and false of the C struct beside it.
   `LUMICE_RenderParam` fields to `angular_dist` / `angular_dist_count`. The old name never said
   what the number is (the angular distance from the sun). `grid.central` keeps loading as an alias
   forever (the new key wins if both are present), so no existing JSON config is rejected.
+  `LUMICE_API_VERSION` moves 416 -> 417 — a source-compatibility break only: `sizeof` and every
+  field's offset are unchanged, so a caller that does not name the field directly is unaffected.
   **What to do**: a C/FFI caller naming the struct field, or using a designated initializer for it,
   fails to compile until renamed to `angular_dist[_count]`; recompile. No JSON change is required
   unless you want to adopt the new key name.
