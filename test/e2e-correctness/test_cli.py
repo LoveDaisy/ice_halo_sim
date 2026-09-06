@@ -67,10 +67,10 @@ class TestCli(LumiceTestCase):
 class TestOutputFormat(LumiceTestCase):
     """Tests for --format and --quality CLI options."""
 
-    def _get_config(self, ray_num=20000):
+    def _get_config(self):
         if not (CONFIGS_DIR / "halo_22.json").exists():
             self.skipTest("halo_22.json not found")
-        return _cheap_halo_22_config(self.output_dir, ray_num)
+        return _cheap_halo_22_config(self.output_dir)
 
     def test_output_format_png(self):
         """--format png should produce .png files."""
