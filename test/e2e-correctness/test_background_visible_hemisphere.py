@@ -49,6 +49,7 @@ fisheye, the one family whose rays were culled outright.
 import json
 import math
 import os
+import unittest
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
@@ -103,12 +104,22 @@ def _regions():
 
 
 class TestBackgroundVisibleHemisphere(LumiceTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Guard before rendering, not after: the skip conditions below decide
+        # whether the render is worth running at all.
+        if not HAS_PILLOW:
+            raise unittest.SkipTest("Pillow not installed")
+        if not CONFIG.exists():
+            raise unittest.SkipTest(f"{CONFIG} not found")
+        # Both tests read the same pair of frames -- one asks where the
+        # background stops, the other which hemisphere survived -- so the config
+        # is rendered once for the class rather than once per test.
+        cls.render = cls.render_once(CONFIG, ["--format", "png"])
+
     def setUp(self):
         super().setUp()
-        if not HAS_PILLOW:
-            self.skipTest("Pillow not installed")
-        if not CONFIG.exists():
-            self.skipTest(f"{CONFIG} not found")
         self.outside, self.below, self.above = _regions()
         for name, region in (
             ("outside", self.outside),
@@ -118,15 +129,15 @@ class TestBackgroundVisibleHemisphere(LumiceTestCase):
             self.assertGreater(len(region), 1000, f"region {name} is too small to mean anything")
 
     def _render(self):
-        """Render both entries of the config and return their pixel accessors, in order."""
-        result = self.run_lumice(
-            ["-f", str(CONFIG), "-o", self.output_dir, "--format", "png"]
-        )
+        """Return the pixel accessors for both entries of the shared render, in order."""
+        result = self.render
         self.assertEqual(result.returncode, 0, result.stderr)
         out = []
         for n in (1, 2):
-            path = os.path.join(self.output_dir, f"img_{n:02d}.png")
-            self.assertTrue(os.path.exists(path), f"no img_{n:02d}.png in {self.output_dir}")
+            path = os.path.join(result.output_dir, f"img_{n:02d}.png")
+            self.assertTrue(
+                os.path.exists(path), f"no img_{n:02d}.png in {result.output_dir}"
+            )
             with Image.open(path) as im:
                 im = im.convert("RGB")
                 self.assertEqual(im.size, (WIDTH, HEIGHT))

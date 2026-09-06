@@ -28,6 +28,7 @@ mask that simply painted nothing would fail too.
 
 import json
 import os
+import unittest
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
@@ -60,20 +61,27 @@ TOLERANCE_LSB = 1
 
 
 class TestBackgroundDomainMask(LumiceTestCase):
-    def setUp(self):
-        super().setUp()
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Guard before rendering, not after: the skip conditions below decide
+        # whether the render is worth running at all.
         if not HAS_PILLOW:
-            self.skipTest("Pillow not installed")
+            raise unittest.SkipTest("Pillow not installed")
         if not CONFIG.exists():
-            self.skipTest(f"{CONFIG} not found")
+            raise unittest.SkipTest(f"{CONFIG} not found")
+        # Both propositions read the same frame -- one asks what is outside the
+        # image circle, the other what is inside it -- so the frame is rendered
+        # once for the class rather than once per proposition.
+        cls.render = cls.render_once(CONFIG, ["--format", "png"])
 
     def _render(self):
-        result = self.run_lumice(
-            ["-f", str(CONFIG), "-o", self.output_dir, "--format", "png"]
-        )
+        result = self.render
         self.assertEqual(result.returncode, 0, result.stderr)
-        img_path = os.path.join(self.output_dir, "img_01.png")
-        self.assertTrue(os.path.exists(img_path), f"no img_01.png in {self.output_dir}")
+        img_path = os.path.join(result.output_dir, "img_01.png")
+        self.assertTrue(
+            os.path.exists(img_path), f"no img_01.png in {result.output_dir}"
+        )
         with Image.open(img_path) as im:
             im = im.convert("RGB")
             self.assertEqual(im.size, (WIDTH, HEIGHT))
