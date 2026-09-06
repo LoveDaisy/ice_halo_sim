@@ -60,12 +60,12 @@ Two boundary forms have each been mis-sorted once during backfill, so they are s
 rather than re-decided per version:
 
 - **A guard or warning added in the editor, with the engine untouched**, is `Changed`, not
-  `Fixed`. PR #169 is the worked example: the GUI now locks the last multi-scattering layer's
-  probability and warns about a zero middle layer, but the PR states "core 渲染语义零改动" and
-  every pre-existing config still renders byte-identically. Nothing the program did was
-  corrected — a way to ask it for something useless was closed off. The tell is the question
-  *does an unchanged config produce different output?* If no, it is `Changed` however much the
-  entry's prose talks about what used to go wrong silently.
+  `Fixed`. The tell is the question *does an unchanged config produce different output?* If a
+  change only closes off a way to ask the engine for something useless — nothing the program
+  computed was ever wrong, and every pre-existing config still renders byte-identically — it is
+  `Changed`, however much the entry's prose talks about what used to go wrong silently. (Worked
+  example: PR #169 has the GUI lock the last multi-scattering layer's probability and warn about
+  a zero middle layer; its description states the core rendering semantics are unchanged.)
 - **A user-visible fault that a redesign incidentally removes** is `Fixed`, and gets its own
   bullet there, even when the redesign itself is an `Added` entry. Keep the two claims
   separate: the feature is what you can now do, the fix is what no longer breaks.
