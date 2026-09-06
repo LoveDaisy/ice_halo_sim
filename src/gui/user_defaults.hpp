@@ -177,7 +177,7 @@ inline const char* IneligibleReasonLabel(IneligibleReason reason) {
 // The predicate used to be `tier == kStructSoft && auto_diff_excluded`, which named the same one
 // field for a reason unrelated to defaults; a second app preference registered under any other
 // tier would have slipped straight past it.
-inline constexpr std::size_t kIneligibleScalarResetFieldCount = 1;
+inline constexpr std::size_t kIneligibleScalarResetFieldCount = 2;
 
 // --------------------------------------------------------------------------------------------------
 // Where a process reads personal defaults from — the CLI surface (pure, header-only)
@@ -547,15 +547,20 @@ void NoteUserDefaultsDowngrade(std::string notice);
 // what makes "the document half must never decide use_gpu_backend" a structural fact rather than a
 // rule someone has to keep.
 //
-// One field today, deliberately: `use_gpu_backend`. The other namespace-3 members
-// (kUnserializedViewFields) stay excluded, and this is not a general per-field registry — the shape
-// leaves room for a second member without pre-building a mechanism for one that does not exist.
+// Two fields, each with its own read/write/erase trio: `use_gpu_backend` and `worker_count`. The
+// other namespace-3 members (kUnserializedViewFields) stay excluded. Two members did NOT turn this
+// into a general per-field registry, and that was the point of the original shape — a second member
+// cost three named functions, which is still less to read than a mechanism that would have had to
+// be designed before anyone knew what a second member looked like. What the two have in common is
+// worth naming, because it is the eligibility criterion rather than a coincidence: both are
+// CONSTRUCTION-TIME server properties (backend topology, worker count) that describe the machine
+// the program runs on, not the halo the document describes.
 //
 // The read is tolerant because the file is user-editable: a missing key, a non-object `app`, or a
-// non-bool value all read as nullopt, i.e. "nothing stored", and NO downgrade is counted. That is
-// the one place this half deliberately diverges from the document half's "one field-level type
-// error discards the whole overlay": `app` is independent of the document half, so a typo in it
-// must not cost the user their document defaults, nor vice versa.
+// value of the wrong JSON type all read as nullopt, i.e. "nothing stored", and NO downgrade is
+// counted. That is the one place this half deliberately diverges from the document half's "one
+// field-level type error discards the whole overlay": `app` is independent of the document half, so
+// a typo in it must not cost the user their document defaults, nor vice versa.
 std::optional<bool> ReadUseGpuBackendFromDoc(const nlohmann::json& doc);
 void WriteUseGpuBackendToDoc(nlohmann::json& doc, bool value);
 // Prunes the parents it empties, like EraseAxisPresetZenithStdFromDoc, so a file opened by hand
@@ -567,6 +572,21 @@ void WriteUseGpuBackendToDoc(nlohmann::json& doc, bool value);
 // of this namespace would need. It is neither dead code to delete on sight nor a call site someone
 // forgot to add.
 void EraseUseGpuBackendFromDoc(nlohmann::json& doc);
+
+// The worker-count trio, structurally identical to the three above (same root key, same tolerant
+// read, same parent pruning on erase). The one difference is the type predicate: is_number_integer,
+// which rejects `1.5` and `"4"` as well as a bool — JSON has one number type and a worker count of
+// 1.5 is not a value the user can have meant, so it reads as nothing stored rather than being
+// truncated into a number they did not type.
+//
+// A stored 0 means "let the program pick" (one per physical core, capped — see
+// kMaxDefaultWorkerCount in server.cpp), the same as GuiState's factory value and the same as
+// LUMICE_ServerConfig::num_workers's own 0. It is nonetheless a STORED answer, distinct
+// from an absent key, for the same reason WriteUseGpuBackendToDoc writes false explicitly: the two
+// resolve alike only while the factory value stays where it is.
+std::optional<int> ReadWorkerCountFromDoc(const nlohmann::json& doc);
+void WriteWorkerCountToDoc(nlohmann::json& doc, int value);
+void EraseWorkerCountFromDoc(nlohmann::json& doc);
 
 // Apply the app-preferences half of `doc` to `state`: each stored field is assigned, each absent
 // one leaves `state` untouched (so an overlay with no `app` key yields the factory value).

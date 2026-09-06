@@ -70,11 +70,23 @@ extern ThumbnailCache g_thumbnail_cache;
 extern LUMICE_Server* g_server;
 extern ServerPoller g_server_poller;
 extern PreviewViewport g_preview_vp;
-// Tracks whether the live g_server was constructed for a GPU backend (Metal/CUDA)
-// vs CPU (see app.cpp). Reset to false by any code that creates g_server directly
-// via LUMICE_CreateServer (CPU default) outside MaybeReconstructServerForBackend —
-// e.g. the perf-test harness — to keep the toggle-detection invariant honest.
+// The construction-time properties the live g_server was actually built with (see app.cpp):
+// whether it is a GPU backend (Metal/CUDA) vs CPU, and how many CPU workers it holds. Together
+// they are what MaybeReconstructServerForConstructionProperties compares against to decide whether
+// the live server still matches what the document asks for.
 extern bool g_server_is_gpu;
+extern int g_server_worker_count;
+
+// Put both trackers back to what LUMICE_CreateServer() constructs (CPU, PhysicalCoreCount workers).
+// MUST be called by any code that creates g_server DIRECTLY rather than through
+// MaybeReconstructServerForConstructionProperties — e.g. the test harnesses — or the next DoRun
+// compares the document against a server that no longer exists and either rebuilds one it did not
+// need to or, worse, keeps one that does not match.
+//
+// It exists as a function rather than as two assignments at each such site so that the set of
+// construction-time properties is stated in exactly one place: adding a third one is then a change
+// to this body, and every direct-creation site inherits it without having to be found again.
+void ResetServerConstructionTrackers();
 
 // Async Stop completion latch (blueprint §5/§8, 1.6). Set true synchronously by DoStop when it
 // offloads the blocking `poller.Stop() + LUMICE_StopServer` sequence onto a background std::async

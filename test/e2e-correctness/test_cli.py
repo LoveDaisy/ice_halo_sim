@@ -3,6 +3,7 @@
 import glob
 import json
 import os
+import re
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
@@ -141,6 +142,191 @@ class TestOutputFormat(LumiceTestCase):
             ["-f", "dummy.json", "--quality"]
         )
         self.assertNotEqual(result.returncode, 0)
+
+
+class TestWorkerCount(LumiceTestCase):
+    """--workers N: the CLI entry point for the simulation worker count.
+
+    The observation point is ServerImpl's startup INFO line
+    ``ServerImpl: gpu_route=... worker_count=N (preferred_backend=...)``, which
+    already existed for the GPU single-engine assertion (296.6) and reports the
+    number the server actually constructed rather than the number the CLI parsed.
+
+    On the no-flag path: ``server_config.num_workers`` is set from a variable
+    whose no-flag value is 0, and server.cpp's
+    ``num_workers > 0 ? num_workers : min(PhysicalCoreCount(), cap)`` guard sends
+    that zero to the automatic branch. These tests therefore pin the observable
+    consequences (a default in the physically possible range, at or below the
+    cap, stable across runs, and different from an explicitly requested value)
+    rather than re-deriving PhysicalCoreCount() in Python, which would be a
+    second authority free to drift from the first.
+
+    The cap's own value is the one number these tests do restate from C++
+    (``EXPECTED_DEFAULT_CAP``). There is no way around that: the whole point of
+    the assertion is that the shipping default does not exceed a specific
+    number, and a test that read the number back out of the binary it is testing
+    would agree with any value the binary happened to hold. Changing the
+    constant is therefore meant to break this file — that is the alarm, not a
+    maintenance cost to be engineered away.
+    """
+
+    # Mirrors kMaxDefaultWorkerCount in src/server/server.cpp. See the class
+    # docstring for why this is deliberately a second copy rather than a lookup.
+    EXPECTED_DEFAULT_CAP = 10
+
+    WORKER_LINE = re.compile(r"worker_count=(\d+)")
+
+    def _get_config(self):
+        cfg = CONFIGS_DIR / "halo_22.json"
+        if not cfg.exists():
+            self.skipTest("halo_22.json not found")
+        return cfg
+
+    def _run_and_read_worker_count(self, extra_args):
+        cfg = self._get_config()
+        result = self.run_lumice(
+            ["-f", str(cfg), "-o", self.output_dir] + list(extra_args)
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        match = self.WORKER_LINE.search(result.stdout)
+        self.assertIsNotNone(
+            match,
+            f"no worker_count= line in stdout:\n{result.stdout}",
+        )
+        return int(match.group(1))
+
+    def test_explicit_workers_is_what_the_server_constructs(self):
+        """--workers N must make the server run exactly N workers."""
+        self.assertEqual(self._run_and_read_worker_count(["--workers", "2"]), 2)
+
+    def test_default_is_a_stable_machine_property_and_differs_from_a_request(self):
+        """No flag → a stable automatic count; and the flag demonstrably moves it.
+
+        The inequality is the red-state half of the explicit-override contract:
+        if --workers were silently ignored, the explicit-2 run above and this one
+        would report the same number. Skipped on a machine whose default happens
+        to be 2, where the two arms are indistinguishable by construction.
+        """
+        default_workers = self._run_and_read_worker_count([])
+        self.assertGreaterEqual(default_workers, 1)
+        # Physical cores never exceed logical CPUs — an independent upper bound
+        # that does not restate PhysicalCoreCount()'s own per-platform logic.
+        self.assertLessEqual(default_workers, os.cpu_count() or 1)
+        # Deterministic: the default is a property of the machine, not of the run.
+        self.assertEqual(self._run_and_read_worker_count([]), default_workers)
+        if default_workers == 2:
+            self.skipTest(
+                "machine default is 2; the explicit-2 arm cannot be told apart from it"
+            )
+        self.assertNotEqual(
+            self._run_and_read_worker_count(["--workers", "2"]), default_workers
+        )
+
+    def test_default_never_exceeds_the_cap(self):
+        """The automatic worker count is capped, whatever the machine has.
+
+        DISCRIMINATING POWER DEPENDS ON THE HOST. On a machine with at most
+        EXPECTED_DEFAULT_CAP physical cores the inequality holds no matter what
+        the cap does, so this arm alone would pass on a build with the cap
+        deleted. The second assertion is the one that does not depend on the
+        host: on a machine with MORE cores than the cap, the default must be the
+        cap exactly — not merely below it — because that is the only value
+        min(cores, cap) can take. os.cpu_count() (logical CPUs) is an upper
+        bound on physical cores, so "logical CPUs > cap" is a sound-but-not-
+        complete detector of that case: it can fail to fire on a host with SMT
+        and few cores, but it never fires wrongly.
+        """
+        default_workers = self._run_and_read_worker_count([])
+        self.assertLessEqual(
+            default_workers,
+            self.EXPECTED_DEFAULT_CAP,
+            "the automatic worker count must not exceed the cap",
+        )
+        if (os.cpu_count() or 1) > self.EXPECTED_DEFAULT_CAP:
+            self.assertEqual(
+                default_workers,
+                self.EXPECTED_DEFAULT_CAP,
+                "on a machine with more cores than the cap the default IS the cap",
+            )
+
+    def test_explicit_workers_above_the_cap_is_not_capped(self):
+        """An explicit request above the cap is honoured verbatim.
+
+        The red-state half of "the cap bounds the automatic value only": if the
+        clamp were applied to the whole expression rather than to the no-flag
+        branch, this would come back as EXPECTED_DEFAULT_CAP instead. Asserting
+        equality rather than "> cap" is what makes that distinguishable.
+
+        The requested count deliberately exceeds the cap and may exceed the
+        host's core count; the assertion reads the number the server was
+        constructed with, not a throughput, so oversubscription does not affect
+        it.
+        """
+        requested = self.EXPECTED_DEFAULT_CAP + 1
+        self.assertEqual(
+            self._run_and_read_worker_count(["--workers", str(requested)]),
+            requested,
+        )
+
+    def test_non_positive_workers_is_rejected(self):
+        """--workers <= 0 must exit non-zero, not fall back to the default."""
+        for val in ["0", "-1"]:
+            result = self.run_lumice(["-f", "dummy.json", "--workers", val])
+            self.assertNotEqual(
+                result.returncode, 0, f"--workers {val} should be rejected"
+            )
+
+    def test_non_numeric_workers_is_rejected(self):
+        """Including a digit prefix with a trailing tail.
+
+        ``std::stoi("3abc")`` does not throw — it returns 3 and stops. Without a
+        check that the whole argument was consumed, "3abc" would be silently
+        accepted as 3, which is exactly the silent fallback AC1 forbids.
+        """
+        for val in ["abc", "3abc", "3.5", "", " "]:
+            result = self.run_lumice(["-f", "dummy.json", "--workers", val])
+            self.assertNotEqual(
+                result.returncode, 0, f"--workers {val!r} should be rejected"
+            )
+
+    def test_workers_leading_whitespace_or_sign_is_rejected(self):
+        """std::stoi skips leading whitespace and accepts a leading '+'/'-'.
+
+        The trailing-garbage check alone (``pos == size``) does not catch this:
+        " 3" and "+3" fully consume under std::stoi and would silently become 3
+        without an explicit leading-character check. Requiring the first
+        character to be a digit closes that gap (code-review round 1, Minor 2).
+        """
+        for val in [" 3", "+3"]:
+            result = self.run_lumice(["-f", "dummy.json", "--workers", val])
+            self.assertNotEqual(
+                result.returncode, 0, f"--workers {val!r} should be rejected"
+            )
+
+    def test_workers_missing_value(self):
+        """--workers as the last argument (missing value) should exit non-zero."""
+        result = self.run_lumice(["-f", "dummy.json", "--workers"])
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_benchmark_mode_says_out_loud_that_it_ignores_workers(self):
+        """--workers + --benchmark: ignored, but with a visible notice.
+
+        The benchmark's 1-worker and PhysicalCoreCount()-worker passes are its
+        measurement methodology (per-core vs parallel efficiency), not a default
+        a preference may override. Validation still runs, so an illegal value is
+        still an error in this mode.
+        """
+        cfg = self._get_config()
+        result = self.run_lumice(
+            ["-f", str(cfg), "-o", self.output_dir, "--benchmark", "--workers", "4"]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--workers is ignored in --benchmark mode", result.stderr)
+
+        rejected = self.run_lumice(
+            ["-f", str(cfg), "--benchmark", "--workers", "0"]
+        )
+        self.assertNotEqual(rejected.returncode, 0)
 
 
 class TestLastLayerProbWarning(LumiceTestCase):

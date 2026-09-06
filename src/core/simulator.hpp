@@ -200,10 +200,12 @@ class Simulator {
   // never chosen for sampling quality. 1 = a fresh shape per ray (the oracle).
   // Resolved from env at Run() entry.
   //
-  // SAFE RANGE [1, 64] -- values >= 128 corrupt the heap, because this doubles as
-  // the ray-batch stride and SimulateOneWavelength's buffers only hold
-  // ray_num*2 == 256 for a 128-ray SimBatch. See env_knobs.hpp GeomClock() for
-  // the measured exit codes and the full mechanism before raising it.
+  // This doubles as the ray-batch stride. It used to carry a heap-corruption
+  // ceiling at the SimBatch size for that reason; ResetHitLoopBuffers removed it
+  // by sizing the hit-loop buffer pair against buffer_data[0]'s capacity instead
+  // of against the batch. Values past the dispatch granularity are now a no-op
+  // rather than unsafe -- see env_knobs.hpp GeomClock() for the before/after
+  // measurement and why raising this alone stops having an effect.
   size_t geom_clock_ = kSmallBatchRayNum;
   // Deterministic half of the reported crystal-geometry count for the config
   // currently in hand — a pure function of that config (see
@@ -248,6 +250,16 @@ class Simulator {
 // Caller must ensure carry.size() == proportions.size(). Returns array with exact sum == ray_num.
 std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& proportions, size_t ray_num,
                                                  std::vector<double>& carry);
+
+// Single owner of the hit-loop buffer-pair capacity contract. The pair is a
+// producer/consumer ping-pong (buffer_data[0] holds a hit's input rays,
+// buffer_data[1] receives their two-child fan-out), so their sizes are NOT
+// independent: buffer_data[1] must absorb twice whatever buffer_data[0] can
+// hold. Sizing the two separately is what let a fan-out write past the end of
+// buffer_data[1] — see the definition in simulator.cpp for the full mechanism.
+//
+// Internal: exposed for unit testing; not part of the public C API.
+void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num);
 
 // Per-batch ray dispatcher: classifies each ray via derived predicates
 // (IsNormal() / IsOutgoing() / IsContinue() / IsTir()) and routes

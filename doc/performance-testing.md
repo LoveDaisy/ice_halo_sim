@@ -87,10 +87,20 @@ The legacy CPU route runs a dual pass and prints one JSON per pass:
 `"mode":"single","workers":1` and `"mode":"multi","workers":N`. A GPU route is a single engine and
 prints one line only (`workers:1`).
 
-**The legacy CPU product path is `worker_count = PhysicalCoreCount()`** (`ServerImpl::ServerImpl`,
-`server.cpp:444`; only a fixed seed or a GPU route forces 1). So `mode:single` is a
-per-core/parallel-efficiency diagnostic — **it is not the shipping configuration**, and a
-`grep '"single"'` that looks right will quietly measure a config nobody runs.
+**The legacy CPU product path is `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`**
+(`ServerImpl::ServerImpl`, `src/server/server.cpp`; only a fixed seed or a GPU route forces 1, and an
+explicit `--workers N` / GUI worker preference overrides the whole expression, cap included). So
+`mode:single` is a per-core/parallel-efficiency diagnostic — **it is not the shipping
+configuration**, and a `grep '"single"'` that looks right will quietly measure a config nobody runs.
+
+**Neither is `mode:multi`, on a machine with more physical cores than that cap.** The `multi` pass
+asks for `PhysicalCoreCount()` workers explicitly, which is exactly why it escapes the cap: it is
+the denominator parallel efficiency is defined against. Read it as "how well does this box scale to
+all its cores", not as "what a user gets" — the two coincided before the default was capped, and on
+a high-core-count box they no longer do. When you want the shipping number, run a normal (non
+`--benchmark`) simulation, or pass `--workers` the capped value and read that. When you want to know
+whether the cap is costing this particular machine throughput, `mode:multi` is precisely the
+measurement that tells you.
 
 This is not a small correction — **effects can invert between the two passes**. Measured, tracing
 identical work (`face_distance` fixed, so zero construction), 20M rays:
@@ -285,7 +295,9 @@ scheduling overhead. **Meaningful for the legacy CPU route only** — see the GP
 
 > **⚠️ GPU backends are single-engine — there is no "single" vs "multi" parallelism.** The GPU
 > route (Metal / CUDA) runs `worker_count=1` unconditionally (`server.cpp:284`); only the legacy
-> CPU route is genuinely multi-worker (`worker_count = PhysicalCoreCount()`). Because a GPU
+> CPU route is genuinely multi-worker (`worker_count = min(PhysicalCoreCount(),
+> kMaxDefaultWorkerCount)` by default; the `multi` benchmark pass asks for full cores explicitly and
+> is therefore uncapped — see §A). Because a GPU
 > "single" and "multi" pass would both run on the same one engine (differing only by warmup +
 > ray-count, not parallelism), **`--benchmark` collapses the GPU route to ONE steady pass**
 > (labelled `mode="multi"`) and skips the warmup pass; the legacy CPU route keeps the genuine
@@ -823,6 +835,49 @@ The dashboard tracks 12 time-series (4 platforms × 3 metrics):
 > recipe. Reproduce: container `pip install pytest numpy`, `LUMICE_HAS_CUDA=1`, then
 > `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`;
 > per-dispatch ΣY split via `bench_work/harness2.cpp` (dev49).
+
+#### Legacy CPU batch size (`kDefaultRayNum`=128): the binding constraint is a scene-dependent ceiling, not a batch count
+
+The knob above sizes the GPU dispatch grid, but on the legacy CPU route the same
+`LUMICE_DISPATCH_RAY_NUM` overrides `kDefaultRayNum` (`src/server/server.cpp:142`, consumed at
+`server.cpp:1620`) and really does change how many rays each SimBatch hands to the worker pool. A
+sweep from 128 up to 8192, on two CPUs (a 16-core x86 box and a 12-core Apple M2 Max) and two
+scene families (a light single-crystal single-scattering scene and a heavy multi-crystal
+multi-scattering one), found **no batch size that is good for both** — because what binds is a
+**handoff-rate ceiling, and that ceiling is itself scene-dependent, moving 4.8× between the two
+scenes**:
+
+- The light scene already peaks at **51.8 k batch/s** at the default batch of 128 — it is pinned
+  against the ceiling. Raising its batch to 256 drops the rate to 28.0 k, which buys **+16.2% peak
+  throughput** *and* a flatter worker-count curve at the same time (best/worst ratio over
+  worker counts ≥ 8: 1.59× → 1.24×). That is a strict two-axis win, so 128 is not this scene's
+  optimum.
+- The heavy scene peaks at only **10.8 k batch/s** — far below the ceiling at every batch tried.
+  Raising its batch buys nothing but latency and imbalance, and throughput degrades monotonically:
+  256: −15.2%, 512: −24.2%, 8192: −34.5%. Here 128 *is* the optimum, and it sits on the sweep's
+  lower boundary.
+- On the M2 Max the whole axis barely moves either scene (light −2.6%…+6.8%, heavy −5.9%…+2.0%),
+  and unlike the x86 box its worker-count curve is already close to flat at the default batch
+  (1.07× / 1.26×, vs 1.59× / 1.41×). On that host the batch-size question is close to moot to
+  begin with — which is a reason not to read a Mac-only sweep as evidence that the axis is dead.
+
+**Why `kDefaultRayNum` stays 128.** Moving it to 256 would trade the light scene's +16% for the
+heavy scene's −15% — not a net win, just a different scene favored. The constant also doubles as
+the default commit granularity (`kCommitCap = env::CommitRayNum(logger_, kDefaultRayNum)`,
+`src/server/server.cpp:1324`), so raising it would coarsen the GUI snapshot cadence as a side
+effect: its reach is wider than CPU throughput alone. (Pointer, not a finding of this sweep: the
+worker count sits on a separate axis from batch size and is capped independently at
+`kMaxDefaultWorkerCount`, `src/server/server.cpp:181`.)
+
+**The batch size has a hard floor below 40 rays, and the failure mode is a crash, not a slowdown.**
+`LUMICE_DISPATCH_RAY_NUM` ≤ 32 on the light scene family faults deterministically inside
+`RayBuffer::DupOverflowSlot` (`src/config/sim_data.cpp:158`), on both platforms: on x86/Linux
+every run at 8/16/24/32 died with SIGSEGV and every run at 40/48/64/96/128 was clean; on
+arm64/macOS 16 and 32 gave SIGSEGV and 8 gave an abort, again with ≥ 40 clean. The heavy scene
+runs fine at those same batch sizes (8/16/32/64 all green), so this floor is scene-dependent too.
+Today the user-facing exposure is zero (the default is 128 and nothing ships a smaller one), but
+any proposal to lower the batch is blocked by it, and a sweep that walks below 40 will die rather
+than report a number.
 
 **GPU device root-gen (scrum-260)**: on the GPU backends, root rays (orientation / direction /
 entry point) are generated on-device via a counter-based PCG stream keyed by

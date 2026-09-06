@@ -127,6 +127,11 @@ const Row kInertRows[] = {
   // principle — the legacy wrapper owns it.
   { "use_gpu_backend", "use_gpu_backend", [](GuiState& s) { s.use_gpu_backend = !s.use_gpu_backend; }, false, false,
     false },
+  // Same argument, and the observable consequence of its auto_diff_excluded bit: worker_count is a
+  // construction-time server property outside ConfigSnapshot, so the generic reconciler has no
+  // baseline to diff it against and must derive nothing from it. The server rebuild it does cause
+  // is driven from DoRun, not from here.
+  { "worker_count", "worker_count", [](GuiState& s) { s.worker_count = 2; }, false, false, false },
 };
 
 void CheckRows(const Row* rows, size_t count) {
@@ -283,10 +288,12 @@ TEST(GuiStateReconcile, EveryRegisteredStructuralFieldIsActuallyDiffed) {
     registered.insert(entry.name);
   }
   EXPECT_TRUE(registered == mutated) << "the reconciler's field set and the tier registry have drifted apart";
-  // Exactly one structural field is held out of the automatic diff (use_gpu_backend, which is not
-  // in the committed snapshot). A second one appearing means a field was excluded without a
-  // hand-written replacement being wired up alongside.
-  EXPECT_EQ(excluded_struct_fields, 1);
+  // Two structural fields are held out of the automatic diff, and for one reason: use_gpu_backend
+  // and worker_count are construction-time server properties that are not in the committed
+  // snapshot, so there is no baseline here to diff them against. Each has its hand-written
+  // replacement — the server-reconstruction check DoRun performs before committing. A THIRD one
+  // appearing means a field was excluded without such a replacement being wired up alongside.
+  EXPECT_EQ(excluded_struct_fields, 2);
 }
 
 // Applying the effects: a hard reset is a superset of a re-run, so it takes over rather than

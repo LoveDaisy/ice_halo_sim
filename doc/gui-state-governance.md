@@ -125,7 +125,7 @@
 |---|----------|------|------|
 | ① 单例文档默认 | `FieldTier::kStructSoft` 中的单例字段（`sun` / `sim` / `renderer`） | 进覆盖文件的 GuiState 半区 |
 | ② 预设库 | 内置 axis 预设表每一行可调的 zenith std（该值不是 `GuiState` 的顶层字段，落地时机与运行时形态见 8.7） | 进覆盖文件独立的 `presets` 子树，不占用 GuiState 半区的键名空间 |
-| ③ app 偏好 | `FieldTier::kView` 中未被 `SerializeGuiStateJson` 序列化的那批（日志级别三件套 / 日志面板展开态 / 左侧面板折叠态），以及 `use_gpu_backend`（渲染后端选择） | **部分解禁**：`use_gpu_backend` 经覆盖文件独立的第三个根键 `app` 落地为个人默认（形态与 ② 同构，面板里是第二个注册式区，见 8.3），在 `kFieldTierTable` 上由自己的 `app_preference_eligible` 位登记；其余成员仍然排除——它们没有存储通道，`ResolveDefaultEligibility` 对它们仍返回 `kAppPreference`。工厂默认不变（`use_gpu_backend = false`，理由见 `gui_state.hpp` 该字段处的注释）|
+| ③ app 偏好 | `FieldTier::kView` 中未被 `SerializeGuiStateJson` 序列化的那批（日志级别三件套 / 日志面板展开态 / 左侧面板折叠态），以及 `use_gpu_backend`（渲染后端选择）/ `worker_count`（CPU 路线 worker 数） | **部分解禁**：`use_gpu_backend` 与 `worker_count` 各经覆盖文件独立的第三个根键 `app` 落地为个人默认（形态与 ② 同构，面板里是第二个注册式区，见 8.3），在 `kFieldTierTable` 上**各自**由自己的 `app_preference_eligible` 位登记、各自有一套 `Read/Write/Erase*FromDoc`；其余成员仍然排除——它们没有存储通道，`ResolveDefaultEligibility` 对它们仍返回 `kAppPreference`。工厂默认不变（`use_gpu_backend = false` / `worker_count = 0`，理由见 `gui_state.hpp` 两个字段处的注释）。⭐**这两个成员的共同点就是这个命名空间的资格判据本身，不是巧合**：二者都是**服务器构造期属性**（后端拓扑 / worker 数），描述的是**程序跑在哪台机器上**，而不是文档描述的那个晕。放进文档半区就意味着它跟着文件旅行到另一台机器——正是 `doc/env-var-policy.md` 拒绝环境变量承载用户可见行为的那条「静默逐机器漂移」换了个载体。二者也都因此**不在 `SerializeGuiStateJson` 的输出里**，`.lmc` 结构性地装不下它们。|
 | ④ 集合区 | `FieldTier::kStructHard` 的成员，以及 `kStructSoft` 里被 `kCollectionFields`（`user_defaults.hpp:64`）标记的容器：晶体 / layer / filter / 染色规则 | 排除。这些容器在序列化后的 key path 里携带文档局部下标（如某个数组的第几项），脱离具体文档后这个下标没有意义 |
 
 ### 8.2 资格判定：从档位表派生，不手写第二份清单
@@ -145,7 +145,9 @@
 
   405 的 D3（"编辑器只能注册，不能从 JSON 叶子派生"）**没有被推翻**：它一直管的是编辑器这一半，这次重构只是新增了存在性那一半的生成式做法，并第一次把两者在同一份文档里并列写清楚——不写清楚的代价，是后人看见"存在性是生成的"就顺势以为"编辑器现在也可以是生成的"。
 
-- **注册式的区域现在有两个，`presets` 与 `app`，两者对生成式 walk 都是隐形的。** 面板里除了 §2 那张生成式的设置列表，还有两块**不由 walk 产出**的区域：§1 预设库（`presets` 根键，命名空间 ②）与 §app 应用偏好（`app` 根键，命名空间 ③）。它们隐形的机制是同一条，且是结构性的而非约定：`SerializeGuiStateJson` 从不产出这两个根键，`BuildDefaultDiffRows` 遍历的正是那份序列化输出的键集合，因此这两棵子树没有机会成为一行。反过来说，**存在这两个根键下的字段，只能经它们各自的 `ReadXFromDoc` / `WriteXToDoc` / `EraseXFromDoc` 原语读写**——这也是"文档半区绝不能决定 `use_gpu_backend`"从一条纪律变成一条机制的地方。
+- **注册式的区域现在有两个，`presets` 与 `app`，两者对生成式 walk 都是隐形的。** 面板里除了 §2 那张生成式的设置列表，还有两块**不由 walk 产出**的区域：§1 预设库（`presets` 根键，命名空间 ②）与 §app 应用偏好（`app` 根键，命名空间 ③）。它们隐形的机制是同一条，且是结构性的而非约定：`SerializeGuiStateJson` 从不产出这两个根键，`BuildDefaultDiffRows` 遍历的正是那份序列化输出的键集合，因此这两棵子树没有机会成为一行。反过来说，**存在这两个根键下的字段，只能经它们各自的 `ReadXFromDoc` / `WriteXToDoc` / `EraseXFromDoc` 原语读写**——这也是"文档半区绝不能决定 `use_gpu_backend`（以及后来的 `worker_count`）"从一条纪律变成一条机制的地方。
+
+  ⚠️ **`app` 至今没有、也不需要一份通用的 per-field registry。** 加入第二个成员的代价是三个具名函数 + `ResetIneligibleScalarFields` 一行 + `ApplyAppPreferencesOverride` 一行，仍然比"先设计一套没人知道第二个成员长什么样的机制"便宜；漏掉后两行不会静默——`kIneligibleScalarResetFieldCount` 那道覆盖闸会红。⇒ 重新评估 registry 的时机是**第三个成员**出现时，不是现在。
 
   这张注册表也是主 UI 与面板收敛到"同一份权威"的落地方式：主 UI 里所有绑定到已注册字段的滑条调用点（`app_panels.cpp` 的 View / Display / Overlay 与 `panels.cpp` 的 Sun / Simulation，共 16 处）都改读同一个 `ConstraintFor()`（`field_editor_registry.hpp:137`），不再各自持有一份边界字面量——改一处，主 UI 与面板同时移动（`main-ui-constraint-registry` / 408.8 落地；其 AC3 的红态探针证明了这一点：故意改错某个约束的边界，主 UI 与表格单元格在同一次改动、同一帧一起偏移）。
 

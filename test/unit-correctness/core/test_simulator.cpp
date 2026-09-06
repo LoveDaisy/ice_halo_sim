@@ -39,6 +39,62 @@ size_t SumAlloc(const size_t* alloc, size_t n) {
   return sum;
 }
 
+// ---- ResetHitLoopBuffers: the hit-loop buffer-pair capacity contract ----
+//
+// buffer_data[0] holds a hit's input rays; TraceRayBasicInfo fans each of them
+// into two slots of buffer_data[1]. RayBuffer::EmplaceBack's `size_ + 1 <
+// capacity_` guard is what bounds buffer_data[0].size_, so the contract that
+// keeps the fan-out in bounds is
+//
+//     buffer_data[1].capacity_ >= 2 * (buffer_data[0].capacity_ - 1)
+//
+// stated against the CAPACITIES, not against the ray_num of the current batch.
+// These cases are the deterministic half of the guard: the e2e sentinel over the
+// reported scene can only trip when a ray actually violates the "at most one
+// normal child per parent" assumption, which is a stochastic event, whereas the
+// contract itself is checkable directly and always.
+size_t MaxFanOutSlots(const RayBuffer buffer_data[2]) {
+  // EmplaceBack fills at most capacity_ - 1 slots; each of those fans out to 2.
+  return 2 * (buffer_data[0].capacity_ - 1);
+}
+
+TEST(ResetHitLoopBuffers, SecondBufferAbsorbsFullFanOut) {
+  for (size_t ray_num : { size_t{ 1 }, size_t{ 2 }, size_t{ 8 }, size_t{ 24 }, size_t{ 32 }, size_t{ 40 },
+                          size_t{ 128 }, size_t{ 1024 } }) {
+    RayBuffer buffer_data[2];
+    ResetHitLoopBuffers(buffer_data, ray_num);
+    EXPECT_GE(buffer_data[1].capacity_, MaxFanOutSlots(buffer_data))
+        << "ray_num=" << ray_num << ": buffer_data[1] cannot absorb a full buffer_data[0] fan-out";
+  }
+}
+
+TEST(ResetHitLoopBuffers, ContractHoldsAcrossShrinkingBatches) {
+  // RayBuffer::Reset is grow-never-shrink, so a workspace recycled from a large
+  // batch keeps the large capacity_. The contract must therefore be stated
+  // against buffer_data[0]'s ACTUAL capacity, not against the current batch's
+  // ray_num — a formula that recomputes `ray_num * 2` for both buffers leaves
+  // buffer_data[0] oversized from the earlier batch while buffer_data[1] is
+  // sized for the small one.
+  RayBuffer buffer_data[2];
+  ResetHitLoopBuffers(buffer_data, 1024);
+  const size_t grown_capacity = buffer_data[0].capacity_;
+  ResetHitLoopBuffers(buffer_data, 8);
+  EXPECT_EQ(buffer_data[0].capacity_, grown_capacity) << "Reset is expected to be grow-never-shrink";
+  EXPECT_GE(buffer_data[1].capacity_, MaxFanOutSlots(buffer_data));
+}
+
+TEST(ResetHitLoopBuffers, InputBufferStillHoldsTheBatch) {
+  // Guard against "fix" the contract by shrinking buffer_data[0]: it must still
+  // be able to hold the batch it is given (with the one slot EmplaceBack keeps
+  // free), or rays would be dropped at the hit-loop entry instead.
+  for (size_t ray_num : { size_t{ 1 }, size_t{ 32 }, size_t{ 128 } }) {
+    RayBuffer buffer_data[2];
+    ResetHitLoopBuffers(buffer_data, ray_num);
+    EXPECT_GT(buffer_data[0].capacity_, ray_num) << "ray_num=" << ray_num;
+  }
+}
+
+
 // Case 1: Equal proportions
 TEST(PartitionCrystalRayNum, EqualProportions) {
   std::vector<float> proportions = { 0.5f, 0.5f };

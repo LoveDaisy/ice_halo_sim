@@ -1,6 +1,7 @@
 #include "gui/user_defaults.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -109,14 +110,15 @@ std::string DescribeAxisPresetClamp(AxisPreset preset, float requested, float st
 // structurally unreachable from it anyway — kDisplay and the `kView \ serialized` set have no JSON
 // key at all, and the collections are cleared wholesale by the caller. This handles the ones that
 // are ordinary serializable scalars, where the file's top level has a well-formed place to put
-// them. Today that is exactly `use_gpu_backend`, registered app_preference_eligible.
+// them. Today those are `use_gpu_backend` and `worker_count`, both registered
+// app_preference_eligible.
 //
-// It does NOT rest on the claim that the deserializer would read such a key today: for
-// use_gpu_backend it would not — the GuiState serializer is written key by key (file_io.cpp) and
-// has no entry for this field, so a top-level `use_gpu_backend` is inert on the way in. The reason
-// to keep the reset anyway is that this is the one line where "namespace 1 cannot decide this
-// field" is stated as code, its cost is one assignment, and the alternative is that the boundary
-// holds only for as long as nobody adds the field to the serializer. An earlier version of this
+// It does NOT rest on the claim that the deserializer would read such a key today: for neither of
+// them would it — the GuiState serializer is written key by key (file_io.cpp) and has no entry for
+// either field, so a top-level `use_gpu_backend` or `worker_count` is inert on the way in. The
+// reason to keep the reset anyway is that this is the one place where "namespace 1 cannot decide
+// this field" is stated as code, its cost is one assignment per field, and the alternative is that
+// the boundary holds only for as long as nobody adds a field to the serializer. An earlier version of this
 // comment asserted the deserializer WOULD read it; that was checked and is false, which is the
 // second reason the justification is stated as a boundary rather than as a defence against a
 // specific reader.
@@ -131,6 +133,7 @@ std::string DescribeAxisPresetClamp(AxisPreset preset, float requested, float st
 void ResetIneligibleScalarFields(GuiState& state) {
   const GuiState factory{};
   state.use_gpu_backend = factory.use_gpu_backend;
+  state.worker_count = factory.worker_count;
 }
 
 // "Does this document say anything the user chose?" — the provenance stamp does not count.
@@ -578,6 +581,7 @@ void EraseAxisPresetZenithStdFromDoc(nlohmann::json& doc, AxisPreset preset) {
 namespace {
 constexpr const char* kAppRootKey = "app";
 constexpr const char* kUseGpuBackendKey = "use_gpu_backend";
+constexpr const char* kWorkerCountKey = "worker_count";
 }  // namespace
 
 std::optional<bool> ReadUseGpuBackendFromDoc(const nlohmann::json& doc) {
@@ -621,9 +625,59 @@ void EraseUseGpuBackendFromDoc(nlohmann::json& doc) {
   }
 }
 
+std::optional<int> ReadWorkerCountFromDoc(const nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    return std::nullopt;
+  }
+  const auto app = doc.find(kAppRootKey);
+  if (app == doc.end() || !app->is_object()) {
+    return std::nullopt;
+  }
+  const auto value = app->find(kWorkerCountKey);
+  // is_number_integer() rather than is_number(): a stored 1.5 is not a worker count anyone meant, so
+  // it reads as nothing stored instead of being truncated into a number the user never typed. A
+  // JSON bool is not a number under either predicate, so `true` is rejected here too.
+  if (value == app->end() || !value->is_number_integer()) {
+    return std::nullopt;
+  }
+  // A hand-edited file can carry an integer literal outside int's range (e.g. 99999999999).
+  // get<int>() on that is an implementation-defined narrowing conversion — it could come back as a
+  // sign-flipped negative or another out-of-range value instead of failing. Read as the widest
+  // integer type nlohmann exposes and reject anything that would not round-trip through int.
+  const auto wide = value->get<std::int64_t>();
+  if (wide < std::numeric_limits<int>::min() || wide > std::numeric_limits<int>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(wide);
+}
+
+void WriteWorkerCountToDoc(nlohmann::json& doc, int value) {
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  doc[kAppRootKey][kWorkerCountKey] = value;
+}
+
+void EraseWorkerCountFromDoc(nlohmann::json& doc) {
+  if (!doc.is_object()) {
+    doc = nlohmann::json::object();
+  }
+  const auto app_it = doc.find(kAppRootKey);
+  if (app_it == doc.end() || !app_it->is_object()) {
+    return;
+  }
+  app_it->erase(kWorkerCountKey);
+  if (app_it->empty()) {
+    doc.erase(kAppRootKey);
+  }
+}
+
 void ApplyAppPreferencesOverride(GuiState& state, const nlohmann::json& doc) {
   if (const std::optional<bool> use_gpu = ReadUseGpuBackendFromDoc(doc); use_gpu.has_value()) {
     state.use_gpu_backend = *use_gpu;
+  }
+  if (const std::optional<int> workers = ReadWorkerCountFromDoc(doc); workers.has_value()) {
+    state.worker_count = *workers;
   }
 }
 

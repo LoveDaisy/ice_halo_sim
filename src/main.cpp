@@ -1,3 +1,4 @@
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -208,6 +209,13 @@ void PrintUsage(const char* prog_name) {
             << "                     'auto' and 'cpu' both select the CPU route today; 'metal'\n"
             << "                     falls back to CPU if unavailable. The LUMICE_TRACE_BACKEND\n"
             << "                     env var, if set, still overrides this (debug/CI only).\n"
+            << "  --workers <N>      Number of CPU simulation worker threads (default: automatic —\n"
+            << "                     one per physical core, capped at a ceiling above which no\n"
+            << "                     machine measured ran faster; an explicit N is never capped).\n"
+            << "                     Machine-dependent, so it is a command-line switch rather than\n"
+            << "                     a config-file field: a config travels between machines and a\n"
+            << "                     worker count should not travel with it. Ignored on a GPU route\n"
+            << "                     (single engine) and in --benchmark mode.\n"
             << "  --benchmark        Run a throughput benchmark and output [BENCHMARK] JSON. The legacy\n"
             << "                     CPU route runs a dual pass (single-worker + multi-worker → per-core\n"
             << "                     and parallel-efficiency data); a GPU route is single-engine, so it\n"
@@ -222,6 +230,7 @@ void PrintUsage(const char* prog_name) {
             << "  " << prog_name << " -f config.json --format png\n"
             << "  " << prog_name << " -f config.json --quality 80\n"
             << "  " << prog_name << " -f config.json --backend metal\n"
+            << "  " << prog_name << " -f config.json --workers 4\n"
             << "  " << prog_name << " -f config.json --benchmark\n"
             << "  " << prog_name << " -f config.json -v\n";
 }
@@ -617,6 +626,10 @@ int main(int argc, char** argv) {
   int jpeg_quality = kDefaultJpegQuality;
   bool benchmark_mode = false;
   int preferred_backend = LUMICE_BACKEND_CPU;
+  // 0 = "not specified" — the same value LUMICE_ServerConfig::num_workers already uses to mean
+  // "let the server pick" (one per physical core, capped), so no separate was-it-set flag is
+  // needed.
+  int cli_workers = 0;
   auto log_level = LUMICE_LOG_INFO;
 
   for (int i = 1; i < argc; i++) {
@@ -677,6 +690,42 @@ int main(int argc, char** argv) {
         PrintUsage(argv[0]);
         return 1;
       }
+    } else if (arg == "--workers") {
+      if (++i >= argc) {
+        std::cerr << "Error: --workers requires an argument\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      // std::stoi stops at the first non-digit WITHOUT throwing, so "3abc" would parse as 3 and be
+      // silently accepted. The `pos == size` check is what makes a trailing-garbage argument an
+      // error rather than a value the user never typed. std::stoi also skips LEADING whitespace and
+      // accepts a leading '+'/'-' before parsing, so those two checks alone would let " 3" or "+3"
+      // through as if the user had typed a bare "3" — reject anything that doesn't start with a
+      // digit up front, since AC1 only ever wants a positive integer typed as one.
+      const std::string workers_arg = argv[i];
+      if (workers_arg.empty() || !std::isdigit(static_cast<unsigned char>(workers_arg[0]))) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      std::size_t parsed_len = 0;
+      try {
+        cli_workers = std::stoi(workers_arg, &parsed_len);
+      } catch (const std::exception&) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (parsed_len != workers_arg.size()) {
+        std::cerr << "Error: --workers requires a numeric value, got '" << workers_arg << "'\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (cli_workers <= 0) {
+        std::cerr << "Error: --workers must be a positive integer, got " << cli_workers << "\n\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
     } else if (arg == "--benchmark") {
       benchmark_mode = true;
     } else if (arg == "-v") {
@@ -697,7 +746,7 @@ int main(int argc, char** argv) {
   // Re-parse file paths from wide-char command line for full Unicode support.
   // argv[i] on Windows uses ANSI codepage, which loses non-ASCII characters.
   // Only path arguments (-f, -o) need wide-char re-parsing; ASCII-only args
-  // (--format, --quality) are safe as-is.
+  // (--format, --quality, --workers) are safe as-is.
   {
     int wargc = 0;
     wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
@@ -735,6 +784,22 @@ int main(int argc, char** argv) {
 
   // Benchmark mode: dual-pass (single-worker + multi-worker)
   if (benchmark_mode) {
+    // The benchmark's worker counts are part of its measurement methodology, not a default a user
+    // preference may override: the "single" pass is 1 worker BECAUSE that is what per-core
+    // efficiency means, and "multi" is PhysicalCoreCount() BECAUSE that is what the parallel figure
+    // is defined against. So --workers is ignored here — said out loud rather than swallowed, the
+    // same way the --backend fallbacks above announce their substitution. The value is still
+    // validated in the parse loop above; being ignored in this mode does not relax AC1.
+    //
+    // Note this is an EXPLICIT worker count (num_workers > 0), so it deliberately escapes the cap
+    // the automatic default is subject to (kMaxDefaultWorkerCount, server.cpp). On a machine with
+    // more physical cores than that cap, "multi" therefore no longer reports the throughput the
+    // shipping default produces: it reports full-core parallel efficiency, which is what this
+    // pass is FOR. doc/performance-testing.md says the same thing to whoever reads the number.
+    if (cli_workers != 0) {
+      std::cerr << "Warning: --workers is ignored in --benchmark mode; the single/multi passes use "
+                   "their own fixed worker counts by design.\n";
+    }
     std::ifstream config_file(config_filename);
     if (!config_file.is_open()) {
       std::cerr << "Error: cannot open config file: " << config_filename.u8string() << "\n";
@@ -759,8 +824,9 @@ int main(int argc, char** argv) {
     // (kept labelled "multi" for output continuity) and skip the meaningless warmup
     // pass. Only the legacy CPU route keeps the genuine dual-pass: "single" = 1
     // worker (per-core efficiency), "multi" = PhysicalCoreCount() workers (real
-    // parallelism). LUMICE_WillUseGpuRoute is env-aware (LUMICE_TRACE_BACKEND wins
-    // over --backend), so this matches how bench_throughput.py selects a GPU run.
+    // parallelism — full-core, which is above the shipping default's cap on a
+    // machine with many cores; see the note at the top of this branch). LUMICE_WillUseGpuRoute is env-aware
+    // (LUMICE_TRACE_BACKEND wins over --backend), so this matches how bench_throughput.py selects a GPU run.
     bool gpu_route = LUMICE_WillUseGpuRoute(preferred_backend) != 0;
 
     if (!gpu_route) {
@@ -790,7 +856,8 @@ int main(int argc, char** argv) {
     }
 
     // Steady pass (label="multi"): original ray count. CPU = PhysicalCoreCount()
-    // workers (parallel); GPU = the single engine (the representative steady figure).
+    // workers (parallel — explicit, so uncapped: this is the parallel-efficiency figure,
+    // not the shipping default); GPU = the single engine (the representative steady figure).
     int multi_workers = gpu_route ? 1 : lumice::PhysicalCoreCount();
     RunBenchmarkPass(config_json.dump(), multi_workers, "multi", cores, log_level, preferred_backend);
 
@@ -804,6 +871,7 @@ int main(int argc, char** argv) {
 
   LUMICE_ServerConfig server_config{};
   server_config.preferred_backend = preferred_backend;
+  server_config.num_workers = cli_workers;  // 0 = automatic: one per physical core, capped (server.cpp)
   auto* server = LUMICE_CreateServerEx(&server_config);
   LUMICE_SetLogLevel(server, log_level);
 

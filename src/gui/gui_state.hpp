@@ -1227,7 +1227,7 @@ struct GuiState {
   bool save_texture = true;  // Whether to include texture in .lmc save (UI-only, not serialized)
 
   // Request a GPU trace backend (Metal on Apple, CUDA on NVIDIA). Toggling this
-  // reconstructs the server on the next DoRun via MaybeReconstructServerForBackend
+  // reconstructs the server on the next DoRun via MaybeReconstructServerForConstructionProperties
   // (backend is a construction-time topology property: CPU N-worker vs GPU single
   // engine), so the accumulated image resets on toggle. UI-only: not serialized into a
   // document (.lmc) and not in the Revert baseline (ConfigSnapshot).
@@ -1252,6 +1252,30 @@ struct GuiState {
   // value lives under the override file's `app` root key — never the document half — see
   // user_defaults.hpp's app-preferences block and doc/gui-state-governance.md §8.
   bool use_gpu_backend = false;
+
+  // Number of CPU simulation workers a NEW server is constructed with. 0 = automatic: one per
+  // physical core, capped (LUMICE_ServerConfig::num_workers's own meaning for 0, server.cpp —
+  // deliberately the same convention rather than a second answer to "what does 0 mean here"). Like use_gpu_backend this
+  // is a construction-time property, so changing it reconstructs the server on the next DoRun via
+  // MaybeReconstructServerForConstructionProperties; the GPU route is a single engine and ignores
+  // it. UI-only: not serialized into a document (.lmc) and not in the Revert baseline
+  // (ConfigSnapshot).
+  //
+  // WHY IT IS AN app PREFERENCE AND NOT A DOCUMENT FIELD. A worker count is a property of the
+  // MACHINE, not of the halo being simulated: the same document opened on a laptop and on a
+  // workstation wants different numbers, and neither number is a statement about the scene. Put it
+  // in the document and it travels with the file — which is precisely the "silent per-machine
+  // drift" doc/env-var-policy.md refuses to accept from environment variables, arriving through a
+  // different carrier. So its only storage channel is the override file's `app` root key, the same
+  // one use_gpu_backend uses, where a value stays on the machine that chose it. See
+  // user_defaults.hpp's app-preferences block and doc/gui-state-governance.md §8.
+  //
+  // No upper bound is enforced here, and that stays true now that the AUTOMATIC value has a
+  // measured one (kMaxDefaultWorkerCount, server.cpp): the cap answers "what should the program
+  // pick when nobody said", and a number typed into the Settings panel is somebody saying.
+  // Clamping it here would also put a second copy of that constant in a second file, where the
+  // two would drift. Oversubscribing threads is slow, not unsafe.
+  int worker_count = 0;
 
   // Edit modal mode (UI-only, session-only, not in ConfigSnapshot).
   // Staged mode: BeginPopupModal + OK/Cancel + dirty-mark on tabs.
@@ -1299,7 +1323,7 @@ struct GuiState {
   // reconstructed server also has no old-generation payloads in flight (the old server is destroyed),
   // so the fence has nothing legitimate left to guard. Reset the display generation to epoch 0 and
   // clear the carried-forward texture so the new backend's first frame reaches the screen. Called by
-  // MaybeReconstructServerForBackend (the sole owner of server reconstruction). The epoch fields are
+  // MaybeReconstructServerForConstructionProperties (the sole owner of server reconstruction). The epoch fields are
   // re-established from the fresh server via DoRun's post-commit LUMICE_GetSimLifecycle readback.
   void ResetDisplayGenerationForBackendSwap() {
     committed_epoch = 0;

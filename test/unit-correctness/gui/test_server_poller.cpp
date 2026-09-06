@@ -819,7 +819,7 @@ TEST_F(ServerPoller, TheIdleHeartbeatKeepsTickingAndRepublishesNothing) {
 }
 
 // The safety property the heartbeat endangers. Stop()'s callers destroy the server on the next line
-// — MaybeReconstructServerForBackend does Stop() then LUMICE_DestroyServer, DoStop does Stop() then
+// — MaybeReconstructServerForConstructionProperties does Stop() then LUMICE_DestroyServer, DoStop does Stop() then
 // LUMICE_StopServer. Before the heartbeat, "self-paused" and "not touching the server" were the same
 // state and Stop() could early-return on it. They are now different facts, and if Stop() still
 // early-returned, a tick landing after it returned would dereference a destroyed server.

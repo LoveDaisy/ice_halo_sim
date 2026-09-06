@@ -151,8 +151,10 @@ A/B，比的是 native-ISA 二进制对基线-ISA 二进制，而**任何地方�
 偏低说明存在锁竞争、内存带宽饱和或调度开销。**仅对 legacy CPU 路线有意义**——见下方 GPU caveat。
 
 > **⚠️ GPU 后端是单引擎——不存在 "single" vs "multi" 并行。** GPU 路线（Metal / CUDA）无条件
-> `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（`worker_count =
-> PhysicalCoreCount()`）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
+> `worker_count=1`（`server.cpp:284`）；只有 legacy CPU 路线是真多 worker（默认
+> `worker_count = min(PhysicalCoreCount(), kMaxDefaultWorkerCount)`；`--benchmark` 的 `multi` 趟
+> 显式请求满核，因此不受该上限约束——在核数高于上限的机器上，它量的是满核并行效率，不再等于出厂
+> 默认会跑出来的吞吐）。既然 GPU 的 "single" 与 "multi" 趟都跑在同一个单引擎（只差暖机+光线数、
 > 非并行），**`--benchmark` 对 GPU 路线塌成 ONE 稳态趟**（label `mode="multi"`）、跳过暖机趟；
 > legacy CPU 路线保留真双趟。路线检测是 env-aware 的（`LUMICE_WillUseGpuRoute` 认 `LUMICE_TRACE_BACKEND`，
 > 故 env 选的 GPU run 也塌）。读 GPU 结果时：
@@ -556,6 +558,40 @@ push 到 `main` 的 benchmark 结果会通过
 > `LUMICE_HAS_CUDA=1`，然后
 > `LUMICE_DISPATCH_RAY_NUM=131072 pytest -m slow test/parity-cross-backend/backend/test_cuda_exit_seam_parity.py::test_cuda_single_ms_no_filter_parity`；
 > 逐 dispatch ΣY 拆分用 `bench_work/harness2.cpp`（dev49）。
+
+#### legacy CPU 批大小（`kDefaultRayNum`=128）：绑定约束是随场景变化的天花板，不是批条数
+
+上面那条旋钮定的是 GPU dispatch 网格；但在 legacy CPU 路径上，同一个 `LUMICE_DISPATCH_RAY_NUM`
+会 override `kDefaultRayNum`（`src/server/server.cpp:142`，消费点在 `server.cpp:1620`），**确实**
+改变每个 SimBatch 交给 worker 池的光线条数。在两颗 CPU（一台 16 核 x86 + 一台 12 核 Apple M2 Max）
+× 两个场景族（一个轻量单晶体单次散射场景、一个重的多晶体多次散射场景）上把该轴从 128 扫到 8192，
+**没有找到一个对两个场景都好的批大小**——因为绑定约束是一个**交接率天花板，而这个天花板本身随
+场景变化，两个场景之间相差 4.8×**：
+
+- 轻场景在默认批（128）上就已达峰值 **51.8 k batch/s**——顶在天花板上。把它的批抬到 256 使交接率
+  降到 28.0 k，于是同时买到 **+16.2% 峰值吞吐**与更平的 worker 数曲线（worker 数 ≥ 8 区间的
+  最优/最差比 1.59× → 1.24×）。这是**双轴严格占优**，所以 128 并不是这个场景的最优。
+- 重场景峰值只有 **10.8 k batch/s**——在测过的每一档都远低于天花板。加大它的批只买到延迟与不均衡，
+  吞吐单调变差：256 档 −15.2%、512 档 −24.2%、8192 档 −34.5%。这个场景上 128 **就是**最优，
+  且它落在扫描的下边界上。
+- 在 M2 Max 上整条轴对两个场景都几乎不起作用（轻场景 −2.6%…+6.8%、重场景 −5.9%…+2.0%），且与
+  x86 机器不同，它的 worker 数曲线在默认批上就已接近平（1.07× / 1.26×，对比 1.59× / 1.41×）。
+  这台机器上批大小这个问题本来就接近不存在——反过来说，只在 Mac 上扫一遍就断言「这条轴是死的」
+  不成立。
+
+**为什么 `kDefaultRayNum` 保持 128。** 改成 256 是拿轻场景的 +16% 去换重场景的 −15%，不是净胜，
+只是换一个被偏袒的场景。这个常数还兼任提交粒度的默认值（`kCommitCap =
+env::CommitRayNum(logger_, kDefaultRayNum)`，`src/server/server.cpp:1324`），抬高它会连带把 GUI
+快照节奏变粗：它的射程比纯 CPU 吞吐更宽。（补充指针，非本次扫描的结论：worker 数是与批大小
+独立的另一条轴，其默认值单独由 `kMaxDefaultWorkerCount` 封顶，`src/server/server.cpp:181`。）
+
+**批大小有一个 <40 光线的硬地板，且失效形态是崩溃而不是变慢。** `LUMICE_DISPATCH_RAY_NUM` ≤ 32
+在轻场景族上确定性地崩在 `RayBuffer::DupOverflowSlot` 内（`src/config/sim_data.cpp:158`），
+两个平台都复现：x86/Linux 上 8/16/24/32 档每一次 run 都 SIGSEGV，而 40/48/64/96/128 档全绿；
+arm64/macOS 上 16 与 32 档 SIGSEGV、8 档 abort，同样 ≥ 40 正常。重场景在同样的批大小下跑得好好的
+（8/16/32/64 全绿），所以这个地板同样是场景相关的。今天的用户暴露面为零（默认就是 128，
+也没有任何产物发更小的值），但任何「下调批大小」的方案都被它挡住，而一次走到 40 以下的扫描会直接
+崩掉而不是给出一个数。
 
 **GPU device root-gen（scrum-260）**：GPU 后端上，root 光线（取向 / 方向 / 入射点）经 counter-based
 PCG 流 `(gen_seed, gen_ray_base + tid)` 在 device 上生成，替代 host 预生成 + 上传。这是默认路径；对

@@ -145,6 +145,10 @@ struct RayBuffer {
   // src immediately before this call (i.e. recorders_[dst_idx].overflow_idx_
   // currently indexes into src.overflow_arena_). This invariant is maintained
   // by RecorderFanOut and the batch EmplaceBack overload.
+  // ENFORCED, not merely documented: the implementation gates the precondition
+  // with FatalAbort in Release as well as Debug. This function is the single
+  // owner of that check — all three call paths funnel here, so the gate is NOT
+  // restated at the call sites.
   void DupOverflowSlot(const RayBuffer& src, size_t dst_idx);
 };
 

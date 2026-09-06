@@ -585,8 +585,69 @@ std::unique_ptr<size_t[]> PartitionCrystalRayNum(const std::vector<float>& propo
 }
 
 
+// Single owner of the hit-loop buffer-pair capacity contract.
+//
+// The pair is a producer/consumer ping-pong: buffer_data[0] holds the rays that
+// enter a hit, buffer_data[1] receives their two-child fan-out (reflect +
+// refract), and CollectData feeds the surviving children back into
+// buffer_data[0] for the next hit. So the sizes are NOT independent —
+// buffer_data[1] must be able to absorb 2x whatever buffer_data[0] can hold.
+//
+// Until this function existed both were reset to `ray_num * 2` at the call
+// site, which sized buffer_data[1] for the NOMINAL fan-out (`curr_ray_num` is
+// capped by geom_clock_, so `2 * curr_ray_num <= 2 * ray_num` fits exactly) and
+// left ZERO margin. The nominal case rests on an assumption nothing enforces:
+// that each parent yields at most one "normal" child (the reflected one stays
+// inside, the refracted one exits). A single ray violating it — a grazing /
+// near-edge hit whose refracted child still finds a next face — pushed
+// buffer_data[0].size_ to curr_ray_num + 1, and the next hit's fan-out then
+// wrote 2 slots past the end of buffer_data[1]'s rays_/recorders_/components_
+// arrays. Measured: LUMICE_DISPATCH_RAY_NUM=32 on an ms-1 scene reached
+// batch=33 with both capacities at 64, corrupting the adjacent heap and
+// surfacing much later as a wild RaypathRecorder::overflow_idx_ in
+// DupOverflowSlot. The crash was dispatch-size-dependent for exactly this
+// reason: curr_ray_num = min(geom_clock_, ...) = min(32, ray_num), so only
+// ray_num <= 32 hit the zero-margin regime; larger batches got
+// 2 * ray_num - 64 slots of accidental slack and survived.
+//
+// The bound below closes that: RayBuffer::EmplaceBack's `size_ + 1 < capacity_`
+// guard caps buffer_data[0].size_ at capacity_ - 1, so a fan-out needs at most
+// 2 * capacity_ - 2 slots, which twice buffer_data[0]'s capacity covers with two
+// slots to spare. The relationship holds regardless of how many extra normal
+// children a hit produces, and no ray is dropped to achieve it.
+//
+// This is the same bound, for the same reason, that CpuTraceBackend already
+// applies to its own workspace pair (`workspace[1].Reset(layer_ray_num * 4)` in
+// cpu_trace_backend.cpp, whose comment records the ASan-diagnosed
+// heap-buffer-overflow that *2 caused there). That path was fixed and this one
+// was not — keep the two in step if either changes.
+void ResetHitLoopBuffers(RayBuffer buffer_data[2], size_t ray_num) {
+  buffer_data[0].Reset(ray_num * 2);
+  // Read the capacity back rather than recomputing `ray_num * 2`: Reset is
+  // grow-never-shrink, so a buffer recycled from a larger batch keeps the
+  // larger capacity, and the invariant must hold against the capacity that
+  // actually bounds buffer_data[0].size_.
+  buffer_data[1].Reset(buffer_data[0].capacity_ * 2);
+}
+
+
 void TraceRayBasicInfo(const Crystal& curr_crystal, float refractive_index, size_t curr_ray_num,
                        RayBuffer* buffer_data) {
+  // Release-judgable fan-out capacity gate, at the single owner of the fan-out.
+  // Everything below writes indices [0, curr_ray_num * 2) of buffer_data[1]
+  // through raw strided views (HitSurface / Propagate) and RecorderFanOut,
+  // none of which bounds-check in Release. ResetHitLoopBuffers makes this
+  // unreachable; the gate is what keeps a future regression in the sizing
+  // contract from degrading back into silent heap corruption diagnosed three
+  // frames away from its cause.
+  if (curr_ray_num * 2 > buffer_data[1].capacity_) {
+    FatalAbort(
+        "TraceRayBasicInfo: fan-out of %zu rays needs %zu slots but buffer_data[1] holds %zu "
+        "(buffer_data[0] capacity_=%zu size_=%zu). The hit-loop buffer-pair capacity contract "
+        "(see ResetHitLoopBuffers) was violated.",
+        curr_ray_num, curr_ray_num * 2, buffer_data[1].capacity_, buffer_data[0].capacity_, buffer_data[0].size_);
+  }
+
   // 1 HitSurface.
   {
     float_bf_t d_in{ buffer_data[0][0].d_, sizeof(RaySeg) };
@@ -1215,8 +1276,7 @@ void Simulator::SimulateOneWavelength(const SceneConfig& config, const RaypathCo
     auto crystal_ray_num = PartitionCrystalRayNum(proportions, ray_num, ray_alloc_carry[mi]);
 
     // NOTE: ray_num will change between scatterings.
-    buffer_data[0].Reset(ray_num * 2);
-    buffer_data[1].Reset(ray_num * 2);
+    ResetHitLoopBuffers(buffer_data, ray_num);
 
     size_t init_ray_offset = 0;
     for (size_t ci = 0; ci < ms_crystal_cnt && !stop_; ci++) {
