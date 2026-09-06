@@ -898,6 +898,13 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
 
 ## [4.2.8] - 2026-06-01
 
+### Added
+- **Entry/Exit filters gain wildcards, multi-value OR, and path-length bounds** (#118). Leaving
+  the entry or exit face blank now means "any face" (previously `0` was indistinguishable from
+  "match face 0"); an entry or exit can match a set of faces (`entry={3,4}, exit={5,6}`); and a
+  filter can additionally require a minimum and/or maximum hit-path length (unbounded / exactly N
+  / at most N / a range). Existing single-value `{"entry": 3, "exit": 5}` configs are unaffected.
+
 ### Changed
 - **The auto-EV brightness anchor moves from the 99.5th to the 99th percentile, and is now computed
   on a coarse downsampled grid rather than the full-resolution frame** (#116). On the intentionally
@@ -915,13 +922,6 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   rays terminate immediately instead of completing a full multi-scattering trajectory, restoring
   the throughput a filter is supposed to buy: +74% at `ms_prob=0.5` and +114% at `ms_prob=0.8`
   (multi-worker, filter-on vs filter-off, macOS).
-
-### Added
-- **Entry/Exit filters gain wildcards, multi-value OR, and path-length bounds** (#118). Leaving
-  the entry or exit face blank now means "any face" (previously `0` was indistinguishable from
-  "match face 0"); an entry or exit can match a set of faces (`entry={3,4}, exit={5,6}`); and a
-  filter can additionally require a minimum and/or maximum hit-path length (unbounded / exactly N
-  / at most N / a range). Existing single-value `{"entry": 3, "exit": 5}` configs are unaffected.
 
 ### Removed
 - **The unused `norm_mode` config key is dropped** (#116). Its only live branch (`total_pix`) is
@@ -968,12 +968,6 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
 - **A hover tooltip on a multi-part control only responded over its last sub-widget, not the whole
   control** (#114). Affected sliders that combine a drag control with a text-entry box now show
   their tooltip anywhere over the combined widget.
-- Several simulator-internal correctness gaps closed alongside the fixes above (#110): a stale
-  "ghost ray" left over from a previous batch could be read on the next one, a resumed ray's
-  `prev_ray_idx` bookkeeping was fragile across chunk boundaries, and one `CollectData` branch was
-  unreachable by any test. None of these had a demonstrated user-visible symptom on their own; they
-  are recorded here because the fix closed gaps an audit found in the exact code path the other
-  fixes in this release also touch.
 
 ## [4.2.6] - 2026-05-25
 
@@ -1008,24 +1002,7 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   percentile with `target_white` changed from 200 to 135 — chosen after comparing 9
   `(percentile, target)` combinations across 9 scenes for perceptual balance.
 - **A rendered scene exported via `Save → Screenshot` no longer comes out dimmer than what the
-  live preview showed** (#105) — see the Fixed entry below for the actual defect; grouped here
-  because it ships in the same brightness-pipeline rework.
-
-### Fixed
-- **A server process could crash after roughly 31 create/destroy cycles when alternating between
-  three different configs** (#100). Three `LUMICE_Get*Results` C API functions wrote one
-  `LUMICE_*Result` element past the end of the caller's array whenever the result count exactly
-  filled it, corrupting adjacent heap memory; confirmed by ASan as a stack-buffer-overflow and, in
-  production, a SIGSEGV once the heap had shuffled enough for the overwrite to land on a live
-  allocation.
-- **A screenshot exported via `Save` could be noticeably dimmer than the on-screen preview of the
-  same frame** (#105). The export path was missing the auto-EV and anchor/filtered path selection
-  that the live preview already applied; both paths are now built from the same brightness
-  pipeline.
-- **A ray that failed a filter partway through a multi-scattering sequence could still leak into
-  the final rendered image** (#108). The per-ray "failed a filter in an earlier layer" state
-  wasn't tracked across layers, so on a probability-based path continuation such a ray could still
-  land in the main output instead of being routed away from it.
+  live preview showed** (#105, see Fixed below).
 
 ### ⚠️ Breaking Changes
 - **`LUMICE_RawXyzResult`'s `unfiltered_xyz_buffer` / `unfiltered_snapshot_intensity` fields are
@@ -1045,27 +1022,23 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   a deterministic run must set `LUMICE_ServerConfig::sim_seed` instead — the environment variable
   is now silently ignored, not an error.
 
-## [4.2.5] - 2026-05-20
-
 ### Fixed
-- **A ray that grazed the shared edge between two faces after a total-internal-reflection off a
-  raypath `[1,3]` face could escape out the far side of the crystal instead of continuing to
-  reflect** (#92). The edge case was indistinguishable from a legitimate "ray floating off its own
-  source face" using the tolerance's sign alone, so fixing one direction of the ambiguity kept
-  reopening the other; resolved by tracking which face a ray actually came from and applying a
-  different tolerance to that face than to every other candidate face.
-- **A scene mixing a raypath filter with multi-scattering could render at roughly 1/6 the ray
-  throughput of an equivalent scene without the filter's `D` symmetry variant** (#98). Matching a
-  filter against a ray mutated shared per-crystal symmetry state on every single ray; filter
-  matching is now a pure, allocation-free comparison against a precomputed canonical form.
-- **A filter using the `D` (180°-roll-independent) symmetry variant against a pyramid crystal could
-  fail to match raypaths it should have** (#98), because the reflection it relies on was skipped
-  on pyramid (cone) faces.
-- **Two raypaths that are genuinely the same up to symmetry could reduce to two different
-  canonical forms** (#98) when reduction crossed a `D`-symmetry step, breaking the invariant that
-  the same orbit always reduces to the same representative.
-- **The Pyramid Upper/Lower Height slider rows were about 20px narrower than the Height row above
-  them** (#97), from a leftover width-adjustment term in the slider layout formula.
+- **A server process could crash after roughly 31 create/destroy cycles when alternating between
+  three different configs** (#100). Three `LUMICE_Get*Results` C API functions wrote one
+  `LUMICE_*Result` element past the end of the caller's array whenever the result count exactly
+  filled it; the array is caller-stack-allocated (`src/main.cpp`), and ASan confirmed the
+  overwrite as a stack-buffer-overflow. In production it manifested as a SIGSEGV once the stack
+  layout had shifted enough, after roughly 31 lifecycles, for the overwrite to land on live data.
+- **A screenshot exported via `Save` could be noticeably dimmer than the on-screen preview of the
+  same frame** (#105). The export path was missing the auto-EV and anchor/filtered path selection
+  that the live preview already applied; both paths are now built from the same brightness
+  pipeline.
+- **A ray that failed a filter partway through a multi-scattering sequence could still leak into
+  the final rendered image** (#108). The per-ray "failed a filter in an earlier layer" state
+  wasn't tracked across layers, so on a probability-based path continuation such a ray could still
+  land in the main output instead of being routed away from it.
+
+## [4.2.5] - 2026-05-20
 
 ### Changed
 - **A scattering entry's own filter is now also used to gate the simulator's live "unfiltered"
@@ -1096,6 +1069,26 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   **What to do**: recompile against the new header; a caller that doesn't read the new fields is
   unaffected (`face_count == 0` is the old shape).
 
+### Fixed
+- **A ray that grazed the shared edge between two faces after a total-internal-reflection off a
+  raypath `[1,3]` face could escape out the far side of the crystal instead of continuing to
+  reflect** (#92). The edge case was indistinguishable from a legitimate "ray floating off its own
+  source face" using the tolerance's sign alone, so fixing one direction of the ambiguity kept
+  reopening the other; resolved by tracking which face a ray actually came from and applying a
+  different tolerance to that face than to every other candidate face.
+- **A scene mixing a raypath filter with multi-scattering could render at roughly 1/6 the ray
+  throughput of an equivalent scene without the filter's `D` symmetry variant** (#98). Matching a
+  filter against a ray mutated shared per-crystal symmetry state on every single ray; filter
+  matching is now a pure, allocation-free comparison against a precomputed canonical form.
+- **A filter using the `D` (180°-roll-independent) symmetry variant against a pyramid crystal could
+  fail to match raypaths it should have** (#98), because the reflection it relies on was skipped
+  on pyramid (cone) faces.
+- **Two raypaths that are genuinely the same up to symmetry could reduce to two different
+  canonical forms** (#98) when reduction crossed a `D`-symmetry step, breaking the invariant that
+  the same orbit always reduces to the same representative.
+- **The Pyramid Upper/Lower Height slider rows were about 20px narrower than the Height row above
+  them** (#97), from a leftover width-adjustment term in the slider layout formula.
+
 ## [4.2.4] - 2026-05-14
 
 ### Added
@@ -1104,11 +1097,22 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   (#89). When a filter is active, brightness is anchored against the unfiltered ray set so
   toggling a filter on and off doesn't itself change perceived brightness — the dedicated
   "unfiltered" C API fields this depends on ship in this release (see below).
+- **New public C API**: `LUMICE_MAX_ID`, `LUMICE_CrystalKind` + `LUMICE_IsLegalFace`,
+  `LUMICE_RaypathValidationState` + `LUMICE_ValidateRaypathText`, `LUMICE_LensType` +
+  `LUMICE_MaxFov`, and a new `LUMICE_ERR_UNKNOWN` error code (#90) — pure additions, factored out
+  of internal GUI logic so it no longer needs to reach past the C API into core headers; nothing
+  changes for an existing caller.
 
 ### Changed
 - **Raypath symmetry matching is redesigned for correctness**: the `D` (roll-mirror) filter
   operator now uses a closed-form roll-bucket calculation instead of an approximate scheme, and a
   GUI tooltip explains when `D` isn't applicable to the current crystal (#88).
+
+### ⚠️ Breaking Changes
+- **`LUMICE_RawXyzResult` gains `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity`
+  fields** (#89), the readout Adaptive Brightness's filter-independent anchor (above) is built on.
+  **What to do**: recompile against the new header; a caller that never uses Adaptive Brightness is
+  unaffected.
 
 ### Fixed
 - **The `B` (mirror) filter symmetry operator did not correctly swap pyramid faces** (#88), so a
@@ -1116,17 +1120,6 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
 - **Sampling a crystal orientation near the poles with a negative-mean Rayleigh (or a mean below
   the equator) distribution could fold into the wrong hemisphere or the wrong azimuth** (#88), a
   latent bug in the same routine that couples roll to latitude-folding.
-
-### ⚠️ Breaking Changes
-- **`LUMICE_RawXyzResult` gains `unfiltered_xyz_buffer` and `unfiltered_snapshot_intensity`
-  fields** (#89), the readout Adaptive Brightness's filter-independent anchor (above) is built on.
-  **What to do**: recompile against the new header; a caller that never uses Adaptive Brightness is
-  unaffected.
-- **New public C API**: `LUMICE_MAX_ID`, `LUMICE_CrystalKind` + `LUMICE_IsLegalFace`,
-  `LUMICE_RaypathValidationState` + `LUMICE_ValidateRaypathText`, `LUMICE_LensType` +
-  `LUMICE_MaxFov`, and a new `LUMICE_ERR_UNKNOWN` error code (#90) — pure additions, factored out
-  of internal GUI logic so it no longer needs to reach past the C API into core headers.
-  **What to do**: recompile against the new header; nothing else changes for an existing caller.
 
 ## [4.2.3] - 2026-05-07
 
@@ -1159,16 +1152,16 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   (#87), and the Entry-Exit filter subpanel's field styling (validation coloring, labels, a
   Remove Filter button) is aligned with the Raypath subpanel's.
 
-### Fixed
-- **The Entry-Exit filter's crystal-card summary showed `?` instead of an arrow** (`EE:2?5`
-  instead of `EE:2->5`) (#87). The bundled font has no glyph for `→` (U+2192); replaced with the
-  ASCII `->`.
-
 ### Removed
 - **The Direction filter type is removed from the GUI's filter-type selector** (#87). The core
   JSON path is unchanged — a hand-written `"type": "direction"` filter still loads and behaves the
   same — but the GUI editor no longer offers it, and an existing `.lmc` containing one degrades to
   an empty Raypath filter with a warning when reopened.
+
+### Fixed
+- **The Entry-Exit filter's crystal-card summary showed `?` instead of an arrow** (`EE:2?5`
+  instead of `EE:2->5`) (#87). The bundled font has no glyph for `→` (U+2192); replaced with the
+  ASCII `->`.
 
 ## [4.2.2] - 2026-04-29
 
