@@ -495,6 +495,10 @@ script prints the path for whichever group it ran.
   there is no `push` event at all, so a guard of `github.event_name == 'push'` means "`main` only"
   (which `benchmark-summary` genuinely wants, since it writes the gh-pages benchmark history) and
   is a silent loss of PR coverage anywhere it was meant to mean "always".
+  The `on:` block's own comment in `ci.yml` is the authority on this — it is the thing that has to
+  be right for the workflow to behave, and it carries the details this summary leaves out (what the
+  duplication cost, and why tag pushes no longer run this workflow). Change the triggers and that
+  comment is what you edit; this paragraph is a summary that has to be re-checked against it.
 
 ## Documentation Index (`doc/`)
 
