@@ -49,6 +49,31 @@ has no independent user effect). **Split** one PR into several entries when it b
 unrelated user-visible changes. The test is the same one as above: does splitting or merging
 change what a reader needs to know about one perceptible behavior?
 
+### Which section an entry goes in
+
+`Fixed` is for a change to **what the program does** with the same input: it used to hang,
+crash, drop rays, show wrong pixels, report a wrong number, or fall back to a default, and now
+it does not. `Changed` is for everything that was already working and is now different or
+better — faster, clearer, differently shaped output.
+
+Two boundary forms have each been mis-sorted once during backfill, so they are stated here
+rather than re-decided per version:
+
+- **A guard or warning added in the editor, with the engine untouched**, is `Changed`, not
+  `Fixed`. PR #169 is the worked example: the GUI now locks the last multi-scattering layer's
+  probability and warns about a zero middle layer, but the PR states "core 渲染语义零改动" and
+  every pre-existing config still renders byte-identically. Nothing the program did was
+  corrected — a way to ask it for something useless was closed off. The tell is the question
+  *does an unchanged config produce different output?* If no, it is `Changed` however much the
+  entry's prose talks about what used to go wrong silently.
+- **A user-visible fault that a redesign incidentally removes** is `Fixed`, and gets its own
+  bullet there, even when the redesign itself is an `Added` entry. Keep the two claims
+  separate: the feature is what you can now do, the fix is what no longer breaks.
+
+A bullet that bundles several sub-claims across this line should be split — unless the split
+would separate parts of one visual change a reader perceives as a single thing, in which case
+keep it whole and let the dominant claim pick the section.
+
 ### Breaking changes
 
 A change to a default value, to a config-file semantic, or to the C API's ABI or behavior gets
@@ -658,8 +683,7 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   `Custom…` entry that opens a wavelength/weight table editor (add/remove rows, a preset seed, and
   a Reset button back to that seed), so a discrete custom spectrum — previously only reachable by
   hand-editing the config JSON — can be built and saved from the GUI. Round-trips through `.lmc`
-  files and core JSON configs. Incidentally fixes a pre-existing bug where importing a legacy
-  hand-written discrete-spectrum config silently dropped the spectrum on load.
+  files and core JSON configs.
 
 ### Changed
 - **Multi-scattering layer `prob` footguns are now guarded in the GUI** (#169). Setting the
@@ -686,6 +710,9 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   values directly.
 
 ### Fixed
+- **A legacy hand-written discrete-spectrum config lost its spectrum when loaded** (#168, #173).
+  Importing such a config silently dropped the discrete spectrum and fell back to the default, so
+  the render you got was not the one the file described. It now loads as written.
 - **Filters with multiple OR'd raypaths or several entry/exit conditions stalled the GUI while
   dragging** (#172). Programmatic filter commits had two paths — a fast typed-struct path and a
   slow, string-based JSON path — and any filter beyond a single plain raypath fell onto the slow
