@@ -1476,7 +1476,7 @@ step:
    that is already gone. Rerunning without reading the durations is the failure mode this section
    exists to name and stop.
 3. **Decide what to trim or fix from the ranked list**, using the same cost-vs-value reasoning as
-   §7.3 and the AGENTS.md completeness-claim discipline it points at: a slow case earns its place by
+   §7.3 and the AGENTS.md completeness-claim discipline: a slow case earns its place by
    the defects it can catch, not by having existed since before the budget was tight.
 4. **Reach for the budget itself last, not first.** Raising `timeout-minutes` on either job is an
    owner decision, not an implementer's call to make locally — it converts "our suite grew past what
