@@ -107,6 +107,17 @@ Checks:
      the rule" are different facts and get different exits. The next rule's
      author should reuse that channel rather than invent a second one — said by
      position, because a rule number written here rots the moment one is added.
+  15. msvc-string-literal-limit — no raw string literal under src/ may exceed
+     16384 bytes of body. MSVC caps a single string literal at that size and
+     reports C2026 ("string too big, trailing characters truncated"); GCC,
+     Clang and VS 2026 do not, so the failure is invisible on every leg of CI
+     except the one that publishes Windows binaries. It has happened once: the
+     GLSL fragment-shader sources embedded in src/gui/preview_renderer.cpp grew
+     past the cap across many small shader edits and broke the release build
+     with nothing red beforehand. The fix is free — adjacent string literals
+     concatenate at compile time, so splitting one literal into two changes not
+     a single byte of the program — which is exactly why the cap is worth
+     pinning mechanically instead of remembering.
 
 Add a new check as a function returning a list of Violation and append it to
 CHECKS, and add a numbered entry above. Keep each check deterministic and
@@ -140,6 +151,20 @@ CXX_SUFFIXES = {".cpp", ".cc", ".hpp", ".h", ".mm", ".inl"}
 # file were written and validated against host C++ only, and sweeping .cu/.metal
 # into all of them at once would change ten rules' scope as a side effect of
 # adding one. Widen CXX_SUFFIXES itself only after auditing each check.
+#
+# TWO checks share this set today — no-bare-print and msvc-string-literal-limit —
+# so a change here moves both, and both must be re-audited before it lands. The
+# name still says "print" because it was written for one consumer; renaming it to
+# something scope-neutral is a real debt, deliberately deferred rather than paid
+# on the release-unblocking change that added the second consumer. The trigger to
+# pay it: a THIRD consumer. At that point a name that describes only the first
+# one has stopped being a historical accident and started being misleading, and
+# the rename should be done then rather than re-argued.
+#
+# That same trigger covers a second debt, so the two get settled in one pass
+# rather than being rediscovered separately: the two consumers also carry a
+# duplicated `sorted(SRC.rglob("*"))` + suffix-filter walk. Two inlined copies
+# are cheaper to read than a helper; a third is the point where the helper wins.
 PRINT_SCAN_SUFFIXES = CXX_SUFFIXES | {".cu", ".cuh", ".metal"}
 
 # The only two translation units under src/ allowed to write to a stdio stream.
@@ -185,8 +210,16 @@ def strip_comments(text: str) -> str:
 
     Known limitation: C++11 raw string literals (R"delim(...)delim") are not
     parsed specially — a raw string containing `//`, `/*`, or a getenv("LUMICE_…")
-    fragment could be mis-handled. The codebase currently uses none, so this is a
-    documented gap, not an active false-positive source.
+    fragment could be mis-handled. The codebase DOES use them (the embedded GLSL
+    sources in src/gui/preview_renderer.cpp and src/gui/crystal_renderer.cpp), so
+    this is an active gap, not a theoretical one. What saves it today is an
+    accident: `R"delim(` opens with a quote, so the body is read as an ordinary
+    string literal and preserved verbatim — until a body containing an odd number
+    of `"` characters desyncs the state machine, after which a `//` inside the
+    body is treated as a real comment and blanked. The msvc-string-literal-limit
+    rule therefore does NOT come through here: it needs the closing delimiter
+    intact to find a literal at all, and a blanked one makes an oversized literal
+    disappear from the scan rather than report.
     """
     out = []
     i, n = 0, len(text)
@@ -1216,6 +1249,82 @@ def check_no_bare_print() -> list[Violation]:
     return out
 
 
+# --- msvc-string-literal-limit ----------------------------------------------
+#
+# MSVC caps one string literal at 16384 bytes and reports C2026 past it. GCC,
+# Clang and VS 2026 accept more, so a literal that grows over the line compiles
+# everywhere a developer looks and fails only on the leg that ships Windows
+# binaries — where it stops a release rather than a commit. The number is the
+# observed C2026 trigger point, not a style budget.
+MSVC_STRING_LITERAL_LIMIT = 16384
+
+# R"delim( ... )delim" with the delimiter back-referenced, so the closing marker
+# must match the opening one. Non-greedy body + DOTALL: a literal spans lines,
+# and the first matching close terminator ends it.
+#
+# Known gaps, stated rather than papered over (the checker is the rule):
+#   - the delimiter charset is [A-Za-z0-9_]; C++ allows a few punctuation
+#     characters there that this pattern would not match.
+#   - a literal produced by macro expansion or by the preprocessor's # operator
+#     is not visible to a source-text scan at all.
+#   - `R"` appearing inside a line comment or inside another string is read as a
+#     literal opener. That direction fails toward a false positive, which someone
+#     investigates; the misses above fail toward green, which nobody does.
+#   - the body is measured after the file has been decoded with
+#     errors="replace", the reading style every scanning check in this file uses.
+#     A byte sequence that is not valid UTF-8 becomes U+FFFD and re-encodes to
+#     three bytes, so a file carrying one would be measured against a count that
+#     is not its size on disk. Left as is rather than special-cased here: the
+#     divergence is shared with the other checks, and pinning it in one of them
+#     would leave the others reading differently from their sibling.
+RAW_STRING_LITERAL = re.compile(r'R"([A-Za-z0-9_]{0,16})\((.*?)\)\1"', re.DOTALL)
+
+
+def check_msvc_string_literal_limit() -> list[Violation]:
+    """No raw string literal under src/ may exceed MSVC's 16384-byte cap.
+
+    Deliberately reads the RAW file text, not code_lines()/strip_comments().
+    code_lines() is line-oriented and a literal spans hundreds of lines, so there
+    is nothing for it to measure. strip_comments() is length-preserving, so it
+    would not distort the byte count directly — the harm is one step removed and
+    worse: it does not parse raw strings, so a body carrying an odd number of `"`
+    characters desyncs its state machine, and a `//` after that point is blanked
+    as if it were a comment. Blank the closing `)delim"` and the literal is not
+    found at all, which reports as clean.
+
+    Reported at the literal's OPENING line — the line a reader has to go edit.
+    MSVC instead reports the line where its own buffer ran out, deep inside the
+    literal, which is why the two line numbers do not agree.
+    """
+    out: list[Violation] = []
+    # Same walk shape as check_no_bare_print(), for the same reason: cxx_sources()
+    # is bound to CXX_SUFFIXES and would skip .cu/.metal. Not factored into a
+    # shared helper at two call sites — see the PRINT_SCAN_SUFFIXES note.
+    for path in sorted(SRC.rglob("*")):
+        if path.suffix not in PRINT_SCAN_SUFFIXES or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in RAW_STRING_LITERAL.finditer(text):
+            size = len(match.group(2).encode("utf-8"))
+            if size <= MSVC_STRING_LITERAL_LIMIT:
+                continue
+            lineno = text.count("\n", 0, match.start()) + 1
+            out.append(
+                Violation(
+                    path,
+                    lineno,
+                    "msvc-string-literal-limit",
+                    f"raw string literal body is {size} bytes, over MSVC's "
+                    f"{MSVC_STRING_LITERAL_LIMIT}-byte cap for a single literal "
+                    "(C2026: string too big, trailing characters truncated). Split it "
+                    'into adjacent literals — `)delim"` on one line, `R"delim(` on the '
+                    "next — which the compiler concatenates back into the identical "
+                    "bytes. src/gui/preview_renderer.cpp carries a worked example.",
+                )
+            )
+    return out
+
+
 # --- user-defaults-single-write-path ---------------------------------------
 #
 # The personal-defaults override file has exactly one writer, and the rule exists
@@ -1649,6 +1758,7 @@ CHECKS = [
     check_no_default_constructed_crystal_slots,
     check_gui_test_suite_args_sync,
     check_no_bare_print,
+    check_msvc_string_literal_limit,
     check_user_defaults_single_write_path,
     check_pytest_invocation_marker,
 ]
@@ -1675,7 +1785,8 @@ def main() -> int:
         "reconciler-widget-include, using-namespace, struct-layout parity, no-config-by-value-copy, "
         "gui-state-field-tier-registration, no-msvc-unsafe-builtin, "
         "no-default-constructed-crystal-slots, gui-test-suite-args-sync, no-bare-print, "
-        "user-defaults-single-write-path, pytest-invocation-marker)."
+        "msvc-string-literal-limit, user-defaults-single-write-path, "
+        "pytest-invocation-marker)."
     )
     return 0
 

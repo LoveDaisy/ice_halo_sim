@@ -488,7 +488,17 @@ script prints the path for whichever group it ran.
 - `config.json`, `test.json`, `scratchpad/`, remote test output files, and most generated artifacts are intentionally git-ignored.
 - Do not use `git add -f` to force-track ignored files. If a file is ignored and you are unsure, stop and ask first.
 - Reference images under `test/e2e-correctness/references/*.jpg` and `test/gui/references/*.jpg` are explicitly unignored and may be tracked normally.
-- CI runs build and unit tests on branch pushes; E2E tests run on PRs and `main`.
+- CI (`.github/workflows/ci.yml`) triggers on `pull_request` and on `push` **filtered to `main`**.
+  Every job therefore runs exactly once per commit: once while the change is a PR, once again when
+  it lands on `main`. The filter is what makes that true — without it a push to a PR branch fires
+  both events and every unguarded job runs twice. The consequence when adding a job: on a PR branch
+  there is no `push` event at all, so a guard of `github.event_name == 'push'` means "`main` only"
+  (which `benchmark-summary` genuinely wants, since it writes the gh-pages benchmark history) and
+  is a silent loss of PR coverage anywhere it was meant to mean "always".
+  The `on:` block's own comment in `ci.yml` is the authority on this — it is the thing that has to
+  be right for the workflow to behave, and it carries the details this summary leaves out (what the
+  duplication cost, and why tag pushes no longer run this workflow). Change the triggers and that
+  comment is what you edit; this paragraph is a summary that has to be re-checked against it.
 
 ## Documentation Index (`doc/`)
 

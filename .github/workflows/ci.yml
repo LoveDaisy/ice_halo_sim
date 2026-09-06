@@ -1,7 +1,28 @@
 name: CI
 
 on:
+  # `push` is filtered to main on purpose. Without a branch filter, a push to a
+  # PR branch fires BOTH `push` and `pull_request`, so every job without a
+  # job-level `if:` ran twice on the same commit — measured at ~18.4 minutes of
+  # duplicated machine time and 4 concurrency slots per PR. Filtering here fixes
+  # that at the source, for every job at once, instead of per-job guards that
+  # each have to be kept in sync.
+  #
+  # The consequence to keep in mind when adding a job: on a PR branch there is
+  # now NO push event. A job that wants to run on PRs must therefore have either
+  # no job-level `if:` at all, or one that admits `pull_request` — a guard of
+  # `github.event_name == 'push'` now means "main only", which is a legitimate
+  # thing to want (see benchmark-summary) but a silent loss of coverage if it
+  # was meant to mean "always".
+  #
+  # A branch filter also drops tag pushes, which the unfiltered `push:` used to
+  # catch: `v*` tags no longer run this workflow. That is intended, not lost
+  # coverage. A release tag is cut from a commit already on main, so this
+  # workflow has already run on that exact commit — a tag-push run was a third
+  # copy of the same result. Release artifacts are gated by release.yml, which
+  # keeps its own `push: tags: ['v*']` trigger and is unaffected by this filter.
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -12,10 +33,14 @@ env:
   CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm_cache
 
 jobs:
-  # Build + unit tests run on every push (all branches).
+  # Build + unit tests run once per PR and once per push to main.
   # E2E tests run separately on pull_request and push to main (see e2e-test job).
+  #
+  # No job-level `if:` — the workflow-level `on: push: branches: [main]` /
+  # `pull_request` pair already yields exactly one run per commit. The guard that
+  # used to sit here (`github.event_name == 'push'`) predates that filter and now
+  # would mean "never run on a PR".
   build:
-    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -252,7 +277,7 @@ jobs:
           retention-days: 7
 
   # CUDA compile-only: nvcc actually compiles the .cu translation units on every
-  # push/PR. No GPU is required (nvcc emits PTX/object from CPU). Runtime and
+  # PR and every push to main. No GPU is required (nvcc emits PTX/object from CPU). Runtime and
   # parity validation still need a GPU runner and are intentionally
   # out of scope here — see issue.md AC6: this job must not be read as
   # "CUDA all green". The job exists to catch nvcc-only compile/syntax bugs
@@ -349,8 +374,9 @@ jobs:
   # without it, the scrum-309 Windows-gated build fixes (spdlog/fmt/nvcc)
   # would have zero automated regression protection on main.
   #
-  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
-  # triggers so both PRs and branch pushes run this gate.
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
   windows-cuda-compile:
     runs-on: windows-2022
     timeout-minutes: 30
@@ -455,8 +481,9 @@ jobs:
   # break surfaced only when someone tried -b by hand. Fixing the file without
   # adding this gate would just restart that clock.
   #
-  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
-  # triggers so both PRs and branch pushes run this gate.
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
   bench-compile:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -506,8 +533,9 @@ jobs:
   # correctness, which is exactly the defect class above. Runtime behavior under the
   # shared flavor is verified locally, not here.
   #
-  # No job-level `if:` — relies on the workflow-level `on: push / pull_request`
-  # triggers so both PRs and branch pushes run this gate.
+  # No job-level `if:` — relies on the workflow-level `on: push: branches: [main]`
+  # / `pull_request` triggers, so this gate runs once per PR and once per push to
+  # main.
   shared-gui-test-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -788,6 +816,9 @@ jobs:
           esac
         timeout-minutes: 15
 
+  # The `push` guard STAYS here, and now reads as "main only" — which is the
+  # intent: this job publishes the benchmark history to gh-pages, and a PR must
+  # not write to it.
   benchmark-summary:
     if: always() && github.event_name == 'push'
     needs: [build]
@@ -987,8 +1018,9 @@ jobs:
           summary-always: true
           max-items-in-chart: 100
 
+  # No job-level `if:` — see the note on the `build` job: the workflow-level
+  # trigger pair already gives one run per PR and one per push to main.
   format-check:
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -1001,8 +1033,8 @@ jobs:
   # Engineering-policy gate (separate from format-check above): env-knob
   # centralization + registration, GUI/core API boundary, no `using namespace`.
   # Version-independent — the executable half of doc/env-var-policy.md + AGENTS.md.
+  # No job-level `if:` — see the note on the `build` job.
   policy:
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
