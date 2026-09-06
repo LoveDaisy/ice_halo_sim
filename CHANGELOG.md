@@ -123,142 +123,278 @@ it was thinking of and false of the C struct beside it.
 ## [Unreleased]
 
 ### Added
-- **`grid.outline` now draws**: the render config's celestial-outline flag draws a line
-  along the horizon (altitude 0) in CLI/core renders, where for four years it was parsed,
-  validated, serialized and then ignored. The line is placed from the same per-pixel inverse
-  projection the render-domain mask is built from — not a second copy of that math — and is
-  clipped to the hemisphere `visible` admits, so a `visible: upper` render shows the horizon as
-  the edge of its sky. Its width follows the local degrees-per-pixel (the preview shader's own
-  rule), so it stays a couple of pixels across the whole lens/FOV range, and its colour is the
-  GUI overlay's horizon red blended in linear RGB before the sRGB transfer curve. **The default
-  changed to off** — see Changed below.
-- **GUI background colour reaches the picture**: the preview, the three PNG exports
+- **Lens border ring for fisheye projections** (#283). Overlay gains a `Lens Border` row (colour +
+  toggle, off by default) that draws the projection's own image-circle boundary — equal-area,
+  equidistant, orthographic and all four dual-fisheye variants — so a halo that does not fill the
+  frame no longer looks indistinguishable from the black surround outside the lens's valid domain.
+  `linear`, single-lens `fisheye_stereographic`, `rectangular` and `globe` are unaffected: the first
+  three already fill the frame at every reachable field of view, and `globe` is excluded as a
+  product choice despite having a bounded image circle of its own.
+- **GUI background colour reaches the picture** (#286). The preview, the three PNG exports
   (screenshot / dual-fisheye / equirectangular) and the frame baked into a saved `.lmc` now all
-  paint the configured background colour behind the halo. Previously only the CLI did, so the GUI
+  paint the configured background colour behind the halo — previously only the CLI did, so the GUI
   colour picker moved and nothing on screen changed. The colour is composited additively in linear
   RGB before the sRGB transfer curve, which makes a pixel carrying no halo energy render as exactly
   the sRGB triple the picker showed; it is painted only where the lens actually images sky, so the
-  black surround outside a fisheye's image circle stays black. Expect halo-against-sky contrast to
-  drop against a bright background — that is what the sRGB curve does, and EV is its control.
-- **Raypath-colour (composite) display honours the background colour**: with raypath
-  colouring on, the picture now carries the same background as with it off. Previously the
+  black surround outside a fisheye's image circle stays black.
+- **Raypath-colour (composite) display honours the background colour** (#286). With raypath
+  colouring on, the picture now carries the same background as with it off — previously the
   composite was baked server-side with a black surround, so toggling colouring changed the
-  background out from under the user — the visible inconsistency this closes. The colour is added
-  in linear RGB after all exposure handling and before the sRGB transfer curve, only on the pixels
-  the lens actually images, so it agrees byte-for-byte with the mono path outside the halo and
-  leaves the region outside a fisheye's image circle black.
-- **One new C API setter** (ABI addition, non-breaking):
-  `LUMICE_SetCompositeBackground(server, background_linear)` — a display-time push of the
-  composite path's additive linear-RGB background, shaped exactly like `LUMICE_SetCompositeExposure`
-  (no epoch bump, no accumulator reset, no re-simulation; the next acquired result frame re-bakes
-  the composite). All-zero, the default, is an algebraic no-op, so a consumer that never calls it
-  sees byte-identical composites.
-- **One new C API pure function** (ABI addition, non-breaking):
-  `LUMICE_XyzToSrgbUint8WithBackground(xyz_in, out, pixel_count, intensity_scale, background_linear)`
-  — the existing `LUMICE_XyzToSrgbUint8` with an additive linear-RGB background composited before
-  the final clamp and gamma, for a consumer baking a frame that has to match what the renderer put
-  on screen. The inverse sRGB transfer curve a caller needs to convert a picker colour into that
-  `background_linear` argument (or into `LUMICE_RenderParam::background`) stays a C++-only inline
-  function, `lumice::SrgbToLinearRgb` in `src/util/color_space.hpp` — no new public C API for it.
-- **`ev_mode`** -- a first-class choice between the two exposure anchors, reaching core
-  `RenderConfig`, the C API, `.lmc` documents and CLI JSON. `"relative"` (the DEFAULT) anchors
-  the image to its own P99, which is what the GUI preview has always displayed: the picture
-  keeps its look as `ray_num` grows, and correspondingly the config alone does not determine
-  output brightness. `"absolute"` anchors to the energy the light source EMITTED, so two renders
-  at the same EV are comparable -- the behavior the entry below introduced unconditionally.
-  A config with no `ev_mode` key, and one with a misspelled value, both render `relative`.
-  **This replaces that entry's default rather than adding to it**: the CLI was unconditionally
-  absolute for one release cycle, so an existing config re-rendered now switches to the P99
-  self-anchor unless it states `"ev_mode": "absolute"`. Which anchor an image was made with is
-  no longer inferable from the tool version; it is in the document.
-  On the composite (raypath-colour) path the same field selects between the participating-pixel
-  self-anchor and the mono path's absolute scale -- the very same scalar, shared rather than
-  re-derived, so mono and composite stay comparable at one EV.
+  background out from under the user.
+- **Two new C API entry points for the background colour** (#286, ABI additions, non-breaking):
+  `LUMICE_SetCompositeBackground(server, background_linear)`, a display-time push shaped exactly
+  like `LUMICE_SetCompositeExposure` (no epoch bump, no re-simulation; all-zero is an algebraic
+  no-op, so a caller that never calls it sees byte-identical composites), and
+  `LUMICE_XyzToSrgbUint8WithBackground(...)`, the existing `LUMICE_XyzToSrgbUint8` with an additive
+  linear-RGB background composited before the final clamp and gamma.
+- **`ev_mode`** (#287, #299) — a first-class choice between two exposure anchors, reaching core
+  `RenderConfig`, the C API, `.lmc` documents and CLI JSON. `"absolute"` anchors to the energy the
+  light source EMITTED, so two renders at the same EV are directly comparable. `"relative"` (the
+  DEFAULT) anchors to the P99 radiance of a fixed, full-sky reference buffer built for the scene —
+  the same anchor the GUI preview has always used — so it does not depend on which view, lens,
+  `visible` clip or output resolution a particular render asks for; `ray_num` still co-determines
+  it, since the anchor is a statistic over the accumulated simulation. A config with no `ev_mode`
+  key, or a misspelled value, renders `relative`. On the composite (raypath-colour) path the same
+  field selects between the participating-pixel self-anchor and the mono path's absolute scale,
+  sharing one scalar rather than re-deriving it.
   **ABI**: `LUMICE_RenderParam` gains a trailing `int ev_mode` (`LUMICE_EV_MODE_RELATIVE` = 0,
-  `LUMICE_EV_MODE_ABSOLUTE` = 1) and `LUMICE_API_VERSION` moves 415 -> 416. The field is
-  APPENDED, so every existing field keeps its offset, but `sizeof` grows: a caller that was not
-  recompiled hands the API a shorter struct. Recompile against the new header. RELATIVE == 0
-  keeps the documented default reachable from a zero-initialized struct.
-- **`LUMICE_RawXyzResult.emitted_energy`** (C API): the total spectral energy the light
-  source emitted into a snapshot -- the quantity the renderer now normalizes by. Raw total,
-  unlike the neighbouring `snapshot_intensity`, which is a per-pixel figure; and a different
-  measurement, not a rescaling of it, since one counts what went in and the other what
-  landed. A consumer reproduces the renderer's own scale as
-  `intensity_factor * kNormScale * total_pixels / emitted_energy`. The field occupies
-  alignment padding that already existed before `epoch`, so `sizeof(LUMICE_RawXyzResult)`
-  stays 64 bytes and every existing field keeps its offset -- a caller compiled against the
-  old header is unaffected, and one recompiled against the new one gains a field without
-  relinking anything else.
+  `LUMICE_EV_MODE_ABSOLUTE` = 1). See Breaking Changes below for what selecting each mode does to
+  an existing config's brightness.
+- **`LUMICE_RawXyzResult.emitted_energy`** (#287, C API, ABI addition): the total spectral energy
+  the light source emitted into a snapshot — the quantity `absolute` mode normalizes by. A raw
+  total, unlike the neighbouring per-pixel `snapshot_intensity`, and a different measurement, not a
+  rescaling of it, since one counts what went in and the other what landed. A consumer reproduces
+  the renderer's own absolute scale as `intensity_factor * kNormScale * total_pixels /
+  emitted_energy`. Occupies pre-existing alignment padding, so `sizeof(LUMICE_RawXyzResult)` is
+  unchanged.
+- **`LUMICE_RawXyzResult.anchor_l99_sky` and `.axis_solid_angle`** (#299, C API, ABI additions):
+  the two quantities a consumer needs to reproduce the `relative`-mode scale itself —
+  `anchor_l99_sky` is the P99 radiance of the fixed full-sky reference buffer (identical on every
+  row of one call), and `axis_solid_angle` is the solid angle this renderer's own on-axis pixel
+  subtends: `scale = intensity_factor * TargetWhiteToLinear(135) / (axis_solid_angle *
+  anchor_l99_sky)`. `anchor_l99_sky` grows the struct (64 -> 72 bytes) — a caller that was not
+  recompiled hands the API a shorter buffer; `axis_solid_angle` then lands in the padding that
+  growth leaves behind, so it does not grow the struct a second time.
+- **Core-side annotation layer**: the CLI renderer can now draw every auxiliary line and marker the
+  GUI preview draws, from one shared implementation instead of two (#292, #305). A `render[]` entry
+  can ask for parallels (`grid.elevation`), meridians (`grid.longitude`, new), circles of angular
+  distance from the sun (`grid.angular_dist`, renamed from `grid.central` — see Breaking Changes), a
+  front-hemisphere clip (`front`, new), text labels for each of those families
+  (`horizon_label` / `grid_label` / `angular_dist_label`, new), and — generalizing the existing
+  zenith/nadir ring into a named list — up to six sky-direction markers (`grid.markers`: zenith,
+  nadir, sun, subsun, anthelion, antisolar), each independently switched, coloured and drawn, with a
+  matching `[Look At ▾]` view preset in the GUI's View group. All of this previously existed in the
+  GUI only, or not at all in this generalized form; an exported config now reproduces it. New C API:
+  `LUMICE_ComputeAnnotationOverlay` / `LUMICE_ReleaseAnnotationOverlay` (pure, side-effect-free
+  geometry and label anchors for one view) and `LUMICE_ResolveAnnotationMarkerDirection`.
+  **ABI**: a series of `LUMICE_RenderParam` field additions across this arc — `elevation_grid`
+  becoming rendered, `longitude_grid`, `zenith_nadir`, `front`, the three `*_label` switches, and
+  `markers` / `markers_count` / `markers_opacity` / `markers_radius_px` — every one appended so
+  existing fields keep their offsets, and every one opt-in: a zero-initialized struct draws none of
+  them, matching what a config with no `grid` object already rendered. `zenith_nadir` and the
+  `.lmc` `overlay_zenith_nadir_*` keys keep working unchanged; where both `zenith_nadir` and a
+  non-empty `markers` list are present, `markers` wins.
+- **CLI `--workers N`**, and a matching GUI personal default (#314). Both front ends previously left
+  worker count at its zero-initialized automatic default; `--workers` now lets a user pick it
+  explicitly (rejected outright, not silently clamped, if it is not a positive integer), and the
+  GUI Settings panel can save a preferred value the same way it saves other personal defaults. See
+  Breaking Changes below for the new automatic default this doesn't override.
+- **GUI "Use GPU" can be saved as a personal default** (#311). Previously the checkbox reset to
+  legacy CPU on every launch even after an explicit choice; it can now be saved via Settings like
+  other personal defaults. The factory default is unchanged (CPU), and a saved GPU preference on a
+  machine with no GPU backend available is silently ignored by the existing runtime fallback.
 
 ### Changed
-- **`render[].grid.outline` now defaults to `false`**. It defaulted to `true` for as long
-  as it existed, which cost nothing while nothing drew it; now that it draws, leaving it on would
-  put a horizon line into every existing config that never asked for one. Add `"horizon": true` to
-  a renderer to get the line back. Turning an annotation on for every render is a product decision
-  nobody has made, so the default states the one thing that is certain: draw it when asked.
-- **`render[].grid.central` / `grid.elevation` documented as not rendered**. Both keys are
-  still parsed, validated and round-tripped, and no code draws either — they are now labelled that
-  way in `doc/configuration.md` (and `_zh`) instead of sitting in the same table as the keys that
-  do something, and the shipped `examples/config_example.json` no longer demonstrates a 22 deg
-  circle that never appears in the output.
-- **Breaking behavior change (CLI image brightness): display normalization is now absolute.**
-  The renderer divides by the energy the light source EMITTED, where it used to divide by the
-  energy that LANDED on a pixel. The old denominator moved with the scene -- add a filter, or
-  point a narrower lens at the sky, and the image was silently re-brightened by exactly the
-  amount that had been removed, so two renders at the same EV could not be compared. The new
-  one is fixed by the source and the ray budget alone.
-  **Re-running an existing config produces a darker image**, by exactly the fraction of
-  emitted energy that reached the frame: negligible for a full-sphere view (~0.98, under 0.03
-  stop), around 0.4-0.6 for a 90-120 degree lens (~1 stop), and as low as 0.18 for a narrow
-  lens behind a filter (~2.5 stop). Raise EV to taste; the darkening is the change working,
-  not a regression. Cross-lens comparability is a separate matter and is not claimed here:
-  two projections still differ by a per-projection solid-angle constant.
-  The GUI is unaffected -- its display path normalizes through its own auto-EV anchor and
-  never used this scale. `kNormScale` is unchanged at 0.08: it was calibrated on full-sphere
-  views, which is where the two denominators nearly coincide.
-- **Breaking behavior change (CLI image brightness): display normalization now supports an
-  absolute anchor, selected by the `ev_mode` entry above (default remains `relative`, i.e.
-  unchanged pixels for an existing config).** The renderer divides by the energy the light
-  source EMITTED, where it used to divide by the energy that LANDED on a pixel. The old denominator
-  moved with the scene -- add a filter, or point a narrower lens at the sky, and the image
-  was silently re-brightened by exactly the amount that had been removed, so two renders at
-  the same EV could not be compared. The new one is fixed by the source and the ray budget
-  alone.
-  **Re-running an existing config in `"absolute"` mode produces a darker image**, by exactly
-  `landed_fraction` (energy landed / energy emitted) -- a per-scene constant, independent of
-  `ray_num`. The general law: `new_scale / old_scale ≡ landed_fraction`, and a caller can
-  compute their own scene's shift from two `LUMICE_RawXyzResult` fields
-  (`snapshot_intensity`, `emitted_energy`) without re-deriving anything. Measured spans across
-  this feature's calibration corpus, in stops (`log2(landed_fraction)`):
-  full-sphere view, no filter: **-0.038 .. -0.002**; narrow lens (90-120 degree), no filter:
-  **-0.67 .. -1.25**; filter active / high `ms_prob`: **-0.97 .. -10.47**. The darkening is the
-  change working, not a regression -- raise EV to taste. Cross-lens comparability is a
-  separate matter and is not claimed here, by design: two projections still differ by a
-  per-projection solid-angle constant, and fixing that would re-weight every pixel by its own
-  solid angle and change each image's appearance, which is out of scope (see
-  `doc/ev-pipeline-architecture.md` §7.3).
-  The GUI is unaffected in either mode's pixels for an existing document -- see the `ev_mode`
-  entry above for what changed in the GUI (a Mode control, not a pixel default). `kNormScale`
-  is unchanged at 0.08: it was calibrated on full-sphere views, which is where the two
-  denominators nearly coincide (`landed_fraction` median 0.980; re-deriving it would move
-  full-sphere scenes by only +0.029 stop, at the cost of re-shooting every reference image).
-  For an illuminant spectrum the emitted energy is charged at the band expectation of the
-  SPD rather than at the weight of the wavelength each batch happens to draw, so the same
-  config renders at the same brightness at every seed.
-  Separately, an undersampled scene darkens as `ray_num` grows under **either** denominator
-  (measured N-scaling slope: -1.026 landed-weight, -1.027 emitted-energy) -- an honest
-  Monte-Carlo estimator property, not something this change introduces or fixes. See
-  `doc/ev-pipeline-architecture.md` §7.4 before reporting it as a regression.
+- **Cylinder crystal height can go as low as `1e-4`**, down from `0.01` (#301) — the GUI slider's
+  floor was far above core's actual `h > 1e-5` acceptance, so this range was reachable by editing a
+  config by hand but not from the slider. Several sliders' display formats are also corrected
+  (`axis` fields, `sun.diameter`) where the digit shown did not change finely enough to track the
+  slider's own step size, making the control look frozen mid-drag.
+- **Legacy CPU backend throughput improved via reduced allocation churn** (#303). A per-batch
+  working buffer was reallocated on every batch; it is now reused for the worker's lifetime,
+  measured to cut large allocations from roughly 17,000 to about a dozen in one run. Measured
+  throughput gain ranges from +2.4% to +159.5% across two machines, worker counts and scenarios
+  (largest at 16 workers on a 16-core machine); peak memory dropped 57-61% in the same runs. Output
+  is bit-identical — no `GetUniform()` call sites were added or removed.
+- **The renderer-count-exceeded error names the actual count and the limit** (#294). Loading a
+  fifth `render[]` entry used to fail with a bare `error code 3`; the CLI now reports `config has 5
+  "render" entries, exceeding the limit of 4`. The limit itself (4) is unchanged.
 
-### Removed
-- **Breaking ABI #4**: `LUMICE_RenderParam::opacity` removed, and `render[].opacity` is no longer
-  parsed from JSON (`RenderConfig::opacity_` deleted). The field had no drawing consumer anywhere
-  in the tree since the first commit — setting it changed nothing — and it has no counterpart in
-  the GUI, so nothing was ever going to grow into it. `LUMICE_API_VERSION` is bumped to 416.
-  Drop the assignment from C/FFI callers; old JSON configs keep loading (unknown keys are
-  ignored). Note this is a DIFFERENT field from `LUMICE_GridLine::opacity`, which is untouched.
-  The GUI's mirror of the same field (`renderer.opacity`, editable in the Settings panel and
-  persisted in `.lmc`) is removed with it; a `.lmc` written by an older build still opens.
+### ⚠️ Breaking Changes
+- **`LUMICE_RenderParam::opacity` is removed** (#286). `render[].opacity` is no longer parsed from
+  JSON either. The field had no drawing consumer anywhere in the tree since the first commit —
+  setting it changed nothing — and had no GUI counterpart.
+  **What to do**: drop the assignment from C/FFI callers and recompile; an existing JSON config
+  that still sets `"opacity"` keeps loading (unknown keys are ignored). This is a different field
+  from `LUMICE_GridLine::opacity`, which is untouched. The GUI's own mirror of the field
+  (`renderer.opacity`, in Settings and in `.lmc`) is removed with it — a `.lmc` written by an older
+  build still opens.
+- **Display normalization gains an absolute anchor, and the CLI's own denominator changes to use
+  it by default** (#287). The renderer's scale used to divide by the energy that LANDED on a
+  pixel — a quantity that moves with the scene (add a filter, or narrow the lens, and the image
+  silently re-brightened by whatever was removed), which made two renders at the same EV
+  incomparable. The `ev_mode` field (see Added) now picks the denominator: `absolute` divides by
+  the energy the source EMITTED, fixed by the light source and the ray budget alone; `relative`
+  (the default) is described under Added, and its own migration is covered by the entry below.
+  **What to do**: rendering with `ev_mode: absolute` produces a darker image than the old CLI
+  behavior, by exactly `landed_fraction` (energy landed / energy emitted), a per-scene constant
+  independent of `ray_num` — negligible for a full-sphere view (-0.038 .. -0.002 stop), around a
+  stop for a 90-120 degree lens (-0.67 .. -1.25), and up to -10.47 stops behind a filter or at high
+  `ms_prob`. Raise EV to taste; a caller can also compute the exact shift from
+  `LUMICE_RawXyzResult`'s `snapshot_intensity` and `emitted_energy` without re-deriving anything.
+  Cross-lens comparability is not claimed: two projections still differ by a per-projection
+  solid-angle constant. `kNormScale` (0.08) is unchanged — full-sphere `landed_fraction` medians
+  0.980, so re-deriving it would move full-sphere scenes by only +0.029 stop against the cost of
+  every reference image. Separately, an undersampled scene darkens as `ray_num` grows under either
+  denominator (measured slope ~ -1.03 for both) — an honest Monte-Carlo estimator property, not
+  something this change introduces; see `doc/ev-pipeline-architecture.md` §7.4 before reporting it
+  as a regression.
+- **`relative` mode now anchors to the same fixed reference buffer the GUI has always used,
+  instead of to the render's own output** (#299). The CLI's `relative` implementation (above)
+  anchored to the P99 of the view actually being rendered — dependent on its lens, `visible` clip
+  and output resolution — where the GUI anchored to a full-sky buffer built independently of any
+  of those. This was a bug in the CLI implementation rather than a second definition of
+  `relative`; the two anchors now agree, algebraically, on one formula both front ends evaluate.
+  **What to do**: every existing `ev_mode: relative` config (the default) re-renders at a
+  different brightness — measured across a calibration corpus, from -2.02 to +2.55 stops. Two of
+  the shifts are intentional and worth knowing rather than raising EV to undo: a narrow field of
+  view no longer auto-brightens relative to a wide one, and changing `sim_resolution` (or,
+  interactively in the GUI, resizing the preview) no longer changes the picture's brightness.
+  `absolute` mode is unaffected — it was already anchored independently of the render's own output.
+- **`render[].grid.central` is renamed to `render[].grid.angular_dist`** (#292), and the matching
+  `LUMICE_RenderParam` fields to `angular_dist` / `angular_dist_count`. The old name never said
+  what the number is (the angular distance from the sun). `grid.central` keeps loading as an alias
+  forever (the new key wins if both are present), so no existing JSON config is rejected.
+  **What to do**: a C/FFI caller naming the struct field, or using a designated initializer for it,
+  fails to compile until renamed to `angular_dist[_count]`; recompile. No JSON change is required
+  unless you want to adopt the new key name.
+  Separately, and with no ABI half: a config carrying `grid.central` (now `grid.angular_dist`) or
+  `grid.elevation` entries used to have them parsed, validated and round-tripped without ever being
+  drawn — the CLI draws both now (see the annotation-layer entry under Added), so a config that
+  already set either one renders differently from before.
+- **Automatic CPU worker count is capped at 10** (#314), down from the machine's full physical
+  core count. Measured across two machines (16-core and 12-core) and two scenarios, throughput
+  peaked at 10 workers regardless of core count, so adding more only bought scheduling overhead —
+  as much as +61.6% throughput recovered by capping on the 16-core machine.
+  **What to do**: nothing, unless you were relying on this project defaulting to more than 10
+  workers on a many-core machine — pass `--workers N` (CLI) or set the personal default (GUI, see
+  Added) to opt back into a higher count; an explicit value is honoured verbatim and is not subject
+  to the cap.
+
+### Fixed
+- **A crash on selecting one of the last three lens types** (#289). `kLensTypeJsonNames[]` had only
+  8 entries for 11 `LensType` values, with no `static_assert` to catch the mismatch, so serializing
+  a document with `Fisheye Orthographic`, `Dual Fisheye Orthographic` or `Globe` selected read past
+  the array — a SIGSEGV in the observed build, and on another build potentially a silently
+  corrupted lens type written to the saved file. Reachable via Save, opening Settings, or saving a
+  user default. The array is now complete and `static_assert`-guarded, and an unrecognized stored
+  value falls back to `linear` with a visible notice instead of silently defaulting.
+- **A raypath like `3-5,1-2` silently computed the wrong path instead of being rejected** (#284).
+  `,` was the raypath separator before `-` replaced it years ago, and survived undocumented as a
+  read-compatibility fallback; typing it in the GUI's raypath field normalized `3-5,1-2` into
+  `3-5-1-2` — a single four-face path where the user meant two separate three-face paths — with no
+  validation error, since every face number involved happened to be legal. The editor now rejects
+  raypath text containing `,` with a message naming the correct separators (`-` within a path, `;`
+  between paths); a `.lmc` written before this fix is migrated automatically on load (comma -> `-`
+  within each raypath token; `entry:`/`exit:` face-list commas are untouched), with a log entry per
+  document that needed it.
+- **An exported config could describe a different picture than the one on screen** (#288). The
+  GUI's export path shared its config-building code with the path that commits a scene to
+  simulate, but only `intensity_factor` and `ev_mode` were actually filled in for export — lens
+  type, field of view, view pose, `visible`, resolution, background colour and the horizon toggle
+  were all left at their internal simulation defaults instead of the values on screen, and in the
+  horizon case this meant an exported document could draw a line the user had explicitly turned
+  off. The export path is now filled in field by field from the same GUI state the preview reads
+  (three necessary conversions — camera roll, background colour space, resolution — are documented
+  at their call sites), checked by a new same-document, two-renderer-path comparison test
+  (`test/gui/parity/test_gui_cli_export_parity.cpp`). A config front-clipped (`front`) had no core
+  equivalent at the time this shipped and is rejected on export with a warning rather than being
+  silently mis-encoded; #292 (below) later gives `front` a real core field, replacing that
+  placeholder. A GUI ray-tint control that never had any effect (changing it re-simulated but
+  altered no pixel) is removed as part of the same cleanup.
+- **GUI preview brightness for non-equal-area projections did not match the CLI** (#290, #296). The CLI
+  bins per-pixel energy directly onto its target lens (a genuine camera measurement, `~ L*Ω_p`);
+  the GUI's preview shader resamples a fixed equal-area texture without multiplying by the target
+  lens's own per-pixel solid angle, so for any lens whose solid angle is not constant across the
+  frame — every projection except the equal-area family — the two disagreed by up to 0.79x at
+  frame centre and 1.35x at the edge (measured, `linear`, 160 degree FOV). The preview shader now
+  applies that lens's relative illumination, so non-equal-area GUI previews gain the natural
+  vignetting the CLI already had; equal-area previews are pixel-identical (their solid angle is
+  constant, so there was nothing to add). A same-cycle regression this introduced — the saved-`.lmc`
+  and composite (raypath-colour) preview paths correctly showed the new vignetting live but lost it
+  after Save -> Open, because those paths bake an 8-bit texture that never carried it — is fixed
+  together with it: `.lmc` and the composite bake now store plain radiance (no background, no
+  vignetting), and both are applied uniformly at display time, so what a document shows after
+  reopening matches what it showed when saved. A `.lmc` file saved before this fix keeps rendering
+  without the vignetting on reopen, since the background colour it would need to subtract back out
+  was already irreversibly baked into its pixels.
+- **Fisheye renders were clipped to a 90-degree hemisphere regardless of the lens's own field of
+  view** (#291). Core computed content only for angles up to 90 degrees from the view axis for four
+  of the five single-lens fisheye variants, while the GUI preview's own domain check allowed up to
+  180 degrees; a lens configured for a wider field of view showed correct sky in the GUI preview and
+  a black ring past the 90-degree radius in the CLI. Core's domain is now widened per lens to match:
+  equal-area and equidistant to the full 180 degrees, stereographic to 179.5 degrees (its radius
+  formula diverges exactly at 180); orthographic is intentionally left at 90 degrees, since past
+  that point its own radius formula folds back on itself and stops being invertible. The
+  dual-fisheye family already matched the GUI at 180 degrees and is unaffected.
+- **Three further CLI rendering behaviors did not match the GUI preview** (#297): a `rectangular`
+  render honoured only the camera's azimuth, silently ignoring any configured elevation or roll; the
+  `visible` hemisphere clip was applied only to single-lens renders, so a dual-fisheye, rectangular
+  or globe renderer left the large majority of its nominally hidden pixels still carrying energy;
+  and the forward energy-binning pixel-center convention differed by half a pixel from the
+  convention the render-domain mask and viewport already used. All three are now aligned with the
+  GUI and with each other. An existing config using a `rectangular` lens with non-zero elevation or
+  roll, or any lens combined with `visible: upper`/`lower` outside the single-lens family, renders
+  differently (and correctly) as a result; the pixel-center change is a sub-pixel shift.
+- **GUI preview showed a faint double image straddling the horizon in dual-fisheye scenes** (#302).
+  A pixel-binning convention change had updated the render-domain mask and the viewport but missed
+  a third place using the same convention — the preview shader's own source-texture sampling —
+  which doubled an existing half-texel offset already contributed by bilinear filtering. The two
+  fisheye source discs sample with opposite-signed offsets, so the error mixed pixels from two
+  different points in the sky into the equator overlap band, visible as a roughly 0.26-degree-wide
+  horizontal ghosting band a few degrees above and below the horizon. CLI renders were unaffected
+  (no resampling step there).
+- **Screenshot export silently dropped overlay text labels by default, and drew them at half size
+  on a Retina display** (#304). A separate, unsaved "Include Overlay in Screenshot" toggle defaulted
+  to off and controlled only the text, while overlay lines exported unconditionally — so the
+  exported PNG usually had grid lines with no numbers next to them, despite the menu item's name
+  implying an all-or-nothing choice. Separately, the export path hardcoded a 1:1 device-pixel ratio
+  when placing label glyphs (while getting label position right), so on a 2x Retina display exported
+  text rendered at half the size it appeared on screen. Both are fixed by rendering the screen
+  preview and the export from one shared off-screen path (image, lines and labels together, at the
+  actual output device-pixel scale); the separate toggle no longer exists — turning labels off is
+  now the same Overlay-panel switch that already controls the on-screen preview.
+- **A batch of traced rays could be silently dropped under a rare scheduling stall** (#300). The
+  server published a batch of ray data to the consumer thread *before* recording it in its own
+  pending-batch counter; if the producer thread was preempted for as little as 0.2-1 ms between
+  those two steps, the consumer could see the batch (with the counter still reading zero), discard
+  it as unexpected, and the counter's later increment left no trace that anything had been lost.
+  Affects the CLI and the GUI equally. The counter now increments before the batch is published, so
+  the ordering that made this possible no longer exists.
+- **A `--benchmark` run could report a physically impossible throughput** (#312), typically when
+  `ray_num` was smaller than the internal drain quantum. In that case no internal "steady" sample
+  window ever formed, and the benchmark's fallback path could end up dividing the full ray count by
+  however long it took the poller to next observe the run go idle — a quantity that measures poll
+  latency, not trace time — producing rates of several hundred million rays/second on a run that
+  took milliseconds either way. The fallback now divides by the run's actual wall-clock duration
+  instead, a true (if conservative) lower bound.
+- **A CLI overlay text label could be cut in half at the edge of a narrow field of view** (#310).
+  The GUI already clamped a label's position to stay fully inside the viewport; the CLI renderer
+  drew the raw anchor `LUMICE_ComputeAnnotationOverlay` returned, which for a curve entering the
+  visible area at the frame's edge is exactly the edge itself. Both front ends now share one
+  clamping implementation (`src/util/label_viewport_clamp.hpp`).
+- **A hit-loop buffer overflow could crash the legacy CPU backend at small dispatch sizes** (#314).
+  `LUMICE_DISPATCH_RAY_NUM` at or below 32 crashed deterministically in multi-scattering scenes; a
+  hit-loop buffer's sizing left zero headroom for one code path's fan-out, corrupting the heap. The
+  buffer's capacity contract is now a single owner with an explicit precondition check.
+- **Reference-point markers were mirrored on `rectangular` renders, and their section header could
+  steal a click meant for a marker beneath it** (#305). The screen-position conversion the markers
+  share with overlay labels had an inverted vertical axis specifically for the `rectangular` lens —
+  invisible until this change, since the previous zenith/nadir-only pair is symmetric under that
+  flip and so could never show it; and the "Reference Points" section header was missing a flag that
+  let a click reach a widget drawn on top of it. Also, a marker's name-to-ring spacing on a HiDPI
+  display was off by the display's own scale factor, since a device-pixel radius was being added
+  directly to an already-logical-space anchor point.
 
 ## [4.4.3] - 2026-08-30
 
