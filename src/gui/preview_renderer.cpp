@@ -210,7 +210,8 @@ vec2 dualFisheyeToUV(vec2 xy_norm, bool is_upper) {
   // every fragment onto a texel corner and turns every sample into a 2x2 bilinear average.
   return pixel / tex_res;
 }
-
+)glsl"
+R"glsl(
 // Convert world direction to dual equal-area fisheye UV (single hemisphere, no blend).
 vec2 dirToDualFisheye(vec3 d) {
   vec3 sky = -d;
@@ -580,7 +581,8 @@ vec3 overlayLensBorder(vec3 color, vec2 pos, float half_fov) {
   float t = 1.0 - smoothstep(0.0, kBorderHalfWidthPx, d);
   return mix(color, u_lens_border_color, t * u_lens_border_alpha);
 }
-
+)glsl"
+R"glsl(
 out vec4 frag_color;
 
 void main() {
