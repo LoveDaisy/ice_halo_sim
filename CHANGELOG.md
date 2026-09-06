@@ -677,7 +677,9 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   forced a full filter rebuild that stalled the live preview. All GUI filter commits now go
   through the fast path.
 - **Switching between the CPU and GPU backend and clicking Run no longer leaves the previous
-  backend's stale frame on screen** (#172).
+  backend's stale frame on screen** (#172). Reconstructing the server for the new backend reset
+  its epoch counter to zero, but the GUI's anti-flicker display fence carried the old backend's
+  higher epoch across the swap and kept refusing the new backend's first frames as "stale."
 
 ### ⚠️ Breaking Changes
 - **`ray_num` now means the total ray count across all wavelengths of a discrete spectrum, not
@@ -838,11 +840,15 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   hit recorder into a small-buffer-optimized layout (paths up to 16 hits stored inline, longer
   ones spilling to a per-batch arena) cut its memory footprint; measured +57.8% multi-worker
   throughput on a filter-plus-multi-scattering scene, no change on a simple single-crystal scene.
-- **The default worker count is now the number of physical CPU cores, not
-  `hardware_concurrency - 2`** (#120). The simulator is memory-bound with a dedicated consumer
-  thread; the old default packed workers onto SMT/hyperthread siblings, contending for cache with
-  each other and starving the consumer — measured ~48% throughput loss on a common 8-core/16-thread
-  desktop. `num_workers` set explicitly is unaffected.
+
+### ⚠️ Breaking Changes
+- **The default worker count changes from `hardware_concurrency - 2` to the number of physical
+  CPU cores** (#120). The simulator is memory-bound with a dedicated consumer thread; the old
+  default packed workers onto SMT/hyperthread siblings, contending for cache with each other and
+  starving the consumer — measured ~48% throughput loss on a common 8-core/16-thread desktop.
+  **What to do**: nothing, unless you depend on the exact previous thread count (a benchmark
+  script, a machine shared with other workloads) — set `num_workers` explicitly to pin it; a
+  config that already sets `num_workers` is unaffected either way.
 
 ### Fixed
 - **Some extreme crystal geometries rendered visibly wrong halo patterns** (#133, #135, #137). A
