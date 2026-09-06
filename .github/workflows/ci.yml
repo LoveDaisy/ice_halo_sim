@@ -68,8 +68,28 @@ jobs:
             cache_key: macos-arm64
             benchmark_bin: build/Release/static/bin/Lumice
 
+          # windows-2022, NOT windows-2025 — this leg must compile on the SAME
+          # image release.yml's `windows-x64` artifact is built on. A build leg
+          # pinned to a different image is testing a configuration nobody ships:
+          # the C2026 fixed by PR #316 (a shader raw string literal past MSVC's
+          # 16384-byte cap) compiled clean here under VS 2026 and only surfaced
+          # in the release build under VS 2022 — a green that did not mean what
+          # it was read to mean.
+          #
+          # The divergence was never a decision. `windows-2025` used to ship
+          # VS 2022; GitHub rolled its only Visual Studio install forward to
+          # VS 2026 underneath the name, and only the legs that visibly broke
+          # (windows-cuda-compile, release.yml) were moved off it. This one
+          # stayed put because nothing broke. Image names change meaning under
+          # your feet — when one does, re-check every leg pinned to it, not just
+          # the red ones.
+          #
+          # Accepted loss: no CI leg compiles under VS 2026 any more. That
+          # coverage was forward insurance for the day windows-2022 retires, and
+          # it is given up on purpose — the migration is forced whenever that
+          # image goes away, so learning about it early buys little.
           - name: Windows MSVC x86_64
-            os: windows-2025
+            os: windows-2022
             build_gui: ON
             cache_key: windows-msvc-x64
             msvc: true
@@ -348,11 +368,15 @@ jobs:
   #     Every current CUDA release rejects MSVC > VS 2022 (CUDA 12.6's
   #     `crt/host_config.h`: "Only the versions between 2017 and 2022 are
   #     supported"), so the CUDA job MUST run on an image that still ships a
-  #     CUDA-compatible MSVC. windows-2022 ships VS 2022 (MSVC 14.4x). The
-  #     non-CUDA `Windows MSVC x86_64` build job above stays on windows-2025
-  #     (it compiles fine under VS 2026); only this CUDA job needs the older
-  #     image. Verified first-hand in CI run 28439410508 (the windows-2025
-  #     attempt that failed at Configure).
+  #     CUDA-compatible MSVC. windows-2022 ships VS 2022 (MSVC 14.4x).
+  #     Verified first-hand in CI run 28439410508 (the windows-2025 attempt
+  #     that failed at Configure).
+  #     Both Windows jobs pin windows-2022 today, for two DIFFERENT reasons
+  #     that have to be maintained apart: this one because CUDA hard-rejects
+  #     MSVC newer than VS 2022; the non-CUDA `Windows MSVC x86_64` build job
+  #     above because release.yml's windows-x64 artifact builds there, and a
+  #     build leg on another image tests a configuration nobody ships (the
+  #     comment on that matrix entry carries the history).
   #   - MSVC: windows-2022 runner default (VS 2022; `_MSC_VER` surfaced by the
   #     "Diagnose toolchain versions" step below — kept permanently so future
   #     image drift is debuggable from any run).
@@ -364,7 +388,10 @@ jobs:
   #     to whatever hosted image still carries a CUDA-supported VS, or bump
   #     CUDA to a version that supports the then-current MSVC. Do NOT "fix" a
   #     future break by pinning a stale MSVC toolset onto windows-2025 — that
-  #     image dropped VS 2022 entirely.
+  #     image dropped VS 2022 entirely. THREE pins move together or the
+  #     build-mirrors-release property breaks again: this job, the
+  #     `Windows MSVC x86_64` matrix entry above, and release.yml's
+  #     windows-x64 row.
   #
   # Mirrors the ubuntu-24.04 `cuda-compile` job (compile-only, no GPU, no
   # runtime). Runtime/parity validation still requires a real CUDA GPU and
