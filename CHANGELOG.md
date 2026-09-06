@@ -72,7 +72,9 @@ rather than re-decided per version:
 
 A bullet that bundles several sub-claims across this line should be split — unless the split
 would separate parts of one visual change a reader perceives as a single thing, in which case
-keep it whole and let the dominant claim pick the section.
+keep it whole and let the dominant claim pick the section. (This is a different question from
+the Granularity section's split-by-PR rule above: that one decides how many *entries* one PR
+becomes, this one decides which *section* one entry's sub-claims land in.)
 
 ### Breaking changes
 
