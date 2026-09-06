@@ -16,12 +16,14 @@ What this leg establishes (and what it does NOT):
     changing the sampler, judge "did the new sampler converge to the SAME
     distribution as the old one" against exactly this floor — a new-vs-old PSNR at
     or above it means the distributions are indistinguishable at this ray count.
-  * FROZEN BASELINE: the current (triangle) sampler's output is already frozen for
-    these two configs by the smoke references (references/halo_22_01.jpg,
-    references/parhelion_01.jpg, gated by test_smoke.py). This leg reuses those
-    references as the 口径-B baseline rather than duplicating the JPEGs, and asserts
-    a fresh render still matches them — so a T2/T3 regression that shifts the
-    overall distribution shows up here too.
+  * FROZEN BASELINE — retired, deliberately not asserted here. Both configs are
+    already frozen against the very same JPEGs (references/halo_22_01.jpg,
+    references/parhelion_01.jpg) by test_smoke.py, at a threshold that is equal
+    (halo_22: 26.5 vs 26.5) or stricter (parhelion: 37.5 vs 35.0). Re-rendering
+    them here bought a second, strictly weaker copy of an oracle smoke already
+    owns — same CLI, same references, hence the same failure modes, so it was
+    never independent corroboration either. A T2/T3 distribution shift still
+    shows up: it shows up in test_smoke.py.
 
 In T1 this leg has NO power to distinguish old vs new sampler (there is only one
 sampler yet). Its T1 deliverable is the methodology + the calibrated floor; the
@@ -42,7 +44,6 @@ if HAS_PILLOW:
     from test.e2e.image_utils import compute_mse, compute_psnr
 
 CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
-REFERENCES_DIR = get_project_root() / "test" / "e2e-correctness" / "references"
 
 # Self-consistency PSNR floor (dB) per config. Calibrated 2026-07-23 by rendering
 # each config 3 times (independent wall-clock-seeded processes) and taking the min
@@ -74,48 +75,56 @@ class TestIncidenceSamplingConvergence(LumiceTestCase):
         self.assertGreater(os.path.getsize(images[0]), 0, f"{config_name}: empty image")
         return images[0]
 
-    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
-    def test_self_consistency_and_frozen_baseline(self):
-        """Two independent renders agree within the noise floor, and match baseline.
+    def _check_self_consistency(self, config_name: str, floor: float):
+        """Two independent renders of one config agree within the noise floor.
 
-        For each config: render twice (independent seeds). run1-vs-run2 PSNR gives
-        the self-consistency noise floor (must clear the calibrated threshold), and
-        run1-vs-frozen-reference PSNR ties the current sampler to the 口径-B baseline
-        the smoke references already freeze.
+        The CLI seeds its RNG from the wall clock, so two separate processes draw
+        independent sequences; their PSNR is the noise floor of "the same
+        distribution rendered twice". T2/T3 judge a new sampler against exactly
+        this floor.
         """
-        for config_name, floor in SELF_CONSISTENCY_FLOOR.items():
-            with self.subTest(config=config_name):
-                dir_a = tempfile.mkdtemp(prefix=f"lumice_conv_{config_name}_a_")
-                dir_b = tempfile.mkdtemp(prefix=f"lumice_conv_{config_name}_b_")
-                try:
-                    img_a = self._render(config_name, dir_a)
-                    img_b = self._render(config_name, dir_b)
+        dir_a = tempfile.mkdtemp(prefix=f"lumice_conv_{config_name}_a_")
+        dir_b = tempfile.mkdtemp(prefix=f"lumice_conv_{config_name}_b_")
+        try:
+            img_a = self._render(config_name, dir_a)
+            img_b = self._render(config_name, dir_b)
 
-                    # Self-consistency: two independent renders of the same config.
-                    psnr_self = compute_psnr(compute_mse(img_a, img_b))
-                    self.assertGreaterEqual(
-                        psnr_self, floor,
-                        f"{config_name}: self-consistency PSNR {psnr_self:.1f} dB "
-                        f"< floor {floor} dB — renders are noisier than the "
-                        f"calibrated Monte-Carlo floor (rendering regression?).",
-                    )
+            psnr_self = compute_psnr(compute_mse(img_a, img_b))
+            self.assertGreaterEqual(
+                psnr_self, floor,
+                f"{config_name}: self-consistency PSNR {psnr_self:.1f} dB "
+                f"< floor {floor} dB — renders are noisier than the "
+                f"calibrated Monte-Carlo floor (rendering regression?).",
+            )
+        finally:
+            shutil.rmtree(dir_a, ignore_errors=True)
+            shutil.rmtree(dir_b, ignore_errors=True)
 
-                    # Frozen baseline: current sampler vs the smoke reference.
-                    ref_path = REFERENCES_DIR / f"{config_name}_01.jpg"
-                    self.assertTrue(
-                        ref_path.exists(),
-                        f"Baseline reference missing: {ref_path}",
-                    )
-                    psnr_ref = compute_psnr(compute_mse(img_a, str(ref_path)))
-                    self.assertGreaterEqual(
-                        psnr_ref, floor,
-                        f"{config_name}: PSNR vs frozen baseline {psnr_ref:.1f} dB "
-                        f"< floor {floor} dB — the entry-point distribution drifted "
-                        f"from the 口径-B baseline.",
-                    )
-                finally:
-                    shutil.rmtree(dir_a, ignore_errors=True)
-                    shutil.rmtree(dir_b, ignore_errors=True)
+
+def _make_self_consistency_test(config_name: str, floor: float):
+    @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
+    def _test(self):
+        self._check_self_consistency(config_name, floor)
+
+    _test.__name__ = f"test_self_consistency_{config_name}"
+    _test.__doc__ = (
+        f"{config_name}: two independent renders agree within the "
+        f"{floor} dB self-consistency floor."
+    )
+    return _test
+
+
+# One pytest item per config, rather than one item looping over both: xdist
+# distributes by item, so a single looping item pins every config to one worker
+# and becomes the whole set's wall clock (doc/testing-architecture.md §7.0).
+# `unittest.TestCase` methods cannot be driven by @pytest.mark.parametrize, hence
+# the setattr generation below (same shape as test_smoke.py).
+for _config_name, _floor in SELF_CONSISTENCY_FLOOR.items():
+    setattr(
+        TestIncidenceSamplingConvergence,
+        f"test_self_consistency_{_config_name}",
+        _make_self_consistency_test(_config_name, _floor),
+    )
 
 
 if __name__ == "__main__":

@@ -29,7 +29,10 @@ PSNR threshold calibration (e2e methodology, matches test_smoke.py):
   single-digit range, so the gate still catches it.
 """
 
+import platform
 from pathlib import Path
+
+import pytest
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
@@ -354,7 +357,16 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
         """Every color class captures at least one non-zero pixel (CPU backend)."""
         self._assert_multi_layer_all_classes_present([])
 
+    @pytest.mark.skipif(
+        platform.system() != "Darwin",
+        reason="Metal backend is only available on macOS",
+    )
     def test_multi_layer_color_class_signal_metal(self):
-        """Every color class captures at least one non-zero pixel (Metal backend;
-        silently falls back to CPU on Linux CI, equivalent to a second CPU run)."""
+        """Every color class captures at least one non-zero pixel (Metal backend).
+
+        Darwin-only: where Metal is unavailable, `--backend metal` silently falls
+        back to CPU, making this a byte-for-byte rerun of
+        `test_multi_layer_color_class_signal_cpu` — the same oracle paid for
+        twice. Skip it there rather than buy it again.
+        """
         self._assert_multi_layer_all_classes_present(["--backend", "metal"])
