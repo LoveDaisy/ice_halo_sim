@@ -39,8 +39,6 @@ thread-scheduling noise, not a semantic difference.
 
 import glob
 import os
-import shutil
-import tempfile
 import unittest
 
 from test.e2e.base import LumiceTestCase
@@ -62,28 +60,39 @@ CORE_DIRECT_CONFIG = "composition_core_direct.json"
 class TestCompositionEquivalence(LumiceTestCase):
     """GUI SoP export ≡ hand-authored core complex filter (AC1)."""
 
-    def _run_config_and_get_image(self, config_name: str) -> str:
-        cfg_path = CONFIGS_DIR / config_name
-        if not cfg_path.exists():
-            self.skipTest(f"Config not found: {cfg_path}")
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Each config is rendered once for the whole class. The two "runs
+        # successfully" tests and the PSNR comparison ask three questions of the
+        # same two frames, so rendering per test bought the same pixels twice.
+        for name in (SOP_EXPORT_CONFIG, CORE_DIRECT_CONFIG):
+            if not (CONFIGS_DIR / name).exists():
+                raise unittest.SkipTest(f"Config not found: {CONFIGS_DIR / name}")
+        cls.renders = {
+            name: cls.render_once(CONFIGS_DIR / name)
+            for name in (SOP_EXPORT_CONFIG, CORE_DIRECT_CONFIG)
+        }
 
-        result = self.run_lumice(["-f", str(cfg_path), "-o", self.output_dir])
+    def _image_for(self, config_name: str) -> str:
+        """Return the image path of this class's shared render of `config_name`."""
+        result = self.renders[config_name]
         self.assertEqual(
             result.returncode, 0,
             f"{config_name} failed:\nstdout: {result.stdout}\nstderr: {result.stderr}",
         )
-        images = sorted(glob.glob(os.path.join(self.output_dir, "img_*.jpg")))
+        images = sorted(glob.glob(os.path.join(result.output_dir, "img_*.jpg")))
         self.assertTrue(len(images) > 0, f"No output images for {config_name}")
         return images[0]
 
     def test_sop_gui_export_runs_successfully(self):
         """The GUI-export SoP config must render (exit 0, non-empty image)."""
-        img = self._run_config_and_get_image(SOP_EXPORT_CONFIG)
+        img = self._image_for(SOP_EXPORT_CONFIG)
         self.assertGreater(os.path.getsize(img), 0)
 
     def test_core_direct_runs_successfully(self):
         """The hand-authored core-direct config must render too."""
-        img = self._run_config_and_get_image(CORE_DIRECT_CONFIG)
+        img = self._image_for(CORE_DIRECT_CONFIG)
         self.assertGreater(os.path.getsize(img), 0)
 
     @unittest.skipUnless(HAS_PILLOW, "Pillow not installed")
@@ -96,29 +105,18 @@ class TestCompositionEquivalence(LumiceTestCase):
         halo. A failure here means the GUI's SoP expansion diverged semantically
         from the core predicate (e.g. an ExpandSopToClauses regression).
         """
-        dir_a = tempfile.mkdtemp(prefix="lumice_sop_")
-        dir_b = tempfile.mkdtemp(prefix="lumice_core_")
-        orig_dir = self.output_dir
-        try:
-            self.output_dir = dir_a
-            img_a = self._run_config_and_get_image(SOP_EXPORT_CONFIG)
+        img_a = self._image_for(SOP_EXPORT_CONFIG)
+        img_b = self._image_for(CORE_DIRECT_CONFIG)
 
-            self.output_dir = dir_b
-            img_b = self._run_config_and_get_image(CORE_DIRECT_CONFIG)
-
-            mse = compute_mse(img_a, img_b)
-            psnr = compute_psnr(mse)
-            self.assertGreaterEqual(
-                psnr,
-                EQUIVALENCE_PSNR_THRESHOLD,
-                f"GUI SoP export vs core-direct filter diverged: "
-                f"PSNR = {psnr:.1f} dB < threshold {EQUIVALENCE_PSNR_THRESHOLD} dB. "
-                f"The GUI editor's sum-of-products expansion "
-                f"(ExpandSopToClauses/SerializeFilterForCore) is no longer "
-                f"semantically equivalent to the same filter authored directly in "
-                f"core's ComplexFilterParam — a compound-predicate regression.",
-            )
-        finally:
-            self.output_dir = orig_dir
-            shutil.rmtree(dir_a, ignore_errors=True)
-            shutil.rmtree(dir_b, ignore_errors=True)
+        mse = compute_mse(img_a, img_b)
+        psnr = compute_psnr(mse)
+        self.assertGreaterEqual(
+            psnr,
+            EQUIVALENCE_PSNR_THRESHOLD,
+            f"GUI SoP export vs core-direct filter diverged: "
+            f"PSNR = {psnr:.1f} dB < threshold {EQUIVALENCE_PSNR_THRESHOLD} dB. "
+            f"The GUI editor's sum-of-products expansion "
+            f"(ExpandSopToClauses/SerializeFilterForCore) is no longer "
+            f"semantically equivalent to the same filter authored directly in "
+            f"core's ComplexFilterParam — a compound-predicate regression.",
+        )

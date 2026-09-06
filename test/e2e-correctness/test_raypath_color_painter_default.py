@@ -90,6 +90,7 @@ Design notes
 """
 
 import json
+import unittest
 from pathlib import Path
 
 from test.e2e.base import LumiceTestCase
@@ -129,6 +130,17 @@ def _both_nonzero_fraction(png_path):
 class TestPainterDefaultComposite(LumiceTestCase):
     """Painter is the default composite mode + painter blends where dominant occludes."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Rendered once for the class: one test asks whether the bare-array
+        # config renders at all, the other reads the same painter frame as the
+        # blend arm of its comparison. The dominant control below is a different
+        # config and still gets its own run.
+        # Guarded, not skipped, on a missing fixture -- see setUp.
+        if CONFIG.exists():
+            cls.painter_render = cls.render_once(CONFIG, ["--format", "png"])
+
     def setUp(self):
         super().setUp()
         # Hard-fail (not skip) if the fixture vanishes: this is a regression
@@ -146,15 +158,13 @@ class TestPainterDefaultComposite(LumiceTestCase):
         enough here; the blend-vs-occlude structural assertion lives in the
         next test.
         """
-        result = self.run_lumice(
-            ["-f", str(CONFIG), "-o", self.output_dir, "--format", "png"]
-        )
+        result = self.painter_render
         self.assertEqual(
             result.returncode, 0, f"Lumice failed:\n{result.stderr}"
         )
 
-        composite = Path(self.output_dir) / "img_01_components.png"
-        mono = Path(self.output_dir) / "img_01.png"
+        composite = Path(result.output_dir) / "img_01_components.png"
+        mono = Path(result.output_dir) / "img_01.png"
 
         self.assertTrue(
             composite.exists(), f"composite image not produced: {composite}"
@@ -184,16 +194,12 @@ class TestPainterDefaultComposite(LumiceTestCase):
         if not HAS_PILLOW:
             self.skipTest("Pillow not available")
 
-        painter_out = Path(self.output_dir) / "painter"
-        painter_out.mkdir()
-        result_p = self.run_lumice(
-            ["-f", str(CONFIG), "-o", str(painter_out), "--format", "png"]
-        )
+        result_p = self.painter_render
         self.assertEqual(
             result_p.returncode, 0,
             f"Lumice (painter) failed:\n{result_p.stderr}"
         )
-        painter_composite = painter_out / "img_01_components.png"
+        painter_composite = Path(result_p.output_dir) / "img_01_components.png"
         self.assertTrue(
             painter_composite.exists(),
             f"painter composite not produced: {painter_composite}",

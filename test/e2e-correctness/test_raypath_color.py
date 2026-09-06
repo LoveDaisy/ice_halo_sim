@@ -29,7 +29,11 @@ PSNR threshold calibration (e2e methodology, matches test_smoke.py):
   single-digit range, so the gate still catches it.
 """
 
+import platform
+import unittest
 from pathlib import Path
+
+import pytest
 
 from test.e2e.base import LumiceTestCase
 from test.e2e.image_utils import HAS_PILLOW
@@ -224,20 +228,30 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
     cleanly.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not MULTI_LAYER_CONFIG.exists():
+            raise unittest.SkipTest(f"{MULTI_LAYER_CONFIG} not found")
+        # The CPU arm of this class asks two questions of one render -- is the
+        # composite well-formed (below), and does every class hold a non-zero
+        # Y-lane (the `ColorClassSignal:` line further down) -- off the same
+        # command line. One render answers both; the Metal arm keeps its own,
+        # since `--backend metal` is a different command line and a separate
+        # oracle.
+        cls.cpu_render = cls.render_once(MULTI_LAYER_CONFIG)
+
     def test_multi_layer_all_semantics(self):
         """Multi-layer raypath_color config produces a well-formed composite
         with all four classes visibly present and no phantom-hue regression.
         """
-        if not MULTI_LAYER_CONFIG.exists():
-            self.skipTest(f"{MULTI_LAYER_CONFIG} not found")
-
-        result = self.run_lumice(["-f", str(MULTI_LAYER_CONFIG), "-o", self.output_dir])
+        result = self.cpu_render
         self.assertEqual(
             result.returncode, 0, f"Lumice failed:\n{result.stderr}"
         )
 
-        composite = Path(self.output_dir) / "img_01_components.jpg"
-        mono = Path(self.output_dir) / "img_01.jpg"
+        composite = Path(result.output_dir) / "img_01_components.jpg"
+        mono = Path(result.output_dir) / "img_01.jpg"
 
         # (a) Composite + mono produced (additive delivery, not replacement).
         self.assertTrue(
@@ -313,12 +327,15 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
         `test_multi_layer_all_semantics` docstring / progress.md for why
         the argmax-based indicator was cross-backend non-portable.
         """
-        if not MULTI_LAYER_CONFIG.exists():
-            self.skipTest(f"{MULTI_LAYER_CONFIG} not found")
-
-        result = self.run_lumice(
-            ["-f", str(MULTI_LAYER_CONFIG), "-o", self.output_dir, *backend_args]
-        )
+        # The default-backend arm reuses the render setUpClass already made for
+        # this class; `--backend metal` is a different command line, so it buys
+        # its own.
+        if backend_args:
+            result = self.run_lumice(
+                ["-f", str(MULTI_LAYER_CONFIG), "-o", self.output_dir, *backend_args]
+            )
+        else:
+            result = self.cpu_render
         self.assertEqual(
             result.returncode, 0, f"Lumice failed:\n{result.stderr}"
         )
@@ -354,7 +371,16 @@ class TestRaypathColorMultiLayer(LumiceTestCase):
         """Every color class captures at least one non-zero pixel (CPU backend)."""
         self._assert_multi_layer_all_classes_present([])
 
+    @pytest.mark.skipif(
+        platform.system() != "Darwin",
+        reason="Metal backend is only available on macOS",
+    )
     def test_multi_layer_color_class_signal_metal(self):
-        """Every color class captures at least one non-zero pixel (Metal backend;
-        silently falls back to CPU on Linux CI, equivalent to a second CPU run)."""
+        """Every color class captures at least one non-zero pixel (Metal backend).
+
+        Darwin-only: where Metal is unavailable, `--backend metal` silently falls
+        back to CPU, making this a byte-for-byte rerun of
+        `test_multi_layer_color_class_signal_cpu` — the same oracle paid for
+        twice. Skip it there rather than buy it again.
+        """
         self._assert_multi_layer_all_classes_present(["--backend", "metal"])

@@ -13,6 +13,29 @@ from test.e2e.runner import get_project_root
 CONFIGS_DIR = get_project_root() / "test" / "e2e" / "configs"
 
 
+def _cheap_halo_22_config(output_dir, ray_num=20000):
+    """halo_22.json with ray_num cut from 10,000,000 down to `ray_num`.
+
+    The CLI-surface tests in this file assert on stdout text, the exit code, the
+    suffix/count of the produced files, or a JPEG's byte size. Not one of those
+    oracles changes its verdict with the ray budget, so paying for 10M rays buys
+    them nothing — the shipped fixture is simply the one that happened to be at
+    hand. halo_22's crystal, lens and scattering layers are left untouched (the
+    scene still has to render something and still has to carry last-layer
+    prob=0.0); only the ray count shrinks. Same shape as `_build_config` in
+    test/regression-sentinel/test_max_hits_crash.py.
+
+    Not for anything whose oracle is image similarity: a PSNR comparison against
+    a committed reference does depend on the ray budget, and shrinking it there
+    would trade discriminating power for wall clock.
+    """
+    doc = json.loads((CONFIGS_DIR / "halo_22.json").read_text())
+    doc["scene"]["ray_num"] = ray_num
+    out = Path(output_dir) / "halo_22_cheap.json"
+    out.write_text(json.dumps(doc))
+    return out
+
+
 class TestCli(LumiceTestCase):
     def test_help_flag(self):
         """Lumice -h should exit 0 and print usage."""
@@ -27,9 +50,9 @@ class TestCli(LumiceTestCase):
 
     def test_output_directory(self):
         """Lumice -o should write images to the specified directory."""
-        cfg = CONFIGS_DIR / "halo_22.json"
-        if not cfg.exists():
+        if not (CONFIGS_DIR / "halo_22.json").exists():
             self.skipTest("halo_22.json not found")
+        cfg = _cheap_halo_22_config(self.output_dir)
 
         result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
         self.assertEqual(result.returncode, 0)
@@ -45,10 +68,9 @@ class TestOutputFormat(LumiceTestCase):
     """Tests for --format and --quality CLI options."""
 
     def _get_config(self):
-        cfg = CONFIGS_DIR / "halo_22.json"
-        if not cfg.exists():
+        if not (CONFIGS_DIR / "halo_22.json").exists():
             self.skipTest("halo_22.json not found")
-        return cfg
+        return _cheap_halo_22_config(self.output_dir)
 
     def test_output_format_png(self):
         """--format png should produce .png files."""
@@ -177,10 +199,9 @@ class TestWorkerCount(LumiceTestCase):
     WORKER_LINE = re.compile(r"worker_count=(\d+)")
 
     def _get_config(self):
-        cfg = CONFIGS_DIR / "halo_22.json"
-        if not cfg.exists():
+        if not (CONFIGS_DIR / "halo_22.json").exists():
             self.skipTest("halo_22.json not found")
-        return cfg
+        return _cheap_halo_22_config(self.output_dir)
 
     def _run_and_read_worker_count(self, extra_args):
         cfg = self._get_config()
@@ -357,6 +378,9 @@ class TestLastLayerProbWarning(LumiceTestCase):
         cfg = CONFIGS_DIR / "halo_22.json"
         if not cfg.exists():
             self.skipTest(f"{cfg} not found")
+        # Only the ray budget is cut; the scattering layers this asserts on are
+        # copied through unchanged. See _cheap_halo_22_config.
+        cfg = _cheap_halo_22_config(self.output_dir)
         result = self.run_lumice(["-f", str(cfg), "-o", self.output_dir])
         self.assertEqual(result.returncode, 0)
         combined = result.stdout + result.stderr
