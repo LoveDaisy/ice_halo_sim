@@ -90,19 +90,23 @@ See `CLAUDE.md` for detailed naming conventions and coding guidelines.
 
 ## Release Process
 
-1. **Update version**: `python scripts/version.py set X.Y.Z`
-2. **Verify**: `python scripts/version.py check` (should exit 0)
-3. **Commit** the version change
+**Before you start**: write the release's entries under `## [Unreleased]` in `CHANGELOG.md`. Step 1 cuts that section into the new version's section and leaves a fresh empty `[Unreleased]` behind, so whatever is not written by then is not in the release notes. `set` refuses to cut an empty `[Unreleased]`; `--allow-empty-changelog` is the escape hatch for a release with genuinely no user-perceptible change.
+
+1. **Update version**: `python scripts/version.py set X.Y.Z` — bumps `CMakeLists.txt` *and* cuts `CHANGELOG.md`'s `[Unreleased]` into `## [X.Y.Z] - <UTC date>`, adding the matching link definition. Both files are computed and validated before either is written, so a rejected CHANGELOG leaves nothing half-updated.
+2. **Verify**: `python scripts/version.py check --tag vX.Y.Z` (should exit 0) — checks both that `CMakeLists.txt` matches the tag and that `CHANGELOG.md` has a section for it. Pass `--tag` explicitly at this point: without it the check compares against the *previous* tag, which does not yet match the version you just set.
+3. **Commit** the version and CHANGELOG changes
 4. **Tag**: `git tag vX.Y.Z`
 5. **Push**: `git push origin main --tags`
 
-The release workflow (`.github/workflows/release.yml`) triggers automatically on `v*` tag pushes. It runs a version consistency check before building — if `CMakeLists.txt` version doesn't match the tag, the release is blocked.
+The release workflow (`.github/workflows/release.yml`) triggers automatically on `v*` tag pushes. It runs the same consistency check before building — if `CMakeLists.txt` version doesn't match the tag, or `CHANGELOG.md` has no section for it, the release is blocked.
 
 The release produces platform-specific packages:
 - **Linux x64/ARM64**: `.tar.gz` with CLI executable (ARM64 excludes GUI due to runner GPU limitations)
 - **macOS ARM64**: `.tar.gz` with CLI executable and `LumiceGUI.app` bundle
 - **Windows x64**: `.zip` with CLI and GUI executables (`.exe` with embedded icon)
 
+The release page's body is that version's `CHANGELOG.md` section; GitHub's auto-generated pull-request list follows it as an appendix. How well the section reads is therefore how well the release page reads.
+
 ### Before tagging
 
-Always run `python scripts/version.py check` locally to verify version consistency before creating a tag. The CI check is a safety net, not a substitute for local verification.
+Always run `python scripts/version.py check --tag vX.Y.Z` locally to verify version and changelog consistency before creating a tag. The CI check is a safety net, not a substitute for local verification.

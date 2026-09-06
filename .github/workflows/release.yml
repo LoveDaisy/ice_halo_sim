@@ -245,12 +245,23 @@ jobs:
       contents: write
 
     steps:
+      # checkout runs first on purpose: its default clean does a `git clean -ffdx`,
+      # which would delete the downloaded artifacts (they are untracked files) and
+      # leave `files: lumice-*` matching nothing.
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
+      - name: Extract CHANGELOG section
+        run: python scripts/version.py extract-notes "${{ needs.prepare.outputs.version }}" > changelog-section.md
+
+      # body_path supplies the hand-written section; generate_release_notes appends
+      # the auto-generated PR list after it.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body_path: changelog-section.md
           generate_release_notes: true
           files: lumice-*
