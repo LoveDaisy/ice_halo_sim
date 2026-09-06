@@ -913,15 +913,16 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
   percentile taken over an ever-growing lit set, not a bug, and no anchor choice makes it fully
   stable. The downsampled, lower-percentile anchor is a mitigation, not a fix; ordinary scenes are
   unaffected in practice (25-scene regression: 22/25 pixel-identical to the prior anchor).
-- **Adaptive Brightness no longer holds onto a filter-independent EV anchor** (#115). The F1
-  anchor lane introduced in 4.2.6 traded multi-scattering throughput for EV stability across
-  filter toggles; beta feedback found the stability rarely mattered while the throughput cost was
-  paid on every multi-scattering render. Brightness is now a straight per-frame P99 of the visible
-  framebuffer, so **the exposure can shift when you toggle a filter** — accepted as the right
-  trade since filter A/B brightness comparison is rare and multi-scattering is common. Filter-fail
-  rays terminate immediately instead of completing a full multi-scattering trajectory, restoring
-  the throughput a filter is supposed to buy: +74% at `ms_prob=0.5` and +114% at `ms_prob=0.8`
-  (multi-worker, filter-on vs filter-off, macOS).
+- **Adaptive Brightness no longer holds onto a filter-independent EV anchor** (#115). The
+  filter-independent `anchor_p995_y` / `anchor_snapshot_intensity` statistic introduced in 4.2.6
+  (see that version's Breaking Changes entry) traded multi-scattering throughput for EV stability
+  across filter toggles; beta feedback found the stability rarely mattered while the throughput
+  cost was paid on every multi-scattering render. Brightness is now a straight per-frame P99 of
+  the visible framebuffer, so **the exposure can shift when you toggle a filter** — accepted as
+  the right trade since filter A/B brightness comparison is rare and multi-scattering is common.
+  Filter-fail rays terminate immediately instead of completing a full multi-scattering trajectory,
+  restoring the throughput a filter is supposed to buy: +74% at `ms_prob=0.5` and +114% at
+  `ms_prob=0.8` (multi-worker, filter-on vs filter-off, macOS).
 
 ### Removed
 - **The unused `norm_mode` config key is dropped** (#116). Its only live branch (`total_pix`) is
@@ -931,7 +932,7 @@ with no merge commit to grep for, and direct-to-main commits appear in no PR lis
 
 ### ⚠️ Breaking Changes
 - **`LUMICE_RawXyzResult::anchor_p995_y` and `anchor_snapshot_intensity` are removed** (#115),
-  shrinking the struct from 64 to 56 bytes on 64-bit platforms. These carried the F1 anchor lane's
+  shrinking the struct from 64 to 56 bytes on 64-bit platforms. These carried the
   filter-independent brightness statistic introduced in 4.2.6; there is no replacement field,
   since the new normalization (above) is computed entirely from the already-published
   `snapshot_intensity`. **What to do**: recompile against the new header; drop any code that reads
